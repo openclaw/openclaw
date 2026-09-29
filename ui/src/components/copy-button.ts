@@ -1,5 +1,6 @@
 // Control UI chat module implements copy as markdown behavior.
 import { html, type TemplateResult } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { icons } from "./icons.ts";
@@ -47,7 +48,8 @@ export async function handleCopyButton(event: Event, text: string, idleLabel: st
   button.disabled = true;
   setButtonLabel(button, idleLabel);
 
-  // Retired buttons must not overwrite a newer copy through the legacy fallback.
+  // Callers key mutable controls by payload, retiring their fallback and feedback
+  // when the text changes. Already-submitted native writes cannot be cancelled.
   const isCurrent = () => button.isConnected && button.dataset.copyAttempt === attempt;
   const copied = await copyToClipboard(text, isCurrent);
   delete button.dataset.copyState;
@@ -85,22 +87,25 @@ export function renderCopyButton(
   bare = false,
 ): TemplateResult {
   // Chat footers own their ghost chrome; .btn backgrounds would box the icon.
-  return html`
-    <openclaw-tooltip .content=${idleLabel}>
-      <button
-        class=${bare ? "chat-copy-btn" : "btn btn--xs chat-copy-btn"}
-        type="button"
-        aria-label=${idleLabel}
-        @click=${(event: Event) => void handleCopyButton(event, text, idleLabel)}
-      >
-        <span class="chat-copy-btn__icon" aria-hidden="true">
-          <span class="chat-copy-btn__icon-copy">${icons.copy}</span>
-          <span class="chat-copy-btn__icon-check">${icons.check}</span>
-        </span>
-      </button>
-      <span data-copy-feedback role="status" hidden></span>
-    </openclaw-tooltip>
-  `;
+  return html`${keyed(
+    text,
+    html`
+      <openclaw-tooltip .content=${idleLabel}>
+        <button
+          class=${bare ? "chat-copy-btn" : "btn btn--xs chat-copy-btn"}
+          type="button"
+          aria-label=${idleLabel}
+          @click=${(event: Event) => void handleCopyButton(event, text, idleLabel)}
+        >
+          <span class="chat-copy-btn__icon" aria-hidden="true">
+            <span class="chat-copy-btn__icon-copy">${icons.copy}</span>
+            <span class="chat-copy-btn__icon-check">${icons.check}</span>
+          </span>
+        </button>
+        <span data-copy-feedback role="status" hidden></span>
+      </openclaw-tooltip>
+    `,
+  )}`;
 }
 
 export function renderCopyAsMarkdownButton(markdown: string): TemplateResult {

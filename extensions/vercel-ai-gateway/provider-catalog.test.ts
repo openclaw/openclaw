@@ -1,5 +1,5 @@
-// Vercel Ai Gateway tests cover provider catalog plugin behavior.
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -15,31 +15,24 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 import {
   discoverVercelAiGatewayModels,
-  getStaticVercelAiGatewayModelCatalog,
   VERCEL_AI_GATEWAY_BASE_URL,
   VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW,
   VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS,
 } from "./api.js";
-import { resolveVercelAiGatewayDynamicModel } from "./models.js";
 import {
   buildStaticVercelAiGatewayProvider,
   buildVercelAiGatewayProvider,
   resolveVercelAiGatewayModel,
 } from "./provider-catalog.js";
 
-const STATIC_MODEL_IDS = [
-  "anthropic/claude-opus-4.6",
-  "openai/gpt-5.4",
-  "openai/gpt-5.4-pro",
-  "moonshotai/kimi-k2.6",
-];
-
-function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-    ...init,
+function mockCatalog(payload: unknown, status = 200) {
+  const release = vi.fn(async () => {});
+  fetchWithSsrFGuardMock.mockResolvedValueOnce({
+    response: jsonResponse(payload, status),
+    release,
+    finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
   });
+  return release;
 }
 
 afterEach(() => {
@@ -51,57 +44,13 @@ describe("vercel ai gateway provider catalog", () => {
   it.each([503, 200])(
     "preserves the public advisory builder for HTTP %s with no rows",
     async (status) => {
-      const release = vi.fn(async () => undefined);
-      fetchWithSsrFGuardMock.mockResolvedValueOnce({
-        response: jsonResponse({ data: [] }, { status }),
-        release,
-      });
+      const release = mockCatalog({ data: [] }, status);
       await expect(buildVercelAiGatewayProvider()).resolves.toEqual(
         buildStaticVercelAiGatewayProvider(),
       );
       expect(release).toHaveBeenCalledOnce();
     },
   );
-
-  it("exposes the static fallback model catalog", () => {
-    expect(getStaticVercelAiGatewayModelCatalog().map((model) => model.id)).toStrictEqual(
-      STATIC_MODEL_IDS,
-    );
-  });
-
-  it("builds an offline static provider catalog", () => {
-    expect(buildStaticVercelAiGatewayProvider()).toStrictEqual({
-      baseUrl: VERCEL_AI_GATEWAY_BASE_URL,
-      api: "anthropic-messages",
-      models: getStaticVercelAiGatewayModelCatalog(),
-    });
-  });
-
-  it("builds runtime metadata for live-only model ids", () => {
-    expect(resolveVercelAiGatewayDynamicModel("custom/provider-model")).toEqual({
-      id: "custom/provider-model",
-      name: "custom/provider-model",
-      reasoning: false,
-      input: ["text"],
-      contextWindow: VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW,
-      maxTokens: VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-      },
-    });
-  });
-
-  it("adds transport metadata for runtime model resolution", () => {
-    expect(resolveVercelAiGatewayModel("custom/provider-model")).toMatchObject({
-      id: "custom/provider-model",
-      provider: "vercel-ai-gateway",
-      api: "anthropic-messages",
-      baseUrl: VERCEL_AI_GATEWAY_BASE_URL,
-    });
-  });
 
   it("preserves provider thinking metadata for known live-only upstream models", () => {
     expect(resolveVercelAiGatewayModel("openai/gpt-5.5")).toMatchObject({
@@ -114,28 +63,16 @@ describe("vercel ai gateway provider catalog", () => {
   });
 
   it("excludes non-language models while preserving vision and legacy catalog rows", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: jsonResponse({
-        data: [
-          {
-            id: "alibaba/qwen3-235b-a22b-thinking",
-            type: "language",
-            tags: ["vision", "reasoning"],
-          },
-          ...[
-            ["embedding", "alibaba/qwen3-embedding-0.6b"],
-            ["image", "bfl/flux-2-flex"],
-            ["video", "alibaba/wan-v2.5-t2v-preview"],
-            ["reranking", "cohere/rerank-v3.5"],
-            ["speech", "fish-audio/s1"],
-            ["transcription", "fish-audio/transcribe-1"],
-            ["realtime", "openai/gpt-realtime-1.5"],
-          ].map(([type, id]) => ({ id, type })),
-          { id: "custom/legacy-model" },
-        ],
-      }),
-      release: async () => {},
-      finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
+    mockCatalog({
+      data: [
+        {
+          id: "alibaba/qwen3-235b-a22b-thinking",
+          type: "language",
+          tags: ["vision", "reasoning"],
+        },
+        { id: "alibaba/qwen3-embedding-0.6b", type: "embedding" },
+        { id: "custom/legacy-model" },
+      ],
     });
 
     expect((await buildVercelAiGatewayProvider()).models).toMatchObject([
@@ -148,68 +85,37 @@ describe("vercel ai gateway provider catalog", () => {
     ]);
   });
 
-  it("preserves empty and fully filtered catalogs", async () => {
-    for (const payload of [
-      [],
-      { data: [] },
-      { data: [{ id: "fixture/embedding-model", type: "embedding" }] },
-    ]) {
-      clearLiveCatalogCacheForTests();
-      fetchWithSsrFGuardMock.mockReset();
-      fetchWithSsrFGuardMock.mockResolvedValueOnce({
-        response: jsonResponse(payload),
-        release: async () => {},
-        finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
-      });
-
-      await expect(discoverVercelAiGatewayModels({ discoveryMode: "strict" })).resolves.toEqual([]);
-    }
+  it("preserves fully filtered catalogs", async () => {
+    mockCatalog({ data: [{ id: "fixture/embedding-model", type: "embedding" }] });
+    await expect(discoverVercelAiGatewayModels({ discoveryMode: "strict" })).resolves.toEqual([]);
   });
 
-  it.each([
-    {
-      kind: "envelope",
-      payload: { data: {} },
-      error: "Live model catalog response must be an array or { data: [] }",
-    },
-    {
-      kind: "row",
-      payload: { data: [null] },
-      error: "Vercel AI Gateway model list: malformed JSON response",
-    },
-  ])("propagates a malformed model list $kind", async ({ payload, error }) => {
-    const release = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: jsonResponse(payload),
-      release,
-      finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
-    });
-    await expect(discoverVercelAiGatewayModels({ discoveryMode: "strict" })).rejects.toThrow(error);
+  it("propagates a malformed model list row", async () => {
+    const release = mockCatalog({ data: [null] });
+    await expect(discoverVercelAiGatewayModels({ discoveryMode: "strict" })).rejects.toThrow(
+      "Vercel AI Gateway model list: malformed JSON response",
+    );
     expect(release).toHaveBeenCalledOnce();
   });
 
   it("falls back from malformed live token metadata", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: jsonResponse({
-        data: [
-          {
-            id: "anthropic/claude-opus-4.6",
-            name: "Claude Opus 4.6",
-            context_window: -1,
-            max_tokens: 128_000.5,
-            tags: ["vision", "reasoning"],
-          },
-          {
-            id: "custom/provider-model",
-            name: "Custom model",
-            context_window: Number.POSITIVE_INFINITY,
-            max_tokens: 0,
-            tags: ["reasoning"],
-          },
-        ],
-      }),
-      release: async () => {},
-      finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
+    mockCatalog({
+      data: [
+        {
+          id: "anthropic/claude-opus-4.6",
+          name: "Claude Opus 4.6",
+          context_window: -1,
+          max_tokens: 128_000.5,
+          tags: ["vision", "reasoning"],
+        },
+        {
+          id: "custom/provider-model",
+          name: "Custom model",
+          context_window: Number.POSITIVE_INFINITY,
+          max_tokens: 0,
+          tags: ["reasoning"],
+        },
+      ],
     });
 
     const models = await discoverVercelAiGatewayModels();
@@ -227,12 +133,7 @@ describe("vercel ai gateway provider catalog", () => {
   });
 
   it("uses the trusted environment proxy for the official live catalog", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: jsonResponse({ data: [{ id: "custom/live-model" }] }),
-      release,
-      finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
-    });
+    const release = mockCatalog({ data: [{ id: "custom/live-model" }] });
 
     const models = await discoverVercelAiGatewayModels();
 

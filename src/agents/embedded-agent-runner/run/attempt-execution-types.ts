@@ -1,8 +1,8 @@
+import type { ContextEngine } from "../../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import type { AgentTool } from "../../runtime/index.js";
 import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
-import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
-/** Shared contracts for the prepared attempt execution phases. */
 import type { createPromptBuildToolPolicy } from "./attempt-prompt-support.js";
 import type { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
@@ -23,7 +23,7 @@ type PreparedTranscriptLifecycle = Prepared<typeof prepareEmbeddedAttemptTranscr
 
 export type EmbeddedAttemptExecutionPhaseInput = {
   attempt: EmbeddedRunAttemptInternalParams;
-  activeContextEngine?: AttemptContextEngine;
+  activeContextEngine?: ContextEngine;
   agentDir: string;
   isRawModelRun: boolean;
   resolveActiveContextEnginePluginId: () => string | undefined;
@@ -39,7 +39,9 @@ export type EmbeddedAttemptExecutionPhaseInput = {
     systemPrompt: Prepared<typeof prepareEmbeddedAttemptSystemPrompt>;
     toolBase: Prepared<typeof prepareEmbeddedAttemptToolBase>;
     toolCatalog: ReturnType<typeof prepareEmbeddedAttemptToolCatalog>;
-    promptToolPolicy: ReturnType<typeof createPromptBuildToolPolicy>;
+    promptToolPolicy: ReturnType<
+      typeof createPromptBuildToolPolicy<AgentTool, AgentTool, AgentTool>
+    >;
   };
   sessionLock: Pick<
     PreparedTranscriptLifecycle,

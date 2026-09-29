@@ -53,7 +53,7 @@ function createRoster() {
         return () => listeners.delete(listener);
       },
     },
-    publish(agentsList: AgentsListResult) {
+    publish(agentsList: AgentsListResult | null) {
       state = { agentsList };
       for (const listener of listeners) {
         listener();
@@ -632,6 +632,133 @@ describe("agent selection", () => {
     });
 
     expect(selection.state).toEqual({ selectedId: "roboclaw", scopeId: "roboclaw" });
+  });
+});
+
+describe("configured Settings agent selection", () => {
+  const configuredRoster = (
+    agents: AgentsListResult["agents"],
+    defaultId = "main",
+  ): AgentsListResult => ({
+    defaultId,
+    mainKey: "main",
+    scope: "per-sender",
+    agents,
+  });
+  const createSettingsSelection = (
+    gateway: ReturnType<typeof createGateway>,
+    roster: ReturnType<typeof createRoster>,
+  ) =>
+    createAgentSelectionCapability(gateway.gateway, roster.roster, undefined, undefined, {
+      requireConfiguredAgent: true,
+    });
+
+  it("keeps a cold link private until the roster confirms it, independently of chat", () => {
+    const gateway = createGateway(null);
+    const roster = createRoster();
+    const chat = createAgentSelectionCapability(gateway.gateway, roster.roster);
+    const settings = createSettingsSelection(gateway, roster);
+    settings.set("Research");
+    expect(settings.state).toEqual({ selectedId: null, scopeId: null });
+    gateway.publish({ client: null, assistantAgentId: "main" });
+    roster.publish(configuredRoster([{ id: "main" }, { id: "research" }]));
+    expect(settings.state).toEqual({ selectedId: "research", scopeId: "research" });
+    expect(chat.state.selectedId).toBe("main");
+    settings.set("main");
+    chat.set("research");
+    expect(settings.state.selectedId).toBe("main");
+    settings.dispose();
+    chat.dispose();
+  });
+
+  it.each([
+    {
+      requested: "removed",
+      defaultId: "main",
+      agents: [{ id: "main" }, { id: "research" }],
+      expected: "main",
+    },
+    {
+      requested: "system",
+      defaultId: "system",
+      agents: [{ id: "system", kind: "system" as const }, { id: "research" }],
+      expected: "research",
+    },
+    {
+      requested: "main",
+      defaultId: "main",
+      agents: [{ id: "system", kind: "system" as const }],
+      expected: null,
+    },
+    { requested: "main", defaultId: "main", agents: [], expected: null },
+  ])(
+    "reconciles $requested to $expected against the selectable roster",
+    ({ requested, defaultId, agents, expected }) => {
+      const gateway = createGateway();
+      const roster = createRoster();
+      const settings = createSettingsSelection(gateway, roster);
+      settings.set(requested);
+      roster.publish(configuredRoster(agents, defaultId));
+      expect(settings.state).toEqual({ selectedId: expected, scopeId: expected });
+      settings.setScope(requested);
+      expect(settings.state).toEqual({ selectedId: expected, scopeId: expected });
+      settings.dispose();
+    },
+  );
+
+  it("preserves explicit ownership through reconnect, then clears a removed agent", () => {
+    const gateway = createGateway();
+    const roster = createRoster();
+    const settings = createSettingsSelection(gateway, roster);
+    roster.publish(configuredRoster([{ id: "main" }, { id: "research" }]));
+    settings.set("research");
+    roster.publish(null);
+    gateway.publish({ client: null, assistantAgentId: null });
+    expect(settings.state.selectedId).toBeNull();
+    gateway.publish({ client: null, assistantAgentId: "main" });
+    roster.publish(configuredRoster([{ id: "main" }, { id: "research" }]));
+    expect(settings.state.selectedId).toBe("research");
+    roster.publish(configuredRoster([{ id: "main" }]));
+    expect(settings.state).toEqual({ selectedId: "main", scopeId: "main" });
+    roster.publish(configuredRoster([]));
+    expect(settings.state).toEqual({ selectedId: null, scopeId: null });
+    settings.dispose();
+  });
+
+  it("does not carry pending intent to another Gateway and stops observing after disposal", () => {
+    const gateway = createGateway();
+    const roster = createRoster();
+    gateway.gateway.subscribe(() => roster.publish(null));
+    const settings = createSettingsSelection(gateway, roster);
+    settings.set("research");
+    const revision = settings.intentRevision;
+    gateway.switchGateway("ws://gateway-b.test");
+    expect(settings.intentRevision).toBeGreaterThan(revision);
+    roster.publish(configuredRoster([{ id: "main" }, { id: "research" }]));
+    expect(settings.state.selectedId).toBe("main");
+    const listener = vi.fn();
+    settings.subscribe(listener);
+    settings.dispose();
+    roster.publish(configuredRoster([{ id: "research" }], "research"));
+    gateway.publish({ client: null, assistantAgentId: "research" });
+    expect(settings.state.selectedId).toBe("main");
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("records same-id and ABA user intent without treating roster publication as new intent", () => {
+    const gateway = createGateway();
+    const roster = createRoster();
+    const settings = createSettingsSelection(gateway, roster);
+    const initialRevision = settings.intentRevision;
+    roster.publish(configuredRoster([{ id: "main" }, { id: "research" }]));
+    expect(settings.intentRevision).toBe(initialRevision);
+    settings.set("main");
+    settings.set("research");
+    settings.set("main");
+    expect(settings.intentRevision).toBe(initialRevision + 3);
+    roster.publish(configuredRoster([{ id: "research" }], "research"));
+    expect(settings.intentRevision).toBe(initialRevision + 3);
+    settings.dispose();
   });
 });
 

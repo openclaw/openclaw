@@ -1,23 +1,24 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { SqliteQueryCompiler } from "kysely";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
+  withOpenClawAgentDatabaseWrite,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesForTest,
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readMemoryPreimages, storeMemoryPreimage } from "./dreaming-consolidation-artifacts.js";
 import {
-  deleteMemoryEntryOrigins,
+  deleteMemoryEntryOriginsInDatabase,
   listMemoryEntryOrigins,
   listMemorySessionTombstones,
   pruneMemoryEntryOrigins,
   recordMemoryEntryOrigins,
-  recordMemorySessionTombstones,
   reserveMemoryEntryOrigins,
   type MemoryEntryOrigin,
 } from "./memory-entry-origins.js";
@@ -26,6 +27,7 @@ import { recordShortTermRecalls } from "./short-term-promotion-record.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
+  seedMemoryForgetTombstones,
 } from "./test-helpers.js";
 
 describe("memory entry origins", () => {
@@ -45,7 +47,7 @@ describe("memory entry origins", () => {
   afterEach(async () => {
     resetMemoryCoreDreamingStateForTests();
     closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     vi.unstubAllEnvs();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
@@ -62,14 +64,20 @@ describe("memory entry origins", () => {
   }
 
   it("lazily restores the additive origins table without changing the agent schema version", async () => {
-    expect(deleteMemoryEntryOrigins({ agentId: "main", entryKeys: ["candidate"] })).toBe(0);
+    const pruning = {
+      workspaceDir: stateDir,
+      agentIds: ["main"],
+      entryKeys: ["candidate"],
+      retainedEntryKeys: new Set<string>(),
+    };
+    await pruneMemoryEntryOrigins(pruning);
     await expect(fs.access(resolveOpenClawAgentSqlitePath({ agentId: "main" }))).rejects.toThrow();
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
     const version = db.prepare("PRAGMA user_version").get();
     db.exec("DROP TABLE IF EXISTS memory_entry_origins");
 
     expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
-    expect(deleteMemoryEntryOrigins({ agentId: "main", entryKeys: ["candidate"] })).toBe(0);
+    await pruneMemoryEntryOrigins(pruning);
     expect(
       db.prepare("SELECT name FROM sqlite_schema WHERE name = 'memory_entry_origins'").get(),
     ).toBeUndefined();
@@ -97,7 +105,7 @@ describe("memory entry origins", () => {
     ).toBeUndefined();
 
     expect(
-      recordMemorySessionTombstones({
+      seedMemoryForgetTombstones({
         agentId: "main",
         sessionIds: ["session-2", "session-1", "session-1"],
         createdAt: 1_000,
@@ -108,7 +116,7 @@ describe("memory entry origins", () => {
       .get();
     expect(deletionRevision).not.toEqual(revisionBefore);
     expect(
-      recordMemorySessionTombstones({
+      seedMemoryForgetTombstones({
         agentId: "main",
         sessionIds: ["session-1"],
         reason: "replacement",
@@ -193,13 +201,21 @@ describe("memory entry origins", () => {
       origin("replacement", "session-1"),
       origin("surviving", "session-3"),
     ]);
-    expect(deleteMemoryEntryOrigins({ agentId: "main", entryKeys: ["replacement"] })).toBe(1);
+    await expect(
+      withOpenClawAgentDatabaseWrite({ agentId: "main" }, ({ db }) =>
+        deleteMemoryEntryOriginsInDatabase(db, { agentId: "main", entryKeys: ["replacement"] }),
+      ),
+    ).resolves.toBe(1);
     expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([origin("surviving", "session-3")]);
   });
 
-  it("rolls back only newly reserved lineage when a replacement does not commit", () => {
+  it("rolls back only newly reserved lineage when a replacement does not commit", async () => {
     const priorEntry = "- Keep the original deployment target.";
-    const original = [origin("candidate", "session-2"), origin("prior", "session-1")];
+    const prior = Array.from({ length: 32 }, (_, index) =>
+      origin("prior", `session-${String(index).padStart(2, "0")}`),
+    );
+    const existing = origin("candidate", "session-existing");
+    const original = [existing, ...prior];
     recordMemoryEntryOrigins({ agentId: "main", origins: original });
     for (const filter of [
       { entryKeys: [] },
@@ -207,19 +223,75 @@ describe("memory entry origins", () => {
       { entryKeys: ["missing"] },
       { entryKeys: ["candidate"], sessionIds: ["session-1"] },
     ]) {
-      expect(deleteMemoryEntryOrigins({ agentId: "main", ...filter })).toBe(0);
+      await expect(
+        withOpenClawAgentDatabaseWrite({ agentId: "main" }, ({ db }) =>
+          deleteMemoryEntryOriginsInDatabase(db, { agentId: "main", ...filter }),
+        ),
+      ).resolves.toBe(0);
     }
     expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(original);
-    const rollback = reserveMemoryEntryOrigins({
-      agentIds: ["main"],
-      previousMemory: `${buildPromotionMarker("prior")}\n${priorEntry}\n`,
-      operations: [{ candidateKey: "candidate", action: "merged", priorEntries: [priorEntry] }],
-    });
-    expect(listMemoryEntryOrigins({ agentId: "main", entryKeys: ["candidate"] })).toHaveLength(2);
+    const compile = vi.spyOn(SqliteQueryCompiler.prototype, "compileQuery");
+    try {
+      const rollback = reserveMemoryEntryOrigins({
+        agentIds: ["main"],
+        previousMemory: `${buildPromotionMarker("prior")}\n${priorEntry}\n`,
+        operations: [{ candidateKey: "candidate", action: "merged", priorEntries: [priorEntry] }],
+      });
+      expect(listMemoryEntryOrigins({ agentId: "main", entryKeys: ["candidate"] })).toEqual([
+        ...prior.map((entry) => origin("candidate", entry.sessionId)),
+        existing,
+      ]);
 
-    rollback();
+      rollback();
 
-    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(original);
+      expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(original);
+      expect(
+        compile.mock.results.filter(
+          (result) =>
+            result.type === "return" &&
+            result.value.sql.startsWith('insert into "memory_entry_origins"'),
+        ).length,
+      ).toBeLessThanOrEqual(2);
+    } finally {
+      compile.mockRestore();
+    }
+  });
+
+  it("keeps fresh origin values and insertion order across conflicts and failed reservations", () => {
+    const first = origin("candidate", "session-z");
+    const second: MemoryEntryOrigin = {
+      entryKey: "candidate",
+      agentId: "main",
+      sessionId: "session-a",
+      sessionKey: null,
+      originClass: "agent",
+      observedAt: 2_000,
+    };
+    const third: MemoryEntryOrigin = {
+      entryKey: "candidate",
+      agentId: "main",
+      sessionId: "session-m",
+      sessionKey: "agent:main:漢😀",
+      originClass: "system",
+      observedAt: 3_000,
+    };
+    expect(
+      recordMemoryEntryOrigins({
+        agentId: "main",
+        origins: [first, second, { ...first, observedAt: 9_000 }, third],
+      }),
+    ).toEqual([first, second, third]);
+    const before = [second, third, first];
+    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(before);
+    expect(() =>
+      recordMemoryEntryOrigins({
+        agentId: "main",
+        origins: [origin("next", "new-session"), { ...second, agentId: "other" }],
+      }),
+    ).toThrow("memory entry origin belongs to another agent");
+    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(before);
+    closeOpenClawAgentDatabasesForTest();
+    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(before);
   });
 
   it.each(["DREAMS.md", "dreams.md"])(
@@ -249,7 +321,7 @@ describe("memory entry origins", () => {
       });
       const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
       db.prepare(
-        "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, 'memory', 1, 2, ?, 'fts-only', ?, '[]', 1000)",
+        "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, 'memory', 1, 2, ?, 'fts-only', ?, x'', 1000)",
       ).run(
         "older-memory",
         "MEMORY.md",

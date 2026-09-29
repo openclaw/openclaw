@@ -20,7 +20,6 @@ import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
 import type {
   ChannelMessagingAdapter,
   ChannelOutboundSessionRoute,
-  ChannelPollResult,
   ChannelSecurityDmPolicy,
   ChannelThreadingAdapter,
 } from "../channels/plugins/types.core.js";
@@ -29,7 +28,6 @@ import type { ChannelMeta } from "../channels/plugins/types.public.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
-import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { normalizeOutboundThreadId } from "../infra/outbound/thread-id.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
@@ -38,6 +36,7 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
+import { createAttachedChannelResultAdapter } from "./channel-send-result.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
 export type {
   AgentPromptGuidance,
@@ -189,24 +188,6 @@ export type {
   ChannelMessagingAdapter,
 } from "../channels/plugins/types.core.js";
 
-function createInlineTextPairingAdapter(params: {
-  idLabel: string;
-  message: string;
-  normalizeAllowEntry?: ChannelPairingAdapter["normalizeAllowEntry"];
-  notify: (
-    params: Parameters<NonNullable<ChannelPairingAdapter["notifyApproval"]>>[0] & {
-      message: string;
-    },
-  ) => Promise<void> | void;
-}): ChannelPairingAdapter {
-  return {
-    idLabel: params.idLabel,
-    normalizeAllowEntry: params.normalizeAllowEntry,
-    notifyApproval: async (ctx) => {
-      await params.notify({ ...ctx, message: params.message });
-    },
-  };
-}
 export type {
   ProviderUsageSnapshot,
   UsageProviderId,
@@ -660,56 +641,12 @@ type ChatChannelThreadingOptions<TResolvedAccount> =
 
 type ChatChannelAttachedOutboundOptions = {
   base: Omit<ChannelOutboundAdapter, "sendText" | "sendMedia" | "sendPoll">;
-  attachedResults: {
-    channel: string;
-    sendText?: (
-      ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0],
-    ) => MaybePromise<Omit<OutboundDeliveryResult, "channel">>;
-    sendMedia?: (
-      ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0],
-    ) => MaybePromise<Omit<OutboundDeliveryResult, "channel">>;
-    sendPoll?: (
-      ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendPoll"]>>[0],
-    ) => MaybePromise<Omit<ChannelPollResult, "channel">>;
-  };
+  attachedResults: Parameters<typeof createAttachedChannelResultAdapter>[0];
 };
 
-type MaybePromise<T> = T | Promise<T>;
-
-function createInlineAttachedChannelResultAdapter(
-  params: ChatChannelAttachedOutboundOptions["attachedResults"],
-) {
-  return {
-    sendText: params.sendText
-      ? async (ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0]) => ({
-          channel: params.channel,
-          ...(await params.sendText!(ctx)),
-        })
-      : undefined,
-    sendMedia: params.sendMedia
-      ? async (ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0]) => ({
-          channel: params.channel,
-          ...(await params.sendMedia!(ctx)),
-        })
-      : undefined,
-    sendPoll: params.sendPoll
-      ? async (ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendPoll"]>>[0]) => ({
-          channel: params.channel,
-          ...(await params.sendPoll!(ctx)),
-        })
-      : undefined,
-  } satisfies Pick<ChannelOutboundAdapter, "sendText" | "sendMedia" | "sendPoll">;
-}
-
 function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: string | null }>(
-  security:
-    | ChannelSecurityAdapter<TResolvedAccount>
-    | ChatChannelSecurityOptions<TResolvedAccount>
-    | undefined,
-): ChannelSecurityAdapter<TResolvedAccount> | undefined {
-  if (!security) {
-    return undefined;
-  }
+  security: ChannelSecurityAdapter<TResolvedAccount> | ChatChannelSecurityOptions<TResolvedAccount>,
+): ChannelSecurityAdapter<TResolvedAccount> {
   if (!("dm" in security)) {
     return security;
   }
@@ -741,23 +678,24 @@ function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: strin
 }
 
 function resolveChatChannelPairing(
-  pairing: ChannelPairingAdapter | ChatChannelPairingOptions | undefined,
-): ChannelPairingAdapter | undefined {
-  if (!pairing) {
-    return undefined;
-  }
+  pairing: ChannelPairingAdapter | ChatChannelPairingOptions,
+): ChannelPairingAdapter {
   if (!("text" in pairing)) {
     return pairing;
   }
-  return createInlineTextPairingAdapter(pairing.text);
+  const text = pairing.text;
+  return {
+    idLabel: text.idLabel,
+    normalizeAllowEntry: text.normalizeAllowEntry,
+    notifyApproval: async (ctx) => {
+      await text.notify({ ...ctx, message: text.message });
+    },
+  };
 }
 
 function resolveChatChannelThreading<TResolvedAccount>(
-  threading: ChannelThreadingAdapter | ChatChannelThreadingOptions<TResolvedAccount> | undefined,
-): ChannelThreadingAdapter | undefined {
-  if (!threading) {
-    return undefined;
-  }
+  threading: ChannelThreadingAdapter | ChatChannelThreadingOptions<TResolvedAccount>,
+): ChannelThreadingAdapter {
   if (!("topLevelReplyToMode" in threading) && !("scopedAccountReplyToMode" in threading)) {
     return threading;
   }
@@ -778,17 +716,14 @@ function resolveChatChannelThreading<TResolvedAccount>(
 }
 
 function resolveChatChannelOutbound(
-  outbound: ChannelOutboundAdapter | ChatChannelAttachedOutboundOptions | undefined,
-): ChannelOutboundAdapter | undefined {
-  if (!outbound) {
-    return undefined;
-  }
+  outbound: ChannelOutboundAdapter | ChatChannelAttachedOutboundOptions,
+): ChannelOutboundAdapter {
   if (!("attachedResults" in outbound)) {
     return outbound;
   }
   return {
     ...outbound.base,
-    ...createInlineAttachedChannelResultAdapter(outbound.attachedResults),
+    ...createAttachedChannelResultAdapter(outbound.attachedResults),
   };
 }
 

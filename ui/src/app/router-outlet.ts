@@ -13,6 +13,7 @@ import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import {
   RouterOutletController,
   selectRenderedRouteMatch,
+  type RouterOutletInputs,
   type RouterOutletSnapshot,
 } from "./router-outlet-controller.ts";
 import {
@@ -20,8 +21,6 @@ import {
   retryStaleChunkReloadWhenReachable,
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
-
-export { selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 
 type RenderableModule<TData> = {
   render: (data: TData | undefined, loaderPending: boolean, presented?: boolean) => unknown;
@@ -84,8 +83,8 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
 ) {
   const staleChunk = isStaleChunkImportError(error);
   if (staleChunk) {
-    // The chunk this document references was replaced by a newer build;
-    // revalidate cannot fix that, only a reload against the fresh index.html.
+    // Asset failures can mean an interrupted connection or a replaced build.
+    // Reload also resets failed browser imports and Vite stylesheet preloads.
     void scheduleStaleChunkReload();
   }
   const revalidate = () => {
@@ -99,9 +98,8 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
       revalidate();
       return;
     }
-    // The gateway is usually still restarting when this is clicked (that update
-    // is what stranded the chunk), so wait for it to answer and then reload
-    // instead of declining on the first failed probe — a silent no-op here is
+    // The Gateway may still be restarting or unreachable, so wait for it to answer
+    // and then reload instead of declining on the first failed probe — a silent no-op here is
     // what drives people to a manual hard reload. Reloading against an
     // unreachable gateway would replace the recoverable panel error with a
     // fatal navigation error in app webviews, so the wait is still bounded.
@@ -111,12 +109,12 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
       if (reloading) {
         return;
       }
+      // Vite marks CSS dependencies seen before loading them. Retrying the
+      // module after a failed or blocked reload can mount it without its styles.
       restoreButton();
-      revalidate();
     });
   };
-  // Stale-chunk failures are routine after a gateway update, so present them
-  // as an update prompt instead of a generic failure.
+  // Resource errors alone cannot establish that a newer build exists.
   return renderLazyViewError({ error, onRetry: handleRetry, render, stale: staleChunk });
 }
 
@@ -126,25 +124,18 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
   renderedMatch: RouteMatch<TRouteId, TModule, TData> | undefined,
   options: RouterOutletOptions<TLoadContext> = {},
 ): unknown {
-  if (renderedMatch?.status === "notFound") {
-    return nothing;
-  }
-  if (renderedMatch?.status === "redirected") {
-    return nothing;
-  }
-  if (!renderedMatch) {
+  if (
+    !renderedMatch ||
+    renderedMatch.status === "notFound" ||
+    renderedMatch.status === "redirected"
+  ) {
     return nothing;
   }
 
   const routeId = renderedMatch.routeId;
-  if (!renderedMatch?.module) {
+  if (!renderedMatch.module) {
     return renderedMatch.error
-      ? renderError<TRouteId, TLoadContext, TModule, TData>(
-          router,
-          options.retryContext,
-          renderedMatch.error,
-          routeId,
-        )
+      ? renderError(router, options.retryContext, renderedMatch.error, routeId)
       : selection.showPending
         ? renderLoadingState()
         : nothing;
@@ -152,12 +143,7 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
   const routeModule = renderedMatch.module;
   if (!isRenderableModule<TData>(routeModule)) {
     return renderedMatch.error
-      ? renderError<TRouteId, TLoadContext, TModule, TData>(
-          router,
-          options.retryContext,
-          renderedMatch.error,
-          routeId,
-        )
+      ? renderError(router, options.retryContext, renderedMatch.error, routeId)
       : null;
   }
   const renderedPage = () =>
@@ -167,7 +153,7 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
         : routeModule.render(renderedMatch.data, renderedMatch.isFetching === "loader"),
     );
   return renderedMatch.error
-    ? renderError<TRouteId, TLoadContext, TModule, TData>(
+    ? renderError(
         router,
         options.retryContext,
         renderedMatch.error,
@@ -176,12 +162,6 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
       )
     : renderedPage();
 }
-
-type RouterOutletInputs<TRouteId extends string, TLoadContext, TModule, TData> = {
-  router?: Router<TRouteId, TLoadContext, TModule, TData>;
-  onNotFound?: () => boolean | void;
-  notFoundRecoveryReady?: boolean;
-};
 
 class LitRouterOutletController<
   TRouteId extends string,
@@ -369,6 +349,13 @@ class OpenClawRouterOutlet<
       // Returning from another page must not revive the previously selected
       // session while the requested destination is still unresolved.
       if (module?.retainOnNavigate && waiting) {
+        // Chat's module can arrive before its submitted-prompt preview loader.
+        // Keep the launcher visible until that first Chat presentation is ready.
+        if (renderedMatch?.routeId === "chat" && snapshot.settled?.routeId === "new-session") {
+          return renderRouterOutlet(router, snapshot, snapshot.settled, {
+            retryContext: this.retryContext,
+          });
+        }
         return renderLoadingState();
       }
       return renderRouterOutlet(router, snapshot, renderedMatch, {

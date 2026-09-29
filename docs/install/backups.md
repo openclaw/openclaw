@@ -69,10 +69,18 @@ workspaces remain ordinary workspace files. [Backup CLI](/cli/backup)
 documents every flag, owner-declared regenerable resources, volatile files,
 and verification details.
 
-If the configuration is malformed, `--no-include-workspace` can still produce a
-partial recovery archive for state, config, and credentials. Its skipped
-diagnostics identify agent and plugin ownership that could not be resolved;
-repair the configuration before relying on an archive as complete.
+If the configuration is malformed, state archive creation fails because agent
+and plugin ownership cannot be resolved. `--no-include-workspace` only excludes
+workspace files; it does not bypass ownership discovery. Before repairing the
+configuration, save the active config file:
+
+```bash
+openclaw backup create --only-config --output ~/Backups/openclaw --verify
+```
+
+This saves only the active JSON config file, without parsing it or including
+its `$include` dependencies. Repair the configuration, then rerun the full
+archive command above to protect state, credentials, agents, and workspaces.
 
 Archives are full copies: each run re-uploads everything. They are the right
 tool before an update, reset, uninstall, or machine move, and a reasonable
@@ -357,8 +365,9 @@ openclaw backup restore "$ARCHIVE" --target ./restored-openclaw
 
 The target must not exist or must be empty, and it must not be inside the live
 state directory or any configured live agent directory. OpenClaw verifies
-archive structure, the manifest, hardlinks, symbolic-link entries, and
-SQLite databases before it writes the target. A non-empty target is refused,
+archive structure, the manifest, hardlinks, symbolic-link entries, and the root
+SQLite snapshot and its durably registered agent snapshots before it writes the
+target. Other payload remains opaque. A non-empty target is refused,
 and a failed extraction cleans its incomplete output. The command never writes
 into live state or agent roots and has no force or in-place mode. Treat the
 restored directory as sensitive: it can contain credentials, auth profiles,

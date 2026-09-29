@@ -1,15 +1,10 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderTextInput } from "./config-form.node.scalar.ts";
-import { analyzeConfigSchema, renderConfigForm as renderConfigFormBase } from "./config-form.ts";
-
-function renderConfigForm(
-  props: Omit<Parameters<typeof renderConfigFormBase>[0], "onShowAdvanced"> & {
-    onShowAdvanced?: () => void;
-  },
-) {
-  return renderConfigFormBase({ showAdvanced: true, onShowAdvanced: () => {}, ...props });
-}
+import {
+  renderAnalyzedFormFixture,
+  renderTextInputFixture,
+} from "../test-helpers/config-form-fixtures.ts";
+import { analyzeConfigSchema, renderNode } from "./config-form.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);
@@ -20,6 +15,111 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
 }
 
 describe("config form primitive union integrity", () => {
+  it.each(
+    [false, true].flatMap((maskSensitive) => [
+      { maskSensitive, initial: undefined },
+      { maskSensitive, initial: "~/.openclaw/usage-footer.json" },
+    ]),
+  )(
+    "renderNode preserves inline objects in ordinary unions (maskSensitive=$maskSensitive, initial=$initial)",
+    ({ maskSensitive, initial }) => {
+      const container = document.createElement("div");
+      const onPatch = vi.fn();
+      const analysis = analyzeConfigSchema({
+        anyOf: [{ type: "string" }, { type: "object", additionalProperties: {} }],
+      });
+      render(
+        renderNode({
+          schema: analysis.schema!,
+          value: initial,
+          path: ["messages", "usageTemplate"],
+          hints: {},
+          unsupported: new Set(analysis.unsupportedPaths),
+          disabled: false,
+          maskSensitive,
+          onPatch,
+        }),
+        container,
+      );
+      const editor = expectElement(
+        container.querySelector<HTMLTextAreaElement>("textarea"),
+        "typed inline-object editor",
+      );
+      const template = { output: { default: [{ text: "usage" }] } };
+      editor.value = JSON.stringify(template);
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+      editor.dispatchEvent(new Event("change", { bubbles: true }));
+      expect(onPatch).toHaveBeenLastCalledWith(["messages", "usageTemplate"], template);
+    },
+  );
+
+  it.each(["string-first", "object-first"])(
+    "edits string/object credentials without converting reference or object values (%s)",
+    (syntax) => {
+      const container = document.createElement("div");
+      const onPatch = vi.fn();
+      const credential = {
+        type: syntax === "string-first" ? ["string", "object"] : ["object", "string"],
+        minLength: 3,
+      };
+      const analysis = analyzeConfigSchema({
+        type: "object",
+        properties: { credentials: { type: "object", properties: { token: credential } } },
+      });
+      const renderValue = (token: unknown) =>
+        render(
+          renderNode({
+            schema: analysis.schema!,
+            value: { credentials: { token } },
+            path: [],
+            hints: { "credentials.token": { sensitive: true } },
+            unsupported: new Set(analysis.unsupportedPaths),
+            disabled: false,
+            rawAvailable: false,
+            maskSensitive: true,
+            onPatch,
+          }),
+          container,
+        );
+
+      renderValue(undefined);
+      const input = expectElement(
+        container.querySelector<HTMLInputElement>("input"),
+        "credential input",
+      );
+      expect(input.type).toBe("password");
+      input.value = "x";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).not.toHaveBeenCalled();
+      input.value = "synthetic-key";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).toHaveBeenLastCalledWith(["credentials", "token"], "synthetic-key");
+      renderValue("synthetic-key");
+      expect(input.readOnly).toBe(false);
+      expect(input.type).toBe("password");
+
+      for (const source of ["env", "file", "exec"]) {
+        onPatch.mockClear();
+        renderValue({ source, provider: "default", id: "synthetic-reference" });
+        const reference = expectElement(
+          container.querySelector<HTMLInputElement>("input"),
+          "reference input",
+        );
+        expect(reference.value).toBe("");
+        expect(reference.readOnly).toBe(true);
+        expect(reference.placeholder).toContain("edit the config file directly");
+        reference.value = "replacement";
+        reference.dispatchEvent(new Event("input", { bubbles: true }));
+        reference.dispatchEvent(new Event("change", { bubbles: true }));
+        expect(onPatch).not.toHaveBeenCalled();
+      }
+
+      renderValue({ nested: "structured" });
+      expect(container.querySelector("textarea")).not.toBeNull();
+      expect(container.querySelector("input")).toBeNull();
+    },
+  );
+
   it.each(["anyOf", "type-array"])(
     "preserves the current branch type in %s primitive unions",
     (syntax) => {
@@ -48,16 +148,10 @@ describe("config form primitive union integrity", () => {
           },
         });
         expect(analysis.unsupportedPaths).toEqual([]);
-        render(
-          renderConfigForm({
-            schema: analysis.schema,
-            value: { providerOptions: { deepgram: { temperature: value } } },
-            uiHints: {},
-            unsupportedPaths: analysis.unsupportedPaths,
-            onPatch,
-          }),
-          container,
-        );
+        renderAnalyzedFormFixture(container, analysis, {
+          value: { providerOptions: { deepgram: { temperature: value } } },
+          onPatch,
+        });
         return expectElement(
           container.querySelector<HTMLInputElement>("input[type='text']"),
           "mixed primitive union input",
@@ -161,25 +255,19 @@ describe("config form primitive union integrity", () => {
       let value: unknown = initial;
 
       const renderValue = () => {
-        render(
-          renderTextInput({
-            schema,
-            value,
-            path: ["allowFrom"],
-            hints: {},
-            unsupported: new Set(),
-            disabled: false,
-            inputType: "text",
-            onPatch: (_path, nextValue) => {
-              patches.push(nextValue);
-              persisted = nextValue;
-              value = nextValue;
-              // Model application immediately refreshes the rendered field.
-              renderValue();
-            },
-          }),
-          container,
-        );
+        renderTextInputFixture(container, {
+          schema,
+          value,
+          path: ["allowFrom"],
+          inputType: "text",
+          onPatch: (_path, nextValue) => {
+            patches.push(nextValue);
+            persisted = nextValue;
+            value = nextValue;
+            // Model application immediately refreshes the rendered field.
+            renderValue();
+          },
+        });
       };
 
       try {

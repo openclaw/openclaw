@@ -15,6 +15,7 @@ import {
   mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
 import { buildSystemdUnit, parseSystemdExecStart } from "../../daemon/systemd-unit.js";
+import { systemdManagerVersionProbe } from "../../daemon/systemd-user-bus.test-support.js";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
 import { captureEnv, withEnvAsync } from "../../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
@@ -66,6 +67,7 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime,
 }));
 
+const daemonExec = await import("../../daemon/exec-file.js");
 const { runDaemonInstall } = await import("./install.js");
 const { buildLaunchAgentPlist, readLaunchAgentProgramArgumentsFromFile } =
   await import("../../daemon/launchd-plist.js");
@@ -109,6 +111,11 @@ describe("runDaemonInstall integration", () => {
   let tempHome: string;
   let configPath: string;
 
+  async function writeConfig(config: unknown, indent?: number) {
+    await fs.writeFile(configPath, JSON.stringify(config, null, indent));
+    clearConfigCache();
+  }
+
   async function snapshotConfig() {
     const contents = await fs.readFile(configPath);
     const { ino, mode, uid } = await fs.lstat(configPath);
@@ -118,6 +125,7 @@ describe("runDaemonInstall integration", () => {
   beforeAll(async () => {
     envSnapshot = captureEnv([
       "HOME",
+      "DBUS_SESSION_BUS_ADDRESS",
       "OPENCLAW_STATE_DIR",
       "OPENCLAW_CONFIG_PATH",
       "OPENCLAW_GATEWAY_TOKEN",
@@ -128,6 +136,7 @@ describe("runDaemonInstall integration", () => {
     await fs.mkdir(tempHome);
     configPath = path.join(tempHome, "openclaw.json");
     process.env.HOME = accountHome;
+    process.env.DBUS_SESSION_BUS_ADDRESS = `unix:path=${path.join(accountHome, "bus")}`;
     process.env.OPENCLAW_STATE_DIR = tempHome;
     process.env.OPENCLAW_CONFIG_PATH = configPath;
   });
@@ -144,6 +153,7 @@ describe("runDaemonInstall integration", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mockSystemAccountHome();
+    vi.spyOn(daemonExec, "execFileUtf8").mockImplementation(systemdManagerVersionProbe);
     resetRuntimeCapture();
     clearRuntimeConfigSnapshot();
     // Keep these defined-but-empty so dotenv won't repopulate from local .env.
@@ -152,11 +162,11 @@ describe("runDaemonInstall integration", () => {
     serviceMock.isLoaded.mockResolvedValue(false);
     serviceMock.install.mockReset();
     serviceMock.install.mockResolvedValue(undefined);
+    serviceMock.readDefinitionMutationCapability.mockReset();
     serviceMock.readDefinitionMutationCapability.mockResolvedValue({ kind: "writable" });
     serviceMock.readCommand.mockReset();
     serviceMock.readCommand.mockResolvedValue(null);
-    await fs.writeFile(configPath, JSON.stringify({}, null, 2));
-    clearConfigCache();
+    await writeConfig({}, 2);
   });
 
   it.each(
@@ -242,7 +252,7 @@ describe("runDaemonInstall integration", () => {
           if (typeof options === "number" || !options?.input) {
             throw new Error("Missing plist fixture input");
           }
-          return decodeLaunchAgentPlistFixture(options.input);
+          return decodeLaunchAgentPlistFixture(options.input, args[1]);
         }
         return runExec(file, args, options);
       });
@@ -350,31 +360,26 @@ describe("runDaemonInstall integration", () => {
   });
 
   it("fails closed when token SecretRef is required but unresolved", async () => {
-    await fs.writeFile(
-      configPath,
-      JSON.stringify(
-        {
-          secrets: {
-            providers: {
-              default: { source: "env" },
-            },
+    await writeConfig(
+      {
+        secrets: {
+          providers: {
+            default: { source: "env" },
           },
-          gateway: {
-            auth: {
-              mode: "token",
-              token: {
-                source: "env",
-                provider: "default",
-                id: "MISSING_GATEWAY_TOKEN",
-              },
+        },
+        gateway: {
+          auth: {
+            mode: "token",
+            token: {
+              source: "env",
+              provider: "default",
+              id: "MISSING_GATEWAY_TOKEN",
             },
           },
         },
-        null,
-        2,
-      ),
+      },
+      2,
     );
-    clearConfigCache();
 
     await expect(runDaemonInstall({ json: true })).rejects.toThrow("__exit__:1");
     expect(serviceMock.install).not.toHaveBeenCalled();
@@ -400,8 +405,7 @@ describe("runDaemonInstall integration", () => {
       };
       await fs.mkdir(ancestor);
       await fs.chmod(ancestor, 0o777);
-      await fs.writeFile(configPath, JSON.stringify(config));
-      clearConfigCache();
+      await writeConfig(config);
       busctl.mockResolvedValue({
         code: 1,
         termination: "exit",
@@ -445,6 +449,28 @@ describe("runDaemonInstall integration", () => {
       }
     },
   );
+
+  it("names an unreadable Linux unit without changing config or replacing it", async () => {
+    const unit = path.join(accountHome, ".config/systemd/user/openclaw-gateway.service");
+    const readFile = fs.readFile.bind(fs);
+    vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+      if (args[0] === unit) {
+        throw Object.assign(new Error("private-native-error-canary"), { code: "EACCES" });
+      }
+      return readFile(...args);
+    });
+    serviceMock.readCommand.mockImplementation(readSystemdServiceExecStart);
+    serviceMock.isLoaded.mockRejectedValue(new Error("Failed to get unit file state"));
+    const before = await snapshotConfig();
+    await expect(runDaemonInstall({ json: true, force: true })).rejects.toThrow("__exit__:1");
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain(JSON.stringify(unit).slice(1, -1));
+    expect(output).toContain("unreadable");
+    expect(output).not.toContain("private-native-error-canary");
+    expect(await snapshotConfig()).toEqual(before);
+    expect(serviceMock.install).not.toHaveBeenCalled();
+    expect(serviceMock.isLoaded).not.toHaveBeenCalled();
+  });
 
   it.each(["fragment", "drop-in"])(
     "blocks a root-owned manager %s before config or token writes",
@@ -595,24 +621,19 @@ describe("runDaemonInstall integration", () => {
   });
 
   it("refuses service install when config was written by a newer OpenClaw", async () => {
-    await fs.writeFile(
-      configPath,
-      JSON.stringify(
-        {
-          meta: {
-            lastTouchedVersion: "9999.1.1",
-          },
-          gateway: {
-            auth: {
-              mode: "token",
-            },
+    await writeConfig(
+      {
+        meta: {
+          lastTouchedVersion: "9999.1.1",
+        },
+        gateway: {
+          auth: {
+            mode: "token",
           },
         },
-        null,
-        2,
-      ),
+      },
+      2,
     );
-    clearConfigCache();
 
     await expect(runDaemonInstall({ json: true, force: true })).rejects.toThrow("__exit__:1");
 
@@ -642,8 +663,7 @@ describe("runDaemonInstall integration", () => {
   ])(
     "preserves config bytes and directory entries when definition access is refused and $name",
     async ({ capability, config, marker }) => {
-      await fs.writeFile(configPath, JSON.stringify(config, null, 2));
-      clearConfigCache();
+      await writeConfig(config, 2);
       serviceMock.readDefinitionMutationCapability.mockResolvedValueOnce(capability);
       const before = await snapshotConfig();
 
@@ -667,8 +687,7 @@ describe("runDaemonInstall integration", () => {
     "preserves config, token, and state when $name cannot inspect its command",
     async ({ loaded, force }) => {
       const secret = "service-command-inspection-secret-canary";
-      await fs.writeFile(configPath, JSON.stringify({ gateway: { auth: { mode: "token" } } }));
-      clearConfigCache();
+      await writeConfig({ gateway: { auth: { mode: "token" } } });
       serviceMock.isLoaded.mockResolvedValue(loaded);
       serviceMock.readCommand.mockRejectedValueOnce(new Error(secret));
       const before = await snapshotConfig();
@@ -736,8 +755,7 @@ describe("runDaemonInstall integration", () => {
 
   it("repairs missing gateway mode for a loaded sealed service without rewriting its definition", async () => {
     const config = { gateway: { auth: { mode: "token", token: "existing-token" } } };
-    await fs.writeFile(configPath, JSON.stringify(config));
-    clearConfigCache();
+    await writeConfig(config);
     serviceMock.isLoaded.mockResolvedValue(true);
     serviceMock.readDefinitionMutationCapability.mockResolvedValue({
       kind: "sealed",
@@ -754,11 +772,7 @@ describe("runDaemonInstall integration", () => {
   });
 
   it("refuses loaded-service auto-refresh before persisting missing gateway defaults", async () => {
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ gateway: { auth: { mode: "token", token: "existing-token" } } }),
-    );
-    clearConfigCache();
+    await writeConfig({ gateway: { auth: { mode: "token", token: "existing-token" } } });
     serviceMock.isLoaded.mockResolvedValue(true);
     serviceMock.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "run"],
@@ -779,8 +793,7 @@ describe("runDaemonInstall integration", () => {
 
   it("refuses a loaded service's sealed effective state before persisting config or a token", async () => {
     const effectiveStateDir = path.join(tempHome, "sealed-service-state");
-    await fs.writeFile(configPath, JSON.stringify({ gateway: { auth: { mode: "token" } } }));
-    clearConfigCache();
+    await writeConfig({ gateway: { auth: { mode: "token" } } });
     serviceMock.isLoaded.mockResolvedValue(true);
     serviceMock.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "run"],
@@ -855,21 +868,16 @@ describe("runDaemonInstall integration", () => {
   });
 
   it("auto-mints token when no source exists without embedding it into service env", async () => {
-    await fs.writeFile(
-      configPath,
-      JSON.stringify(
-        {
-          gateway: {
-            auth: {
-              mode: "token",
-            },
+    await writeConfig(
+      {
+        gateway: {
+          auth: {
+            mode: "token",
           },
         },
-        null,
-        2,
-      ),
+      },
+      2,
     );
-    clearConfigCache();
     serviceMock.isLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 
     await runDaemonInstall({ json: true });
@@ -885,11 +893,7 @@ describe("runDaemonInstall integration", () => {
   });
 
   it("logs a generated-token warning without callback indexes or warning arrays", async () => {
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ gateway: { mode: "local", auth: { mode: "token" } } }),
-    );
-    clearConfigCache();
+    await writeConfig({ gateway: { mode: "local", auth: { mode: "token" } } });
     serviceMock.isLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 
     await runDaemonInstall({});

@@ -34,7 +34,6 @@ vi.mock("./session-utils.js", async () => {
         entry: { sessionId: "session", verboseLevel: "off", updatedAt: sessionFixture.updatedAt },
       };
     },
-    loadGatewaySessionLifecycleSnapshot: () => ({ row: null }),
   };
 });
 
@@ -54,6 +53,7 @@ describe("retired execution event projection", () => {
     const handler = createAgentEventHandler({
       broadcast,
       broadcastToConnIds,
+      nodeHasSessionSubscribers: () => true,
       nodeSendToSession,
       chatRunState,
       agentRunSeq: new Map(),

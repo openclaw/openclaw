@@ -1,6 +1,7 @@
 // PTY adapter tests cover PTY lifecycle and termination behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import type { ProcessExtinctionResult } from "../types.js";
 import {
   expectRealExitWinsOverSigkillFallback,
   expectWaitStaysPendingUntilSigkillFallback,
@@ -16,7 +17,8 @@ const { spawnMock, ptyKillMock, signalProcessTreeMock, signalPtySessionTreeMock 
   }),
 );
 
-vi.mock("../../terminal-pty.js", () => ({
+vi.mock("../../terminal-pty.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../terminal-pty.js")>()),
   spawnTerminalPty: (...args: unknown[]) => spawnMock(...args),
 }));
 
@@ -253,7 +255,7 @@ describe("createPtyAdapter", () => {
   it("keeps terminal fallback distinct from unconfirmed PTY cleanup", async () => {
     vi.useFakeTimers();
     spawnMock.mockReturnValue(createStubPty());
-    const onSpawnCleanup = vi.fn<(cleanup: Promise<void>) => void>();
+    const onSpawnCleanup = vi.fn<(cleanup: Promise<ProcessExtinctionResult>) => void>();
     const adapter = await createPtyAdapter({
       shell: "bash",
       args: ["-lc", "sleep 10"],

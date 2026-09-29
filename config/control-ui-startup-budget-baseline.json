@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 354540,
-  "reason": "Main crossed the startup enforcement limit after concurrent landings (main alone 354388 B vs 354270 B limit); this PR adds 119 B for provider auth markers in the model picker; measured 354540 B on the rebased tree. Fixed 358400 B cap retained.",
-  "updatedAt": "2026-09-11"
+  "startupJsGzipBytes": 371771,
+  "reason": "Approved by @steipete for PR #158567 on 2026-09-27: measured startup bundle 371,771 B after main reconciliation and canonical boot-module regeneration, +1,015 B (0.27%) over the previous baseline. Paired baseline and cap retain the 512 B growth and 64 B build-variance allowances, yielding a 372,347 B enforcement limit.",
+  "updatedAt": "2026-09-27"
 }

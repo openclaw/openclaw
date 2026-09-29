@@ -64,6 +64,12 @@ describe("mattermost monitor resources", () => {
       expected: '[mattermost attachment unavailable] "report].pdf"',
     },
     { fileName: "   ", expected: "[mattermost attachment unavailable]" },
+    { fileName: ".", expected: "[mattermost attachment unavailable]" },
+    { fileName: "..", expected: "[mattermost attachment unavailable]" },
+    { fileName: "\u0000\u0001", expected: "[mattermost attachment unavailable]" },
+    { fileName: "file", expected: '[mattermost attachment unavailable] "file"' },
+    { fileName: "_", expected: '[mattermost attachment unavailable] "_"' },
+    { fileName: "-", expected: '[mattermost attachment unavailable] "-"' },
   ])("safely formats unavailable attachment names: $fileName", ({ fileName, expected }) => {
     expect(
       formatMattermostInboundMediaText({

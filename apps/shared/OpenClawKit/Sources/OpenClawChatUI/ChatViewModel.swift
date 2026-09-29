@@ -10,12 +10,14 @@ let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
 @MainActor
 @Observable
 public final class OpenClawChatViewModel {
-    public nonisolated static let defaultModelSelectionID = "__default__"
-    public nonisolated static let inheritedThinkingSelectionID = "__inherited__"
     static let maxAttachmentBytes = 5_000_000
     static let sessionListFetchLimit = 200
 
-    public internal(set) var messages: [OpenClawChatMessage] = []
+    public internal(set) var messages: [OpenClawChatMessage] = [] {
+        didSet { self.sourcePreviewState.update(self.messages) }
+    }
+
+    let sourcePreviewState = ChatSourcePreviewState()
 
     public var input: String = "" {
         didSet {
@@ -25,6 +27,8 @@ public final class OpenClawChatViewModel {
     }
 
     public internal(set) var replyTarget: OpenClawChatReplyTarget?
+    public let webConversation: OpenClawWebConversation?
+    var isApplyingWebSession = false
     @ObservationIgnored
     var inputHistoriesBySession: [String: ChatInputHistory] = [:]
     /// Native attachments, including images restored by rewind/fork, stay in memory only.
@@ -37,25 +41,36 @@ public final class OpenClawChatViewModel {
     var savedDraftRevisionsBySession: [String: UInt64] = [:]
     @ObservationIgnored
     var isApplyingRecalledInput = false
-    /// Setter is module-internal for the thinking-level extension only.
     public internal(set) var thinkingLevel: String
     /// User intent stays stable while `thinkingLevel` follows the selected model's advertised levels.
     var preferredThinkingLevel: String
-    /// Setter is module-internal for the thinking-level extension only.
     public internal(set) var thinkingLevelOptions: [OpenClawChatThinkingLevelOption]
-    /// Setter is module-internal for the thinking-level extension only.
     public internal(set) var showsThinkingPicker = false
     public internal(set) var preferredVerboseLevel: String
     var prefersExplicitVerboseLevel: Bool
-    public private(set) var modelSelectionID: String = "__default__"
+    private var requestedModelSelectionID: String = "__default__"
+
+    public private(set) var modelSelectionID: String {
+        get { self.projectedModelSelectionID(self.requestedModelSelectionID) }
+        set { self.requestedModelSelectionID = newValue }
+    }
+
     public internal(set) var modelChoices: [OpenClawChatModelChoice] = []
     var modelAvailabilityIsSessionScoped = false
+    var modelSelectionPolicy: OpenClawChatModelSelectionPolicy?
+    var modelCatalogInvalidated = false
     public internal(set) var modelCatalogMessage: String?
+    var agentCatalog: OpenClawChatAgentsListResponse?
+    var isLoadingAgents = false
+    var agentsErrorText: String?
+    @ObservationIgnored
+    var hasRequestedAgents = false
+    @ObservationIgnored
+    var agentCatalogGeneration: UInt64 = 0
     @ObservationIgnored
     var nextModelCatalogRequestID: UInt64 = 0
     var modelPickerFavorites: [String]
     var modelPickerRecents: [String]
-    /// Setters are module-internal for the sending extension's command catalog.
     public internal(set) var slashCommands: [OpenClawChatCommandChoice] = []
     public internal(set) var isLoadingSlashCommands = false
     public internal(set) var slashCommandsErrorText: String?
@@ -68,20 +83,18 @@ public final class OpenClawChatViewModel {
         let sessionRoutingContract: String?
     }
 
-    public private(set) var isLoading = false
-    /// Setters are module-internal for the sending extension only.
+    public internal(set) var isLoading = false
     public internal(set) var isSending = false
     public internal(set) var isSendingAttachmentDraft = false
+    public internal(set) var isSubmittingDraft = false
     private var deferredExternalSessionKey: String?
     private var deferredDeliveryIdentity: DeferredDeliveryIdentity?
-    var isSubmittingDraft = false
     @ObservationIgnored
     var isCreatingSession = false
     var attachmentStagingCount = 0
     public private(set) var isAborting = false
     public var errorText: String?
     public var attachments: [OpenClawPendingAttachment] = []
-    /// Setter is module-internal for the health/outbox extension only.
     public internal(set) var healthOK: Bool = false
     /// Bumped after every successful group-catalog mutation so views keyed on it
     /// refetch; catalog-only changes (e.g. creating an empty group) alter no
@@ -97,6 +110,8 @@ public final class OpenClawChatViewModel {
 
     public private(set) var pendingRunCount: Int = 0
     public internal(set) var questionCards: [OpenClawQuestionCardModel] = []
+    var questionAttentionOwnerID = UUID()
+    public internal(set) var isQuestionAuthorityRetired = false
     var questionRefreshGeneration: UInt64 = 0
     var questionStateRevision: UInt64 = 0
     var questionExpiryTasks: [String: Task<Void, Never>] = [:]
@@ -106,6 +121,7 @@ public final class OpenClawChatViewModel {
     var hasActiveSessionRunWithoutChatSnapshot = false
     var activeSessionRunIDs: [String] = []
     var liveRunStateByRunID: [String: ChatLiveRunState] = [:]
+    var narration = ChatNarration()
     public internal(set) var progressCard: ProgressCard?
     var progressCardStoreAvailable: Bool?
     @ObservationIgnored
@@ -125,13 +141,17 @@ public final class OpenClawChatViewModel {
     }
 
     public internal(set) var sessionId: String?
+    public var currentSessionTarget: OpenClawChatSessionTarget {
+        OpenClawChatSessionTarget(
+            sessionKey: self.sessionKey,
+            agentID: OpenClawChatSessionKey.agentID(from: self.sessionKey) == nil
+                ? self.explicitSessionAgentID ?? self.activeAgentId : nil)
+    }
+
     public private(set) var streamingAssistantText: String?
 
-    public private(set) var pendingToolCalls: [OpenClawChatPendingToolCall] = []
-    var subagentActivities: [ChatSubagentActivity] = []
-    var hiddenWorkingSubagentCount = 0
+    public private(set) var toolActivities: [OpenClawChatPendingToolCall] = []
     private(set) var timelineRevision: UInt64 = 0
-    /// Setter is module-internal for the transcript-cache extension only.
     public internal(set) var sessions: [OpenClawChatSessionEntry] = [] {
         didSet {
             syncContextUsageFraction()
@@ -164,7 +184,14 @@ public final class OpenClawChatViewModel {
     var unreadPatchGuard = ChatSessionUnreadPatchGuard()
     let unreadMutationQueue = ChatSessionUnreadMutationQueue()
     /// Internal for the outbox extension's flush path only.
-    let transport: any OpenClawChatTransport
+    let defaultTransport: any OpenClawChatTransport
+    @ObservationIgnored
+    var scopedSessionTransport: (any OpenClawChatTransport)?
+    var explicitSessionAgentID: String?
+    var transport: any OpenClawChatTransport {
+        self.scopedSessionTransport ?? self.defaultTransport
+    }
+
     let haptics: OpenClawChatHaptics
     let transcriptCache: (any OpenClawChatTranscriptCache)?
     let outbox: (any OpenClawChatCommandOutbox)?
@@ -191,12 +218,6 @@ public final class OpenClawChatViewModel {
     var isOutboxFlushRequestedWhileActive = false
     @ObservationIgnored
     var reconciledOutboxBranchScopes: Set<OpenClawChatOutboxScope> = []
-    @ObservationIgnored
-    var reconcilingOutboxBranchScopes: Set<OpenClawChatOutboxScope> = []
-    @ObservationIgnored
-    var outboxBranchReconcileRetryAttempts: [OpenClawChatOutboxScope: Int] = [:]
-    @ObservationIgnored
-    var outboxBranchReconcileRetryTasks: [OpenClawChatOutboxScope: Task<Void, Never>] = [:]
     @ObservationIgnored
     var outboxBranchConnectionGeneration: UInt64 = 0
     @ObservationIgnored
@@ -244,7 +265,9 @@ public final class OpenClawChatViewModel {
     private nonisolated(unsafe) var eventTask: Task<Void, Never>?
     private(set) var isTransportDetached = false
     @ObservationIgnored
-    private nonisolated(unsafe) var bootstrapTask: Task<Void, Never>?
+    nonisolated(unsafe) var bootstrapTask: Task<Void, Never>?
+    @ObservationIgnored
+    var historyInvalidationRefresh: (requestID: UInt64, task: Task<Void, Never>)?
     var runOwnershipGeneration: UInt64 = 0
     var latestAppliedRunSnapshotRequestID: UInt64 = 0
     var isApplyingRunSnapshot = false
@@ -316,13 +339,13 @@ public final class OpenClawChatViewModel {
     private var settingsPatchTailsByTarget: [ModelPatchTarget: SettingsPatchTail] = [:]
     var nextThinkingSelectionRequestID: UInt64 = 0
     var latestThinkingSelectionRequestIDsByTarget: [ModelPatchTarget: UInt64] = [:]
-    var confirmedThinkingPreference: ThinkingPreferenceState
-    var emittedThinkingPreference: ThinkingPreferenceState
-    var thinkingPreferenceRequests: [UInt64: ThinkingPreferenceRequest] = [:]
+    var confirmedThinkingPreference: PreferenceState
+    var emittedThinkingPreference: PreferenceState
+    var thinkingPreferenceRequests: [UInt64: PreferenceRequest] = [:]
     var nextVerboseSelectionRequestID: UInt64 = 0
-    var confirmedVerbosePreference: VerbosePreferenceState
-    var emittedVerbosePreference: VerbosePreferenceState
-    var verbosePreferenceRequests: [UInt64: VerbosePreferenceRequest] = [:]
+    var confirmedVerbosePreference: PreferenceState
+    var emittedVerbosePreference: PreferenceState
+    var verbosePreferenceRequests: [UInt64: PreferenceRequest] = [:]
     var acceptedVerboseLevelsByTarget: [ModelPatchTarget: VerboseLevelState] = [:]
     var acceptedFastModesByTarget: [ModelPatchTarget: FastModeState] = [:]
     var lastSuccessfulThinkingOverrideClearedByTarget: [ModelPatchTarget: Bool] = [:]
@@ -348,26 +371,22 @@ public final class OpenClawChatViewModel {
         let sessionRoutingContract: String?
     }
 
-    struct VerbosePreferenceState: Equatable {
+    struct PreferenceState: Equatable {
         let level: String
         let isExplicit: Bool
     }
 
-    enum VerbosePreferenceRequest {
-        case pending(VerbosePreferenceState)
-        case succeeded(VerbosePreferenceState)
+    enum PreferenceRequest {
+        case pending(PreferenceState)
+        case succeeded(PreferenceState)
         case failed
-    }
 
-    struct ThinkingPreferenceState: Equatable {
-        let level: String
-        let isExplicit: Bool
-    }
-
-    enum ThinkingPreferenceRequest {
-        case pending(ThinkingPreferenceState)
-        case succeeded(ThinkingPreferenceState)
-        case failed
+        var state: PreferenceState? {
+            switch self {
+            case let .pending(state), let .succeeded(state): state
+            case .failed: nil
+            }
+        }
     }
 
     enum VerboseLevelState {
@@ -438,6 +457,7 @@ public final class OpenClawChatViewModel {
         let supportsInFlightRunState: Bool
         let hasInFlightRun: Bool
         let sessionHasActiveRun: Bool
+        var retryAfterMs: Int?
 
         static let failed = RunHistoryRefreshResult(
             applied: false,
@@ -465,26 +485,20 @@ public final class OpenClawChatViewModel {
         var scope: RunMessageScope
     }
 
-    var pendingToolCallsById: [String: OpenClawChatPendingToolCall] = [:] {
+    var turnToolCallsById: [String: OpenClawChatPendingToolCall] = [:] {
         didSet {
-            guard self.pendingToolCallsById != oldValue else { return }
-            reportToolActivityChanges(from: oldValue, to: self.pendingToolCallsById)
-            self.pendingToolCalls = self.pendingToolCallsById.values
-                .sorted { ($0.startedAt ?? 0) < ($1.startedAt ?? 0) }
+            guard self.turnToolCallsById != oldValue else { return }
+            self.toolActivities = prepareToolActivities(from: oldValue)
             markTimelineChanged()
         }
     }
-
-    @ObservationIgnored
-    var subagentActivityState = ChatSubagentActivityState()
-    @ObservationIgnored
-    var subagentActivityCleanupTask: Task<Void, Never>?
 
     var lastHealthPollAt: Date?
 
     public init(
         sessionKey: String,
         transport: any OpenClawChatTransport,
+        webConversation: OpenClawWebConversation? = nil,
         activeAgentId: String? = nil,
         sessionRoutingContract: String? = nil,
         attachmentOwnerIsActive: @escaping @MainActor () -> Bool = { false },
@@ -503,7 +517,8 @@ public final class OpenClawChatViewModel {
         diagnosticsLog: (@MainActor @Sendable (String) -> Void)? = nil)
     {
         self.sessionKey = sessionKey
-        self.transport = transport
+        self.webConversation = webConversation
+        self.defaultTransport = transport
         self.haptics = haptics
         self.transcriptCache = transcriptCache
         self.modelPickerStore = modelPickerStore
@@ -521,7 +536,7 @@ public final class OpenClawChatViewModel {
         self.preferredThinkingLevel = initialResolvedThinkingLevel
         self.thinkingLevelOptions = []
         self.prefersExplicitThinkingLevel = normalizedThinkingLevel != nil
-        let initialThinkingPreference = ThinkingPreferenceState(
+        let initialThinkingPreference = PreferenceState(
             level: initialResolvedThinkingLevel,
             isExplicit: normalizedThinkingLevel != nil)
         self.confirmedThinkingPreference = initialThinkingPreference
@@ -530,7 +545,7 @@ public final class OpenClawChatViewModel {
         let initialResolvedVerboseLevel = normalizedVerboseLevel ?? "off"
         self.preferredVerboseLevel = initialResolvedVerboseLevel
         self.prefersExplicitVerboseLevel = normalizedVerboseLevel != nil
-        let initialVerbosePreference = VerbosePreferenceState(
+        let initialVerbosePreference = PreferenceState(
             level: initialResolvedVerboseLevel,
             isExplicit: normalizedVerboseLevel != nil)
         self.confirmedVerbosePreference = initialVerbosePreference
@@ -574,24 +589,21 @@ public final class OpenClawChatViewModel {
     /// Permanently retires a replaced presentation without aborting its gateway run.
     public func detachTransport() {
         guard !self.isTransportDetached else { return }
+        self.cancelHistoryInvalidationRefresh()
+        self.retireQuestionAuthority()
         self.isTransportDetached = true
+        let transport = self.transport
+        Task { await transport.releaseActiveSessionSubscription() }
+        self.invalidateSourceContext()
         self.endPendingToolActivities()
         self.eventTask?.cancel()
         self.bootstrapTask?.cancel()
         self.bootstrapOutboxBranchStateCapture?.task.cancel()
         self.swarmRefreshTask?.cancel()
         self.outboxRetryTask?.cancel()
-        for task in self.outboxBranchReconcileRetryTasks.values {
-            task.cancel()
-        }
         self.outboxChangesTask?.cancel()
         self.activeSessionRunIndicatorTimeoutTask?.cancel()
-        self.subagentActivityCleanupTask?.cancel()
-        self.questionRefreshRetryTask?.cancel()
-        for (_, task) in self.questionExpiryTasks {
-            task.cancel()
-        }
-        for (_, task) in self.pendingRunOwnerTasks {
+        for task in self.pendingRunOwnerTasks.values {
             task.cancel()
         }
         for tail in self.settingsPatchTailsByTarget.values {
@@ -604,48 +616,17 @@ public final class OpenClawChatViewModel {
         startBootstrap()
     }
 
-    public func refresh() {
-        startBootstrap()
-    }
-
     public func resumeFromForeground() {
         Task { await self.refreshRunStateAfterForeground() }
     }
 
     public func abort() {
+        guard !self.usesWebConversation else { return }
         Task { await self.performAbort() }
     }
 
-    public func deleteSession(_ sessionKey: String) {
-        Task {
-            do {
-                try await self.transport.deleteSession(key: sessionKey)
-            } catch {
-                self.errorText = error.localizedDescription
-                return
-            }
-            self.sessions.removeAll { $0.key == sessionKey }
-            if self.matchesCurrentSessionKey(incoming: sessionKey, current: self.sessionKey) {
-                // The active transcript just disappeared server-side; fall
-                // back to the main session instead of a dead key.
-                let fallback = self.resolvedMainSessionKey
-                if fallback != self.sessionKey {
-                    self.applySessionSwitch(to: fallback, intent: .userInitiated)
-                } else {
-                    // Deleting the active main session: the key stays the
-                    // address, so clear local state and re-bootstrap in place.
-                    self.advanceSessionGeneration()
-                    self.clearSessionOwnedState()
-                    self.errorText = nil
-                    self.startBootstrap()
-                }
-            }
-            await self.fetchSessions(limit: nil, sessionSnapshot: self.currentSessionSnapshot())
-        }
-    }
-
-    public func switchSession(to sessionKey: String) {
-        applySessionSwitch(to: sessionKey, intent: .userInitiated)
+    public func switchSession(to sessionKey: String, agentID: String? = nil) {
+        applySessionSwitch(to: sessionKey, intent: .userInitiated, agentID: agentID)
     }
 
     public func syncSession(to sessionKey: String) {
@@ -699,7 +680,8 @@ public final class OpenClawChatViewModel {
         if agentChanged {
             self.sessions = ChatSessionSidebarModel.clearingForeignGlobalObserverDigest(
                 in: self.sessions,
-                activeAgentId: nextAgentId)
+                activeAgentId: self.explicitSessionAgentID ??
+                    OpenClawChatSessionKey.agentID(from: self.sessionKey) ?? nextAgentId)
         }
         self.activeAgentId = nextAgentId
         self.sessionRoutingContract = nextContract
@@ -731,49 +713,24 @@ public final class OpenClawChatViewModel {
     }
 
     var resolvedMainSessionKey: String {
+        if let agentID = self.explicitSessionAgentID ?? OpenClawChatSessionKey.agentID(from: self.sessionKey) {
+            return self.mainSessionKey(forAgent: agentID)
+        }
         let trimmed = self.sessionDefaults?.mainSessionKey?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return (trimmed?.isEmpty == false ? trimmed : nil) ?? "main"
     }
 
     private var usesMutableAgentRouting: Bool {
-        OpenClawChatSessionKey.agentID(from: self.sessionKey) == nil
+        self.explicitSessionAgentID == nil && OpenClawChatSessionKey.agentID(from: self.sessionKey) == nil
     }
 
     private func usesMutableContractRouting(for contract: String?) -> Bool {
         self.usesMutableContractRouting(sessionKey: self.sessionKey, contract: contract)
     }
 
-    func usesMutableContractRouting(sessionKey: String, contract: String?) -> Bool {
-        if OpenClawChatSessionKey.agentID(from: sessionKey) == nil {
-            return true
-        }
-        let parts = sessionKey
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
-        guard parts.count == 3 else { return false }
-        let normalizedSessionKey = parts[2].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let resolvedMainParts = self.resolvedMainSessionKey
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
-        let normalizedMainSessionKey = String(resolvedMainParts.last ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let contractMainKey = OpenClawChatSessionRoutingContract.parse(contract)?.mainKey ?? ""
-        return normalizedSessionKey == "global" ||
-            normalizedSessionKey == "main" ||
-            normalizedSessionKey == normalizedMainSessionKey ||
-            normalizedSessionKey == contractMainKey
-    }
-
     public var showsModelPicker: Bool {
         !self.modelChoices.isEmpty
-    }
-
-    public var defaultModelLabel: String {
-        guard let defaultModelID = normalizedModelSelectionID(sessionDefaults?.model) else {
-            return "Default"
-        }
-        return "Default: \(modelLabel(for: defaultModelID))"
     }
 }
 
@@ -812,7 +769,8 @@ extension OpenClawChatViewModel {
             key: self.sessionKey,
             generation: self.sessionGeneration,
             agentID: self.activeAgentId,
-            deliveryAgentID: OpenClawChatSessionKey.agentID(from: self.sessionKey) ?? self.activeAgentId,
+            deliveryAgentID: self.explicitSessionAgentID ??
+                OpenClawChatSessionKey.agentID(from: self.sessionKey) ?? self.activeAgentId,
             sessionRoutingContract: self.sessionRoutingContract)
     }
 
@@ -894,6 +852,10 @@ extension OpenClawChatViewModel {
         sessionKey requestedSessionKey: String? = nil,
         paintCachedTranscript: Bool = true)
     {
+        if self.usesWebConversation {
+            self.loadWebConversationChrome()
+            return
+        }
         let sessionKey = requestedSessionKey ?? self.sessionKey
         guard !self.isTransportDetached, sessionKey == self.sessionKey else { return }
         if self.swarmSessionKey != sessionKey {
@@ -910,7 +872,7 @@ extension OpenClawChatViewModel {
         self.invalidateOutboxBranchReconciliation()
         self.healthOK = false
         clearPendingRuns(reason: nil)
-        self.pendingToolCallsById = [:]
+        self.turnToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
         self.updateActiveSessionRunWithoutChatSnapshot(false)
         self.sessionId = nil
@@ -958,7 +920,6 @@ extension OpenClawChatViewModel {
 
             Task { [weak self] in await self?.refreshQuestions() }
             Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: context.session) }
-            Task { [weak self] in await self?.refreshSubagentActivities(sessionSnapshot: context.session) }
 
             let payload = try await transport.requestHistory(sessionKey: context.session.key)
             guard self.isCurrentBootstrap(context) else { return }
@@ -996,29 +957,10 @@ extension OpenClawChatViewModel {
         }
     }
 
-    private func syncActiveSessionSubscription(startingWith sessionKey: String) async {
-        var nextSessionKey = sessionKey
-        while true {
-            do {
-                // Subscribe requests are gateway side effects. If a stale request finishes
-                // after a newer switch, immediately reassert the latest visible session.
-                try await self.transport.setActiveSessionKey(nextSessionKey)
-            } catch {
-                let currentSessionKey = self.sessionKey
-                guard currentSessionKey != nextSessionKey else {
-                    // Best-effort only; history/send/health still work without push events.
-                    return
-                }
-                nextSessionKey = currentSessionKey
-                continue
-            }
-            let currentSessionKey = self.sessionKey
-            guard currentSessionKey != nextSessionKey else { return }
-            nextSessionKey = currentSessionKey
-        }
-    }
-
     private func refreshRunStateAfterForeground() async {
+        if self.usesWebConversation { self.loadWebConversationChrome()
+            return
+        }
         let context = self.beginHistoryRequest()
         self.logDiagnostic(
             "chat.ui foreground refresh sessionKey=\(context.session.key) "
@@ -1035,7 +977,7 @@ extension OpenClawChatViewModel {
             if refresh.sessionHasActiveRun,
                Self.hasUnansweredLatestUser(in: self.messages)
             {
-                self.pendingToolCallsById = [:]
+                self.turnToolCallsById = [:]
                 self.updateStreamingAssistantText(nil)
                 // Keep a known run ID authoritative so its stream and terminal
                 // events still route here. Synthesize activity only after the
@@ -1046,7 +988,7 @@ extension OpenClawChatViewModel {
                 clearPendingRuns(
                     reason: nil,
                     hapticEvent: assistantHapticEventAfterLatestUser())
-                self.pendingToolCallsById = [:]
+                self.turnToolCallsById = [:]
                 self.updateStreamingAssistantText(nil)
             }
         }
@@ -1060,12 +1002,10 @@ extension OpenClawChatViewModel {
         defer { self.isAborting = false }
 
         let runIds = Array(pendingRuns)
+        let sessionKey = self.sessionKey
+        let transport = self.transport
         for runId in runIds {
-            do {
-                try await self.transport.abortRun(sessionKey: self.sessionKey, runId: runId)
-            } catch {
-                // Best-effort.
-            }
+            try? await transport.abortRun(sessionKey: sessionKey, runId: runId)
         }
     }
 
@@ -1098,7 +1038,8 @@ extension OpenClawChatViewModel {
             let successfulSettingsPatchRequestID = self.lastSuccessfulSettingsPatchRequestIDsByTarget[target]
             let res: OpenClawChatSessionsListResponse
             do {
-                res = try await self.transport.listSessions(limit: limit, search: nil, archived: false)
+                res = try await self.transport.listSessions(
+                    limit: limit, search: nil, archived: false, agentID: session.deliveryAgentID)
             } catch {
                 if self.outbox != nil, self.healthOK, !self.hasCurrentSessionMetadata {
                     applyTransportHealth(false)
@@ -1134,7 +1075,10 @@ extension OpenClawChatViewModel {
             let organized = OpenClawChatSessionListOrganizer.organize(res.sessions)
             for session in organized {
                 self.unreadPatchGuard.observe(
-                    key: self.sessionMutationIdentity(for: session.key, listedKey: session.key),
+                    key: self.sessionMutationIdentity(
+                        for: session.key,
+                        listedKey: session.key,
+                        agentID: session.agentId),
                     unread: session.unread)
             }
             self.sessions = self.applyingLocalUnreadOverrides(to: organized)
@@ -1196,13 +1140,29 @@ extension OpenClawChatViewModel {
         self.readySessionMetadataGeneration == self.sessionMetadataGeneration
     }
 
-    private func applySessionSwitch(to sessionKey: String, intent: SessionSwitchIntent) {
+    private func applySessionSwitch(
+        to sessionKey: String,
+        intent: SessionSwitchIntent,
+        agentID: String? = nil)
+    {
         let next = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !next.isEmpty else { return }
-        guard next != self.sessionKey else {
+        let encodedAgentID = OpenClawChatSessionKey.agentID(from: next)?.lowercased()
+        let requestedAgentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let nextAgentID = encodedAgentID == nil && requestedAgentID?.isEmpty == false ? requestedAgentID : nil
+        if let encodedAgentID, let requestedAgentID, encodedAgentID != requestedAgentID {
+            self.errorText = "The selected conversation belongs to another agent. Refresh and try again."
+            return
+        }
+        guard next != self.sessionKey || nextAgentID != self.explicitSessionAgentID else {
             if intent == .externalSync {
                 self.deferredExternalSessionKey = nil
             }
+            return
+        }
+        let scopedTransport = nextAgentID.flatMap { self.defaultTransport.scoped(toAgentID: $0) }
+        if nextAgentID != nil, scopedTransport == nil {
+            self.errorText = "This connection cannot open that agent's conversation. Reconnect and try again."
             return
         }
         if blocksAttachmentOwnerChange {
@@ -1216,13 +1176,24 @@ extension OpenClawChatViewModel {
             return
         }
         self.deferredExternalSessionKey = nil
-        self.prepareComposerForSessionSwitch(to: next)
+        self.prepareComposerForSessionSwitch(to: next, agentID: nextAgentID)
         self.advanceSessionGeneration()
         self.clearSessionOwnedState()
+        if self.currentSessionSnapshot().deliveryAgentID != (nextAgentID ?? encodedAgentID ?? self.activeAgentId) {
+            self.sessions = []
+            self.hasAppliedLiveSessions = false
+            self.swarmEnabled = false
+            self.resetSwarmProgress()
+        }
+        self.explicitSessionAgentID = nextAgentID
+        self.scopedSessionTransport = scopedTransport
         self.sessionKey = next
         self.restoreComposerAfterSessionSwitch()
         if intent == .userInitiated {
             self.onSessionChanged?(next)
+        }
+        if !self.isApplyingWebSession, let context = self.webConversationContext {
+            self.webConversation?.navigate?(context, intent == .userInitiated ? .user : .synchronization)
         }
         self.startBootstrap(sessionKey: next)
     }
@@ -1247,21 +1218,26 @@ extension OpenClawChatViewModel {
         self.prepareComposerForSessionSwitch(to: next)
         self.advanceSessionGeneration()
         self.clearSessionOwnedState()
+        self.explicitSessionAgentID = nil
+        self.scopedSessionTransport = nil
         self.sessionKey = next
         self.restoreComposerAfterSessionSwitch()
         self.onSessionChanged?(next)
+        if let context = self.webConversationContext { self.webConversation?.navigate?(context, .user) }
         self.errorText = nil
         self.startBootstrap()
     }
 
     /// Clears state owned by the current session/agent before a new identity can consume events.
-    private func clearSessionOwnedState() {
+    func clearSessionOwnedState() {
         self.invalidateComposerCapabilities()
         self.modelSelectionID = Self.defaultModelSelectionID
         self.modelAvailabilityIsSessionScoped = false
-        self.modelChoices = []
+        self.invalidateModelChoices()
+        self.modelSelectionPolicy = nil
         self.modelCatalogMessage = nil
         replaceMessages([])
+        self.narration = ChatNarration()
         self.isShowingCachedTranscript = false
         self.hasAppliedLiveHistory = false
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
@@ -1269,8 +1245,7 @@ extension OpenClawChatViewModel {
         self.provisionalFinalMessagesByID.removeAll()
         resetOutboxPresentationForSessionSwitch()
         self.sessionId = nil
-        self.pendingToolCallsById = [:]
-        self.clearSubagentActivities()
+        self.turnToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
         self.clearProgressCard()
         self.updateActiveSessionRunWithoutChatSnapshot(false)
@@ -1302,6 +1277,7 @@ extension OpenClawChatViewModel {
         self.replyTarget = nil
         self.runMessageScopesByRunID.removeAll()
         self.provisionalFinalMessagesByID.removeAll()
+        self.narration = ChatNarration()
         self.startBootstrap()
     }
 
@@ -1404,11 +1380,7 @@ extension OpenClawChatViewModel {
             guard request.id == self.latestModelSelectionRequestIDsByTarget[request.target] else { return }
             let rollbackSelectionID = self.lastSuccessfulModelSelectionIDsByTarget[request.target]
                 ?? request.rollbackSelectionID
-            if let previousRequestID = request.previousRequestID {
-                self.latestModelSelectionRequestIDsByTarget[request.target] = previousRequestID
-            } else {
-                self.latestModelSelectionRequestIDsByTarget.removeValue(forKey: request.target)
-            }
+            self.latestModelSelectionRequestIDsByTarget[request.target] = request.previousRequestID
             if self.lastSuccessfulModelSelectionIDsByTarget[request.target] == rollbackSelectionID {
                 self.applySuccessfulModelSelection(
                     rollbackSelectionID,
@@ -1504,12 +1476,7 @@ extension OpenClawChatViewModel {
            sessionRoutingContract == nil,
            sessionKey == self.sessionKey
         {
-            let session = self.currentSessionSnapshot()
-            return modelPatchTarget(
-                sessionKey: session.key,
-                canonicalSessionKey: currentSessionEntry()?.key,
-                agentID: session.deliveryAgentID,
-                sessionRoutingContract: session.sessionRoutingContract)
+            return self.currentModelPatchTarget()
         }
         return modelPatchTarget(
             sessionKey: sessionKey,
@@ -1531,9 +1498,8 @@ extension OpenClawChatViewModel {
         let explicitModelID = self.normalizedModelSelectionID(
             currentSession?.model,
             provider: currentSession?.modelProvider)
-        let defaultModelID = self.normalizedModelSelectionID(
-            self.sessionDefaults?.model,
-            provider: self.sessionDefaults?.modelProvider)
+        let defaults = self.modelPickerDefault
+        let defaultModelID = self.normalizedModelSelectionID(defaults.model, provider: defaults.provider)
         if self.lastSuccessfulModelSelectionIDsByTarget[target] == Self.defaultModelSelectionID,
            explicitModelID == defaultModelID
         {
@@ -1555,15 +1521,15 @@ extension OpenClawChatViewModel {
         return trimmed
     }
 
-    private func normalizedModelSelectionID(_ modelID: String?, provider: String? = nil) -> String? {
+    func normalizedModelSelectionID(_ modelID: String?, provider: String? = nil) -> String? {
         guard let modelID else { return nil }
         let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        if let provider = Self.normalizedProvider(provider) {
+        if let provider = ChatPayloadDecoding.trimmedNonEmptyString(provider) {
             let providerQualified = Self.providerQualifiedModelSelectionID(modelID: trimmed, provider: provider)
             if let match = modelChoices.first(where: {
                 $0.selectionID == providerQualified ||
-                    ($0.modelID == trimmed && Self.normalizedProvider($0.provider) == provider)
+                    ($0.modelID == trimmed && ChatPayloadDecoding.trimmedNonEmptyString($0.provider) == provider)
             }) {
                 return match.selectionID
             }
@@ -1585,25 +1551,6 @@ extension OpenClawChatViewModel {
             return nil
         }
         return normalized
-    }
-
-    /// Module-internal: the session-actions extension derives new-session keys.
-    func generatedNewSessionKey(agentID explicitAgentID: String? = nil) -> String {
-        let baseKey = "ios-\(UUID().uuidString.lowercased())"
-        guard let agentID = explicitAgentID ??
-            OpenClawChatSessionKey.agentID(from: sessionKey) ??
-            activeAgentId ??
-            OpenClawChatSessionKey.agentID(from: resolvedMainSessionKey) ??
-            sessions.lazy.compactMap({ OpenClawChatSessionKey.agentID(from: $0.key) }).first
-        else {
-            return baseKey
-        }
-        return "agent:\(agentID):\(baseKey)"
-    }
-
-    private func modelLabel(for modelID: String) -> String {
-        self.modelChoices.first(where: { $0.selectionID == modelID || $0.modelID == modelID })?.displayLabel ??
-            modelID
     }
 
     private func applySuccessfulModelSelection(
@@ -1690,7 +1637,7 @@ extension OpenClawChatViewModel {
             return (nil, nil)
         }
         if let choice = modelChoices.first(where: { $0.selectionID == modelRef }) {
-            return (choice.modelID, Self.normalizedProvider(choice.provider))
+            return (choice.modelID, ChatPayloadDecoding.trimmedNonEmptyString(choice.provider))
         }
         return (modelRef, nil)
     }

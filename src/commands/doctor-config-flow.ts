@@ -1,6 +1,4 @@
 import { homedir } from "node:os";
-/** Main doctor config flow: preflight, migrations, previews, repairs, and final write decision. */
-import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
   listAgentEntries,
@@ -15,33 +13,35 @@ import { readRecentConfigAuditRecords } from "../config/io.audit.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
-import { resolveConfigIncludeWriteBoundary } from "../config/mutate.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { inspectShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
-import { isPathInside } from "../infra/path-guards.js";
+import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import {
+  noteDoctorHookConfigWarnings,
   noteImplicitFallbackClobberWarnings,
   noteMcpOriginWarning,
+  noteMediaCliModelWarnings,
+  noteMissingDefaultAgentOwner,
   noteOpencodeProviderOverrides,
   noteSandboxOriginProxyWarning,
 } from "./doctor-config-analysis.js";
-import {
-  runDoctorConfigPreflight,
-  shouldSkipPluginValidationForDoctorConfigPreflight,
-} from "./doctor-config-preflight.js";
+import { shouldSkipPluginValidationForDoctorConfigPreflight } from "./doctor-config-preflight-plugin-index.js";
+import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { createWorkspaceAliasMigrationRepair } from "./doctor-workspace-alias.js";
+import { createDoctorChangesPanelSink } from "./doctor/changes-panel-sink.js";
 import { cronCodexRuntimePolicyTargetKey } from "./doctor/cron/store-migration.js";
 import { emitDoctorNotes, sanitizeDoctorNote } from "./doctor/emit-notes.js";
 import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
 import {
   applyLegacyCompatibilityStep,
   applyUnknownConfigKeyStep,
+  prepareDoctorConfigReferenceSource,
 } from "./doctor/shared/config-flow-steps.js";
 import { prepareDoctorConfigMigrationResult } from "./doctor/shared/config-migration-result.js";
 import {
@@ -53,108 +53,25 @@ import { listDoctorConfiguredChannelIds } from "./doctor/shared/configured-chann
 import { containsAuthoredInclude } from "./doctor/shared/include-migration-ownership.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 import type { DoctorPluginMetadataSnapshotState } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
+import { canWriteDoctorInclude } from "./doctor/shared/roster-include-write.js";
 import { shouldSkipLegacyUpdateDoctorConfigWrite } from "./doctor/shared/update-phase.js";
 
-function collectInvalidHookTransformsDirWarnings(
-  cfg: OpenClawConfig,
-  configPath: string,
-): string[] {
-  const transformsDir = cfg.hooks?.transformsDir?.trim();
-  if (!transformsDir) {
-    return [];
-  }
-  const configDir = path.dirname(configPath);
-  const transformsRoot = path.join(configDir, "hooks", "transforms");
-  const resolved = path.isAbsolute(transformsDir)
-    ? path.resolve(transformsDir)
-    : path.resolve(transformsRoot, transformsDir);
-  if (isPathInside(transformsRoot, resolved)) {
-    return [];
-  }
-  return [
-    `- hooks.transformsDir: ${transformsDir} is outside ${transformsRoot}. Hook transform modules must live under ${transformsRoot}; move custom transforms there or remove hooks.transformsDir.`,
-  ];
-}
-
-function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): string[] {
-  const unsupportedKeysByEntry = Object.entries(cfg.hooks?.internal?.entries ?? {})
-    .filter(([, entry]) => entry && typeof entry === "object" && !Array.isArray(entry))
-    .map(([hookKey, entry]) => {
-      const unsupportedKeys = ["handler", "module", "extraDirs", "installs"].filter((key) =>
-        Object.hasOwn(entry, key),
-      );
-      return { hookKey, unsupportedKeys };
-    })
-    .filter(({ unsupportedKeys }) => unsupportedKeys.length > 0);
-
-  if (unsupportedKeysByEntry.length === 0) {
-    return [];
-  }
-
-  return unsupportedKeysByEntry.map(
-    ({ hookKey, unsupportedKeys }) =>
-      `- hooks.internal.entries.${hookKey}: unsupported loader key${unsupportedKeys.length === 1 ? "" : "s"} ${unsupportedKeys.join(", ")} will not load hook modules. Use bootstrap-extra-files for session bootstrap content, or create a managed/workspace hook directory with HOOK.md + handler.js. Doctor cannot rewrite this automatically because per-hook entry keys are open-ended hook configuration.`,
-  );
-}
-
-// Repair-mode "Doctor changes" panels queue until the final candidate passes the
-// same validation the atomic writer enforces: printing "Doctor changes" and then
-// refusing the write would report repairs that never reached disk. Preview
-// panels print immediately — they promise nothing.
-type DoctorChangesPanelSink = {
-  emit: (changeLines: ReadonlyArray<string>, options?: { sanitize?: boolean }) => void;
-  drain: () => string[];
-};
-
-function createDoctorChangesPanelSink(shouldRepair: boolean): DoctorChangesPanelSink {
-  const pending: string[] = [];
-  return {
-    emit: (changeLines, options = {}) => {
-      if (changeLines.length === 0) {
-        return;
-      }
-      const body = changeLines.join("\n");
-      const message = options.sanitize ? sanitizeDoctorNote(body) : body;
-      if (shouldRepair) {
-        pending.push(message);
-        return;
-      }
-      note(message, "Doctor changes preview");
-    },
-    drain: () => pending.splice(0),
-  };
-}
-
 async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
-  try {
-    await callGateway({
-      method: "secrets.reload",
-      params: {},
-      timeoutMs: 3000,
-    });
-  } catch {
-    // Best-effort only: doctor --fix must still succeed when no gateway is running
-    // or the live gateway cannot reload unrelated secret-backed channels.
-  }
-  try {
-    await callGateway({
-      method: "models.authStatus",
-      params: { refresh: true },
-      timeoutMs: 3000,
-    });
-  } catch {
-    // Best-effort only: doctor --fix must still succeed when no gateway is running.
+  for (const request of [
+    { method: "secrets.reload", params: {} },
+    { method: "models.authStatus", params: { refresh: true } },
+  ]) {
+    try {
+      await callGateway({ ...request, timeoutMs: 3000 });
+    } catch {
+      // Doctor repair remains best effort when the Gateway is stopped or cannot reload.
+    }
   }
 }
 
-/**
- * Loads config, runs doctor migrations/repairs, and returns the config write plan.
- *
- * This is the config-side orchestration boundary for doctor; it keeps preview notes, repair
- * mutations, gateway auth refreshes, and final write confirmation in one ordered flow.
- */
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
+  agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
   runtime?: RuntimeEnv;
   prompter?: DoctorPrompter;
@@ -169,10 +86,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     (progress) =>
       runDoctorConfigPreflight({
         observe: false,
+        invocationPurpose: "doctor",
         repairPrefixedConfig: shouldRepair,
         recoverCorruptTargetStore: shouldRepair,
         doctorOnlyStateMigrations: shouldRepair,
         preparePluginMetadataSnapshot: true,
+        ...(params.agentDatabaseMigrationDiscovery
+          ? { agentDatabaseMigrationDiscovery: params.agentDatabaseMigrationDiscovery }
+          : {}),
         beforeWorkspaceStateMigration: createWorkspaceAliasMigrationRepair(
           params.prompter,
           progress.done,
@@ -191,9 +112,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       ? await importShippedPluginInstallConfigForDoctor(preflight.snapshot)
       : undefined;
   if (pluginInstallConfigImport?.pluginInventoryChanged) {
-    const { readDoctorConfigPreflightSnapshot } =
-      await import("./doctor-config-preflight-plugin-index.js");
-    const refreshed = await readDoctorConfigPreflightSnapshot({
+    const { readConfigPreflightSnapshot } = await import("./config-preflight-snapshot.js");
+    const refreshed = await readConfigPreflightSnapshot({
       allowCurrentPluginMetadata: false,
       includePluginMetadata: true,
       preparePluginMetadataSnapshot: true,
@@ -207,14 +127,18 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     };
   }
   const { snapshot, baseConfig: baseCfg } = preflight;
+  const referenceSource = prepareDoctorConfigReferenceSource(snapshot);
   const pluginMetadataSnapshotState: DoctorPluginMetadataSnapshotState = {
     current: preflight.pluginMetadataSnapshot,
+    inventoryChanged: pluginInstallConfigImport?.pluginInventoryChanged,
   };
   const { createDoctorPluginMetadataSnapshotScope } =
     await import("./doctor/shared/plugin-metadata-snapshot-scope.js");
   const pluginMetadataSnapshotScope = createDoctorPluginMetadataSnapshotScope({
     getBaseSnapshot: () => pluginMetadataSnapshotState.current,
     env: process.env,
+    getDeferredPluginIds: () =>
+      preflight.deferredPluginMigrations?.map((pending) => pending.pluginId) ?? [],
   });
   const runWithPluginMetadataSnapshot = pluginMetadataSnapshotScope.run;
   const invalidatePluginMetadataSnapshot = () => {
@@ -245,6 +169,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
+  const configRepairWarnings: string[] = [];
   const applyConfigMutation = (
     mutation: DoctorConfigMutationResult & { warnings?: string[] },
     options: { fixHint: string; sanitize?: boolean; emitWarnings?: boolean },
@@ -252,6 +177,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     changesPanelSink.emit(mutation.changes, options.sanitize ? { sanitize: true } : {});
     if (options.emitWarnings && mutation.warnings?.length) {
       emitDoctorNotes({ note, warningNotes: mutation.warnings });
+      configRepairWarnings.push(...mutation.warnings);
     }
     state = applyDoctorConfigMutation({
       state,
@@ -328,6 +254,18 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       explicitSetPaths.push(["agents", "ownership"]);
     }
   }
+  const { prepareSessionStoreOwnerRecovery } = await import("./doctor-session-store-owner.js");
+  const sessionStoreOwnerRecovery = await prepareSessionStoreOwnerRecovery({
+    config: state.candidate,
+    snapshot,
+    prompter: params.prompter,
+  });
+  applyConfigMutation(sessionStoreOwnerRecovery, {
+    fixHint: `Run "${doctorFixCommand}" to review session-store ownership recovery.`,
+    sanitize: true,
+    emitWarnings: true,
+  });
+
   const { collectBlockedLegacyOpenAICodexProviderPlan } =
     await import("./doctor/shared/legacy-config-migrations.runtime.models.js");
   const blockedCodexProviderPlan = collectBlockedLegacyOpenAICodexProviderPlan(state.candidate);
@@ -407,19 +345,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     emitWarnings: true,
   });
 
-  const hookTransformsDirWarnings = collectInvalidHookTransformsDirWarnings(
-    state.cfg,
-    snapshot.path,
-  );
-  if (hookTransformsDirWarnings.length > 0) {
-    note(sanitizeDoctorNote(hookTransformsDirWarnings.join("\n")), "Doctor warnings");
-  }
-  const unsupportedInternalHookEntryWarnings = collectUnsupportedInternalHookEntryWarnings(
-    state.cfg,
-  );
-  if (unsupportedInternalHookEntryWarnings.length > 0) {
-    note(sanitizeDoctorNote(unsupportedInternalHookEntryWarnings.join("\n")), "Doctor warnings");
-  }
+  noteDoctorHookConfigWarnings(state.cfg, snapshot.path);
 
   // Parsed config supplies invalid-key evidence only; migrations still mutate the
   // include/env-resolved candidate so doctor never writes unresolved source values.
@@ -439,10 +365,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     await import("./doctor/shared/legacy-config-binding-repair.js");
   applyConfigMutation(
     runWithCurrentPluginMetadata(state.candidate, () =>
-      repairUnownedChannelAccountBindings(state.candidate),
+      repairUnownedChannelAccountBindings({
+        config: state.candidate,
+        sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
+      }),
     ),
     {
-      fixHint: `Run "${doctorFixCommand}" to bind channel accounts with a single existing route owner.`,
+      fixHint: `Run "${doctorFixCommand}" to preserve channel account ownership.`,
+      emitWarnings: true,
     },
   );
 
@@ -481,7 +411,28 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     );
   }
 
+  const { recoverInstalledPluginConfigIds } =
+    await import("./doctor/shared/installed-plugin-id-recovery.js");
+  const installedPluginRecovery = await recoverInstalledPluginConfigIds(
+    state.candidate,
+    process.env,
+  );
+  applyConfigMutation(
+    { ...installedPluginRecovery, warnings: installedPluginRecovery.notices },
+    { fixHint: `Run "${doctorFixCommand}" to apply these changes.`, emitWarnings: true },
+  );
+  if (referenceSource) {
+    referenceSource.installedPluginIdRecovery = installedPluginRecovery.recovery;
+  }
+  // Preserve authored legacy disable policy before auto-enable can generate a
+  // canonical entry that would otherwise win the migration's shallow merge.
   const pluginActivationSourceConfig = state.candidate;
+  const { collectCodexPluginActivationWarnings } =
+    await import("./doctor/shared/codex-plugin-activation-warning.js");
+  emitDoctorNotes({
+    note,
+    warningNotes: collectCodexPluginActivationWarnings(pluginActivationSourceConfig),
+  });
   const { applyPluginAutoEnable } = await import("../config/plugin-auto-enable.js");
   applyConfigMutation(
     runWithCurrentPluginMetadata(state.candidate, () =>
@@ -509,16 +460,27 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     });
   }
 
-  const { collectPluginToolAllowlistWarnings } =
-    await import("./doctor/shared/plugin-tool-allowlist-warnings.js");
+  const [
+    { collectPluginToolAllowlistWarnings },
+    { collectGitHubUpgradeWarnings },
+    { normalizePluginsConfig },
+  ] = await Promise.all([
+    import("./doctor/shared/plugin-tool-allowlist-warnings.js"),
+    import("./doctor/shared/github-preview-upgrade.js"),
+    import("../plugins/config-state.js"),
+  ]);
   const pluginToolAllowlistWarnings = runWithCurrentPluginMetadata(state.candidate, () =>
     collectPluginToolAllowlistWarnings({
       cfg: state.candidate,
       env: process.env,
     }),
   );
-  if (pluginToolAllowlistWarnings.length > 0) {
-    note(sanitizeDoctorNote(pluginToolAllowlistWarnings.join("\n")), "Doctor warnings");
+  const pluginWarnings = [
+    ...pluginToolAllowlistWarnings,
+    ...collectGitHubUpgradeWarnings(normalizePluginsConfig(state.candidate.plugins)),
+  ];
+  if (pluginWarnings.length > 0) {
+    note(sanitizeDoctorNote(pluginWarnings.join("\n")), "Doctor warnings");
   }
 
   const hasConfiguredChannels =
@@ -539,6 +501,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     emitDoctorNotes({
       note,
       changeNotes: channelDoctorSequence.changeNotes,
+      infoNotes: channelDoctorSequence.infoNotes,
       warningNotes: channelDoctorSequence.warningNotes,
     });
 
@@ -567,6 +530,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const prompter = params.prompter;
     const repairSequence = await runDoctorRepairSequence({
       state,
+      installedPluginIdRecovery: installedPluginRecovery.recovery,
       doctorFixCommand,
       env: process.env,
       blockedCodexProviderPlan,
@@ -586,6 +550,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         : {}),
     });
     state = repairSequence.state;
+    if (referenceSource) {
+      referenceSource.installedPluginIdRecovery = new Map([
+        ...installedPluginRecovery.recovery,
+        ...repairSequence.installedPluginIdRecovery,
+      ]);
+    }
     pluginMetadataSnapshotState.current = repairSequence.pluginMetadataSnapshot;
     openAICodexAuthProfileIdMap = repairSequence.openAICodexAuthProfileIdMap;
     retiredModelRefConfig = repairSequence.retiredModelRefConfig;
@@ -605,17 +575,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }
   } else {
     const { collectDoctorPreviewNotes } = await import("./doctor/shared/preview-warnings.js");
-    const collectPreviewNotes = async () =>
-      await collectDoctorPreviewNotes({
+    const previewNotes = await runWithCurrentPluginMetadata(state.candidate, () =>
+      collectDoctorPreviewNotes({
         cfg: state.candidate,
         activationSourceConfig: pluginActivationSourceConfig,
         doctorFixCommand,
         env: process.env,
         allowExec: params.options.allowExec === true,
         blockedCodexProviderPlan,
-        runWithPluginMetadataSnapshot,
-      });
-    const previewNotes = await runWithCurrentPluginMetadata(state.candidate, collectPreviewNotes);
+      }),
+    );
     emitDoctorNotes({
       note,
       infoNotes: previewNotes.infoNotes,
@@ -679,12 +648,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const shouldWriteConfig = finalized.shouldWriteConfig && legacyStep.blocksWrite !== true;
   const includeBoundaryWrite =
     shouldWriteConfig &&
-    resolveConfigIncludeWriteBoundary({
+    canWriteDoctorInclude(
       snapshot,
-      nextConfig: cfg,
-      persistCanonicalAgentRoster,
-      explicitSetPaths,
-    });
+      cfg,
+      { persistCanonicalAgentRoster, explicitSetPaths },
+      referenceSource?.installedPluginIdRecovery,
+    );
 
   const configuredOpencodePluginIds = [
     cfg.models?.providers?.opencode || cfg.models?.providers?.["opencode-zen"]
@@ -706,10 +675,13 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   noteImplicitFallbackClobberWarnings(cfg);
   noteSandboxOriginProxyWarning(cfg);
   noteMcpOriginWarning(cfg);
+  noteMediaCliModelWarnings(cfg);
+  noteMissingDefaultAgentOwner(cfg);
 
   const migrationResult = await finalizeMigrationResult({
     cfg,
     shouldWriteConfig,
+    pluginInventoryChanged: pluginMetadataSnapshotState.inventoryChanged,
     metadataSnapshot: pluginMetadataSnapshotState.current,
     runWithCurrentPluginMetadata,
   });
@@ -721,10 +693,19 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   return {
     ...finalized,
-    sourceConfigForWrite: snapshot.sourceConfig,
+    ...(shouldWriteConfig && sessionStoreOwnerRecovery.changes.length > 0
+      ? {
+          confirmedConfigSource: {
+            path: snapshot.path,
+            hash: snapshot.hash ?? hashConfigRaw(snapshot.raw),
+          },
+        }
+      : {}),
+    ...(referenceSource ? { referenceSource } : {}),
     ...(pluginInstallConfigImport ? { pluginInstallConfigImport } : {}),
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig,
+    ...(configRepairWarnings.length ? { warnings: [...new Set(configRepairWarnings)] } : {}),
     ...(shouldWriteConfig && pendingChangePanels.length > 0 ? { pendingChangePanels } : {}),
     sourceConfigValid: snapshot.valid,
     ...(legacyStep.partiallyValid === true ? { skipPluginValidationOnWrite: true } : {}),

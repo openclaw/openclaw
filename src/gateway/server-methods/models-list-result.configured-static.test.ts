@@ -16,7 +16,7 @@ import {
   WITHOUT_OPENAI_ENV_AUTH,
 } from "./models-list-result.openai-routes.test-support.js";
 import { modelsHandlers } from "./models.js";
-import type { GatewayClient, RespondFn } from "./types.js";
+import type { RespondFn } from "./types.js";
 
 describe("models.list configured static entries", () => {
   afterEach(() => {
@@ -80,7 +80,6 @@ describe("models.list configured static entries", () => {
           const params = {
             agentId: "worker",
             view: "configured",
-            includeDefaultModels: true,
             preparedOnly: true,
           };
           const respond = vi.fn<RespondFn>();
@@ -121,12 +120,30 @@ describe("models.list configured static entries", () => {
           staticEntries: [catalogEntry("gpt-5.6-luna", "openai-chatgpt-responses")],
         });
         const read = async (profileId?: string) => {
-          const params = { agentId: "main", view: "configured", preparedOnly: true };
+          const params = {
+            agentId: "main",
+            view: "configured",
+            preparedOnly: true,
+            includeDefaultModels: false,
+          };
           const respond = vi.fn<RespondFn>();
           await modelsHandlers["models.list"]!({
             req: { type: "req", id: "personal-catalog", method: "models.list", params },
             client: profileId
-              ? ({ authenticatedUserProfile: { profileId } } as GatewayClient)
+              ? {
+                  connect: {
+                    minProtocol: 4,
+                    maxProtocol: 4,
+                    client: { id: "cli", version: "test", platform: "test", mode: "cli" },
+                    caps: [],
+                  },
+                  authenticatedUserProfile: {
+                    profileId,
+                    displayName: null,
+                    hasAvatar: false,
+                    updatedAt: 1,
+                  },
+                }
               : null,
             context,
             params,
@@ -268,6 +285,7 @@ describe("models.list configured static entries", () => {
         view: "configured",
       }),
     ).resolves.toEqual({
+      defaultModels: { automaticUtilityModel: "openai/gpt-5.6-luna" },
       models: [
         expect.objectContaining({
           id: "gpt-5.6-sol",

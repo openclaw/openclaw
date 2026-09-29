@@ -1,12 +1,12 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.js";
 import { prepareSessionsPatchEntry, projectSessionsPatchEntry } from "../sessions-patch.js";
 import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 
-export type SessionPatchCatalogResult = Result<ModelCatalogEntry[], unknown>;
+export type SessionPatchCatalogResult = Result<ModelCatalogSnapshot, unknown>;
 
 export function createSessionPatchCatalogPreparation(
-  loadCatalog: (agentId: string) => Promise<ModelCatalogEntry[]>,
+  loadCatalog: (agentId: string) => Promise<ModelCatalogSnapshot>,
   diagnostics?: SessionPatchDiagnostics,
 ) {
   const preparations = new Map<string, Promise<SessionPatchCatalogResult>>();
@@ -17,7 +17,7 @@ export function createSessionPatchCatalogPreparation(
         const timing = diagnostics?.scope("catalog");
         try {
           const catalog = await loadCatalog(agentId);
-          return ok(Array.isArray(catalog) ? catalog : []);
+          return ok(catalog);
         } catch (error) {
           return err(error);
         } finally {
@@ -58,7 +58,7 @@ export function createSessionPatchCatalogPreparation(
           kind: "complete",
           result: await projectSessionsPatchEntry({
             ...params.projection,
-            loadGatewayModelCatalog: () => load(params.agentId),
+            loadGatewayModelCatalogSnapshot: () => load(params.agentId),
           }),
         };
       }

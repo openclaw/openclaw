@@ -1,20 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import * as sqliteQuery from "../../infra/kysely-sync.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "../service.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import type { CronServiceDeps } from "../service/state.js";
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "./key.js";
+import { finishCronRunReceipt, prepareCronRunReceiptClaim } from "./run-receipt-store.js";
 import {
-  claimCronRunReceiptInDatabase,
-  finishCronRunReceipt,
-  prepareCronRunReceiptClaim,
-} from "./run-receipt-store.js";
-import { inspectActiveCronRunReceipt } from "./run-receipt-store.test-support.js";
+  claimCronRunReceiptInDatabaseForTest,
+  inspectActiveCronRunReceipt,
+} from "./run-receipt-store.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-pending-retention-" });
 
@@ -33,6 +34,8 @@ describe("pending cron receipt retention", () => {
       });
     const makeService = (cronEnabled = true) =>
       new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled,
         log: logger,
@@ -58,13 +61,14 @@ describe("pending cron receipt retention", () => {
     // next admitted run. Its pending job association must keep the receipt.
     for (let index = 0; index < 64; index += 1) {
       const prepared = prepareCronRunReceiptClaim({
+        observed: undefined,
         storePath,
         job,
         agentId: "alpha",
         startedAtMs: now + 100 + index * 2,
       });
       const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-        claimCronRunReceiptInDatabase({
+        claimCronRunReceiptInDatabaseForTest({
           database: db,
           prepared,
           resolveAgentId: (current) => current.agentId!,
@@ -116,12 +120,22 @@ describe("pending cron receipt retention", () => {
 
       expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
       // A late settlement still prunes after an owner edit closes its receipt.
-      finishCronRunReceipt({ handle: pending!, status: "ok", finishedAtMs: now });
+      const queries = vi.spyOn(sqliteQuery, "executeSqliteQuerySync");
+      let fetchedRows: number;
+      try {
+        finishCronRunReceipt({ handle: pending!, status: "ok", finishedAtMs: now });
+        fetchedRows = queries.mock.results.flatMap((result) =>
+          result.type === "return" ? result.value.rows : [],
+        ).length;
+      } finally {
+        queries.mockRestore();
+      }
       expect(terminalIds()).toEqual([...history.slice(1).toReversed(), pending!.receiptId]);
       expect(retirement()).toEqual({ receipt_id: pending!.receiptId });
       expect((await loadCronStore(storePath)).jobs[0]?.state.runningReceiptId).toBe(
         pending!.receiptId,
       );
+      expect(fetchedRows).toBeLessThanOrEqual(8);
 
       await reconciler.start();
       expect(runCommandJob).toHaveBeenCalledOnce();

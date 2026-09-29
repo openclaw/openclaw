@@ -101,6 +101,10 @@ export interface ProcessSession {
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
   exitReason?: TerminationReason;
+  /** Explicit process/task stop intent; the terminal reason still owns confirmation. */
+  cancellationRequested?: boolean;
+  /** Cleanup failure prevents an intentional stop from being treated as successful observation. */
+  finalizationFailed?: boolean;
   /** Preserve the lifecycle owner's verdict for polls that captured the running session. */
   terminalStatus?: Exclude<ProcessStatus, "running">;
   noOutputTimedOut?: boolean;
@@ -220,7 +224,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingStderrChars = pendingChars;
   }
   session.totalOutputChars += chunk.length;
-  const aggregated = trimWithCap(session.aggregated + chunk, session.maxOutputChars);
+  const aggregated = tail(session.aggregated + chunk, session.maxOutputChars);
   session.truncated =
     session.truncated || aggregated.length < session.aggregated.length + chunk.length;
   session.aggregated = aggregated;
@@ -310,11 +314,17 @@ export function markExited(
   session.pendingOutput = pending.output;
   session.pendingOutputDropped = pending.outputDropped;
   moveToFinished(session);
+  if (!session.finalizing) {
+    settleExecSessionFinalization(session);
+  }
+}
+
+/** Releases scope joins after the process owner's task and notification work settles. */
+export function settleExecSessionFinalization(session: ProcessSession): void {
+  session.finalizing = false;
   const active = activeExecSessions.get(session.id);
   if (active?.session === session) {
     activeExecSessions.delete(session.id);
-    // The exec owner's synchronous task/notification callbacks run before
-    // these promise continuations resume and release the environment state.
     active.settled?.resolve();
   }
 }
@@ -352,11 +362,6 @@ export function acknowledgeNotifyOnExit(record: {
   }
   remove();
   record.notifyOnExitRemoval = undefined;
-}
-
-/** Reports owner-tracked process liveness even after visibility is removed. */
-export function hasActiveBackgroundExecSession(sessionId: string): boolean {
-  return activeExecSessions.get(sessionId)?.promoted === true;
 }
 
 /** Returns the number of live background exec sessions without exposing process details. */
@@ -439,16 +444,20 @@ function capPendingStream(
 ) {
   let pendingChars = pendingCharsInput;
   let overflow = pendingChars - cap;
-  for (let index = 0; index < output.length && overflow > 0;) {
+  let writeIndex = 0;
+  let index = 0;
+  for (; index < output.length && overflow > 0; index += 1) {
     const chunk = output[index];
     if (!chunk || chunk.stream !== stream) {
-      index += 1;
+      if (writeIndex !== index) {
+        output.copyWithin(writeIndex, index, index + 1);
+      }
+      writeIndex += 1;
       continue;
     }
     if (chunk.text.length <= overflow) {
       overflow -= chunk.text.length;
       pendingChars -= chunk.text.length;
-      output.splice(index, 1);
       continue;
     }
     const trimmed = sliceUtf16Safe(chunk.text, overflow);
@@ -457,12 +466,10 @@ function capPendingStream(
     chunk.text = trimmed;
     break;
   }
+  if (writeIndex !== index) {
+    output.splice(writeIndex, index - writeIndex);
+  }
   return pendingChars;
-}
-
-/** Keeps only the last `max` characters for bounded aggregate output storage. */
-function trimWithCap(text: string, max: number) {
-  return tail(text, max);
 }
 
 /** Lists backgrounded running sessions visible to reconnect/poll callers. */

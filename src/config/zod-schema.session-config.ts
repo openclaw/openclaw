@@ -40,6 +40,7 @@ export const SessionSchema = z
       .enum(["main", "per-peer", "per-channel-peer", "per-account-channel-peer"])
       .optional(),
     groupScope: z.enum(["main", "per-group"]).optional(),
+    notifyOnCreate: z.boolean().optional(),
     identityLinks: z.record(z.string(), z.array(z.string())).optional(),
     resetTriggers: z.array(z.string()).optional(),
     reset: SessionResetConfigSchema.optional(),
@@ -95,28 +96,19 @@ export const SessionSchema = z
       })
       .strict()
       .superRefine((val, ctx) => {
-        if (val.maxDiskBytes !== undefined && val.maxDiskBytes !== false) {
-          try {
-            parseByteSize(normalizeStringifiedOptionalString(val.maxDiskBytes) ?? "", {
-              defaultUnit: "b",
-            });
-          } catch {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: ["maxDiskBytes"],
-              message: "invalid size (use b, kb, mb, gb, tb)",
-            });
+        for (const key of ["maxDiskBytes", "highWaterBytes"] as const) {
+          const value = val[key];
+          if (value === undefined || value === false) {
+            continue;
           }
-        }
-        if (val.highWaterBytes !== undefined) {
           try {
-            parseByteSize(normalizeStringifiedOptionalString(val.highWaterBytes) ?? "", {
+            parseByteSize(normalizeStringifiedOptionalString(value) ?? "", {
               defaultUnit: "b",
             });
           } catch {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
-              path: ["highWaterBytes"],
+              path: [key],
               message: "invalid size (use b, kb, mb, gb, tb)",
             });
           }

@@ -78,6 +78,7 @@ export async function withIMessageRemoteFile<T>(params: {
   localPath: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  assertDirectAdapterHandoff?: () => void;
   deps?: RemoteFileDeps;
   use: (remotePath: string) => Promise<T>;
 }): Promise<T> {
@@ -100,6 +101,7 @@ trap - EXIT HUP INT TERM
 rm -rf -- ${remoteDir}
 `;
 
+  params.assertDirectAdapterHandoff?.();
   try {
     await runChecked(
       run,
@@ -107,12 +109,14 @@ rm -rf -- ${remoteDir}
       ["ssh", ...SSH_OPTIONS, "-T", "--", remoteHost, "sh -s"],
       { input: createScript, timeoutMs: params.timeoutMs, signal: params.signal },
     );
+    params.assertDirectAdapterHandoff?.();
     await runChecked(
       run,
       "iMessage remote file upload",
       ["scp", ...SSH_OPTIONS, "--", params.localPath, `${remoteHost}:${remotePath}`],
       { timeoutMs: params.timeoutMs, signal: params.signal },
     );
+    params.assertDirectAdapterHandoff?.();
     return await params.use(remotePath);
   } finally {
     try {

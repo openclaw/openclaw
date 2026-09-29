@@ -7,6 +7,7 @@ import {
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "../utils/system-prompt-cache-boundary.js";
+import { anthropicServerSideFallbackCases } from "./anthropic-server-fallback.test-support.js";
 
 const anthropicMockState = vi.hoisted(() => ({
   configs: [] as unknown[],
@@ -311,7 +312,7 @@ describe("Anthropic provider", () => {
     expect((capturedPayload as { system?: unknown }).system).toEqual([
       {
         type: "text",
-        text: "x-anthropic-billing-header: cc_version=2.1.75; cc_entrypoint=sdk-cli;",
+        text: "x-anthropic-billing-header: cc_version=2.1.280; cc_entrypoint=sdk-cli;",
       },
       {
         type: "text",
@@ -401,107 +402,133 @@ describe("Anthropic provider", () => {
     expect(result.usage.cost.total).toBeCloseTo(1.469044, 6);
   });
 
-  it("captures and replays streamed Anthropic compaction blocks", async () => {
-    const firstClient = createAnthropicSseClient([
-      {
-        type: "message_start",
-        message: {
-          id: "msg_compaction",
-          model: "claude-sonnet-4-6",
-          usage: { input_tokens: 50_001, output_tokens: 0 },
+  it.each(["opaque-final-compaction", null])(
+    "captures streamed Anthropic compaction deltas and replays final opaque metadata %s",
+    async (encryptedContent) => {
+      const firstClient = createAnthropicSseClient([
+        {
+          type: "message_start",
+          message: {
+            id: "msg_compaction",
+            model: "claude-sonnet-4-6",
+            usage: { input_tokens: 50_001, output_tokens: 0 },
+          },
         },
-      },
-      {
-        type: "content_block_start",
-        index: 0,
-        content_block: { type: "compaction", content: null },
-      },
-      {
-        type: "content_block_delta",
-        index: 0,
-        delta: { type: "compaction_delta", content: "summary checkpoint" },
-      },
-      { type: "content_block_stop", index: 0 },
-      {
-        type: "content_block_start",
-        index: 1,
-        content_block: { type: "text", text: "" },
-      },
-      {
-        type: "content_block_delta",
-        index: 1,
-        delta: { type: "text_delta", text: "Done." },
-      },
-      { type: "content_block_stop", index: 1 },
-      {
-        type: "message_delta",
-        delta: { stop_reason: "compaction" },
-        usage: { input_tokens: 1, output_tokens: 1 },
-      },
-      { type: "message_stop" },
-    ]);
-    const replayOptions = {
-      anthropicServerCompaction: true,
-      authProfileId: "anthropic:work",
-      sessionId: "session-1",
-    } as const;
-    const firstUser = { role: "user" as const, content: "old question", timestamp: 0 };
-    const first = await streamAnthropic(
-      makeAnthropicModel(),
-      { messages: [firstUser] },
-      {
-        apiKey: "sk-ant-provider",
-        client: firstClient as never,
-        ...replayOptions,
-      },
-    ).result();
-
-    expect(first.stopReason).toBe("stop");
-    expect(first.providerReplay).toMatchObject({
-      type: "anthropic-compaction",
-      data: "summary checkpoint",
-      replayIndex: 0,
-    });
-
-    let replayPayload: Record<string, unknown> | undefined;
-    const secondClient = createAnthropicSseClient([
-      {
-        type: "message_start",
-        message: {
-          id: "msg_replay",
-          model: "claude-sonnet-4-6",
-          usage: { input_tokens: 1 },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "compaction",
+            content: null,
+            encrypted_content: "opaque-initial-compaction",
+          },
         },
-      },
-      {
-        type: "message_delta",
-        delta: { stop_reason: "end_turn" },
-        usage: { input_tokens: 1, output_tokens: 1 },
-      },
-      { type: "message_stop" },
-    ]);
-    await streamAnthropic(
-      makeAnthropicModel(),
-      {
-        messages: [firstUser, first, { role: "user", content: "new question", timestamp: 2 }],
-      },
-      {
-        apiKey: "sk-ant-provider",
-        client: secondClient as never,
-        ...replayOptions,
-        onPayload: (payload) => {
-          replayPayload = payload as Record<string, unknown>;
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: {
+            type: "compaction_delta",
+            content: "summary ",
+            encrypted_content: "opaque-partial-compaction",
+          },
         },
-      },
-    ).result();
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: {
+            type: "compaction_delta",
+            content: "checkpoint",
+            encrypted_content: encryptedContent,
+          },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "content_block_start",
+          index: 1,
+          content_block: { type: "text", text: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 1,
+          delta: { type: "text_delta", text: "Done." },
+        },
+        { type: "content_block_stop", index: 1 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "compaction" },
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+        { type: "message_stop" },
+      ]);
+      const replayOptions = {
+        anthropicServerCompaction: true,
+        authProfileId: "anthropic:work",
+        sessionId: "session-1",
+      } as const;
+      const firstUser = { role: "user" as const, content: "old question", timestamp: 0 };
+      const first = await streamAnthropic(
+        makeAnthropicModel(),
+        { messages: [firstUser] },
+        {
+          apiKey: "sk-ant-provider",
+          client: firstClient as never,
+          ...replayOptions,
+        },
+      ).result();
 
-    const replayMessages = replayPayload?.messages as Array<Record<string, unknown>>;
-    expect(replayMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
-    expect(replayMessages[0]?.content).toEqual([
-      { type: "compaction", content: "summary checkpoint" },
-      { type: "text", text: "Done." },
-    ]);
-  });
+      expect(first.stopReason).toBe("stop");
+      expect(first.providerReplay).toMatchObject({
+        type: "anthropic-compaction",
+        data: "summary checkpoint",
+        replayIndex: 0,
+      });
+
+      let replayPayload: Record<string, unknown> | undefined;
+      const secondClient = createAnthropicSseClient([
+        {
+          type: "message_start",
+          message: {
+            id: "msg_replay",
+            model: "claude-sonnet-4-6",
+            usage: { input_tokens: 1 },
+          },
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+        { type: "message_stop" },
+      ]);
+      // oxlint-disable-next-line unicorn/prefer-structured-clone -- Verify persisted provider replay after JSON transcript reload.
+      const savedMessages: Context["messages"] = JSON.parse(
+        JSON.stringify([firstUser, first, { role: "user", content: "new question", timestamp: 2 }]),
+      );
+      await streamAnthropic(
+        makeAnthropicModel(),
+        { messages: savedMessages },
+        {
+          apiKey: "sk-ant-provider",
+          client: secondClient as never,
+          ...replayOptions,
+          onPayload: (payload) => {
+            replayPayload = payload as Record<string, unknown>;
+          },
+        },
+      ).result();
+
+      const replayMessages = replayPayload?.messages as Array<Record<string, unknown>>;
+      expect(replayMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
+      expect(replayMessages[0]?.content).toEqual([
+        {
+          type: "compaction",
+          content: "summary checkpoint",
+          encrypted_content: encryptedContent,
+        },
+        { type: "text", text: "Done." },
+      ]);
+    },
+  );
 
   it("ignores a message_delta whose usage object is omitted", async () => {
     const client = createAnthropicSseClient([
@@ -1322,25 +1349,23 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it.each([
-    { id: "claude-fable-5", name: "Claude Fable 5" },
-    { id: "claude-opus-5", name: "Claude Opus 5" },
-  ])(
+  it.each(anthropicServerSideFallbackCases)(
     "sends default server-side fallback params for direct $name API-key requests",
-    async (model) => {
+    async ({ optionHeaders, customBeta, ...model }) => {
       const { payload: capturedPayload } = await captureSimpleAnthropicPayload(model, {
         mode: "raw",
-        stopBeforeNetwork: true,
+        headers: optionHeaders,
       });
 
       expect((capturedPayload as { fallbacks?: unknown }).fallbacks).toBe("default");
-      await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
-      const config = anthropicMockState.configs[0] as {
-        defaultHeaders?: Record<string, string>;
+      const requestOptions = anthropicMockState.requestOptions[0] as {
+        headers?: Record<string, string>;
       };
-      expect(config.defaultHeaders?.["anthropic-beta"]).toContain(
-        "server-side-fallback-2026-07-01",
-      );
+      const betas = requestOptions.headers?.["anthropic-beta"]?.split(",");
+      expect(betas).toContain("server-side-fallback-2026-07-01");
+      if (customBeta) {
+        expect(betas).toContain("files-api-2025-04-14");
+      }
     },
   );
 

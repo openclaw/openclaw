@@ -130,7 +130,7 @@ it("opens New Agent through the real Gateway and runner using a protected provid
       expect(result).toMatchObject({
         sessionId,
         action: "none",
-        reply: expect.stringContaining("Let's hatch a new agent"),
+        reply: expect.stringContaining("Let's create an agent"),
       });
       expect(requests).toEqual([
         {
@@ -170,7 +170,7 @@ it("opens New Agent through the real Gateway and runner using a protected provid
       expect(fresh).toMatchObject({
         sessionId: freshSessionId,
         action: "none",
-        reply: expect.stringContaining("Let's hatch a new agent"),
+        reply: expect.stringContaining("Let's create an agent"),
       });
       expect(requests).toHaveLength(3);
       expect(requests[2]?.authorization).toBe(`Bearer ${rotatedKey}`);

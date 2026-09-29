@@ -68,6 +68,10 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
   const assertAdmittedActive = attempt.admittedRunContext
     ? resolveAdmittedRunActiveAssertion(attempt.admittedRunContext, attempt.abortSignal)
     : undefined;
+  const withTranscriptWrite: WithOwnedTranscriptWrite = (operation) =>
+    initialWriter
+      ? initialWriter.withTranscriptWrite(() => transcriptLifecycle.withTranscriptWrite(operation))
+      : transcriptLifecycle.withTranscriptWrite(operation);
   const ownedTranscriptWriteContext: OwnedSessionTranscriptWriteContext = {
     sessionFile: attempt.sessionFile,
     sessionKey: attempt.sessionKey,
@@ -77,11 +81,11 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
       attempt.abortSignal?.throwIfAborted();
       assertAdmittedActive?.();
     },
-    withTranscriptWrite: (operation) => transcriptLifecycle.withTranscriptWrite(operation),
+    withTranscriptWrite,
   };
   const withOwnedTranscriptWrite: WithOwnedTranscriptWrite = (operation) =>
     withOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, async () =>
-      transcriptLifecycle.withTranscriptWrite(operation),
+      withTranscriptWrite(operation),
     );
 
   externalAbortController.arm();

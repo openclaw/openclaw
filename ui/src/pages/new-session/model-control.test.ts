@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { contextWith, deferred, renderControl } from "./model-control.test-support.ts";
+import { contextWith, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 afterEach(() => {
@@ -126,7 +127,7 @@ describe("new-session model runtime", () => {
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith(
         "sessions.catalog.list",
-        { agentId: "main", limitPerHost: 1 },
+        { agentId: "main", metadataOnly: true },
         { signal: expect.any(AbortSignal) },
       ),
     );
@@ -240,83 +241,6 @@ describe("new-session model runtime", () => {
     ).toBeNull();
   });
 
-  it.each([
-    { inherited: true, checked: "true", toggleValue: "off", next: false },
-    { inherited: false, checked: "false", toggleValue: "on", next: true },
-    { inherited: "auto", checked: "true", toggleValue: "off", next: false },
-  ] as const)(
-    "renders the current composer toggle for inherited Fast Mode $inherited",
-    async ({ inherited, checked, toggleValue, next }) => {
-      const { context } = contextWith([
-        {
-          id: "gpt-5.6-luna",
-          name: "GPT-5.6 Luna",
-          provider: "openai",
-          reasoning: true,
-          effectiveFastMode: inherited,
-        },
-      ]);
-      const control = new NewSessionModelControl(() => undefined);
-      control.load(context, "main", true);
-
-      await vi.waitFor(() => {
-        const container = renderControl(control, context);
-        const toggle = container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]");
-        expect(
-          container.querySelector(".chat-controls__fast-mode-title")?.textContent?.trim(),
-        ).toBe("Fast mode");
-        expect(toggle?.classList.contains("chat-controls__speed-toggle")).toBe(true);
-        expect(toggle?.dataset.chatSpeedToggle).toBe(toggleValue);
-        expect(toggle?.getAttribute("aria-checked")).toBe(checked);
-      });
-
-      renderControl(control, context)
-        .querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")
-        ?.click();
-      expect(control.fastMode).toBe(next);
-    },
-  );
-
-  it("clears Fast Mode when switching to a provider without a wire mapping", async () => {
-    const { context } = contextWith([
-      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true },
-      {
-        id: "llama-4",
-        name: "Llama 4",
-        provider: "ollama",
-        thinkingLevels: [
-          { id: "low", label: "Low" },
-          { id: "high", label: "High" },
-        ],
-      },
-    ]);
-    const control = new NewSessionModelControl(() => undefined);
-    control.load(context, "main", true);
-
-    await vi.waitFor(() =>
-      expect(
-        renderControl(control, context).querySelector('[data-chat-model-option="ollama/llama-4"]'),
-      ).not.toBeNull(),
-    );
-    renderControl(control, context)
-      .querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")
-      ?.click();
-    expect(control.fastMode).toBe(true);
-
-    renderControl(control, context)
-      .querySelector<HTMLButtonElement>('[data-chat-model-option="ollama/llama-4"]')
-      ?.click();
-
-    expect(control.selected).toBe("ollama/llama-4");
-    expect(control.fastMode).toBeUndefined();
-    const unsupportedToggle = renderControl(control, context).querySelector<HTMLButtonElement>(
-      "[data-chat-speed-toggle]",
-    );
-    expect(unsupportedToggle?.disabled).toBe(true);
-    expect(unsupportedToggle?.getAttribute("aria-checked")).toBe("false");
-    expect(unsupportedToggle?.dataset.chatSpeedToggle).toBe("");
-  });
-
   it("does not mark ordinary catalog loading as preference restoration", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
@@ -329,11 +253,20 @@ describe("new-session model runtime", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
   });
 
-  it("shows the known default immediately without inventing catalog choices", async () => {
+  it("waits for a catalog receipt before presenting the configured default", async () => {
     const pending = deferred<{ models: ModelCatalogEntry[] }>();
     const { context, request } = contextWith([]);
     request.mockReturnValueOnce(pending.promise);
-    const control = new NewSessionModelControl(() => undefined);
+    const ready = deferred();
+    const control = new NewSessionModelControl(() => {
+      if (
+        renderControl(control, context).querySelector(
+          '[data-chat-model-option="openai/gpt-5.6-luna"]',
+        )
+      ) {
+        ready.resolve();
+      }
+    });
 
     control.load(context, "main", true);
 
@@ -346,18 +279,26 @@ describe("new-session model runtime", () => {
       ".skeleton.chat-controls__model-trigger-skeleton",
     );
     expect(loadingModelTrigger).not.toBeNull();
-    expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("false");
+    expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("true");
     expect(loadingModelTrigger?.classList.contains("chat-controls__model-trigger--loading")).toBe(
-      false,
+      true,
     );
-    expect(loadingModelTrigger?.getAttribute("aria-label")).toContain("gpt-5.6-luna");
+    expect(loadingModelTrigger?.getAttribute("aria-label")).toContain("Loading models…");
+    expect(container.textContent).not.toContain("gpt-5.6-luna");
     expect(loadingModelTrigger?.getAttribute("aria-disabled")).toBe("false");
-    expect(loadingSkeleton).toBeNull();
+    expect(loadingSkeleton).not.toBeNull();
     expect(loadingModelTrigger?.textContent).not.toContain("Loading models");
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
     expect(control.modelForSubmission()).toBe("");
     expect(control.modelSelectionBlockedReason({ id: "main" })).toBeUndefined();
-    pending.resolve({ models: [] });
+    pending.resolve({ models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }] });
+    await ready.promise;
+    const settled = renderControl(control, context);
+    expect(settled.querySelector('[data-chat-model-option="openai/gpt-5.6-luna"]')).not.toBeNull();
+    expect(settled.querySelector("[data-chat-model-select]")?.getAttribute("aria-busy")).toBe(
+      "false",
+    );
+    control.reset();
   });
 
   it("waits for selected-agent defaults after chat metadata resolves", async () => {
@@ -466,17 +407,15 @@ describe("new-session model runtime", () => {
   });
 
   it("does not invent Medium for a hydrated agent without a thinking profile", async () => {
-    const { context, request } = contextWith([
+    const { context } = contextWith([
       { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
     ]);
-    const notify = vi.fn();
-    const control = new NewSessionModelControl(notify);
+    const control = new NewSessionModelControl(() => undefined);
 
     control.load(context, "main", true);
-    await waitForFast(() => {
-      expect(request).toHaveBeenCalledOnce();
-      expect(notify).toHaveBeenCalledTimes(2);
-    });
+    await waitForFast(() =>
+      expect(renderControl(control, context).textContent).toContain("GPT-5.6 Sol"),
+    );
 
     const container = renderControl(control, context, "main", {
       id: "main",
@@ -519,10 +458,8 @@ describe("new-session model runtime", () => {
     expect(control.selected).toBe("");
   });
 
-  it.each([
-    ["generic transport error", new Error("metadata unavailable")],
-    ["request timeout", new Error("gateway request timeout for chat.metadata")],
-  ])("renders %s as unavailable instead of a default-only catalog", async (_label, error) => {
+  it("renders a transport failure as unavailable instead of a default-only catalog", async () => {
+    const error = new Error("metadata unavailable");
     const { context, request } = contextWith([]);
     request.mockRejectedValueOnce(error);
     const control = new NewSessionModelControl(() => undefined);
@@ -793,13 +730,11 @@ describe("new-session model runtime", () => {
 
   it("preserves a live selection when an invalidated metadata refresh fails", async () => {
     const { context, request } = contextWith([]);
-    const notify = vi.fn();
-    const control = new NewSessionModelControl(notify);
+    const control = new NewSessionModelControl(() => undefined);
     control.load(context, "main", true);
-    await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledOnce();
-      expect(notify).toHaveBeenCalledTimes(2);
-    });
+    await vi.waitFor(() =>
+      expect(renderControl(control, context).textContent).toContain("No models available"),
+    );
     control.selected = "anthropic/claude-sonnet-4-6";
     control.thinkingLevel = "high";
     control.invalidate(false);
@@ -981,29 +916,42 @@ describe("new-session model runtime", () => {
     pending.resolve({ models: [] });
   });
 
-  it("drops a stored model and its reasoning override when the model is unavailable", async () => {
-    const { context, request } = contextWith([
-      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
-    ]);
-    const notify = vi.fn();
-    const onSelectionChange = vi.fn();
-    const control = new NewSessionModelControl(notify, onSelectionChange);
+  it.each(["missing", "denied"])(
+    "drops a stored model and reasoning when the model is %s",
+    async (state) => {
+      const { context, request } = contextWith([
+        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
+        ...(state === "denied"
+          ? [
+              {
+                id: "retired-model",
+                name: "Retired model",
+                provider: "anthropic",
+                manualSelectionAllowed: false,
+              },
+            ]
+          : []),
+      ]);
+      const notify = vi.fn();
+      const onSelectionChange = vi.fn();
+      const control = new NewSessionModelControl(notify, onSelectionChange);
 
-    control.load(context, "main", true, {
-      preference: { model: "openai/gpt-5.6-sol", thinkingLevel: "high" },
-    });
-    await vi.waitFor(() => expect(control.selected).toBe("openai/gpt-5.6-sol"));
-    expect(control.thinkingLevel).toBe("high");
+      control.load(context, "main", true, {
+        preference: { model: "openai/gpt-5.6-sol", thinkingLevel: "high" },
+      });
+      await vi.waitFor(() => expect(control.selected).toBe("openai/gpt-5.6-sol"));
+      expect(control.thinkingLevel).toBe("high");
 
-    control.load(context, "main", true, {
-      preference: { model: "anthropic/retired-model", thinkingLevel: "high" },
-    });
+      control.load(context, "main", true, {
+        preference: { model: "anthropic/retired-model", thinkingLevel: "high" },
+      });
 
-    expect(request).toHaveBeenCalledOnce();
-    expect(control.selected).toBe("");
-    expect(control.thinkingLevel).toBe("");
-    expect(onSelectionChange).toHaveBeenLastCalledWith({ model: "", thinkingLevel: "" });
-  });
+      expect(request).toHaveBeenCalledOnce();
+      expect(control.selected).toBe("");
+      expect(control.thinkingLevel).toBe("");
+      expect(onSelectionChange).toHaveBeenLastCalledWith({ model: "", thinkingLevel: "" });
+    },
+  );
 
   it("drops a stored reasoning override when its option is no longer available", async () => {
     const { context, request } = contextWith([

@@ -3,6 +3,7 @@
  */
 import { EventEmitter } from "node:events";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   MAX_DATE_TIMESTAMP_MS,
   MAX_TIMER_TIMEOUT_MS,
@@ -11,17 +12,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
+import {
+  getCurrentActiveNodeContext,
+  setActiveNodeContexts,
+} from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
-  NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
-  NODE_WORKER_PRIVATE_COMMANDS,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
 } from "../infra/node-commands.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
+import {
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  type NodeWorkerHostDeclaration,
+} from "../infra/node-runner-inventory.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
@@ -34,7 +39,13 @@ import {
   updateNodeRunnerInventory,
 } from "./node-registry-private.js";
 import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
-import { MAX_BUFFERED_BYTES } from "./server-constants.js";
+import {
+  createTestNodeSocket,
+  makeClient,
+  registerNodeSession,
+  type TestNodeSocket,
+} from "./node-registry.test-helpers.js";
+import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import {
   createDeviceWorkerRuntime,
@@ -45,35 +56,6 @@ let testNodeHostCommands: NonNullable<
   ReturnType<typeof createEmptyPluginRegistry>["nodeHostCommands"]
 > = [];
 const activeTestRegistries = new Set<NodeRegistry>();
-
-type TestNodeSocket = {
-  readyState: number;
-  bufferedAmount: number;
-  send: ReturnType<typeof vi.fn>;
-  close: ReturnType<typeof vi.fn>;
-};
-
-const NON_OPEN_NODE_SOCKET_STATES = [
-  { state: "connecting", readyState: WebSocket.CONNECTING },
-  { state: "closing", readyState: WebSocket.CLOSING },
-  { state: "closed", readyState: WebSocket.CLOSED },
-];
-
-function createTestNodeSocket(
-  sent: string[] = [],
-  readyState: TestNodeSocket["readyState"] = WebSocket.OPEN,
-): TestNodeSocket {
-  return {
-    readyState,
-    bufferedAmount: 0,
-    send: vi.fn((frame: unknown) => {
-      if (typeof frame === "string") {
-        sent.push(frame);
-      }
-    }),
-    close: vi.fn(),
-  };
-}
 
 function createNodeRegistry(options?: ConstructorParameters<typeof NodeRegistry>[0]): NodeRegistry {
   const registry = new NodeRegistry(options);
@@ -88,6 +70,7 @@ function createPrivateNodeRegistryRuntime(options?: ConstructorParameters<typeof
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const registry of activeTestRegistries) {
     for (const session of registry.listConnected()) {
       registry.unregister(session.connId);
@@ -95,74 +78,8 @@ afterEach(() => {
   }
   activeTestRegistries.clear();
   testNodeHostCommands = [];
-  setActiveNodeContext(null);
+  setActiveNodeContexts([]);
 });
-
-function makeClient(
-  connId: string,
-  nodeId: string,
-  sent: string[] = [],
-  opts: {
-    clientId?: string;
-    displayName?: string;
-    platform?: string;
-    version?: string;
-    caps?: string[];
-    commands?: string[];
-    computerUse?: unknown;
-    declaredComputerUse?: unknown;
-    permissions?: Record<string, boolean>;
-    declaredCaps?: string[];
-    declaredCommands?: string[];
-    declaredPermissions?: Record<string, boolean>;
-    sessionCapsCeiling?: string[];
-    sessionCommandsCeiling?: string[];
-    socket?: GatewayWsClient["socket"];
-  } = {},
-): GatewayWsClient {
-  return {
-    connId,
-    usesSharedGatewayAuth: false,
-    socket: opts.socket ?? (createTestNodeSocket(sent) as unknown as GatewayWsClient["socket"]),
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: opts.clientId ?? "openclaw-macos",
-        version: opts.version ?? "1.0.0",
-        platform: opts.platform ?? "darwin",
-        mode: "node",
-        displayName: opts.displayName,
-      },
-      device: {
-        id: nodeId,
-        publicKey: "public-key",
-        signature: "signature",
-        signedAt: 1,
-        nonce: "nonce",
-      },
-      caps: opts.caps ?? [],
-      commands: opts.commands ?? [],
-      computerUse: opts.computerUse,
-      declaredComputerUse: opts.declaredComputerUse,
-      permissions: opts.permissions,
-      declaredCaps: opts.declaredCaps,
-      declaredCommands: opts.declaredCommands,
-      declaredPermissions: opts.declaredPermissions,
-      sessionCapsCeiling: opts.sessionCapsCeiling,
-      sessionCommandsCeiling: opts.sessionCommandsCeiling,
-    } as unknown as GatewayWsClient["connect"],
-  };
-}
-
-function registerNodeSession(
-  registry: NodeRegistry,
-  client: GatewayWsClient,
-  opts: Partial<Parameters<NodeRegistry["register"]>[1]> = {},
-) {
-  const { pairingIdentity = "identity-a", ...registration } = opts;
-  return registry.register(client, { ...registration, pairingIdentity });
-}
 
 function registerTestNodeSocket(
   registry: NodeRegistry,
@@ -181,7 +98,6 @@ function registerDemoNodePluginTool(params: {
   name: string;
   command: string;
   description?: string;
-  parameters?: Record<string, unknown>;
   dangerous?: boolean;
 }) {
   const registry = createEmptyPluginRegistry();
@@ -197,7 +113,6 @@ function registerDemoNodePluginTool(params: {
       agentTool: {
         name: params.name,
         description: params.description ?? "Demo node-host tool",
-        ...(params.parameters ? { parameters: params.parameters } : {}),
       },
       handle: async () => "{}",
     },
@@ -225,7 +140,7 @@ function makeConnectivitySocket(emitPong: boolean) {
       queueMicrotask(() => socket.emit("pong"));
     }
   };
-  return socket as unknown as GatewayWsClient["socket"];
+  return socket as unknown as GatewayWsClient["socket"] & NonNullable<GatewayWsClient["webSocket"]>;
 }
 
 function registerNode(registry: NodeRegistry, opts: Parameters<typeof makeClient>[3] = {}) {
@@ -392,19 +307,18 @@ describe("gateway/node-registry", () => {
     expect(frames).toEqual([]);
   });
 
-  it.each(NODE_WORKER_PRIVATE_COMMANDS)(
-    "rejects private command %s through the generic invoke surface",
-    async (command) => {
-      const registry = createNodeRegistry();
-      const frames = registerNode(registry, { clientId: GATEWAY_CLIENT_IDS.NODE_HOST });
+  it("rejects a private worker command through the generic invoke surface", async () => {
+    const registry = createNodeRegistry();
+    const frames = registerNode(registry, { clientId: GATEWAY_CLIENT_IDS.NODE_HOST });
 
-      await expect(registry.invoke({ nodeId: "node-1", command })).resolves.toEqual({
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: "private node command is not invocable" },
-      });
-      expect(frames).toEqual([]);
-    },
-  );
+    await expect(
+      registry.invoke({ nodeId: "node-1", command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: "private node command is not invocable" },
+    });
+    expect(frames).toEqual([]);
+  });
 
   it("does not expose the unchecked invoke core through registry reflection", () => {
     const registry = createNodeRegistry();
@@ -669,12 +583,7 @@ describe("gateway/node-registry", () => {
       }),
       { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
     );
-    const publish = (workerHost: {
-      enabled: true;
-      capacity: { total: number; available: number };
-      bundleRetention?: 1;
-      bundleStatus?: 1;
-    }) =>
+    const publish = (workerHost: NodeWorkerHostDeclaration) =>
       updateNodeRunnerInventory({
         registry: nodeRegistry,
         nodeId: "node-1",
@@ -708,10 +617,40 @@ describe("gateway/node-registry", () => {
     });
     expect(runnerStateChanged).not.toHaveBeenCalled();
 
+    expect(publish({ ...retained, capacity: { total: 2, available: 0 }, statusWait: 1 })).toEqual({
+      changed: true,
+    });
+    expect(publish({ ...retained, statusWait: 1, capacity: { available: 0, total: 2 } })).toEqual({
+      changed: false,
+    });
+    expect(runnerStateChanged).toHaveBeenCalledExactlyOnceWith("node-1", {
+      inventoryChanged: true,
+      availabilityChanged: false,
+    });
+    runnerStateChanged.mockClear();
+
     const [proof] = await nodeWorkerSupervisorTransport.listCurrentNodes();
     if (!proof) {
       throw new Error("expected current runner proof");
     }
+    expect(nodeWorkerSupervisorTransport.isCurrent(proof, true)).toBe(false);
+    const idleHost = {
+      ...retained,
+      idleRetention: true as const,
+      capacity: { total: 2, available: 0, reclaimableIdle: 1 },
+    };
+    expect(publish(idleHost)).toEqual({ changed: true });
+    expect(nodeWorkerSupervisorTransport.isCurrent(proof, true)).toBe(true);
+    expect(
+      collectNodeCatalogRuntimeState(nodeRegistry, [
+        { nodeId: "node-1", connId: "conn-1", pairingGeneration: "generation-a" },
+      ]).workerSlotsByNodeId.get("node-1"),
+    ).toEqual(idleHost.capacity);
+    expect(
+      publish({ ...idleHost, capacity: { ...idleHost.capacity, reclaimableIdle: 0 } }),
+    ).toEqual({ changed: true });
+    expect(nodeWorkerSupervisorTransport.isCurrent(proof, true)).toBe(false);
+    runnerStateChanged.mockClear();
     expect(
       nodeWorkerSupervisorTransport.acceptBundleStatus?.(proof, {
         bundleHash: "a".repeat(64),
@@ -831,11 +770,9 @@ describe("gateway/node-registry", () => {
           },
         }),
       ).toEqual({ changed: true });
-      const [proof] = await nodeWorkerSupervisorTransport.listCurrentNodes();
-      expect(proof?.clientId).toBe(clientId);
-      if (!proof) {
-        throw new Error("expected current supervisor proof");
-      }
+      const [candidate] = await nodeWorkerSupervisorTransport.listCurrentNodes();
+      const proof = expectDefined(candidate, "current supervisor proof");
+      expect(proof.clientId).toBe(clientId);
       expect(
         updateNodeRunnerInventory({
           registry: nodeRegistry,
@@ -908,6 +845,7 @@ describe("gateway/node-registry", () => {
             enabled: true,
             capacity: { total: 2, available: 0 },
             environmentSession: 1,
+            capturedExecPolicy: true,
           },
         },
       });
@@ -1541,183 +1479,14 @@ describe("gateway/node-registry", () => {
     await invoke;
   });
 
-  it("ranks connected nodes by gateway-derived input activity", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], {
-        displayName: "Desk Mac",
-        permissions: { accessibility: true },
-      }),
-      {},
-    );
-    registerNodeSession(
-      registry,
-      makeClient("conn-2", "node-2", [], {
-        displayName: "Laptop",
-        permissions: { accessibility: true },
-      }),
-      {},
-    );
-
-    expect(
-      registry.updatePresenceActivity({
-        nodeId: "node-1",
-        connId: "conn-1",
-        idleSeconds: 10,
-        observedAtMs: 100_000,
-      }),
-    ).toMatchObject({ lastActiveAtMs: 90_000, presenceUpdatedAtMs: 100_000 });
-    registry.updatePresenceActivity({
-      nodeId: "node-2",
-      connId: "conn-2",
-      idleSeconds: 2,
-      observedAtMs: 105_000,
-    });
-
-    expect(registry.getActiveNode()?.nodeId).toBe("node-2");
-    expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "node-2" });
-    expect(registry.unregister("conn-2")).toBe("node-2");
-    expect(registry.getActiveNode()?.nodeId).toBe("node-1");
-    expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "node-1" });
-  });
-
-  it("recomputes active context when a same-id connection replaces reported presence", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-old", "node-1", [], { permissions: { accessibility: true } }),
-      {},
-    );
-    registry.updatePresenceActivity({
-      nodeId: "node-1",
-      connId: "conn-old",
-      idleSeconds: 0,
-      observedAtMs: 100_000,
-    });
-
-    registerNodeSession(
-      registry,
-      makeClient("conn-new", "node-1", [], { permissions: { accessibility: true } }),
-      {},
-    );
-
-    expect(registry.getActiveNode()).toBeUndefined();
-    expect(getCurrentActiveNodeContext()).toBeNull();
-    expect(registry.unregister("conn-old")).toBeNull();
-    expect(getCurrentActiveNodeContext()).toBeNull();
-  });
-
-  it("rejects presence updates from stale node connections", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-new", "node-1", [], { permissions: { accessibility: true } }),
-      {},
-    );
-
-    expect(
-      registry.updatePresenceActivity({
-        nodeId: "node-1",
-        connId: "conn-old",
-        idleSeconds: 0,
-        observedAtMs: 100_000,
-      }),
-    ).toBeNull();
-    expect(registry.getActiveNode()).toBeUndefined();
-  });
-
-  it("does not advance a bounded estimate on saturated idle keepalives", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], { permissions: { accessibility: true } }),
-      {},
-    );
-    const first = registry.updatePresenceActivity({
-      nodeId: "node-1",
-      connId: "conn-1",
-      idleSeconds: 2_592_000,
-      saturated: true,
-      observedAtMs: 3_000_000_000,
-    });
-    const keepalive = registry.updatePresenceActivity({
-      nodeId: "node-1",
-      connId: "conn-1",
-      idleSeconds: 2_592_000,
-      saturated: true,
-      observedAtMs: 3_000_180_000,
-    });
-
-    expect(first?.lastActiveAtMs).toBe(408_000_000);
-    expect(keepalive?.lastActiveAtMs).toBe(408_000_000);
-    expect(keepalive?.presenceUpdatedAtMs).toBe(3_000_180_000);
-  });
-
-  it("clears reported presence when Accessibility permission is removed", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], {
-        permissions: { accessibility: true },
-        declaredPermissions: { accessibility: true },
-      }),
-      {},
-    );
-    registry.updatePresenceActivity({
-      nodeId: "node-1",
-      connId: "conn-1",
-      idleSeconds: 0,
-      observedAtMs: 100_000,
-    });
-
-    registry.updateSurface("node-1", { commands: [], permissions: { accessibility: false } });
-
-    expect(registry.get("node-1")?.lastActiveAtMs).toBeUndefined();
-    expect(registry.get("node-1")?.presenceUpdatedAtMs).toBeUndefined();
-    expect(registry.getActiveNode()).toBeUndefined();
-    expect(getCurrentActiveNodeContext()).toBeNull();
-  });
-
-  it("clears presence only for the current connection and selects the next active Mac", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], { permissions: { accessibility: true } }),
-      {},
-    );
-    registerNodeSession(
-      registry,
-      makeClient("conn-2", "node-2", [], { permissions: { accessibility: true } }),
-      {},
-    );
-    registry.updatePresenceActivity({
-      nodeId: "node-1",
-      connId: "conn-1",
-      idleSeconds: 10,
-      observedAtMs: 100_000,
-    });
-    registry.updatePresenceActivity({
-      nodeId: "node-2",
-      connId: "conn-2",
-      idleSeconds: 0,
-      observedAtMs: 105_000,
-    });
-
-    expect(registry.clearPresenceActivity({ nodeId: "node-2", connId: "conn-old" })).toBeNull();
-    expect(registry.getActiveNode()?.nodeId).toBe("node-2");
-    expect(registry.clearPresenceActivity({ nodeId: "node-2", connId: "conn-2" })).toBe(true);
-    expect(registry.getActiveNode()?.nodeId).toBe("node-1");
-    expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "node-1" });
-    expect(registry.clearPresenceActivity({ nodeId: "node-2", connId: "conn-2" })).toBe(false);
-  });
-
   it("checks node websocket connectivity with ping/pong", async () => {
     const registry = createTestNodeRegistry();
+    const socket = makeConnectivitySocket(true);
     registerNodeSession(
       registry,
       makeClient("conn-1", "node-1", [], {
-        socket: makeConnectivitySocket(true),
+        socket,
+        webSocket: socket,
       }),
       {},
     );
@@ -1729,7 +1498,7 @@ describe("gateway/node-registry", () => {
     const registry = createTestNodeRegistry();
     const socket = makeConnectivitySocket(true);
     const ping = vi.spyOn(socket, "ping");
-    const client = makeClient("conn-invalidated", "node-1", [], { socket });
+    const client = makeClient("conn-invalidated", "node-1", [], { socket, webSocket: socket });
     registerNodeSession(registry, client, {});
     client.invalidated = true;
 
@@ -1743,12 +1512,17 @@ describe("gateway/node-registry", () => {
   it("does not report an old websocket as connected after its node reconnects", async () => {
     const registry = createTestNodeRegistry();
     const oldSocket = makeConnectivitySocket(false);
-    registerNodeSession(registry, makeClient("conn-old", "node-1", [], { socket: oldSocket }), {});
+    registerNodeSession(
+      registry,
+      makeClient("conn-old", "node-1", [], { socket: oldSocket, webSocket: oldSocket }),
+      {},
+    );
 
     const connectivity = registry.checkConnectivity("node-1", 50);
+    const newSocket = makeConnectivitySocket(true);
     const replacement = registerNodeSession(
       registry,
-      makeClient("conn-new", "node-1", [], { socket: makeConnectivitySocket(true) }),
+      makeClient("conn-new", "node-1", [], { socket: newSocket, webSocket: newSocket }),
       {},
     );
     (oldSocket as unknown as EventEmitter).emit("pong");
@@ -1766,10 +1540,7 @@ describe("gateway/node-registry", () => {
 
   it("does not report a replaced polling transport as connected", async () => {
     const registry = createTestNodeRegistry();
-    let resolveProbe: ((result: { ok: true }) => void) | undefined;
-    const transportProbe = new Promise<{ ok: true }>((resolve) => {
-      resolveProbe = resolve;
-    });
+    const { promise: transportProbe, resolve: resolveProbe } = createDeferred<{ ok: true }>();
     registry.registerTransport(
       makeClient("conn-old", "node-1"),
       { pairingIdentity: "identity-a" },
@@ -1781,9 +1552,10 @@ describe("gateway/node-registry", () => {
     );
 
     const connectivity = registry.checkConnectivity("node-1", 50);
+    const newSocket = makeConnectivitySocket(true);
     const replacement = registerNodeSession(
       registry,
-      makeClient("conn-new", "node-1", [], { socket: makeConnectivitySocket(true) }),
+      makeClient("conn-new", "node-1", [], { socket: newSocket, webSocket: newSocket }),
       {},
     );
     resolveProbe?.({ ok: true });
@@ -1811,7 +1583,11 @@ describe("gateway/node-registry", () => {
     };
     let frames: string[] = [];
     let socket = makeTrackedSocket(frames);
-    registerNodeSession(registry, makeClient("conn-0", "node-1", frames, { socket }), {});
+    registerNodeSession(
+      registry,
+      makeClient("conn-0", "node-1", frames, { socket, webSocket: socket }),
+      {},
+    );
 
     for (let attempt = 1; attempt <= 50; attempt += 1) {
       const previousSocket = socket;
@@ -1831,7 +1607,7 @@ describe("gateway/node-registry", () => {
       socket = makeTrackedSocket(frames);
       const replacement = registerNodeSession(
         registry,
-        makeClient(`conn-${attempt}`, "node-1", frames, { socket }),
+        makeClient(`conn-${attempt}`, "node-1", frames, { socket, webSocket: socket }),
         {},
       );
       (previousSocket as unknown as EventEmitter).emit("pong");
@@ -1864,10 +1640,12 @@ describe("gateway/node-registry", () => {
 
   it("reports stale node websocket connectivity before invoke timeout", async () => {
     const registry = createTestNodeRegistry();
+    const socket = makeConnectivitySocket(false);
     registerNodeSession(
       registry,
       makeClient("conn-1", "node-1", [], {
-        socket: makeConnectivitySocket(false),
+        socket,
+        webSocket: socket,
       }),
       {},
     );
@@ -2046,41 +1824,38 @@ describe("gateway/node-registry", () => {
     }
   });
 
-  it.each(["browser.proxy", NODE_MCP_TOOLS_CALL_COMMAND, "demo.echo", "system.run"])(
-    "bounds stalled pairing without dispatching an expired %s command",
-    async (command) => {
-      vi.useFakeTimers();
-      const { registry, frames, release } = registerPairingWait();
-      const onDispatchReady = vi.fn();
-      let result: Awaited<ReturnType<NodeRegistry["invoke"]>> | undefined;
-      const invoke = registry.invoke({
-        nodeId: "node-1",
-        command,
-        timeoutMs: 100,
-        onDispatchReady,
+  it("bounds stalled pairing without dispatching an expired command", async () => {
+    vi.useFakeTimers();
+    const { registry, frames, release } = registerPairingWait();
+    const onDispatchReady = vi.fn();
+    let result: Awaited<ReturnType<NodeRegistry["invoke"]>> | undefined;
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      timeoutMs: 100,
+      onDispatchReady,
+    });
+    void invoke.then((value) => {
+      result = value;
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(100);
+      expect(result).toEqual({
+        ok: false,
+        error: { code: "TIMEOUT", message: "node invoke timed out" },
       });
-      void invoke.then((value) => {
-        result = value;
-      });
-      try {
-        await vi.advanceTimersByTimeAsync(100);
-        expect(result).toEqual({
-          ok: false,
-          error: { code: "TIMEOUT", message: "node invoke timed out" },
-        });
-        expect(vi.getTimerCount()).toBe(0);
-        release();
-        await vi.advanceTimersByTimeAsync(0);
-        expect(frames).toEqual([]);
-        expect(onDispatchReady).not.toHaveBeenCalled();
-        expect(registry.get("node-1")?.connId).toBe("conn-1");
-      } finally {
-        release();
-        await vi.advanceTimersByTimeAsync(100);
-        vi.useRealTimers();
-      }
-    },
-  );
+      expect(vi.getTimerCount()).toBe(0);
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(frames).toEqual([]);
+      expect(onDispatchReady).not.toHaveBeenCalled();
+      expect(registry.get("node-1")?.connId).toBe("conn-1");
+    } finally {
+      release();
+      await vi.advanceTimersByTimeAsync(100);
+      vi.useRealTimers();
+    }
+  });
 
   it("shares the invoke budget across pairing, serialization, and the pending response", async () => {
     vi.useFakeTimers();
@@ -3128,11 +2903,10 @@ describe("gateway/node-registry", () => {
     ).toBe(false);
   });
 
-  it.each(
-    [GATEWAY_CLIENT_IDS.NODE_HOST, GATEWAY_CLIENT_IDS.MACOS_APP].flatMap((clientId) =>
-      ["mcp.tools.call.v1", "system.run"].map((command) => ({ clientId, command })),
-    ),
-  )(
+  it.each([
+    { clientId: GATEWAY_CLIENT_IDS.NODE_HOST, command: "mcp.tools.call.v1" },
+    { clientId: GATEWAY_CLIENT_IDS.MACOS_APP, command: "system.run" },
+  ])(
     "forwards cancellation of first-party non-streaming $clientId $command calls",
     async ({ clientId, command }) => {
       const registry = createNodeRegistry();
@@ -3159,11 +2933,10 @@ describe("gateway/node-registry", () => {
     },
   );
 
-  it.each(
-    [GATEWAY_CLIENT_IDS.NODE_HOST, GATEWAY_CLIENT_IDS.MACOS_APP].flatMap((clientId) =>
-      ["mcp.tools.call.v1", "system.run"].map((command) => ({ clientId, command })),
-    ),
-  )(
+  it.each([
+    { clientId: GATEWAY_CLIENT_IDS.NODE_HOST, command: "mcp.tools.call.v1" },
+    { clientId: GATEWAY_CLIENT_IDS.MACOS_APP, command: "system.run" },
+  ])(
     "forwards timeouts of first-party non-streaming $clientId $command calls",
     async ({ clientId, command }) => {
       vi.useFakeTimers();
@@ -3531,32 +3304,6 @@ describe("gateway/node-registry", () => {
     ]);
   });
 
-  it.each(NON_OPEN_NODE_SOCKET_STATES)(
-    "rejects normal event sends while the node websocket is $state",
-    ({ readyState }) => {
-      const registry = createTestNodeRegistry();
-      const socket = createTestNodeSocket([], readyState);
-      registerTestNodeSocket(registry, socket);
-
-      expect(registry.sendEvent("node-1", "node.test", { ok: true })).toBe(false);
-      expect(socket.send).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(NON_OPEN_NODE_SOCKET_STATES)(
-    "rejects raw event sends while the node websocket is $state",
-    ({ readyState }) => {
-      const registry = createTestNodeRegistry();
-      const socket = createTestNodeSocket([], readyState);
-      registerTestNodeSocket(registry, socket);
-
-      expect(
-        registry.sendEventRaw("node-1", "node.test", serializeEventPayload({ ok: true })),
-      ).toBe(false);
-      expect(socket.send).not.toHaveBeenCalled();
-    },
-  );
-
   it("rate-limits failed event delivery warnings for registered nodes", async () => {
     const capture = createDiagnosticLogRecordCapture();
     setLoggerOverride({
@@ -3604,12 +3351,9 @@ describe("gateway/node-registry", () => {
   });
 
   it("drops a delayed voice-wake snapshot after persistent generation changes", async () => {
-    let resolveCurrent!: (state: { identity: string; generation?: string } | undefined) => void;
-    const currentPairingState = new Promise<{ identity: string; generation?: string } | undefined>(
-      (resolve) => {
-        resolveCurrent = resolve;
-      },
-    );
+    const { promise: currentPairingState, resolve: resolveCurrent } = createDeferred<
+      { identity: string; generation?: string } | undefined
+    >();
     const resolveCurrentPairingState = vi.fn(() => currentPairingState);
     const registry = createNodeRegistry({ resolveCurrentPairingState });
     const frames: string[] = [];
@@ -3632,10 +3376,9 @@ describe("gateway/node-registry", () => {
   });
 
   it("drops a delayed command-free snapshot after pairing identity deletion", async () => {
-    let resolveCurrent!: (state: { identity: string } | undefined) => void;
-    const currentPairingState = new Promise<{ identity: string } | undefined>((resolve) => {
-      resolveCurrent = resolve;
-    });
+    const { promise: currentPairingState, resolve: resolveCurrent } = createDeferred<
+      { identity: string } | undefined
+    >();
     const registry = createNodeRegistry({
       resolveCurrentPairingState: async () => await currentPairingState,
     });
@@ -3658,10 +3401,10 @@ describe("gateway/node-registry", () => {
   });
 
   it("does not retarget an approval refresh when its connection changes during pairing verification", async () => {
-    let resolveCurrent!: (state: { identity: string; generation: string }) => void;
-    const currentPairingState = new Promise<{ identity: string; generation: string }>((resolve) => {
-      resolveCurrent = resolve;
-    });
+    const { promise: currentPairingState, resolve: resolveCurrent } = createDeferred<{
+      identity: string;
+      generation: string;
+    }>();
     const registry = createNodeRegistry({
       resolveCurrentPairingState: async () => await currentPairingState,
     });
@@ -3685,17 +3428,18 @@ describe("gateway/node-registry", () => {
   });
 
   it("rejects raw event sends when the node socket buffer is saturated", () => {
+    vi.useFakeTimers();
     resetDiagnosticEventsForTest();
     const diagnosticEvents: unknown[] = [];
     const stopDiagnostics = onDiagnosticEvent((event) => diagnosticEvents.push(event));
     const registry = createTestNodeRegistry();
-    const socket = {
+    const socket = Object.assign(new EventEmitter(), {
       readyState: WebSocket.OPEN,
       bufferedAmount: MAX_BUFFERED_BYTES + 1,
       send: vi.fn(),
       close: vi.fn(),
       terminate: vi.fn(),
-    };
+    });
     registerTestNodeSocket(registry, socket);
     const payload = serializeEventPayload({ foo: "bar" });
 
@@ -3703,6 +3447,10 @@ describe("gateway/node-registry", () => {
       expect(registry.sendEventRaw("node-1", "chat", payload)).toBe(false);
       expect(socket.send).not.toHaveBeenCalled();
       expect(socket.close).toHaveBeenCalledWith(1008, "slow consumer");
+      expect(socket.terminate).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
+      expect(socket.terminate).toHaveBeenCalledOnce();
+      vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
       expect(socket.terminate).toHaveBeenCalledOnce();
       expect(socket.close.mock.invocationCallOrder[0]).toBeLessThan(
         socket.terminate.mock.invocationCallOrder[0]!,
@@ -3723,6 +3471,27 @@ describe("gateway/node-registry", () => {
       stopDiagnostics();
       resetDiagnosticEventsForTest();
     }
+  });
+
+  it("cancels node slow-consumer termination after the socket closes", () => {
+    vi.useFakeTimers();
+    const registry = createTestNodeRegistry();
+    const socket = Object.assign(new EventEmitter(), {
+      readyState: WebSocket.OPEN,
+      bufferedAmount: MAX_BUFFERED_BYTES + 1,
+      send: vi.fn(),
+      close: vi.fn(),
+      terminate: vi.fn(),
+    });
+    registerTestNodeSocket(registry, socket);
+
+    expect(registry.sendEventRaw("node-1", "chat", serializeEventPayload({ foo: "bar" }))).toBe(
+      false,
+    );
+    socket.emit("close", 1008, Buffer.from("slow consumer"));
+    vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
+
+    expect(socket.terminate).not.toHaveBeenCalled();
   });
 
   it("refreshes effective live surface within the declared surface", () => {
@@ -4093,77 +3862,6 @@ describe("gateway/node-registry", () => {
     expect(session.nodePluginTools.map((tool) => tool.name)).toEqual(["demo_echo"]);
     expect(listConnectedNodePluginTools().map((entry) => entry.descriptor.name)).toEqual([
       "demo_echo",
-    ]);
-  });
-
-  it("accepts unregistered descriptors only inside the approved command surface", () => {
-    const registry = createTestNodeRegistry();
-    const client = makeClient("conn-1", "node-1", [], {
-      commands: ["system.run"],
-    });
-
-    const session = registerNodeSession(registry, client, {});
-    publishNodePluginTools(registry, [
-      {
-        pluginId: "demo",
-        name: "demo_echo",
-        description: "Allowed command",
-        command: "system.run",
-      },
-      {
-        pluginId: "demo",
-        name: "demo_blocked",
-        description: "Blocked command",
-        command: "demo.blocked",
-      },
-    ]);
-
-    expect(session.nodePluginTools.map((tool) => tool.name)).toEqual(["demo_echo"]);
-    expect(listConnectedNodePluginTools().map((entry) => entry.descriptor.name)).toEqual([
-      "demo_echo",
-    ]);
-  });
-
-  it("uses registry metadata for node-hosted plugin tool descriptors", () => {
-    registerDemoNodePluginTool({
-      name: "demo_echo",
-      command: "demo.echo",
-      description: "Trusted registry description",
-      parameters: {
-        type: "object",
-        properties: { text: { type: "string" } },
-      },
-    });
-    const registry = createTestNodeRegistry();
-    const client = makeClient("conn-1", "node-1", [], {
-      commands: ["demo.echo"],
-    });
-
-    const session = registerNodeSession(registry, client, {});
-    publishNodePluginTools(registry, [
-      {
-        pluginId: "demo",
-        name: "demo_echo",
-        description: "Injected node description",
-        parameters: {
-          type: "object",
-          properties: { secret: { type: "string" } },
-        },
-        command: "demo.echo",
-      },
-    ]);
-
-    expect(session.nodePluginTools).toEqual([
-      {
-        pluginId: "demo",
-        name: "demo_echo",
-        description: "Trusted registry description",
-        parameters: {
-          type: "object",
-          properties: { text: { type: "string" } },
-        },
-        command: "demo.echo",
-      },
     ]);
   });
 

@@ -27,6 +27,7 @@ const VITEST_OPTIONS_WITH_VALUE = new Set([
   "--project",
   "--reporter",
   "--reporters",
+  "--repeats",
   "--retry",
   "--root",
   "-r",

@@ -8,6 +8,7 @@ import { root as createFsSafeRoot } from "../infra/fs-safe.js";
 import * as eventStore from "../memory-host-sdk/event-store.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { clearMemoryPluginState } from "../plugins/memory-state.test-fixtures.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { listMemoryHostPublicArtifacts } from "./memory-host-core.js";
 import {
@@ -17,8 +18,9 @@ import {
 import { appendMemoryHostEvent } from "./memory-host-events.js";
 
 describe("memory host event export recovery", () => {
-  afterEach(() => {
+  afterEach(async () => {
     clearMemoryPluginState();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();

@@ -321,7 +321,7 @@ export async function createPairedNodeWorkerHost(
     import("../../../../src/infra/device-identity.js"),
     import("../../../../src/node-host/invoke.js"),
     import("../../../../src/node-host/node-worker-bundle-installer.js"),
-    import("../../../../src/node-host/node-worker-supervisor-contract.js"),
+    import("../../../../src/worker/node-supervisor-protocol.js"),
     import("../../../../src/node-host/node-worker-supervisor.js"),
     import("../../../../src/node-host/node-worker-workspace.js"),
   ]);
@@ -355,6 +355,7 @@ export async function createPairedNodeWorkerHost(
     protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
     workerHost: {
       enabled: true as const,
+      capturedExecPolicy: true as const,
       ...(environmentSession
         ? { environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION }
         : {}),

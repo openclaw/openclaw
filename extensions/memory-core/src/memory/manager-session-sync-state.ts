@@ -1,18 +1,13 @@
-// Memory Core plugin module implements manager session sync state behavior.
 import {
   isCronRunSessionKey,
   isDreamingNarrativeSessionStoreKey,
   type SessionFileEntry,
+  type SessionFileState,
   type SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemorySourceFileStateRow } from "./manager-source-state.js";
 
-export type MemorySessionStartupFileState = {
-  absPath: string;
-  path: string;
-  mtimeMs: number;
-  size: number;
-};
+export type MemorySessionStartupFileState = SessionFileState;
 
 export function isMemorySessionIndexable(
   entry: Pick<
@@ -57,9 +52,13 @@ export function resolveMemorySessionStartupState(params: {
       dirtyFiles.push(file.absPath);
       continue;
     }
-    // File mtimes and SQLite session updatedAt values can move backward after
+    // Activity and transcript revisions can move backward after
     // restore/reset. The downstream content-hash gate suppresses unchanged rewrites.
-    if (file.size !== indexedSize || file.mtimeMs !== indexedMtimeMs) {
+    if (
+      file.size !== indexedSize ||
+      file.mtimeMs !== indexedMtimeMs ||
+      (file.revisionMs !== undefined && !existing.hash.startsWith(`sqlite:${file.revisionMs}:`))
+    ) {
       dirtyFiles.push(file.absPath);
     }
   }

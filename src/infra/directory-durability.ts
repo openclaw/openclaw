@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import {
   publishFileExclusive,
   syncDirectory,
@@ -7,7 +8,6 @@ import {
   type PublishFileExclusiveFailurePhase,
   type PublishFileExclusiveResult,
 } from "@openclaw/fs-safe/durability";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { FsSafeError } from "./fs-safe.js";
 
 export {
@@ -17,6 +17,7 @@ export {
   publishFileExclusive,
   sha256File,
   syncDirectory,
+  syncDirectoryBestEffort,
   syncDirectoryBestEffortSync,
   syncDirectorySync,
   type DirectorySyncOutcome,

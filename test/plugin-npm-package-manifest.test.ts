@@ -4,7 +4,9 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -25,18 +27,25 @@ import {
   withAugmentedPluginNpmManifestForPackage,
 } from "../scripts/lib/plugin-npm-package-manifest.mts";
 import { hasChannelPackageState } from "../src/channels/plugins/package-state-probes.js";
-import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
+import type { PluginManifest } from "../src/plugins/manifest-types.js";
+import {
+  cleanupTempDirs,
+  makeTempDir as makeTempRepoRoot,
+  useAutoCleanupTempDirTracker,
+} from "./helpers/temp-dir.js";
 import { writeJsonFile } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
+const fixtureDirs = useAutoCleanupTempDirTracker(afterEach);
 const tsxImport = import.meta.resolve("tsx");
 const execFileAsync = promisify(execFile);
+const registryDependencyArtifacts = new Map<string, { tarball: Buffer; integrity: string }>();
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);
 });
 
-function writeGeneratedChannelMetadata(repoDir: string): void {
+function writeGeneratedChannelMetadata(repoDir: string, pluginId = "twitch"): void {
   const metadataPath = join(
     repoDir,
     "src",
@@ -48,8 +57,8 @@ function writeGeneratedChannelMetadata(repoDir: string): void {
     metadataPath,
     `export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
   {
-    pluginId: "twitch",
-    channelId: "twitch",
+    pluginId: "${pluginId}",
+    channelId: "${pluginId}",
     label: "Twitch",
     description: "Twitch chat integration",
     schema: {
@@ -149,6 +158,72 @@ function writePublishablePluginPackage(repoDir: string): string {
   return packageDir;
 }
 
+function writeQaGatewayFixture(id: "qa-lab" | "qa-channel") {
+  const repoRoot = fixtureDirs.make("openclaw-private-qa-manifest-");
+  const packageDir = join(repoRoot, "extensions", id);
+  const packageJson = {
+    name: `@openclaw/${id}`,
+    version: "2026.9.6",
+    private: true,
+    type: "module",
+    files: ["**"],
+    exports: { ".": "./index.ts", "./api.js": "./api.ts" },
+    scripts: { prepack: "node source-only-script.js" },
+    dependencies: { "parent-tooling": "7.0.0", typebox: "1.2.3", zod: "4.5.6" },
+    devDependencies: { "@openclaw/plugin-sdk": "workspace:*" },
+    openclaw: {
+      extensions: ["./index.ts"],
+      compat: { pluginApi: ">=2026.9.6" },
+      build: { workerEntries: ["./src/inspection.worker.ts"] },
+      ...(id === "qa-channel" ? { setupEntry: "./setup-entry.ts", channel: { id } } : {}),
+    },
+  };
+  const manifest: PluginManifest = {
+    id,
+    configSchema: { type: "object", additionalProperties: false, properties: {} },
+    activation: { onStartup: false },
+    ...(id === "qa-lab"
+      ? {
+          cliCommands: [{ name: "qa", description: "Run QA scenarios", hasSubcommands: true }],
+          contracts: {
+            tools: ["qa_restart_wait", "qa_restart_unsafe_probe"],
+            webSearchProviders: ["qa-lab-search"],
+            workerProviders: ["static-ssh"],
+          },
+          toolMetadata: { qa_restart_wait: { replaySafe: true } },
+        }
+      : { channels: [id] }),
+  };
+  writeJsonFile(join(packageDir, "package.json"), packageJson);
+  writeJsonFile(join(packageDir, "openclaw.plugin.json"), manifest);
+  for (const source of [
+    "index.ts",
+    "api.ts",
+    "source-only-script.js",
+    "src/inspection.worker.ts",
+  ]) {
+    writeFileText(join(packageDir, source), 'throw new Error("source-only tooling");\n');
+  }
+  const outputs =
+    id === "qa-lab"
+      ? ["gateway-entry.js"]
+      : ["index.js", "setup-entry.js", "channel-plugin-api.js", "setup-plugin-api.js", "api.js"];
+  for (const output of [...outputs, ".setup/lazy.mjs"]) {
+    writeFileText(join(packageDir, "dist", output), "export {};\n");
+  }
+  if (id === "qa-channel") {
+    writeGeneratedChannelMetadata(repoRoot, id);
+  }
+  return {
+    repoRoot,
+    packageDir,
+    packageJson,
+    manifest,
+    outputs,
+    profile: "qa-gateway-fixture" as const,
+  };
+}
+
 function writeLocalDependencyPackage(
   packageDir: string,
   options: { optionalDependencySpec?: string } = {},
@@ -191,20 +266,40 @@ function writePatchedRuntimeFixture(bundling = "default") {
   const packRegistryDependency = (name: string) => {
     const dependencyDir = join(packageDir, "deps", name);
     const manifest = JSON.parse(readFileSync(join(dependencyDir, "package.json"), "utf8"));
-    const pack = spawnSync(
-      "npm",
-      ["pack", "--json", "--ignore-scripts", "--pack-destination", repoDir],
-      {
-        cwd: dependencyDir,
-        encoding: "utf8",
-      },
+    const inputKey = JSON.stringify(
+      readdirSync(dependencyDir)
+        .toSorted()
+        .map((file) => {
+          const filePath = join(dependencyDir, file);
+          const fileStat = lstatSync(filePath);
+          if (!fileStat.isFile()) {
+            throw new Error(`Registry fixture input must be a regular file: ${file}`);
+          }
+          return [file, fileStat.mode, readFileSync(filePath).toString("base64")];
+        }),
     );
-    expect(pack.status, pack.stderr).toBe(0);
-    const tarball = readFileSync(join(repoDir, parseNpmPackResult(pack.stdout).filename));
+    let artifact = registryDependencyArtifacts.get(inputKey);
+    if (!artifact) {
+      const pack = spawnSync(
+        "npm",
+        ["pack", "--json", "--ignore-scripts", "--pack-destination", repoDir],
+        {
+          cwd: dependencyDir,
+          encoding: "utf8",
+        },
+      );
+      expect(pack.status, pack.stderr).toBe(0);
+      const tarball = readFileSync(join(repoDir, parseNpmPackResult(pack.stdout).filename));
+      artifact = {
+        tarball,
+        integrity: `sha512-${createHash("sha512").update(tarball).digest("base64")}`,
+      };
+      registryDependencyArtifacts.set(inputKey, artifact);
+    }
     return {
       manifest,
-      tarball,
-      integrity: `sha512-${createHash("sha512").update(tarball).digest("base64")}`,
+      tarball: Buffer.from(artifact.tarball),
+      integrity: artifact.integrity,
     };
   };
   const registryVersions = [packRegistryDependency("local-runtime-dep")];
@@ -335,11 +430,12 @@ function writePatchedRuntimeFixture(bundling = "default") {
     ),
     snapshots: {
       [`local-runtime-dep@${patchedVersion}`]: {},
+      ...(bundling === "nested-other" ? { "local-runtime-dep@2.0.0": {} } : {}),
       ...(bundling.startsWith("nested-")
         ? {
             "unpatched-sibling@1.0.0": {
               optionalDependencies: {
-                "local-runtime-dep": bundling === "nested-other" ? "2.0.0" : "1.0.0",
+                "local-runtime-dep": bundling === "nested-other" ? "2.0.0" : patchedVersion,
               },
             },
           }
@@ -738,6 +834,126 @@ describe("plugin npm package manifest staging", () => {
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
   });
 
+  it.each(["qa-lab", "qa-channel"] as const)(
+    "packs only the private %s Gateway surface and restores source metadata",
+    (id) => {
+      const fixture = writeQaGatewayFixture(id);
+      const { packageDir, packageJson, manifest, outputs } = fixture;
+      const sourcePackageText = readFileSync(join(packageDir, "package.json"), "utf8");
+      const sourceManifestText = readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8");
+      withAugmentedPluginNpmManifestForPackage(fixture, ({ packageDir: packedDir }) => {
+        const packed = JSON.parse(readFileSync(join(packedDir, "package.json"), "utf8"));
+        const packedManifest = JSON.parse(
+          readFileSync(join(packedDir, "openclaw.plugin.json"), "utf8"),
+        );
+        const files = listNpmPackDryRunFiles(packedDir);
+        expect(packed).toMatchObject({
+          name: packageJson.name,
+          version: packageJson.version,
+          private: true,
+        });
+        expect(packed.peerDependencies.openclaw).toBe(packageJson.openclaw.compat.pluginApi);
+        expect(packed.openclaw.extensions).toEqual([
+          id === "qa-lab" ? "./dist/gateway-entry.js" : "./dist/index.js",
+        ]);
+        expect(packed.openclaw.runtimeExtensions).toEqual(packed.openclaw.extensions);
+        for (const entry of packed.openclaw.extensions) {
+          expect(files).toContain(entry.replace(/^\.\//u, ""));
+        }
+        for (const output of outputs) {
+          expect(files).toContain(`dist/${output}`);
+        }
+        expect(files).toContain("dist/.setup/lazy.mjs");
+        expect(files).toContain("openclaw.plugin.json");
+        expect(files.some((file) => file.endsWith(".ts") || file === "source-only-script.js")).toBe(
+          false,
+        );
+        expect(packed.exports).toBeUndefined();
+        expect(packed.scripts).toBeUndefined();
+        expect(packed.devDependencies).toBeUndefined();
+        expect(packed.openclaw.build).toBeUndefined();
+        expect(packedManifest.cliCommands).toBeUndefined();
+        expect(packedManifest.configSchema).toEqual(manifest.configSchema);
+        expect(packedManifest.activation).toEqual(manifest.activation);
+        if (id === "qa-lab") {
+          expect(packed.dependencies).toEqual({});
+          expect(packed.openclaw.setupEntry).toBeUndefined();
+          expect(packedManifest.contracts).toEqual(manifest.contracts);
+          expect(packedManifest.toolMetadata).toEqual({ qa_restart_wait: { replaySafe: true } });
+        } else {
+          expect(packed.dependencies).toEqual({ typebox: "1.2.3", zod: "4.5.6" });
+          expect(packed.openclaw.setupEntry).toBe("./dist/setup-entry.js");
+          expect(packed.openclaw.runtimeSetupEntry).toBe(packed.openclaw.setupEntry);
+          expect(packedManifest.channels).toEqual(["qa-channel"]);
+          expect(packedManifest.channelConfigs["qa-channel"].schema).toEqual({
+            type: "object",
+            required: ["channelName"],
+            properties: { channelName: { type: "string" } },
+          });
+        }
+      });
+      expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(sourcePackageText);
+      expect(readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8")).toBe(
+        sourceManifestText,
+      );
+
+      // Metadata selection must not reintroduce parent-tooling dependencies when bundling is requested.
+      const bundled = resolveAugmentedPluginNpmPackageJson({
+        ...fixture,
+        bundleDependencies: true,
+      });
+      expect(bundled.packageJson?.bundledDependencies).toEqual(
+        id === "qa-channel" ? ["typebox", "zod"] : [],
+      );
+    },
+  );
+
+  it.each([
+    { id: "qa-lab", missing: "gateway-entry.js" },
+    { id: "qa-channel", missing: "channel-plugin-api.js" },
+    { id: "qa-channel", missing: "api.js" },
+    { id: "qa-channel", missing: "setup-plugin-api.js" },
+  ] as const)("refuses private $id packaging without $missing", ({ id, missing }) => {
+    const fixture = writeQaGatewayFixture(id);
+    rmSync(join(fixture.packageDir, "dist", missing));
+    expect(() =>
+      withAugmentedPluginNpmManifestForPackage(fixture, () => {
+        throw new Error("incomplete fixture reached pack callback");
+      }),
+    ).toThrow(`package-local plugin runtime is missing for ${id}: ./dist/${missing}`);
+  });
+
+  it.each(["missing", "another channel"])(
+    "refuses a QA Channel fixture when generated schema metadata is %s",
+    (scenario) => {
+      const fixture = writeQaGatewayFixture("qa-channel");
+      if (scenario === "missing") {
+        rmSync(
+          join(fixture.repoRoot, "src", "config", "bundled-channel-config-metadata.generated.ts"),
+        );
+      } else {
+        writeGeneratedChannelMetadata(fixture.repoRoot);
+      }
+      expect(() =>
+        withAugmentedPluginNpmManifestForPackage(fixture, () => {
+          throw new Error("schema-less fixture reached pack callback");
+        }),
+      ).toThrow("QA Channel fixtures require the canonical generated channel config metadata");
+    },
+  );
+
+  it("refuses publication metadata for private Gateway fixtures before applying an overlay", () => {
+    const fixture = writeQaGatewayFixture("qa-lab");
+    const original = readFileSync(join(fixture.packageDir, "openclaw.plugin.json"), "utf8");
+    expect(() =>
+      resolveAugmentedPluginNpmManifest({
+        ...fixture,
+        clawhubMetadataDir: "not-a-publication-source",
+      }),
+    ).toThrow("Private QA Gateway fixtures cannot use publication metadata");
+    expect(readFileSync(join(fixture.packageDir, "openclaw.plugin.json"), "utf8")).toBe(original);
+  });
+
   it.for([
     { name: "module", partial: undefined },
     { name: "env-only", partial: {} },
@@ -746,7 +962,7 @@ describe("plugin npm package manifest staging", () => {
     { name: "missing specifier", partial: { exportName: "hasState" } },
     { name: "blank specifier", partial: { specifier: " \t", exportName: "hasState" } },
   ])(
-    "packs the plugin icon and loads both channel-state probes from one artifact ($name)",
+    "packs plugin identity and activity artwork with channel-state probes ($name)",
     ({ partial }) => {
       const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-state-runtime-");
       const packageDir = writePublishablePluginPackage(repoDir);
@@ -783,6 +999,10 @@ describe("plugin npm package manifest staging", () => {
       writeFileText(join(packageDir, "dist", "index.cjs"), "module.exports = {};\n");
       writeFileText(join(packageDir, "dist", "setup-entry.cjs"), "module.exports = {};\n");
       writeFileText(join(packageDir, "assets", "icon.png"), "portable-package-icon");
+      const activitySvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"/>';
+      writeFileText(join(packageDir, "assets", "activity.svg"), activitySvg);
+      writeFileText(join(packageDir, "assets", "activity", "diffs.svg"), activitySvg);
+      writeFileText(join(packageDir, "assets", "activity", "notes.txt"), "unpublished-notes");
       writeFileText(join(packageDir, "assets", "design-source.svg"), "unpublished-design");
       writeFileText(
         join(packageDir, "dist", "configured-state.cjs"),
@@ -842,6 +1062,9 @@ describe("plugin npm package manifest staging", () => {
         expect(packedFiles).toContain("dist/configured-state.cjs");
         expect(packedFiles).toContain("dist/auth-presence.cjs");
         expect(packedFiles).toContain("assets/icon.png");
+        expect(packedFiles).toContain("assets/activity.svg");
+        expect(packedFiles).toContain("assets/activity/diffs.svg");
+        expect(packedFiles).not.toContain("assets/activity/notes.txt");
         expect(packedFiles).not.toContain("assets/design-source.svg");
         expect(packedFiles).not.toContain("configured-state.ts");
         expect(packedFiles).not.toContain("auth-presence.ts");
@@ -860,6 +1083,9 @@ describe("plugin npm package manifest staging", () => {
         expect(readFileSync(join(packageRoot, "assets", "icon.png"), "utf8")).toBe(
           "portable-package-icon",
         );
+        for (const activityPath of ["assets/activity.svg", "assets/activity/diffs.svg"]) {
+          expect(readFileSync(join(packageRoot, activityPath), "utf8")).toBe(activitySvg);
+        }
         if (partial) {
           const channel = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"))
             .openclaw.channel;
@@ -945,6 +1171,7 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
     "split destination",
     "failed command",
     "ancestor optional",
+    "legacy shrinkwrap",
   ])("preserves source dependencies while staging npm bundles with %s", (scenario) => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-portable-optional-");
     const packageDir = writePublishablePluginPackage(repoDir);
@@ -984,6 +1211,16 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
     const sourceOnlyPath = join(packageDir, "node_modules", "source-only", "marker");
     writeFileText(sourceOnlyPath, "keep\n");
     const originalText = readFileSync(join(packageDir, "package.json"), "utf8");
+    const shrinkwrapPath = join(packageDir, "npm-shrinkwrap.json");
+    const legacyShrinkwrap = `${JSON.stringify({
+      name: "@openclaw/diffs",
+      version: "2026.5.3",
+      lockfileVersion: 3,
+      packages: {},
+    })}\n`;
+    if (scenario === "legacy shrinkwrap") {
+      writeFileText(shrinkwrapPath, legacyShrinkwrap);
+    }
     const outputDir =
       scenario.includes("destination") && scenario !== "default destination"
         ? join(packageDir, "artifacts")
@@ -1031,6 +1268,9 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
     expect(readFileSync(sourceOnlyPath, "utf8")).toBe("keep\n");
     expect(existsSync(join(packageDir, "package-lock.json"))).toBe(false);
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
+    if (scenario === "legacy shrinkwrap") {
+      expect(readFileSync(shrinkwrapPath, "utf8")).toBe(legacyShrinkwrap);
+    }
     if (scenario === "failed command") {
       const stagingDir = result.stdout.trim();
       expect(stagingDir).not.toBe("");
@@ -1291,17 +1531,11 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
     }
   });
 
-  it.each(
-    ["default", "isolated"].flatMap((layout) =>
-      ["bundle opt-out", "stale install", "stale importer spec", "wrong package identity"].map(
-        (scenario) => ({ layout, scenario }),
-      ),
-    ),
-  )(
-    "rejects a patched artifact when its packaging precondition fails ($layout / $scenario)",
-    ({ layout, scenario }) => {
+  it.each(["bundle opt-out", "stale install", "stale importer spec", "wrong package identity"])(
+    "rejects a patched artifact when its packaging precondition fails (%s)",
+    (scenario) => {
       const { repoDir, packageDir, sourceManifest, installedDir, lock } =
-        writePatchedRuntimeFixture(layout);
+        writePatchedRuntimeFixture();
       if (scenario === "bundle opt-out") {
         sourceManifest.openclaw.release.bundleRuntimeDependencies = false;
         writeJsonFile(join(packageDir, "package.json"), sourceManifest);

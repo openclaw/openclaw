@@ -1,5 +1,4 @@
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
-// Zalouser plugin module implements setup surface behavior.
 import {
   addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
@@ -69,16 +68,6 @@ function setZalouserDmPolicy(
   return setZalouserAccountScopedConfig(cfg, resolvedAccountId, {
     dmPolicy: policy,
     ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
-  });
-}
-
-function setZalouserGroupPolicy(
-  cfg: OpenClawConfig,
-  accountId: string,
-  groupPolicy: "open" | "allowlist" | "disabled",
-): OpenClawConfig {
-  return setZalouserAccountScopedConfig(cfg, accountId, {
-    groupPolicy,
   });
 }
 
@@ -328,6 +317,9 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
           ...(options?.beforePersistentEffect
             ? { beforeCredentialPersistence: options.beforePersistentEffect }
             : {}),
+          ...(options?.assertPersistentEffectCurrent
+            ? { assertCredentialPersistenceCurrent: options.assertPersistentEffectCurrent }
+            : {}),
         });
         if (start.qrDataUrl) {
           const qrPath = await writeQrDataUrlToTempFile(start.qrDataUrl, account.profile);
@@ -366,7 +358,9 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
       });
       if (!keepSession) {
         await options?.beforePersistentEffect?.();
-        await logoutZaloProfile(account.profile);
+        await logoutZaloProfile(account.profile, {
+          assertCurrent: options?.assertPersistentEffectCurrent,
+        });
         await options?.beforePersistentEffect?.();
         const start = await startZaloQrLogin({
           profile: account.profile,
@@ -374,6 +368,9 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
           timeoutMs: 35_000,
           ...(options?.beforePersistentEffect
             ? { beforeCredentialPersistence: options.beforePersistentEffect }
+            : {}),
+          ...(options?.assertPersistentEffectCurrent
+            ? { assertCredentialPersistenceCurrent: options.assertPersistentEffectCurrent }
             : {}),
         });
         if (start.qrDataUrl) {
@@ -423,7 +420,8 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
       Object.keys(resolveZalouserAccountSync({ cfg, accountId }).config.groups ?? {}),
     updatePrompt: ({ cfg, accountId }) =>
       Boolean(resolveZalouserAccountSync({ cfg, accountId }).config.groups),
-    setPolicy: ({ cfg, accountId, policy }) => setZalouserGroupPolicy(cfg, accountId, policy),
+    setPolicy: ({ cfg, accountId, policy }) =>
+      setZalouserAccountScopedConfig(cfg, accountId, { groupPolicy: policy }),
     resolveAllowlist: async ({ cfg, accountId, entries, prompter }) => {
       if (entries.length === 0) {
         await prompter.note(

@@ -16,6 +16,7 @@ import {
   readPersistedInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
 } from "../../../plugins/installed-plugin-index-records.js";
+import { resolveInstalledPluginIndexStateDatabaseOptions } from "../../../plugins/installed-plugin-index-store-path.js";
 import { writePersistedInstalledPluginIndex } from "../../../plugins/installed-plugin-index-store-write.js";
 import {
   readPersistedInstalledPluginIndexSync,
@@ -32,6 +33,7 @@ import {
   resolveTrustedOfficialClawHubPackageName,
   resolveTrustedSourceLinkedOfficialClawHubInstall,
 } from "../../../plugins/official-external-install-records.js";
+import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
 
 /** Backfill shipped ClawHub authority only from a catalog-bound legacy install record. */
 export function migrateOfficialPluginInstallProvenance(
@@ -120,6 +122,7 @@ function mergeShippedPluginInstallRecords(
 /** Preview the same install-record merge that the importer repeats under its lease. */
 export function readShippedPluginInstallConfigImportRecords(
   snapshot: ConfigFileSnapshot,
+  options: { env?: NodeJS.ProcessEnv } = {},
 ): Record<string, PluginInstallRecord> | undefined {
   const source = inspectShippedPluginInstallConfigRecords(snapshot.sourceConfig);
   if (source.status === "missing") {
@@ -129,8 +132,8 @@ export function readShippedPluginInstallConfigImportRecords(
     throw new InvalidPluginInstallRecordStateError(INVALID_CONFIG_INSTALL_RECORD_MESSAGE);
   }
   return mergeShippedPluginInstallRecords(
-    loadInstalledPluginIndexInstallRecordsSync(),
-    readPersistedInstalledPluginIndexInstallRecords(),
+    loadInstalledPluginIndexInstallRecordsSync(options),
+    readPersistedInstalledPluginIndexInstallRecords(options),
     source.records,
   );
 }
@@ -197,7 +200,6 @@ export async function importShippedPluginInstallConfigForDoctor(
   }
   const { commitPluginInstallRecordsOnly } =
     await import("../../../plugins/install-record-commit.js");
-  const { withPluginLifecycleLease } = await import("../../../plugins/plugin-lifecycle-lease.js");
   // Installers take the plugin lease before the config lock; retain that order here.
   return await withPluginLifecycleLease({}, async (lease) =>
     withConfigMutationExclusive(async () => {
@@ -316,13 +318,33 @@ export async function migratePluginRegistryForDoctor(
   params: PluginRegistryDoctorMigrationParams = {},
 ): Promise<PluginRegistryDoctorMigrationResult> {
   const preflight = preflightPluginRegistryDoctorMigration(params);
+  if (params.dryRun) {
+    return {
+      status: preflight.action === "skip-existing" ? "skip-existing" : "dry-run",
+      migrated: false,
+      preflight,
+    };
+  }
+  if (preflight.action !== "skip-existing") {
+    // Config may come from readConfig; reject it before acquiring a mutating lease.
+    preflightPluginRegistryDoctorMigration({
+      ...params,
+      config: await readMigrationConfig(params),
+    });
+  }
+  return await withPluginLifecycleLease(
+    resolveInstalledPluginIndexStateDatabaseOptions(params),
+    async () => migratePluginRegistryForDoctorWithLease(params),
+  );
+}
+
+async function migratePluginRegistryForDoctorWithLease(
+  params: PluginRegistryDoctorMigrationParams,
+): Promise<PluginRegistryDoctorMigrationResult> {
+  const preflight = preflightPluginRegistryDoctorMigration(params);
   if (preflight.action === "skip-existing") {
     return { status: "skip-existing", migrated: false, preflight };
   }
-  if (params.dryRun) {
-    return { status: "dry-run", migrated: false, preflight };
-  }
-
   const rawConfig = await readMigrationConfig(params);
   if (inspectShippedPluginInstallConfigRecords(rawConfig).status === "invalid") {
     throw new InvalidPluginInstallRecordStateError(INVALID_CONFIG_INSTALL_RECORD_MESSAGE);

@@ -1,4 +1,3 @@
-// Memory Core plugin module implements cli behavior.
 import type { Command } from "commander";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
@@ -27,7 +26,7 @@ import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
   DEFAULT_PROMOTION_MIN_SCORE,
   DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
-} from "./short-term-promotion.js";
+} from "./short-term-promotion-types.js";
 
 const loadMemoryCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime.js"));
 
@@ -180,8 +179,12 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     )
     .option("--json", "Print JSON")
     .action(async (queryArg: string | undefined, opts: MemorySearchCommandOptions) => {
+      const query = opts.query ?? queryArg;
+      if (!query) {
+        throw new Error("Missing search query. Provide a positional query or use --query <text>.");
+      }
       const runtime = await loadMemoryCliRuntime();
-      await runtime.runMemorySearch(queryArg, opts, hostOptions);
+      await runtime.runMemorySearch(query, opts, hostOptions);
     });
 
   memory
@@ -210,6 +213,11 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--dry-run", "Report everything that would be deleted without writing", false)
     .option("--json", "Print the complete machine-readable deletion report")
     .action(async (opts: MemoryForgetCommandOptions) => {
+      if (!opts.session?.length && !opts.hookSource?.length && !opts.participant?.length) {
+        throw new Error(
+          "Memory forget requires --session <id-or-key>, --hook-source <source>, or --participant <actor-id>.",
+        );
+      }
       const runtime = await loadMemoryCliRuntime();
       await runtime.runMemoryForget(opts);
     });
@@ -252,8 +260,12 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--include-promoted", "Include already promoted candidates", false)
     .option("--json", "Print JSON")
     .action(async (selectorArg: string | undefined, opts: MemoryPromoteExplainOptions) => {
+      const selector = selectorArg?.trim();
+      if (!selector) {
+        throw new Error("Memory promote-explain requires a non-empty selector.");
+      }
       const runtime = await loadMemoryCliRuntime();
-      await runtime.runMemoryPromoteExplain(selectorArg, opts, hostOptions);
+      await runtime.runMemoryPromoteExplain(selector, opts, hostOptions);
     });
 
   memory

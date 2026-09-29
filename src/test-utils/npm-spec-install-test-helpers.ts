@@ -89,15 +89,16 @@ type NpmViewMetadata = {
   shasum?: string;
 };
 
-// Keep spawn doubles shaped like the real process helper so install tests stay narrow.
-function createSuccessfulSpawnResult(stdout = ""): SpawnResult {
+// Keep command doubles shaped like the real process helper across install and update tests.
+export function createCommandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
   return {
-    code: 0,
-    stdout,
+    stdout: "",
     stderr: "",
+    code: 0,
     signal: null,
     killed: false,
     termination: "exit",
+    ...overrides,
   };
 }
 
@@ -118,8 +119,8 @@ export function mockNpmViewMetadataResult(
       throw new Error(`unexpected command: ${argv.join(" ")}`);
     }
 
-    return createSuccessfulSpawnResult(
-      JSON.stringify({
+    return createCommandResult({
+      stdout: JSON.stringify({
         name: metadata.name,
         version: metadata.version,
         dist: {
@@ -127,7 +128,7 @@ export function mockNpmViewMetadataResult(
           shasum: metadata.shasum,
         },
       }),
-    );
+    });
   });
 }
 
@@ -167,7 +168,7 @@ export function mockNpmPackMetadataResult(
       fs.writeFileSync(path.join(cwd, metadata.filename), "");
     }
 
-    return createSuccessfulSpawnResult(JSON.stringify([metadata]));
+    return createCommandResult({ stdout: JSON.stringify([metadata]) });
   });
 }
 
@@ -206,7 +207,7 @@ export async function expectInstallUsesIgnoreScripts(params: {
       }
   >;
 }) {
-  params.run.mockResolvedValue(createSuccessfulSpawnResult());
+  params.run.mockResolvedValue(createCommandResult());
   const result = await params.install();
   expect(result.ok).toBe(true);
   if (!result.ok) {

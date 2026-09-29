@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/env-vars.js";
 import { createConfigIO } from "../../config/io.js";
+import { resolveConfigPath } from "../../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../../config/sessions/targets.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -15,12 +16,31 @@ import {
   type OpenClawDatabaseSchemaPreflight,
 } from "../../state/openclaw-database-preflight.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { UpdatePreMutationError } from "./shared.js";
+import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 
 type TargetDatabaseSchemaContext = {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 };
+
+export type TargetDatabaseSchemaContextOptions = {
+  legacyConfigPlan?: LegacyConfigUpdatePlan;
+  /** Candidate admission owns schema validation; the installed process still pins source bytes. */
+  configValidation?: "candidate";
+};
+
+/** Candidate admission sees only the invoking process's config and shared-state selectors. */
+export function isCandidateAdmissionContextCovered(
+  env: NodeJS.ProcessEnv,
+  admissionEnv: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return (
+    resolveConfigPath(env) === resolveConfigPath(admissionEnv) &&
+    resolveOpenClawStateSqlitePath(env) === resolveOpenClawStateSqlitePath(admissionEnv)
+  );
+}
 
 export function formatSchemaRefusalLines(
   schemas: {
@@ -37,7 +57,7 @@ export function formatSchemaRefusalLines(
     }),
     ...schemas.indeterminate.map(
       (database) =>
-        `${prefix}: could not inspect ${database.kind} database ${database.path}: ${database.reason}; retry once the gateway releases it.`,
+        `${prefix}: could not inspect ${database.kind} database ${database.path}: ${database.reason}; check database access and free disk space, then retry the update.`,
     ),
     OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
     "Installing manually via npm bypasses this guard; back up first and verify compatibility.",
@@ -63,6 +83,7 @@ async function checkTargetDatabaseSchemas(
   return preflightOpenClawDatabaseSchemas({
     env: context.env,
     supportedVersions,
+    preserveSourceArtifacts: false,
     // Include default on-disk stores that update-time Doctor can later touch,
     // without resolving configured candidates into writable migration owners.
     configuredAgentDatabaseTargets: [],
@@ -73,10 +94,13 @@ async function checkTargetDatabaseSchemas(
 
 export async function captureTargetDatabaseSchemaContext(
   env: NodeJS.ProcessEnv,
-  options?: { legacyConfigPlan?: LegacyConfigUpdatePlan },
+  options?: TargetDatabaseSchemaContextOptions,
 ) {
-  // Do not load plugins, recover config, record observations, or change the
-  // caller's environment just to discover the stores selected by this config.
+  const configValidation =
+    options?.configValidation === "candidate" && isCandidateAdmissionContextCovered(env)
+      ? ("candidate" as const)
+      : undefined;
+  // Discover stores without plugins, recovery, observations, or caller environment changes.
   const inspectionEnv = cloneEnvWithPlatformSemantics(env);
   const readEnv = cloneEnvWithPlatformSemantics(env);
   const { snapshot, writeOptions } = await createConfigIO({
@@ -114,18 +138,22 @@ export async function captureTargetDatabaseSchemaContext(
       `Update refused: planned configuration changed at ${snapshot.path}. Retry against the current source.`,
     );
   }
-  if ((!snapshot.valid && !legacyConfigPlan) || snapshot.readError) {
-    throw new UpdatePreMutationError(
-      "database-schema-preflight",
-      `Update refused: could not inspect configured database paths from ${snapshot.path}. Correct the configuration before retrying.`,
-    );
+  if (
+    (!snapshot.valid && !legacyConfigPlan && configValidation !== "candidate") ||
+    snapshot.readError
+  ) {
+    throw createUpdateConfigFailure(snapshot);
   }
   return {
     env: inspectionEnv,
-    config: legacyConfigPlan?.config ?? snapshot.sourceConfig ?? snapshot.config,
+    config:
+      configValidation === "candidate"
+        ? snapshot.sourceConfig
+        : (legacyConfigPlan?.config ?? snapshot.sourceConfig ?? snapshot.config),
     configSnapshot: snapshot,
     readEnv,
     ...(legacyConfigPlan ? { legacyConfigPlan } : {}),
+    ...(configValidation ? { configValidation } : {}),
   };
 }
 

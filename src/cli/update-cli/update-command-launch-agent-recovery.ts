@@ -20,6 +20,7 @@ export async function recoverInstalledLaunchAgentAfterUpdate(params: {
   service?: GatewayService;
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
+  onGatewayStartAttempted?: () => void;
   deps?: PostUpdateLaunchAgentRecoveryDeps;
 }): Promise<PostUpdateLaunchAgentRecoveryResult> {
   params.assertCurrent?.();
@@ -39,6 +40,7 @@ export async function recoverInstalledLaunchAgentAfterUpdate(params: {
 
   let recovered: Awaited<ReturnType<typeof recover>>;
   try {
+    params.onGatewayStartAttempted?.();
     recovered = await recover({ result: "restarted", env: state.env });
     params.assertCurrent?.();
   } catch (error) {

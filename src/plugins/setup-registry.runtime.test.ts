@@ -143,44 +143,69 @@ describe("setup-registry descriptor lookup", () => {
     );
   });
 
-  it("keeps descriptors inside a narrower view of the same metadata generation", async () => {
-    const { resolvePluginSetupCliBackendDescriptor } = await import("./setup-registry.runtime.js");
-    const snapshot = createCurrentSnapshot({ manifestHash: "scoped", cliBackends: ["Scoped-CLI"] });
-    const narrowed = projectPluginMetadataSnapshot(snapshot, []);
-    const resolve = (view: PluginMetadataSnapshot) =>
+  it.each(["scope", "prepared"] as const)(
+    "keeps descriptors inside a narrower %s view of the same metadata generation",
+    async (mode) => {
+      const { resolvePluginSetupCliBackendDescriptor } =
+        await import("./setup-registry.runtime.js");
+      const snapshot = createCurrentSnapshot({
+        manifestHash: "scoped",
+        cliBackends: ["Scoped-CLI"],
+      });
+      const narrowed = projectPluginMetadataSnapshot(snapshot, []);
+      const resolve = (view: PluginMetadataSnapshot) =>
+        mode === "prepared"
+          ? resolvePluginSetupCliBackendDescriptor({
+              backend: "scoped-cli",
+              metadataSnapshot: view,
+            })
+          : withPluginMetadataSnapshotScope(
+              view,
+              () => resolvePluginSetupCliBackendDescriptor({ backend: "scoped-cli" }),
+              { trustConfigIdentity: true },
+            );
+
+      expect(resolve(snapshot)).toEqual({ pluginId: "openai", backend: { id: "Scoped-CLI" } });
+      expect(resolve(narrowed)).toBeUndefined();
+      expect(resolve(snapshot)).toEqual({ pluginId: "openai", backend: { id: "Scoped-CLI" } });
+      expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "applies current enablement policy without rebuilding backend inventory (prepared=%s)",
+    async (prepared) => {
+      const { resolvePluginSetupCliBackendDescriptor, resolvePluginSetupCliBackendIds } =
+        await import("./setup-registry.runtime.js");
+      const snapshot = createCurrentSnapshot({
+        manifestHash: "policy",
+        cliBackends: ["Policy-CLI"],
+      });
       withPluginMetadataSnapshotScope(
-        view,
-        () => resolvePluginSetupCliBackendDescriptor({ backend: "scoped-cli" }),
+        snapshot,
+        () => {
+          for (const enabled of [true, false, true]) {
+            const config = { plugins: { entries: { openai: { enabled } } } };
+            expect(
+              resolvePluginSetupCliBackendDescriptor({
+                backend: "policy-cli",
+                config,
+                ...(prepared ? { metadataSnapshot: snapshot } : {}),
+              }),
+            ).toEqual(enabled ? { pluginId: "openai", backend: { id: "Policy-CLI" } } : undefined);
+            expect(
+              resolvePluginSetupCliBackendIds({
+                config,
+                ...(prepared ? { metadataSnapshot: snapshot } : {}),
+              }),
+            ).toEqual(enabled ? ["Policy-CLI"] : []);
+          }
+        },
         { trustConfigIdentity: true },
       );
-
-    expect(resolve(snapshot)).toEqual({ pluginId: "openai", backend: { id: "Scoped-CLI" } });
-    expect(resolve(narrowed)).toBeUndefined();
-    expect(resolve(snapshot)).toEqual({ pluginId: "openai", backend: { id: "Scoped-CLI" } });
-    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
-  });
-
-  it("applies current enablement policy without rebuilding the prepared backend inventory", async () => {
-    const { resolvePluginSetupCliBackendDescriptor, resolvePluginSetupCliBackendIds } =
-      await import("./setup-registry.runtime.js");
-    const snapshot = createCurrentSnapshot({ manifestHash: "policy", cliBackends: ["Policy-CLI"] });
-    withPluginMetadataSnapshotScope(
-      snapshot,
-      () => {
-        for (const enabled of [true, false, true]) {
-          const config = { plugins: { entries: { openai: { enabled } } } };
-          expect(resolvePluginSetupCliBackendDescriptor({ backend: "policy-cli", config })).toEqual(
-            enabled ? { pluginId: "openai", backend: { id: "Policy-CLI" } } : undefined,
-          );
-          expect(resolvePluginSetupCliBackendIds({ config })).toEqual(
-            enabled ? ["Policy-CLI"] : [],
-          );
-        }
-      },
-      { trustConfigIdentity: true },
-    );
-    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
-  });
+      expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses enabled metadata cliBackends", async () => {
     const snapshot = createPluginMetadataSnapshotFixture({

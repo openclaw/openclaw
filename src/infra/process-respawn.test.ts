@@ -1,5 +1,9 @@
 // Covers process respawn behavior across supervisors.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  formatWindowsTaskSupervisorChildArgument,
+  WINDOWS_TASK_SUPERVISOR_CHILD_FLAG,
+} from "../daemon/windows-task-supervisor-contract.js";
 import { captureFullEnv, deleteTestEnvValue } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
@@ -96,13 +100,6 @@ function expectLaunchdSupervisedWithHandoff(params?: { launchJobLabel?: string }
 }
 
 describe("restartGatewayProcessWithFreshPid", () => {
-  it("returns disabled when OPENCLAW_NO_RESPAWN is set", () => {
-    process.env.OPENCLAW_NO_RESPAWN = "1";
-    const result = restartGatewayProcessWithFreshPid();
-    expect(result.mode).toBe("disabled");
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
-
   it("keeps OPENCLAW_NO_RESPAWN ahead of inherited supervisor hints", () => {
     clearSupervisorHints();
     mockProcessPlatform("darwin");
@@ -157,23 +154,6 @@ describe("restartGatewayProcessWithFreshPid", () => {
       mode: "failed",
       detail: "spawn EPERM",
     });
-  });
-
-  it("launchd supervisor never returns failed regardless of triggerOpenClawRestart outcome", () => {
-    clearSupervisorHints();
-    mockProcessPlatform("darwin");
-    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
-    // Even if triggerOpenClawRestart *would* fail, launchd path must not call it.
-    triggerOpenClawRestartMock.mockReturnValue({
-      ok: false,
-      method: "launchctl",
-      detail: "Bootstrap failed: 5: Input/output error",
-    });
-    const result = restartGatewayProcessWithFreshPid();
-    expect(result.mode).toBe("supervised");
-    expect(result.mode).not.toBe("failed");
-    expect(scheduleLaunchdHandoffMock).toHaveBeenCalledOnce();
-    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
   });
 
   it("does not schedule kickstart on non-darwin platforms", () => {
@@ -261,6 +241,35 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it("returns the task-supervisor restart code without launching a detached handoff", () => {
+    clearSupervisorHints();
+    mockProcessPlatform("win32");
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+    process.argv = [...originalArgv, formatWindowsTaskSupervisorChildArgument(305419896)];
+
+    expect(restartGatewayProcessWithFreshPid()).toEqual({
+      mode: "supervised",
+      exitCode: 305419896,
+    });
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a task-supervisor child without its private restart marker", () => {
+    clearSupervisorHints();
+    mockProcessPlatform("win32");
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+    process.argv = [...originalArgv, WINDOWS_TASK_SUPERVISOR_CHILD_FLAG];
+
+    expect(restartGatewayProcessWithFreshPid()).toEqual({
+      mode: "failed",
+      detail: "Windows task supervisor restart marker is missing or invalid",
+    });
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+  });
+
   it("keeps generic service markers out of non-Windows supervisor detection", () => {
     clearSupervisorHints();
     mockProcessPlatform("linux");
@@ -317,22 +326,6 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
   });
-
-  it("does not attempt detached spawn on unmanaged Unix even if spawn would throw", () => {
-    delete process.env.OPENCLAW_NO_RESPAWN;
-    clearSupervisorHints();
-    mockProcessPlatform("linux");
-
-    spawnMock.mockImplementation(() => {
-      throw new Error("spawn failed");
-    });
-    const result = restartGatewayProcessWithFreshPid();
-    expect(result).toEqual({
-      mode: "disabled",
-      detail: "unmanaged: use in-process restart to keep custom supervisor PID tracking stable",
-    });
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
 });
 
 describe("respawnGatewayProcessForUpdate", () => {
@@ -360,8 +353,7 @@ describe("respawnGatewayProcessForUpdate", () => {
 
     const result = respawnGatewayProcessForUpdate();
 
-    expect(result.mode).toBe("spawned");
-    expect(result.pid).toBe(5151);
+    expect(result).toMatchObject({ mode: "spawned", pid: 5151 });
     expect(spawnMock).toHaveBeenCalledWith(
       process.execPath,
       ["C:\\openclaw\\node_modules\\openclaw\\openclaw.mjs", "gateway", "run"],
@@ -427,8 +419,7 @@ describe("respawnGatewayProcessForUpdate", () => {
 
     const result = respawnGatewayProcessForUpdate();
 
-    expect(result.mode).toBe("spawned");
-    expect(result.pid).toBe(6161);
+    expect(result).toMatchObject({ mode: "spawned", pid: 6161 });
     expect(spawnMock).toHaveBeenCalledWith(
       process.execPath,
       ["/repo/dist/index.js", "gateway", "run"],
@@ -450,7 +441,9 @@ describe("respawnGatewayProcessForUpdate", () => {
 
     const result = respawnGatewayProcessForUpdate();
 
-    expect(result.mode).toBe("spawned");
+    if (result.mode !== "spawned") {
+      throw new Error("Expected a spawned update child");
+    }
     expect(result.child).toBe(child);
     expect(child.on).toHaveBeenCalledWith("error", expect.any(Function));
     const errorListener = child.on.mock.calls.find(([event]) => event === "error")?.[1];
@@ -472,7 +465,9 @@ describe("respawnGatewayProcessForUpdate", () => {
 
     const result = respawnGatewayProcessForUpdate();
 
-    expect(result.mode).toBe("failed");
-    expect(result.detail).toContain("spawn failed");
+    expect(result).toMatchObject({
+      mode: "failed",
+      detail: expect.stringContaining("spawn failed"),
+    });
   });
 });

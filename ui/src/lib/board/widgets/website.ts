@@ -7,9 +7,12 @@ import { renderBoardWidgetError } from "../../../components/board/board-widget-c
 import { icons } from "../../../components/icons.ts";
 import { resolveGatewayHttpOrigin } from "../../../components/sandbox-host.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerBoardWebsiteEnglish } from "../../../i18n/locales/en-board-website.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import type { BoardWidget } from "../types.ts";
 import "./website.css";
+
+registerBoardWebsiteEnglish();
 
 class OpenClawWebsiteWidget extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })

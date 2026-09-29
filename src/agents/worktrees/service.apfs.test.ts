@@ -6,6 +6,7 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { getApfsCloneId } from "../../../test/helpers/apfs.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 import { listTemplates } from "./template-registry.js";
@@ -15,15 +16,161 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
   return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
 }
 
+async function readAcl(file: string): Promise<string[]> {
+  const { stdout } = await execFileAsync("/bin/ls", ["-lde", file]);
+  return stdout
+    .split("\n")
+    .filter((line) => /^\s+\d+:/u.test(line))
+    .map((line) => line.trim());
+}
+
 describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(() => {
       vi.unstubAllEnvs();
+      vi.restoreAllMocks();
       closeOpenClawStateDatabaseForTest();
       cleanup();
     }),
   );
+
+  it.each(["directory_inherit", "file_inherit,directory_inherit"])(
+    "preserves %s ACLs like native Git checkout",
+    async (inheritance) => {
+      vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+      const root = tempDirs.make("openclaw-service-apfs-acl-");
+      const repo = await initializeRepository(root);
+      await fs.mkdir(path.join(repo, "nested"));
+      await fs.writeFile(path.join(repo, "nested", "payload"), "tracked source\n");
+      await git(repo, "add", ".");
+      await git(repo, "commit", "-m", "nested fixture");
+      const worktreeRoot = path.join(root, "worktrees");
+      await fs.mkdir(worktreeRoot);
+      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+      let worktreeAcceleration = false;
+      const service = new ManagedWorktreeService({
+        env,
+        getConfig: () => ({ worktreeRoot, worktreeAcceleration }),
+      });
+      const seed = await service.create({ repoRoot: repo, name: "seed", baseRef: "HEAD" });
+      await execFileAsync("/bin/chmod", [
+        "+a",
+        `everyone allow read,${inheritance}`,
+        path.dirname(seed.path),
+      ]);
+      const control = await service.create({ repoRoot: repo, name: "control", baseRef: "HEAD" });
+      worktreeAcceleration = true;
+      const created = await service.create({ repoRoot: repo, name: "inherited", baseRef: "HEAD" });
+      const relativePaths = ["", "README.md", "nested", "nested/payload"];
+      const expected = await Promise.all(
+        relativePaths.map((relative) => readAcl(path.join(control.path, relative))),
+      );
+      expect(expected.some((acl) => acl.length > 0)).toBe(true);
+      expect(
+        await Promise.all(
+          relativePaths.map((relative) => readAcl(path.join(created.path, relative))),
+        ),
+      ).toEqual(expected);
+      expect(await git(created.path, "status", "--porcelain")).toBe("");
+      expect(listTemplates(env)).toEqual([]);
+    },
+  );
+
+  it("reevaluates destination ACLs before reusing a clean template", async () => {
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    const root = tempDirs.make("openclaw-service-apfs-acl-reuse-");
+    const repo = await initializeRepository(root);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+    const service = new ManagedWorktreeService({ env, getConfig: () => ({}) });
+    const first = await service.create({ repoRoot: repo, name: "first", baseRef: "HEAD" });
+    const template = listTemplates(env)[0];
+    assert(template);
+    const parent = path.dirname(first.path);
+    await execFileAsync("/bin/chmod", [
+      "+a",
+      "everyone allow read,file_inherit,directory_inherit",
+      parent,
+    ]);
+    const second = await service.create({ repoRoot: repo, name: "second", baseRef: "HEAD" });
+    expect(await readAcl(path.join(second.path, "README.md"))).toEqual([
+      "0: group:everyone inherited allow read",
+    ]);
+    expect(listTemplates(env).map((entry) => entry.id)).toEqual([template.id]);
+    await execFileAsync("/bin/chmod", ["-N", parent]);
+    await execFileAsync("/bin/chmod", ["+a", "everyone allow read", parent]);
+    const third = await service.create({ repoRoot: repo, name: "third", baseRef: "HEAD" });
+    expect(await readAcl(path.join(third.path, "README.md"))).toEqual([]);
+    expect(getApfsCloneId(path.join(third.path, "README.md"))).toBe(
+      getApfsCloneId(path.join(template.path, "README.md")),
+    );
+  });
+
+  it("does not transplant ACLs from a cached template root", async () => {
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    const root = tempDirs.make("openclaw-service-apfs-stale-acl-");
+    const repo = await initializeRepository(root);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+    const service = new ManagedWorktreeService({ env, getConfig: () => ({}) });
+    await service.create({ repoRoot: repo, name: "first", baseRef: "HEAD" });
+    const template = listTemplates(env)[0];
+    assert(template);
+    await execFileAsync("/bin/chmod", ["+a", "everyone allow read", template.path]);
+    const created = await service.create({ repoRoot: repo, name: "clean-root", baseRef: "HEAD" });
+    expect(await readAcl(created.path)).toEqual([]);
+    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    expect(await git(created.path, "status", "--porcelain")).toBe("");
+  });
+
+  it.each(["parent", "template"])(
+    "uses Git if %s ACLs change during native cloning",
+    async (changed) => {
+      vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+      const root = tempDirs.make("openclaw-service-apfs-acl-race-");
+      const repo = await initializeRepository(root);
+      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+      const copy = nativeWorktreeFilesystem.copy;
+      vi.spyOn(nativeWorktreeFilesystem, "copy").mockImplementationOnce(
+        async (source, destination, options) => {
+          await execFileAsync("/bin/chmod", [
+            "+a",
+            changed === "parent"
+              ? "everyone allow read,file_inherit,directory_inherit"
+              : "everyone allow read",
+            changed === "parent" ? path.dirname(destination) : source,
+          ]);
+          await copy(source, destination, options);
+        },
+      );
+      const service = new ManagedWorktreeService({ env, getConfig: () => ({}) });
+      const created = await service.create({
+        repoRoot: repo,
+        name: "changed-policy",
+        baseRef: "HEAD",
+      });
+      expect(await readAcl(path.join(created.path, "README.md"))).toEqual(
+        changed === "parent" ? ["0: group:everyone inherited allow read"] : [],
+      );
+      if (changed === "template") {
+        expect(await readAcl(created.path)).toEqual([]);
+      }
+      expect(await git(created.path, "status", "--porcelain")).toBe("");
+    },
+  );
+
+  it("uses Git when ACL inspection is unavailable", async () => {
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    const root = tempDirs.make("openclaw-service-apfs-acl-unavailable-");
+    const repo = await initializeRepository(root);
+    const { apfsFilesystem } = await import("./filesystem-apfs.native.js");
+    vi.spyOn(apfsFilesystem, "readDirectoryAcl").mockReturnValue(undefined);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+    const service = new ManagedWorktreeService({ env, getConfig: () => ({}) });
+    const created = await service.create({ repoRoot: repo, name: "unavailable", baseRef: "HEAD" });
+    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    expect(await git(created.path, "status", "--porcelain")).toBe("");
+    expect(listTemplates(env)).toEqual([]);
+  });
 
   it("clones through creation, independent provisioning, restore, invalidation and cleanup", async () => {
     vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");

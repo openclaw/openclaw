@@ -108,7 +108,7 @@ function projectMcpCallToolResultContent(result: {
 }): AgentToolResult<unknown>["content"] {
   const sourceContent = Array.isArray(result.content) ? result.content : [];
   if (isRecord(result.structuredContent)) {
-    const mirroredText = JSON.stringify(result.structuredContent, null, 2);
+    let mirroredText: string | undefined;
     const structuredJson = JSON.stringify(
       JSON.parse(stableStringify(result.structuredContent)),
       null,
@@ -119,7 +119,12 @@ function projectMcpCallToolResultContent(result: {
       { type: "text", text: structuredText },
       ...sourceContent
         // Only the SDK's full pretty-JSON mirror is redundant; overlapping text can carry recovery guidance.
-        .filter((block) => !isRecord(block) || block.type !== "text" || block.text !== mirroredText)
+        .filter(
+          (block) =>
+            !isRecord(block) ||
+            block.type !== "text" ||
+            block.text !== (mirroredText ??= JSON.stringify(result.structuredContent, null, 2)),
+        )
         .map(mcpContentBlockToAgentContent),
     ];
   }

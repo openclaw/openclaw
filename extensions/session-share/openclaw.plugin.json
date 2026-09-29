@@ -1,5 +1,6 @@
 {
   "id": "session-share",
+  "categories": ["inbox-collaboration"],
   "activation": {
     "onStartup": false,
     "onConfigPaths": ["plugins.entries.session-share"]
@@ -7,7 +8,7 @@
   "uiHints": {
     "share.groups": {
       "label": "Shared Session Groups",
-      "help": "Only sessions in these exact group names are published. Incognito, draft, and adopted catalog sessions are never shared."
+      "help": "Only sessions in these exact group names are published. Subagent, incognito, draft, and adopted catalog sessions are never shared."
     },
     "nodes": {
       "label": "Paired Node Attribution",
@@ -22,6 +23,20 @@
       "help": "Trust this paired node's numeric GitHub account claims for local profile display attribution. Off by default."
     }
   },
+  "configGroups": [
+    {
+      "id": "session-sharing",
+      "title": "Session sharing",
+      "order": 10,
+      "properties": ["share"]
+    },
+    {
+      "id": "node-attribution",
+      "title": "Node attribution",
+      "order": 20,
+      "properties": ["nodes"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

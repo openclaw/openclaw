@@ -1,3 +1,5 @@
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 // Mattermost tests cover the action-to-REST send path over loopback.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
@@ -10,6 +12,9 @@ import { setMattermostRuntime } from "./runtime.js";
 
 const CHANNEL_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
 const loadOutboundMediaFromUrl = vi.hoisted(() => vi.fn());
+
+type MattermostMessageSender = NonNullable<NonNullable<typeof mattermostPlugin.message>["send"]>;
+type MattermostSendContext = Parameters<NonNullable<MattermostMessageSender["text"]>>[0];
 
 vi.mock("./mattermost/runtime-api.js", async () => ({
   ...(await vi.importActual<typeof import("./mattermost/runtime-api.js")>(
@@ -244,4 +249,166 @@ describe("Mattermost send action loopback", () => {
     expect(uploads[0]).toContain("Content-Type: image/png");
     expect(uploads[0]).toContain("\r\n\r\nunnamed-image\r\n");
   });
+});
+
+describe("Mattermost sender authority over HTTP", () => {
+  it.each([
+    ...(["text", "media", "payload"] as const).flatMap((mode) =>
+      [false, true].map((revoke) => ({ mode, revoke, uploadFails: false })),
+    ),
+    ...[false, true].map((revoke) => ({ mode: "media" as const, revoke, uploadFails: true })),
+  ])(
+    "keeps preferred $mode delivery current after preparation (revoke=$revoke, uploadFails=$uploadFails)",
+    async ({ mode, revoke, uploadFails }) => {
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const heldPath = mode === "text" ? "/api/v4/users/username/alice" : "/api/v4/files";
+      const requests: Array<{ path: string; authorization?: string }> = [];
+      const postBodies: unknown[] = [];
+      const sequence: string[] = [];
+      const token = `synthetic-authority-${mode}-${revoke}`;
+      const retirement = new Error("Mattermost sender is no longer current");
+      let current = true;
+
+      await withServer(
+        (request, response) => {
+          let postBody = "";
+          request.setEncoding("utf8");
+          request.on("data", (chunk) => {
+            if (request.url === "/api/v4/posts") {
+              postBody += chunk;
+            }
+          });
+          request.on("end", () => {
+            const requestPath = request.url ?? "";
+            requests.push({ path: requestPath, authorization: request.headers.authorization });
+            if (requestPath === "/api/v4/posts") {
+              postBodies.push(JSON.parse(postBody) as unknown);
+            }
+            sequence.push(requestPath);
+            const respond = () => {
+              response.writeHead(uploadFails && requestPath === "/api/v4/files" ? 503 : 200, {
+                "content-type": "application/json",
+              });
+              if (requestPath === "/api/v4/users/username/alice") {
+                response.end(JSON.stringify({ id: "bbbbbbbbbbbbbbbbbbbbbbbbbb" }));
+              } else if (requestPath === "/api/v4/users/me") {
+                response.end(JSON.stringify({ id: "cccccccccccccccccccccccccc" }));
+              } else if (requestPath === "/api/v4/channels/direct") {
+                response.end(JSON.stringify({ id: CHANNEL_ID }));
+              } else if (requestPath === "/api/v4/files") {
+                response.end(
+                  JSON.stringify(
+                    uploadFails
+                      ? { message: "Temporary upload failure" }
+                      : { file_infos: [{ id: "file-authority" }] },
+                  ),
+                );
+              } else {
+                response.end(JSON.stringify({ id: "post-authority", channel_id: CHANNEL_ID }));
+              }
+            };
+            if (requestPath === heldPath) {
+              entered.resolve();
+              void release.promise.then(respond);
+            } else {
+              respond();
+            }
+          });
+        },
+        async (baseUrl) => {
+          setMattermostRuntime(createPluginRuntimeMock());
+          loadOutboundMediaFromUrl.mockReset();
+          loadOutboundMediaFromUrl.mockResolvedValue({
+            buffer: Buffer.from("authority attachment"),
+            contentType: "text/plain",
+            fileName: "report.txt",
+          });
+          const send = mattermostPlugin.message?.send;
+          if (!send?.text || !send.media || !send.payload) {
+            throw new Error("Mattermost preferred send registration missing");
+          }
+          const onDeliveryResult = vi.fn<NonNullable<MattermostSendContext["onDeliveryResult"]>>(
+            async () => {
+              sequence.push("result");
+            },
+          );
+          const onPlatformSendDispatch = vi.fn(async () => {
+            sequence.push("dispatch");
+          });
+          const ctx: MattermostSendContext = {
+            cfg: {
+              channels: {
+                mattermost: {
+                  baseUrl,
+                  botToken: token,
+                  network: { dangerouslyAllowPrivateNetwork: true },
+                },
+              },
+            },
+            to: mode === "text" ? "@alice" : `channel:${CHANNEL_ID}`,
+            text: "authority proof",
+            accountId: "default",
+            assertDirectAdapterHandoff: () => {
+              if (!current) {
+                throw retirement;
+              }
+            },
+            onPlatformSendDispatch,
+            onDeliveryResult,
+          };
+          const mediaUrl = "https://media.example.test/report.txt";
+          const pending =
+            mode === "text"
+              ? send.text(ctx)
+              : mode === "media"
+                ? send.media({ ...ctx, mediaUrl })
+                : send.payload({
+                    ...ctx,
+                    payload: {
+                      text: ctx.text,
+                      mediaUrl,
+                      channelData: { mattermost: { attachmentText: "attachment context" } },
+                    },
+                  });
+          const settled = pending.then(
+            (value) => ({ value, error: undefined }),
+            (error: unknown) => ({ value: undefined, error }),
+          );
+          try {
+            await Promise.race([
+              entered.promise,
+              settled.then(() => {
+                throw new Error(`Send settled before reaching ${heldPath}`);
+              }),
+            ]);
+            current = !revoke;
+            release.resolve();
+            const outcome = await settled;
+            if (revoke) {
+              expect(requests.map(({ path }) => path)).toEqual([heldPath]);
+              expect(outcome.error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+              expect(outcome.error).toMatchObject({ retryable: false, cause: retirement });
+              expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+              expect(onDeliveryResult).not.toHaveBeenCalled();
+            } else {
+              expect(outcome.error).toBeUndefined();
+              expect(outcome.value?.receipt.platformMessageIds).toEqual(["post-authority"]);
+              expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+              expect(onDeliveryResult).toHaveBeenCalledOnce();
+              expect(sequence.slice(-3)).toEqual(["dispatch", "/api/v4/posts", "result"]);
+              expect(postBodies).toMatchObject([
+                { message: uploadFails ? `${ctx.text}\n${mediaUrl}` : ctx.text },
+              ]);
+            }
+            expect(requests.every(({ authorization }) => authorization === `Bearer ${token}`)).toBe(
+              true,
+            );
+          } finally {
+            release.resolve();
+          }
+        },
+      );
+    },
+  );
 });

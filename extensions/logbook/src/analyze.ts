@@ -1,6 +1,5 @@
-// Logbook analysis pipeline: frames -> observations -> revised timeline cards.
-// Pure parsing/validation lives here so tests can cover it without the SDK.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { asRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { dayKeyFor } from "./day.js";
 import { CARD_CATEGORIES } from "./prompts.js";
 import type { LogbookCard, LogbookCardDraft, LogbookDistraction } from "./types.js";
@@ -87,20 +86,15 @@ export function parseObservationSegments(params: {
   } catch {
     return [];
   }
-  const list = Array.isArray(parsed)
-    ? parsed
-    : parsed &&
-        typeof parsed === "object" &&
-        Array.isArray((parsed as { segments?: unknown }).segments)
-      ? (parsed as { segments: unknown[] }).segments
-      : [];
+  const candidate = Array.isArray(parsed) ? parsed : asRecord(parsed).segments;
+  const list = Array.isArray(candidate) ? candidate : [];
   const segments: ParsedSegment[] = [];
   for (const entry of list) {
     if (!entry || typeof entry !== "object") {
       continue;
     }
     const record = entry as Record<string, unknown>;
-    const description = typeof record.description === "string" ? record.description.trim() : "";
+    const description = normalizeOptionalString(record.description);
     const startMs = typeof record.start === "string" ? clockToMs(params.day, record.start) : null;
     const endMs = typeof record.end === "string" ? clockToMs(params.day, record.end) : null;
     if (!description || startMs === null || endMs === null) {
@@ -112,17 +106,6 @@ export function parseObservationSegments(params: {
   }
   return segments.toSorted((a, b) => a.startMs - b.startMs);
 }
-
-type RawCard = {
-  startTime?: unknown;
-  endTime?: unknown;
-  category?: unknown;
-  title?: unknown;
-  summary?: unknown;
-  detailedSummary?: unknown;
-  distractions?: unknown;
-  appSites?: unknown;
-};
 
 type CardParseResult = { ok: true; drafts: LogbookCardDraft[] } | { ok: false; error: string };
 
@@ -155,7 +138,7 @@ function parseDistractions(day: string, value: unknown): LogbookDistraction[] {
     const record = entry as Record<string, unknown>;
     const startMs = typeof record.startTime === "string" ? clockToMs(day, record.startTime) : null;
     const endMs = typeof record.endTime === "string" ? clockToMs(day, record.endTime) : null;
-    const title = typeof record.title === "string" ? record.title.trim() : "";
+    const title = normalizeOptionalString(record.title);
     if (startMs === null || endMs === null || !title || endMs <= startMs) {
       continue;
     }
@@ -186,9 +169,9 @@ export function parseCardsJson(params: {
       problems.push(`Card ${index}: not an object.`);
       return;
     }
-    const raw = entry as RawCard;
-    const title = typeof raw.title === "string" ? raw.title.trim() : "";
-    const summary = typeof raw.summary === "string" ? raw.summary.trim() : "";
+    const raw = entry as Record<string, unknown>;
+    const title = normalizeOptionalString(raw.title);
+    const summary = normalizeOptionalString(raw.summary);
     const startMs = typeof raw.startTime === "string" ? clockToMs(params.day, raw.startTime) : null;
     const endMs = typeof raw.endTime === "string" ? clockToMs(params.day, raw.endTime) : null;
     if (startMs === null || endMs === null) {
@@ -203,17 +186,14 @@ export function parseCardsJson(params: {
       problems.push(`Card ${index}: title and summary are required.`);
       return;
     }
-    const appSites =
-      raw.appSites && typeof raw.appSites === "object"
-        ? (raw.appSites as Record<string, unknown>)
-        : {};
+    const appSites = asRecord(raw.appSites);
     drafts.push({
       day: params.day,
       startMs,
       endMs,
       title,
       summary,
-      detail: typeof raw.detailedSummary === "string" ? raw.detailedSummary.trim() : "",
+      detail: normalizeOptionalString(raw.detailedSummary) ?? "",
       category: normalizeCategory(raw.category),
       appPrimary: normalizeDomain(appSites.primary),
       appSecondary: normalizeDomain(appSites.secondary),
@@ -286,9 +266,7 @@ export function validateCardCoverage(params: {
       );
     }
   }
-  const covered = params.drafts
-    .map((draft) => ({ startMs: draft.startMs, endMs: draft.endMs }))
-    .toSorted((a, b) => a.startMs - b.startMs);
+  const covered = params.drafts.toSorted((a, b) => a.startMs - b.startMs);
   for (const span of params.requiredSpans) {
     let cursor = span.startMs;
     for (const interval of covered) {
@@ -388,25 +366,6 @@ export function selectBatchFrames(params: {
     startMs: first.capturedAtMs,
     endMs,
   };
-}
-
-/** Evenly samples frames so a batch stays within the per-call image budget. */
-export function sampleFrames<T>(frames: T[], max: number): T[] {
-  if (max <= 0) {
-    return [];
-  }
-  if (frames.length <= max) {
-    return frames;
-  }
-  if (max === 1) {
-    return [expectDefined(frames[0], "first Logbook frame sample")];
-  }
-  const sampled: T[] = [];
-  const step = (frames.length - 1) / (max - 1);
-  for (let i = 0; i < max; i += 1) {
-    sampled.push(expectDefined(frames[Math.round(i * step)], "sampled Logbook frame"));
-  }
-  return [...new Set(sampled)];
 }
 
 /** Picks the frame closest to a card's midpoint as its keyframe. */

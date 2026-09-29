@@ -1,12 +1,14 @@
 // Setup migration staging keeps provider writes isolated until verified promotion.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { findExistingAncestor } from "@openclaw/fs-safe/advanced";
+import { isNotFoundPathError } from "@openclaw/fs-safe/path";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/store.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isNotFoundPathError } from "../infra/path-guards.js";
 import { summarizeMigrationItems } from "../plugin-sdk/migration.js";
 import type {
   MigrationApplyResult,
@@ -22,8 +24,16 @@ import {
   disposeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  restoreSetupInferenceConfig,
+  type SetupInferenceConfigTarget,
+  type SetupInferenceConfigWriteOptions,
+} from "../system-agent/setup-inference-transition.js";
 import { hashSetupMigrationConfig } from "./setup.migration-canonical.js";
 import {
   assertDisjointPromotionTargets,
@@ -62,6 +72,7 @@ type SetupMigrationStage = {
   staged: SetupMigrationStagePaths;
   final: SetupMigrationStagePaths;
   configRuntime: MigrationConfigRuntime;
+  inferenceConfigTarget: SetupInferenceConfigTarget;
   getFinalConfig: () => OpenClawConfig;
   getStagedConfig: () => OpenClawConfig;
   replaceStagedConfig: (config: OpenClawConfig) => void;
@@ -82,38 +93,22 @@ type SetupMigrationStage = {
   cleanup: () => Promise<void>;
 };
 
-async function findExistingAncestor(candidate: string): Promise<string> {
-  let current = path.resolve(candidate);
-  while (!(await migrationPathEntryExists(current))) {
-    const parent = path.dirname(current);
-    if (parent === current) {
-      throw new Error(`Could not find an existing parent for migration staging at ${candidate}.`);
-    }
-    current = parent;
-  }
-  return current;
-}
-
 async function makePrivateStageNear(target: string, label: string): Promise<string> {
-  const ancestor = await findExistingAncestor(path.dirname(path.resolve(target)));
+  const parent = path.dirname(path.resolve(target));
+  const ancestor = await findExistingAncestor(parent);
+  if (!ancestor) {
+    throw new Error(`Could not find an existing parent for migration staging at ${parent}.`);
+  }
   const staged = await fs.mkdtemp(path.join(ancestor, `.openclaw-${label}-`));
   await fs.chmod(staged, 0o700);
   return staged;
-}
-
-function replacePathPrefix(value: string, from: string, to: string): string {
-  if (value === from) {
-    return to;
-  }
-  const prefix = `${from}${path.sep}`;
-  return value.startsWith(prefix) ? `${to}${value.slice(from.length)}` : value;
 }
 
 function projectPath(value: string, mappings: ReadonlyArray<readonly [string, string]>): string {
   const mapping = mappings
     .filter(([from]) => value === from || value.startsWith(`${from}${path.sep}`))
     .toSorted(([left], [right]) => right.length - left.length)[0];
-  return mapping ? replacePathPrefix(value, mapping[0], mapping[1]) : value;
+  return mapping ? `${mapping[1]}${value.slice(mapping[0].length)}` : value;
 }
 
 function projectValue(value: unknown, mappings: ReadonlyArray<readonly [string, string]>): unknown {
@@ -137,10 +132,10 @@ function projectPlanTargets(
 ): MigrationPlan {
   return {
     ...plan,
-    ...(plan.target ? { target: projectValue(plan.target, mappings) as string } : {}),
+    ...(plan.target ? { target: projectPath(plan.target, mappings) } : {}),
     items: plan.items.map((item) => ({
       ...item,
-      ...(item.target ? { target: projectValue(item.target, mappings) as string } : {}),
+      ...(item.target ? { target: projectPath(item.target, mappings) } : {}),
     })),
     ...(plan.metadata
       ? { metadata: projectValue(plan.metadata, mappings) as Record<string, unknown> }
@@ -196,7 +191,7 @@ function createInMemoryConfigRuntime(params: {
   };
 }
 
-function phasePlan(
+export function buildSetupMigrationPhasePlan(
   plan: MigrationPlan,
   phase: "before-promotion" | "after-promotion",
 ): MigrationPlan {
@@ -208,13 +203,6 @@ function phasePlan(
     return { ...item, status: "skipped" as const, reason: DEFERRED_REASON };
   });
   return { ...plan, items, summary: summarizeMigrationItems(items) };
-}
-
-export function buildSetupMigrationPhasePlan(
-  plan: MigrationPlan,
-  phase: "before-promotion" | "after-promotion",
-): MigrationPlan {
-  return phasePlan(plan, phase);
 }
 
 function takeMatchingItem(items: MigrationItem[], item: MigrationItem): MigrationItem | undefined {
@@ -310,6 +298,36 @@ export async function createSetupMigrationStage(params: {
     stagedConfig,
     projectToFinal: projectConfigToFinal,
   });
+  const replaceStagedConfig = (config: OpenClawConfig) =>
+    configs.replaceConfigs({ stagedConfig: config, finalConfig: projectConfigToFinal(config) });
+  const writeInferenceConfig = async (
+    config: OpenClawConfig,
+    options: SetupInferenceConfigWriteOptions,
+    expected?: OpenClawConfig,
+  ) => {
+    const before = configs.getStagedConfig();
+    if (expected && !isDeepStrictEqual(before, expected)) {
+      throw new SetupMigrationTargetChangedError(
+        "Staged connection settings changed before activation.",
+      );
+    }
+    options.captureUndo(async () => {
+      const restored = restoreSetupInferenceConfig(configs.getStagedConfig(), before, config);
+      if (restored.written) {
+        replaceStagedConfig(restored.config);
+      }
+      return restored;
+    });
+    replaceStagedConfig(config);
+    return configs.getStagedConfig();
+  };
+  const inferenceConfigTarget: SetupInferenceConfigTarget = {
+    write: writeInferenceConfig,
+    read: async () => {
+      const config = configs.getStagedConfig();
+      return { config, write: (next, options) => writeInferenceConfig(next, options, config) };
+    },
+  };
   openOpenClawAgentDatabase({ agentId, env: stageEnv });
   let databasesDisposed = false;
   let finalAgentDatabaseRegistered = false;
@@ -330,14 +348,10 @@ export async function createSetupMigrationStage(params: {
     staged: stagedPaths,
     final: finalPaths,
     configRuntime: configs.runtime,
+    inferenceConfigTarget,
     getFinalConfig: configs.getFinalConfig,
     getStagedConfig: configs.getStagedConfig,
-    replaceStagedConfig(config) {
-      configs.replaceConfigs({
-        stagedConfig: config,
-        finalConfig: projectConfigToFinal(config),
-      });
-    },
+    replaceStagedConfig,
     projectPlanToStage: (plan) => projectPlanTargets(plan, toStage),
     projectResultToFinal: (result) => projectValue(result, toFinal) as MigrationApplyResult,
     async promote({ expectedConfig, continuation, readConfigFile, commitConfigFile }) {
@@ -426,6 +440,13 @@ export async function createSetupMigrationStage(params: {
             await moveRecordedEmptyTarget(component);
           }
           await fs.mkdir(path.dirname(component.finalPath), { recursive: true, mode: 0o700 });
+          if (component.name === "agent") {
+            // Capture fresh shared history before the imported agent becomes a live store.
+            openOpenClawStateDatabase({
+              env: finalEnv,
+              initializationAgentPaths: [path.join(finalAgentDir, "openclaw-agent.sqlite")],
+            });
+          }
           await fs.rename(component.stagedPath, component.finalPath);
           if (component.name === "agent") {
             registerOpenClawAgentDatabase({

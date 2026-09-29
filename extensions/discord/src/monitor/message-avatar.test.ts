@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Client, User } from "../internal/discord.js";
 
@@ -15,16 +16,6 @@ vi.mock("openclaw/plugin-sdk/logging-core", () => ({
 }));
 
 const { createDiscordAvatarResolver } = await import("./message-avatar.js");
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
 
 function discordUser(id: string, avatar: string | null): User {
   return { id, avatar } as User;
@@ -44,7 +35,7 @@ afterEach(() => {
 
 describe("createDiscordAvatarResolver", () => {
   it("downloads a DM avatar in the background and reuses it until the hash changes", async () => {
-    const firstDownload = deferred<{ path: string }>();
+    const firstDownload = createDeferred<{ path: string }>();
     mocks.saveRemoteMedia.mockReturnValueOnce(firstDownload.promise);
     const resolver = createDiscordAvatarResolver();
     const firstAuthor = discordUser("user-1", "hash-1");
@@ -84,8 +75,8 @@ describe("createDiscordAvatarResolver", () => {
   });
 
   it("uses a lazily fetched guild icon instead of the sender avatar", async () => {
-    const guildLookup = deferred<{ icon: string }>();
-    const guildDownload = deferred<{ path: string }>();
+    const guildLookup = createDeferred<{ icon: string }>();
+    const guildDownload = createDeferred<{ path: string }>();
     const fetchGuild = vi.fn(() => guildLookup.promise);
     const client = {
       fetchGuild,
@@ -128,7 +119,7 @@ describe("createDiscordAvatarResolver", () => {
   });
 
   it("does not fall back to the public CDN when an API override is configured", async () => {
-    const guildLookup = deferred<{ icon: string }>();
+    const guildLookup = createDeferred<{ icon: string }>();
     const client = { fetchGuild: vi.fn(() => guildLookup.promise) } as unknown as Client;
     process.env[DISCORD_API_URL_ENV] = "http://127.0.0.1:43210/api/v10";
     const resolver = createDiscordAvatarResolver();

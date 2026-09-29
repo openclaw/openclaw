@@ -1,6 +1,9 @@
+import fs from "node:fs";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as transcriptRedact from "../../agents/transcript-redact.js";
 import {
   beginConversationDeliveryOperation,
   getConversationDeliveryOperation,
@@ -8,28 +11,41 @@ import {
   markConversationDeliverySent,
 } from "../../config/sessions/conversation-delivery-store.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import {
+  resolveSqliteReadScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { registerPendingConversationTurn } from "../../sessions/conversation-turns.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
+import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   closeOpenClawAgentDatabasesForTest();
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function setupReefConversation() {
+async function setupReefConversation(options: { agentId?: string; storePath?: string } = {}) {
   const stateDir = tempDirs.make("openclaw-conversation-capture-");
-  const storePath = path.join(stateDir, "sessions.json");
-  const sessionKey = "agent:main:reef:direct:peer-agent";
+  const agentId = options.agentId ?? "main";
+  const storePath = options.storePath ?? path.join(stateDir, "sessions.json");
+  const sessionKey = `agent:${agentId}:reef:direct:peer-agent`;
   const sessionId = "reef-session";
   const cfg = { session: { store: storePath } } as OpenClawConfig;
   await sessionAccessor.upsertSessionEntryCore(
-    { agentId: "main", sessionKey, storePath },
+    { agentId, sessionKey, storePath },
     {
       sessionId,
       updatedAt: 100,
@@ -46,7 +62,7 @@ async function setupReefConversation() {
   );
   return {
     cfg,
-    scope: { agentId: "main", storePath },
+    scope: { agentId, storePath },
     sessionKey,
     sessionId,
     storePath,
@@ -76,7 +92,321 @@ function persistSentOperation(params: {
   markConversationDeliverySent(params.scope, params.operationId, params.outboundMessageId);
 }
 
+function inboundReply(
+  setup: Awaited<ReturnType<typeof setupReefConversation>>,
+  outboundMessageId: string,
+) {
+  return {
+    AgentId: setup.scope.agentId,
+    SessionKey: setup.sessionKey,
+    ChatType: "direct",
+    Provider: "reef",
+    InboundAccessAuthorized: true,
+    OriginatingChannel: "reef",
+    OriginatingTo: "reef:peer-agent",
+    NativeDirectUserId: "peer-agent",
+    MessageSidFull: "inbound-admission",
+    ReplyToIdFull: outboundMessageId,
+    RawBody: "ordinary reply",
+    BodyForAgent: "ordinary reply",
+    commandText: "ordinary reply",
+    agentText: "ordinary reply",
+    rawText: "ordinary reply",
+  } as FinalizedRuntimeMsgContext;
+}
+
+function registerCapture(setup: Awaited<ReturnType<typeof setupReefConversation>>, id: string) {
+  persistSentOperation({ ...setup, operationId: id, outboundMessageId: id });
+  const pending = registerPendingConversationTurn({
+    agentId: setup.scope.agentId,
+    id,
+    conversationRef: setup.conversationRef,
+    sessionId: setup.sessionId,
+    timeoutMs: 50,
+  });
+  pending.setOutboundMessageId(id);
+  return pending;
+}
+
 describe("conversation turn capture", () => {
+  it.each(["complete", "cancel", "timeout", "replace", "lifecycle"] as const)(
+    "retains reply ownership through writer admission: %s",
+    async (outcome) => {
+      const setup = await setupReefConversation();
+      vi.useFakeTimers();
+      const id = `admission-${outcome}`;
+      const pending = registerCapture(setup, id);
+      pending.markReady();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const prepared = createDeferredCore();
+      const originalRedact = transcriptRedact.redactTranscriptMessage;
+      vi.spyOn(transcriptRedact, "redactTranscriptMessage").mockImplementation((...args) => {
+        const message = originalRedact(...args);
+        prepared.resolve();
+        return message;
+      });
+      const blocker = runOpenClawAgentWriteAdmission(
+        toDatabaseOptions(resolveSqliteReadScope(setup.scope)),
+        async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      );
+      await entered.promise;
+      let capture: Promise<boolean> | undefined;
+      try {
+        capture = capturePendingConversationTurnReply({
+          cfg: setup.cfg,
+          ctx: inboundReply(setup, id),
+        });
+        await prepared.promise;
+        expect(getConversationDeliveryOperation(setup.scope, id)?.status).toBe("sent");
+        if (outcome === "cancel") {
+          pending.cancel();
+        }
+        if (outcome === "timeout") {
+          await vi.advanceTimersByTimeAsync(50);
+        }
+        if (outcome === "replace" || outcome === "lifecycle") {
+          const scope = { ...setup.scope, sessionKey: setup.sessionKey };
+          const entry = sessionAccessor.loadSessionEntryReadOnly(scope)!;
+          sessionAccessor.replaceSessionEntrySync(scope, {
+            ...entry,
+            ...(outcome === "replace"
+              ? { sessionId: "replacement" }
+              : { lifecycleRevision: "replacement-lifecycle" }),
+          });
+        }
+        release.resolve();
+        await blocker;
+        await expect(capture).resolves.toBe(outcome === "complete");
+        const record = getConversationDeliveryOperation(setup.scope, id);
+        expect(record?.status).toBe(outcome === "complete" ? "replied" : "sent");
+        if (outcome === "complete") {
+          await expect(pending.wait()).resolves.toMatchObject({ messageId: "inbound-admission" });
+        } else {
+          pending.cancel();
+          await expect(pending.wait()).resolves.toBeUndefined();
+          expect(record?.reply).toBeUndefined();
+          expect(
+            await sessionAccessor.loadTranscriptEvents({
+              ...setup.scope,
+              sessionId: setup.sessionId,
+            }),
+          ).toEqual([]);
+        }
+      } finally {
+        pending.cancel();
+        release.resolve();
+        await blocker;
+        await capture;
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["replace", "lifecycle"] as const)(
+    "rechecks the session after outbound correlation: %s",
+    async (outcome) => {
+      const setup = await setupReefConversation();
+      vi.useFakeTimers();
+      const id = `correlation-${outcome}`;
+      const pending = registerCapture(setup, id);
+      const capture = capturePendingConversationTurnReply({
+        cfg: setup.cfg,
+        ctx: inboundReply(setup, id),
+      });
+      try {
+        const scope = { ...setup.scope, sessionKey: setup.sessionKey };
+        const entry = sessionAccessor.loadSessionEntryReadOnly(scope)!;
+        sessionAccessor.replaceSessionEntrySync(scope, {
+          ...entry,
+          ...(outcome === "replace"
+            ? { sessionId: "replacement" }
+            : { lifecycleRevision: "replacement-lifecycle" }),
+        });
+        pending.markReady();
+        await expect(capture).resolves.toBe(false);
+        expect(getConversationDeliveryOperation(setup.scope, id)?.reply).toBeUndefined();
+      } finally {
+        pending.cancel();
+        await capture;
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("queues the no-waiter acknowledgement without making it replayable inline", async () => {
+    const setup = await setupReefConversation();
+    const id = "no-waiter-admission";
+    beginConversationDeliveryOperation(setup.scope, {
+      operationId: id,
+      operationKind: "turn",
+      conversationRef: setup.conversationRef,
+      message: "outbound",
+      preparedMessageId: id,
+    });
+    markConversationDeliveryQueued(setup.scope, id, `queue-${id}`);
+    const release = createDeferredCore();
+    const blocker = runOpenClawAgentWriteAdmission(
+      toDatabaseOptions(resolveSqliteReadScope(setup.scope)),
+      () => release.promise,
+    );
+    const capture = capturePendingConversationTurnReply({
+      cfg: setup.cfg,
+      ctx: inboundReply(setup, id),
+    });
+    try {
+      await setImmediate();
+      expect(getConversationDeliveryOperation(setup.scope, id)?.status).toBe("queued");
+      release.resolve();
+      await blocker;
+      await expect(capture).resolves.toBe(false);
+      expect(getConversationDeliveryOperation(setup.scope, id)).toMatchObject({ status: "sent" });
+      expect(getConversationDeliveryOperation(setup.scope, id)?.reply).toBeUndefined();
+      expect(
+        await sessionAccessor.loadTranscriptEvents({ ...setup.scope, sessionId: setup.sessionId }),
+      ).toEqual([]);
+    } finally {
+      release.resolve();
+      await blocker;
+      await capture;
+    }
+  });
+
+  it.each(["source", "ambient"] as const)(
+    "retains the source state authority when %s is refused during correlation",
+    async (refused) => {
+      const sourceEnv = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: tempDirs.make("capture-source-state-"),
+      };
+      const ambientEnv = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: tempDirs.make("capture-other-state-"),
+      };
+      vi.stubEnv("OPENCLAW_STATE_DIR", sourceEnv.OPENCLAW_STATE_DIR);
+      const setup = await setupReefConversation();
+      vi.useFakeTimers();
+      const id = `state-${refused}`;
+      const pending = registerCapture(setup, id);
+      const capture = capturePendingConversationTurnReply({
+        cfg: setup.cfg,
+        ctx: inboundReply(setup, id),
+      });
+      const refusalEnv = refused === "source" ? sourceEnv : ambientEnv;
+      try {
+        recordAgentDatabaseAdmissions(
+          [
+            {
+              agentId: "main",
+              paths: [setup.storePath],
+              embeddedOwnerId: "other",
+              code: "agent-database-ownership-mismatch",
+              reason: "fixture owner retired",
+              repairHint: "fixture",
+            },
+          ],
+          { env: refusalEnv },
+        );
+        vi.stubEnv("OPENCLAW_STATE_DIR", ambientEnv.OPENCLAW_STATE_DIR);
+        pending.markReady();
+        await expect(capture).resolves.toBe(refused !== "source");
+        recordAgentDatabaseAdmissions([], { env: refusalEnv });
+        const record = getConversationDeliveryOperation({ ...setup.scope, env: sourceEnv }, id);
+        expect(record?.status).toBe(refused === "source" ? "sent" : "replied");
+      } finally {
+        recordAgentDatabaseAdmissions([], { env: refusalEnv });
+        pending.cancel();
+        await capture;
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("keeps the logical agent on a shared physical store across admission", async () => {
+    const storePath = path.join(tempDirs.make("capture-shared-store-"), "shared.sqlite");
+    const physical = openOpenClawAgentDatabase({ agentId: "schema-owner", path: storePath });
+    const setup = await setupReefConversation({ agentId: "logical-agent", storePath });
+    vi.useFakeTimers();
+    const id = "shared-store-capture";
+    const pending = registerCapture(setup, id);
+    pending.markReady();
+    try {
+      await expect(
+        capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundReply(setup, id) }),
+      ).resolves.toBe(true);
+      await expect(pending.wait()).resolves.toMatchObject({ messageId: "inbound-admission" });
+      expect(getConversationDeliveryOperation(setup.scope, id)?.status).toBe("replied");
+      expect(physical.agentId).toBe("schema-owner");
+      expect(
+        await sessionAccessor.loadTranscriptEvents({ ...setup.scope, sessionId: setup.sessionId }),
+      ).toHaveLength(1);
+    } finally {
+      pending.cancel();
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains a relative configured store when the working directory changes during correlation", async () => {
+    const setup = await setupReefConversation();
+    const cfg = {
+      session: { store: path.relative(process.cwd(), setup.storePath) },
+    } as OpenClawConfig;
+    const movedDirectory = tempDirs.make("capture-moved-cwd-");
+    vi.useFakeTimers();
+    const id = "relative-store-capture";
+    const pending = registerCapture(setup, id);
+    const capture = capturePendingConversationTurnReply({ cfg, ctx: inboundReply(setup, id) });
+    try {
+      vi.spyOn(process, "cwd").mockReturnValue(movedDirectory);
+      pending.markReady();
+      await expect(capture).resolves.toBe(true);
+      await expect(pending.wait()).resolves.toMatchObject({ messageId: "inbound-admission" });
+      expect(getConversationDeliveryOperation(setup.scope, id)?.status).toBe("replied");
+    } finally {
+      vi.restoreAllMocks();
+      pending.cancel();
+      await capture;
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not capture into a replacement shared-store owner with matching logical identities", async () => {
+    const storePath = path.join(tempDirs.make("capture-replaced-store-"), "shared.sqlite");
+    openOpenClawAgentDatabase({ agentId: "original-owner", path: storePath });
+    const setup = await setupReefConversation({ agentId: "logical-agent", storePath });
+    vi.useFakeTimers();
+    const id = "replaced-owner-capture";
+    const pending = registerCapture(setup, id);
+    const capture = capturePendingConversationTurnReply({
+      cfg: setup.cfg,
+      ctx: inboundReply(setup, id),
+    });
+    try {
+      closeOpenClawAgentDatabasesForTest();
+      fs.renameSync(storePath, `${storePath}.retired`);
+      unregisterOpenClawAgentDatabase({ agentId: "original-owner", path: storePath });
+      openOpenClawAgentDatabase({ agentId: "replacement-owner", path: storePath });
+      const replacement = await setupReefConversation({ agentId: "logical-agent", storePath });
+      persistSentOperation({ ...replacement, operationId: id, outboundMessageId: id });
+      pending.markReady();
+      await expect(capture).resolves.toBe(false);
+      expect(getConversationDeliveryOperation(replacement.scope, id)?.status).toBe("sent");
+      expect(
+        await sessionAccessor.loadTranscriptEvents({
+          ...replacement.scope,
+          sessionId: replacement.sessionId,
+        }),
+      ).toEqual([]);
+    } finally {
+      pending.cancel();
+      await capture;
+      vi.useRealTimers();
+    }
+  });
+
   it("fails closed without channel ingress admission proof", async () => {
     const pending = registerPendingConversationTurn({
       agentId: "main",

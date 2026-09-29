@@ -4,13 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import {
   createGitCommandError,
-  GIT_TIMEOUT_MS,
   enqueueGitRefMutation,
   executeGitCommand,
   executeGitCommandBytes,
+  executeGitCommandBuffered,
   normalizeGitPathForFilesystem,
   requireGitCommandOutput,
-  withForegroundGitMaintenance,
   type GitCommandOptions,
 } from "../../infra/git-exec.js";
 import { hasGitWorkerContext, requestGitWorkerCommand } from "../../infra/git-worker-context.js";
@@ -19,11 +18,7 @@ import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../../infra/windows-encoding.js";
-import {
-  runCommandBuffered,
-  type BufferedCommandOptions,
-  type BufferedCommandResult,
-} from "../../process/exec.js";
+import type { BufferedCommandOptions, BufferedCommandResult } from "../../process/exec.js";
 
 export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
 
@@ -33,6 +28,7 @@ export const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
 type WorktreeListEntry = {
   path: string;
   lockedReason?: string;
+  branch?: string | null;
 };
 
 function withNoGlob(value: string | undefined): string {
@@ -84,10 +80,7 @@ export function gitEnvironment(
 export async function runGit(
   cwd: string,
   args: string[],
-  options: GitCommandOptions & {
-    /** Recheck caller authority at execution, after any shared-ref queue wait. */
-    beforeRun?: () => void;
-  } = {},
+  options: GitCommandOptions = {},
 ): Promise<GitResult> {
   if (hasGitWorkerContext()) {
     const { signal: _signal, beforeRun: _beforeRun, ...forwarded } = options;
@@ -108,23 +101,7 @@ export async function runGit(
       }),
     };
   }
-  const baseEnv = options.baseEnv ?? { ...process.env };
-  const env = gitEnvironment(options.env, args, process.platform, baseEnv);
-  // Fetch can prune refs and start maintenance; keep its follow-on writes owned.
-  const fetchesRefs = args[0] === "fetch";
-  const run = (gitArgs: string[]) => {
-    if (gitArgs === args) {
-      options.beforeRun?.();
-    }
-    return executeGitCommand(cwd, gitArgs, {
-      ...options,
-      baseEnv,
-      env,
-      input: gitArgs === args ? options.input : undefined,
-      killProcessTree: options.killProcessTree ?? (fetchesRefs && gitArgs === args),
-    });
-  };
-  return await withGitRefAdmission(cwd, args, run);
+  return await runOwnedGitCommand(cwd, args, options, executeGitCommand);
 }
 
 /** Parent-only command execution for text consumers whose decoding runs in a worker. */
@@ -133,25 +110,44 @@ export async function runGitBytes(
   args: string[],
   options: Parameters<typeof runGit>[2] = {},
 ) {
+  return await runOwnedGitCommand(cwd, args, options, executeGitCommandBytes);
+}
+
+async function runOwnedGitCommand<
+  T extends { termination: string; code: number | null; stdout: string | Uint8Array },
+>(
+  cwd: string,
+  args: string[],
+  options: GitCommandOptions,
+  execute: (cwd: string, args: string[], options: GitCommandOptions) => Promise<T>,
+): Promise<T> {
   const baseEnv = options.baseEnv ?? { ...process.env };
   const env = gitEnvironment(options.env, args, process.platform, baseEnv);
-  return await withGitRefAdmission(cwd, args, (gitArgs) => {
-    if (gitArgs === args) {
-      options.beforeRun?.();
-    }
-    return executeGitCommandBytes(cwd, gitArgs, {
-      ...options,
-      baseEnv,
-      env,
-      input: gitArgs === args ? options.input : undefined,
-      killProcessTree: options.killProcessTree ?? (args[0] === "fetch" && gitArgs === args),
-    });
-  });
+  return await withGitRefAdmission(
+    cwd,
+    args,
+    (gitArgs) =>
+      execute(cwd, gitArgs, {
+        ...options,
+        beforeRun: gitArgs === args ? options.beforeRun : undefined,
+        baseEnv,
+        env,
+        input: gitArgs === args ? options.input : undefined,
+        // Fetch can prune refs and start maintenance; keep its follow-on writes owned.
+        killProcessTree: options.killProcessTree ?? (args[0] === "fetch" && gitArgs === args),
+      }),
+    options.signal,
+  );
 }
 
 async function withGitRefAdmission<
   T extends { termination: string; code: number | null; stdout: string | Uint8Array },
->(cwd: string, args: string[], run: (args: string[]) => Promise<T>): Promise<T> {
+>(
+  cwd: string,
+  args: string[],
+  run: (args: string[]) => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
   const mutatesRefs =
     args[0] === "fetch" ||
     args[0] === "update-ref" ||
@@ -175,7 +171,24 @@ async function withGitRefAdmission<
           ),
           windowsEncoding: resolveWindowsConsoleEncoding(),
         });
-  return await enqueueGitRefMutation(cwd, commonDir.trim(), () => run(args));
+  let entered = false;
+  try {
+    return await enqueueGitRefMutation(
+      cwd,
+      commonDir.trim(),
+      () => {
+        entered = true;
+        return run(args);
+      },
+      signal,
+    );
+  } catch (error) {
+    if (!entered && signal?.aborted && error === signal.reason) {
+      // The runner owns cancellation results and returns before spawning with this signal.
+      return await run(args);
+    }
+    throw error;
+  }
 }
 
 /** Byte-preserving Git transport shared by worker inventories and ordinary callers. */
@@ -198,22 +211,20 @@ export async function runGitBuffered(
   }
   const baseEnv = options.baseEnv ?? { ...process.env };
   const env = gitEnvironment(options.env, args, process.platform, baseEnv);
-  return await withGitRefAdmission(cwd, args, (gitArgs) => {
-    if (gitArgs === args) {
-      options.beforeRun?.();
-    }
-    const argv = ["git", "-C", cwd, ...gitArgs];
-    return runCommandBuffered(
-      options.killProcessTree === false ? argv : withForegroundGitMaintenance(argv),
-      {
+  return await withGitRefAdmission(
+    cwd,
+    args,
+    (gitArgs) => {
+      return executeGitCommandBuffered(cwd, gitArgs, {
         ...options,
-        timeoutMs: options.timeoutMs ?? GIT_TIMEOUT_MS,
+        beforeRun: gitArgs === args ? options.beforeRun : undefined,
         input: gitArgs === args ? options.input : undefined,
         baseEnv,
         env,
-      },
-    );
-  });
+      });
+    },
+    options.signal,
+  );
 }
 
 export function commandError(command: string, result: GitResult): Error {
@@ -263,6 +274,10 @@ function parseWorktreeList(output: string): WorktreeListEntry[] {
       current.lockedReason = "";
     } else if (current && field.startsWith("locked ")) {
       current.lockedReason = field.slice("locked ".length);
+    } else if (current && field.startsWith("branch ")) {
+      current.branch = field.slice("branch ".length);
+    } else if (current && field === "detached") {
+      current.branch = null;
     }
   }
   if (current) {

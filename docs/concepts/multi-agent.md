@@ -166,10 +166,11 @@ external sends, publication, purchases, deletion, or production changes.
 These delegation settings remain team wiring in config. The role Claws will
 carry them once the separate Claw profile support lands.
 
-The coordinator is an explicit target, not a universal default. Team creation
+The coordinator is an explicit target. Team creation
 sets `agents.defaults.systemAgent.agentId` to the coordinator only when that
-ambient owner is unset; an existing owner is preserved and reported. Other
-surfaces retain their own targeting and [routing bindings](/concepts/agent-bindings).
+owner is unset; an existing owner is preserved and reported. In an explicit fleet,
+this also designates the default for operations that support default-agent selection.
+Explicit targets and [routing bindings](/concepts/agent-bindings) take precedence.
 
 Use `--prefix <p>` to namespace all team ids, `--coordinator <id>` to rename the
 coordinator, and `--workspace-root <dir>` to choose the parent directory for the
@@ -319,10 +320,18 @@ both keyed `agents.entries` and older `agents.list` rosters, including with
 `--fix --non-interactive`. Existing bindings and per-surface owners remain
 unchanged. Last-known-good recovery applies the same ownership stamp before
 validating and restoring a directly authored markerless roster.
-If an account has no fallback route but its matchable narrower bindings
-all explicitly name one configured agent, Doctor adds an account-scoped binding for that
-agent. It does not borrow ownership from another account or channel, choose
-between conflicting owners, or assign other unowned surfaces.
+Doctor never promotes narrower conversation bindings to account-wide ownership.
+It does not borrow ownership from another account or channel, choose between
+conflicting owners, or assign other unowned surfaces.
+
+During a legacy `agents.list` migration, unbound accounts keep
+their historical first-agent fallback as an explicit account binding, including
+when narrower conversation routes name other agents. Doctor
+records the binding alongside the ownership stamp. Both update-channel migration
+and manual Doctor require the original roster; if it is unavailable, Doctor reports
+that reason and leaves the bindings unchanged. An account whose owner remains
+unresolved reports the required binding and stays blocked without automatic
+restart attempts; other accounts and the Gateway continue serving.
 
 When migrating a legacy `agents.list` roster without a default marker, Doctor
 also pins the first agent's inherited workspace to `agents.entries.<id>.workspace`. Its customized instructions

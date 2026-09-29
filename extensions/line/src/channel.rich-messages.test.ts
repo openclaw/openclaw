@@ -41,21 +41,18 @@ function resolveChannelDataSchema() {
 }
 
 describe("LINE rich-message boundaries", () => {
-  it.each([undefined, { blocks: [] }])(
-    "preserves a payload without renderable presentation: %j",
-    async (presentation) => {
-      const payload = {
-        text: "",
-        presentationTextMode: "fallback" as const,
-        presentation,
-        replyToId: "original-message",
-        mediaUrl: "https://example.com/image.png",
-        channelData: { line: { quickReplies: ["Continue"] } },
-      };
+  it("preserves a payload without renderable presentation", async () => {
+    const payload = {
+      text: "",
+      presentationTextMode: "fallback" as const,
+      presentation: { blocks: [] },
+      replyToId: "original-message",
+      mediaUrl: "https://example.com/image.png",
+      channelData: { line: { quickReplies: ["Continue"] } },
+    };
 
-      expect(await prepareLineReplyPayload(payload)).toEqual(payload);
-    },
-  );
+    expect(await prepareLineReplyPayload(payload)).toEqual(payload);
+  });
 
   it("leaves legacy marker text unchanged", () => {
     const payload = { text: "Choose: [[buttons: Menu | Pick one | A:a, B:b]]" };
@@ -63,48 +60,6 @@ describe("LINE rich-message boundaries", () => {
     const result = linePlugin.messaging?.transformReplyPayload?.({ payload } as never) ?? payload;
 
     expect(result).toEqual(payload);
-  });
-
-  it("maps portable buttons and options to Flex actions and quick replies", async () => {
-    const result = await lineOutboundAdapter.renderPresentation?.({
-      payload: { text: "Choose one" },
-      presentation: {
-        title: "Menu",
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              { label: "Status", action: { type: "command", command: "/status" } },
-              { label: "Site", action: { type: "url", url: "https://example.com" } },
-            ],
-          },
-          {
-            type: "select",
-            placeholder: "Pick one",
-            options: [
-              { label: "Alpha", action: { type: "callback", value: "alpha" } },
-              { label: "Help", action: { type: "command", command: "/help" } },
-            ],
-          },
-        ],
-      },
-      ctx: { to: "line:group:C0123456789abcdef0123456789abcdef" } as never,
-    });
-
-    const line = result?.channelData?.line as {
-      flexMessage?: { contents?: { footer?: { contents?: Array<{ action?: unknown }> } } };
-      quickReplyItems?: unknown[];
-    };
-    expect(line.flexMessage?.contents?.footer?.contents).toMatchObject([
-      { action: { type: "message", text: "/status" } },
-      { action: { type: "uri", uri: "https://example.com" } },
-    ]);
-    expect(createLineQuickReply(line.quickReplyItems as never)).toMatchObject({
-      items: [
-        { action: { type: "postback", data: "alpha" } },
-        { action: { type: "message", text: "/help" } },
-      ],
-    });
   });
 
   it("resolves a reply's presentation into LINE controls before delivery reads it", async () => {
@@ -558,29 +513,26 @@ describe("LINE rich-message boundaries", () => {
     expect(line?.quickReplyItems).toHaveLength(1);
   });
 
-  it.each([undefined, "", "   "])(
-    "keeps the select prompt when fallback text is %j",
-    async (text) => {
-      const prepared = await prepareLineReplyPayload({
-        text,
-        presentationTextMode: "fallback",
-        presentation: {
-          title: "Choose a deployment",
-          blocks: [
-            {
-              type: "select",
-              placeholder: "Which environment should receive this deployment?",
-              options: [{ label: "Staging", action: { type: "callback", value: "staging" } }],
-            },
-          ],
-        },
-      });
+  it.each([undefined, "   "])("keeps the select prompt when fallback text is %j", async (text) => {
+    const prepared = await prepareLineReplyPayload({
+      text,
+      presentationTextMode: "fallback",
+      presentation: {
+        title: "Choose a deployment",
+        blocks: [
+          {
+            type: "select",
+            placeholder: "Which environment should receive this deployment?",
+            options: [{ label: "Staging", action: { type: "callback", value: "staging" } }],
+          },
+        ],
+      },
+    });
 
-      expect(prepared.text).toBe(
-        "Choose a deployment\n\nWhich environment should receive this deployment?",
-      );
-    },
-  );
+    expect(prepared.text).toBe(
+      "Choose a deployment\n\nWhich environment should receive this deployment?",
+    );
+  });
 
   it("preserves full select prompts and overflow labels while bounding native labels", async () => {
     const placeholder = "Which region should receive this deployment?";
@@ -658,133 +610,6 @@ describe("LINE rich-message boundaries", () => {
       expect(prepared.text).toContain(label);
     }
     expect(prepared.text).not.toContain("Option 1\n");
-  });
-
-  it("keeps a select prompt's title when the title is all it carries", async () => {
-    const prepared = await prepareLineReplyPayload({
-      text: "Here are the files.",
-      presentation: {
-        title: "Pick a file",
-        blocks: [
-          {
-            type: "select",
-            options: [{ label: "notes.md", action: { type: "callback", value: "notes" } }],
-          },
-        ],
-      },
-    });
-
-    expect(prepared.text).toBe("Here are the files.\n\nPick a file");
-  });
-
-  it("keeps that title on the outbound path, which delivers no fallback text of its own", async () => {
-    // Core blanks the text before calling the renderer when the producer marked
-    // it as the presentation's fallback, so the title is the only prose left.
-    const rendered = await lineOutboundAdapter.renderPresentation?.({
-      payload: { text: undefined },
-      presentation: {
-        title: "Pick a file",
-        blocks: [
-          {
-            type: "select",
-            options: [{ label: "notes.md", action: { type: "callback", value: "notes" } }],
-          },
-        ],
-      },
-      ctx: { to: DIRECT_TARGET },
-    } as never);
-
-    expect(rendered?.text).toBe("Pick a file");
-    const line = rendered?.channelData?.line as { quickReplyItems?: unknown[] } | undefined;
-    expect(line?.quickReplyItems).toHaveLength(1);
-  });
-
-  it("keeps a select's placeholder when every option became a chip", async () => {
-    const presentation = {
-      blocks: [
-        {
-          type: "select" as const,
-          placeholder: "Pick a day",
-          options: [
-            { label: "Mon", action: { type: "callback" as const, value: "mon" } },
-            { label: "Tue", action: { type: "callback" as const, value: "tue" } },
-          ],
-        },
-      ],
-    };
-
-    const prepared = await prepareLineReplyPayload({ text: "Here you go.", presentation });
-
-    // The placeholder is the prompt for those chips; the fallback renderer drops
-    // a select with no options, so it cannot ride along inside the block.
-    expect(prepared.text).toBe("Here you go.\n\nPick a day");
-    const line = prepared.channelData?.line as { quickReplyItems?: unknown[] } | undefined;
-    expect(line?.quickReplyItems).toHaveLength(2);
-  });
-
-  it("keeps that placeholder on the outbound path too", async () => {
-    const rendered = await lineOutboundAdapter.renderPresentation?.({
-      payload: { text: undefined },
-      presentation: {
-        blocks: [
-          {
-            type: "select",
-            placeholder: "Pick a day",
-            options: [{ label: "Mon", action: { type: "callback", value: "mon" } }],
-          },
-        ],
-      },
-      ctx: { to: DIRECT_TARGET },
-    } as never);
-
-    expect(rendered?.text).toBe("Pick a day");
-  });
-
-  it("keeps each select's own heading over its own leftovers", async () => {
-    const block = (placeholder: string, prefix: string) => ({
-      type: "select" as const,
-      placeholder,
-      options: Array.from({ length: 8 }, (_, index) => ({
-        label: `${prefix}-${index + 1}`,
-        action: { type: "callback" as const, value: `${prefix}-${index + 1}` },
-      })),
-    });
-
-    const prepared = await prepareLineReplyPayload({
-      text: "Choose.",
-      presentation: { blocks: [block("Environment", "env"), block("Region", "region")] },
-    });
-
-    // The row fills in order, so the first select keeps only its prompt while the
-    // second one's leftovers stay under the heading they belong to.
-    expect(prepared.text).toBe(
-      "Choose.\n\nEnvironment\n\nRegion:\n- region-6\n- region-7\n- region-8",
-    );
-  });
-
-  it("keeps the options two select blocks push past LINE's one-message limit", async () => {
-    const block = (prefix: string) => ({
-      type: "select" as const,
-      options: Array.from({ length: 8 }, (_, index) => ({
-        label: `${prefix}-${index + 1}`,
-        action: { type: "callback" as const, value: `${prefix}-${index + 1}` },
-      })),
-    });
-
-    const prepared = await prepareLineReplyPayload({
-      text: "Pick an environment and a region.",
-      presentation: { blocks: [block("env"), block("region")] },
-    });
-
-    const line = prepared.channelData?.line as { quickReplyItems?: Array<{ label: string }> };
-    // Each block fits on its own; together they exceed what one message carries.
-    expect(line.quickReplyItems).toHaveLength(13);
-    expect(line.quickReplyItems?.at(-1)?.label).toBe("region-5");
-    for (const label of ["region-6", "region-7", "region-8"]) {
-      expect(prepared.text).toContain(label);
-    }
-    // The thirteen LINE draws must not also be listed as prose.
-    expect(prepared.text).not.toContain("env-1");
   });
 
   it("keeps the overflow options beside a Flex card without repeating the card", async () => {

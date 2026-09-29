@@ -4,9 +4,11 @@ import { chmodSync, copyFileSync, mkdirSync, readFileSync, statSync, writeFileSy
 import path from "node:path";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
 const digest = (value: Buffer | string) => createHash("sha256").update(value).digest("hex");
 
 describe.runIf(process.platform === "darwin")("bundled browser sign-in helper", () => {
@@ -84,7 +86,7 @@ exit 2
         {
           encoding: "utf8",
           env: {
-            PATH: `${tools}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+            PATH: `${tools}:${path.dirname(testNodeExecPath)}:/usr/bin:/bin`,
             TMPDIR: root,
             fixture_archive: archive,
           },

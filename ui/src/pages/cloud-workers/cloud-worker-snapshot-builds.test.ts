@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { deferred } from "../../lib/config/config-test-harness.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {

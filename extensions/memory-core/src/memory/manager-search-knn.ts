@@ -1,7 +1,7 @@
 // Memory Core plugin module implements the synchronous sqlite-vec KNN query body.
 import type { DatabaseSync } from "node:sqlite";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { buildMemoryModelFilter, type MemorySearchRow } from "./manager-search-shared.js";
 import { vectorToBlob } from "./vector-blob.js";
 
 const VECTOR_KNN_OVERSAMPLE_FACTOR = 8;
@@ -10,15 +10,7 @@ const MAX_VECTOR_KNN_K = 4096;
 const SQL_IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const SOURCE_FILTER_RE = /^(?:| AND c\.source IN \(\?(?:, \?)*\))$/u;
 
-type VectorKnnRow = {
-  id: string;
-  path: string;
-  start_line: number;
-  end_line: number;
-  text: string;
-  source: MemorySource;
-  dist: number;
-};
+type VectorKnnRow = MemorySearchRow & { dist: number };
 
 export type VectorKnnRequest = {
   vectorTable: string;
@@ -71,12 +63,6 @@ export function isVectorKnnRow(value: unknown): value is VectorKnnRow {
   );
 }
 
-function buildModelFilter(column: string, models: string[]): string {
-  return models.length === 1
-    ? `${column} = ?`
-    : `${column} IN (${models.map(() => "?").join(", ")})`;
-}
-
 export function validateVectorKnnRequest(request: VectorKnnRequest): void {
   if (!SQL_IDENTIFIER_RE.test(request.vectorTable)) {
     throw new Error("invalid memory vector table identifier");
@@ -114,13 +100,15 @@ export function runVectorKnnQuery(
   request: VectorKnnRequest,
 ): VectorKnnResponse {
   validateVectorKnnRequest(request);
-  const vectorModelFilter = buildModelFilter("c.model", request.providerModels);
+  const vectorModelFilter = buildMemoryModelFilter("c.model", request.providerModels);
   const qBlob = vectorToBlob(request.queryVec);
   const snippetByteLimit = request.snippetMaxChars * 4;
   const runVectorQuery = (candidateLimit: number) => {
     // TEXT substr stops at NUL, so retain the byte prefix when it contains one.
     // Four bytes per UTF-16 unit cover UTF-8/UTF-16 without scanning the full body;
     // truncateUtf16Safe below removes any excess or partial trailing code point.
+    // CROSS JOIN is intentional: sqlite-vec must run KNN before chunk lookup.
+    // Reordering the chunks table first repeats the KNN scan once per chunk.
     const queryRows = db
       .prepare(
         `SELECT c.id, c.path, c.start_line, c.end_line,\n` +
@@ -130,7 +118,7 @@ export function runVectorKnnQuery(
           `       c.source,\n` +
           `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
           `  FROM ${request.vectorTable} v\n` +
-          `  JOIN memory_index_chunks c ON c.id = v.id\n` +
+          `  CROSS JOIN memory_index_chunks c ON c.id = v.id\n` +
           ` WHERE v.embedding MATCH ? AND k = ? AND ${vectorModelFilter}${request.sourceFilter.sql}\n` +
           ` ORDER BY dist ASC\n` +
           ` LIMIT ?`,
@@ -158,16 +146,19 @@ export function runVectorKnnQuery(
   const candidateLimit = Math.min(request.limit * VECTOR_KNN_OVERSAMPLE_FACTOR, MAX_VECTOR_KNN_K);
   let rows = runVectorQuery(candidateLimit);
   if (rows.length < request.limit) {
+    // Only the widening/fallback thresholds matter; stop counting once they are known.
     const matchingChunkCountRow = db
       .prepare(
-        `SELECT COUNT(*) AS count FROM memory_index_chunks c WHERE ${vectorModelFilter}${request.sourceFilter.sql}`,
+        `SELECT COUNT(*) AS count FROM (\n` +
+          `  SELECT 1 FROM memory_index_chunks c WHERE ${vectorModelFilter}${request.sourceFilter.sql} LIMIT ?\n` +
+          `)`,
       )
-      .get(...request.providerModels, ...request.sourceFilter.params);
+      .get(...request.providerModels, ...request.sourceFilter.params, request.limit);
     const matchingChunkCount = readCount(matchingChunkCountRow);
     if (matchingChunkCount > rows.length) {
       const vectorCountRow = db
-        .prepare(`SELECT COUNT(*) AS count FROM ${request.vectorTable}`)
-        .get();
+        .prepare(`SELECT COUNT(*) AS count FROM (SELECT 1 FROM ${request.vectorTable} LIMIT ?)`)
+        .get(MAX_VECTOR_KNN_K + 1);
       const vectorCount = readCount(vectorCountRow);
       const widenedLimit = Math.min(vectorCount, MAX_VECTOR_KNN_K);
       if (widenedLimit > candidateLimit) {

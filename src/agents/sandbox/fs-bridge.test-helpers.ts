@@ -99,6 +99,23 @@ export function getScriptsFromCalls(): string[] {
   return mockedExecDockerRaw.mock.calls.map(([args]) => getDockerScript(args));
 }
 
+export function expectOnlyCanonicalPathCommands() {
+  for (const script of getScriptsFromCalls()) {
+    expect(script).toContain('readlink -n -f -- "$cursor"');
+  }
+}
+
+export function mockContainerCanonicalPaths(paths: Readonly<Record<string, string>>) {
+  const run = mockedExecDockerRaw.getMockImplementation()!;
+  mockedExecDockerRaw.mockImplementation(async (args, options) => {
+    const canonical = paths[getDockerArg(args, 1)];
+    if (canonical && getDockerScript(args).includes('readlink -n -f -- "$cursor"')) {
+      return dockerExecResult(`${canonical}\n`);
+    }
+    return run(args, options);
+  });
+}
+
 export function findCallByScriptFragment(fragment: string) {
   return mockedExecDockerRaw.mock.calls.find(([args]) => getDockerScript(args).includes(fragment));
 }
@@ -180,7 +197,7 @@ function installDockerReadMock(params?: { canonicalPath?: string }) {
   const canonicalPath = params?.canonicalPath;
   mockedExecDockerRaw.mockImplementation(async (args) => {
     const script = getDockerScript(args);
-    if (script.includes('readlink -f -- "$cursor"')) {
+    if (script.includes('readlink -n -f -- "$cursor"')) {
       return dockerExecResult(`${canonicalPath ?? getDockerArg(args, 1)}\n`);
     }
     if (script.includes('stat -c "%F|%s|%y"')) {

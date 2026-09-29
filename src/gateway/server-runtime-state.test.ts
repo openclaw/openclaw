@@ -7,6 +7,7 @@ import { connect } from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
@@ -615,10 +616,7 @@ describe("createGatewayRuntimeState", () => {
 
   it("waits for every gateway bind host before freezing lazy sandbox listeners", async () => {
     mocks.resolveGatewayListenHosts.mockResolvedValue(["127.0.0.1", "::1"]);
-    let releaseSecondBind: () => void = () => {};
-    const secondBind = new Promise<void>((resolve) => {
-      releaseSecondBind = resolve;
-    });
+    const { promise: secondBind, resolve: releaseSecondBind } = createDeferred();
     mocks.listenGatewayHttpServer.mockImplementation(async ({ bindHost, port }) => {
       if (bindHost === "::1" && port === 18789) {
         await secondBind;

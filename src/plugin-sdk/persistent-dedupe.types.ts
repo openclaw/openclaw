@@ -1,5 +1,16 @@
 import type { FileLockOptions } from "./file-lock.js";
 
+export type PersistentDedupeEntry = {
+  key: string;
+  seenAt: number;
+};
+
+export type PersistentDedupeLegacyJsonImportEntry = {
+  key: string;
+  value: PersistentDedupeEntry;
+  ttlMs?: number;
+};
+
 type PersistentDedupeBaseOptions = {
   /** Milliseconds a recorded key remains recent; `0` keeps keys until cache pruning. */
   ttlMs: number;

@@ -136,12 +136,25 @@ export function sanitizeCompactionReplayState(
   if (data === undefined) {
     return undefined;
   }
+  const encryptedContent =
+    !isSuppression && descriptor === ANTHROPIC_REPLAY_DESCRIPTOR
+      ? value.encryptedContent
+      : undefined;
+  if (
+    encryptedContent !== undefined &&
+    encryptedContent !== null &&
+    (typeof encryptedContent !== "string" ||
+      !helpers.isStructurallyValidOpaqueReplayToken(encryptedContent))
+  ) {
+    return undefined;
+  }
   const replayId = isSuppression ? undefined : descriptor.readId?.(value, route, helpers);
   return {
     v: 1,
     type: value.type,
     ...(replayId !== undefined ? { id: replayId } : {}),
     data,
+    ...(encryptedContent !== undefined ? { encryptedContent } : {}),
     ...(value.replayIndex !== undefined ? { replayIndex: value.replayIndex } : {}),
     provider: value.provider,
     api: value.api,

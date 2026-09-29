@@ -1,4 +1,3 @@
-// Voice Call plugin module implements lifecycle behavior.
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { TerminalStates, type CallRecord, type EndReason } from "../types.js";
 import type { CallManagerContext } from "./context.js";
@@ -12,7 +11,7 @@ const log = createSubsystemLogger("voice-call/lifecycle");
 
 type CallLifecycleContext = Pick<
   CallManagerContext,
-  "activeCalls" | "providerCallIdMap" | "storePath"
+  "activeCalls" | "providerCallIdMap" | "storePath" | "stateRuntime"
 > &
   Partial<
     Pick<CallManagerContext, "transcriptWaiters" | "maxDurationTimers" | "notifyHangupTimers">
@@ -52,7 +51,7 @@ export async function finalizeCall(params: {
     next.endedAt = params.endedAt ?? Date.now();
     next.endReason = endReason;
     transitionState(next, endReason);
-    await persistCallRecord(ctx.storePath, next);
+    await persistCallRecord(ctx.storePath, next, ctx.stateRuntime);
     Object.assign(call, next);
     log.info(
       `[voice-call] Call finalized callId=${call.callId} providerCallId=${call.providerCallId ?? "unknown"} endReason=${endReason}`,

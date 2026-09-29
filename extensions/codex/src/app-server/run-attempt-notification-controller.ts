@@ -2,7 +2,6 @@ import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { acknowledgeInternalToolResult } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { isTerminalCodexTurnNotificationForTurn } from "./attempt-notification-state.js";
 import {
   isCodexTurnAbortMarkerNotification,
   isPendingOpenClawDynamicToolCompletionNotification,
@@ -18,10 +17,8 @@ import type { CodexServerNotification } from "./protocol.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import {
-  CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS,
-  waitForPromiseOrAbort,
-} from "./turn-router.js";
+import { waitForPromiseOrAbort } from "./timeout.js";
+import { CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS } from "./turn-router.js";
 import type { CodexThreadRouteScope } from "./turn-router.js";
 
 export function createCodexAttemptNotificationController(
@@ -29,7 +26,7 @@ export function createCodexAttemptNotificationController(
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
 ) {
-  const { prompt, state: resourceState, projectorRef, registerNativeSubagentMonitor } = resources;
+  const { prompt, state: resourceState, projectorRef } = resources;
   const { context, turnState } = prompt;
   const { attemptTools, runtime } = context;
   const { appServer, runAbortController } = runtime.connection;
@@ -37,7 +34,6 @@ export function createCodexAttemptNotificationController(
   const {
     state,
     turnIdRef,
-    userInputBridgeRef,
     steeringQueueRef,
     activeTurnItemIds,
     pendingOpenClawDynamicToolCompletionIds,
@@ -75,22 +71,21 @@ export function createCodexAttemptNotificationController(
       nativeItemObservers.delete(observe);
     }
   };
-  const isTerminalTurnNotificationForTurn = (
-    notification: CodexServerNotification,
-    notificationTurnId: string,
-  ) =>
-    isTerminalCodexTurnNotificationForTurn({
-      notification,
-      threadId: resourceState.thread.threadId,
-      turnId: notificationTurnId,
-    });
+  const readTerminalTurn = (notification: CodexServerNotification, notificationTurnId: string) =>
+    notification.method === "turn/completed" &&
+    isCodexNotificationForTurn(
+      notification.params,
+      resourceState.thread.threadId,
+      notificationTurnId,
+    )
+      ? readCodexTurnCompletedNotification(notification.params)?.turn
+      : undefined;
   const handleNotification = async (notification: CodexServerNotification) => {
     if (state.projectionClosed) {
       return;
     }
     const projector = projectorRef.current;
     const turnId = turnIdRef.current;
-    userInputBridgeRef.current?.handleNotification(notification);
     if (!projector || !turnId) {
       if (notification.method === "error") {
         state.latestStartupErrorNotification = notification;
@@ -102,11 +97,10 @@ export function createCodexAttemptNotificationController(
       resourceState.thread.threadId,
       turnId,
     );
-    const isTerminal = isTerminalTurnNotificationForTurn(notification, turnId);
+    const completedTurn = readTerminalTurn(notification, turnId);
     if (
       (state.timeout || state.localCompletionRequested) &&
-      isTerminal &&
-      readCodexTurnCompletedNotification(notification.params)?.turn.status === "interrupted"
+      completedTurn?.status === "interrupted"
     ) {
       // Cleanup's interrupt confirms stop; it cannot replace the result or
       // usage already owned by an execution deadline or terminal tool.
@@ -135,7 +129,7 @@ export function createCodexAttemptNotificationController(
             scheduleTerminalDynamicToolReleaseCheck();
           }
           const item = readCodexNotificationItem(notification.params);
-          if (item?.type === "dynamicToolCall" && typeof item.id === "string") {
+          if (item?.type === "dynamicToolCall") {
             const response = await openClawDynamicToolExecutions.get({
               threadId: resourceState.thread.threadId,
               turnId,
@@ -183,18 +177,17 @@ export function createCodexAttemptNotificationController(
       state.activeLocalProjections -= 1;
       if (isCurrentTurn && notification.method === "item/completed") {
         const item = readCodexNotificationItem(notification.params);
-        if (item?.type === "commandExecution" && typeof item.id === "string") {
+        if (item?.type === "commandExecution") {
           pendingNativeCommandItems.delete(item.id);
         }
       }
       for (const observe of nativeItemObservers) {
         observe();
       }
-      if (isTerminal) {
-        const completedTurn = readCodexTurnCompletedNotification(notification.params)?.turn;
+      if (completedTurn) {
         // App-server collapses abort reasons; the marker preserves explicit
         // native user interruption without treating marker text as terminal.
-        if (completedTurn?.status === "interrupted" && state.sawCodexInterruptMarker) {
+        if (completedTurn.status === "interrupted" && state.sawCodexInterruptMarker) {
           projector.markAborted();
         }
         completeTurn();
@@ -231,11 +224,9 @@ export function createCodexAttemptNotificationController(
       return;
     }
     projector.recordMcpToolCallReceipt(notification);
-    if (isTerminalTurnNotificationForTurn(notification, turnId)) {
-      const completed = readCodexTurnCompletedNotification(notification.params);
-      if (completed) {
-        projector.settlement.terminalReceipt = completed.turn;
-      }
+    const completedTurn = readTerminalTurn(notification, turnId);
+    if (completedTurn) {
+      projector.settlement.terminalReceipt = completedTurn;
       state.terminalTurnNotificationQueued = true;
       steeringQueueRef.current?.sealAdmission();
       deadlines.beginSettlement(receivedAtMs);
@@ -246,11 +237,7 @@ export function createCodexAttemptNotificationController(
         allocateCodexToolOutcomeOrdinal?.(modelToolCallId);
       }
       const nativeItem = readCodexNotificationItem(notification.params);
-      if (
-        notification.method === "item/started" &&
-        nativeItem?.type === "commandExecution" &&
-        typeof nativeItem.id === "string"
-      ) {
+      if (notification.method === "item/started" && nativeItem?.type === "commandExecution") {
         pendingNativeCommandItems.add(nativeItem.id);
       }
       if (nativeItem?.type === "webSearch") {
@@ -273,7 +260,6 @@ export function createCodexAttemptNotificationController(
   const drainNotificationQueue = async () => {
     await resourceState.turnRoute?.drain();
   };
-  registerNativeSubagentMonitor(resourceState.thread.threadId);
   return {
     waitForActiveNativeTurnCompletion,
     waitForNativeTerminalItems,

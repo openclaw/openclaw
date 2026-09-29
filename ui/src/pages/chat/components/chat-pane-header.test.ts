@@ -1,4 +1,4 @@
-import { html, nothing, render } from "lit";
+import { html, render } from "lit";
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
@@ -8,11 +8,13 @@ import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
-import type { SessionCapability } from "../../../lib/sessions/index.ts";
 import { resolveSessionWorkspace } from "../../../lib/sessions/workspace.ts";
-import { activePlacementSession, createTestChatPane } from "../chat-pane.test-support.ts";
+import {
+  activePlacementSession,
+  createSessionCapabilityFixture,
+  createTestChatPane,
+} from "../chat-pane.test-support.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
-import { createBackgroundTasksProps } from "./chat-background-tasks.ts";
 import {
   chatPaneHeaderSessionRow as row,
   mountChatPaneHeader,
@@ -39,7 +41,10 @@ function mountIntegratedPresenceHeader(params: {
   presence: PresenceEntry[];
 }) {
   const client = { instanceId: "self-instance" } as unknown as GatewayBrowserClient;
-  const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+  const { pane, state } = createTestChatPane({
+    client,
+    sessions: createSessionCapabilityFixture(),
+  });
   const actor = {
     type: "human" as const,
     id: "profile-ada",
@@ -69,7 +74,6 @@ function mountIntegratedPresenceHeader(params: {
     render(
       pane.renderPaneHeader(
         createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
         session,
         false,
         undefined,
@@ -138,22 +142,12 @@ describe("chat pane header", () => {
       mergedChrome: true,
       panelActions: html`<button data-action="persistent-surface"></button>`,
       panelLayoutActions: html`<button aria-label="Swap Chat and Dashboard"></button>`,
-      discussionAction: html`<button data-action="discussion"></button>`,
-      diffAction: html`<button data-action="diff"></button>`,
-      backgroundTasksAction: html`<button data-action="tasks"></button>`,
-      workspaceAction: html`<button data-action="workspace"></button>`,
-      sessionRailAction: html`<button data-action="rail"></button>`,
       sessionMenuAction: html`<button data-action="session-menu"></button>`,
       onOpenSplitView: vi.fn(),
     });
 
     expect(container.querySelector('[data-action="persistent-surface"]')).toBeNull();
     expect(container.querySelector('[aria-label="Swap Chat and Dashboard"]')).not.toBeNull();
-    expect(container.querySelector('[data-action="discussion"]')).toBeNull();
-    expect(container.querySelector('[data-action="diff"]')).toBeNull();
-    expect(container.querySelector('[data-action="tasks"]')).toBeNull();
-    expect(container.querySelector('[data-action="workspace"]')).toBeNull();
-    expect(container.querySelector('[data-action="rail"]')).toBeNull();
     expect(container.querySelector('[data-action="session-menu"]')).not.toBeNull();
     expect(container.querySelector(".chat-pane__nav-toggle")).not.toBeNull();
     expect(container.querySelector(".chat-pane__palette-open")).toBeNull();
@@ -240,7 +234,8 @@ describe("chat pane header", () => {
     );
   });
 
-  it.each(["local", "reclaimed"] as const)("hides the placement chip for %s state", (state) => {
+  it("hides the placement chip for a local session", () => {
+    const state = "local";
     const { container } = mountHeader({
       placementControl: renderChatPanePlacement({
         session: row({
@@ -257,51 +252,35 @@ describe("chat pane header", () => {
     expect(container.querySelector(".chat-pane__placement-chip")).toBeNull();
   });
 
-  it("places placement and presence between the identity trail and face control", () => {
+  it("places placement and presence after the identity trail", () => {
     const { container } = mountHeader({
       placementControl: html`<span data-slot="placement"></span>`,
       presence: html`<span data-slot="presence"></span>`,
-      faceControl: html`<span data-slot="face"></span>`,
     });
     const crumbs = container.querySelector(".chat-pane__crumbs");
     expect(
       [...container.querySelectorAll("[data-slot]")].map((slot) => slot.getAttribute("data-slot")),
-    ).toEqual(["placement", "presence", "face"]);
+    ).toEqual(["placement", "presence"]);
     expect(crumbs?.nextElementSibling?.getAttribute("data-slot")).toBe("placement");
   });
 
-  it("places visibility in the owner slot while the face switch stays centered", () => {
+  it("places visibility in the owner slot beside placement and presence", () => {
     const { container } = mountHeader({
       placementControl: html`<span data-slot="placement"></span>`,
       presence: html`<span data-slot="presence"></span>`,
-      faceControl: html`<span data-slot="face"></span>`,
       sharingControl: html`<span data-slot="sharing"></span>`,
     });
 
     expect(container.querySelector('[data-slot="placement"]')?.parentElement?.className).toBe(
       "chat-pane__header-leading",
     );
-    expect(container.querySelector('[data-slot="face"]')?.parentElement?.className).toBe(
-      "chat-pane__header-center",
-    );
     expect(container.querySelector('[data-slot="sharing"]')?.parentElement?.className).toBe(
       "chat-pane__header-leading",
     );
   });
 
-  it("keeps visibility in the owner slot when the session has no face switch", () => {
-    const { container } = mountHeader({
-      faceControl: nothing,
-      sharingControl: html`<span data-slot="sharing"></span>`,
-    });
-
-    expect(container.querySelector('[data-slot="sharing"]')?.parentElement?.className).toBe(
-      "chat-pane__header-leading",
-    );
-    expect(container.querySelector(".chat-pane__header--centered")).toBeNull();
-  });
-
-  it.each([false, true])("keeps the public indicator visible in narrow=%s headers", (narrow) => {
+  it("keeps the public indicator visible in narrow headers", () => {
+    const narrow = true;
     const { container } = mountHeader({
       narrow,
       publicAccessIndicator: html`<span class="chat-pane__public-share-indicator">Public</span>`,
@@ -328,38 +307,6 @@ describe("chat pane header", () => {
     expect(container.querySelector("openclaw-session-owner-chip")).toBeNull();
     expect(container.querySelector('[data-slot="sharing"]')?.parentElement?.className).toBe(
       "chat-pane__header-leading",
-    );
-  });
-
-  it("uses the full header width when no face switch needs centering", () => {
-    const { container } = mountHeader();
-    expect(container.querySelector(".chat-pane__header--centered")).toBeNull();
-    expect(container.querySelector(".chat-pane__header-center")).toBeNull();
-    expect(
-      [...container.querySelector(".chat-pane__header")!.children].map((child) => child.className),
-    ).toEqual(["chat-pane__header-leading", "chat-pane__header-trailing"]);
-  });
-
-  it("leads with the project, then a separator, then the session title", () => {
-    const { container } = mountHeader();
-    const crumbs = container.querySelector(".chat-pane__crumbs");
-    expect([...(crumbs?.children ?? [])].map((child) => child.className)).toEqual([
-      "chat-pane__project-row",
-      "chat-pane__session-trail",
-    ]);
-    expect(
-      [...(crumbs?.querySelector(".chat-pane__project-row")?.children ?? [])].map(
-        (child) => child.className,
-      ),
-    ).toEqual(["chat-pane__workspace-menu"]);
-    expect(
-      [...(crumbs?.querySelector(".chat-pane__session-trail")?.children ?? [])].map(
-        (child) => child.className,
-      ),
-    ).toEqual(["chat-pane__crumb-sep", "chat-pane__session-title chat-pane__session-title-button"]);
-    expect(crumbs?.querySelector(".chat-pane__crumb-sep")?.textContent).toBe("/");
-    expect(crumbs?.querySelector(".chat-pane__crumb-sep")?.getAttribute("aria-hidden")).toBe(
-      "true",
     );
   });
 
@@ -598,29 +545,39 @@ describe("chat pane header", () => {
     expect(chip?.getAttribute("title")).toBe("Created by Ada");
   });
 
-  it("routes Enter and Escape from the rename input", () => {
-    const enter = mountHeader({ editing: true, renameValue: "  Updated  " });
-    const enterInput = enter.container.querySelector<HTMLInputElement>("input");
-    enterInput?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
-    expect(enter.props.onCommitRename).toHaveBeenCalledOnce();
+  it.each([
+    ["Enter", false, 0, "commit"],
+    ["Escape", false, 0, "cancel"],
+    ["Enter", true, 0, null],
+    ["Escape", true, 0, null],
+    ["Enter", false, 229, null],
+    ["Escape", false, 229, null],
+  ] as const)(
+    "routes rename %s with isComposing=%s and keyCode=%i",
+    (key, isComposing, keyCode, action) => {
+      const { container, props } = mountHeader({ editing: true, renameValue: "研究" });
+      const input = container.querySelector<HTMLInputElement>(".chat-pane__session-title-input");
+      expect(input).toBeInstanceOf(HTMLInputElement);
+      const event = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key,
+        isComposing,
+        keyCode,
+      });
+      input?.dispatchEvent(event);
 
-    const escape = mountHeader({ editing: true });
-    escape.container
-      .querySelector("input")
-      ?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
-    expect(escape.props.onCancelRename).toHaveBeenCalledOnce();
-    expect(escape.props.onCommitRename).not.toHaveBeenCalled();
-  });
+      expect(event.defaultPrevented).toBe(action !== null);
+      expect(props.onCommitRename).toHaveBeenCalledTimes(action === "commit" ? 1 : 0);
+      expect(props.onCancelRename).toHaveBeenCalledTimes(action === "cancel" ? 1 : 0);
+    },
+  );
 
   it("keeps catalog sessions static and without a workspace chip", () => {
     const { container } = mountHeader({
       catalog: true,
       session: undefined,
       panelActions: html`<span data-action="terminal"></span>`,
-      diffAction: html`<span data-action="diff"></span>`,
-      backgroundTasksAction: html`<span data-action="tasks"></span>`,
-      workspaceAction: html`<span data-action="workspace"></span>`,
-      sessionRailAction: html`<span data-action="rail"></span>`,
     });
     expect(container.querySelector(".chat-pane__session-title-button")).toBeNull();
     expect(container.querySelector(".chat-pane__session-title")?.textContent).toContain(
@@ -628,10 +585,6 @@ describe("chat pane header", () => {
     );
     expect(container.querySelector(".chat-pane__workspace-chip")).toBeNull();
     expect(container.querySelector('[data-action="terminal"]')).not.toBeNull();
-    expect(container.querySelector('[data-action="diff"]')).toBeNull();
-    expect(container.querySelector('[data-action="tasks"]')).toBeNull();
-    expect(container.querySelector('[data-action="workspace"]')).toBeNull();
-    expect(container.querySelector('[data-action="rail"]')).toBeNull();
   });
 
   it("keeps read-only gateway session titles static", () => {

@@ -18,14 +18,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBrowserPlugin } from "../../plugin-registration.js";
 import type { OpenClawPluginApi } from "../../runtime-api.js";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
-import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
+import { getBrowserStateRuntime } from "../browser-runtime-state.js";
+import type { closeTrackedCdpTarget } from "./cdp.helpers.js";
 import { resolveBrowserConfig, type ResolvedBrowserConfig } from "./config.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
+import { readColdNativeActivity } from "./session-tab-process-state.js";
 import { durableOwnership } from "./session-tab-registry.sqlite.test-helpers.js";
+import {
+  browserSessionTabNativeIdentity,
+  ensureBrowserSessionTabStoreReady,
+} from "./session-tab-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const cdpMocks = vi.hoisted(() => ({
-  closeTrackedCdpTarget: vi.fn<() => Promise<CloseTrackedCdpTargetResult>>(),
+  closeTrackedCdpTarget: vi.fn<typeof closeTrackedCdpTarget>(),
 }));
 
 vi.mock("./cdp.helpers.js", async (importOriginal) => ({
@@ -36,7 +42,9 @@ vi.mock("./cdp.helpers.js", async (importOriginal) => ({
 import {
   closeTrackedBrowserTabsForSessions,
   sweepTrackedBrowserTabs,
+  touchSessionBrowserTab,
   trackSessionBrowserTab,
+  untrackSessionBrowserTab,
 } from "./session-tab-registry.js";
 
 const config = {
@@ -68,7 +76,7 @@ function clearProcessLocalTabState(): void {
   }
 }
 
-function installRuntime(): void {
+async function installRuntime(): Promise<void> {
   registerBrowserPlugin(
     createTestPluginApi({
       id: "browser",
@@ -80,12 +88,11 @@ function installRuntime(): void {
         state: {
           openKeyedStore: (options: OpenKeyedStoreOptions) =>
             createPluginStateKeyedStoreForTests("browser", options),
-          openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
-            createPluginStateSyncKeyedStoreForTests("browser", options),
         },
       } as unknown as OpenClawPluginApi["runtime"],
     }),
   );
+  await ensureBrowserSessionTabStoreReady();
 }
 
 function openStore(): PluginStateSyncKeyedStore<unknown> {
@@ -100,14 +107,20 @@ describe("durable extension session tab cleanup", () => {
   const originalStateDir = process.env.OPENCLAW_STATE_DIR;
   let resolved: ResolvedBrowserConfig;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     clearRuntimeConfigSnapshot();
     clearProcessLocalTabState();
     process.env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-browser-extension-tabs-");
     resetPluginStateStoreForTests();
-    installRuntime();
+    await installRuntime();
     openStore().clear();
-    cdpMocks.closeTrackedCdpTarget.mockReset().mockResolvedValue({ status: "closed" });
+    cdpMocks.closeTrackedCdpTarget
+      .mockReset()
+      .mockImplementation(async ({ closeIfCurrent }) =>
+        closeIfCurrent
+          ? await closeIfCurrent(async () => ({ status: "closed" }))
+          : { status: "closed" },
+      );
     setRuntimeConfigSnapshot(config, config);
     resolved = resolveBrowserConfig(config.browser, config);
   });
@@ -123,9 +136,100 @@ describe("durable extension session tab cleanup", () => {
     }
   });
 
+  async function trackColdSiblings(nativeTargetId: string) {
+    const params = {
+      sessionKey: `agent:main:${nativeTargetId.toLowerCase()}`,
+      targetId: nativeTargetId,
+      profile: "chrome",
+    };
+    const firstOwnership = durableOwnership(nativeTargetId, "profile-a", "browser-a");
+    const lastOwnership = durableOwnership(nativeTargetId, "profile-b", "browser-b");
+    for (const ownership of [firstOwnership, lastOwnership]) {
+      await trackSessionBrowserTab({ ...params, ownership, now: 1_000 });
+    }
+    // Both real durable generations own this alias, so activity cannot adopt either row.
+    await touchSessionBrowserTab({ ...params, now: 2_000 });
+    const coldIdentity = browserSessionTabNativeIdentity({ ...params, nativeTargetId });
+    expect(readColdNativeActivity(coldIdentity)).toBe(2_000);
+    return { params, firstOwnership, lastOwnership, coldIdentity };
+  }
+
+  it.each(["deletion", "replacement", "replacement with unavailable retirement"] as const)(
+    "retires cold activity after the final native owner's %s",
+    async (retirement) => {
+      const { params, firstOwnership, lastOwnership, coldIdentity } =
+        await trackColdSiblings("NATIVE-RETIRE");
+      await untrackSessionBrowserTab({ ...params, ownership: firstOwnership });
+      expect(openStore().entries()).toHaveLength(1);
+      expect(readColdNativeActivity(coldIdentity)).toBe(2_000);
+
+      if (retirement === "deletion") {
+        await untrackSessionBrowserTab({ ...params, ownership: lastOwnership });
+        expect(openStore().entries()).toEqual([]);
+      } else {
+        const unavailable = retirement === "replacement with unavailable retirement";
+        const store = getBrowserStateRuntime().sessionTabs;
+        const bind = store.withCurrent!;
+        const reads = vi.fn(async () => {
+          throw new Error("retirement read unavailable");
+        });
+        const observer = unavailable
+          ? vi.spyOn(store, "withCurrent").mockImplementation((authority) => ({
+              ...bind(authority),
+              entries: reads,
+            }))
+          : undefined;
+        try {
+          await expect(
+            trackSessionBrowserTab({
+              ...params,
+              ...(unavailable ? { profile: "renamed" } : { targetId: "opaque-handle" }),
+              ownership: lastOwnership,
+              now: 3_000,
+            }),
+          ).resolves.toMatchObject({
+            profile: unavailable ? "renamed" : "chrome",
+            interactionTargetKind: unavailable ? "native" : "opaque",
+          });
+        } finally {
+          observer?.mockRestore();
+        }
+        expect(openStore().entries()).toHaveLength(1);
+        expect(openStore().entries()[0]?.value).toMatchObject({
+          profile: unavailable ? "renamed" : "chrome",
+          interactionTargetKind: unavailable ? "native" : "opaque",
+        });
+        if (unavailable) {
+          expect(reads).toHaveBeenCalledOnce();
+          expect(readColdNativeActivity(coldIdentity)).toBe(2_000);
+          return;
+        }
+      }
+      expect(readColdNativeActivity(coldIdentity)).toBeUndefined();
+    },
+  );
+
+  it("retires cold activity after terminal cleanup and preserves retryable owners", async () => {
+    const closed = await trackColdSiblings("NATIVE-CLOSED");
+    const retryable = await trackColdSiblings("NATIVE-RETRYABLE");
+    await expect(
+      closeTrackedBrowserTabsForSessions({
+        sessionKeys: [closed.params.sessionKey, retryable.params.sessionKey],
+        now: 3_000,
+        closeDurableTab: async (tab) =>
+          tab.nativeTargetId === closed.params.targetId
+            ? { status: "closed" }
+            : { status: "unavailable", reason: "target-lookup-failed" },
+      }),
+    ).resolves.toBe(2);
+    expect(openStore().entries()).toHaveLength(2);
+    expect(readColdNativeActivity(retryable.coldIdentity)).toBe(2_000);
+    expect(readColdNativeActivity(closed.coldIdentity)).toBeUndefined();
+  });
+
   it("uses the live process-only extension credential for lifecycle cleanup", async () => {
     expect(resolved.extensionRelayInternalTokens).toEqual({});
-    trackSessionBrowserTab({
+    await trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "extension-tab",
       profile: "chrome",
@@ -156,7 +260,7 @@ describe("durable extension session tab cleanup", () => {
   });
 
   it("retains cleanup without a runtime and closes it after reconnect", async () => {
-    trackSessionBrowserTab({
+    await trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "extension-tab",
       profile: "chrome",

@@ -12,6 +12,9 @@ import {
   readWorktreeState,
   runReleasePrepareSteps,
 } from "../../scripts/release-prepare.ts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+
+const testNodeExecPath = resolveTestNodeExecPath();
 
 function worktreeState(
   overrides: Partial<{
@@ -50,6 +53,18 @@ describe("release preparation arguments", () => {
       "Expected 1 through 16",
     );
   });
+});
+
+it("rejects alpha preparation before constructing write steps", () => {
+  expect(() =>
+    createReleasePrepareSteps({
+      android: false,
+      version: "2026.9.24-alpha.1",
+      rootDir: "/repo",
+      mode: "write",
+      jobs: 2,
+    }),
+  ).toThrow("Alpha releases are retired;");
 });
 
 describe("release preparation plan", () => {
@@ -141,7 +156,7 @@ describe("release preparation plan", () => {
       process.exitCode = status;
     `;
     const result = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       ["--import", "tsx", "--input-type=module", "-e", harness],
       {
         cwd: process.cwd(),

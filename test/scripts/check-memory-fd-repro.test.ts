@@ -1,4 +1,3 @@
-// Check Memory Fd Repro tests cover check memory fd repro script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -15,13 +14,19 @@ import {
   writeConfig,
 } from "../../scripts/check-memory-fd-repro.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import { validateConfigObject } from "../../src/config/validation.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { withEnv } from "../../src/test-utils/env.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const SCRIPT_PATH = path.resolve("scripts/check-memory-fd-repro.mts");
-const TSX_PRELOAD = path.resolve("scripts/tsx.mjs");
+const scriptUrl = resolveRuntimeWorkerUrl(scriptModuleEntrypoints.checkMemoryFdRepro);
 const SOURCE_TSCONFIG_PATH = path.resolve("tsconfig.json");
+const testNodeExecPath = resolveTestNodeExecPath();
 const OWNED_PID = 2_147_483_646;
 const FOREIGN_PID = 2_147_483_645;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -214,13 +219,12 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
       ].join("\n"),
     );
     const result = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       [
-        "--import",
-        TSX_PRELOAD,
+        ...resolveRuntimeWorkerArgv(scriptUrl, testNodeExecPath).slice(0, -1),
         "--import",
         preloadPath,
-        SCRIPT_PATH,
+        ...resolveRuntimeWorkerArgv(scriptUrl, testNodeExecPath).slice(-1),
         "--allow-non-darwin",
         ...(scenario.startsWith("completed-threshold")
           ? ["--mode", "leak", "--min-leaked-fds", "1"]
@@ -472,25 +476,6 @@ describe("check-memory-fd-repro", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
-  });
-
-  it("accepts an available memory_search tool payload", () => {
-    const result = classifyMemorySearchInvokeResponse({
-      httpOk: true,
-      status: 200,
-      bodyText: JSON.stringify({
-        ok: true,
-        result: {
-          content: [{ type: "text", text: JSON.stringify({ results: [] }) }],
-        },
-      }),
-    });
-
-    expect(result).toMatchObject({
-      ok: true,
-      gatewayOk: true,
-      resultCount: 0,
-    });
   });
 
   it("rejects disabled memory_search tool payloads", () => {

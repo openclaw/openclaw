@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -146,99 +147,110 @@ function boundedText<T extends string | null>(
 }
 
 function readQuery(
+  database: DatabaseSync,
   query: ReturnType<typeof meetingTranscriptSessionQuery>,
   purpose: TranscriptReadPurpose = "page",
 ) {
-  return query.select((eb) => {
-    const notes = eb
-      .selectFrom("meeting_transcript_summaries as notes")
-      .whereRef("notes.session_id", "=", "meeting_transcript_sessions.session_id")
-      .whereRef("notes.session_started_at", "=", "meeting_transcript_sessions.started_at");
-    const overview = notes
-      .select((n) =>
-        n
-          .fn<string | null>("json_extract", [n.ref("notes.summary_json"), n.val("$.overview")])
-          .as("overview"),
-      )
-      .$asScalar();
-    const summarySource = notes
-      .select((n) =>
-        n
-          .fn<string | null>("json_extract", [n.ref("notes.summary_json"), n.val("$.source")])
-          .as("source"),
-      )
-      .$asScalar();
-    const utterances = eb
-      .selectFrom("meeting_transcript_utterances as u")
-      .whereRef("u.session_id", "=", "meeting_transcript_sessions.session_id")
-      .whereRef("u.session_started_at", "=", "meeting_transcript_sessions.started_at");
-    // Group and order in SQLite. The aggregate is byte-checked in this statement
-    // before any participant strings cross into JavaScript.
-    const speakers = utterances
-      .select("u.speaker_label")
-      .where("u.speaker_label", "is not", null)
-      .where("u.speaker_label", "!=", "")
-      .groupBy("u.speaker_label")
-      .orderBy((u) => u.fn.min("u.sequence"), "asc");
-    const participants = eb
-      .selectFrom(speakers.as("speakers"))
-      .select((s) =>
-        s.fn<string>("json_group_array", [s.ref("speakers.speaker_label")]).as("participants"),
-      )
-      .$asScalar();
-    const lastAt = eb
-      .selectFrom("meeting_transcript_utterances as u")
-      .select((u) => u.fn.coalesce("u.ended_at", "u.started_at").as("at"))
-      .whereRef("u.session_id", "=", "meeting_transcript_sessions.session_id")
-      .whereRef("u.session_started_at", "=", "meeting_transcript_sessions.started_at")
-      .orderBy("u.sequence", "desc")
-      .limit(1)
-      .$asScalar();
-    const identityBytes = textBytes(eb.ref("session_id"), eb.ref("started_at"), eb.ref("selector"));
-    const bytes = textBytes(
-      eb.ref("session_id"),
-      eb.ref("started_at"),
-      eb.ref("selector"),
-      eb.ref("source_json"),
-      eb.ref("metadata_json"),
-      eb.ref("title"),
-      eb.ref("stopped_at"),
-      lastAt,
-      overview,
-      summarySource,
-      participants,
-    );
-    const maxBytes = byteLimit(purpose);
-    return [
+  const eb = expressionBuilder(query);
+  const notes = eb
+    .selectFrom("meeting_transcript_summaries as notes")
+    .whereRef("notes.session_id", "=", "meeting_transcript_sessions.session_id")
+    .whereRef("notes.session_started_at", "=", "meeting_transcript_sessions.started_at");
+  const overview = notes
+    .select((n) =>
+      n
+        .fn<string | null>("json_extract", [n.ref("notes.summary_json"), n.val("$.overview")])
+        .as("overview"),
+    )
+    .$asScalar();
+  const summarySource = notes
+    .select((n) =>
+      n
+        .fn<string | null>("json_extract", [n.ref("notes.summary_json"), n.val("$.source")])
+        .as("source"),
+    )
+    .$asScalar();
+  const utterances = eb
+    .selectFrom("meeting_transcript_utterances as u")
+    .whereRef("u.session_id", "=", "meeting_transcript_sessions.session_id")
+    .whereRef("u.session_started_at", "=", "meeting_transcript_sessions.started_at");
+  // Group and order in SQLite. The aggregate is byte-checked in this statement
+  // before any participant strings cross into JavaScript.
+  const speakers = utterances
+    .select("u.speaker_label")
+    .where("u.speaker_label", "is not", null)
+    .where("u.speaker_label", "!=", "")
+    .groupBy("u.speaker_label")
+    .orderBy((u) => u.fn.min("u.sequence"), "asc");
+  const participants = eb
+    .selectFrom(speakers.as("speakers"))
+    .select((s) =>
+      s.fn<string>("json_group_array", [s.ref("speakers.speaker_label")]).as("participants"),
+    )
+    .$asScalar();
+  const lastAt = utterances
+    .select((u) => u.fn.coalesce("u.ended_at", "u.started_at").as("at"))
+    .orderBy("u.sequence", "desc")
+    .limit(1)
+    .$asScalar();
+  const identityBytes = textBytes(eb.ref("session_id"), eb.ref("started_at"), eb.ref("selector"));
+  const bytes = textBytes(
+    eb.ref("session_id"),
+    eb.ref("started_at"),
+    eb.ref("selector"),
+    eb.ref("source_json"),
+    eb.ref("metadata_json"),
+    eb.ref("title"),
+    eb.ref("stopped_at"),
+    lastAt,
+    overview,
+    summarySource,
+    participants,
+  );
+  const maxBytes = byteLimit(purpose);
+  const columns = (payloadBytes: Expression<number>) =>
+    [
       boundedText(eb.ref("session_id"), identityBytes, maxBytes).as("session_id"),
       boundedText(eb.ref("started_at"), identityBytes, maxBytes).as("started_at"),
       boundedText(eb.ref("selector"), identityBytes, maxBytes).as("selector"),
-      boundedText(eb.ref("source_json"), bytes, maxBytes).as("source_json"),
-      boundedText(eb.ref("metadata_json"), bytes, maxBytes).as("metadata_json"),
-      boundedText(eb.ref("title"), bytes, maxBytes).as("title"),
-      boundedText(eb.ref("stopped_at"), bytes, maxBytes).as("stopped_at"),
-      boundedText(lastAt, bytes, maxBytes).as("last_utterance_at"),
-      boundedText(overview, bytes, maxBytes).as("overview"),
-      boundedText(summarySource, bytes, maxBytes).as("summary_source"),
-      boundedText(participants, bytes, maxBytes).as("participants_json"),
-      bytes.as("payload_bytes"),
+      boundedText(eb.ref("source_json"), payloadBytes, maxBytes).as("source_json"),
+      boundedText(eb.ref("metadata_json"), payloadBytes, maxBytes).as("metadata_json"),
+      boundedText(eb.ref("title"), payloadBytes, maxBytes).as("title"),
+      boundedText(eb.ref("stopped_at"), payloadBytes, maxBytes).as("stopped_at"),
+      boundedText(lastAt, payloadBytes, maxBytes).as("last_utterance_at"),
+      boundedText(overview, payloadBytes, maxBytes).as("overview"),
+      boundedText(summarySource, payloadBytes, maxBytes).as("summary_source"),
+      boundedText(participants, payloadBytes, maxBytes).as("participants_json"),
+      eb.parens(payloadBytes).as("payload_bytes"),
       identityBytes.as("identity_bytes"),
       utterances
         .select((u) => u.fn.countAll<number>().as("count"))
         .$asScalar()
         .as("utterance_count"),
       "updated_at_ms",
-      eb
-        .exists(
-          eb
-            .selectFrom("meeting_transcript_summaries as summary")
-            .select("summary.session_id")
-            .whereRef("summary.session_id", "=", "meeting_transcript_sessions.session_id")
-            .whereRef("summary.session_started_at", "=", "meeting_transcript_sessions.started_at"),
-        )
-        .as("has_summary"),
-    ];
-  });
+      eb.exists(notes.select("notes.session_id")).as("has_summary"),
+    ] as const;
+  if (maxBytes === undefined) {
+    return query.select(columns(bytes));
+  }
+  // Reuse byte counts across payload guards without retaining unbounded bodies.
+  const measured = meetingTranscriptDb(database)
+    .with(
+      (cte) => cte("read_sizes").materialized(),
+      () =>
+        query.select([
+          "session_id as read_session_id",
+          "started_at as read_started_at",
+          bytes.as("payload_bytes"),
+        ]),
+    )
+    .selectFrom("read_sizes")
+    .innerJoin("meeting_transcript_sessions", (join) =>
+      join
+        .onRef("meeting_transcript_sessions.session_id", "=", "read_sizes.read_session_id")
+        .onRef("meeting_transcript_sessions.started_at", "=", "read_sizes.read_started_at"),
+    );
+  return measured.select((sizes) => columns(sizes.ref("read_sizes.payload_bytes")));
 }
 
 type TranscriptReadRow = Awaited<
@@ -278,6 +290,11 @@ export type TranscriptReadOptions = Omit<TranscriptsListParams, "cursor"> & {
 };
 
 const dateReaders = new WeakSet<DatabaseSync>();
+const dateParser = new AsyncLocalStorage<typeof parseDateStringTimestampMs>();
+
+function parseTranscriptDate(value: unknown): number | undefined {
+  return (dateParser.getStore() ?? parseDateStringTimestampMs)(value);
+}
 
 function registerTranscriptDateReader(database: DatabaseSync): void {
   if (dateReaders.has(database)) {
@@ -285,10 +302,7 @@ function registerTranscriptDateReader(database: DatabaseSync): void {
   }
   // Canonical database reopen creates a new handle. Date parsing is not
   // deterministic because timezone-free strings depend on the process timezone.
-  database.function(
-    "openclaw_transcript_date_ms",
-    (value) => parseDateStringTimestampMs(value) ?? null,
-  );
+  database.function("openclaw_transcript_date_ms", (value) => parseTranscriptDate(value) ?? null);
   dateReaders.add(database);
 }
 
@@ -342,16 +356,16 @@ export function* iterateTranscriptReadEntries(
     );
   }
   if (options.startedAfter) {
-    const startedAfter = parseDateStringTimestampMs(options.startedAfter) ?? null;
+    const startedAfter = parseTranscriptDate(options.startedAfter) ?? null;
     query = query.where((eb) => eb(transcriptStartTime(eb.ref("started_at")), ">=", startedAfter));
   }
   if (options.startedBefore) {
-    const startedBefore = parseDateStringTimestampMs(options.startedBefore) ?? null;
+    const startedBefore = parseTranscriptDate(options.startedBefore) ?? null;
     query = query.where((eb) => eb(transcriptStartTime(eb.ref("started_at")), "<", startedBefore));
   }
   if (options.after) {
     const after = options.after;
-    const afterTime = parseDateStringTimestampMs(after.startedAt);
+    const afterTime = parseTranscriptDate(after.startedAt);
     query = query.where((eb) => {
       const time = transcriptStartTime(eb.ref("started_at"));
       const afterIdentity = eb(
@@ -429,6 +443,7 @@ export function* iterateTranscriptReadEntries(
   const rows = iterateSqliteQuerySync(
     database,
     readQuery(
+      database,
       meetingTranscriptDb(database)
         .selectFrom("meeting_transcript_sessions")
         .where((eb) =>
@@ -466,6 +481,7 @@ export function readTranscriptEntry(
   const row = executeSqliteQueryTakeFirstSync(
     database,
     readQuery(
+      database,
       meetingTranscriptDb(database)
         .selectFrom("meeting_transcript_sessions")
         .where("selector", "=", selector),
@@ -482,17 +498,29 @@ export function readTranscriptEntry(
 export function readLatestTranscriptEntry(database: DatabaseSync) {
   const row = executeSqliteQueryTakeFirstSync(
     database,
-    readQuery(meetingTranscriptDb(database).selectFrom("meeting_transcript_sessions"))
-      .where("next_utterance_seq", ">", 0)
-      .orderBy("updated_at_ms", "desc")
-      .orderBy("meeting_transcript_sessions.started_at", "desc")
-      .orderBy("meeting_transcript_sessions.session_id", "asc")
-      .limit(1),
+    readQuery(
+      database,
+      meetingTranscriptDb(database)
+        .selectFrom("meeting_transcript_sessions")
+        .where("next_utterance_seq", ">", 0)
+        .orderBy("updated_at_ms", "desc")
+        .orderBy("meeting_transcript_sessions.started_at", "desc")
+        .orderBy("meeting_transcript_sessions.session_id", "asc")
+        .limit(1),
+    ),
   );
   return row ? transcriptReadEntryFromRow(row) : undefined;
 }
 
-export function queryTranscriptReadEntries(database: DatabaseSync, options: TranscriptReadOptions) {
+export function queryTranscriptReadEntries(
+  database: DatabaseSync,
+  options: TranscriptReadOptions,
+  parseDate = parseDateStringTimestampMs,
+) {
+  return dateParser.run(parseDate, () => collectTranscriptReadEntries(database, options));
+}
+
+function collectTranscriptReadEntries(database: DatabaseSync, options: TranscriptReadOptions) {
   const entries: TranscriptReadEntry[] = [];
   let bytes = 0;
   for (const entry of iterateTranscriptReadEntries(database, options)) {
@@ -596,7 +624,7 @@ function readTranscriptUtterancePage(
 /** Omit the duplicated transcript inside SQLite before materializing the stored summary. */
 export function readStoredTranscriptNotes(
   database: DatabaseSync,
-  session: TranscriptSessionDescriptor,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   purpose: TranscriptReadPurpose = "page",
 ): { summary?: Omit<TranscriptsSummary, "transcript">; markdown?: string } {
   const row = executeSqliteQueryTakeFirstSync(
@@ -631,20 +659,6 @@ export function readStoredTranscriptNotes(
     summary,
     markdown: row.markdown ?? undefined,
   };
-}
-
-/** Iterate canonical rows for downloads without materializing export files or an unbounded array. */
-function* iterateTranscriptUtterances(
-  database: DatabaseSync,
-  session: TranscriptSessionDescriptor,
-): Generator<TranscriptUtterance> {
-  for (const row of iterateSqliteQuerySync(
-    database,
-    utteranceQuery(database, session, "export").orderBy("sequence", "asc"),
-  )) {
-    assertTranscriptByteCount(row.payload_bytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
-    yield transcriptReadUtteranceFromRow(row);
-  }
 }
 
 function requireTranscriptReadEntry(
@@ -694,13 +708,20 @@ export type TranscriptExportRead = {
   notes: ReturnType<typeof readStoredTranscriptNotes> | undefined;
 };
 
+/** Stream canonical rows and notes in the caller's read snapshot without materializing files. */
 export function* iterateTranscriptExport(
   database: DatabaseSync,
   selector: string,
   includeNotes: boolean,
 ): Generator<TranscriptUtterance, TranscriptExportRead> {
   const entry = requireTranscriptReadEntry(database, selector, "export");
-  yield* iterateTranscriptUtterances(database, entry.session);
+  for (const row of iterateSqliteQuerySync(
+    database,
+    utteranceQuery(database, entry.session, "export").orderBy("sequence", "asc"),
+  )) {
+    assertTranscriptByteCount(row.payload_bytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
+    yield transcriptReadUtteranceFromRow(row);
+  }
   const notes = includeNotes
     ? readStoredTranscriptNotes(database, entry.session, "export")
     : undefined;

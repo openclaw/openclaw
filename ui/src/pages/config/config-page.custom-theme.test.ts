@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext, ApplicationThemeServerSelection } from "../../app/context.ts";
 import type { ImportedCustomTheme } from "../../app/custom-theme.ts";
 import { loadSettings, patchSettings, type UiSettings } from "../../app/settings.ts";
@@ -12,14 +13,6 @@ import type { CustomThemeImportOwner } from "./custom-theme-import-owner.ts";
 import * as customTheme from "./custom-theme-import.ts";
 
 const importCustomThemeFromUrl = vi.fn<typeof customTheme.importCustomThemeFromUrl>();
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
 
 type CustomThemeImportState = {
   context: ApplicationContext;

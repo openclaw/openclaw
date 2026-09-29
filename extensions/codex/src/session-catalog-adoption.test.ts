@@ -1,6 +1,13 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 // Codex supervision tests cover passive listing and safe local session takeover.
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
 import { describe, expect, it, vi } from "vitest";
+import { createLazyCodexAppServerBindingStore } from "./app-server/session-binding-store.js";
+import { bindingStoreKey } from "./app-server/session-binding.js";
+import { createCodexSqliteTestBindingStateStore } from "./app-server/session-binding.sqlite.test-helpers.js";
+import { listAdoptedSessionEntries } from "./session-catalog-adoption.js";
 import {
   commandRpcMocks,
   pinnedConnectionMocks,
@@ -34,7 +41,142 @@ import {
   type PluginRuntime,
 } from "./session-catalog.test-helpers.js";
 
+function continueSource(
+  params: Omit<Parameters<typeof continueLocalCodexSession>[0], "config" | "threadId">,
+) {
+  return continueLocalCodexSession({ config, threadId: "thread-1", ...params });
+}
+
 describe("Codex supervision catalog", () => {
+  it("refreshes bulk adoption authority after a generation changes or a binding disappears", async () => {
+    const state = createCodexSqliteTestBindingStateStore({
+      namespace: "adoption-cohort",
+      maxEntries: 10,
+      env: { ...process.env },
+    });
+    const bindingStore = createLazyCodexAppServerBindingStore(state);
+    const entries = ["first", "second"].map((sourceThreadId) => ({
+      sessionKey: supervisionSessionKey(sourceThreadId),
+      entry: adoptedEntry({ sourceThreadId, sessionId: `session-${sourceThreadId}` }),
+    }));
+    const { runtime } = createRuntime({ entries });
+    try {
+      for (const [index, sourceThreadId] of ["first", "second"].entries()) {
+        await seedSupervisionBinding({
+          bindingStore,
+          sessionId: entries[index]!.entry.sessionId,
+          sessionKey: entries[index]!.sessionKey,
+          sourceThreadId,
+        });
+      }
+      const lookupMany = vi.spyOn(state, "lookupMany");
+      const lookup = vi.spyOn(state, "lookup");
+      const list = () =>
+        listCodexSessionCatalog({
+          bindingStore,
+          config,
+          runtime,
+          control: createControl({
+            listPage: vi.fn(async () => ({
+              sessions: ["first", "second"].map((threadId) => ({
+                threadId,
+                status: "idle",
+                archived: false as const,
+              })),
+            })),
+          }),
+        });
+      expect((await list()).hosts[0]?.sessions.map((entry) => entry.sessionKey)).toEqual(
+        entries.map((entry) => entry.sessionKey),
+      );
+      entries[0]!.entry.sessionId = "successor";
+      expect((await list()).hosts[0]?.sessions.map((entry) => entry.sessionKey)).toEqual([
+        undefined,
+        entries[1]!.sessionKey,
+      ]);
+      const firstIdentity = sessionBindingIdentity({
+        sessionId: "successor",
+        sessionKey: entries[0]!.sessionKey,
+        config,
+      });
+      state.update(
+        bindingStoreKey(firstIdentity),
+        (row) => row && { ...row, sessionId: "successor" },
+      );
+      state.delete(
+        bindingStoreKey(
+          sessionBindingIdentity({
+            sessionId: entries[1]!.entry.sessionId,
+            sessionKey: entries[1]!.sessionKey,
+            config,
+          }),
+        ),
+      );
+      expect((await list()).hosts[0]?.sessions.map((entry) => entry.sessionKey)).toEqual([
+        entries[0]!.sessionKey,
+        undefined,
+      ]);
+      expect(lookupMany).toHaveBeenCalled();
+      expect(lookup).not.toHaveBeenCalled();
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("reports duplicate adoption across agents before decoding a later malformed bulk row", async () => {
+    const state = createCodexSqliteTestBindingStateStore({
+      namespace: "adoption-order",
+      maxEntries: 10,
+      env: { ...process.env },
+    });
+    const bindingStore = createLazyCodexAppServerBindingStore(state);
+    const cohortConfig: OpenClawConfig = {
+      agents: { list: [{ id: "main", default: true }, { id: "beta" }, { id: "gamma" }] },
+    };
+    const duplicates = ["main", "beta"].map((agentId) => ({
+      sessionKey: `agent:${agentId}:${supervisionSessionInputKey("duplicate")}`,
+      entry: adoptedEntry({ sourceThreadId: "duplicate", sessionId: `${agentId}-session` }),
+    }));
+    const malformed = {
+      sessionKey: `agent:gamma:${supervisionSessionInputKey("malformed")}`,
+      entry: adoptedEntry({ sourceThreadId: "malformed", sessionId: "malformed-session" }),
+    };
+    const { runtime, entries } = createRuntime({ entries: [...duplicates, malformed] });
+    try {
+      for (const duplicate of duplicates) {
+        await seedSupervisionBinding({
+          bindingStore,
+          sessionId: duplicate.entry.sessionId,
+          sessionKey: duplicate.sessionKey,
+          sourceThreadId: "duplicate",
+        });
+      }
+      const key = bindingStoreKey(
+        sessionBindingIdentity({
+          sessionId: malformed.entry.sessionId,
+          sessionKey: malformed.sessionKey,
+          config: cohortConfig,
+        }),
+      );
+      state.register(key, { version: 1, state: "active", binding: { threadId: "", cwd: "/repo" } });
+      const lookupMany = vi.spyOn(state, "lookupMany");
+      await expect(
+        listAdoptedSessionEntries({ bindingStore, config: cohortConfig, runtime }),
+      ).rejects.toThrow(
+        "multiple OpenClaw sessions adopt Codex thread duplicate from the same home",
+      );
+      entries.splice(1, 1);
+      await expect(
+        listAdoptedSessionEntries({ bindingStore, config: cohortConfig, runtime }),
+      ).rejects.toThrow(`Invalid Codex app-server binding row: ${key}`);
+      expect(lookupMany).toHaveBeenCalledTimes(2);
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+    }
+  });
+
   it("enriches only the local source row with its adopted OpenClaw session", async () => {
     const control = createControl({
       listPage: vi.fn(async () => ({
@@ -270,7 +412,7 @@ describe("Codex supervision actions", () => {
       getRuntimeConfig: () => config,
       env: { CODEX_HOME: home },
     });
-    const source = factory.homesForAgent("main")[0]!;
+    const source = (await factory.homesForAgent("main"))[0]!;
     const { runtime, createSessionEntry } = createRuntime();
     const { api } = createGatewayApi(runtime);
     await expect(
@@ -289,7 +431,6 @@ describe("Codex supervision actions", () => {
     );
     expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual([
       "thread/read",
-      "thread/list",
       "thread/read",
     ]);
   });
@@ -344,20 +485,16 @@ describe("Codex supervision actions", () => {
       userMessageCount: number;
     }> = [];
 
-    const first = await continueLocalCodexSession({
+    const first = await continueSource({
       api,
       bindingStore,
-      config,
       control,
-      threadId: "thread-1",
       onContinued: (baseline) => baselines.push(baseline),
     });
-    const second = await continueLocalCodexSession({
+    const second = await continueSource({
       api,
       bindingStore,
-      config,
       control,
-      threadId: "thread-1",
       onContinued: (baseline) => baselines.push(baseline),
     });
 
@@ -521,12 +658,10 @@ describe("Codex supervision actions", () => {
       userMessageCount: number;
     }> = [];
 
-    await continueLocalCodexSession({
+    await continueSource({
       api,
       bindingStore,
-      config,
       control,
-      threadId: "thread-1",
       onContinued: (baseline) => baselines.push(baseline),
     });
 
@@ -584,12 +719,11 @@ describe("Codex supervision actions", () => {
   });
 
   it("does not expose or reuse an initializing session while history import is paused", async () => {
-    let releaseImport: (() => void) | undefined;
-    const importGate = new Promise<void>((resolve) => {
-      releaseImport = resolve;
-    });
+    const importEntered = createDeferred<void>();
+    const importGate = createDeferred<void>();
     transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockImplementationOnce(async () => {
-      await importGate;
+      importEntered.resolve();
+      await importGate.promise;
       return { importedMessages: 0, omittedMessages: 0 };
     });
     const { runtime, entries, createSessionEntry } = createRuntime();
@@ -597,45 +731,49 @@ describe("Codex supervision actions", () => {
     const bindingStore = createCodexTestBindingStore();
     const control = createEligibleControl();
 
-    const firstContinue = continueLocalCodexSession({
-      api,
-      bindingStore,
-      config,
-      control,
-      threadId: "thread-1",
-    });
-    await vi.waitFor(() => {
+    const firstContinue = continueSource({ api, bindingStore, control });
+    const pending: Promise<unknown>[] = [firstContinue];
+    try {
+      await Promise.race([
+        importEntered.promise,
+        firstContinue.then(() => {
+          throw new Error("Continue finished without entering the paused history import");
+        }),
+      ]);
       expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledOnce();
-    });
 
-    const duringImport = await listCodexSessionCatalog({ bindingStore, config, runtime, control });
-    expect(duringImport.hosts[0]?.sessions[0]).not.toHaveProperty("sessionKey");
-    expect(entries[0]?.entry.initializationPending).toBe(true);
-    let secondSettled = false;
-    const secondContinue = continueLocalCodexSession({
-      api,
-      bindingStore,
-      config,
-      control,
-      threadId: "thread-1",
-    }).then((result) => {
-      secondSettled = true;
-      return result;
-    });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(secondSettled).toBe(false);
-    expect(createSessionEntry).toHaveBeenCalledOnce();
+      const duringImport = await listCodexSessionCatalog({
+        bindingStore,
+        config,
+        runtime,
+        control,
+      });
+      expect(duringImport.hosts[0]?.sessions[0]).not.toHaveProperty("sessionKey");
+      expect(entries[0]?.entry.initializationPending).toBe(true);
+      let secondSettled = false;
+      const secondContinue = continueSource({ api, bindingStore, control }).then((result) => {
+        secondSettled = true;
+        return result;
+      });
+      pending.push(secondContinue);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(secondSettled).toBe(false);
+      expect(createSessionEntry).toHaveBeenCalledOnce();
 
-    releaseImport?.();
-    const [first, second] = await Promise.all([firstContinue, secondContinue]);
-    expect(second).toEqual(first);
-    expect(entries[0]?.entry.pluginExtensions).toEqual({
-      codex: {
-        supervision: { sourceThreadId: "thread-1", modelLocked: true },
-      },
-    });
-    expect(entries[0]?.entry.initializationPending).toBeUndefined();
+      importGate.resolve();
+      const [first, second] = await Promise.all([firstContinue, secondContinue]);
+      expect(second).toEqual(first);
+      expect(entries[0]?.entry.pluginExtensions).toEqual({
+        codex: {
+          supervision: { sourceThreadId: "thread-1", modelLocked: true },
+        },
+      });
+      expect(entries[0]?.entry.initializationPending).toBeUndefined();
+    } finally {
+      importGate.resolve();
+      await Promise.allSettled(pending);
+    }
   });
 
   it("does not archive a source with an interrupted initializing branch", async () => {
@@ -665,13 +803,7 @@ describe("Codex supervision actions", () => {
     const { api } = createGatewayApi(runtime);
     const bindingStore = createCodexTestBindingStore();
     const control = createEligibleControl();
-    const continued = await continueLocalCodexSession({
-      api,
-      bindingStore,
-      config,
-      control,
-      threadId: "thread-1",
-    });
+    const continued = await continueSource({ api, bindingStore, control });
 
     await expect(archiveTestSession({ control, bindingStore, runtime })).rejects.toThrow(
       "cannot be archived until its OpenClaw branch starts",
@@ -705,56 +837,60 @@ describe("Codex supervision actions", () => {
   });
 
   it("serializes archive behind an in-flight Continue and rejects the pending branch", async () => {
-    let releaseImport: (() => void) | undefined;
-    const importGate = new Promise<void>((resolve) => {
-      releaseImport = resolve;
-    });
+    const importEntered = createDeferred<void>();
+    const importGate = createDeferred<void>();
     transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockImplementationOnce(async () => {
-      await importGate;
+      importEntered.resolve();
+      await importGate.promise;
       return { importedMessages: 0, omittedMessages: 0 };
     });
     const { runtime } = createRuntime();
     const { api } = createGatewayApi(runtime);
     const bindingStore = createCodexTestBindingStore();
     const control = createEligibleControl();
-    const continuing = continueLocalCodexSession({
-      api,
-      bindingStore,
-      config,
-      control,
-      threadId: "thread-1",
-    });
-    await vi.waitFor(() => {
+    const continuing = continueSource({ api, bindingStore, control });
+    const pending: Promise<unknown>[] = [continuing];
+    try {
+      await Promise.race([
+        importEntered.promise,
+        continuing.then(() => {
+          throw new Error("Continue finished without entering the paused history import");
+        }),
+      ]);
       expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledOnce();
-    });
 
-    let archiveSettled = false;
-    const archiving = archiveTestSession({ control, bindingStore, runtime }).then(
-      (value) => {
-        archiveSettled = true;
-        return { ok: true as const, value };
-      },
-      (error: unknown) => {
-        archiveSettled = true;
-        return { ok: false as const, error };
-      },
-    );
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(archiveSettled).toBe(false);
-    expect(control.archiveThread).not.toHaveBeenCalled();
+      let archiveSettled = false;
+      const archiving = archiveTestSession({ control, bindingStore, runtime }).then(
+        (value) => {
+          archiveSettled = true;
+          return { ok: true as const, value };
+        },
+        (error: unknown) => {
+          archiveSettled = true;
+          return { ok: false as const, error };
+        },
+      );
+      pending.push(archiving);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(archiveSettled).toBe(false);
+      expect(control.archiveThread).not.toHaveBeenCalled();
 
-    releaseImport?.();
-    await expect(continuing).resolves.toMatchObject({ disposition: "forked" });
-    const archiveResult = await archiving;
-    expect(archiveResult.ok).toBe(false);
-    if (archiveResult.ok) {
-      throw new Error("archive unexpectedly succeeded");
+      importGate.resolve();
+      await expect(continuing).resolves.toMatchObject({ disposition: "forked" });
+      const archiveResult = await archiving;
+      expect(archiveResult.ok).toBe(false);
+      if (archiveResult.ok) {
+        throw new Error("archive unexpectedly succeeded");
+      }
+      expect(archiveResult.error).toBeInstanceOf(Error);
+      expect((archiveResult.error as Error).message).toContain(
+        "cannot be archived until its OpenClaw branch starts",
+      );
+      expect(control.archiveThread).not.toHaveBeenCalled();
+    } finally {
+      importGate.resolve();
+      await Promise.allSettled(pending);
     }
-    expect(archiveResult.error).toBeInstanceOf(Error);
-    expect((archiveResult.error as Error).message).toContain(
-      "cannot be archived until its OpenClaw branch starts",
-    );
-    expect(control.archiveThread).not.toHaveBeenCalled();
   });
 });

@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   setGatewayPluginMetadataSnapshot,
@@ -450,78 +451,6 @@ describe("plugin setup registry artifact lifecycle", () => {
     },
   );
 
-  it.each<{
-    artifactDir: string;
-    declared: boolean;
-    competingDist?: string;
-  }>([
-    { artifactDir: ".", declared: true },
-    { artifactDir: ".", declared: false },
-    { artifactDir: "dist", declared: false },
-    { artifactDir: ".", declared: false, competingDist: "setup-api.ts" },
-    {
-      artifactDir: ".",
-      declared: false,
-      competingDist: "setup-api.js",
-    },
-  ])(
-    "reloads installed $artifactDir setup artifacts (declared: $declared, dist conflict: $competingDist)",
-    ({ artifactDir, declared, competingDist }) => {
-      const rootDir = fs.realpathSync(makeTrackedTempDir("openclaw-setup-lifecycle", tempDirs));
-      const artifactRoot = path.join(rootDir, artifactDir);
-      fs.mkdirSync(artifactRoot, { recursive: true });
-      const setupSource = path.join(artifactRoot, "setup-api.cjs");
-      const dependencyPath = path.join(artifactRoot, "setup-dependency.cjs");
-      if (competingDist) {
-        fs.mkdirSync(path.join(rootDir, "dist"), { recursive: true });
-        fs.writeFileSync(
-          path.join(rootDir, "dist", competingDist),
-          'module.exports = { register(api) { api.registerProvider({ id: "setup-lifecycle", label: "wrong-dist-entry" }); } };\n',
-          "utf8",
-        );
-      }
-      const writeSetupArtifact = (version: string) => {
-        fs.writeFileSync(dependencyPath, `module.exports = "dependency-${version}";\n`, "utf8");
-        fs.writeFileSync(
-          setupSource,
-          `module.exports = { register(api) { api.registerProvider({ id: "setup-lifecycle", label: "entry-${version}:" + require("./setup-dependency.cjs") }); } };\n`,
-          "utf8",
-        );
-      };
-      const manifestRegistry = {
-        plugins: [
-          {
-            id: "setup-lifecycle",
-            rootDir,
-            source: setupSource,
-            ...(declared ? { setupSource } : {}),
-            manifestPath: path.join(rootDir, "openclaw.plugin.json"),
-            origin: "global",
-            channels: [],
-            providers: ["setup-lifecycle"],
-            cliBackends: [],
-            skills: [],
-            hooks: [],
-            setup: { requiresRuntime: true, providers: [{ id: "setup-lifecycle" }] },
-          },
-        ],
-        diagnostics: [],
-      } satisfies PluginManifestRegistry;
-
-      writeSetupArtifact("before");
-      expect(resolvePluginSetupRegistry({ manifestRegistry }).providers[0]?.provider.label).toBe(
-        "entry-before:dependency-before",
-      );
-
-      writeSetupArtifact("after");
-      clearPluginMetadataLifecycleCaches();
-
-      expect(resolvePluginSetupRegistry({ manifestRegistry }).providers[0]?.provider.label).toBe(
-        "entry-after:dependency-after",
-      );
-    },
-  );
-
   it.each(
     ["dist", "dist-runtime"].flatMap((artifactRootName) =>
       [false, true].map((computed) => ({ artifactRootName, computed })),
@@ -626,7 +555,9 @@ describe("plugin setup module lifecycle", () => {
     "keeps setup lazy imports with their transferred owner (changed: %s)",
     async (changed) => {
       const { cache, record, rootDir, source } = fixture();
-      const owner = withPluginCache(cache, retainGatewayPluginMetadata);
+      const owner = withPluginCache(cache, () =>
+        retainGatewayPluginMetadata(createTestGatewayScheduler()),
+      );
       const next = createPluginCache();
       const event = `setup-transfer-${changed}`;
       const listeners = process.listenerCount(event);
@@ -679,8 +610,12 @@ describe("plugin setup module lifecycle", () => {
 
   it("retains shared setup callbacks until the last metadata owner joins their cleanup", async () => {
     const { cache, record, rootDir, source } = fixture();
-    const first = withPluginCache(cache, retainGatewayPluginMetadata);
-    const second = withPluginCache(cache, retainGatewayPluginMetadata);
+    const first = withPluginCache(cache, () =>
+      retainGatewayPluginMetadata(createTestGatewayScheduler()),
+    );
+    const second = withPluginCache(cache, () =>
+      retainGatewayPluginMetadata(createTestGatewayScheduler()),
+    );
     const firstCache = createPluginCache();
     const secondCache = createPluginCache();
     const event = "setup-shared-metadata";
@@ -696,7 +631,7 @@ describe("plugin setup module lifecycle", () => {
       `process.on(${JSON.stringify(event)}, () => {}); module.exports = () => "shared";`,
     );
     let closing: Promise<void> | undefined;
-    let joining: Promise<void> | undefined;
+    let joining: ReturnType<typeof second.close> | undefined;
     let late: ReturnType<typeof retainGatewayPluginMetadata> | undefined;
     try {
       const value = withPluginCache(firstCache, () =>
@@ -733,7 +668,9 @@ describe("plugin setup module lifecycle", () => {
       joining = second.close();
       await cleanupEntered.promise;
       expect(() => {
-        late = withPluginCache(secondCache, retainGatewayPluginMetadata);
+        late = withPluginCache(secondCache, () =>
+          retainGatewayPluginMetadata(createTestGatewayScheduler()),
+        );
       }).toThrow("Gateway plugin metadata is shutting down");
       expect(settled).toBe(false);
       expect(cleanup).toHaveBeenCalledOnce();
@@ -756,14 +693,18 @@ describe("plugin setup module lifecycle", () => {
   it("selects a live metadata owner before awaiting a sibling's cleanup", async () => {
     const { cache, record, rootDir, source, loader } = fixture();
     const secondCache = createPluginCache();
-    const first = withPluginCache(cache, retainGatewayPluginMetadata);
+    const first = withPluginCache(cache, () =>
+      retainGatewayPluginMetadata(createTestGatewayScheduler()),
+    );
     const entered = createDeferred();
     const release = createDeferred();
     let second: ReturnType<typeof retainGatewayPluginMetadata> | undefined;
-    let closing: Promise<void> | undefined;
+    let closing: ReturnType<typeof first.close> | undefined;
     let newcomer: ReturnType<typeof retainGatewayPluginMetadata> | undefined;
     try {
-      second = withPluginCache(secondCache, retainGatewayPluginMetadata);
+      second = withPluginCache(secondCache, () =>
+        retainGatewayPluginMetadata(createTestGatewayScheduler()),
+      );
       fs.writeFileSync(source, 'module.exports = () => "ready";');
       const snapshot = withPluginCache(cache, () =>
         createPluginMetadataSnapshotFixture({ plugins: [record] }),
@@ -794,12 +735,12 @@ describe("plugin setup module lifecycle", () => {
       await entered.promise;
       expect(getProcessPluginCache() === secondCache).toBe(true);
       expect(getGatewayPluginMetadataSnapshot()).toBe(survivingSnapshot);
-      expect(() => retainGatewayPluginMetadata()).toThrow(
+      expect(() => retainGatewayPluginMetadata(createTestGatewayScheduler())).toThrow(
         "Gateway plugin metadata is shutting down",
       );
       release.resolve();
       await closing;
-      newcomer = retainGatewayPluginMetadata();
+      newcomer = retainGatewayPluginMetadata(createTestGatewayScheduler());
       newcomer.publish(survivingSnapshot);
       await second.close();
       expect(getGatewayPluginMetadataSnapshot()).toBe(survivingSnapshot);

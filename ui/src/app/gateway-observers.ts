@@ -5,8 +5,10 @@ import type {
 import type { EventLogEntry } from "../api/event-log.ts";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
+import { invalidateCronCatalog } from "../lib/cron/catalog.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import {
+  clearModelCatalogCache,
   beginModelCatalogRead,
   publishModelCatalogResult,
   type ModelCatalogRead,
@@ -17,6 +19,7 @@ import {
   type UiSessionDefaultsHost,
 } from "../lib/sessions/session-key.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
+import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
 export function createGatewayEventObserver(options: {
   isAttached: () => boolean;
@@ -78,6 +81,9 @@ export function createGatewayEventLog() {
     get revision() {
       return revision;
     },
+    clear() {
+      entries = [];
+    },
     resetConnection() {
       recoveryScope = null;
       return retire();
@@ -123,7 +129,10 @@ export function createGatewayMetadataObserver(
           previous.selfUser?.id !== next.selfUser?.id ||
           (previous.phase === "connected" && next.phase !== "connected"))
       ) {
+        invalidateUserPreferences(previous.client);
+        invalidateCronCatalog(previous.client);
         invalidateModelAuthStatusRequests(previous.client);
+        clearModelCatalogCache(previous.client);
         invalidateChatMetadataStore(previous.client);
         if (!isCurrent(next)) {
           return false;
@@ -149,7 +158,13 @@ export function createGatewayMetadataObserver(
         : undefined;
       return true;
     },
-    receive(event: GatewayEventFrame, host: UiSessionDefaultsHost): GatewayEventFrame | undefined {
+    receive(
+      event: GatewayEventFrame,
+      host: UiSessionDefaultsHost & Pick<ApplicationGatewaySnapshot, "client">,
+    ): GatewayEventFrame | undefined {
+      if (host.client && (event.event === "cron" || event.event === "config.changed")) {
+        invalidateCronCatalog(host.client);
+      }
       if (event.event !== "models.snapshot") {
         return event;
       }

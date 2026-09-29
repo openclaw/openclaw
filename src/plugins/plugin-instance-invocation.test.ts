@@ -1,11 +1,23 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { describe, expect, it, vi } from "vitest";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import {
+  bindPluginMetadataSnapshotCache,
+  createPluginCache,
+  getScopedPluginCache,
+} from "./plugin-cache.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { PluginInstance } from "./plugin-instance.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "./runtime/gateway-request-scope.js";
+import {
+  getPluginRuntimeGenerationRegistry,
+  withPluginRuntimeGenerationScope,
+} from "./runtime/generation-scope.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
 function createOwnedInstance() {
@@ -16,45 +28,107 @@ function createOwnedInstance() {
 }
 
 describe("independent plugin execution scope views", () => {
-  it("preserves Gateway identity through invocation exit and restores both views after rejection", async () => {
+  it.each(["ordinary", "consumer"] as const)(
+    "admits a %s callback in one independent frame and retains its closure fence",
+    async (kind) => {
+      const instance = createOwnedInstance();
+      const consumer = kind === "consumer" ? instance.retainConsumer() : undefined;
+      let retained: (() => void) | undefined;
+      let outer: ReturnType<typeof getPluginRuntimeGatewayRequestScope>;
+      let calls = 0;
+      const hook = (consumer ?? instance).wrap((callback: () => void) => {
+        outer = getPluginRuntimeGatewayRequestScope();
+        retained = callback;
+        callback();
+        expect(getPluginRuntimeGatewayRequestScope()).toBe(outer);
+      });
+      const frames = vi.spyOn(AsyncLocalStorage.prototype, "run");
+      try {
+        hook(() => {
+          calls++;
+          const scope = getPluginRuntimeGatewayRequestScope();
+          expect(scope?.pluginId).toBe(instance.pluginId);
+          expect(scope).not.toBe(outer);
+        });
+        // One plugin invocation plus one independently admitted caller callback.
+        expect(frames).toHaveBeenCalledTimes(2);
+        frames.mockRestore();
+        expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+        if (consumer) {
+          consumer.release();
+          expect(instance.run(() => "still open")).toBe("still open");
+        } else {
+          await instance.dispose();
+        }
+        expect(() => retained!()).toThrow(consumer ? "consumer is closed" : "reloaded or disabled");
+        expect(calls).toBe(1);
+      } finally {
+        frames.mockRestore();
+        consumer?.release();
+        await instance.dispose();
+      }
+    },
+  );
+
+  it("preserves Gateway and generation context through invocation exit and rejection", async () => {
     const instance = createOwnedInstance();
     const unowned = new PluginInstance("unowned-scope");
     const parent = { isWebchatConnect: () => false, revalidate: async () => {} };
+    const generation = {
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
+      pluginRegistry: createEmptyPluginRegistry(),
+    };
+    const cache = createPluginCache();
+    bindPluginMetadataSnapshotCache(generation.metadataSnapshot, cache);
+    const expectGeneration = () => {
+      expect(getCurrentPluginMetadataSnapshot()).toBe(generation.metadataSnapshot);
+      expect(getScopedPluginCache()).toBe(cache);
+      expect(getPluginRuntimeGenerationRegistry()).toBe(generation.pluginRegistry);
+    };
     try {
-      await withPluginRuntimeGatewayRequestScope(parent, () =>
-        instance.run(async () => {
-          const call = pluginInstanceInvocation.getStore();
-          const gateway = getPluginRuntimeGatewayRequestScope()!;
-          expect(call?.instance).toBe(instance);
-          expect(gateway.revalidate).toBe(parent.revalidate);
-          const explicit = { ...gateway, pluginSource: "explicit-child" };
-          await withPluginRuntimeGatewayRequestScope(explicit, async () => {
-            await Promise.resolve();
-            expect(getPluginRuntimeGatewayRequestScope()).toBe(explicit);
-            expect(pluginInstanceInvocation.getStore()).toBe(call);
-          });
-          expect(getPluginRuntimeGatewayRequestScope()).toBe(gateway);
-          const failure = new Error("cleanup fixture");
-          await expect(
-            pluginInstanceInvocation.exit(async () => {
-              expect(pluginInstanceInvocation.getStore()).toBeUndefined();
-              expect(getPluginRuntimeGatewayRequestScope()).toBe(gateway);
-              await unowned.run(async () => {
-                await Promise.resolve();
-                expect(pluginInstanceInvocation.getStore()?.instance).toBe(unowned);
+      await withPluginRuntimeGenerationScope(generation, () =>
+        withPluginRuntimeGatewayRequestScope(parent, () =>
+          instance.run(async () => {
+            const call = pluginInstanceInvocation.getStore();
+            const gateway = getPluginRuntimeGatewayRequestScope()!;
+            expect(call?.instance).toBe(instance);
+            expect(gateway.revalidate).toBe(parent.revalidate);
+            expectGeneration();
+            const explicit = { ...gateway, pluginSource: "explicit-child" };
+            await withPluginRuntimeGatewayRequestScope(explicit, async () => {
+              await Promise.resolve();
+              expect(getPluginRuntimeGatewayRequestScope()).toBe(explicit);
+              expect(pluginInstanceInvocation.getStore()).toBe(call);
+              expectGeneration();
+            });
+            expect(getPluginRuntimeGatewayRequestScope()).toBe(gateway);
+            const failure = new Error("cleanup fixture");
+            await expect(
+              pluginInstanceInvocation.exit(async () => {
+                expect(pluginInstanceInvocation.getStore()).toBeUndefined();
                 expect(getPluginRuntimeGatewayRequestScope()).toBe(gateway);
-              });
-              expect(pluginInstanceInvocation.getStore()).toBeUndefined();
-              expect(getPluginRuntimeGatewayRequestScope()).toBe(gateway);
-              throw failure;
-            }),
-          ).rejects.toBe(failure);
-          expect(pluginInstanceInvocation.getStore()).toBe(call);
-          expect(getPluginRuntimeGatewayRequestScope()).toBe(gateway);
-        }),
+                expectGeneration();
+                await unowned.run(async () => {
+                  await Promise.resolve();
+                  expect(pluginInstanceInvocation.getStore()?.instance).toBe(unowned);
+                  expect(getPluginRuntimeGatewayRequestScope()).toBe(gateway);
+                  expectGeneration();
+                });
+                expect(pluginInstanceInvocation.getStore()).toBeUndefined();
+                expect(getPluginRuntimeGatewayRequestScope()).toBe(gateway);
+                throw failure;
+              }),
+            ).rejects.toBe(failure);
+            expect(pluginInstanceInvocation.getStore()).toBe(call);
+            expect(getPluginRuntimeGatewayRequestScope()).toBe(gateway);
+            expectGeneration();
+          }),
+        ),
       );
       expect(pluginInstanceInvocation.getStore()).toBeUndefined();
       expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+      expect(getScopedPluginCache()).toBeUndefined();
+      expect(getPluginRuntimeGenerationRegistry()).toBeUndefined();
     } finally {
       await Promise.all([instance.dispose(), unowned.dispose()]);
     }

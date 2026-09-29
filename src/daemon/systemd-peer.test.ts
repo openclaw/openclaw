@@ -1,7 +1,15 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import { execFileUtf8 } from "./exec-file.js";
+import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
 import { openSystemdBroker, openSystemdPrivatePeer } from "./systemd-peer-native.js";
 import { admitSystemdServiceReadBinding } from "./systemd-peer.js";
+import { systemdManagerVersionProbe } from "./systemd-user-bus.test-support.js";
+
+vi.mock("./exec-file.js", () => ({ execFileUtf8: vi.fn() }));
 
 vi.mock("../shared/pid-alive.js", () => ({
   getProcessStartTime: () => 100,
@@ -17,6 +25,7 @@ vi.mock("./systemd-peer-native.js", () => ({
 const query = vi.fn<Awaited<ReturnType<typeof openSystemdBroker>>["query"]>();
 const closeBroker = vi.fn(async () => {});
 const closePeer = vi.fn(async () => {});
+const dirs = useAutoCleanupTempDirTracker(afterEach);
 const env = {
   HOME: "/home/test",
   XDG_RUNTIME_DIR: "/custom/runtime",
@@ -28,6 +37,16 @@ beforeEach(() => {
   mockProcessPlatform("linux");
   vi.spyOn(process, "geteuid").mockReturnValue(1000);
   vi.stubEnv("SUDO_USER", undefined);
+  vi.mocked(execFileUtf8).mockImplementation(async (command, args, options) => {
+    await systemdManagerVersionProbe(command, args);
+    const stale = options?.env?.DBUS_SESSION_BUS_ADDRESS === "unix:path=/tmp/dbus-stale";
+    return {
+      code: stale ? 1 : 0,
+      termination: "exit",
+      stdout: stale ? "" : 's "252.39"',
+      stderr: stale ? "No manager on this broker" : "",
+    };
+  });
   query.mockImplementation(async (args) => [
     [args[4] === "GetNameOwner" ? ":1.0" : args[4] === "GetConnectionUnixUser" ? 1000 : 1234],
   ]);
@@ -77,6 +96,36 @@ it("does not admit another route when the authored broker is unavailable", async
   expect(openSystemdPrivatePeer).not.toHaveBeenCalled();
 });
 
+it("authenticates through the runtime bus instead of a stale shell address", async () => {
+  const runtime = dirs.make("openclaw-broker-route-,");
+  await fs.writeFile(path.join(runtime, "bus"), "");
+  const binding = await admitSystemdServiceReadBinding(
+    { ...env, XDG_RUNTIME_DIR: runtime, DBUS_SESSION_BUS_ADDRESS: "unix:path=/tmp/dbus-stale" },
+    performance.now() + 1000,
+  );
+  expect(openSystemdBroker).toHaveBeenCalledExactlyOnceWith(
+    `unix:path=${path.posix.join(runtime, "bus").replaceAll(",", "%2C")}`,
+    expect.any(Number),
+  );
+  expect(binding).toBeDefined();
+  await binding?.close();
+});
+
+it("preserves a working custom broker when an unrelated runtime socket exists", async () => {
+  const runtime = dirs.make("openclaw-custom-broker-");
+  await fs.writeFile(path.join(runtime, "bus"), "");
+  const binding = await admitSystemdServiceReadBinding(
+    { ...env, XDG_RUNTIME_DIR: runtime },
+    performance.now() + 1000,
+  );
+  expect(openSystemdBroker).toHaveBeenCalledExactlyOnceWith(
+    env.DBUS_SESSION_BUS_ADDRESS,
+    expect.any(Number),
+  );
+  expect(binding).toBeDefined();
+  await binding?.close();
+});
+
 it("refuses broker loss between credential observations without reconnecting", async () => {
   query
     .mockResolvedValueOnce([[":1.0"]])
@@ -93,10 +142,51 @@ it("disposes the peer if the original manager changes before admission completes
     .mockResolvedValueOnce([[1000]])
     .mockResolvedValueOnce([[1234]])
     .mockResolvedValueOnce([[":1.1"]]);
-  expect(await admitSystemdServiceReadBinding(env, performance.now() + 1000)).toBeUndefined();
+  await expect(admitSystemdServiceReadBinding(env, performance.now() + 1000)).rejects.toMatchObject(
+    {
+      reason: "systemd-manager-changed",
+    },
+  );
   expect(closePeer).toHaveBeenCalledOnce();
   expect(closeBroker).toHaveBeenCalledOnce();
 });
+
+it.each(["account", "process", "native peer"])(
+  "preserves a definite %s refusal instead of admitting a fallback",
+  async (changed) => {
+    if (changed === "account") {
+      query.mockResolvedValueOnce([[":1.0"]]).mockResolvedValueOnce([[2001]]);
+    } else if (changed === "process") {
+      query
+        .mockResolvedValueOnce([[":1.0"]])
+        .mockResolvedValueOnce([[1000]])
+        .mockResolvedValueOnce([[1234]])
+        .mockResolvedValueOnce([[":1.0"]])
+        .mockResolvedValueOnce([[4321]]);
+    } else {
+      vi.mocked(openSystemdPrivatePeer).mockRejectedValueOnce(
+        new ServiceOwnershipRefusalError("systemd-manager-changed"),
+      );
+    }
+    await expect(
+      admitSystemdServiceReadBinding(env, performance.now() + 1000),
+    ).rejects.toMatchObject({
+      reason: "systemd-manager-changed",
+    });
+    expect(openSystemdBroker).toHaveBeenCalledOnce();
+    expect(closeBroker).toHaveBeenCalledOnce();
+  },
+);
+
+it.each([null, -1, 0xffffffff, 1000.5, "1000"])(
+  "keeps malformed manager UID %j diagnostic",
+  async (uid) => {
+    query.mockResolvedValueOnce([[":1.0"]]).mockResolvedValueOnce([[uid]]);
+    expect(await admitSystemdServiceReadBinding(env, performance.now() + 1000)).toBeUndefined();
+    expect(openSystemdPrivatePeer).not.toHaveBeenCalled();
+    expect(closeBroker).toHaveBeenCalledOnce();
+  },
+);
 
 it.each([
   "unixexec:path=/usr/bin/helper",
@@ -127,5 +217,31 @@ it("preserves a custom abstract local Unix route", async () => {
   );
   expect(binding).toBeDefined();
   expect(openSystemdBroker).toHaveBeenCalledWith(address, expect.any(Number));
+  await binding?.close();
+});
+
+it("admits the selected runtime bus after a stale nonlocal address", async () => {
+  const runtime = dirs.make("openclaw-nonlocal-fallback-");
+  await fs.writeFile(path.join(runtime, "bus"), "");
+  vi.mocked(execFileUtf8).mockResolvedValueOnce({
+    code: 1,
+    termination: "exit",
+    stdout: "",
+    stderr: "Failed to connect to bus: Connection refused",
+  });
+  const binding = await admitSystemdServiceReadBinding(
+    {
+      ...env,
+      XDG_RUNTIME_DIR: runtime,
+      DBUS_SESSION_BUS_ADDRESS: "tcp:host=example.invalid,port=1234",
+    },
+    performance.now() + 1000,
+  );
+  expect(binding).toBeDefined();
+  expect(openSystemdBroker).toHaveBeenCalledExactlyOnceWith(
+    `unix:path=${runtime}/bus`,
+    expect.any(Number),
+  );
+  expect(execFileUtf8).toHaveBeenCalledTimes(2);
   await binding?.close();
 });

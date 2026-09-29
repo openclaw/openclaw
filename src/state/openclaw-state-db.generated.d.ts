@@ -372,6 +372,9 @@ export interface CronJobs {
   declaration_key: string | null;
   description: string | null;
   enabled: number;
+  grant_definition_generation: number | null;
+  grant_definition_revision: string | null;
+  grant_definition_updated_at: number | null;
   job_id: string;
   job_json: string;
   name: string;
@@ -769,6 +772,7 @@ export interface GithubPublicationSessionLifecycles {
   lifecycle_revision: string | null;
   publication_kind: string;
   request_id: string;
+  requester_authority_json: string | null;
 }
 
 export interface GithubRepositoryPublicationRequests {
@@ -805,6 +809,7 @@ export interface GithubRepositoryPublicationRequests {
   repository: string | null;
   request_digest: string;
   request_id: string;
+  requester_authority_json: string | null;
   run_id: string | null;
   session_id: string;
   session_key: string;
@@ -816,6 +821,26 @@ export interface GithubRepositoryPublicationRequests {
   updated_at_ms: number;
   workspace_id: string;
   workspace_tree: string | null;
+}
+
+export interface LocalWorkspaceProjections {
+  agent_id: string;
+  base_commit: string;
+  baseline_json: string | null;
+  baseline_ref: string | null;
+  created_at_ms: number;
+  journal_json: string | null;
+  journal_pack: Uint8Array | null;
+  lifecycle_revision: string | null;
+  paused_runtimes_json: string | null;
+  pending_ref: string | null;
+  pending_target: string | null;
+  projection_path: string;
+  revision: Generated<number>;
+  session_id: string;
+  session_key: string;
+  source_paths_json: string;
+  worktree_id: string;
 }
 
 export interface MacosPortGuardianRecords {
@@ -934,6 +959,12 @@ export interface NativeHookRelayBridges {
   updated_at_ms: number;
 }
 
+export interface NodeWorkerLaunchCleanup {
+  cleanup_mode: string;
+  launch_id: string;
+  lineage_settled: number | null;
+}
+
 export interface NodeWorkerLaunchContainers {
   container_json: string | null;
   launch_id: string;
@@ -1011,6 +1042,11 @@ export interface OperatorApprovalExecutionIdentities {
   approval_id: string;
   source_context_id: string;
   source_execution_id: string;
+}
+
+export interface OperatorApprovalStandingGrantGenerations {
+  grant_id: string;
+  job_definition_generation: number;
 }
 
 export interface OperatorApprovalStandingGrants {
@@ -1245,6 +1281,7 @@ export interface SessionWatchCursors {
   target_session_key: string;
   updated_at: number;
   watcher_session_key: string;
+  watcher_store_path: string | null;
 }
 
 export interface SkillLibraryEntries {
@@ -1390,9 +1427,11 @@ export interface StateLeases {
 export interface SubagentRuns {
   child_session_key: string;
   controller_session_key: string | null;
+  controller_store_path: string | null;
   created_at: number;
   payload_json: Generated<string>;
   requester_session_key: string;
+  requester_store_path: string | null;
   run_id: string;
 }
 
@@ -1411,6 +1450,9 @@ export interface TaskRuns {
   detail_json: string | null;
   ended_at: number | null;
   error: string | null;
+  execution_owner_host: string | null;
+  execution_owner_pid: number | null;
+  execution_owner_start_identity: number | null;
   label: string | null;
   last_event_at: number | null;
   last_tool_name: string | null;
@@ -1460,6 +1502,16 @@ export interface UserPreferences {
   profile_id: string;
   updated_at_ms: number;
   value_json: string;
+}
+
+export interface UserProfileIdentities {
+  authorization_basis_json: string | null;
+  authorization_id: string | null;
+  canonical_login: string | null;
+  created_at: number;
+  profile_id: string;
+  provider: string;
+  subject: string;
 }
 
 export interface WebPushApprovalDeliveries {
@@ -1717,6 +1769,7 @@ export interface Worktrees {
   base_ref: string;
   branch: string;
   created_at: number;
+  gc_protection_json: string | null;
   id: string;
   last_active_at: number;
   owner_id: string | null;
@@ -1788,6 +1841,7 @@ export interface DB {
   github_publication_requests: GithubPublicationRequests;
   github_publication_session_lifecycles: GithubPublicationSessionLifecycles;
   github_repository_publication_requests: GithubRepositoryPublicationRequests;
+  local_workspace_projections: LocalWorkspaceProjections;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
   mcp_oauth_pending_authorizations: McpOauthPendingAuthorizations;
@@ -1798,12 +1852,14 @@ export interface DB {
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;
   native_hook_relay_bridges: NativeHookRelayBridges;
+  node_worker_launch_cleanup: NodeWorkerLaunchCleanup;
   node_worker_launch_containers: NodeWorkerLaunchContainers;
   node_worker_launches: NodeWorkerLaunches;
   node_worker_prepared_workspaces: NodeWorkerPreparedWorkspaces;
   node_worker_turns: NodeWorkerTurns;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   operator_approval_execution_identities: OperatorApprovalExecutionIdentities;
+  operator_approval_standing_grant_generations: OperatorApprovalStandingGrantGenerations;
   operator_approval_standing_grants: OperatorApprovalStandingGrants;
   operator_approvals: OperatorApprovals;
   outbound_media_provenance: OutboundMediaProvenance;
@@ -1839,6 +1895,7 @@ export interface DB {
   task_runs: TaskRuns;
   update_runs: UpdateRuns;
   user_preferences: UserPreferences;
+  user_profile_identities: UserProfileIdentities;
   web_push_approval_deliveries: WebPushApprovalDeliveries;
   web_push_subscriptions: WebPushSubscriptions;
   worker_environment_credentials: WorkerEnvironmentCredentials;

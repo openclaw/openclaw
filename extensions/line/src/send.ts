@@ -1,4 +1,3 @@
-// Line plugin module implements send behavior.
 import { randomUUID } from "node:crypto";
 import { HTTPFetchError, messagingApi } from "@line/bot-sdk";
 import lineBotSdkPackage from "@line/bot-sdk/package.json" with { type: "json" };
@@ -191,30 +190,6 @@ function resolveLineMessagingAccount(opts: LineClientOpts): {
   return { account, token };
 }
 
-function createLineMessagingClient(opts: LineClientOpts): {
-  account: ReturnType<typeof resolveLineAccount>;
-  client: messagingApi.MessagingApiClient;
-} {
-  const { account, token } = resolveLineMessagingAccount(opts);
-  return {
-    account,
-    client: new messagingApi.MessagingApiClient({ channelAccessToken: token }),
-  };
-}
-
-function createLinePushContext(
-  to: string,
-  opts: LineClientOpts,
-): {
-  account: ReturnType<typeof resolveLineAccount>;
-  token: string;
-  chatId: string;
-} {
-  const { account, token } = resolveLineMessagingAccount(opts);
-  const chatId = normalizeTarget(to);
-  return { account, token, chatId };
-}
-
 type LineProviderRequest = messagingApi.PushMessageRequest | messagingApi.ReplyMessageRequest;
 type LineProviderResponse = messagingApi.PushMessageResponse | messagingApi.ReplyMessageResponse;
 
@@ -256,8 +231,13 @@ async function postLineProviderMessages(
   retryKey?: string,
   authorize?: LineSendOpts["authorize"],
 ): Promise<LineProviderResponse> {
-  if (authorize && !(await authorize())) {
-    throw new Error("LINE send authorization denied");
+  const requestBody = JSON.stringify(request);
+  if (authorize) {
+    const authorized = authorize();
+    // A synchronous handoff check and the request must share one execution turn.
+    if (!(typeof authorized === "boolean" ? authorized : await authorized)) {
+      throw new Error("LINE send authorization denied");
+    }
   }
   const response = await fetchWithRuntimeDispatcherOrMockedGlobal(
     `https://api.line.me/v2/bot/message/${operation}`,
@@ -269,7 +249,7 @@ async function postLineProviderMessages(
         "User-Agent": `@line/bot-sdk/${lineBotSdkPackage.version}`,
         ...(retryKey ? { "X-Line-Retry-Key": retryKey } : {}),
       },
-      body: JSON.stringify(request),
+      body: requestBody,
     },
   );
 
@@ -405,7 +385,8 @@ async function pushLineMessages(
     throw new Error("Message must be non-empty for LINE sends");
   }
 
-  const { account, token, chatId } = createLinePushContext(to, opts);
+  const { account, token } = resolveLineMessagingAccount(opts);
+  const chatId = normalizeTarget(to);
   const normalizedMessages = applyLineQuoteToken(messages, opts.quoteToken).map(
     normalizeLineMessage,
   );
@@ -577,22 +558,6 @@ export function createFlexMessage(
   };
 }
 
-export async function pushImageMessage(
-  to: string,
-  originalContentUrl: string,
-  previewImageUrl: string | undefined,
-  opts: LinePushOpts,
-): Promise<LineSendResult> {
-  const message = await buildLineMediaMessage(
-    originalContentUrl,
-    { mediaKind: "image", previewImageUrl },
-    to,
-  );
-  return pushLineMessages(to, [message], opts, {
-    verboseMessage: (chatId) => `line: pushed image to ${chatId}`,
-  });
-}
-
 export async function pushLocationMessage(
   to: string,
   location: LineLocation,
@@ -646,7 +611,7 @@ export function createQuickReplyItems(labels: string[]): QuickReply {
   return { items };
 }
 
-export function createTextMessageWithQuickReplies(
+function createTextMessageWithQuickReplies(
   text: string,
   quickReplyLabels: string[],
 ): TextMessage & { quickReply: QuickReply } {
@@ -661,7 +626,8 @@ export async function showLoadingAnimation(
   chatId: string,
   opts: LineClientOpts & { loadingSeconds?: number },
 ): Promise<void> {
-  const { client } = createLineMessagingClient(opts);
+  const { token } = resolveLineMessagingAccount(opts);
+  const client = new messagingApi.MessagingApiClient({ channelAccessToken: token });
 
   try {
     await client.showLoadingAnimation({

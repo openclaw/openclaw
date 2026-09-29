@@ -1,8 +1,9 @@
 // Session checkout diff collection and session-start baseline filtering.
 import crypto from "node:crypto";
-import { constants as fsConstants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
+import { root as openFsRoot, type Root } from "@openclaw/fs-safe/root";
 import type {
   SessionDiffFile,
   SessionsDiffResult,
@@ -11,7 +12,12 @@ import { runGit, runGitBuffered } from "../agents/worktrees/git.js";
 import type { SessionDiffBaseline } from "../config/sessions/types.js";
 import { GIT_TIMEOUT_MS } from "../infra/git-exec.js";
 import type { GitCheckoutDiffInput, GitReadOperations } from "../infra/git-read-operations.js";
-import { parseNameStatusZ, parseNumstatZ, splitPatchByFile } from "./session-diff-parser.js";
+import {
+  parseDiffInventoryZ,
+  parseNameStatusZ,
+  parseNumstatZ,
+  splitPatchByFile,
+} from "./session-diff-parser.js";
 import {
   loadSessionDiffBranchMetadata,
   resolveSessionDiffBase,
@@ -56,12 +62,14 @@ async function gitOut(
 
 async function loadCheckoutRevision(
   cwd: string,
-): Promise<{ root: string; head?: string; branch?: string } | undefined> {
+): Promise<{ root: string; head?: string; branch?: string; objectFormat?: string } | undefined> {
   try {
-    // Git emits the root before verifying HEAD; exit 1 keeps an unborn checkout's root.
-    // Split only the final OID on success so embedded newlines in paths remain intact.
+    // Keep format/root options before --verify: old Git echoes unknown options here,
+    // and exit 1 still preserves an unborn checkout's root. Only remove the first
+    // format line and final successful OID so embedded root newlines remain intact.
     const result = await runGit(cwd, [
       "rev-parse",
+      "--show-object-format",
       "--show-toplevel",
       "--verify",
       "--quiet",
@@ -71,6 +79,7 @@ async function loadCheckoutRevision(
       return undefined;
     }
     const lines = result.stdout.replace(/\n$/, "").split("\n");
+    const objectFormat = lines.shift();
     const head = result.code === 0 ? lines.pop() : undefined;
     const root = lines.join("\n");
     if (!root) {
@@ -79,7 +88,12 @@ async function loadCheckoutRevision(
     const branchOut = head
       ? (await gitOut(root, ["rev-parse", "--abbrev-ref", "HEAD"]))?.trim()
       : undefined;
-    return { root, head, branch: branchOut && branchOut !== "HEAD" ? branchOut : undefined };
+    return {
+      root,
+      head,
+      branch: branchOut && branchOut !== "HEAD" ? branchOut : undefined,
+      objectFormat,
+    };
   } catch {
     return undefined;
   }
@@ -217,16 +231,24 @@ async function collectTrackedFiles(
   budget: PatchBudget,
 ): Promise<{ files: SessionDiffFile[]; truncated: boolean }> {
   const diffArgs = (options: string[]) => ["diff", "-M", ...options, ...revisions, "--"];
-  const nameStatus = await gitOut(root, diffArgs(["--name-status", "-z"]));
-  if (nameStatus === null) {
-    return { files: [], truncated: false };
+  const inventoryText = await gitOut(root, diffArgs(["--raw", "--numstat", "--no-color", "-z"]));
+  let inventory: ReturnType<typeof parseDiffInventoryZ>;
+  if (inventoryText !== null) {
+    inventory = parseDiffInventoryZ(inventoryText);
+  } else {
+    // Preserve filename-only results when Git cannot compute line counts.
+    const nameStatus = await gitOut(root, diffArgs(["--name-status", "-z"]));
+    const entries = parseNameStatusZ(nameStatus ?? "");
+    if (entries.length === 0) {
+      return { files: [], truncated: false };
+    }
+    const numstatText = (await gitOut(root, diffArgs(["--numstat", "-z"]))) ?? "";
+    inventory = { entries, numstat: parseNumstatZ(numstatText) };
   }
-  const entries = parseNameStatusZ(nameStatus);
+  const { entries, numstat } = inventory;
   if (entries.length === 0) {
     return { files: [], truncated: false };
   }
-  const numstatText = (await gitOut(root, diffArgs(["--numstat", "-z"]))) ?? "";
-  const numstat = parseNumstatZ(numstatText);
   const totalChangedLines = [...numstat.values()].reduce(
     (sum, entry) => sum + entry.additions + entry.deletions,
     0,
@@ -296,7 +318,7 @@ export async function collectCheckoutDiff(
   if (!checkout) {
     return empty("not_git");
   }
-  const { root, head, branch } = checkout;
+  const { root, head, branch, objectFormat } = checkout;
   // Canonical root for the hardlink/escape guard: show-toplevel can contain
   // symlinked path segments, and containment is compared against realpaths.
   const realRoot = await fs.realpath(root).catch(() => root);
@@ -304,7 +326,7 @@ export async function collectCheckoutDiff(
     ? { base: params.baseCommit, baseRef: params.baseCommit }
     : head
       ? await resolveSessionDiffBase({ branch, gitOut, head, root })
-      : await resolveSessionDiffEmptyTree(root);
+      : await resolveSessionDiffEmptyTree(root, objectFormat);
   const metadata =
     head && branchBase
       ? await loadSessionDiffBranchMetadata({ base: branchBase.base, gitOut, head, root })
@@ -350,7 +372,9 @@ export async function collectCheckoutDiff(
       return unknownCommit();
     }
     const parent = (await gitOut(root, ["rev-parse", "--verify", "--quiet", `${commit}^`]))?.trim();
-    const commitBase = parent ? { base: parent } : await resolveSessionDiffEmptyTree(root);
+    const commitBase = parent
+      ? { base: parent }
+      : await resolveSessionDiffEmptyTree(root, objectFormat);
     revisions = commitBase ? [commitBase.base, commit] : undefined;
   } else if (scope === "uncommitted") {
     revisions = head ? [head] : branchBase ? [branchBase.base] : undefined;
@@ -392,19 +416,11 @@ type BaselineCandidate = Pick<SessionDiffFile, "oldPath" | "path" | "status" | "
 
 type BaselineHashBudget = { remaining: number };
 
-function sameMutationFingerprint(left: BigIntStats, right: BigIntStats): boolean {
-  return (
-    left.ctimeNs === right.ctimeNs &&
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mode === right.mode &&
-    left.mtimeNs === right.mtimeNs &&
-    left.nlink === right.nlink &&
-    left.size === right.size
-  );
-}
-
-function hashBaselineDescriptor(candidate: BaselineCandidate, content: string): string {
+function hashBaselineDescriptor(
+  candidate: BaselineCandidate,
+  content: string,
+  bytes?: Buffer,
+): string {
   return crypto
     .createHash("sha256")
     .update(
@@ -416,13 +432,14 @@ function hashBaselineDescriptor(candidate: BaselineCandidate, content: string): 
         content,
       ].join("\0"),
     )
+    .update(bytes ?? "")
     .digest("hex");
 }
 
 async function fingerprintBaselineCandidate(params: {
   budget: BaselineHashBudget;
   candidate: BaselineCandidate;
-  realRoot: string;
+  directory: Root | undefined;
   root: string;
 }): Promise<string | undefined> {
   const { candidate } = params;
@@ -438,7 +455,7 @@ async function fingerprintBaselineCandidate(params: {
   ) {
     return undefined;
   }
-  const initial = await fs.lstat(absolutePath, { bigint: true }).catch(() => undefined);
+  const initial = await fs.lstat(absolutePath).catch(() => undefined);
   if (!initial) {
     return undefined;
   }
@@ -448,64 +465,23 @@ async function fingerprintBaselineCandidate(params: {
       ? undefined
       : hashBaselineDescriptor(candidate, `symlink:${target}`);
   }
-  if (
-    !initial.isFile() ||
-    initial.nlink !== 1n ||
-    initial.size > BigInt(MAX_BASELINE_FILE_BYTES) ||
-    initial.size > BigInt(params.budget.remaining)
-  ) {
-    return undefined;
-  }
-  const resolved = await fs.realpath(absolutePath).catch(() => undefined);
-  if (
-    !resolved ||
-    (resolved !== params.realRoot && !resolved.startsWith(params.realRoot + nodePath.sep))
-  ) {
-    return undefined;
-  }
-  const handle = await fs
-    .open(absolutePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+  const opened = await params.directory
+    ?.open(`.${nodePath.sep}${relativePath}`)
     .catch(() => undefined);
-  if (!handle) {
+  if (!opened) {
     return undefined;
   }
-  params.budget.remaining -= Number(initial.size);
-  try {
-    const opened = await handle.stat({ bigint: true });
-    if (!opened.isFile() || opened.nlink !== 1n || !sameMutationFingerprint(initial, opened)) {
-      return undefined;
-    }
-    const digest = crypto.createHash("sha256");
-    digest.update(
-      [
-        candidate.path,
-        candidate.oldPath ?? "",
-        candidate.status,
-        candidate.untracked === true ? "untracked" : "tracked",
-        opened.mode.toString(),
-        opened.size.toString(),
-      ].join("\0"),
-    );
-    const buffer = Buffer.allocUnsafe(64 * 1024);
-    let offset = 0;
-    while (offset < Number(opened.size)) {
-      const { bytesRead } = await handle.read(
-        buffer,
-        0,
-        Math.min(buffer.length, Number(opened.size) - offset),
-        offset,
-      );
-      if (bytesRead === 0) {
-        return undefined;
-      }
-      digest.update(buffer.subarray(0, bytesRead));
-      offset += bytesRead;
-    }
-    const final = await handle.stat({ bigint: true });
-    return sameMutationFingerprint(opened, final) ? digest.digest("hex") : undefined;
-  } finally {
-    await handle.close().catch(() => undefined);
+  await using file = opened;
+  const { mode, size } = file.stat;
+  if (size > MAX_BASELINE_FILE_BYTES || size > params.budget.remaining) {
+    return undefined;
   }
+  params.budget.remaining -= size;
+  const buffer = Buffer.allocUnsafe(size);
+  if ((await readFileWindowFully(file.handle, buffer, 0)) !== size) {
+    return undefined;
+  }
+  return hashBaselineDescriptor(candidate, `${mode}\0${size}`, buffer);
 }
 
 async function gitOutForBaseline(cwd: string, args: string[]): Promise<string | null> {
@@ -529,19 +505,25 @@ async function collectBaselineCandidates(params: {
   if (!checkout) {
     return undefined;
   }
-  const { root, head, branch } = checkout;
+  const { root, head, branch, objectFormat } = checkout;
   const baseInfo = head
     ? await resolveSessionDiffBase({ branch, gitOut, head, root })
-    : await resolveSessionDiffEmptyTree(root);
-  const trackedText = baseInfo
-    ? await gitOutForBaseline(root, ["diff", "-M", baseInfo.base, "--name-status", "-z"])
-    : "";
-  const untrackedText = await gitOutForBaseline(root, [
-    "ls-files",
-    "--others",
-    "--exclude-standard",
-    "-z",
+    : await resolveSessionDiffEmptyTree(root, objectFormat);
+  const [trackedResult, untrackedResult] = await Promise.allSettled([
+    baseInfo
+      ? gitOutForBaseline(root, ["diff", "-M", baseInfo.base, "--name-status", "-z"])
+      : Promise.resolve(""),
+    gitOutForBaseline(root, ["ls-files", "--others", "--exclude-standard", "-z"]),
   ]);
+  // Join both command lifetimes before returning a failure to the capture owner.
+  if (trackedResult.status === "rejected") {
+    throw trackedResult.reason;
+  }
+  if (untrackedResult.status === "rejected") {
+    throw untrackedResult.reason;
+  }
+  const trackedText = trackedResult.value;
+  const untrackedText = untrackedResult.value;
   if (trackedText === null || untrackedText === null) {
     return { root, candidates: [], truncated: true };
   }
@@ -566,14 +548,17 @@ async function fingerprintBaselineCandidates(params: {
   candidates: BaselineCandidate[];
   root: string;
 }): Promise<{ files: SessionDiffBaseline["files"]; truncated: boolean }> {
-  const realRoot = await fs.realpath(params.root).catch(() => params.root);
+  const directory = await openFsRoot(params.root, {
+    hardlinks: "reject",
+    symlinks: "follow-parents-within-root",
+  }).catch(() => undefined);
   const budget: BaselineHashBudget = { remaining: MAX_BASELINE_TOTAL_BYTES };
   const files: SessionDiffBaseline["files"] = [];
   for (const candidate of params.candidates) {
     const fingerprint = await fingerprintBaselineCandidate({
       budget,
       candidate,
-      realRoot,
+      directory,
       root: params.root,
     });
     if (fingerprint) {

@@ -14,6 +14,7 @@ import {
   loadCandidateAuthProfileStore,
   updateCandidateAuthProfileStore,
 } from "./candidate-stores.js";
+import { closeAuthProfileReadPool } from "./sqlite.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -90,6 +91,7 @@ describe("candidate auth profile stores", () => {
         refresh: "custom-refresh",
       });
     } finally {
+      closeAuthProfileReadPool({ kind: "root", rootPath: tempRoot });
       unregisterOpenClawAgentDatabase({
         agentId: "configured",
         path: configuredDatabasePath,

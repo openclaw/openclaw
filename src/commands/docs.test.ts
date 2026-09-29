@@ -250,3 +250,84 @@ describe("docsSearchCommand", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 });
+
+describe("docs search request ownership", () => {
+  it("settles a known HTTP error before a retained clone reaches EOF", async () => {
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let requestSignal: AbortSignal | null | undefined;
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        streamController = controller;
+        controller.enqueue(new TextEncoder().encode("held response"));
+      },
+    });
+    const response = new Response(source, { status: 503 });
+    const capture = response.clone();
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(async (_url, init) => {
+      requestSignal = init?.signal;
+      requestSignal?.addEventListener(
+        "abort",
+        () => {
+          streamController?.error(new DOMException("fixture aborted", "AbortError"));
+        },
+        { once: true },
+      );
+      return response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const pending = docsSearchCommand(["held-error"], createTestRuntime()).then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        pending,
+        new Promise<null>((resolve) => {
+          deadline = setTimeout(() => resolve(null), 500);
+        }),
+      ]);
+      expect(result).not.toBeNull();
+      if (!result || result.ok) {
+        throw new Error("expected the HTTP error before capture EOF");
+      }
+      expect(result.error).toMatchObject({ message: "Docs search failed: HTTP 503" });
+      expect(requestSignal?.aborted).toBe(true);
+    } finally {
+      if (deadline) {
+        clearTimeout(deadline);
+      }
+      streamController?.error(new DOMException("fixture cleanup", "AbortError"));
+      await capture.body?.cancel().catch(() => undefined);
+      await pending;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps the successful payload while releasing its request signal", async () => {
+    let requestSignal: AbortSignal | null | undefined;
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(async (_url, init) => {
+      requestSignal = init?.signal;
+      return new Response(
+        JSON.stringify({
+          results: [{ title: "Retained result", link: "https://docs.openclaw.ai/cli" }],
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const runtime = createTestRuntime();
+    try {
+      await docsSearchCommand(["kept"], runtime, { json: true });
+      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+        query: "kept",
+        results: [{ title: "Retained result", link: "https://docs.openclaw.ai/cli" }],
+      });
+      expect(requestSignal?.aborted).toBe(true);
+      expect(runtime.error).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

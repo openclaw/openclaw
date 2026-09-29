@@ -1,4 +1,3 @@
-// Bench Gateway Startup script supports OpenClaw repository automation.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -32,6 +31,7 @@ import {
   STALLED_CATALOG_MODEL_ID,
   STALLED_CATALOG_PROVIDER_ID,
   summarizeNumbers,
+  summarizeTraceStats,
   type InitialProbeResult,
   type SummaryStats,
   validateCliArgs as validateGatewayBenchCliArgs,
@@ -107,6 +107,9 @@ type CliOptions = {
   cpuProfDir?: string;
   entry: string;
   heapProfDir?: string;
+  installedCohort?: string;
+  installedChild: boolean;
+  installedCpuDiagnostic: boolean;
   json: boolean;
   output?: string;
   runs: number;
@@ -120,12 +123,19 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_ENTRY = "dist/entry.js";
 const INCIDENT_COMBINED_HEALTHZ_P95_MAX_MS = 30_000;
 const INCIDENT_COMBINED_READYZ_P95_MAX_MS = 60_000;
-const BOOLEAN_FLAGS = new Set(["--help", "-h", "--json"]);
+const BOOLEAN_FLAGS = new Set([
+  "--help",
+  "-h",
+  "--json",
+  "--installed-child",
+  "--installed-cpu-diagnostic",
+]);
 const VALUE_FLAGS = new Set([
   "--case",
   "--cpu-prof-dir",
   "--entry",
   "--heap-prof-dir",
+  "--installed-cohort",
   "--output",
   "--runs",
   "--timeout-ms",
@@ -159,6 +169,19 @@ function buildLargePluginModelAgentEntries() {
   );
 }
 
+function preparedRuntimeConfig(): Record<string, unknown> {
+  const model = `${STALLED_CATALOG_PROVIDER_ID}/${STALLED_CATALOG_MODEL_ID}`;
+  return {
+    ...BASE_CONFIG,
+    agents: {
+      defaults: {
+        model: { primary: model },
+        models: { [model]: { agentRuntime: { id: "openclaw" } } },
+      },
+    },
+  };
+}
+
 const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   {
     id: "default",
@@ -176,19 +199,7 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     name: "gateway, prepared runtime with CPU-stalling live catalog",
     env: { OPENCLAW_SKIP_CHANNELS: "1" },
     providerCatalogStallMs: 2_000,
-    config: {
-      ...BASE_CONFIG,
-      agents: {
-        defaults: {
-          model: { primary: `${STALLED_CATALOG_PROVIDER_ID}/${STALLED_CATALOG_MODEL_ID}` },
-          models: {
-            [`${STALLED_CATALOG_PROVIDER_ID}/${STALLED_CATALOG_MODEL_ID}`]: {
-              agentRuntime: { id: "openclaw" },
-            },
-          },
-        },
-      },
-    },
+    config: preparedRuntimeConfig(),
   },
   {
     id: "preparedRuntimeScaleOne",
@@ -198,19 +209,7 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     env: { OPENCLAW_SKIP_CHANNELS: "1" },
     providerStaticCatalogModelCount: 64,
     providerStaticCatalogStallMs: 100,
-    config: {
-      ...BASE_CONFIG,
-      agents: {
-        defaults: {
-          model: { primary: `${STALLED_CATALOG_PROVIDER_ID}/${STALLED_CATALOG_MODEL_ID}` },
-          models: {
-            [`${STALLED_CATALOG_PROVIDER_ID}/${STALLED_CATALOG_MODEL_ID}`]: {
-              agentRuntime: { id: "openclaw" },
-            },
-          },
-        },
-      },
-    },
+    config: preparedRuntimeConfig(),
   },
   {
     id: "preparedRuntimeScaleMany",
@@ -220,19 +219,7 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     env: { OPENCLAW_SKIP_CHANNELS: "1" },
     providerStaticCatalogModelCount: 64,
     providerStaticCatalogStallMs: 100,
-    config: {
-      ...BASE_CONFIG,
-      agents: {
-        defaults: {
-          model: { primary: `${STALLED_CATALOG_PROVIDER_ID}/${STALLED_CATALOG_MODEL_ID}` },
-          models: {
-            [`${STALLED_CATALOG_PROVIDER_ID}/${STALLED_CATALOG_MODEL_ID}`]: {
-              agentRuntime: { id: "openclaw" },
-            },
-          },
-        },
-      },
-    },
+    config: preparedRuntimeConfig(),
   },
   {
     id: "oneInternalHook",
@@ -359,11 +346,41 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
 
 function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
   validateCliArgs(argv);
+  const installedCohort = parseFlagValue(argv, "--installed-cohort");
+  const installedChild = hasFlag(argv, "--installed-child");
+  const installedCpuDiagnostic = hasFlag(argv, "--installed-cpu-diagnostic");
+  if (installedChild && !installedCohort) {
+    throw new CliArgumentError("--installed-child requires --installed-cohort");
+  }
+  if (installedCpuDiagnostic && !installedCohort) {
+    throw new CliArgumentError("--installed-cpu-diagnostic requires --installed-cohort");
+  }
+  if (installedCohort) {
+    for (const flag of [
+      "--case",
+      "--entry",
+      "--runs",
+      "--warmup",
+      "--cpu-prof-dir",
+      "--heap-prof-dir",
+      "--timeout-ms",
+    ]) {
+      if (argv.includes(flag)) {
+        throw new CliArgumentError(`${flag} is not supported with --installed-cohort`);
+      }
+    }
+    if (!parseFlagValue(argv, "--output")) {
+      throw new CliArgumentError("--installed-cohort requires --output");
+    }
+  }
   return {
-    cases: resolveCases(parseRepeatableFlag(argv, "--case")),
+    cases: installedCohort ? [] : resolveCases(parseRepeatableFlag(argv, "--case")),
     cpuProfDir: parseFlagValue(argv, "--cpu-prof-dir"),
     entry: resolveEntry(parseFlagValue(argv, "--entry")),
     heapProfDir: parseFlagValue(argv, "--heap-prof-dir"),
+    installedCohort,
+    installedChild,
+    installedCpuDiagnostic,
     json: hasFlag(argv, "--json"),
     output: resolveOutputPath(parseFlagValue(argv, "--output")),
     runs: parsePositiveInt(parseFlagValue(argv, "--runs"), DEFAULT_RUNS, "--runs"),
@@ -391,6 +408,8 @@ Options:
   --timeout-ms <ms>    Per-run timeout (default: ${DEFAULT_TIMEOUT_MS})
   --cpu-prof-dir <dir> Write one V8 CPU profile per run
   --heap-prof-dir <dir> Write one V8 heap profile per run
+  --installed-cohort <path> Measure one fresh installed startup and eight retained-state restarts
+  --installed-cpu-diagnostic Profile one established startup after an unprofiled fresh prime; requires --installed-cohort
   --output <path>      Write machine-readable JSON to a file
   --json               Emit machine-readable JSON
   --help, -h           Show this text
@@ -401,73 +420,25 @@ Case ids:
 }
 
 function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]): CaseResult {
-  const startupTraceKeys = new Set<string>();
-  for (const sample of samples) {
-    for (const key of Object.keys(sample.startupTrace)) {
-      startupTraceKeys.add(key);
-    }
-  }
-  const startupTrace: Record<string, SummaryStats> = {};
-  for (const key of [...startupTraceKeys].toSorted()) {
-    const stats = summarizeNumbers(
-      samples
-        .map((sample) => sample.startupTrace[key])
-        .filter((value): value is number => typeof value === "number"),
+  const startupTrace = summarizeTraceStats(samples, (sample) => sample.startupTrace);
+  const summarize = (read: (sample: GatewaySample) => number | null) =>
+    summarizeNumbers(
+      samples.map(read).filter((value): value is number => typeof value === "number"),
     );
-    if (stats) {
-      startupTrace[key] = stats;
-    }
-  }
   return {
     id: benchCase.id,
     name: benchCase.name,
     samples,
     summary: {
-      completionMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.completionMs)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      firstOutputMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.firstOutputMs)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      cpuCoreRatio: summarizeNumbers(
-        samples
-          .map((sample) => sample.cpuCoreRatio)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      cpuMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.cpuMs)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      gatewayReadyLogMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.gatewayReadyLogMs)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      healthzMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.healthz.ms)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      httpListenLogMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.httpListenLogMs)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      maxRssMb: summarizeNumbers(
-        samples
-          .map((sample) => sample.maxRssMb)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      readyzMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.readyz.ms)
-          .filter((value): value is number => typeof value === "number"),
-      ),
+      completionMs: summarize((sample) => sample.completionMs),
+      firstOutputMs: summarize((sample) => sample.firstOutputMs),
+      cpuCoreRatio: summarize((sample) => sample.cpuCoreRatio),
+      cpuMs: summarize((sample) => sample.cpuMs),
+      gatewayReadyLogMs: summarize((sample) => sample.gatewayReadyLogMs),
+      healthzMs: summarize((sample) => sample.healthz.ms),
+      httpListenLogMs: summarize((sample) => sample.httpListenLogMs),
+      maxRssMb: summarize((sample) => sample.maxRssMb),
+      readyzMs: summarize((sample) => sample.readyz.ms),
       startupTrace,
     },
   };
@@ -873,14 +844,9 @@ async function runGatewaySample(options: {
       sampleRss();
       rssTimer = setInterval(sampleRss, 100);
       rssTimer.unref?.();
-      const childExitPromise = new Promise<{ exitCode: number | null; signal: string | null }>(
-        (resolve) => {
-          startedChild.once("exit", (exitCode, signal) => {
-            childExited = true;
-            resolve({ exitCode, signal });
-          });
-        },
-      );
+      startedChild.once("exit", () => {
+        childExited = true;
+      });
 
       const onLine = (line: string, nowMs: number) => {
         const readyLogKind = classifyGatewayReadyLog(line);
@@ -945,8 +911,6 @@ async function runGatewaySample(options: {
       const exit = await stopChild(startedChild);
       sampleRss();
       child = undefined;
-      // stopChild is the bounded teardown wait; the raw exit promise may never settle.
-      void childExitPromise.catch(() => null);
       flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt, {
         flushPartial: true,
       });
@@ -1063,6 +1027,17 @@ async function main() {
   }
 
   const options = parseOptions(argv);
+  if (options.installedCohort) {
+    const { runInstalledGatewayBenchmark } = await import("./lib/gateway-bench-installed.ts");
+    process.exitCode = await runInstalledGatewayBenchmark({
+      inputPath: options.installedCohort,
+      outputPath: options.output!,
+      child: options.installedChild,
+      diagnostic: options.installedCpuDiagnostic,
+      argv,
+    });
+    return;
+  }
   if (options.cpuProfDir) {
     mkdirSync(options.cpuProfDir, { recursive: true });
   }

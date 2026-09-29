@@ -1,4 +1,4 @@
-import { safeFileURLToPath } from "../../../infra/local-file-access.js";
+import { safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import {
   isImageMediaFact,
   normalizeMediaFacts,
@@ -67,43 +67,21 @@ function mediaFactToImageRef(fact: MediaFact, factIndex: number): MediaImageRef 
   if (!isImageMediaFact(fact)) {
     return undefined;
   }
-  const mediaUri = [fact.url, fact.path].find((value) => value?.startsWith("media://inbound/"));
-  const identity = mediaUri ?? fact.path ?? fact.url;
-  if (!identity) {
-    return fact.hydrationSuppressed === true
-      ? {
-          aliases: [],
-          detect: false,
-          factIndex,
-          raw: "",
-          type: "path",
-          resolved: "",
-          hydrate: false,
-          ...(fact.workspaceDir ? { workspaceDir: fact.workspaceDir } : {}),
-        }
-      : undefined;
-  }
   const localRef = resolveMediaFactLocalRef(fact);
-  const hydrate = fact.hydrationSuppressed !== true;
-  if (!localRef || isOpenClawCliImageCachePath(localRef.resolved)) {
-    return {
-      aliases: [fact.path, fact.url].filter((value): value is string => Boolean(value)),
-      detect: false,
-      factIndex,
-      raw: identity,
-      type: "path",
-      resolved: identity,
-      hydrate: false,
-      ...(fact.workspaceDir ? { workspaceDir: fact.workspaceDir } : {}),
-    };
+  const identity = localRef?.raw ?? fact.path ?? fact.url;
+  if (!identity && fact.hydrationSuppressed !== true) {
+    return undefined;
   }
+  const usableRef =
+    localRef && !isOpenClawCliImageCachePath(localRef.resolved) ? localRef : undefined;
   return {
-    ...localRef,
-    aliases: [fact.path, fact.url, localRef.resolved].filter((value): value is string =>
+    ...(usableRef ?? { raw: identity ?? "", type: "path", resolved: identity ?? "" }),
+    aliases: [fact.path, fact.url, usableRef?.resolved].filter((value): value is string =>
       Boolean(value),
     ),
+    ...(!usableRef ? { detect: false } : {}),
     factIndex,
-    hydrate,
+    hydrate: Boolean(usableRef) && fact.hydrationSuppressed !== true,
     ...(fact.workspaceDir ? { workspaceDir: fact.workspaceDir } : {}),
   };
 }
@@ -120,5 +98,7 @@ export function collectMediaImageRefs(
 // facts that will actually hydrate an image count; described/remote-only facts
 // whose hydration is suppressed must not block text-only prompts.
 export function hasHydratableMediaImages(media?: readonly MediaFact[]): boolean {
-  return collectMediaImageRefs(media).some((ref) => ref?.hydrate === true);
+  return normalizeMediaFacts(media)
+    .map(mediaFactToImageRef)
+    .some((ref) => ref?.hydrate === true);
 }

@@ -7,8 +7,8 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { ensureWebPushSubscriptionBindingColumns } from "./push-web-store.kernel.js";
 import {
-  ensureWebPushSubscriptionBindingColumns,
   webPushSubscriptionFromRow,
   webPushSubscriptionToRow,
   webPushSubscriptionsEqual,
@@ -16,7 +16,7 @@ import {
   type VapidKeyPair,
   type WebPushDatabase,
   type WebPushSubscription,
-} from "./push-web-store.js";
+} from "./push-web-store.records.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
   claimLegacyMigrationSourceClaims,

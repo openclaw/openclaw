@@ -194,9 +194,79 @@ Related:
 - [Doctor](/gateway/doctor)
 - [Gateway CLI](/cli/gateway)
 
+## Native aborts on Linux (SIGABRT)
+
+`malloc(): invalid next->prev_inuse (unsorted)` followed by systemd
+`status=6/ABRT` indicates detected native heap corruption. It does not identify
+the corrupting code, and it is different from a kernel OOM kill. A JavaScript
+signal handler or stability bundle cannot reliably capture a native `abort()`.
+Arrange OS core capture **before** another failure.
+
+Startup logs include `native runtime` (PID, platform, architecture, Node, V8,
+libuv, OpenSSL and SQLite versions) and `worker startup state` (tracked Worker
+count, starts/retirements by script, and shared compute admission counters).
+These are startup facts, not a snapshot of the moment of failure. Retain them
+with the crash timestamp, journal, exact OpenClaw build and Node executable.
+
+For a systemd system service, substitute the installed unit name below. For a
+user service, use `systemctl --user` without `sudo`; its hard core limit cannot
+exceed the user manager's inherited limit.
+
+```bash
+sudo systemctl edit openclaw-gateway.service
+# Add this drop-in:
+# [Service]
+# LimitCORE=infinity
+
+sudo systemctl daemon-reload
+sudo systemctl show openclaw-gateway.service -p LimitCORE -p MainPID
+sysctl kernel.core_pattern
+```
+
+Apply the limit at the next operator-coordinated service restart. Then check
+`/proc/<gateway-pid>/limits` for the running process's `Max core file size`;
+changing the unit does not change an already running process's limit.
+
+Choose the capture backend indicated by `kernel.core_pattern`:
+
+- **systemd-coredump:** verify that the distribution's handler is installed and
+  enabled. Inspect `coredump.conf` storage and size limits; a multi-gigabyte
+  Gateway needs enough disk space and `ProcessSizeMax`/`ExternalSizeMax` to keep
+  its core. After a crash, use `sudo coredumpctl info <crashed-pid>` and
+  `sudo coredumpctl debug <crashed-pid>`.
+- **Apport:** inspect `/var/log/apport.log` and `/var/crash`. An existing report
+  for the same Node executable/user can suppress a later report. Archive that
+  exact stale `.crash` report outside `/var/crash` in a root-only directory,
+  then clear any matching stale sidecars according to the distribution's
+  Apport procedure. Do not erase unrelated reports. Verify Apport is enabled
+  and actually accepts the next report; `code=dumped` alone does not prove a
+  core was saved.
+- **Direct core files:** if the installed handler cannot retain this crash,
+  an administrator can temporarily replace it with a private absolute path:
+
+  ```bash
+  # Record the old value so it can be restored after the investigation.
+  sysctl kernel.core_pattern
+  sudo install -d -m 0700 -o <gateway-user> -g <gateway-group> /var/lib/openclaw-cores
+  sudo sysctl -w 'kernel.core_pattern=/var/lib/openclaw-cores/core.%e.%p.%t'
+  ```
+
+  `core_pattern` is host-wide: this replaces capture for other processes too.
+  Ensure the directory is writable by the Gateway service user and accessible
+  inside any service filesystem sandbox. Restore the previous pattern after
+  capture. This temporary `sysctl` setting does not survive reboot.
+
+Validate the chosen backend with a disposable process under equivalent service
+limits and identity, never by aborting the live Gateway. Open a captured core
+with the **matching** Node binary and debug symbols (`gdb /path/to/node
+/path/to/core` for direct files), then run `thread apply all bt`. Preserve all
+thread stacks: the aborting thread can be detecting damage caused elsewhere.
+Core files contain process memory, including credentials and message content;
+keep them private and share only reviewed, redacted evidence.
+
 ## Gateway exits during high memory use
 
-Use when the Gateway disappears under load, the supervisor reports an OOM-style restart, or logs mention `critical memory pressure bundle written`.
+Use when the Gateway disappears under load, the supervisor reports an OOM-style restart, or logs show `memory pressure: level=critical`.
 
 ```bash
 openclaw gateway status --deep
@@ -207,22 +277,20 @@ openclaw gateway diagnostics export
 
 Look for:
 
-- `Reason: diagnostic.memory.pressure.critical` in the latest stability bundle.
-- `Memory pressure:` with `critical/rss_threshold`, `critical/heap_threshold`, or `critical/rss_growth`.
-- `V8 heap:` values near the heap limit.
-- `Largest session files:` entries such as `agents/<agent>/sessions/<session>.jsonl` or `sessions/<session>.jsonl`.
-- Linux cgroup memory counters when the gateway runs inside a container or memory-limited service.
+- `memory pressure: level=critical` with `reason=rss_threshold`, `heap_threshold`, or `rss_growth`.
+- RSS, heap, threshold, and growth values in that log line.
+- Existing stability bundles from fatal exits, shutdown timeouts, or restart startup failures, when available.
 
 Common signatures:
 
-- `critical memory pressure bundle written` appears shortly before restart → OpenClaw captured a pre-OOM stability bundle. Inspect it with `openclaw gateway stability --bundle latest`.
 - `memory pressure: level=critical` appears in gateway logs → OpenClaw detected critical memory pressure and recorded the available in-process memory facts.
-- `Largest session files:` points at a very large redacted transcript path → reduce retained session history, inspect session growth, or move old transcripts out of the active store before restarting.
-- `V8 heap:` used bytes are close to the heap limit → lower prompt/session pressure or reduce concurrent work first. For a managed service, compare the configured controls and install-time recommendation in `Gateway heap:` from `openclaw gateway status` with the runtime measurement. Reinstalling preserves existing stored heap settings; it does not automatically replace an older value with the current recommendation.
-- `Memory pressure: critical/rss_growth` → memory grew quickly inside one sampling window. Check the latest logs for a large import, runaway tool output, repeated retries, or a batch of queued agent work.
-- Critical memory pressure appears in logs but no bundle exists → capture `openclaw gateway diagnostics export` after the event for the available operational evidence.
+- `reason=heap_threshold` → lower prompt/session pressure or reduce concurrent work first. For a managed service, compare the configured controls and install-time recommendation in `Gateway heap:` from `openclaw gateway status` with the runtime measurement. Reinstalling preserves existing stored heap settings; it does not automatically replace an older value with the current recommendation.
+- `reason=rss_growth` → the RSS floor kept rising across consecutive sampling windows. Check the latest logs for a large import, runaway tool output, repeated retries, or a batch of queued agent work.
+- Critical memory pressure appears in logs but no bundle exists → capture `openclaw gateway diagnostics export` after the event for the available operational evidence. Pressure events do not automatically write bundles.
 
-The stability bundle is payload-free. It includes operational memory evidence and redacted relative file paths, not message text, webhook bodies, credentials, tokens, cookies, or raw session ids. Attach the diagnostics export to bug reports instead of copying raw logs.
+On Node, an administrator can also [sample allocations](/gateway/diagnostics#sampling-heap-profile) with `openclaw gateway call diagnostics.heapProfile --timeout 30000`. This captures current allocation activity, not a past spike or all native memory. Older bundles remain readable with `openclaw gateway stability --bundle latest`.
+
+Review the sanitized diagnostics export before attaching it to a bug report; avoid copying raw logs.
 
 Node's automatic heap ceiling can be roughly 4 GiB on a large host. That is a default sizing decision, not a general 64-bit address-space ceiling. `--max-old-space-size` controls V8 old space; the measured total V8 heap ceiling also includes other heap spaces. RSS additionally includes native allocations, buffers, and other process memory. A higher heap ceiling does not preallocate the ceiling, but it still needs enough real capacity and headroom under sustained load.
 
@@ -235,6 +303,10 @@ NODE_OPTIONS="--max-old-space-size=16384" openclaw gateway run
 For a custom supervisor or Docker runtime command, place `--max-old-space-size=16384` immediately after `node`, before the OpenClaw entry script, or set `NODE_OPTIONS` in that process or container's launch environment. Docker image build-time heap options do not configure the runtime Gateway. An OpenClaw config or dotenv value loaded after Node starts cannot resize its heap. `NODE_OPTIONS` can also reach spawned Node children, so prefer a direct Node argument when only the Gateway should receive the budget.
 
 For managed Node services, use the [managed Gateway heap policy](/cli/gateway#manage-the-gateway-service) and inspect both managed launch arguments and operator-owned environment overrides before changing them. Native argv overrides the same option in `NODE_OPTIONS`; percentage old-space sizing takes precedence over absolute old-space sizing. Regeneration preserves stored argv but does not add an automatic heap flag when an operator override owns `NODE_OPTIONS`. Installer-shell `NODE_OPTIONS` does not become a service override. Runtime pressure diagnostics use the effective V8 heap ceiling and physical/reported constraint headroom; an oversized explicit heap setting does not raise the RSS alert threshold above physical capacity. Pressure warnings are diagnostic evidence, not heap limits or automatic restart triggers.
+
+RSS growth detection compares minimum RSS values from completed five-minute windows and requires two consecutive increases. Growth accumulates while these floors keep rising; a flat or falling floor, a sampling gap over ten minutes, or a clock rollback resets the trend. This filters ordinary GC peaks while detecting smaller sustained increases. The logged `rssGrowth` and `windowMs` describe the accumulated floor increase and elapsed time between those minima, which can exceed ten minutes.
+
+On Node, growth warnings and critical events use 4% and 8% of the smaller of the measured V8 heap ceiling and available process capacity, with minimum thresholds of 512 MiB and 1 GiB. Process capacity uses the reported constraint bounded by physical RAM, or physical RAM when no constraint is reported. With a 16 GiB heap and sufficient RAM, those thresholds are about 655 MiB and 1.28 GiB. Unknown heap limits and Bun retain the 512 MiB/1 GiB growth thresholds; Bun's existing absolute memory caps are unchanged. Absolute RSS and heap pressure checks still run on every sample.
 
 Related:
 

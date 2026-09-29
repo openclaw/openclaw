@@ -38,6 +38,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -176,10 +177,10 @@ internal fun VoiceNoteRecordingControls(
         onClick = onCancel,
         modifier = Modifier.size(ClawTheme.spacing.touchTarget),
         shape = CircleShape,
-        color = ClawTheme.colors.canvas,
+        color = Color.Transparent,
         contentColor = ClawTheme.colors.text,
       ) {
-        Box(contentAlignment = Alignment.Center) {
+        Box(modifier = Modifier.padding(8.dp).background(ClawTheme.colors.canvas, CircleShape), contentAlignment = Alignment.Center) {
           Icon(imageVector = Icons.Default.Close, contentDescription = nativeString("Cancel voice note"), modifier = Modifier.size(17.dp))
         }
       }
@@ -187,10 +188,10 @@ internal fun VoiceNoteRecordingControls(
         onClick = onDone,
         modifier = Modifier.size(ClawTheme.spacing.touchTarget),
         shape = CircleShape,
-        color = ClawTheme.colors.primary,
+        color = Color.Transparent,
         contentColor = ClawTheme.colors.primaryText,
       ) {
-        Box(contentAlignment = Alignment.Center) {
+        Box(modifier = Modifier.padding(8.dp).background(ClawTheme.colors.primary, CircleShape), contentAlignment = Alignment.Center) {
           Icon(imageVector = Icons.Default.Check, contentDescription = nativeString("Finish voice note"), modifier = Modifier.size(17.dp))
         }
       }

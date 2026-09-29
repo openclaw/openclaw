@@ -17,8 +17,7 @@ export class ChannelWizardHost {
   textValue = "";
   secretVisible = false;
   blockedByDirtyConfig = false;
-  private multiselectStepId: string | null = null;
-  private textStepId: string | null = null;
+  private stepId: string | null = null;
   private lastPhase = "idle";
   private readonly controller: ChannelWizardController;
 
@@ -94,15 +93,12 @@ export class ChannelWizardHost {
     // Pending input state survives unrelated page re-renders but resets per step.
     const wizard = this.controller.state;
     const stepId = wizard.phase === "step" ? wizard.step.id : null;
-    if (stepId !== this.multiselectStepId) {
-      this.multiselectStepId = stepId;
+    if (stepId !== this.stepId) {
+      this.stepId = stepId;
       this.multiselect =
         wizard.phase === "step" && Array.isArray(wizard.step.initialValue)
           ? [...wizard.step.initialValue]
           : [];
-    }
-    if (stepId !== this.textStepId) {
-      this.textStepId = stepId;
       this.textValue =
         wizard.phase === "step" &&
         wizard.step.type === "text" &&
@@ -126,7 +122,7 @@ export class ChannelWizardHost {
       return;
     }
     // The wizard rewrote openclaw.json on the gateway; resync the local draft.
-    await context.runtimeConfig.refresh({ discardPendingChanges: true });
+    await context.runtimeConfig.discardDraft({ reloadOnly: true });
     await context.channels.refresh(true);
     const whatsapp = accounts.find((entry) => entry.channel === "whatsapp");
     if (whatsapp) {

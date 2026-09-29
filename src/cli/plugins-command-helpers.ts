@@ -7,8 +7,6 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 export { quietPluginJsonLogger } from "./plugins-json-logger.js";
 
-type HookInternalEntryLike = Record<string, unknown> & { enabled?: boolean };
-
 export function createPluginInstallLogger(runtime: RuntimeEnv = defaultRuntime): {
   info: (msg: string) => void;
   warn: (msg: string) => void;
@@ -33,7 +31,7 @@ export function enableInternalHookEntries(
   config: OpenClawConfig,
   hookNames: string[],
 ): OpenClawConfig {
-  const entries = { ...config.hooks?.internal?.entries } as Record<string, HookInternalEntryLike>;
+  const entries = { ...config.hooks?.internal?.entries };
 
   for (const hookName of hookNames) {
     entries[hookName] = {
@@ -89,13 +87,4 @@ function formatPluginInstallAttemptError(error: string): string {
 function isMissingGitForNpmDependencyError(error: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(error);
   return /\bspawn\s+git\b/u.test(normalized) && /\benoent\b/u.test(normalized);
-}
-
-export function logSlotWarnings(warnings: string[], runtime: RuntimeEnv = defaultRuntime) {
-  if (warnings.length === 0) {
-    return;
-  }
-  for (const warning of warnings) {
-    runtime.log(theme.warn(warning));
-  }
 }

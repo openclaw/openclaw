@@ -129,6 +129,7 @@ vi.mock("./compaction-runtime-preparation.js", () => ({
     modelId,
   }),
   prepareCompactionHarnessAuth: vi.fn(async () => ({
+    ok: true,
     runtimeAuthProfileStore: {},
     runtimeAuthPreparation: {
       plan: { selectedAuthMode: "api-key" },
@@ -158,6 +159,7 @@ vi.mock("../provider-runtime-auth-protection.js", () => ({
 
 vi.mock("../provider-secret-egress.js", () => ({
   unwrapSecretSentinelsForProviderEgress: (value: unknown) => value,
+  unwrapModelHeaderSentinelsForProviderEgress: (model: unknown) => model,
 }));
 
 vi.mock("../provider-request-config.js", () => ({
@@ -186,6 +188,7 @@ function createPreparedModelRuntime(config: Record<string, unknown>) {
     workspaceDir: "/tmp/openclaw-model-resolution",
     pluginRegistry: {},
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores: () => ({ authStorage, modelRegistry: emptyModelRegistry }),
   };
@@ -302,6 +305,7 @@ describe("embedded model resolution consistency", () => {
     const preparedModelRuntime = createPreparedModelRuntime(config);
 
     const chat = await resolveEmbeddedRunModelSetup({
+      assertCurrent: () => {},
       runParams: {
         config,
         prompt: "hello",

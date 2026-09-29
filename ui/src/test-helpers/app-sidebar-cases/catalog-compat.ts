@@ -1,13 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import {
-  catalogPage,
-  createGatewayHarness,
-  createSessions,
-  deferred,
-  mountSidebar,
-} from "../app-sidebar.ts";
+import { catalogPage, createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar session catalog pagination", () => {
@@ -40,6 +35,7 @@ describe("AppSidebar session catalog pagination", () => {
         agentId: "main",
         limitPerHost: 40,
         progressId: expect.any(String),
+        allowPartialResults: true,
       });
 
       const selection = context.agentSelection.state as {
@@ -56,6 +52,7 @@ describe("AppSidebar session catalog pagination", () => {
         agentId: "research",
         limitPerHost: 40,
         progressId: expect.any(String),
+        allowPartialResults: true,
       });
     } finally {
       vi.useRealTimers();
@@ -210,7 +207,7 @@ describe("AppSidebar session catalog pagination", () => {
       expect(claudeSection?.textContent).toContain("Remote session");
       expect(
         codexSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("title"),
-      ).toContain("Settings > Plugins");
+      ).toContain("Settings > Appearance > Session sources");
       expect(codexSection?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
       expect(claudeSection?.querySelector('[data-session-catalog-error="claude"]')).not.toBeNull();
     } finally {

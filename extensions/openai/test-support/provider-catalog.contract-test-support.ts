@@ -10,7 +10,7 @@ import {
   importProviderRuntimeCatalogModule,
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-test-contracts";
-import { beforeEach, describe, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const PROVIDER_CATALOG_CONTRACT_TIMEOUT_MS = 300_000;
 
@@ -122,6 +122,50 @@ export function describeOpenAIProviderCatalogContract() {
           augmentModelCatalogWithProviderPlugins,
           expectedOpenaiPluginCodexCatalogEntriesWithGpt55,
         );
+      });
+
+      it("stops catalog template searches after the preferred rows match", async () => {
+        const { openaiProvider } = await contractDepsPromise;
+        const preferredIds = ["gpt-5.4-pro", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"];
+        const cost = { input: 2, output: 8, cacheRead: 1, cacheWrite: 0 };
+        let providerReads = 0;
+        const entries = Array.from({ length: 1_000 }, (_, index) => ({
+          get provider() {
+            providerReads += 1;
+            return "openai";
+          },
+          id: preferredIds[index] ?? `unrelated-${index}`,
+          name: `Catalog row ${index}`,
+          api: "openai-responses" as const,
+          baseUrl: "https://api.example/v1",
+          cost,
+        }));
+        const before = structuredClone(entries);
+        providerReads = 0;
+
+        const result = await openaiProvider.augmentModelCatalog?.({ env: {}, entries });
+        const observedReads = providerReads;
+        expect(result).toEqual(
+          ["gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini", "gpt-5.4-nano"].map(
+            (id, index) =>
+              Object.assign(
+                {
+                  provider: "openai",
+                  id,
+                  name: id,
+                  api: "openai-responses",
+                  baseUrl: "https://api.example/v1",
+                  cost,
+                  reasoning: true,
+                  input: ["text", "image"],
+                  contextWindow: index < 3 ? 1_050_000 : 400_000,
+                },
+                index === 0 ? { contextTokens: 272_000 } : {},
+              ),
+          ),
+        );
+        expect(entries).toEqual(before);
+        expect(observedReads).toBeLessThan(32);
       });
     },
   );

@@ -1,4 +1,3 @@
-// Ollama plugin entrypoint registers its OpenClaw integration.
 import { collectConfiguredModelRefValues } from "@openclaw/model-catalog-core/configured-model-refs";
 import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -50,6 +49,7 @@ import {
   OLLAMA_DEFAULT_API_KEY,
   OLLAMA_PROVIDER_ID,
   isLocalOllamaBaseUrl,
+  readOllamaStringValue,
   resolveOllamaDiscoveryResult,
   resolveOllamaRuntimeBaseUrl,
   shouldUseSyntheticOllamaAuth,
@@ -377,26 +377,11 @@ function needsOllamaCatalogMetadata(entry: ProviderAugmentModelCatalogContext["e
   );
 }
 
-function readConfiguredOllamaApiKey(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
-  }
-  if (value && typeof value === "object" && "value" in value) {
-    const resolved = (value as { value?: unknown }).value;
-    if (typeof resolved === "string") {
-      const trimmed = resolved.trim();
-      return trimmed || undefined;
-    }
-  }
-  return undefined;
-}
-
 function readConcreteOllamaApiKey(value: unknown): string | undefined {
   if (coerceSecretRef(value)) {
     return undefined;
   }
-  const apiKey = readConfiguredOllamaApiKey(value);
+  const apiKey = readOllamaStringValue(value);
   return apiKey && !isNonSecretApiKeyMarker(apiKey) ? apiKey : undefined;
 }
 
@@ -422,7 +407,7 @@ async function resolveAppGuidedOllamaApiKey(
   if (resolved.unresolvedRefReason) {
     return undefined;
   }
-  const value = readConfiguredOllamaApiKey(resolved.value);
+  const value = readOllamaStringValue(resolved.value);
   return value === "OLLAMA_API_KEY"
     ? readConcreteOllamaApiKey(ctx.env.OLLAMA_API_KEY)
     : readConcreteOllamaApiKey(value);
@@ -454,7 +439,7 @@ function readUsableOllamaShowApiKey(params: {
   if (explicitApiKey) {
     return explicitApiKey;
   }
-  const resolvedApiKey = readConfiguredOllamaApiKey(params.resolved?.apiKey);
+  const resolvedApiKey = readOllamaStringValue(params.resolved?.apiKey);
   const canUseResolvedDiscovery =
     params.allowAmbientEnvFallback || !isAmbientOllamaApiKeyMarker(resolvedApiKey);
   const discoveryApiKey = readConcreteOllamaApiKey(params.resolved?.discoveryApiKey);
@@ -504,12 +489,11 @@ function collectConfiguredOllamaModelIds(params: {
     const trimmedName = typeof name === "string" ? name.trim() : "";
     const existing = models.get(trimmed);
     if (existing) {
-      if ((!existing.api && api) || (!existing.name && trimmedName)) {
-        models.set(trimmed, {
-          ...existing,
-          ...(api && !existing.api ? { api } : {}),
-          ...(trimmedName && !existing.name ? { name: trimmedName } : {}),
-        });
+      if (!existing.api && api) {
+        existing.api = api;
+      }
+      if (!existing.name && trimmedName) {
+        existing.name = trimmedName;
       }
       return;
     }
@@ -1024,13 +1008,13 @@ export default definePluginEntry({
             config: ctx.config ?? {},
             env: process.env,
             value: providerConfig.apiKey,
-            path: `models.providers.${ctx.provider}.apiKey`,
+            path: `models.providers[${JSON.stringify(ctx.provider)}].apiKey`,
             unresolvedReasonStyle: "detailed",
           });
           if (resolved.unresolvedRefReason) {
             return undefined;
           }
-          const resolvedApiKey = readConfiguredOllamaApiKey(resolved.value);
+          const resolvedApiKey = readOllamaStringValue(resolved.value);
           const configuredSecretRef = coerceSecretRef(providerConfig.apiKey);
           discoveryApiKey = configuredSecretRef
             ? resolvedApiKey

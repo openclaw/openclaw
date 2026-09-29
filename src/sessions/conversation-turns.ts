@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type ConversationTurnReply = {
@@ -39,6 +40,7 @@ type PendingConversationTurnHandle = {
 type ConversationTurnReplyClaim = {
   turnId: string;
   sessionId: string;
+  assertCurrent: () => void;
   complete: (params?: { transcriptArtifactId?: string; transcriptMessageId?: string }) => void;
   release: () => void;
 };
@@ -101,22 +103,10 @@ export function registerPendingConversationTurn(params: {
   const createdAt = Date.now();
   const timeoutMs = Math.max(0, params.timeoutMs);
   let settled = false;
-  let resolvePromise: (reply: ConversationTurnReply | undefined) => void = () => undefined;
-  const promise = new Promise<ConversationTurnReply | undefined>((resolve) => {
-    resolvePromise = resolve;
-  });
-  let resolveCorrelationReady: () => void = () => undefined;
-  const correlationReady = new Promise<void>((resolve) => {
-    resolveCorrelationReady = resolve;
-  });
-  let correlationReadySettled = false;
-  const markCorrelationReady = () => {
-    if (correlationReadySettled) {
-      return;
-    }
-    correlationReadySettled = true;
-    resolveCorrelationReady();
-  };
+  const { promise, resolve: resolvePromise } = createDeferredCore<
+    ConversationTurnReply | undefined
+  >();
+  const { promise: correlationReady, resolve: markCorrelationReady } = createDeferredCore();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const stopTimeout = () => {
     if (timer) {
@@ -258,8 +248,10 @@ export async function claimPendingConversationTurnReply(params: {
   if (pendingTurns.get(pending.key) !== pending) {
     return undefined;
   }
-  // Keep the timer armed until complete(). The capture owner performs only a
-  // synchronous guarded commit here; any accidental await yields so timeout wins.
+  // Admission may wait while the timer stays armed. Released handles cannot
+  // regain authority when another reply claims the same pending turn.
+  let active = true;
+  const isCurrent = () => active && pendingTurns.get(pending.key) === pending && pending.claimed;
   const reply: ConversationTurnReply = {
     conversationRef: params.conversationRef,
     messageId: params.messageId,
@@ -271,7 +263,16 @@ export async function claimPendingConversationTurnReply(params: {
   return {
     turnId: pending.id,
     sessionId: pending.sessionId,
+    assertCurrent: () => {
+      if (!isCurrent()) {
+        throw new Error("conversation turn reply claim is no longer active");
+      }
+    },
     complete: (completion = {}) => {
+      if (!isCurrent()) {
+        return;
+      }
+      active = false;
       pending.settle({
         ...reply,
         ...(completion.transcriptArtifactId
@@ -283,11 +284,12 @@ export async function claimPendingConversationTurnReply(params: {
       });
     },
     release: () => {
-      // Persistence can fail after a transport reply was claimed. Keep the
-      // waiter alive so a transport retry can claim it before the deadline.
-      if (pendingTurns.get(pending.key) === pending) {
-        pending.claimed = false;
+      if (!isCurrent()) {
+        return;
       }
+      active = false;
+      // Persistence failure permits retry, but an old release cannot clear its claim.
+      pending.claimed = false;
     },
   };
 }

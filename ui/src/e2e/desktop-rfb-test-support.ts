@@ -43,6 +43,9 @@ export async function installDesktopClientFake(panel: Locator): Promise<void> {
         element.dataset.usedCredentials = options.credentials?.password ? "true" : "false";
         return {
           disableInput() {},
+          setPresented() {
+            return true;
+          },
           sendBackspace() {},
           sendKeyboardEvent() {},
           sendText() {},
@@ -204,15 +207,20 @@ export async function installScriptedRfbServer(
     });
     window.WebSocket = RoutedSocket as unknown as typeof WebSocket;
     (
-      window as typeof window & { triggerDesktopRfbDisconnect?: (reason: string) => void }
-    ).triggerDesktopRfbDisconnect = (reason) => {
+      window as typeof window & {
+        triggerDesktopRfbDisconnect?: (reason: string, code?: number) => void;
+      }
+    ).triggerDesktopRfbDisconnect = (reason, code = 1006) => {
       for (const socket of sockets) {
-        socket.close(1006, reason);
+        socket.close(code, reason);
       }
     };
     (window as typeof window & { desktopRfbEvents?: () => string[] }).desktopRfbEvents = () => [
       ...events,
     ];
+    (
+      window as typeof window & { desktopRfbConnectionCount?: () => number }
+    ).desktopRfbConnectionCount = () => nextId;
     (
       window as typeof window & {
         desktopRfbKeyEvents?: () => Array<{ down: boolean; keysym: number }>;
@@ -236,6 +244,13 @@ export async function installScriptedRfbServer(
     };
   }, options);
   return {
+    connectionCount: () =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & { desktopRfbConnectionCount?: () => number }
+          ).desktopRfbConnectionCount?.() ?? 0,
+      ),
     keyEvents: () =>
       page.evaluate(
         () =>
@@ -253,13 +268,15 @@ export async function installScriptedRfbServer(
           ).desktopRfbSend?.(messages),
         chunks,
       ),
-    disconnect: (reason: string) =>
+    disconnect: (reason: string, code = 1006) =>
       page.evaluate(
-        (message) =>
+        ({ message, closeCode }) =>
           (
-            window as typeof window & { triggerDesktopRfbDisconnect?: (reason: string) => void }
-          ).triggerDesktopRfbDisconnect?.(message),
-        reason,
+            window as typeof window & {
+              triggerDesktopRfbDisconnect?: (reason: string, code?: number) => void;
+            }
+          ).triggerDesktopRfbDisconnect?.(message, closeCode),
+        { message: reason, closeCode: code },
       ),
     events: () =>
       page.evaluate(

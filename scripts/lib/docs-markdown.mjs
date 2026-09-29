@@ -420,24 +420,53 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
   return text.replace(placeholder, (_, index) => saved[Number(index)], false);
 }
 
-// mint@4.2.808/common@1.0.1096 published these suffixes before counting.
-// Keep apostrophes as separators so slugify 2.2.1 cannot join them early
-// and change existing heading or component links.
-function mintBaseSlug(title, options) {
-  return slugify(title, { ...options, customReplacements: [["'", "-"]] }).replace(
-    /([a-zA-Z\d]+)-([ts])(-|$)/g,
-    "$1$2$3",
-  );
+// Published documentation anchors retain these transliterations across slugify upgrades.
+const publishedSlugReplacements = [
+  ["'", "-"],
+  ["إ", "i"],
+  ["Ə", "-"],
+  ["ə", "-"],
+  ["Œ", "-"],
+  ["œ", "-"],
+  ["ẞ", "SS"],
+  ["ու", "vo-"],
+  ["ՈՒ", "Vo-"],
+  ["Ու", "Vo-"],
+  ["𝓀", "h"],
+  ["𝕆", "N"],
+  ["ⓒ", "(b)"],
+  ["ⓓ", "(c)"],
+];
+
+function publishedBaseSlug(title, options) {
+  let value = slugify(title, {
+    ...options,
+    lowercase: false,
+    decamelize: false,
+    customReplacements: publishedSlugReplacements,
+  });
+  if (options.decamelize) {
+    // The published acronym rule keeps APIUsage joined but splits APISection.
+    value = value
+      .replace(/([A-Z]{2})(\d)/g, "$1-$2")
+      .replace(/([a-z\d])([A-Z])/g, "$1-$2")
+      .replace(/([A-Z])([A-Z][a-rt-z\d]+)/g, "$1-$2");
+  }
+  if (options.lowercase !== false) {
+    value = value.toLowerCase();
+  }
+  // Published anchors join these suffixes before counting duplicates.
+  return value.replace(/([a-zA-Z\d]+)-([ts])(-|$)/g, "$1$2$3");
 }
-function mintSlug(title, counter = slugifyWithCounter()) {
+function publishedSlug(title, counter = slugifyWithCounter()) {
   const encoded = anchor.defaults.slugify(title);
   const options = /%[0-9A-F]{2}/.test(encoded)
     ? { decamelize: false, preserveCharacters: ["%", "_"], lowercase: false }
     : { decamelize: false, preserveCharacters: ["_"] };
-  const base = mintBaseSlug(encoded, options);
+  const base = publishedBaseSlug(encoded, options);
   return counter(base, options);
 }
-function cleanMintId(id) {
+function cleanPublishedId(id) {
   return decodeURIComponent(id.replace(/%(?![0-9A-Fa-f]{2})/g, "%25"))
     .replace(/[?,;:!'"()[\]{}]/g, "")
     .replace(
@@ -445,7 +474,7 @@ function cleanMintId(id) {
       "",
     );
 }
-function deduplicateMintId(id, seen) {
+function deduplicatePublishedId(id, seen) {
   const count = seen.get(id) ?? 0;
   seen.set(id, count + 1);
   if (!count) {
@@ -561,7 +590,7 @@ export function parseDocsDocument(markdown, md = createDocsMarkdown(), options =
         Number(token.tag.slice(1)) <= 4 &&
         !/\{[^}]*\}/.test(tokens[i + 1].content)
       ) {
-        let alias = mintSlug(
+        let alias = publishedSlug(
           tokens[i + 1].children
             .map((child) =>
               child.type === "softbreak"
@@ -578,7 +607,7 @@ export function parseDocsDocument(markdown, md = createDocsMarkdown(), options =
             ["accordionOpen", "accordion-group", "Update", "promptOpen"].includes(kind),
           )
         ) {
-          alias = deduplicateMintId(cleanMintId(alias), toc);
+          alias = deduplicatePublishedId(cleanPublishedId(alias), toc);
         }
         candidates.push({ token, id, alias });
       }
@@ -615,21 +644,21 @@ export function parseDocsDocument(markdown, md = createDocsMarkdown(), options =
         if (!attrs.id) {
           const title = attrs.title;
           if (kind === "tabOpen" && title) {
-            component.alias = mintSlug(title, tabs);
+            component.alias = publishedSlug(title, tabs);
           } else if (kind === "stepOpen" && title && !["", "true"].includes(attrs.noAnchor)) {
             const parent = stack.at(-2);
             const size =
               attrs.titleSize ??
               (parent?.kind === "stepsOpen" ? parent.attrs.titleSize : undefined);
             component.alias = ["h2", "h3"].includes(size)
-              ? deduplicateMintId(mintSlug(title), toc)
-              : mintSlug(title);
+              ? deduplicatePublishedId(publishedSlug(title), toc)
+              : publishedSlug(title);
           } else if (kind === "accordionOpen" && title) {
-            component.alias = mintBaseSlug(title.replace(":", "-"), { decamelize: false });
+            component.alias = publishedBaseSlug(title.replace(":", "-"), { decamelize: false });
           } else if (kind === "paramOpen") {
             const name = attrs.query ?? attrs.path ?? attrs.body ?? attrs.header ?? attrs.name;
             if (name) {
-              component.alias = mintBaseSlug(`param-${name}`, { decamelize: true });
+              component.alias = publishedBaseSlug(`param-${name}`, { decamelize: true });
             }
           }
         }

@@ -1,11 +1,12 @@
 // Voice Call tests cover webhook.hangup once.lifecycle plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
@@ -24,7 +25,7 @@ function installStateRuntime(): void {
   setVoiceCallStateRuntime({
     state: {
       resolveStateDir: () => "",
-      openKeyedStore: (options: OpenKeyedStoreOptions) =>
+      openKeyedStore: (options: OpenAsyncKeyedStoreOptions) =>
         createPluginStateKeyedStoreForTests("voice-call", options),
       openChannelIngressQueue: (() => {
         throw new Error(
@@ -157,7 +158,8 @@ describe("Voice-call webhook hangup-once lifecycle", () => {
     installStateRuntime();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     vi.restoreAllMocks();
   });
@@ -242,7 +244,7 @@ describe("Voice-call webhook hangup-once lifecycle", () => {
       const openStore = state.openKeyedStore.bind(state);
       const fault = vi
         .spyOn(state, "openKeyedStore")
-        .mockImplementation(<T>(options: OpenKeyedStoreOptions) => {
+        .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
           const store = openStore<T>(options);
           store.entries = async () => {
             throw new Error("synthetic signed callback history failure");
@@ -265,6 +267,7 @@ describe("Voice-call webhook hangup-once lifecycle", () => {
         await server.stop();
       } finally {
         await finalizeTestManagerCalls(manager);
+        await closeOpenClawStateDatabaseAsync();
         resetPluginStateStoreForTests();
         fs.rmSync(storePath, { recursive: true, force: true });
       }
@@ -332,7 +335,8 @@ describe("Voice-call webhook body limits", () => {
     installStateRuntime();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
   });
 

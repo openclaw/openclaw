@@ -3,10 +3,14 @@ import { property, state } from "lit/decorators.js";
 import type { AgentsWorkspaceGetResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { MemorySearchResponse } from "../../../../src/gateway/server-methods/memory-search.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import "../../styles/memory-memories.css";
+
+registerSettingsEnglish();
 
 type SearchResult = MemorySearchResponse["results"][number];
 type SearchState =
@@ -279,7 +283,10 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
   }
 
   override render() {
-    return html`<div class="settings-page memory-memories">
+    return html`<div
+      class="settings-page memory-memories"
+      ${shellLayoutTraits({ settingsPage: true })}
+    >
       ${
         !this.methodAdvertised
           ? html`<p class="memory-memories__unavailable">

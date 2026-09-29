@@ -31,24 +31,25 @@ function fixture() {
 }
 
 describe("canonical declaration stage", () => {
-  it("retains a sibling failure when another compiler cannot start", async () => {
+  it("retains a sibling failure and stops queued work when another compiler cannot start", async () => {
     const { staging, dist, invocation } = fixture();
     const missing = invocation({});
     missing.command = path.join(staging, "missing-compiler");
     const failed = invocation({}, 17);
+    const seal = vi.fn();
     const result = await publishStagedDeclarations(
       {
         env: process.env,
         maxOldSpaceMb: 8192,
         heapShortfall: null,
-        invocations: [missing, failed],
+        invocations: [missing, failed, invocation({ "queued.d.ts": "export {};" })],
       },
       [],
       staging,
       dist,
       ["plugin-sdk/core.d.ts"],
       ["plugin-sdk/obsolete.d.ts"],
-      undefined,
+      seal,
       2,
     ).catch((error: unknown) => error);
     expect(result).toBeInstanceOf(AggregateError);
@@ -59,19 +60,25 @@ describe("canonical declaration stage", () => {
       ]),
     });
     expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
+    expect(fs.existsSync(path.join(staging, "queued.d.ts"))).toBe(false);
+    expect(seal).not.toHaveBeenCalled();
   });
 
   it.each(["success", "exit", "dual-exit", "diagnostic"])(
-    "joins both private compiler stages before %s publication",
+    "joins every private compiler stage before %s publication",
     async (outcome) => {
       const { staging, dist, invocation } = fixture();
       const root = path.dirname(staging);
-      const sources = ["public", "private"].map((name) => ({
+      const names = outcome === "success" ? ["public", "private", "queued"] : ["public", "private"];
+      const sources = names.map((name) => ({
         output: path.join(root, name),
         required: [`plugin-sdk/${name}.d.ts`],
       }));
       const invocations = sources.map((source, index) => {
         const child = invocation({ [source.required[0]!]: "export {};" }, 0, source.output);
+        if (index === 2) {
+          return child;
+        }
         child.args[1] = `
           const fs = require('node:fs'), path = require('node:path');
           const root = ${JSON.stringify(root)}, index = ${index};
@@ -105,6 +112,9 @@ describe("canonical declaration stage", () => {
       });
       const seal = vi.fn(() => {
         expect(fs.existsSync(path.join(root, "second.finished"))).toBe(true);
+        for (const source of sources) {
+          expect(fs.existsSync(path.join(source.output, source.required[0]!))).toBe(true);
+        }
         expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
       });
       const publication = publishStagedDeclarations(

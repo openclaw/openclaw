@@ -27,10 +27,8 @@ import {
   CUSTOM_PLUGIN_UI_DISABLED_MESSAGE,
   isControlUiPluginAllowed,
 } from "./control-ui-plugin-policy.js";
-import {
-  authorizeControlUiPluginCookieRequest,
-  authorizeControlUiReadRequestOrReply,
-} from "./http-auth-utils.js";
+import { authorizeControlUiPluginCookieRequest } from "./http-auth-plugin-cookie.js";
+import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
 import { sendGatewayAuthFailure, sendMethodNotAllowed } from "./http-common.js";
 import { authorizeOperatorScopesForRequiredScope, READ_SCOPE } from "./method-scopes.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
@@ -92,6 +90,7 @@ async function snapshotBrowserBuild(
   registry: PluginRegistry,
   record: PluginRecord,
   declaration = record.controlUi,
+  uiCapabilities?: PluginRecord["uiCapabilities"],
 ): Promise<BrowserBuild> {
   const authority = capturePluginLifecycleAuthority(registry, record);
   const isCurrent = () => authority?.() === true && isControlUiPluginAllowed(record);
@@ -102,7 +101,7 @@ async function snapshotBrowserBuild(
     record.rootDir,
     declaration,
   );
-  const digest = createHash("sha256").update(JSON.stringify(declaration));
+  const digest = createHash("sha256").update(JSON.stringify({ declaration, uiCapabilities }));
   for (const [name, asset] of [...assets].toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
@@ -126,6 +125,7 @@ async function snapshotBrowserBuild(
       revision,
       entryUrl: assetUrl(entryName),
       styles: styles.map(assetUrl),
+      ...(uiCapabilities !== undefined ? { uiCapabilities } : {}),
     },
   };
 }
@@ -157,6 +157,7 @@ async function refreshBrowserCatalog(
     }
     try {
       let declaration: PluginManifestControlUi | undefined = record.controlUi;
+      let uiCapabilities = record.uiCapabilities;
       if (reloadManifest) {
         // Explicit UI reload owns a fresh metadata read without replacing the
         // backend's process-stable manifest, imports, or registration authority.
@@ -167,8 +168,9 @@ async function refreshBrowserCatalog(
           throw new Error("active plugin browser declaration is missing or invalid");
         }
         declaration = loaded.manifest.controlUi;
+        uiCapabilities = loaded.manifest.uiCapabilities;
       }
-      const build = await snapshotBrowserBuild(registry, record, declaration);
+      const build = await snapshotBrowserBuild(registry, record, declaration, uiCapabilities);
       if (!isCurrent()) {
         throw new Error("plugin registry was replaced while its browser assets loaded");
       }
@@ -364,7 +366,11 @@ export async function handleControlUiPluginAssetRequest(
   const cookieAuth = authorizeControlUiPluginCookieRequest(req, {
     requestPath: pathname,
     authGeneration: resolveSharedGatewaySessionGeneration(params.auth, params.trustedProxies),
+    res,
   });
+  if (res.writableEnded || res.destroyed) {
+    return true;
+  }
   if (cookieAuth) {
     const grant = cookieAuth.requestAuth.controlUiPluginGrants?.find(
       (candidate) =>

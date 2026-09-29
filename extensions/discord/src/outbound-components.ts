@@ -1,13 +1,8 @@
-// Discord plugin module implements outbound components behavior.
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
-import {
-  createLazyRuntimeModule,
-  createLazyRuntimeNamedExport,
-} from "openclaw/plugin-sdk/lazy-runtime";
+import { createLazyRuntimeMethod, createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveAskUserQuestionOptionIndices } from "openclaw/plugin-sdk/reply-payload";
 import { readDiscordComponentSpec, type DiscordComponentMessageSpec } from "./components.js";
 
-type DiscordComponentSendFn = typeof import("./send.components.js").sendDiscordComponentMessage;
 type OutboundPayload = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["payload"];
 
 const DISCORD_MESSAGE_COMPONENT_LIMIT = 40;
@@ -44,18 +39,10 @@ export const DISCORD_PRESENTATION_CAPABILITIES = {
   },
 } satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
 
-const loadDiscordComponentSend = createLazyRuntimeNamedExport(
-  () => import("./send.components.js"),
-  "sendDiscordComponentMessage",
+export const sendDiscordComponentMessageLazy = createLazyRuntimeMethod(
+  createLazyRuntimeModule(() => import("./send.components.js")),
+  (runtime) => runtime.sendDiscordComponentMessage,
 );
-
-export async function sendDiscordComponentMessageLazy(
-  ...args: Parameters<DiscordComponentSendFn>
-): ReturnType<DiscordComponentSendFn> {
-  return await (
-    await loadDiscordComponentSend()
-  )(...args);
-}
 
 const loadDiscordSharedInteractive = createLazyRuntimeModule(
   () => import("./shared-interactive.js"),

@@ -41,19 +41,50 @@ async function writeRollout(payload: Record<string, unknown>): Promise<string> {
 }
 
 describe("Codex catalog provenance", () => {
-  it("recognizes an OpenClaw-originated rollout even when Codex reports vscode", async () => {
-    const file = await writeRollout({
-      id: "managed-thread",
-      originator: "openclaw",
-      source: "vscode",
-    });
+  it.each(["openclaw", "codex_cli_rs", "OpenClaw", " openclaw ", " "])(
+    "uses the exact native creation originator %j without reading the rollout",
+    async (originator) => {
+      const file = await writeRollout({ id: "native-provenance", originator: "openclaw" });
+      const open = vi.spyOn(fs, "open");
+      try {
+        await expect(
+          isOpenClawManagedCodexThread(
+            idleThread({ id: "native-provenance", path: file, originator }),
+            path.dirname(file),
+          ),
+        ).resolves.toBe(originator === "openclaw");
+        expect(open).not.toHaveBeenCalled();
+      } finally {
+        open.mockRestore();
+      }
+    },
+  );
 
+  it.each([
+    { label: "missing", originator: undefined },
+    { label: "null", originator: null },
+    { label: "empty", originator: "" },
+    { label: "number", originator: 0 },
+    { label: "boolean", originator: false },
+    { label: "array", originator: [] },
+    { label: "object", originator: {} },
+  ])("keeps rollout fallback for native originator: $label", async ({ originator }) => {
+    const file = await writeRollout({ id: "legacy-provenance", originator: "openclaw" });
+    // Native JSON can violate the declared field type; the fallback owns that boundary.
+    const thread = {
+      ...idleThread({ id: "legacy-provenance", path: file }),
+      originator,
+    } as CodexThread;
+    await expect(isOpenClawManagedCodexThread(thread, path.dirname(file))).resolves.toBe(true);
+  });
+
+  it("does not seed rollout provenance cache from an API-only result", async () => {
+    const file = await writeRollout({ id: "uncached-originator", originator: "codex_cli_rs" });
+    const thread = idleThread({ id: "uncached-originator", path: file, originator: "openclaw" });
+    await expect(isOpenClawManagedCodexThread(thread, path.dirname(file))).resolves.toBe(true);
     await expect(
-      isOpenClawManagedCodexThread(
-        { id: "managed-thread", path: file } as CodexThread,
-        path.dirname(file),
-      ),
-    ).resolves.toBe(true);
+      isOpenClawManagedCodexThread({ ...thread, originator: null }, path.dirname(file)),
+    ).resolves.toBe(false);
   });
 
   it("does not inspect a rollout outside the selected local sessions root", async () => {
@@ -74,7 +105,7 @@ describe("Codex catalog provenance", () => {
     ).resolves.toBe(false);
     await expect(
       isOpenClawManagedCodexThread(
-        { id: "outside-managed-thread", path: file } as CodexThread,
+        { id: "outside-managed-thread", path: file, originator: "openclaw" } as CodexThread,
         undefined,
       ),
     ).resolves.toBe(false);
@@ -162,7 +193,10 @@ describe("Codex catalog provenance", () => {
       ),
     ).resolves.toBe(false);
     await expect(
-      isOpenClawManagedCodexThread({ id: "missing-path" } as CodexThread, path.dirname(native)),
+      isOpenClawManagedCodexThread(
+        { id: "missing-path", originator: "openclaw" } as CodexThread,
+        path.dirname(native),
+      ),
     ).resolves.toBe(false);
   });
 });
@@ -195,7 +229,7 @@ async function localEligibilityFixture(now = () => 0, requestTimeoutMs?: number)
     now,
     managedThreads,
   });
-  const source = factory.homesForAgent("main")[0]!;
+  const source = (await factory.homesForAgent("main"))[0]!;
   const control = factory.forRequest("main", source);
   pinnedConnectionMocks.request.mockImplementation(async ({ method }) =>
     method === "thread/read" ? { thread } : { data: [thread] },
@@ -215,7 +249,29 @@ async function localEligibilityFixture(now = () => 0, requestTimeoutMs?: number)
 }
 
 describe("Codex exact local eligibility", () => {
-  it.each(["cli", "vscode", { custom: "atlas" }, { custom: "chatgpt" }] as const)(
+  it("accepts a newly selected native rollout before resident discovery catches up", async () => {
+    const f = await localEligibilityFixture();
+    commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [{ ...f.thread }] });
+    await f.control.initialize();
+    const replacement = path.join(f.root, "reverted.jsonl");
+    await fs.copyFile(f.rollout, replacement);
+    f.thread.path = replacement;
+    f.thread.cwd = "/workspace/reverted";
+    commandRpcMocks.codexControlRequest.mockClear();
+    commandRpcMocks.codexControlRequest.mockRejectedValue(new Error("broad discovery unavailable"));
+
+    await expect(f.control.requireEligibleThread(f.thread.id)).resolves.toMatchObject({
+      path: replacement,
+      cwd: "/workspace/reverted",
+    });
+    expect((await f.control.listPage({})).sessions[0]?.cwd).toBe("/workspace/reverted");
+    expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
+    expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual([
+      "thread/read",
+    ]);
+  });
+
+  it.each(["cli", { custom: "atlas" }] as const)(
     "verifies interactive source %j using one selected rollout",
     async (source) => {
       const f = await localEligibilityFixture();
@@ -224,21 +280,7 @@ describe("Codex exact local eligibility", () => {
       await expect(f.control.requireEligibleThread(f.thread.id)).resolves.toBe(f.thread);
       expect(
         pinnedConnectionMocks.request.mock.calls.map(([r]) => [r.method, r.requestParams]),
-      ).toEqual([
-        ["thread/read", { threadId: f.thread.id, includeTurns: false }],
-        [
-          "thread/list",
-          {
-            archived: false,
-            cwd: f.thread.cwd,
-            limit: 100,
-            modelProviders: [],
-            sortKey: "recency_at",
-            sortDirection: "desc",
-            useStateDbOnly: true,
-          },
-        ],
-      ]);
+      ).toEqual([["thread/read", { threadId: f.thread.id, includeTurns: false }]]);
       expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
       expect(f.managedThreads.snapshot).not.toHaveBeenCalled();
     },
@@ -280,7 +322,9 @@ describe("Codex exact local eligibility", () => {
     } else if (kind === "wrong read") {
       f.thread.id = "other-thread";
     } else if (kind === "different rollout") {
-      listed.path = path.join(f.root, "previous.jsonl");
+      commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [listed] });
+      await f.control.initialize();
+      f.thread.path = path.join(f.root, "previous.jsonl");
     } else if (kind === "outside") {
       f.thread.path = path.join(f.home, "source.jsonl");
       listed.path = f.thread.path;
@@ -324,36 +368,19 @@ describe("Codex exact local eligibility", () => {
     ).toBe(true);
   });
 
-  it.each(["absent", "repeated", "oversized", "page cap"])(
-    "rejects %s native membership",
-    async (kind) => {
-      const f = await localEligibilityFixture();
-      let page = 0;
-      pinnedConnectionMocks.request.mockImplementation(async ({ method }) => {
-        if (method === "thread/read") {
-          return { thread: f.thread };
-        }
-        page += 1;
-        return {
-          data: [],
-          nextCursor:
-            kind === "absent"
-              ? null
-              : kind === "repeated"
-                ? "cycle"
-                : kind === "oversized"
-                  ? "x".repeat(4097)
-                  : `page-${page}`,
-        };
-      });
-      await expect(f.control.requireEligibleThread(f.thread.id)).rejects.toThrow(
-        kind === "oversized"
-          ? "invalid Codex session catalog"
-          : "eligibility could not be verified",
-      );
-      expect(page).toBe(kind === "page cap" ? 100 : kind === "repeated" ? 2 : 1);
-    },
-  );
+  it("rejects a resident archived thread without native listing or reading", async () => {
+    const f = await localEligibilityFixture();
+    commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [f.thread] });
+    await f.control.initialize();
+    commandRpcMocks.codexControlRequest.mockResolvedValue({});
+    await f.control.archiveThread(f.thread.id);
+    commandRpcMocks.codexControlRequest.mockClear();
+    await expect(f.control.requireEligibleThread(f.thread.id)).rejects.toThrow(
+      "eligibility could not be verified",
+    );
+    expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
+    expect(pinnedConnectionMocks.request).not.toHaveBeenCalled();
+  });
 
   it.each([false, true])(
     "accepts native compressed path representation (read compressed: %s)",
@@ -371,50 +398,44 @@ describe("Codex exact local eligibility", () => {
     },
   );
 
-  it("follows opaque recency cursors beyond the first same-timestamp page without narrowing providers", async () => {
+  it("verifies a resident tail row with one exact read regardless of inventory size", async () => {
     const f = await localEligibilityFixture();
-    const cursor = "native-opaque-timestamp-and-id";
-    pinnedConnectionMocks.request.mockImplementation(async ({ method, requestParams }) => {
-      if (method === "thread/read") {
-        return { thread: { ...f.thread, modelProvider: "rollout-provider" } };
-      }
-      return requestParams.cursor === cursor
-        ? { data: [{ ...f.thread, modelProvider: "indexed-provider", recencyAt: 42 }] }
+    commandRpcMocks.codexControlRequest.mockImplementation(async (_plugin, _method, params) =>
+      params.cursor === "tail"
+        ? { data: [f.thread] }
         : {
-            data: Array.from({ length: 100 }, (_, i) => ({
+            data: Array.from({ length: 64 }, (_, i) => ({
               ...f.thread,
               id: `other-${i}`,
+              originator: "codex_cli_rs",
               recencyAt: 42,
             })),
-            nextCursor: cursor,
-          };
-    });
+            nextCursor: "tail",
+          },
+    );
+    await f.control.initialize();
+    commandRpcMocks.codexControlRequest.mockClear();
     await expect(f.control.requireEligibleThread(f.thread.id)).resolves.toMatchObject({
       id: f.thread.id,
     });
-    expect(pinnedConnectionMocks.request.mock.calls.slice(1).map(([r]) => r.requestParams)).toEqual(
-      [
-        expect.objectContaining({ sortKey: "recency_at", modelProviders: [] }),
-        expect.objectContaining({ cursor, sortKey: "recency_at", modelProviders: [] }),
-      ],
-    );
+    expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
+    expect(pinnedConnectionMocks.request.mock.calls.map(([r]) => r.method)).toEqual([
+      "thread/read",
+    ]);
   });
 
-  it("uses one deadline across the exact read and all membership pages", async () => {
+  it("keeps the eligibility deadline across exact reads and provenance verification", async () => {
     let now = 0;
     const f = await localEligibilityFixture(() => now, 1_000);
-    pinnedConnectionMocks.request.mockImplementation(async ({ method }) => {
-      now += 400;
-      return method === "thread/read"
-        ? { thread: f.thread }
-        : { data: [], nextCursor: `page-${now}` };
+    pinnedConnectionMocks.request.mockImplementation(async () => {
+      now += 1_001;
+      return { thread: f.thread };
     });
     await expect(f.control.requireEligibleThread(f.thread.id)).rejects.toThrow(
       "eligibility could not be verified",
     );
-    expect(pinnedConnectionMocks.request.mock.calls.map(([r]) => r.timeoutMs)).toEqual([
-      1_000, 600, 200,
-    ]);
+    expect(pinnedConnectionMocks.request.mock.calls.map(([r]) => r.timeoutMs)).toEqual([1_000]);
+    expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
   });
 
   it("bounds stalled ownership lookup and prevents native reads after its deadline", async () => {
@@ -547,8 +568,9 @@ describe("Codex exact local eligibility", () => {
 
   it("does not promote cached negative provenance or cross-home ownership into eligibility", async () => {
     const f = await localEligibilityFixture();
+    f.thread.originator = "codex_cli_rs";
     commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [f.thread] });
-    await f.control.listPage({});
+    await f.control.initialize();
     await fs.rm(f.rollout);
     await expect(f.control.requireEligibleThread(f.thread.id)).rejects.toThrow(
       "eligibility could not be verified",
@@ -565,21 +587,31 @@ describe("Codex exact local eligibility", () => {
     );
   });
 
-  it("selects native scan-and-repair verification upfront for a remote pathless source", async () => {
+  it("uses fresh native membership and an exact read for a remote pathless source", async () => {
     const f = await localEligibilityFixture();
     const { localSessionsRoot: _root, ...remoteSource } = f.source;
     f.thread.path = null;
+    commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [f.thread] });
     const remote = f.factory.forRequest("main", remoteSource);
+    await remote.initialize();
+    commandRpcMocks.codexControlRequest.mockClear();
     await expect(remote.requireEligibleThread(f.thread.id)).resolves.toBe(f.thread);
-    expect(pinnedConnectionMocks.request.mock.calls.map(([r]) => r.method)).toEqual([
-      "thread/list",
+    expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
+    expect(
+      pinnedConnectionMocks.request.mock.calls.map(([r]) => [r.method, r.requestParams]),
+    ).toEqual([
+      ["thread/read", { threadId: f.thread.id, includeTurns: false }],
+      [
+        "thread/list",
+        {
+          archived: false,
+          limit: 64,
+          modelProviders: [],
+          sortKey: "recency_at",
+          sortDirection: "desc",
+          cwd: f.thread.cwd,
+        },
+      ],
     ]);
-    expect(pinnedConnectionMocks.request.mock.calls[0]?.[0].requestParams).toEqual({
-      archived: false,
-      limit: 100,
-      modelProviders: [],
-      sortKey: "updated_at",
-      sortDirection: "desc",
-    });
   });
 });

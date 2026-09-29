@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import path from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectFileViolations,
@@ -54,8 +54,6 @@ const storageSpecificTranscriptReaderAliasNames = new Set(["readSessionMessagesF
 const gatewaySessionServerMethodFiles = [
   "src/gateway/server-methods/sessions-abort.ts",
   "src/gateway/server-methods/sessions-compact.ts",
-  "src/gateway/server-methods/sessions-compaction-checkpoints.ts",
-  "src/gateway/server-methods/sessions-compaction-queries.ts",
   "src/gateway/server-methods/sessions-compaction-runner.ts",
   "src/gateway/server-methods/sessions-create.ts",
   "src/gateway/server-methods/sessions-delete.ts",
@@ -68,7 +66,7 @@ const gatewaySessionServerMethodFiles = [
   "src/gateway/server-methods/sessions-subscriptions.ts",
 ];
 
-export const migratedSessionTranscriptReaderFiles = new Set([
+const migratedSessionTranscriptReaderFiles = new Set([
   "src/agents/main-session-recovery/main-session-restart-recovery-store.ts",
   "src/agents/subagents/announce/subagent-announce-output.test.ts",
   "src/agents/subagents/announce/subagent-announce-output.ts",
@@ -117,7 +115,7 @@ function bindingName(node: ts.BindingElement) {
   if (node.propertyName && ts.isIdentifier(node.propertyName)) {
     return node.propertyName.text;
   }
-  if (ts.isIdentifier(node.name)) {
+  if (node.name && ts.isIdentifier(node.name)) {
     return node.name.text;
   }
   return null;
@@ -140,8 +138,11 @@ function destructuresLegacyNamespace(node: ts.BindingElement, legacyNamespaces: 
   return ts.isIdentifier(initializer) && legacyNamespaces.has(initializer.text);
 }
 
-export function findSessionTranscriptReaderBoundaryViolations(content: string, file = "source.ts") {
-  const sourceFile = ts.createSourceFile(file, content, ts.ScriptTarget.Latest, true);
+export function findSessionTranscriptReaderBoundaryViolations(
+  _content: string,
+  _file: string,
+  sourceFile: ts.SourceFile,
+) {
   const violations: Array<{ line: number; reason: string }> = [];
   const legacyNamespaces = new Set<string>();
 
@@ -215,36 +216,27 @@ export function findSessionTranscriptReaderBoundaryViolations(content: string, f
       }
     }
 
-    if (ts.isPropertyAccessExpression(node)) {
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       const receiver = unwrapExpression(node.expression);
+      const name = ts.isPropertyAccessExpression(node)
+        ? node.name
+        : ts.isStringLiteral(node.argumentExpression)
+          ? node.argumentExpression
+          : undefined;
       if (
         ts.isIdentifier(receiver) &&
         legacyNamespaces.has(receiver.text) &&
-        transcriptReaderNames.has(node.name.text)
+        name &&
+        transcriptReaderNames.has(name.text)
       ) {
         violations.push({
-          line: toLine(sourceFile, node.name),
-          reason: `references legacy transcript reader "${node.name.text}"`,
+          line: toLine(sourceFile, name),
+          reason: `references legacy transcript reader "${name.text}"`,
         });
       }
     }
 
-    if (ts.isElementAccessExpression(node)) {
-      const receiver = unwrapExpression(node.expression);
-      if (
-        ts.isIdentifier(receiver) &&
-        legacyNamespaces.has(receiver.text) &&
-        ts.isStringLiteral(node.argumentExpression) &&
-        transcriptReaderNames.has(node.argumentExpression.text)
-      ) {
-        violations.push({
-          line: toLine(sourceFile, node.argumentExpression),
-          reason: `references legacy transcript reader "${node.argumentExpression.text}"`,
-        });
-      }
-    }
-
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
 
   visit(sourceFile);

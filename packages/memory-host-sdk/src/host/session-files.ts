@@ -1,10 +1,18 @@
+import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import path from "node:path";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import { normalizeAgentId } from "./config-utils.js";
 import { readRegularFile, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
-import { createSubsystemLogger, redactSensitiveText } from "./openclaw-runtime-io.js";
+import {
+  captureSensitiveTextRedactionSnapshot,
+  createSubsystemLogger,
+  getSecretRedactionRegistryRevision,
+  redactSensitiveText,
+} from "./openclaw-runtime-io.js";
 import {
   DREAMING_NARRATIVE_RUN_PREFIX,
   isDreamingNarrativeSessionStoreKey,
@@ -17,20 +25,25 @@ import {
   isCronRunSessionKey,
   isExecCompletionEvent,
   isHeartbeatUserMessage,
+  isIncognitoOpenClawAgentSqlitePath,
+  isIncognitoSessionKey,
   isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
-  loadTranscriptEventsSync,
   materializeSessionArchiveForRead,
   parseUsageCountedSessionIdFromFileName,
   parseSqliteSessionFileMarker,
+  prepareSessionEntryInWorker,
+  readRestoredSessionTranscript,
   readTranscriptStatsSync,
-  resolveTranscriptSessionKeyBySessionId,
+  readTranscriptExportSnapshotReadOnlySync,
   resolveSessionTranscriptsDirForAgent,
+  SessionTranscriptColdError,
   stripInboundMetadata,
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
+import { collectRawSessionText, projectSessionEntryRecord } from "./session-entry-projection.js";
 import { classifySessionMessageOrigin } from "./session-provenance.js";
 import { resolveSessionResetRecallCutoff } from "./session-reset-recall.js";
 import {
@@ -66,6 +79,8 @@ export type SessionFileEntry = {
   path: string;
   absPath: string;
   mtimeMs: number;
+  /** Canonical SQLite mutation watermark, independent of source activity. */
+  revisionMs?: number;
   size: number;
   hash: string;
   content: string;
@@ -82,7 +97,10 @@ export type SessionFileEntry = {
   sessionKind: MemorySessionKind;
 };
 
-export type SessionFileState = Pick<SessionFileEntry, "path" | "absPath" | "mtimeMs" | "size">;
+export type SessionFileState = Pick<
+  SessionFileEntry,
+  "path" | "absPath" | "mtimeMs" | "revisionMs" | "size"
+>;
 
 export type BuildSessionEntryOptions = {
   /** Optional preclassification from a caller-managed dreaming transcript lookup. */
@@ -116,20 +134,23 @@ function hashSessionEntrySnapshot(params: {
   lineProvenance: readonly MemoryEntryProvenance[];
   resetRecallCutoff: SessionResetRecallCutoff;
 }): string {
-  const snapshot =
-    params.content +
-    "\n" +
-    params.lineMap.join(",") +
-    "\n" +
-    params.messageTimestampsMs.join(",") +
-    "\n" +
-    JSON.stringify(params.lineProvenance) +
-    "\n" +
-    JSON.stringify(params.resetRecallCutoff);
-  return hashText(snapshot);
+  // Preserve persisted hash bytes without flattening another full export string.
+  return createHash("sha256")
+    .update(params.content)
+    .update("\n")
+    .update(params.lineMap.join(","))
+    .update("\n")
+    .update(params.messageTimestampsMs.join(","))
+    .update("\n")
+    .update(JSON.stringify(params.lineProvenance))
+    .update("\n")
+    .update(JSON.stringify(params.resetRecallCutoff))
+    .digest("hex");
 }
 
-function readSessionEntryResetRecallCutoff(entry: SessionFileEntry): SessionResetRecallCutoff {
+export function readSessionEntryResetRecallCutoff(
+  entry: SessionFileEntry,
+): SessionResetRecallCutoff {
   const value: unknown = Object.getOwnPropertyDescriptor(entry, SESSION_RESET_RECALL_CUTOFF)?.value;
   if (!value || typeof value !== "object" || !("state" in value)) {
     return { state: "invalid" };
@@ -141,6 +162,19 @@ function readSessionEntryResetRecallCutoff(entry: SessionFileEntry): SessionRese
     return { state: "valid", cutoffLine: value.cutoffLine };
   }
   return { state: "invalid" };
+}
+
+function attachSessionEntryResetRecallCutoff(
+  entry: SessionFileEntry,
+  cutoff: SessionResetRecallCutoff,
+): SessionFileEntry {
+  Object.defineProperty(entry, SESSION_RESET_RECALL_CUTOFF, {
+    configurable: false,
+    enumerable: false,
+    value: cutoff,
+    writable: false,
+  });
+  return entry;
 }
 
 export function matchesSessionEntryPrefixHash(
@@ -280,7 +314,7 @@ function loadSessionTranscriptClassificationForSessionsDir(
   const agentId = extractAgentIdFromSessionsDir(sessionsDir);
   if (agentId && isCanonicalSessionsDirForAgent(sessionsDir, agentId)) {
     return classifySessionTranscriptCorpusEntries(
-      listSessionTranscriptCorpusEntriesForAgentSync(agentId),
+      listSessionTranscriptCorpusEntriesForAgentSync(agentId, { includeContentRevision: false }),
     );
   }
   const storePath = path.join(sessionsDir, "sessions.json");
@@ -407,43 +441,8 @@ export function parseCanonicalSessionSyncTargetFromPath(
   return { agentId, sessionId };
 }
 
-async function logSessionFileReadFailure(absPath: string, err: unknown): Promise<void> {
-  createSubsystemLogger("memory").debug(`Failed reading session file ${absPath}: ${String(err)}`);
-}
-
 function normalizeSessionText(value: string): string {
-  return value
-    .replace(/\s*\n+\s*/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function collectRawSessionText(content: unknown): string | null {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return null;
-  }
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const record = block as { type?: unknown; text?: unknown };
-    if (record.type === "text" && typeof record.text === "string") {
-      parts.push(record.text);
-    }
-  }
-  return parts.length > 0 ? parts.join("\n") : null;
-}
-
-function isHighSurrogate(code: number): boolean {
-  return code >= 0xd800 && code <= 0xdbff;
-}
-
-function isLowSurrogate(code: number): boolean {
-  return code >= 0xdc00 && code <= 0xdfff;
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function splitLongSessionLine(
@@ -475,14 +474,7 @@ function splitLongSessionLine(
         break;
       }
     }
-    if (
-      splitAt < normalized.length &&
-      splitAt > cursor &&
-      isHighSurrogate(normalized.charCodeAt(splitAt - 1)) &&
-      isLowSurrogate(normalized.charCodeAt(splitAt))
-    ) {
-      splitAt -= 1;
-    }
+    splitAt = avoidTrailingHighSurrogateBreak(normalized, cursor, splitAt);
     segments.push(normalized.slice(cursor, splitAt).trim());
     cursor = splitAt;
     while (cursor < normalized.length && normalized[cursor] === " ") {
@@ -583,35 +575,40 @@ function resolveBuildSessionSqliteIdentity(absPath: string, opts: BuildSessionEn
   return marker && opts.sessionKey ? { ...marker, sessionKey: opts.sessionKey } : marker;
 }
 
+function sqliteSessionFileState(
+  absPath: string,
+  identity: { agentId: string; sessionId: string },
+  stats: ReturnType<typeof readTranscriptStatsSync>,
+  updatedAtMs?: number,
+): SessionFileState {
+  return {
+    absPath,
+    path: sessionPathForSessionIdentity(identity.agentId, identity.sessionId),
+    mtimeMs: updatedAtMs ?? stats.maxSeq,
+    revisionMs: stats.lastMutationAtMs ?? stats.maxSeq,
+    size: stats.sizeBytes,
+  };
+}
+
 export function statSessionEntrySync(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
+  transcriptStats?: ReturnType<typeof readTranscriptStatsSync>,
 ): SessionFileState | null {
   const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
   if (sqliteIdentity) {
-    const stats = readTranscriptStatsSync({
-      ...sqliteIdentity,
-    });
-    return {
-      absPath,
-      path: sessionPathForSessionIdentity(sqliteIdentity.agentId, sqliteIdentity.sessionId),
-      mtimeMs: opts.updatedAtMs ?? stats.maxSeq,
-      size: stats.sizeBytes,
-    };
+    const stats = transcriptStats ?? readTranscriptStatsSync(sqliteIdentity);
+    return sqliteSessionFileState(absPath, sqliteIdentity, stats, opts.updatedAtMs);
   }
-  try {
-    const stat = fsSync.statSync(absPath);
-    return stat.isFile()
-      ? {
-          absPath,
-          path: sessionPathForFile(absPath),
-          mtimeMs: stat.mtimeMs,
-          size: stat.size,
-        }
-      : null;
-  } catch {
-    return null;
-  }
+  const stat = safeStatSync(absPath);
+  return stat?.isFile()
+    ? {
+        absPath,
+        path: sessionPathForFile(absPath),
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+      }
+    : null;
 }
 
 async function yieldSessionEntryParseIfNeeded(
@@ -629,22 +626,69 @@ export async function buildSessionEntry(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
 ): Promise<SessionFileEntry | null> {
+  const identity = resolveBuildSessionSqliteIdentity(absPath, opts);
+  const prepare = async () => {
+    // Archives may materialize files, observers own their callbacks, and incognito
+    // transcripts exist only in this process. Their existing local contracts stay intact.
+    if (
+      identity &&
+      !opts.onTranscriptMessage &&
+      opts.parseYieldEveryLines === undefined &&
+      !isIncognitoSessionKey(opts.sessionKey) &&
+      !isIncognitoOpenClawAgentSqlitePath(identity.storePath, { agentId: identity.agentId })
+    ) {
+      const options = { ...opts, ...identity };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const redaction = captureSensitiveTextRedactionSnapshot();
+        const prepared = await prepareSessionEntryInWorker(absPath, options, redaction);
+        if (redaction.registryRevision === getSecretRedactionRegistryRevision()) {
+          return prepared.entry
+            ? attachSessionEntryResetRecallCutoff(prepared.entry, prepared.resetRecallCutoff)
+            : null;
+        }
+      }
+      throw new Error(
+        "Session transcript redaction changed during preparation; retry the operation.",
+      );
+    }
+    return buildSessionEntryInProcess(absPath, opts);
+  };
   try {
-    const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
-    const sqliteSource = sqliteIdentity
-      ? (() => {
-          const stats = readTranscriptStatsSync(sqliteIdentity);
-          const records = loadTranscriptEventsSync(sqliteIdentity);
-          const resetRecallCutoff = resolveSessionResetRecallCutoff(records);
-          return {
-            mtimeMs: opts.updatedAtMs ?? stats.maxSeq,
-            path: sessionPathForSessionIdentity(sqliteIdentity.agentId, sqliteIdentity.sessionId),
-            records,
-            resetRecallCutoff,
-            size: stats.sizeBytes,
-          };
-        })()
+    return await prepare();
+  } catch (error) {
+    if (!(error instanceof SessionTranscriptColdError) || identity?.sessionId !== error.sessionId) {
+      throw error;
+    }
+    return readRestoredSessionTranscript(identity, prepare);
+  }
+}
+
+/** The shared transcript worker runs the same projection with task-local redaction. */
+export async function buildSessionEntryInProcess(
+  absPath: string,
+  opts: BuildSessionEntryOptions = {},
+  redactText: (text: string) => string = (text) => redactSensitiveText(text, { mode: "tools" }),
+): Promise<SessionFileEntry | null> {
+  const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
+  try {
+    const snapshot = sqliteIdentity
+      ? readTranscriptExportSnapshotReadOnlySync(sqliteIdentity, {
+          // Observers require original messages and run only after the snapshot closes.
+          projectEvent: opts.onTranscriptMessage ? undefined : projectSessionEntryRecord,
+        })
       : null;
+    const sqliteSource =
+      snapshot && sqliteIdentity
+        ? {
+            ...sqliteSessionFileState(absPath, sqliteIdentity, snapshot.stats, opts.updatedAtMs),
+            records: snapshot.events,
+            resetRecallCutoff: resolveSessionResetRecallCutoff(snapshot.events),
+            sessionKey: snapshot.sessionKey,
+          }
+        : null;
+    if (sqliteIdentity && !sqliteSource) {
+      return null;
+    }
     let raw = "";
     let mtimeMs: number;
     let size: number;
@@ -693,14 +737,7 @@ export async function buildSessionEntry(
     const messageTimestampsMs: number[] = [];
     const lineProvenance: MemoryEntryProvenance[] = [];
     const parseYieldEveryLines = resolveSessionEntryParseYieldLines(opts);
-    const sqliteSessionKey =
-      sqliteIdentity && !opts.sessionKey
-        ? resolveTranscriptSessionKeyBySessionId({
-            agentId: sqliteIdentity.agentId,
-            sessionId: sqliteIdentity.sessionId,
-            storePath: sqliteIdentity.storePath,
-          })
-        : undefined;
+    const sqliteSessionKey = !opts.sessionKey ? sqliteSource?.sessionKey : undefined;
     const sessionStoreClassification =
       !sqliteIdentity &&
       (opts.generatedByDreamingNarrative === undefined || opts.generatedByCronRun === undefined)
@@ -819,7 +856,7 @@ export async function buildSessionEntry(
       if (!text) {
         continue;
       }
-      const safe = redactSensitiveText(text, { mode: "tools" });
+      const safe = redactText(text);
       const label = message.role === "user" ? "User" : "Assistant";
       const renderedLines = renderSessionExportLines(label, safe);
       const memoryProvenance: MemoryEntryProvenance = {
@@ -837,6 +874,7 @@ export async function buildSessionEntry(
       path: memoryPath,
       absPath,
       mtimeMs,
+      ...(sqliteSource ? { revisionMs: sqliteSource.revisionMs } : {}),
       size,
       hash: hashSessionEntrySnapshot({
         content,
@@ -853,15 +891,15 @@ export async function buildSessionEntry(
       ...(generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
       ...(generatedByCronRun ? { generatedByCronRun: true } : {}),
     };
-    Object.defineProperty(entry, SESSION_RESET_RECALL_CUTOFF, {
-      configurable: false,
-      enumerable: false,
-      value: sqliteSource?.resetRecallCutoff ?? { state: "absent" },
-      writable: false,
-    });
-    return entry;
+    return attachSessionEntryResetRecallCutoff(
+      entry,
+      sqliteSource?.resetRecallCutoff ?? { state: "absent" },
+    );
   } catch (err) {
-    void logSessionFileReadFailure(absPath, err);
+    if (sqliteIdentity) {
+      throw err;
+    }
+    createSubsystemLogger("memory").debug(`Failed reading session file ${absPath}: ${String(err)}`);
     return null;
   }
 }

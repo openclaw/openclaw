@@ -3,11 +3,13 @@ import { writeConfigMachineState } from "../state/config-machine-state-write.js"
 import { VERSION } from "../version.js";
 import { materializeModelPolicyAllowlist } from "./model-policy-allowlist-migration.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
+import { materializeUtilityModelSeparation } from "./utility-model-separation-migration.js";
 
 /** Metadata keys automatically stamped on config writes. */
 export const AUTO_MANAGED_CONFIG_META_PATHS = [
   ["meta", "lastTouchedVersion"],
   ["meta", "migrations", "modelPolicyAllowlist"],
+  ["meta", "migrations", "utilityModelSeparation"],
 ] as const;
 
 export function stampConfigWriteMetadata(
@@ -19,7 +21,10 @@ export function stampConfigWriteMetadata(
   const migrationStamped =
     previousConfig === undefined
       ? cfg
-      : materializeModelPolicyAllowlist(cfg, previousConfig).config;
+      : materializeUtilityModelSeparation(
+          materializeModelPolicyAllowlist(cfg, previousConfig).config,
+          previousConfig,
+        ).config;
   return {
     ...migrationStamped,
     meta: {

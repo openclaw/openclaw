@@ -6,6 +6,7 @@ import path from "node:path";
 import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -612,7 +613,24 @@ describe("runMessageAction media behavior", () => {
     });
 
     it("hydrates buffer and filename from a remote URL before the reply handler runs", async () => {
-      const result = await runMessageAction({
+      const entered = createDeferred();
+      const loaded = createDeferred<Awaited<ReturnType<typeof loadWebMedia>>>();
+      const media = {
+        buffer: Buffer.from("hello"),
+        contentType: "image/png",
+        kind: "image" as const,
+        fileName: "pic.png",
+      };
+      const events: string[] = [];
+      vi.mocked(loadWebMedia).mockImplementationOnce(() => {
+        events.push("load");
+        entered.resolve();
+        return loaded.promise;
+      });
+      handleActionMock.mockImplementationOnce(() => {
+        events.push("handler");
+      });
+      const action = runMessageAction({
         cfg,
         action: "reply",
         params: {
@@ -623,13 +641,46 @@ describe("runMessageAction media behavior", () => {
           media: "https://example.com/pic.png",
         },
       });
+      const settled = action.then(
+        () => {
+          events.push("settled");
+        },
+        () => {
+          events.push("rejected");
+        },
+      );
 
-      expect(result.kind).toBe("action");
-      expect(handleActionMock).toHaveBeenCalledTimes(1);
-      const handlerParams = firstMockArg(handleActionMock, "handleAction");
-      expect(handlerParams.buffer).toBe(Buffer.from("hello").toString("base64"));
-      expect(handlerParams.filename).toBe("pic.png");
-      expect(handlerParams.contentType).toBe("image/png");
+      try {
+        await Promise.race([
+          entered.promise,
+          action.then(() => {
+            throw new Error("Reply settled before the media loader started");
+          }),
+        ]);
+        // Observe the held loader after a scheduler turn, without a wall-clock delay.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(events).toEqual(["load"]);
+        expect(handleActionMock).not.toHaveBeenCalled();
+
+        events.push("release");
+        loaded.resolve(media);
+        const result = await action;
+        await settled;
+
+        expect(result.kind).toBe("action");
+        expect(handleActionMock).toHaveBeenCalledTimes(1);
+        expect(events).toEqual(["load", "release", "handler", "settled"]);
+        const payload = requireActionPayload(result);
+        expect(payload.buffer).toBe(Buffer.from("hello").toString("base64"));
+        expect(payload.filename).toBe("pic.png");
+        expect(payload.contentType).toBe("image/png");
+      } finally {
+        // Release and join even when an ordering assertion fails before resolution.
+        loaded.resolve(media);
+        await settled;
+      }
     });
 
     it("delivers parameterized wrapped image data URLs through the reply handler", async () => {

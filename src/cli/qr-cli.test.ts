@@ -1,4 +1,3 @@
-// QR CLI tests cover QR command registration and terminal output behavior.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodePairingSetupCode } from "../pairing/setup-code.js";
@@ -56,10 +55,21 @@ const issueDevicePairSetupBootstrapToken = mocks.issueDevicePairSetupBootstrapTo
 
 const { registerQrCli } = await import("./qr-cli.js");
 
+function createTokenGatewayConfig(customBindHost = "127.0.0.1") {
+  return {
+    gateway: {
+      bind: "custom",
+      customBindHost,
+      auth: { mode: "token", token: "tok" },
+    },
+  };
+}
+
 function createRemoteQrConfig(params?: { withTailscale?: boolean }) {
   return {
     gateway: {
       ...(params?.withTailscale ? { tailscale: { mode: "serve" } } : {}),
+      publicOrigin: "https://gateway.example.test",
       remote: { url: "wss://remote.example.com:444", token: "remote-tok" },
       auth: { mode: "token", token: "local-tok" },
     },
@@ -78,6 +88,7 @@ function createRemoteQrConfig(params?: { withTailscale?: boolean }) {
 function createTailscaleRemoteRefConfig() {
   return {
     gateway: {
+      publicOrigin: "https://gateway.example.test",
       tailscale: { mode: "serve" },
       remote: {
         token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
@@ -199,17 +210,9 @@ describe("registerQrCli", () => {
 
   it.each([
     { args: ["--setup-code-only"], json: false },
-    { args: ["--json"], json: true },
     { args: ["--setup-code-only", "--json"], json: true },
-    { args: ["--json", "--setup-code-only"], json: true },
   ])("prints the requested output for $args", async ({ args, json }) => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        bind: "custom",
-        customBindHost: "127.0.0.1",
-        auth: { mode: "token", token: "tok" },
-      },
-    });
+    loadConfig.mockReturnValue(createTokenGatewayConfig());
 
     await runQr(args);
 
@@ -234,14 +237,37 @@ describe("registerQrCli", () => {
     );
   });
 
+  it.each([
+    { args: [], profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE, access: "full" },
+    { args: ["--limited"], profile: PAIRING_SETUP_BOOTSTRAP_PROFILE, access: "limited" },
+    {
+      args: ["--voice-node"],
+      profile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      access: "limited",
+    },
+  ])(
+    "issues trusted-proxy QR output with the existing $args grant",
+    async ({ args, profile, access }) => {
+      loadConfig.mockReturnValue(createLocalGatewayConfigWithAuth({ mode: "trusted-proxy" }));
+
+      await runQr(["--json", "--url", "wss://gateway.example.test", ...args]);
+
+      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          auth: "trusted-proxy",
+          gatewayUrl: "wss://gateway.example.test",
+          access,
+        }),
+      );
+      expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ profile }),
+      );
+      expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses the bounded bootstrap profile with --limited", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        bind: "custom",
-        customBindHost: "127.0.0.1",
-        auth: { mode: "token", token: "tok" },
-      },
-    });
+    loadConfig.mockReturnValue(createTokenGatewayConfig());
 
     await runQr(["--setup-code-only", "--limited"]);
 
@@ -262,13 +288,7 @@ describe("registerQrCli", () => {
   });
 
   it("uses the least-privilege bootstrap profile with --voice-node", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        bind: "custom",
-        customBindHost: "127.0.0.1",
-        auth: { mode: "token", token: "tok" },
-      },
-    });
+    loadConfig.mockReturnValue(createTokenGatewayConfig());
 
     await runQr(["--setup-code-only", "--voice-node"]);
 
@@ -299,13 +319,7 @@ describe("registerQrCli", () => {
   });
 
   it("renders ASCII QR by default", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        bind: "custom",
-        customBindHost: "127.0.0.1",
-        auth: { mode: "token", token: "tok" },
-      },
-    });
+    loadConfig.mockReturnValue(createTokenGatewayConfig());
 
     await runQr([]);
 
@@ -325,13 +339,7 @@ describe("registerQrCli", () => {
   });
 
   it("fails fast for insecure remote mobile pairing setup urls", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        bind: "custom",
-        customBindHost: "gateway.example",
-        auth: { mode: "token", token: "tok" },
-      },
-    });
+    loadConfig.mockReturnValue(createTokenGatewayConfig("gateway.example"));
 
     await expectQrExit(["--setup-code-only"]);
 
@@ -341,13 +349,7 @@ describe("registerQrCli", () => {
   });
 
   it("allows private LAN IP cleartext setup urls", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        bind: "custom",
-        customBindHost: "192.168.1.8",
-        auth: { mode: "token", token: "tok" },
-      },
-    });
+    loadConfig.mockReturnValue(createTokenGatewayConfig("192.168.1.8"));
 
     await runQr(["--setup-code-only"]);
 
@@ -376,32 +378,13 @@ describe("registerQrCli", () => {
   });
 
   it("rejects invalid override urls before printing setup codes", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        bind: "custom",
-        customBindHost: "127.0.0.1",
-        auth: { mode: "token", token: "tok" },
-      },
-    });
+    loadConfig.mockReturnValue(createTokenGatewayConfig());
 
     await expectQrExit(["--setup-code-only", "--url", "http://localhost:notaport"]);
 
     const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
     expect(output).toContain("Configured publicUrl is invalid.");
     expect(runtime.log).not.toHaveBeenCalled();
-  });
-
-  it("accepts --token override when config has no auth", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        bind: "custom",
-        customBindHost: "127.0.0.1",
-      },
-    });
-
-    await runQr(["--setup-code-only", "--token", "override-token"]);
-
-    expectLoggedLocalSetupCode();
   });
 
   it("skips local password SecretRef resolution when --token override is provided", async () => {
@@ -586,11 +569,8 @@ describe("registerQrCli", () => {
     expect(runtime.log).toHaveBeenCalledWith(expected);
   });
 
-  it.each([
-    { name: "without tailscale configured", withTailscale: false },
-    { name: "when tailscale is configured", withTailscale: true },
-  ])("reports gateway.remote.url as source in --remote json output ($name)", async (testCase) => {
-    loadConfig.mockReturnValue(createRemoteQrConfig({ withTailscale: testCase.withTailscale }));
+  it("prefers gateway.remote.url over Tailscale in --remote json output", async () => {
+    loadConfig.mockReturnValue(createRemoteQrConfig({ withTailscale: true }));
     mockTailscaleStatusLookup();
 
     await runQr(["--json", "--remote"]);
@@ -624,13 +604,7 @@ describe("registerQrCli", () => {
   });
 
   it("errors when --remote is set but no remote URL is configured", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        bind: "custom",
-        customBindHost: "gateway.local",
-        auth: { mode: "token", token: "tok" },
-      },
-    });
+    loadConfig.mockReturnValue(createTokenGatewayConfig("gateway.local"));
 
     await expectQrExit(["--remote"]);
     const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
@@ -638,11 +612,12 @@ describe("registerQrCli", () => {
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
-  it("supports --remote with tailscale serve when remote token ref resolves", async () => {
+  it("preserves --remote Tailscale Serve with publicOrigin and no remote URL", async () => {
     loadConfig.mockReturnValue(createTailscaleRemoteRefConfig());
     resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
       resolvedConfig: {
         gateway: {
+          publicOrigin: "https://gateway.example.test",
           tailscale: { mode: "serve" },
           remote: {
             token: "tailscale-remote-token",

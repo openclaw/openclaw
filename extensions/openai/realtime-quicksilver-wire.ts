@@ -1,5 +1,5 @@
 // GPT-Live frameless session, call-creation, and sideband event wire contracts.
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { readResponseTextPrefix } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
@@ -55,6 +55,14 @@ export type OpenAIQuicksilverRequestIds = {
   sessionId: string;
   threadId: string;
 };
+
+export function createOpenAIQuicksilverRequestIds(): OpenAIQuicksilverRequestIds {
+  return {
+    realtimeSessionId: randomUUID(),
+    sessionId: randomUUID(),
+    threadId: randomUUID(),
+  };
+}
 
 export type OpenAIQuicksilverInitialItem = {
   role: "user" | "assistant";

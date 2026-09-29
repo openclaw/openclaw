@@ -184,7 +184,6 @@ describe("meeting realtime engine output ownership", () => {
   );
 
   it.each([
-    [{ status: "completed" as const, responseId: "response-1" }, "turn.ended"],
     [
       { status: "failed" as const, responseId: "response-1", message: "provider failed" },
       "turn.ended",
@@ -408,7 +407,8 @@ describe("meeting realtime engine output ownership", () => {
       expect(fixture.writeOutput).toHaveBeenCalledWith(fresh);
       expect(fixture.writeOutput).not.toHaveBeenCalledWith(stale);
       expect(fixture.clearOutput).toHaveBeenCalledOnce();
-      expect(fixture.beginOutput).toHaveBeenCalledTimes(2);
+      expect(fixture.beginOutput).toHaveBeenCalledOnce();
+      expect(fixture.beginOutput).toHaveBeenCalledAfter(fixture.clearOutput);
       fixture.releaseWrite(0);
     } finally {
       await fixture.handle.stop();

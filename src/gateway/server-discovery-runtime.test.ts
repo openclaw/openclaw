@@ -76,6 +76,7 @@ const makeDiscoveryService = (params: {
   pluginId: params.pluginId ?? params.id,
   pluginName: params.pluginId ?? params.id,
   source: "test",
+  id: params.id.trim(),
   service: {
     id: params.id,
     advertise: params.advertise ?? vi.fn(async () => ({ stop: params.stop })),
@@ -144,9 +145,16 @@ describe("startGatewayDiscovery", () => {
     mocks.resolveTailnetDnsHint.mockResolvedValue("gateway.tailnet.example.ts.net");
   });
 
-  it.each(["direct", "projected"])(
-    "runs native-backed advertisements and cleanup in their %s registration scope",
-    async (registration) => {
+  it.each([
+    { registration: "direct", descriptor: "canonical" },
+    { registration: "projected", descriptor: "canonical" },
+    { registration: "direct", descriptor: "frozen" },
+    { registration: "projected", descriptor: "frozen" },
+    { registration: "direct", descriptor: "getter" },
+    { registration: "projected", descriptor: "getter" },
+  ])(
+    "preserves $descriptor discovery descriptors in their $registration scope",
+    async ({ registration, descriptor }) => {
       useDevelopmentDiscoveryEnv();
       const builder = createPluginRegistry({
         logger: { ...makeLogs(), error() {} },
@@ -175,11 +183,24 @@ describe("startGatewayDiscovery", () => {
           calls.push({ phase: "stop", value: this.getTime(), runtime: store.tryGetRuntime() });
         }
       }
+      const service = new NativeAdvertisement(37);
+      if (descriptor === "frozen") {
+        Object.defineProperty(service, "id", { value: " native-discovery " });
+        Object.freeze(service);
+      } else if (descriptor === "getter") {
+        let reads = 0;
+        Object.defineProperty(service, "id", {
+          get() {
+            if (reads++ > 0) {
+              throw new Error("discovery id must only be read at admission");
+            }
+            return " native-discovery ";
+          },
+        });
+      }
       instance.run(() => {
         store.setRuntime(runtime);
-        builder
-          .createApi(record, { config: {} })
-          .registerGatewayDiscoveryService(new NativeAdvertisement(37));
+        builder.createApi(record, { config: {} }).registerGatewayDiscoveryService(service);
       });
       const registry =
         registration === "projected" ? createEmptyPluginRegistry() : builder.registry;
@@ -188,6 +209,9 @@ describe("startGatewayDiscovery", () => {
         projectPluginContributions(builder.registry, record, registry);
         adoptPluginRegistryRecords(registry);
       }
+      expect(registry.gatewayDiscoveryServices).toHaveLength(1);
+      expect(registry.gatewayDiscoveryServices[0]?.service).toBe(service);
+      expect(record.gatewayDiscoveryServiceIds).toEqual(["native-discovery"]);
       let discovery: Awaited<ReturnType<typeof startDiscovery>> | undefined;
       try {
         discovery = await startDiscovery({
@@ -827,17 +851,6 @@ describe("startGatewayDiscovery", () => {
       await Promise.all([retaining, disabling]);
       await discovery.stop();
     }
-    expect(stop).toHaveBeenCalledOnce();
-  });
-
-  it("takes each acquired cleanup once even when shutdown repeats", async () => {
-    useDevelopmentDiscoveryEnv();
-    const stop = vi.fn();
-    const discovery = await startDiscovery({
-      gatewayDiscoveryServices: [makeDiscoveryService({ id: "bonjour", stop })],
-    });
-    await discovery.stop();
-    await discovery.stop();
     expect(stop).toHaveBeenCalledOnce();
   });
 

@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import * as privateTempWorkspace from "@openclaw/fs-safe/temp";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
@@ -8,11 +9,14 @@ import {
   createNpmTarget,
   writePackageRoot,
 } from "../../infra/package-update-steps.test-support.js";
-import * as privateTempWorkspace from "../../infra/private-temp-workspace.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { runFreshUpdateArtifact } from "./update-command-artifact.js";
 import * as packageUpdate from "./update-command-package.js";
+
+vi.mock("@openclaw/fs-safe/temp", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/temp")>()),
+}));
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -92,7 +96,6 @@ it.each(["activate", "refuse", "directory"] as const)(
         timeoutMs: 30_000,
         startedAt: Date.now(),
         progress: {},
-        jsonMode: true,
         installTarget: target,
         nodeRunner: path.join(base, "not-the-selected-node"),
         installEnv: {
@@ -233,7 +236,6 @@ it("preserves an artifact refusal when private workspace cleanup also fails", as
           tag: "file:/fixture/candidate.tgz",
           timeoutMs: 1000,
           startedAt: Date.now(),
-          jsonMode: true,
           progress: {},
           installEnv: {},
         }),

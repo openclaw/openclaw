@@ -21,10 +21,13 @@ install_args=(
   --config.enable-pre-post-scripts=true
   --config.side-effects-cache=true
 )
-if [ "$DEPENDENCY_CACHE" = "true" ]; then
-  # Both trees live below the workspace. Prefer real hard links so the
-  # single cache archive can preserve store/package identity; pnpm
-  # safely falls back to copies for files it cannot hard-link.
+if [ "$DEPENDENCY_CACHE" = "true" ] || {
+  [ "${RUNNER_OS:-}" = "Linux" ] &&
+    [ "${PNPM_CONFIG_STORE_DIR:-}" = "$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store" ]
+}; then
+  # This store belongs to one job, so imports cannot change a sibling install's
+  # inodes. Avoid copying the restored store on Linux filesystems without clones;
+  # exact archives also preserve these links. Pnpm falls back to copies as needed.
   export PNPM_CONFIG_PACKAGE_IMPORT_METHOD=hardlink
 fi
 if [ -n "$LOCKFILE_FLAG" ]; then
@@ -60,11 +63,6 @@ clear_dependency_modules() {
     -mindepth 1 -maxdepth 2 \( -type d -o -type l \) -name node_modules \
     -exec rm -rf -- {} +
 }
-if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
-  mkdir -p "$PNPM_CONFIG_MODULES_DIR"
-  ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
-  export NODE_PATH="$PNPM_CONFIG_MODULES_DIR${NODE_PATH:+:$NODE_PATH}"
-fi
 install_status=0
 if [ "$DEPENDENCY_CACHE_HIT" = "true" ]; then
   run_pnpm_install --offline || install_status="$?"
@@ -80,18 +78,15 @@ fi
 if [ "$install_status" -ne 0 ] && [ "$DEPENDENCY_CACHE_HIT" = "true" ]; then
   echo "::warning::Restored dependency store failed pnpm reconciliation; retrying from an empty store"
   clear_dependency_modules
-  rm -rf "${PNPM_CONFIG_STORE_DIR:?}"
+  # Bootstrap already authenticated these archives; dependency repair must not
+  # publish a replacement cache that loses its offline pnpm bootstrap.
+  find "${PNPM_CONFIG_STORE_DIR:?}" -mindepth 1 -maxdepth 1 ! -name toolchain -exec rm -rf -- {} +
   install_status=0
   run_pnpm_install --prefer-offline || install_status="$?"
 fi
 if [ "$install_status" -ne 0 ]; then
   echo "::error::pnpm install failed"
   exit "$install_status"
-fi
-if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
-  rm -rf node_modules
-  ln -sfn "$PNPM_CONFIG_MODULES_DIR" node_modules
-  ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
 fi
 
 if [ "$DEPENDENCY_CACHE" = "true" ]; then

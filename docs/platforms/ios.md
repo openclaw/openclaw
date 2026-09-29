@@ -23,7 +23,12 @@ Availability: The official iPhone app is available on the [App Store](https://ap
 - Keeps a small read-only offline cache of recent chat sessions and transcripts per paired Gateway: cold opens paint the last known transcript immediately and refresh once the Gateway responds, recent chats stay browsable while disconnected, and reset/forget purges the protected local cache.
 - Queues text messages sent while disconnected in a durable per-gateway outbox (up to 50): queued bubbles show in the transcript, flush in order on reconnect with idempotent retries, remain durable until canonical history confirms the send, retry with backoff before surfacing a retry/delete action, and expire instead of sending after 48 hours offline; reset/forget clears the queue with the cache.
 - Chat is the single text-and-voice surface. Chat actions can open the full Sessions screen without leaving Chat and can show or hide assistant reasoning and tool activity. Tap the microphone for draft dictation, open its menu to record a voice note, or use the inline Talk control for realtime voice; the Talk control animates from live microphone or playback level while listening or speaking.
+- Agent narration appears inline as each segment finishes, including after reconnect. Narration, tool activity, and the reply stay grouped in one response with a single top-aligned agent avatar. Completed chat turns fold earlier work into a **Worked for …** disclosure above the reply on iPhone and iPad. Tap it to inspect the work. Final answers and media stay visible, and active or unanswered work stays expanded.
 - Chat accepts images from the photo picker, camera, Files, paste, and the iOS share sheet. Assistant-generated images render inline from short-lived Gateway artifact URLs, open in a full-screen preview, and remain available after reconnect or history reload without storing image bytes in the transcript cache.
+- Choose **+ → File** to attach audio, video, PDFs, text/code, CSV, JSON, Markdown, ZIP archives, and Office documents from Files. Removable chips show filenames and sizes. Files use the Gateway’s advertised attachment size limits and preserve their original bytes through the durable outbox. The file limit also caps the total attachment bytes per message, counting images after resizing; oversized drafts stay in the composer when you try to send. For older Gateways that do not advertise limits, native chat caps non-image files and the combined attachment budget at 19,464,192 bytes (the decoded budget for a 25 MiB frame), and processed images at 5 MB after resizing. Image source reads have a separate 64 MiB cap to bound resize-input memory; a larger source photo within that cap can be sent when its resized JPEG fits the image and batch budgets. Empty or unreadable files show **Could not attach**; oversized files show **Too large to send**. Sent uploads remain visible after history refresh; downloading inbound uploads from native history is not supported yet. Recorded voice notes keep their separate recording flow.
+- Assistant file attachments have a **Download file** action. Tap it to fetch the managed file and open the system share sheet, where you can choose **Save to Files** or another app. Downloads use the current Gateway connection and its scoped artifact access; an expired or removed file must be sent again. Documents are limited to 100 MB.
+- Dictation shows when it is starting and listening, a live microphone waveform, and the words recognized so far. Tap **Done** to add the transcript to your draft or **Cancel** to discard it. Attachments show **Preparing attachments…** while loading and **Sending attachments…** during delivery; failed photo loads show an error so you can select them again.
+- Preserves Markdown paragraph breaks, including before lists and while responses are streaming.
 - Renders completed Mermaid code fences as inline diagrams, with source/copy controls and a full-screen zoomable preview. Diagram rendering uses bundled assets and works offline.
 - Long-press a message or open its actions menu and choose **Select Text** to select and copy any span in a native text view; code fences show a copy button that copies the raw code.
 - **Settings** opens the Dashboard settings pages when connected with `operator.admin`; the native Gateway screen remains available for connection and pairing.
@@ -35,7 +40,24 @@ Open **Settings** in the sidebar to use the same Dashboard settings pages as the
 web and macOS apps. A connected operator session with `operator.admin` is required.
 The toolbar's **Gateway** button opens the native connection screen, including
 setup, paired Gateways, manual connection, and advanced connection options.
+The sidebar footer also provides Gateway access: **Add Gateway** when none are
+saved, a direct connection-settings button when one is saved, and a quick picker
+when multiple Gateways are saved. The picker keeps saved Gateways available even
+when they are offline and includes a management action for setup and pairing.
+Selection identifies the focused Gateway, not whether it is connected.
+Finish recording or delivering attachments and send or clear the current draft
+before using the quick picker. It does not move drafts to another Gateway.
 **Approvals** opens the native approval inbox and shows the pending count.
+
+An icon beside a native sidebar session shows whether its oldest pending request
+is a question or an approval. It opens a compact preview and the number of
+additional requests of that kind. The agent and section headings summarize their sessions, including
+requests outside the visible recent-session list. Tap an icon, activate it with
+a keyboard, or use VoiceOver to read the details without switching chats.
+Questions stay available when navigating away from Chat. Completed, cancelled,
+and expired requests disappear from these previews; answer and credential drafts
+never appear. Gateway administration approvals open their existing Dashboard
+review page, while native exec and plugin approvals keep their existing actions.
 
 The Gateway must serve Dashboard pages that support the companion iOS app.
 If a loaded Settings page does not report that support, a native banner asks you
@@ -89,11 +111,38 @@ These pages require the same connected `operator.admin` session as Settings.
 Without that access, they show the native Gateway connection guidance. Instances
 opens **Devices**, the Dashboard owner of paired nodes and connected clients.
 
+The native **New Thread** agent picker shows configured names or agent IDs as
+soon as the roster arrives. Resolved identities update each choice without
+delaying selection; configured names keep precedence and the Gateway's default
+identity is **Assistant**. The catalog refreshes when the picker opens and stays
+bound to the selected Gateway.
+
 ## Session colors
 
 Long-press a session in the sidebar or Sessions screen to open its session actions, then choose **Color**. Select red, blue, green, yellow, purple, orange, pink, or cyan. **Default** clears the color.
 
 A colored session has a narrow leading stripe in session lists and a small dot beside its title in Chat. Unset colors show neither marker. The Gateway stores color names, not hex values; the app adjusts their hues for light and dark appearances.
+
+## Message times and models
+
+Completed message groups show relative time for the past week and a compact
+local date for older messages, alongside usage when available. VoiceOver reads
+the exact date, time, and time zone. Assistant replies show their recorded
+originating model when known; selecting another model does not change older
+replies. Streaming text, commentary, and tool activity do not gain these footers.
+
+## Sources in chat
+
+Completed answers show up to eight compact **Sources** cards for cited pages
+returned by web search or web fetch during that answer's run. Tap a card to read
+the recorded **Search snippet** or **Page excerpt**, then choose **Open source**
+to visit the page. A card says when no recorded excerpt is available. Opening
+the preview does not retrieve the page again.
+
+Source icons follow the Gateway's automatic favicon preference and use the
+Gateway's authenticated favicon service. A globe appears when icons are disabled
+or unavailable. Session links and GitHub issue or pull request links keep their
+existing link cards.
 
 ## Diagrams in chat
 
@@ -145,7 +194,9 @@ creation has a token or password auth path.
    administrative Gateway controls, then click **Create setup code**.
 
 3. In the iOS app, open **Settings** -> **Gateway**, scan the QR code (or paste
-   the setup code), and connect.
+   the setup code), and connect. Use a mobile setup code from Control UI or
+   [`openclaw qr`](/cli/qr) — not a gateway join URL from
+   [`openclaw devices join-code`](/cli/devices#openclaw-devices-join-code).
 
    Paired Gateways remain in the **Gateways** list. The checkmark identifies
    the focused Gateway; use the bolt control on another row to keep its
@@ -584,6 +635,7 @@ The app keeps a registry of every Gateway it has paired with, so you can switch 
 - Credentials, TLS trust decisions, per-gateway preferences, and cached chat history are stored per Gateway. Switching never mixes state between Gateways, and push registration follows the active Gateway.
 - Swipe a paired Gateway (or use its context menu) to **Forget** it, which removes its credentials, device tokens, TLS pin, and cached chats.
 - Discovered Gateways must be visible on the network to switch to them; manual Gateways reconnect by saved host and port.
+- Demo and screenshot mode hide saved Gateways: the sidebar picker and **Settings → Gateway** show only the fixture connection, without the **Paired Gateways** list or the manual Gateway, credential, and custom header settings. Scan a QR code or paste a setup code to connect a real Gateway.
 
 ## Computer Use relationship
 
@@ -623,6 +675,7 @@ same iOS limits as Talk started inside the app.
 - `NODE_BACKGROUND_UNAVAILABLE`: bring the iOS app to the foreground (camera/screen commands require it).
 - Pairing prompt never appears: run `openclaw devices list` and approve manually.
 - `Gateway setup incomplete`: the Gateway did not provide both node and operator credentials. Generate a new iPhone setup code from **Devices -> Pair device** in the Control UI or `openclaw qr`, then scan it in **Settings -> Gateway**. Automatic reconnect stays paused until you retry setup; this is not a device-storage error.
+- If setup cannot safely replace the Gateway's offline data, it stops before applying the replacement credentials. The setup code and manual endpoint stay available. Resolve the device-storage problem, then retry.
 - Watch shows no iPhone state: confirm the iPhone reports `watchPaired: true`
   and `watchAppInstalled: true` in `watch.status`. If pairing is false, pair the
   Watch in Apple's Watch app. If installation is false, install the companion

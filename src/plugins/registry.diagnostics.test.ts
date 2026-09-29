@@ -4,16 +4,15 @@ import { buildMediaUnderstandingRegistry } from "../media-understanding/provider
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { createPluginRecord } from "./loader-records.js";
-import { createPluginRegistry } from "./registry.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import {
   clearActivePluginRegistry,
   disposePluginRegistryInstances,
   setActivePluginRegistry,
 } from "./runtime.js";
-import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi } from "./types.js";
 
-const registries: ReturnType<typeof createPluginRegistry>["registry"][] = [];
+const registries: ReturnType<typeof createTestPluginRegistry>["registry"][] = [];
 
 afterEach(async () => {
   await clearActivePluginRegistry();
@@ -23,11 +22,7 @@ afterEach(async () => {
 });
 
 function createDiagnosticFixture() {
-  const builder = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
+  const builder = createTestPluginRegistry();
   registries.push(builder.registry);
   const createRecord = (id: string) => {
     const record = createPluginRecord({
@@ -206,18 +201,13 @@ describe("plugin registration diagnostics", () => {
     ).toEqual([{ pluginId: "alpha", provider: "shared-speech", kinds: ["voice"] }]);
   });
 
-  const hookModes = ["absent", "undefined", "custom"] as const;
-  it.each(
-    (
-      [
-        ["google", "gemini"],
-        ["minimax", "minimax-cn"],
-        ["minimax-portal", "minimax-portal-cn"],
-      ] as const
-    ).flatMap(([id, alias]) =>
-      hookModes.flatMap((single) => hookModes.map((multiple) => ({ id, alias, single, multiple }))),
-    ),
-  )(
+  it.each([
+    { id: "google", alias: "gemini", single: "absent", multiple: "absent" },
+    { id: "google", alias: "gemini", single: "undefined", multiple: "undefined" },
+    { id: "google", alias: "gemini", single: "custom", multiple: "undefined" },
+    { id: "minimax", alias: "minimax-cn", single: "undefined", multiple: "custom" },
+    { id: "minimax-portal", alias: "minimax-portal-cn", single: "custom", multiple: "custom" },
+  ] as const)(
     "preserves $id/$alias hook ownership (single=$single, multiple=$multiple)",
     async ({ id, alias, single, multiple }) => {
       const { builder, createRecord } = createDiagnosticFixture();

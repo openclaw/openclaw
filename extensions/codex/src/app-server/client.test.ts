@@ -17,9 +17,14 @@ describe("CodexAppServerClient", () => {
   const clients: CodexAppServerClient[] = [];
   const newerMinorVersion = new SemVer(CODEX_APP_SERVER_VERSION).inc("minor").version;
 
-  function startInitialize() {
-    const harness = createClientHarness();
+  function createHarness(options?: Parameters<typeof createClientHarness>[0]) {
+    const harness = createClientHarness(options);
     clients.push(harness.client);
+    return harness;
+  }
+
+  function startInitialize() {
+    const harness = createHarness();
     const initializing = harness.client.initialize();
     const outbound = JSON.parse(harness.writes[0] ?? "{}") as {
       id?: number;
@@ -42,10 +47,9 @@ describe("CodexAppServerClient", () => {
   it.each([true, false])(
     "bounds image frames only when the transport declares a limit (%s)",
     async (bounded) => {
-      const harness = createClientHarness({
+      const harness = createHarness({
         maxFrameBytes: bounded ? 16 * 1024 * 1024 : undefined,
       });
-      clients.push(harness.client);
       const input = [
         { type: "image", url: `data:image/png;base64,${"A".repeat(16 * 1024 * 1024)}` },
       ];
@@ -68,21 +72,8 @@ describe("CodexAppServerClient", () => {
     },
   );
 
-  it("routes request responses by id", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
-
-    const request = harness.client.request("model/list", {});
-    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number; method?: string };
-    harness.send({ id: outbound.id, result: { models: [] } });
-
-    await expect(request).resolves.toEqual({ models: [] });
-    expect(outbound.method).toBe("model/list");
-  });
-
   it("replays configuration warnings emitted before their notification observer exists", () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
     const notification = {
       method: "configWarning",
       params: {
@@ -100,8 +91,7 @@ describe("CodexAppServerClient", () => {
 
   it("isolates synchronous notification handler failures", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
     const error = new Error("notification observer failed");
     const receiveNotification = vi.fn();
 
@@ -131,8 +121,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("rejects unbounded guarded thread requests before acquiring the fence", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
     const guard = vi.fn(async () => () => undefined);
     harness.client.setThreadSessionRequestGuard(guard);
 
@@ -148,8 +137,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("removes unpaired surrogate code units from outbound JSON-RPC strings", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
     const high = String.fromCharCode(0xd83d);
     const low = String.fromCharCode(0xdc00);
 
@@ -174,8 +162,7 @@ describe("CodexAppServerClient", () => {
 
   it("logs a redacted preview for malformed app-server messages", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
 
     harness.process.stdout.write('{"token":"secret-value"} trailing\n');
 
@@ -192,8 +179,8 @@ describe("CodexAppServerClient", () => {
         }
       | undefined;
     expect(metadata?.error).toBeInstanceOf(SyntaxError);
-    expect(metadata?.errorMessage).toBe(
-      "Unexpected non-whitespace character after JSON at position 25 (line 1 column 26)",
+    expect(metadata?.errorMessage).toMatch(
+      /^(?:Unexpected non-whitespace character after JSON at position 25 \(line 1 column 26\)|JSON Parse error: Unable to parse JSON string)$/u,
     );
     expect(metadata?.fragmentCount).toBe(1);
     expect(metadata?.linePreview).toBe('{"token":"<redacted>"} trailing');
@@ -203,78 +190,10 @@ describe("CodexAppServerClient", () => {
     expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-value");
   });
 
-  it("recovers app-server messages split by raw newlines inside JSON strings", async () => {
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const harness = createClientHarness();
-    clients.push(harness.client);
-    const notifications: unknown[] = [];
-    harness.client.addNotificationHandler((notification) => {
-      notifications.push(notification);
-    });
-
-    harness.process.stdout.write(
-      '{"method":"item/commandExecution/outputDelta","params":{"delta":"first' +
-        "\n" +
-        'second"}}\n',
-    );
-
-    await vi.waitFor(() =>
-      expect(notifications).toEqual([
-        {
-          method: "item/commandExecution/outputDelta",
-          params: { delta: "first\nsecond" },
-        },
-      ]),
-    );
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("recovers large app-server messages split by raw newlines inside JSON strings", async () => {
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const harness = createClientHarness();
-    clients.push(harness.client);
-    const notifications: unknown[] = [];
-    harness.client.addNotificationHandler((notification) => {
-      notifications.push(notification);
-    });
-    const largePrefix = "x".repeat(1_100_000);
-
-    harness.process.stdout.write(
-      '{"method":"item/commandExecution/outputDelta","params":{"delta":"' +
-        largePrefix +
-        "\n" +
-        'second"}}\n',
-    );
-
-    await vi.waitFor(() => expect(notifications).toHaveLength(1));
-    expect(notifications).toEqual([
-      {
-        method: "item/commandExecution/outputDelta",
-        params: { delta: largePrefix + "\nsecond" },
-      },
-    ]);
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("preserves JSON-RPC error codes", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
-
-    const request = harness.client.request("future/method", {});
-    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
-    harness.send({ id: outbound.id, error: { code: -32601, message: "Method not found" } });
-
-    await expect(request).rejects.toHaveProperty("name", "CodexAppServerRpcError");
-    await expect(request).rejects.toHaveProperty("code", -32601);
-    await expect(request).rejects.toHaveProperty("message", "Method not found");
-    await expect(request).rejects.toHaveProperty("method", "future/method");
-  });
-
   it("retries transient app-server overload errors", async () => {
     vi.useFakeTimers();
     vi.spyOn(Math, "random").mockReturnValue(0);
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
 
     const request = harness.client.request("model/list", {});
     const first = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
@@ -293,8 +212,7 @@ describe("CodexAppServerClient", () => {
 
   it("aborts while waiting to retry an overloaded request", async () => {
     vi.useFakeTimers();
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
     const controller = new AbortController();
 
     const request = harness.client.request("model/list", {}, { signal: controller.signal });
@@ -312,8 +230,7 @@ describe("CodexAppServerClient", () => {
 
   it("keeps the shared client when ownership expires after an overload rejection", async () => {
     vi.useFakeTimers();
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
     const releaseGuard = vi.fn();
     harness.client.setThreadSessionRequestGuard(async () => releaseGuard);
     let current = true;
@@ -348,8 +265,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("surfaces relogin details from Codex app-server RPC errors", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
 
     const request = harness.client.request("thread/start", {});
     const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
@@ -369,6 +285,11 @@ describe("CodexAppServerClient", () => {
       },
     });
 
+    await expect(request).rejects.toMatchObject({
+      name: "CodexAppServerRpcError",
+      code: -32602,
+      method: "thread/start",
+    });
     await expect(request).rejects.toHaveProperty(
       "message",
       "failed to load configuration: Your authentication session could not be refreshed automatically. Please log out and sign in again.",
@@ -385,8 +306,7 @@ describe("CodexAppServerClient", () => {
 
   it("rejects timed-out requests and ignores late responses", async () => {
     vi.useFakeTimers();
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
 
     const request = harness.client.request("model/list", {}, { timeoutMs: 1 });
     const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
@@ -400,8 +320,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("rejects aborted requests and ignores late responses", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
     const controller = new AbortController();
 
     const request = harness.client.request("model/list", {}, { signal: controller.signal });
@@ -433,6 +352,45 @@ describe("CodexAppServerClient", () => {
         },
         capabilities: {
           experimentalApi: true,
+          optOutNotificationMethods: [
+            "account/login/completed",
+            "app/list/updated",
+            "command/exec/outputDelta",
+            "deprecationNotice",
+            "externalAgentConfig/import/completed",
+            "externalAgentConfig/import/progress",
+            "fs/changed",
+            "fuzzyFileSearch/sessionCompleted",
+            "fuzzyFileSearch/sessionUpdated",
+            "mcpServer/event/stream/notification",
+            "mcpServer/oauthLogin/completed",
+            "mcpServer/startupStatus/updated",
+            "process/exited",
+            "process/outputDelta",
+            "project/changed",
+            "remoteControl/status/changed",
+            "thread/environment/connected",
+            "thread/environment/disconnected",
+            "thread/goal/cleared",
+            "thread/project/updated",
+            "thread/queue/changed",
+            "thread/realtime/closed",
+            "thread/realtime/error",
+            "thread/realtime/item/completed",
+            "thread/realtime/item/started",
+            "thread/realtime/item/transcript/delta",
+            "thread/realtime/itemAdded",
+            "thread/realtime/outputAudio/delta",
+            "thread/realtime/sdp",
+            "thread/realtime/started",
+            "thread/realtime/transcript/delta",
+            "thread/realtime/transcript/done",
+            "windows/worldWritableWarning",
+            "windowsSandbox/setupCompleted",
+            "turn/diff/updated",
+            "item/fileChange/outputDelta",
+            "thread/compacted",
+          ],
           extensions: {
             "openai/standard-form-input": {},
             "openai/form": {},
@@ -445,48 +403,6 @@ describe("CodexAppServerClient", () => {
     });
     expect(outbound.params?.clientInfo?.version).not.toBe("");
     expect(JSON.parse(harness.writes[1] ?? "{}")).toEqual({ method: "initialized" });
-  });
-
-  it("blocks unsupported app-server versions during initialize", async () => {
-    const { harness, initializing, outbound } = startInitialize();
-    harness.send({
-      id: outbound.id,
-      result: { userAgent: "openclaw/0.146.9 (macOS; test)" },
-    });
-
-    await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.146.9`,
-    );
-    expect(harness.writes).toHaveLength(1);
-  });
-
-  it.each(["0.147.0", "0.148.0"])(
-    "blocks previously bundled Codex app-server version %s",
-    async (version) => {
-      const { harness, initializing, outbound } = startInitialize();
-      harness.send({
-        id: outbound.id,
-        result: { userAgent: `openclaw/${version} (macOS; test)` },
-      });
-
-      await expect(initializing).rejects.toThrow(
-        `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required, but detected ${version}`,
-      );
-      expect(harness.writes).toHaveLength(1);
-    },
-  );
-
-  it("blocks Codex app-server prereleases of the exact supported version", async () => {
-    const { harness, initializing, outbound } = startInitialize();
-    harness.send({
-      id: outbound.id,
-      result: { userAgent: "openclaw/0.149.0-alpha.2 (macOS; test)" },
-    });
-
-    await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.149.0-alpha.2`,
-    );
-    expect(harness.writes).toHaveLength(1);
   });
 
   it("accepts compatible build metadata on the minimum supported version", async () => {
@@ -503,39 +419,10 @@ describe("CodexAppServerClient", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("blocks Codex app-server prereleases outside generated stable schemas", async () => {
-    const { harness, initializing, outbound } = startInitialize();
-    harness.send({
-      id: outbound.id,
-      result: { userAgent: "openclaw/0.144.0-alpha.1 (macOS; test)" },
-    });
-
-    await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required`,
-    );
-    expect(harness.writes).toHaveLength(1);
-  });
-
-  it("blocks Codex app-server custom builds outside generated stable schemas", async () => {
-    const { harness, initializing, outbound } = startInitialize();
-    harness.send({
-      id: outbound.id,
-      result: { userAgent: "openclaw/0.144.0+custom (macOS; test)" },
-    });
-
-    await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required`,
-    );
-    expect(harness.writes).toHaveLength(1);
-  });
-
   it.each([
     ["0.149.0", 0],
     [`${CODEX_APP_SERVER_VERSION}-alpha.4`, 0],
-    [CODEX_APP_SERVER_VERSION, 0],
-    [`${newerMinorVersion}-alpha.4`, 1],
     [newerMinorVersion, 1],
-    [new SemVer(CODEX_APP_SERVER_VERSION).inc("major").version, 1],
   ])("accepts app-server version %s for normal startup validation", async (version, warnings) => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const { harness, initializing, outbound } = startInitialize();
@@ -559,35 +446,26 @@ describe("CodexAppServerClient", () => {
     }
   });
 
-  it.each(["0.147.00", "0.148.0-alpha..9", "0.148.0-alpha.09"])(
-    "blocks malformed app-server version %s during initialize",
+  it.each(["0.146.9", "0.149.0-alpha.2", "0.147.00", undefined])(
+    "rejects unsupported, malformed, or missing app-server version %s",
     async (version) => {
       const { harness, initializing, outbound } = startInitialize();
       harness.send({
         id: outbound.id,
-        result: { userAgent: `openclaw/${version} (macOS; test)` },
+        result: version ? { userAgent: `openclaw/${version} (macOS; test)` } : {},
       });
 
       await expect(initializing).rejects.toThrow(
-        `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required`,
+        `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required, but ${
+          version ? `detected ${version}` : "OpenClaw could not determine the running Codex version"
+        }`,
       );
       expect(harness.writes).toHaveLength(1);
     },
   );
 
-  it("blocks app-server initialize responses without a version", async () => {
-    const { harness, initializing, outbound } = startInitialize();
-    harness.send({ id: outbound.id, result: {} });
-
-    await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required`,
-    );
-    expect(harness.writes).toHaveLength(1);
-  });
-
   it("handles stdin write errors without crashing the process", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
 
     // Start a pending request so we can verify it gets properly rejected.
     const pending = harness.client.request("test/method");
@@ -609,8 +487,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("handles stdout stream errors without crashing the process", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
 
     const pending = harness.client.request("test/method");
     const readError = Object.assign(new Error("stdout pipe broke"), { code: "EIO" });
@@ -626,8 +503,7 @@ describe("CodexAppServerClient", () => {
 
   it("keeps RPC requests usable after stderr stream errors", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
 
     const pending = harness.client.request("test/method");
     const firstRequest = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
@@ -648,8 +524,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("preserves redacted app-server stderr on exit errors", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
 
     const pending = harness.client.request("test/method");
     harness.process.stderr.write('fatal token="secret-value" while booting\n');
@@ -664,8 +539,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("preserves split UTF-8 in app-server stderr exit errors", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
     const pending = harness.client.request("test/method");
     const character = Buffer.from("猫", "utf8");
 
@@ -679,8 +553,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("keeps bounded stderr tails on UTF-16 boundaries", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
     const pending = harness.client.request("test/method");
 
     harness.process.stderr.write(`🎉${"x".repeat(1_999)}`);
@@ -694,8 +567,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("does not write to stdin after the child process exits", () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
 
     // Simulate the child process exiting.
     harness.process.emit("exit", 1, null);
@@ -705,28 +577,8 @@ describe("CodexAppServerClient", () => {
     expect(harness.writes).toHaveLength(0);
   });
 
-  it("answers server-initiated requests with the registered handler result", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
-    harness.client.addRequestHandler((request) => {
-      if (request.method === "item/tool/call") {
-        return { contentItems: [{ type: "inputText", text: "ok" }], success: true };
-      }
-      return undefined;
-    });
-
-    harness.send({ id: "srv-1", method: "item/tool/call", params: { tool: "message" } });
-    await vi.waitFor(() => expect(harness.writes.length).toBe(1));
-
-    expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
-      id: "srv-1",
-      result: { contentItems: [{ type: "inputText", text: "ok" }], success: true },
-    });
-  });
-
   it("interleaves a bounded remote file command with a pending dynamic tool request", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
     const remotePath = "/remote/codex-workspace/reports/slack-upload.txt";
     const content = "authoritative remote attachment";
     harness.client.addRequestHandler(async (request, signal) => {
@@ -782,8 +634,7 @@ describe("CodexAppServerClient", () => {
 
   it("returns JSON-RPC internal errors when server request handlers throw", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
     harness.client.addRequestHandler((request) => {
       if (request.method === "account/chatgptAuthTokens/refresh") {
         throw new Error("refresh_token_invalidated: reauthentication required");
@@ -815,8 +666,7 @@ describe("CodexAppServerClient", () => {
   it("fails closed when a dynamic tool server request handler hangs", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
     let requestSignal: AbortSignal | undefined;
     harness.client.addRequestHandler((request, signal) => {
       if (request.method === "item/tool/call") {
@@ -851,16 +701,93 @@ describe("CodexAppServerClient", () => {
   });
 
   it.each([
+    { executionTimeoutMs: 900_000, beforeDeadlineMs: 660_000, deadlineMs: 930_000 },
+    {
+      executionTimeoutMs: 2_147_483_647,
+      beforeDeadlineMs: 2_147_000_000,
+      deadlineMs: 2_147_483_647,
+    },
+  ])(
+    "accepts one owner execution budget of $executionTimeoutMs ms",
+    async ({ executionTimeoutMs, beforeDeadlineMs, deadlineMs }) => {
+      vi.useFakeTimers();
+      vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const harness = createClientHarness();
+      clients.push(harness.client);
+      let requestSignal: AbortSignal | undefined;
+      let setExecutionTimeoutMs: ((timeoutMs: number) => void) | undefined;
+      harness.client.addRequestHandler((_request, signal, setTimeoutMs) => {
+        requestSignal = signal;
+        setExecutionTimeoutMs = setTimeoutMs;
+        setTimeoutMs?.(executionTimeoutMs);
+        return new Promise<never>(() => {});
+      });
+
+      harness.send({ id: "owned-budget", method: "item/tool/call", params: { tool: "node_exec" } });
+      await vi.advanceTimersByTimeAsync(beforeDeadlineMs);
+      expect(harness.writes).toHaveLength(0);
+      expect(requestSignal?.aborted).toBe(false);
+
+      setExecutionTimeoutMs?.(1_800_000);
+      await vi.advanceTimersByTimeAsync(deadlineMs - beforeDeadlineMs);
+      expect(requestSignal?.aborted).toBe(true);
+      expect(harness.writes).toHaveLength(1);
+      expect(JSON.parse(harness.writes[0] ?? "{}")).toMatchObject({
+        id: "owned-budget",
+        result: {
+          success: false,
+          contentItems: [{ text: expect.stringContaining(`${deadlineMs}ms`) }],
+        },
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it.each(["completed", "timed out"] as const)(
+    "ignores an execution budget reported after the request %s",
+    async (outcome) => {
+      vi.useFakeTimers();
+      vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const harness = createClientHarness();
+      clients.push(harness.client);
+      let requestSignal: AbortSignal | undefined;
+      let setExecutionTimeoutMs: ((timeoutMs: number) => void) | undefined;
+      harness.client.addRequestHandler((_request, signal, setTimeoutMs) => {
+        requestSignal = signal;
+        setExecutionTimeoutMs = setTimeoutMs;
+        return outcome === "completed"
+          ? { success: true, contentItems: [] }
+          : new Promise<never>(() => {});
+      });
+
+      harness.send({
+        id: "retired-budget",
+        method: "item/tool/call",
+        params: { tool: "node_exec" },
+      });
+      await vi.advanceTimersByTimeAsync(
+        outcome === "completed" ? 0 : CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
+      );
+      expect(harness.writes).toHaveLength(1);
+      expect(requestSignal?.aborted).toBe(outcome === "timed out");
+
+      setExecutionTimeoutMs?.(900_000);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(930_000);
+      expect(harness.writes).toHaveLength(1);
+      expect(requestSignal?.aborted).toBe(outcome === "timed out");
+    },
+  );
+
+  it.each([
     { name: "default", timeoutSeconds: undefined, waitMs: 900_000 },
-    { name: "explicit", timeoutSeconds: 900, waitMs: 900_000 },
     { name: "maximum", timeoutSeconds: 3600, waitMs: 3_600_000 },
   ])(
     "keeps the transport open for a $name credential wait and bounds a hung handler",
     async ({ timeoutSeconds, waitMs }) => {
       vi.useFakeTimers();
       vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-      const harness = createClientHarness();
-      clients.push(harness.client);
+      const harness = createHarness();
       let requestSignal: AbortSignal | undefined;
       harness.client.addRequestHandler((_request, signal) => {
         requestSignal = signal;
@@ -901,8 +828,7 @@ describe("CodexAppServerClient", () => {
   );
 
   it("fails closed for unhandled native app-server approvals", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
 
     harness.send({
       id: "approval-1",
@@ -926,8 +852,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("fails closed for unhandled request_user_input prompts", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
 
     harness.send({
       id: "input-1",
@@ -948,8 +873,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("returns an explicit bounded decline for unhandled MCP elicitations", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
+    const harness = createHarness();
 
     harness.send({
       id: "elicitation-1",

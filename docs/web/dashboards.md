@@ -25,20 +25,23 @@ core feature, owned by the thread, stored with the agent, and they survive
 
 Open `/dashboards` to browse dashboard-enabled threads as a card gallery. Search
 by thread or author, filter by author, and sort by recent activity or title.
-Select a card to open its owning task with the dashboard as the focused main
-view. Choose **Restore split** to bring the side panel alongside it. An open
-Dashboards page updates as threads are renamed, archived, or deleted, including
+Stored sessions without a matching task URL remain visible as previews without an open link.
+Select a linked card to open its owning task using your personal presentation override
+or the dashboard’s shared default. Ordinary card clicks stay in the app and preserve
+retained widget interactions. In fullscreen, choose **Restore split** to
+bring the side panel alongside it. An open Dashboards page updates as threads
+are renamed, archived, or deleted, including
 after a Gateway reconnect.
 If a refresh fails, the page keeps the last loaded dashboards visible with a
 stale-data warning. Choose **Retry** to load the list again.
 
-The dashboard and its server-side thread preference follow you when you connect
-to the same Gateway from another device. The active dashboard tab and task
-layout remain per-device UI state. The browser retains layout and tab preferences
+The dashboard and its shared presentation default follow you when you connect
+to the same Gateway from another device. Personal presentation overrides, the
+active dashboard tab, and other task layout choices remain per-device UI state. The browser retains layout and tab preferences
 for up to 500 sessions, keeping the most recently changed entries when it reaches
 that limit. Ordinary task revisits restore the browser's saved arrangement for
-that task; opening a gallery card explicitly focuses the dashboard. Increasing
-the limit does not recover preferences already evicted by an older version.
+that task; gallery cards follow the same presentation preference. Increasing the
+limit does not recover preferences already evicted by an older version.
 
 The browser keeps the three most recently visited tasks in each pane loaded,
 including their dashboard widgets, while you switch tasks or visit Settings.
@@ -133,12 +136,48 @@ never needs the agent.
   **Auto height** from the widget menu to fit the content again.
 - **Tabs.** A board can have several pages — say, an overview tab and a
   focused tab with one big widget. Each tab remembers its widget layout.
+  Visited tabs stay loaded while the dashboard is retained, preserving local
+  filters and widget interactions when you switch back. Unvisited tabs load on
+  demand; changed content still refreshes, and removed tabs release their widgets.
+  Moving a loaded widget to another tab also preserves its unsaved input and interactions.
 - **Dashboard view.** The board can occupy the main area or a resizable side
   panel. With Dashboard active in the side panel, choose **Swap** in the task
   toolbar, then **Focus** for a dashboard-only view. **Restore split** brings
   the side panel back. A tab with one full-width widget fills the focused
-  dashboard edge to edge, without a card border or surrounding padding.
+  dashboard, using all available width and height without a card border.
+  Standard HTML widgets keep their content padding when maximized; widgets
+  explicitly set to full-bleed or frameless remain edge to edge.
+  Embedded MCP apps follow the available space
+  when you resize the window or restore the split.
+  Its widget controls move into the task toolbar’s **…** menu, leaving no
+  hover pill or drag and resize handles over the page. Granted permissions
+  remain available in that menu; approval requests and errors stay visible
+  in the widget.
   Restoring the split or adding another widget brings back the normal spacing.
+- **Shared default.** In the task menu’s **Layout** submenu, choose **Use current
+  view as default** to make ordinary session opens, including sidebar links, show
+  Dashboard in its current fullscreen or split view.
+  While Dashboard is shown, **This is the default view** confirms that the current
+  fullscreen or split view and the session's opening view both match the shared
+  default, including for read-only viewers. When the view differs, **Use current view as default** is available
+  if you can edit the session. Both explain that personal layout choices still
+  apply. Merely opening, swapping, or focusing a panel does not change the shared
+  default. If an older dashboard saved its fullscreen or split presentation but
+  still opens as Chat, choose **Use current view as default** once to save both
+  choices together. Saving does not rearrange
+  anyone already viewing the dashboard; the default applies on subsequent opens
+  and revisits, including opens from the dashboard gallery.
+  Your browser’s deliberate **Focus** / **Restore split** choice takes precedence
+  over the shared default. Choosing the shared view again clears that personal
+  override. Applying a shared default does not create a personal override.
+  Dock position, dimensions, and other panels remain local. Reopening or reloading
+  an unchanged dashboard view preserves the selected side-panel tab, including
+  Side chat or Files when Chat remains main. It also preserves a closed side panel
+  or a focused Chat view. Existing browser layouts without presentation provenance retain
+  their complete saved layout
+  until you deliberately choose a presentation; OpenClaw does not guess whether
+  an older expansion was automatic. Local layout retention remains 500 sessions.
+  An explicit `?dashboard=expanded` link requests fullscreen for that visit only.
 - **Agent parity.** The agent's `dashboard` tool creates or updates trusted
   plugin widgets, moves, resizes, and removes widgets, manages tabs, switches
   the visible tab, and requests a split or expanded dashboard with
@@ -150,6 +189,18 @@ never needs the agent.
   `registeredContentKind`; remove a widget before replacing its content owner
   or registered source kind.
   Ask "show the finance tab and expand the dashboard" and watch it happen.
+
+  To publish the initial view instead, use `dashboard` with
+  `action: "set_default_presentation"` and `presentation: "split"` or `"expanded"`.
+  This durable operation works without a connected browser. `action: "read"`
+  returns the effective `defaultPresentation`, which is `"split"` when unset.
+  Both the menu and agent use the same authorized `sessions.patch` mutation to
+  save `boardFace: "dashboard"` and `boardPresentation` together.
+  The optional `boardPresentation` metadata is stored with the session, survives
+  restart and `/new` or `/reset` of that session, and is removed with session
+  deletion. Patching `boardPresentation: null` restores the built-in split default.
+  No database schema migration or backfill is required. Older builds ignore this
+  presentation behavior; reverting does not remove boards or transcripts.
 
   Switching the visible tab or dashboard presentation requires a connected
   Control UI. If none is connected, the command returns `UNAVAILABLE`; open the
@@ -202,6 +253,103 @@ Use **Open website** if the frame stays blank or cannot sign in. OpenClaw does
 not proxy the site or remove its embedding restrictions. This widget is separate
 from custom HTML widgets and does not loosen their sandbox or network grants.
 
+## Share a browser dashboard with your agent
+
+Ask for a **Browser dashboard** when you want a saved dashboard where your agent
+can read and interact with the same page you see:
+
+> Open this HTTP status app as a fullscreen dashboard. Pin this session as
+> Service Status, and use that same page when I ask you to change its filters.
+
+To show the browser beside chat, ask to open the
+[Browser side panel](/web/control-ui/panels#browser-panel). That opens the
+existing panel without creating a dashboard widget or expanding the board.
+
+The Browser plugin's `browser:dashboard` widget presents a tab in a local
+OpenClaw-managed browser. The Control UI streams that tab, so HTTP apps also
+work when the Control UI itself uses HTTPS. The browser's existing navigation
+policy still applies. It does not inherit the browser cookies on your phone or
+laptop. Administrators use the managed profile's login session. Other session
+writers use an isolated context with its own cookies and storage.
+
+The agent creates the widget through `dashboard`:
+
+```json
+{
+  "action": "widget_put",
+  "name": "service-status",
+  "title": "Service Status",
+  "pluginKind": "browser:dashboard",
+  "props": { "url": "http://status.example.com" },
+  "size": "full"
+}
+```
+
+It then uses the existing `browser` tool with the widget name:
+
+```json
+{ "action": "snapshot", "dashboard": "service-status", "refs": "aria" }
+```
+
+`act` and `navigate` accept the same `dashboard` selector. The selector resolves
+the current tab, so the agent does not need to reopen the URL or guess a target
+ID. Use `dashboard` to arrange the board, expand it with `set_presentation`, and
+remove widgets; session naming and pinning use `sessions`. No separate
+site-specific tool is needed.
+
+For administrators, hiding the dashboard or resetting its conversation keeps its browser tab.
+Ordinary tab closing and idle cleanup do not close a tab owned by a dashboard.
+Use **Stop browser** to release a running tab and **Resume browser** to open it
+again. Agent equivalents are `browser` with `action: "close"` or `"open"` and
+the `dashboard` selector. Stop also persists before the first open, without
+starting a browser; reopening the dashboard or restarting the Gateway keeps it
+paused until Resume. Resuming loads the saved URL; unsaved document state
+does not survive closing the browser. If closure is temporarily unavailable,
+the dashboard shows that Stop is pending and offers **Retry stop** until closure
+is confirmed. Removing or replacing the widget releases
+its old tab when Browser receives the board change; the existing cleanup cycle
+also reconciles missed changes. Gallery previews never start a browser.
+
+Administrator browser dashboards require Browser access and use the `openclaw` managed profile
+by default. Optional `props.profile` selects another local managed profile;
+attached personal browsers, node routing, and remote browser profiles are not
+supported for this widget. The lightweight **Website** widget remains useful
+when you only need to display an embeddable HTTPS website in your own browser.
+
+### Session writer access
+
+With the Browser plugin enabled, a non-admin session writer can open a Browser
+dashboard without `operator.admin`. `operator.write` retains the session's
+existing collaborator rules. The narrower `operator.sessions.write` grants
+access only to the caller's own sessions. Effective browser tool policy still
+applies; this feature does not change role or tool defaults.
+
+The **Session browser** mode uses the configured default local managed profile
+to launch an empty, isolated browser context for that session and widget.
+Custom, attached, personal, extension, node and remote profiles are unsupported.
+Cookies and storage are separate from administrator browsers and other sessions.
+The agent's `dashboard` selector uses this same context when acting for a
+non-admin operator. Administrator views and selectors continue to use their
+separate managed-profile tab; their page state is not shared with Session browser.
+
+Session browser supports page navigation, inspection, screenshots and interaction.
+It does not expose profile management, arbitrary tab selection, file transfers,
+or cookie/storage administration. The general browser tool keeps its existing
+configured host/profile access: this isolation applies to the dashboard route
+and selector, not to the whole agent.
+
+The context survives a normal turn ending or a viewer disconnecting. Revoking a
+person's access stops their viewer and operations without destroying the context
+for other authorized collaborators. Resetting or deleting the session, removing
+the widget, retiring the browser profile, or restarting the Gateway closes the
+context. Session browser's Stop state is in memory; Resume starts from the saved
+widget URL. The Gateway retains at most 64 isolated dashboard records; remove an
+unused browser widget if that limit is reached.
+
+Sessions that require a sandbox or have locked model selection cannot use this
+mode. An isolated Gateway browser context is not a sandbox backend. The existing
+administrator browser path remains available under its existing rules.
+
 ## What widgets are allowed to do
 
 Custom HTML and registered-source widgets that only render need no approval —
@@ -232,6 +380,12 @@ permissions stay the same or shrink. A grant is preserved only when the
 approved bytes still match and the requested permissions do not widen.
 The authoring result distinguishes pending, rejected, and granted access;
 saving a widget does not imply its capabilities were approved.
+Automatic review can reuse a low-risk approval when the same agent recreates
+an HTML or registered-source widget with the same name, source, and declarations
+in another session. This bounded in-memory reuse resets when the runtime
+configuration or exec-approval policy changes. Each session's current permission
+mode and each widget's grant authority still apply. MCP apps and incognito
+sessions do not reuse these assessments. New content still waits for review.
 Widget interactions the agent should know about (filters you clicked, views
 you switched) reach it quietly as session notices — it stays informed without
 being interrupted.

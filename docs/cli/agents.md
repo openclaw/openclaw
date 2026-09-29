@@ -34,6 +34,12 @@ openclaw agents delete work
 
 Options: `--json`, `--bindings` (include full routing rules, not only per-agent counts/summaries).
 
+For an explicit multi-agent roster, the default badge and JSON `isDefault` field
+use `agents.defaults.systemAgent.agentId`. Doctor preserves the migrated default
+there across restarts. Without a designation, every entry reports `isDefault: false`;
+set one with `openclaw config set agents.defaults.systemAgent.agentId <id>`.
+The Control UI's **Set Default** action writes the same designation.
+
 Provider-status labels include optional account display names beside account IDs.
 Routing rules continue to identify accounts by channel and account ID.
 
@@ -80,6 +86,10 @@ skip the identity ceremony: no `BOOTSTRAP.md` is created. The bundled roles
 leave skills unchanged.
 Role delegation settings are also applied. A standalone chief of staff targets the
 standard specialist ids; use the team command to create and wire all four agents.
+When creating an agent through Ask OpenClaw, you can give a display name separately
+from its id, such as “QA Writer” with id `qa-writer`. The approval includes both.
+An explicit display name replaces the role's default name while keeping its
+emoji, theme, and operating instructions.
 Unknown roles are rejected with the available role names. A workspace with an
 unfinished bootstrap cannot adopt a role. OpenClaw checks completion before
 adding role files; rejected adoption leaves workspace files and agent config
@@ -119,10 +129,10 @@ change global delegation defaults or tool policy. See [Team preset](/concepts/mu
 Delegation remains team wiring in config; the role Claws will carry these
 settings once the separate Claw profile support lands.
 
-The coordinator is an explicit chat target, not a universal default agent. If
+The coordinator is an explicit chat target. If
 `agents.defaults.systemAgent.agentId` is unset, team creation sets it to the
-coordinator for ambient system work. An existing ambient owner is preserved and
-reported. Channel routing still needs bindings to the intended agent.
+coordinator for ambient system work and default-compatible operations. An existing
+owner is preserved and reported. Channel bindings take precedence over this default.
 With `--json`, the summary includes `coordinatorId`, the created `agents` and
 their paths, `ambientOwnerId`, and a `note` when another ambient owner is retained.
 
@@ -152,9 +162,16 @@ Options: `--force`, `--json`.
 - If session-store cleanup fails, the agent is removed from config but its files and pending cleanup are retained. Resolve the reported storage error, then retry the same deletion command; `--json` reports `purgeFailed: true` until the purge succeeds.
 - On installations that have not migrated shared auth yet, the legacy owner cannot be deleted. Run `openclaw doctor --fix`; after relocation into shared state SQLite, `main` follows the same deletion rules as any other agent.
 - An agent that owns a session database still used by another configured agent cannot be deleted, even when retaining files. Keep that owner configured; moving shared history to another owner requires a supported migration, which is not currently available.
-- When the Gateway is reachable, deletion routes through the Gateway so config and session-store cleanup share the same writer as runtime traffic. If the Gateway is unreachable, the CLI falls back to the offline local path and removes the agent's scheduled jobs transactionally. If Gateway credentials are unavailable before the CLI can test reachability, deletion still falls back locally but warns that cron cleanup was skipped because a live scheduler may own the store.
+- When the Gateway is reachable, deletion routes through the Gateway so config and session-store cleanup share the same writer as runtime traffic. If the configured local Gateway cannot be reached before connecting, the CLI falls back to the offline local path and removes the agent's scheduled jobs transactionally. If local Gateway credentials are unavailable before the CLI can test reachability, deletion still falls back locally but warns that cron cleanup was skipped because a live scheduler may own the store.
 - If another agent's workspace is the same path, inside this workspace, or contains this workspace, the workspace is retained, and `--json` reports `workspaceRetained`, `workspaceRetainedReason`, and `workspaceSharedWith`.
 - Cleanup also retains directories containing another agent's registered database, so deleting a parent directory cannot discard the survivor's history.
+- Cleanup resolves symlink targets using their filesystem meaning, including `..` segments, so a dangling workspace link cannot select an unrelated neighboring directory.
+
+Automatic local fallback never applies to a remote Gateway or an
+`OPENCLAW_GATEWAY_URL` override, including loopback SSH tunnels. Connection or
+credential failures exit with an error and leave local config, workspace, and
+session state alone. Restore the Gateway connection and credentials, or run the
+command on the Gateway host.
 
 ## Routing bindings
 

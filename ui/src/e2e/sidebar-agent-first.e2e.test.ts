@@ -9,6 +9,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Agent-first sidebar geometry" });
+const fixtureNow = Date.UTC(2026, 8, 24, 12);
 const imageAvatar =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGN4nhWCFTEQkPj64w8ag5AEPqPgiDgdmAgA9YRzYZfFh50AAAAASUVORK5CYII=";
 const agentsList: AgentsListResult = {
@@ -45,7 +46,7 @@ const sessionRows = [
     hasActiveRun: true,
     status: "running",
     unread: true,
-    startedAt: Date.now() - 3_000,
+    startedAt: fixtureNow - 3_000,
   }),
   sessionRow("failure", "Review failed checks", {
     spawnedBy: "agent:main:parent",
@@ -83,6 +84,7 @@ suite.define(() => {
           hasTouch: touch,
         },
         async ({ page }) => {
+          await page.clock.setFixedTime(fixtureNow);
           await page.addInitScript(
             ({ key, prefs }) => {
               localStorage.setItem(key, JSON.stringify(prefs));
@@ -171,7 +173,30 @@ suite.define(() => {
           expect(await name.textContent()).toBe("Engineering");
           expect(await name.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
           expect((await name.boundingBox())?.width).toBe(nameWidth);
-          expect(await group.locator(".sidebar-agent-roster__signals").isVisible()).toBe(false);
+          const attention = group.locator(
+            '.sidebar-agent-roster__signals [data-session-attention="error"]',
+          );
+          expect(await attention.isVisible()).toBe(true);
+          await group.locator(".sidebar-agent-roster__row").focus();
+          await page.keyboard.press("Tab");
+          expect(await attention.evaluate((element) => element === document.activeElement)).toBe(
+            true,
+          );
+          await expect
+            .poll(() => group.locator(".sidebar-agent-roster__signals wa-tooltip[open]").count())
+            .toBe(1);
+          expect(
+            await group.locator(".sidebar-agent-roster__signals wa-tooltip[open]").textContent(),
+          ).toContain("Child session Review failed checks failed: Geometry mismatch");
+          const attentionBounds = (await attention.boundingBox())!;
+          const actionBounds = (await group
+            .locator(".sidebar-agent-roster__actions")
+            .boundingBox())!;
+          expect(attentionBounds.x + attentionBounds.width).toBeLessThanOrEqual(actionBounds.x);
+          expect((await group.locator(".sidebar-agent-roster__header").boundingBox())?.height).toBe(
+            48,
+          );
+          await page.keyboard.press("Escape");
           await group.locator('[data-agent-collapse="main"]').click();
           await group.locator('[data-child-session-toggle="agent:main:parent"]').click();
           await group.locator('[data-child-session-toggle="agent:main:child"]').click();
@@ -206,16 +231,22 @@ suite.define(() => {
                 const title = row
                   .querySelector(".sidebar-recent-session__name")!
                   .getBoundingClientRect();
+                const icon = row
+                  .querySelector(".sidebar-session-indicator")!
+                  .getBoundingClientRect();
                 const state = row
                   .querySelector(".sidebar-session-team-state")
                   ?.getBoundingClientRect();
                 return {
                   left: title.left,
+                  iconLeft: icon.left,
+                  iconRight: icon.right,
                   right: row.getBoundingClientRect().right,
                   stateLeft: state?.left,
                   stateRight: state?.right,
                   titleRight: title.right,
                   height: row.getBoundingClientRect().height,
+                  radius: Number.parseFloat(getComputedStyle(row).borderTopRightRadius),
                 };
               });
               return {
@@ -228,15 +259,16 @@ suite.define(() => {
           const beforeFocus = await geometry();
           expect(beforeFocus.avatarWidth).toBe(36);
           expect(beforeFocus.headerHeight).toBe(48);
-          expect(beforeFocus.rows[0]!.left).toBeCloseTo(beforeFocus.avatarLeft, 1);
+          expect(beforeFocus.rows[0]!.iconLeft).toBeCloseTo(beforeFocus.avatarLeft, 1);
           expect(beforeFocus.rows[1]!.left - beforeFocus.rows[0]!.left).toBeCloseTo(16, 1);
           expect(beforeFocus.rows[2]!.left - beforeFocus.rows[1]!.left).toBeCloseTo(16, 1);
           for (const row of beforeFocus.rows) {
+            expect(row.left - row.iconRight).toBeGreaterThanOrEqual(8);
             expect(row.right).toBeCloseTo(beforeFocus.rows[0]!.right, 1);
             expect(row.height).toBe(touch ? 44 : 32);
             if (row.stateLeft !== undefined) {
               expect(row.titleRight).toBeLessThanOrEqual(row.stateLeft);
-              expect(row.stateRight).toBeCloseTo(row.right - (touch ? 96 : 0), 1);
+              expect(row.stateRight).toBeLessThanOrEqual(row.right - (touch ? 96 : 0) - row.radius);
             } else if (!touch) {
               expect(row.titleRight).toBeCloseTo(row.right, 1);
             }
@@ -282,7 +314,7 @@ suite.define(() => {
           const collapsedSlots = parent.locator(".sidebar-session-team-state");
           const collapsedBounds = (await collapsedSlots.boundingBox())!;
           expect(collapsedBounds.x + collapsedBounds.width).toBeCloseTo(
-            beforeFocus.rows[0]!.right - (touch ? 96 : 0),
+            beforeFocus.rows[0]!.right - (touch ? 96 : 0) - beforeFocus.rows[0]!.radius,
             1,
           );
           expect(
@@ -303,11 +335,17 @@ suite.define(() => {
           expect(
             await group.locator('.sidebar-agent-roster__signals [aria-label="Unread"]').count(),
           ).toBe(1);
-          const summary = group.locator(
-            ".sidebar-agent-roster__signals .sidebar-session-team-state",
-          );
+          const summary = group.locator(".sidebar-agent-roster__signals [data-session-attention]");
           const summaryBounds = (await summary.boundingBox())!;
-          expect(summaryBounds.x + summaryBounds.width).toBeCloseTo(beforeFocus.rows[0]!.right, 1);
+          const summaryActions = (await group
+            .locator(".sidebar-agent-roster__actions")
+            .boundingBox())!;
+          expect(summaryBounds.x + summaryBounds.width).toBeLessThanOrEqual(summaryActions.x);
+          expect(summaryActions.x + summaryActions.width).toBeCloseTo(
+            beforeFocus.rows[0]!.right,
+            1,
+          );
+          expect(await summary.isVisible()).toBe(true);
           await captureSidebarUiProof(suite, page, `agent-first-${mode}-${width}-collapsed.png`);
         },
       );

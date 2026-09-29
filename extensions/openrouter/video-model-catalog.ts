@@ -1,4 +1,3 @@
-// Openrouter plugin module implements video model catalog behavior.
 import type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogProviderContext,
@@ -26,23 +25,6 @@ import { fetchOpenRouterVideoGet, type OpenRouterVideoDispatcherPolicy } from ".
 
 const DEFAULT_HTTP_TIMEOUT_MS = 60_000;
 
-type OpenRouterVideoModel = {
-  allowed_passthrough_parameters?: unknown;
-  canonical_slug?: unknown;
-  created?: unknown;
-  description?: unknown;
-  generate_audio?: unknown;
-  id?: unknown;
-  name?: unknown;
-  pricing_skus?: unknown;
-  seed?: unknown;
-  supported_aspect_ratios?: unknown;
-  supported_durations?: unknown;
-  supported_frame_images?: unknown;
-  supported_resolutions?: unknown;
-  supported_sizes?: unknown;
-};
-
 type OpenRouterVideoModelCatalogCapabilities = VideoGenerationProviderCapabilities & {
   allowedPassthroughParameters?: readonly string[];
   canonicalSlug?: string;
@@ -50,10 +32,6 @@ type OpenRouterVideoModelCatalogCapabilities = VideoGenerationProviderCapabiliti
   description?: string;
   pricingSkus?: Readonly<Record<string, string>>;
 };
-
-type OpenRouterVideoRequestPolicyCacheKey = ReturnType<
-  typeof sanitizeConfiguredModelProviderRequest
->;
 
 type OpenRouterVideoRequestConfig = Parameters<typeof sanitizeConfiguredModelProviderRequest>[0];
 
@@ -126,7 +104,7 @@ function buildOpenRouterVideoModeCapabilities(params: {
 }
 
 function buildOpenRouterVideoModelCapabilities(
-  model: OpenRouterVideoModel,
+  model: Record<string, unknown>,
 ): OpenRouterVideoModelCatalogCapabilities {
   const aspectRatios = normalizeTrimmedStringList(model.supported_aspect_ratios);
   const durations = normalizeNumberArray(model.supported_durations);
@@ -145,7 +123,7 @@ function buildOpenRouterVideoModelCapabilities(
     sizes,
     supportsAudio,
   });
-  const base: VideoGenerationProviderCapabilities = {
+  const capabilities: OpenRouterVideoModelCatalogCapabilities = {
     providerOptions: {
       callback_url: "string",
       seed: "number",
@@ -159,9 +137,6 @@ function buildOpenRouterVideoModelCapabilities(
     videoToVideo: {
       enabled: false,
     },
-  };
-  const capabilities: OpenRouterVideoModelCatalogCapabilities = {
-    ...base,
   };
   const canonicalSlug = normalizeOptionalString(model.canonical_slug);
   if (canonicalSlug) {
@@ -229,10 +204,6 @@ function stableCacheKeyValue(value: unknown): unknown {
   );
 }
 
-function buildRequestPolicyCacheKey(request: OpenRouterVideoRequestPolicyCacheKey): unknown {
-  return stableCacheKeyValue(request ?? null);
-}
-
 function resolveOpenRouterVideoCatalogRequest(params: {
   apiKey: string;
   baseUrl: string | undefined;
@@ -252,7 +223,7 @@ function resolveOpenRouterVideoCatalogRequest(params: {
       },
       request,
     }),
-    requestPolicyCacheKey: buildRequestPolicyCacheKey(request),
+    requestPolicyCacheKey: stableCacheKeyValue(request ?? null),
   };
 }
 
@@ -349,7 +320,9 @@ export async function resolveOpenRouterVideoModelCapabilities(
     allowPrivateNetwork,
     dispatcherPolicy,
   });
-  return projectOpenRouterVideoModelsToCatalogEntries(payload).find(
-    (entry) => entry.model === ctx.model,
-  )?.capabilities;
+  const model = payload.find((row) => {
+    const id = isRecord(row) ? normalizeOptionalString(row.id) : undefined;
+    return id !== undefined && id === ctx.model;
+  });
+  return isRecord(model) ? buildOpenRouterVideoModelCapabilities(model) : undefined;
 }

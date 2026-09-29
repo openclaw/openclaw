@@ -2,7 +2,11 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isMissingPathError } from "../../infra/errno.js";
+import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { WORKER_BUNDLE_RSYNC_RECEIVER_PATH } from "../../shared/worker-bundle-hash.js";
@@ -22,6 +26,7 @@ import {
   type WorkspaceHashMemo,
   type WorkspaceReconcileMetrics,
 } from "./workspace-hash-memo.js";
+import { MAX_WORKSPACE_MANIFEST_BYTES } from "./workspace-inventory-limits.js";
 import {
   createRemoteWorkspaceManifestScript,
   REMOTE_WORKSPACE_MANIFEST_JS,
@@ -176,7 +181,7 @@ export function workerWorkspaceSshArgv(
   ];
 }
 
-async function resolveRemoteWorkspaceBaseManifest(
+export async function resolveRemoteWorkspaceManifest(
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>,
   remoteWorkspaceDir: string,
   expectedRef: string,
@@ -204,18 +209,6 @@ async function resolveRemoteWorkspaceBaseManifest(
     throw new Error("Worker workspace base manifest resolution returned the wrong reference");
   }
   return baseDigest;
-}
-
-export async function resolveRemoteWorkspaceManifest(
-  runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>,
-  remoteWorkspaceDir: string,
-  expectedRef: string,
-) {
-  return await resolveRemoteWorkspaceBaseManifest(
-    runWorkspaceCommand,
-    remoteWorkspaceDir,
-    expectedRef,
-  );
 }
 
 export async function captureRemoteWorkspaceManifest(params: {
@@ -276,7 +269,7 @@ export async function probeWorkspaceGitMode(params: {
   runTask: (argv: string[], options: CommandOptions) => Promise<SpawnResult>;
 }): Promise<{ mode: "git" | "plain"; gitRoot: string; baseCommit: string }> {
   const gitAdmin = await fs.lstat(path.join(params.localPath, ".git")).catch((error: unknown) => {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+    if (hasNodeErrorCode(error, "ENOENT")) {
       return undefined;
     }
     throw error;
@@ -319,11 +312,11 @@ export async function resolveWorkerWorkspaceGitAuthor(
     const result = await runTask([...git, `user.${key}`]);
     return workerWorkspaceCommandSucceeded(result) ? result.stdout.trim() : "";
   };
-  const [name, email] = await Promise.all([read("name"), read("email")]);
-  return {
-    name: request.gitAuthor?.name ?? name,
-    email: request.gitAuthor?.email ?? email,
-  };
+  const [name, email] = await Promise.all([
+    request.gitAuthor?.name ?? read("name"),
+    request.gitAuthor?.email ?? read("email"),
+  ]);
+  return { name, email };
 }
 
 export function stableWorkerPathComponent(value: string, length: number): string {
@@ -389,60 +382,30 @@ export function parseManifestRef(stdout: string): string {
 }
 
 export async function readTransferredManifest(filePath: string): Promise<string> {
-  const stats = await fs.lstat(filePath).catch((error: unknown) => {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  });
-  if (!stats?.isFile() || stats.isSymbolicLink() || stats.size > 64 * 1024 * 1024) {
-    throw new Error("Worker workspace manifest transfer is not a bounded regular file");
-  }
-  return await fs.readFile(filePath, "utf8");
+  const { buffer } = await readRegularFile({ filePath, maxBytes: MAX_WORKSPACE_MANIFEST_BYTES });
+  return buffer.toString("utf8");
 }
 
-async function inboundDirectoryUsage(
-  root: string,
+async function assertInboundDirectoryQuota(
+  directory: string,
   limits: { bytes: number; entries: number },
-): Promise<{ bytes: number; entries: number }> {
+): Promise<void> {
+  const root = await fsSafeRoot(directory);
   let bytes = 0;
-  let entries = 0;
-  const walk = async (directory: string): Promise<void> => {
-    for await (const directoryEntry of await fs.opendir(directory)) {
-      const candidate = path.join(directory, directoryEntry.name);
-      const stats = await fs.lstat(candidate).catch((error: unknown) => {
-        if (
-          typeof error === "object" &&
-          error !== null &&
-          "code" in error &&
-          error.code === "ENOENT"
-        ) {
-          return undefined;
-        }
-        throw error;
-      });
-      if (!stats) {
-        continue;
-      }
-      entries += 1;
-      if (entries > limits.entries) {
-        return;
-      }
-      if (stats.isDirectory() && !stats.isSymbolicLink()) {
-        await walk(candidate);
-      } else if (stats.isFile()) {
-        bytes += stats.size;
-        if (bytes > limits.bytes) {
-          return;
-        }
-      }
-      if (bytes > limits.bytes || entries > limits.entries) {
-        return;
-      }
+  for await (const entry of root.walk("", {
+    order: "filesystem",
+    maxEntries: limits.entries,
+    symlinkPolicy: "skip",
+  })) {
+    if (entry.kind === "file") {
+      bytes += entry.size;
     }
-  };
-  await walk(root);
-  return { bytes, entries };
+    if (entry.kind === "truncated" || bytes > limits.bytes) {
+      throw new Error(
+        `Cloud workspace inbound transfer exceeds its ${limits.bytes} byte or ${limits.entries} entry limit`,
+      );
+    }
+  }
 }
 
 export async function runBoundedInboundRsync(params: {
@@ -464,45 +427,39 @@ export async function runBoundedInboundRsync(params: {
     () => true,
     () => true,
   );
-  let quotaError: Error | undefined;
+  let quotaFailure: { error: unknown } | undefined;
   let pollIntervalMs = INBOUND_QUOTA_INITIAL_POLL_MS;
   // Rsync reports logical updates, not partial files or retry residue. Back off
   // the canonical tree scan, then always recheck once more before acceptance.
-  while (!(await Promise.race([transferSettled, delay(pollIntervalMs).then(() => false)]))) {
-    const usage = await inboundDirectoryUsage(params.destinationRoot, {
-      bytes: params.totalByteLimit,
-      entries: params.entryLimit,
-    });
-    if (usage.bytes > params.totalByteLimit || usage.entries > params.entryLimit) {
-      quotaError = new Error(
-        `Cloud workspace inbound transfer exceeds its ${params.totalByteLimit} byte or ${params.entryLimit} entry limit`,
-      );
-      quotaAbort.abort(quotaError);
-      break;
+  try {
+    while (!(await Promise.race([transferSettled, delay(pollIntervalMs).then(() => false)]))) {
+      await assertInboundDirectoryQuota(params.destinationRoot, {
+        bytes: params.totalByteLimit,
+        entries: params.entryLimit,
+      }).catch((error: unknown) => {
+        // Rsync renames temporary files during active scans; the final scan stays strict.
+        if (!isMissingPathError(error)) {
+          throw error;
+        }
+      });
+      pollIntervalMs = Math.min(pollIntervalMs * 2, INBOUND_QUOTA_MAX_POLL_MS);
     }
-    pollIntervalMs = Math.min(pollIntervalMs * 2, INBOUND_QUOTA_MAX_POLL_MS);
+  } catch (error) {
+    quotaFailure = { error };
+    quotaAbort.abort(error);
   }
   let result: SpawnResult;
   try {
     result = await transfer;
   } catch (error) {
-    throw quotaError ?? error;
+    throw quotaFailure ? quotaFailure.error : error;
   }
-  const finalUsage = await inboundDirectoryUsage(params.destinationRoot, {
+  if (quotaFailure) {
+    throw quotaFailure.error;
+  }
+  await assertInboundDirectoryQuota(params.destinationRoot, {
     bytes: params.totalByteLimit,
     entries: params.entryLimit,
   });
-  if (
-    quotaError ||
-    finalUsage.bytes > params.totalByteLimit ||
-    finalUsage.entries > params.entryLimit
-  ) {
-    throw (
-      quotaError ??
-      new Error(
-        `Cloud workspace inbound transfer exceeds its ${params.totalByteLimit} byte or ${params.entryLimit} entry limit`,
-      )
-    );
-  }
   return result;
 }

@@ -3,7 +3,11 @@ import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamable
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { isMcpRequestTimeoutError } from "./mcp-error.js";
-import { OpenClawStreamableHTTPClientTransport } from "./mcp-http-transport.js";
+import {
+  McpSseSessionExpiredError,
+  OpenClawSSEClientTransport,
+  OpenClawStreamableHTTPClientTransport,
+} from "./mcp-http-transport.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
@@ -12,15 +16,22 @@ type LifecycleSession = {
   transport: Transport & { terminateSession?: () => Promise<void> };
   transportType: "stdio" | "sse" | "streamable-http";
   detachStderr?: () => void;
+  onCleanupError?: (error: unknown) => void;
 };
 
 export class McpClientConnectTimeoutError extends Error {}
 
-/** Matches the SDK's terminal signal for an expired stateful Streamable HTTP session. */
-export function isStatefulMcpHttpSessionExpired(
+/** Matches an expired HTTP session without treating stateless HTTP 404s as expiration. */
+export function isMcpHttpSessionExpired(
   session: Pick<LifecycleSession, "transport" | "transportType">,
   error: unknown,
 ): boolean {
+  if (session.transportType === "sse") {
+    return (
+      session.transport instanceof OpenClawSSEClientTransport &&
+      error instanceof McpSseSessionExpiredError
+    );
+  }
   return (
     session.transportType === "streamable-http" &&
     session.transport instanceof OpenClawStreamableHTTPClientTransport &&
@@ -112,8 +123,16 @@ export async function disposeMcpClient(
   const ignoreCloseFailure = async (close: () => void | PromiseLike<unknown>) => {
     try {
       await close();
-    } catch {
+    } catch (error) {
+      const firstFailure = !failed;
       markFailed();
+      if (firstFailure) {
+        try {
+          session.onCleanupError?.(error);
+        } catch {
+          // Diagnostic observers cannot interrupt resource cleanup.
+        }
+      }
     }
   };
   try {

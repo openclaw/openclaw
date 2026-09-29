@@ -1,5 +1,9 @@
 import type { CompiledQuery } from "kysely";
-import { iterateSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  iterateSqliteQuerySync,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
@@ -7,6 +11,7 @@ import {
   sessionEntryInventoryJson,
 } from "./session-accessor.sqlite-status.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type OpenClawAgentDatabaseReader = Pick<OpenClawAgentDatabase, "agentId" | "db">;
@@ -23,7 +28,7 @@ export function readSessionEntryStore(
     assertCanonicalSqliteSessionKeysCurrent(database);
   }
   const db = getSessionKysely(database.db);
-  let query = db.selectFrom("session_nodes").selectAll();
+  let query = db.selectFrom("session_nodes").selectAll().select(sessionEntrySnapshotColumns);
   if (options.includeArchived === false) {
     query = query.where("archived_at", "is", null);
   }
@@ -54,7 +59,7 @@ const countQueriesByDatabase = new WeakMap<
 >();
 
 export function readSessionEntryCount(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   options: { includeArchived?: boolean } = {},
 ): number {
   const includeArchived = options.includeArchived !== false;
@@ -66,11 +71,16 @@ export function readSessionEntryCount(
     if (!includeArchived) {
       query = query.where("archived_at", "is", null);
     }
-    // One statement preserves the snapshot while settled rows stay inside SQLite.
-    compiled = query
-      .where("entry_valid", "=", 1)
-      .select((eb) => [
-        eb.fn.countAll<number>().as("count"),
+    const totalCount = db
+      .selectFrom("session_nodes")
+      .select((eb) => eb.fn.countAll<number>().as("count"));
+    // Count compact indexes, then subtract unreadable rows in the same statement snapshot.
+    compiled = db
+      .selectNoFrom((eb) => [
+        (includeArchived
+          ? totalCount
+          : eb(totalCount, "-", totalCount.where("archived_at", "is not", null))
+        ).as("count"),
         eb.val<string | null>(null).as("entry_json"),
       ])
       .unionAll(
@@ -87,13 +97,14 @@ export function readSessionEntryCount(
     queries.set(includeArchived, compiled);
   }
   let count = 0;
-  for (const row of iterateSqliteQuerySync(database.db, { compile: () => compiled })) {
+  // Eager execution reuses the shared statement cache without retaining a reader.
+  for (const row of executeSqliteQuerySync(database.db, { compile: () => compiled }).rows) {
     count +=
       row.entry_json === null
         ? row.count
         : parseSessionEntryJson({ entry_json: row.entry_json })
-          ? 1
-          : 0;
+          ? 0
+          : -1;
   }
   return count;
 }

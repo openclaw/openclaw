@@ -3,15 +3,11 @@ import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/mo
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
+import { isInstalledPluginEnabled } from "../../plugins/installed-plugin-index.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolvePluginContributionOwners } from "../../plugins/plugin-registry-contributions.js";
-import {
-  getPluginRecord,
-  isPluginEnabled,
-  type PluginRegistrySnapshot,
-} from "../../plugins/plugin-registry-snapshot.js";
 
 function planManifestCatalogRowsForPluginIds(params: {
   cfg: OpenClawConfig;
@@ -35,41 +31,6 @@ function planManifestCatalogRowsForPluginIds(params: {
     ...(params.providerFilter ? { providerFilter: params.providerFilter } : {}),
     selection: "static",
   }).rows;
-}
-
-function resolveConventionModelCatalogPluginIds(params: {
-  cfg: OpenClawConfig;
-  index: PluginRegistrySnapshot;
-  providerFilter: string;
-}): readonly string[] {
-  const record = getPluginRecord({
-    index: params.index,
-    pluginId: params.providerFilter,
-  });
-  if (
-    !record ||
-    !isPluginEnabled({
-      index: params.index,
-      pluginId: record.pluginId,
-      config: params.cfg,
-    })
-  ) {
-    return [];
-  }
-  return [record.pluginId];
-}
-
-function resolveDeclaredModelCatalogPluginIds(params: {
-  cfg: OpenClawConfig;
-  snapshot: PluginMetadataSnapshot;
-  providerFilter: string;
-}): readonly string[] {
-  return resolvePluginContributionOwners({
-    lookUpTable: params.snapshot,
-    config: params.cfg,
-    contribution: "modelCatalogProviders",
-    matches: params.providerFilter,
-  });
 }
 
 /** Loads authoritative static rows without importing provider runtimes. */
@@ -97,11 +58,9 @@ export function loadStaticManifestCatalogRowsForList(params: {
   const conventionRows = planManifestCatalogRowsForPluginIds({
     cfg: params.cfg,
     registry: snapshot.manifestRegistry,
-    pluginIds: resolveConventionModelCatalogPluginIds({
-      cfg: params.cfg,
-      index: snapshot.index,
-      providerFilter,
-    }),
+    pluginIds: isInstalledPluginEnabled(snapshot.index, providerFilter, params.cfg, params.env)
+      ? [providerFilter]
+      : [],
     providerFilter,
   });
   if (conventionRows.length > 0) {
@@ -110,10 +69,12 @@ export function loadStaticManifestCatalogRowsForList(params: {
   return planManifestCatalogRowsForPluginIds({
     cfg: params.cfg,
     registry: snapshot.manifestRegistry,
-    pluginIds: resolveDeclaredModelCatalogPluginIds({
-      cfg: params.cfg,
-      snapshot,
-      providerFilter,
+    pluginIds: resolvePluginContributionOwners({
+      lookUpTable: snapshot,
+      config: params.cfg,
+      env: params.env,
+      contribution: "modelCatalogProviders",
+      matches: providerFilter,
     }),
     providerFilter,
   });

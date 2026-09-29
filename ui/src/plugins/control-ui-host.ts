@@ -4,23 +4,18 @@ import type {
   ControlUiPageNavigationOptions,
   ControlUiPageTarget,
 } from "../../../src/plugin-sdk/control-ui.js";
-import type { RouteId } from "../app-route-paths.ts";
 import { isRouteId, pathForRoute, pluginTabLocation } from "../app-route-paths.ts";
-import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorReadAccess, readGatewayOperatorAccess } from "../app/operator-access.ts";
 import { i18n } from "../i18n/index.ts";
 import { redactToolPayloadText } from "../lib/browser-redact.ts";
-import {
-  resolveSessionPreferredFaceForKey,
-  sessionNavigationTarget,
-} from "../lib/sessions/route-navigation.ts";
+import { openPreferredApplicationSession } from "../lib/sessions/route-navigation.ts";
 import { normalizeSessionKeyForUiComparison } from "../lib/sessions/session-key.ts";
 import { createControlUiComponents } from "./control-ui-components.ts";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 
 export function createControlUiPluginHost(
-  getContext: () => ApplicationContext<RouteId>,
+  getContext: () => ApplicationContext,
   runtime: ControlUiPluginRuntime,
   owner: Omit<ControlUiPluginOwner, "host">,
 ): ControlUiHost {
@@ -41,7 +36,7 @@ export function createControlUiPluginHost(
       dispose();
     };
   };
-  const call = async <T>(operation: (context: ApplicationContext<RouteId>) => Promise<T>) => {
+  const call = async <T>(operation: (context: ApplicationContext) => Promise<T>) => {
     const result = await operation(current());
     current();
     return result;
@@ -193,23 +188,7 @@ export function createControlUiPluginHost(
         return { refresh, dispose };
       },
       open({ sessionKey, agentId }) {
-        const context = current();
-        const face = resolveSessionPreferredFaceForKey(context, sessionKey, agentId);
-        const target = sessionNavigationTarget({
-          context,
-          face,
-          sessionKey,
-          agentId,
-          preferenceDerivedFace: true,
-          exactKey: true,
-        });
-        selectApplicationSession({
-          selection: context.agentSelection,
-          gateway: context.gateway,
-          sessionKey,
-          agentId,
-        });
-        context.navigate(face, target.options);
+        openPreferredApplicationSession(current(), sessionKey, agentId);
       },
       create: (params) => call((context) => context.sessions.create(params)),
       patch: ({ sessionKey, agentId }, patch) =>

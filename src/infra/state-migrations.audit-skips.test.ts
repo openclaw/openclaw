@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -18,7 +19,6 @@ describe("Doctor legacy audit skips", () => {
   it.each([
     ["checkpointless whitespace", "checkpointless raw archive begins with ambiguous whitespace"],
     ["checkpoint capacity", "durable raw-archive checkpoint capacity is exhausted"],
-    ["rewritten archive", "changed other than by append"],
   ])("continues later repairs after %s and preserves recovery inputs", async (shape, warning) => {
     await withOpenClawTestState({ label: "audit-skip" }, async (state) => {
       const cfg = { plugins: { enabled: false } };
@@ -35,21 +35,17 @@ describe("Doctor legacy audit skips", () => {
       } else {
         await audit.writeJsonLines(audit.config.source, [record]);
         expect((await audit.migrate()).warnings).toEqual([]);
-        if (shape === "rewritten archive") {
-          await audit.writeJsonLines(audit.config.raw, [configAuditRecord("changed")]);
-        } else {
-          const store = openLegacyAuditRawCheckpointStore(state.stateDir);
-          const checkpoint = store.entries()[0]!;
-          store.registerLegacyMany(
-            Array.from({ length: 9_999 }, (_, index) => ({
-              ...checkpoint,
-              key: `retained-generation-${index}`,
-              value: { ...checkpoint.value, generationKey: `retained-generation-${index}` },
-            })),
-          );
-          await audit.writeJsonLines(audit.config.source, [record]);
-          preservedPath = audit.config.source;
-        }
+        const store = openLegacyAuditRawCheckpointStore(state.stateDir);
+        const checkpoint = store.entries()[0]!;
+        store.registerLegacyMany(
+          Array.from({ length: 9_999 }, (_, index) => ({
+            ...checkpoint,
+            key: `retained-generation-${index}`,
+            value: { ...checkpoint.value, generationKey: `retained-generation-${index}` },
+          })),
+        );
+        await audit.writeJsonLines(audit.config.source, [record]);
+        preservedPath = audit.config.source;
       }
       const sourceBytes = await fs.readFile(preservedPath);
       const sanitizedBytes = await fs.readFile(audit.config.sanitized);
@@ -98,6 +94,91 @@ describe("Doctor legacy audit skips", () => {
       expect(() => throwIfDoctorStateMigrationRefused(repeated.stepReceipts)).not.toThrow();
       await expect(fs.readFile(preservedPath)).resolves.toEqual(sourceBytes);
       await expect(fs.readFile(audit.config.sanitized)).resolves.toEqual(sanitizedBytes);
+    });
+  });
+
+  it.each([
+    "rewritten",
+    "malformed rewrite",
+    "empty",
+    "checkpointless empty",
+    "append-only",
+    "missing",
+  ])("preserves migrated history and continues Doctor after a %s raw archive", async (shape) => {
+    await withOpenClawTestState({ label: "audit-quarantine" }, async (state) => {
+      const cfg = { plugins: { enabled: false } };
+      await state.writeConfig(cfg);
+      const audit = new AuditMigrationFixture(state.stateDir);
+      const records = [0, 1, 2].map((index) =>
+        configAuditRecord("***", { ts: `2026-07-01T00:00:0${index}.000Z` }),
+      );
+      if (shape === "checkpointless empty") {
+        await audit.writeJsonLines(audit.config.sanitized, records);
+        await audit.write(audit.config.raw, "");
+      } else {
+        await audit.writeJsonLines(audit.config.source, records);
+        expect((await audit.migrate()).warnings).toEqual([]);
+      }
+      const sanitized = await fs.readFile(audit.config.sanitized);
+      const retained = audit.configRecords();
+      const backup = `${audit.config.raw}.bak`;
+      await audit.write(backup, " \t\n");
+      await audit.write(`${audit.config.source}.bak`, sanitized);
+      if (shape === "rewritten") {
+        await audit.writeJsonLines(audit.config.raw, records.slice(1));
+      } else if (shape === "malformed rewrite") {
+        await audit.write(audit.config.raw, "{bad json\n");
+      } else if (shape === "empty") {
+        await audit.write(audit.config.raw, "");
+      } else if (shape === "append-only") {
+        await audit.appendJsonLines(audit.config.raw, [records[0]]);
+      } else if (shape === "missing") {
+        await fs.rm(audit.config.raw);
+      }
+      const raw = shape === "missing" ? undefined : await fs.readFile(audit.config.raw);
+      const execPath = await state.writeJson("exec-approvals.json", {
+        version: 1,
+        defaults: { security: "allowlist", ask: "on-miss" },
+        agents: {},
+      });
+      const migrate = () =>
+        autoMigrateLegacyState({
+          cfg,
+          doctorOnlyStateMigrations: true,
+          env: state.env,
+          homedir: () => state.home,
+          legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+        });
+
+      const result = await migrate();
+
+      expect(() => throwIfDoctorStateMigrationRefused(result.stepReceipts)).not.toThrow();
+      expect(result.stepReceipts.find((receipt) => receipt.id === "exec-approvals")?.outcome).toBe(
+        "completed",
+      );
+      await expect(fs.access(execPath)).rejects.toMatchObject({ code: "ENOENT" });
+      const quarantines = (await fs.readdir(path.dirname(audit.config.raw))).filter((name) =>
+        name.includes(".quarantined-"),
+      );
+      if (shape === "append-only" || shape === "missing") {
+        expect(result.warnings).toEqual([]);
+        expect(quarantines).toEqual([]);
+        expect(audit.configRecords()).toHaveLength(
+          retained.length + (shape === "append-only" ? 1 : 0),
+        );
+      } else {
+        expect(quarantines).toHaveLength(1);
+        const quarantined = path.join(path.dirname(audit.config.raw), quarantines[0]!);
+        expect(result.warnings).toEqual([expect.stringContaining(quarantined)]);
+        expect(result.warnings[0]).toContain("expected append-only growth");
+        await expect(fs.readFile(quarantined)).resolves.toEqual(raw);
+        await expect(fs.access(audit.config.raw)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(audit.configRecords()).toEqual(retained);
+        await expect(fs.readFile(audit.config.sanitized)).resolves.toEqual(sanitized);
+      }
+      await expect(fs.readFile(backup, "utf8")).resolves.toBe(" \t\n");
+      await expect(fs.readFile(`${audit.config.source}.bak`)).resolves.toEqual(sanitized);
+      expect((await migrate()).warnings).toEqual([]);
     });
   });
 

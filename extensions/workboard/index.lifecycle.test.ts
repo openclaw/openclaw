@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
@@ -6,6 +7,10 @@ import type { OpenClawPluginApi, OpenClawPluginService } from "./api.js";
 import plugin from "./index.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { WorkboardStore } from "./src/store.js";
+
+const workerModuleUrl = new URL("./src/sqlite-store.worker.ts", import.meta.url);
+
+const runtimeSource = fileURLToPath(new URL("./index.ts", import.meta.url));
 
 function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.register) {
   const services: OpenClawPluginService[] = [];
@@ -32,7 +37,7 @@ function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.
           };
         }
       };
-      register(api);
+      register({ ...api, runtimeSource });
     },
   });
   const warn = vi.fn();
@@ -106,22 +111,22 @@ function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.
 describe("Workboard registration cleanup", () => {
   it("registers store disposal before a later runtime dependency throws", async () => {
     await withStateDirEnv("workboard-registration-failure-", async () => {
-      const store = WorkboardStore.openSqlite();
+      const store = WorkboardStore.openSqlite(workerModuleUrl);
       const opened = vi.spyOn(WorkboardStore, "openSqlite").mockReturnValueOnce(store);
-      const failure = new Error("synthetic Gateway runtime unavailable");
+      const failure = new Error("synthetic worktree runtime unavailable");
       try {
         const captured = capturePluginRegistration({
           ...plugin,
           register(api) {
             const runtime = new Proxy(api.runtime, {
               get(target, property) {
-                if (property === "gateway") {
+                if (property === "worktrees") {
                   throw failure;
                 }
                 return Reflect.get(target, property, target);
               },
             });
-            expect(() => plugin.register({ ...api, runtime })).toThrow(failure);
+            expect(() => plugin.register({ ...api, runtime, runtimeSource })).toThrow(failure);
           },
         });
         expect(captured.runtimeLifecycles).toHaveLength(1);
@@ -193,7 +198,8 @@ describe("Workboard registration cleanup", () => {
     "retains public Gateway store ownership for %s stores",
     async (ownership) => {
       await withStateDirEnv("workboard-gateway-lifecycle-", async () => {
-        const store = ownership === "injected" ? WorkboardStore.openSqlite() : undefined;
+        const store =
+          ownership === "injected" ? WorkboardStore.openSqlite(workerModuleUrl) : undefined;
         const generation = registerGeneration((api) =>
           registerWorkboardGatewayMethods({ api, store }),
         );
@@ -214,7 +220,7 @@ describe("Workboard registration cleanup", () => {
           expect(await generation.call("workboard.cards.list")).toMatchObject({
             ok: ownership === "injected",
           });
-          const reopened = WorkboardStore.openSqlite();
+          const reopened = WorkboardStore.openSqlite(workerModuleUrl);
           try {
             expect(await reopened.listBoards()).toMatchObject({
               boards: expect.arrayContaining([

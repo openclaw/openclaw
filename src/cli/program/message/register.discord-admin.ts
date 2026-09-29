@@ -37,17 +37,14 @@ export function registerMessageDiscordAdminCommands(message: Command, helpers: M
 
   const channel = message.command("channel").description("Channel actions");
   helpers
-    .withMessageBase(
-      helpers.withRequiredMessageTarget(channel.command("info").description("Fetch channel info")),
-    )
+    .withMessageBase(channel.command("info").description("Fetch channel info"), "required")
     .action((opts) => helpers.runMessageAction("channel-info", opts));
   register(channel, "list", "List channels", "channel-list", ["guild"]);
 
   const member = message.command("member").description("Member actions");
-  register(member, "info", "Fetch member info", "member-info", ["user"]).option(
-    "--guild-id <id>",
-    "Guild id (Discord)",
-  );
+  register(member, "info", "Fetch member info", "member-info", ["user"])
+    .option("--guild-id <id>", "Guild id (Discord)")
+    .option("--channel-id <id>", "Room id (Matrix) or Graph team-id/channel-id (Microsoft Teams)");
 
   const voice = message.command("voice").description("Voice actions");
   register(voice, "status", "Fetch voice status", "voice-status", ["guild", "user"]);

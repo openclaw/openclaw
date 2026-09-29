@@ -225,13 +225,6 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
       }
       const report = {
         message: data.message.slice(0, 500),
-        source:
-          typeof data.source === "string"
-            ? data.source
-                .replace(/[?#].*$/, "")
-                .replace(/^.*[\\/]/, "")
-                .slice(0, 200)
-            : undefined,
         line: typeof data.line === "number" && Number.isInteger(data.line) ? data.line : undefined,
         column:
           typeof data.column === "number" && Number.isInteger(data.column)
@@ -321,9 +314,12 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
       </div>`;
     }
     if (!this.view || !this.context) {
-      return html`<div role="status" style=${`min-height:${this.preferredHeight ?? 420}px`}>
-        ${t("common.loading")}
-      </div>`;
+      return html`<div
+        class="skeleton"
+        role="status"
+        aria-label=${t("common.loading")}
+        style=${`min-height:${this.preferredHeight ?? 420}px`}
+      ></div>`;
     }
     let src: string | undefined;
     try {

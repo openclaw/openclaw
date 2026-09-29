@@ -6,7 +6,10 @@ import {
 } from "../config/plugin-install-record-map.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
-import { getPersistedInstalledPluginIndexCacheEntry } from "./installed-plugin-index-record-state.js";
+import {
+  getPersistedInstalledPluginIndexCacheEntry,
+  preparePersistedInstalledPluginIndexCacheEntry,
+} from "./installed-plugin-index-record-state.js";
 import type { InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-path.js";
 import {
   extractPluginInstallRecordsFromInstalledPluginIndex,
@@ -14,6 +17,7 @@ import {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
   type InstalledPluginIndex,
 } from "./installed-plugin-index.js";
+import type { PersistedInstalledPluginIndexCacheEntry } from "./plugin-cache-management.js";
 
 export {
   resolveInstalledPluginIndexStorePath,
@@ -48,6 +52,45 @@ const InstalledPluginFileSignatureSchema = z.object({
   ctimeMs: z.number().optional(),
 });
 
+const SourceAdmissionReceiptSchema = z.object({
+  signature: z.string().min(1),
+  sourceDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  nativeArtifacts: z.record(
+    z.string(),
+    z.object({
+      sourceIdentity: z.string().min(1),
+      contentHash: z.string().regex(/^[a-f0-9]{64}$/),
+      sizeBytes: z.number().int().nonnegative().safe(),
+      capturedPath: z.string().min(1),
+      namespace: z.string().min(1),
+      capturedIdentity: z.string().min(1),
+    }),
+  ),
+  nativeNamespaces: z.record(
+    z.string(),
+    z.object({
+      sourceDirectory: z.string().min(1),
+      capturedRoot: z.string().min(1),
+      managed: z.boolean(),
+      referenceRoot: z.string().min(1).optional(),
+      members: z.record(
+        z.string(),
+        z.object({
+          source: z.string().min(1),
+          sourceIdentity: z.string().min(1),
+          capturedIdentity: z.string().min(1),
+          boundaryChecked: z.boolean(),
+          contentHash: z
+            .string()
+            .regex(/^[a-f0-9]{64}$/)
+            .optional(),
+          sizeBytes: z.number().int().nonnegative().safe().optional(),
+        }),
+      ),
+    }),
+  ),
+});
+
 const InstalledPluginIndexRecordSchema = z.object({
   pluginId: z.string(),
   installOwner: z.string().optional(),
@@ -56,6 +99,8 @@ const InstalledPluginIndexRecordSchema = z.object({
   packageVersion: z.string().optional(),
   installRecord: PluginInstallRecordSchema.optional(),
   installRecordHash: z.string().optional(),
+  // Derived receipts may be discarded without invalidating the canonical install ledger.
+  sourceAdmissions: z.record(z.string(), SourceAdmissionReceiptSchema).optional().catch(undefined),
   packageInstall: z.unknown().optional(),
   packageChannel: z.unknown().optional(),
   packageBuild: z
@@ -96,6 +141,9 @@ const PluginDiagnosticSchema = z.object({
   pluginId: z.string().optional(),
   source: z.string().optional(),
   code: z.string().optional(),
+  configDisposition: z.literal("preserve").optional(),
+  errorCode: z.string().optional(),
+  fixHint: z.string().optional(),
 });
 
 const InstalledPluginIndexSchema = z.object({
@@ -134,6 +182,11 @@ export function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex 
   if (!installRecords) {
     return null;
   }
+  for (const diagnostic of parsed.diagnostics) {
+    if (diagnostic.level === "warn" && diagnostic.code === "explicit-config-plugin-selection") {
+      diagnostic.level = "info";
+    }
+  }
   return {
     version: parsed.version,
     ...(parsed.warning ? { warning: parsed.warning } : {}),
@@ -155,13 +208,20 @@ export function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex 
 export async function readPersistedInstalledPluginIndex(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<InstalledPluginIndex | null> {
-  return readPersistedInstalledPluginIndexSync(options);
+  const prepared = await preparePersistedInstalledPluginIndexCacheEntry(options);
+  prepared.assertCurrent();
+  return parseCachedInstalledPluginIndex(prepared.entry);
 }
 
 export function readPersistedInstalledPluginIndexSync(
   options: InstalledPluginIndexStoreOptions = {},
 ): InstalledPluginIndex | null {
-  const entry = getPersistedInstalledPluginIndexCacheEntry(options);
+  return parseCachedInstalledPluginIndex(getPersistedInstalledPluginIndexCacheEntry(options));
+}
+
+function parseCachedInstalledPluginIndex(
+  entry: PersistedInstalledPluginIndexCacheEntry,
+): InstalledPluginIndex | null {
   if (entry.index === undefined) {
     const value = entry.state.status === "present" ? entry.state.value : undefined;
     entry.index =

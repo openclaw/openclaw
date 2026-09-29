@@ -21,12 +21,13 @@ import { normalizeToolPolicyName } from "../tool-policy.js";
 import { isToolResultError } from "../tool-result-error.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
 import { createCliDispatchTranscriptRecorder } from "./cli-backend-dispatch-transcript.js";
+import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 const log = createSubsystemLogger("agents/embedded-cli-dispatch");
 
-type CliBackendDispatchParams = RunEmbeddedAgentParams & {
+type CliBackendDispatchParams = RunEmbeddedAgentInternalParams & {
   sessionTarget: SessionTranscriptRuntimeTarget;
 };
 
@@ -90,7 +91,7 @@ function resolveDispatchableToolsAllow(params: RunEmbeddedAgentParams): string[]
     return undefined;
   }
   const names = params.toolsAllow.map((name) => normalizeToolPolicyName(name));
-  if (names.some((name) => !name || name === "*" || name.includes("*"))) {
+  if (names.some((name) => !name || name.includes("*"))) {
     return undefined;
   }
   return [...new Set(names)];
@@ -145,9 +146,6 @@ async function runEmbeddedAgentViaCliBackend(
   // names; strip and normalize so observers and transcript records see the
   // same tool names and soft-error signal the native embedded path reports.
   const unsubscribe = onAgentEventForRun(params.runId, (evt) => {
-    if (evt.runId !== params.runId) {
-      return;
-    }
     if (evt.stream === "assistant" && typeof evt.data.text === "string") {
       transcript?.noteAssistantText(evt.data.text);
       return;
@@ -198,16 +196,16 @@ async function runEmbeddedAgentViaCliBackend(
   // Reply/cron callers advance lifecycle state and arm execution-phase
   // watchdogs on this signal; dispatched runs emit it at the same
   // post-admission boundary where the native path does.
-  params.onExecutionStarted?.(
-    params.lifecycleGeneration !== undefined
-      ? { lifecycleGeneration: params.lifecycleGeneration }
-      : undefined,
-  );
   log.info(
     `dispatching embedded run through CLI backend: runId=${params.runId} provider=${dispatch.provider} model=${params.model ?? ""}`,
   );
   let finalAssistantText: string | undefined;
   try {
+    await params.onExecutionStarted?.(
+      params.lifecycleGeneration !== undefined
+        ? { lifecycleGeneration: params.lifecycleGeneration }
+        : undefined,
+    );
     const result = await runCliAgent({
       admittedRunContext,
       sessionManager: params.sessionManager,
@@ -231,6 +229,9 @@ async function runEmbeddedAgentViaCliBackend(
       media: params.media,
       provider: dispatch.provider,
       model: params.model,
+      ...(params.requestedRouteResolution === "resolved" && params.provider && params.model
+        ? { requesterModel: { provider: params.provider, model: params.model } }
+        : {}),
       authProfileId: params.authProfileId,
       modelHasVision: params.modelHasVision,
       contextWindow: params.contextWindow,
@@ -257,6 +258,7 @@ async function runEmbeddedAgentViaCliBackend(
       // behind, and no implicit message sends without an explicit target.
       disableCliLiveSession: true,
       cleanupCliLiveSessionOnRunEnd: true,
+      runtimeFactsInTurn: true,
       requireExplicitMessageTarget: true,
       cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
     });

@@ -9,6 +9,7 @@ import {
   ndJsonStream,
   type AnyMessage,
 } from "@agentclientprotocol/sdk";
+import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -24,9 +25,12 @@ import { GatewayClient } from "../gateway/client.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createSqliteAcpEventLedger } from "./event-ledger.js";
 import { readSecretFromFile } from "./secret-file.js";
+import { AcpSessionNewOrdering } from "./session-new-ordering.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { normalizeAcpProvenanceMode } from "./types.js";
 
@@ -106,49 +110,46 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   });
 
   let agent: AcpGatewayAgent | null = null;
-  let onClosed!: () => void;
-  let onCloseFailed!: (error: unknown) => void;
-  const closed = new Promise<void>((resolve, reject) => {
-    onClosed = resolve;
-    onCloseFailed = reject;
-  });
+  let sessionStore: ReturnType<typeof createInMemorySessionStore> | null = null;
+  const { promise: closed, resolve: onClosed, reject: onCloseFailed } = createDeferredCore();
   // Startup can still be awaiting Gateway readiness when shutdown fails.
   void closed.catch(() => {});
   const startupAbortController = new AbortController();
   let stopped = false;
   let gatewayConnected = false;
-  let onGatewayReadyResolve!: () => void;
-  let onGatewayReadyReject!: (err: Error) => void;
-  let gatewayReadySettled = false;
-  const gatewayReady = new Promise<void>((resolve, reject) => {
-    onGatewayReadyResolve = resolve;
-    onGatewayReadyReject = reject;
-  });
-  const resolveGatewayReady = () => {
-    if (gatewayReadySettled) {
-      return;
-    }
-    gatewayReadySettled = true;
-    onGatewayReadyResolve();
-  };
+  const {
+    promise: gatewayReady,
+    resolve: resolveGatewayReady,
+    reject: rejectReady,
+  } = createDeferredCore();
   const rejectGatewayReady = (err: unknown) => {
-    if (gatewayReadySettled) {
-      return;
-    }
-    gatewayReadySettled = true;
-    onGatewayReadyReject(err instanceof Error ? err : new Error(String(err)));
+    rejectReady(err instanceof Error ? err : new Error(String(err)));
   };
   const closeStateDatabase = async () => {
+    const errors: unknown[] = [];
+    try {
+      await finalizeActiveDebugProxyCaptures();
+    } catch (error) {
+      errors.push(error);
+    }
     try {
       await closeOpenClawStateDatabaseAsync();
     } catch (err) {
       console.warn(`acp: state database close failed during shutdown: ${formatErrorMessage(err)}`);
-      throw err;
+      errors.push(err);
+    }
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "ACP capture and state database shutdown failed.");
     }
   };
 
   const gateway = new GatewayClient({
     url: bootstrap.url,
+    deviceAuthScope: bootstrap.deviceAuthScope,
+    ...(bootstrap.sshTunnel ? { sshTunnel: bootstrap.sshTunnel } : {}),
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
     preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
@@ -215,6 +216,9 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
       }
       await stoppingAgent?.shutdown();
       stoppingAgent = null;
+      // This injected store remains caller-owned through failed shutdown retries.
+      sessionStore?.dispose();
+      sessionStore = null;
       const gatewayStop = gateway.stopAndWait().catch((err: unknown) => {
         console.warn(`acp: gateway stop failed during shutdown: ${formatErrorMessage(err)}`);
       });
@@ -264,22 +268,54 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   startupInput.dispose();
   const output = Writable.toWeb(process.stdout);
   const stream = ndJsonStream(output, bufferedInput);
+  const sessionNewOrdering = new AcpSessionNewOrdering();
+  // The ordering boundary mirrors session identity so it can tell an established
+  // session from a pending one. Idle reaping and capacity eviction remove sessions
+  // without any ACP request the boundary could observe, so the store reports every
+  // removal back to it; the boundary stays in step with the store's own lifecycle
+  // rather than only with the close requests a client chooses to send.
+  sessionStore = createInMemorySessionStore({
+    onSessionRemoved: (sessionId) => sessionNewOrdering.forget(sessionId),
+  });
   const readable = stream.readable.pipeThrough(
     new TransformStream<AnyMessage, AnyMessage>({
       transform(message, controller) {
+        sessionNewOrdering.observeInbound(message);
         controller.enqueue(normalizeAcpInitializeProtocolVersion(message));
       },
     }),
   );
+  const orderedOutbound = new TransformStream<AnyMessage, AnyMessage>({
+    transform(message, controller) {
+      sessionNewOrdering.transformOutbound(message, controller);
+    },
+  });
+  // pipeTo rejects when the NDJSON writer or stdout fails. Discarding that promise
+  // would strand the bridge: the ACP client is already unreachable, but the Gateway
+  // connection and shared state database would stay open. Route it through the same
+  // idempotent shutdown owner as EOF and SIGTERM.
+  void orderedOutbound.readable
+    .pipeTo(stream.writable)
+    .catch(async (err: unknown) => {
+      if (opts.verbose) {
+        process.stderr.write(`openclaw acp: outbound stream failed: ${formatErrorMessage(err)}\n`);
+      }
+      await shutdown();
+    })
+    .catch(onCloseFailed);
   const eventLedger = createSqliteAcpEventLedger();
 
   const connection = new AgentSideConnection(
     (conn: AgentSideConnection) => {
-      agent = new AcpGatewayAgent(conn, gateway, { ...opts, eventLedger });
+      agent = new AcpGatewayAgent(conn, gateway, {
+        ...opts,
+        eventLedger,
+        sessionStore: sessionStore ?? undefined,
+      });
       agent.start();
       return agent;
     },
-    { ...stream, readable },
+    { writable: orderedOutbound.writable, readable },
   );
   // The SDK closes the connection when stdin reaches EOF. Reuse the normal
   // shutdown path so the Gateway and shared database cannot keep the bridge alive.

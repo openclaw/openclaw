@@ -1,4 +1,3 @@
-// Voice Call plugin module implements manager behavior.
 import fs from "node:fs";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
@@ -25,6 +24,7 @@ import {
 import { resolveVoiceCallSecondsTimerDelayMs } from "./manager/timer-delays.js";
 import { startMaxDurationTimer } from "./manager/timers.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import type { VoiceCallStateRuntime } from "./runtime-state.js";
 import { resolveDefaultVoiceCallStoreDir } from "./store-path.js";
 import {
   TerminalStates,
@@ -65,9 +65,6 @@ function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): s
   return resolveDefaultVoiceCallStoreDir();
 }
 
-/**
- * Manages voice calls: state ownership and delegation to manager helper modules.
- */
 export class CallManager {
   private activeCalls = new Map<CallId, CallRecord>();
   private providerCallIdMap = new Map<string, CallId>();
@@ -77,17 +74,11 @@ export class CallManager {
   private config: VoiceCallConfig;
   private coreSession: VoiceCallCoreSessionConfig | undefined;
   private storePath: string;
+  private stateRuntime: VoiceCallStateRuntime["state"] | undefined;
   private webhookUrl: string | null = null;
   private activeTurnCalls = new Set<CallId>();
   private endCallOperations = new Map<CallId, Promise<CallEndResult>>();
-  private transcriptWaiters = new Map<
-    CallId,
-    {
-      resolve: (text: string) => void;
-      reject: (err: Error) => void;
-      timeout: NodeJS.Timeout;
-    }
-  >();
+  private transcriptWaiters: CallManagerContext["transcriptWaiters"] = new Map();
   private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
   private initialMessageInFlight = new Set<CallId>();
   private autoResponseOwners = new WeakMap<CallRecord, symbol>();
@@ -186,10 +177,12 @@ export class CallManager {
     config: VoiceCallConfig,
     storePath?: string,
     coreSession?: VoiceCallCoreSessionConfig,
+    stateRuntime?: VoiceCallStateRuntime["state"],
   ) {
     this.config = config;
     this.coreSession = coreSession;
     this.storePath = resolveDefaultStoreBase(config, storePath);
+    this.stateRuntime = stateRuntime;
   }
 
   /**
@@ -223,7 +216,7 @@ export class CallManager {
 
     fs.mkdirSync(this.storePath, { recursive: true });
 
-    const persisted = await loadActiveCallsFromStore(this.storePath);
+    const persisted = await loadActiveCallsFromStore(this.storePath, this.stateRuntime);
     if (this.closing) {
       return;
     }
@@ -251,7 +244,7 @@ export class CallManager {
           // Twilio streams can restore directly in speaking/listening without an
           // answered webhook; anchoring at startedAt preserves bounded duration.
           call.answeredAt = maxDurationAnchor;
-          await persistCallRecord(this.storePath, call);
+          await persistCallRecord(this.storePath, call, this.stateRuntime);
         }
         if (this.closing) {
           return;
@@ -327,7 +320,7 @@ export class CallManager {
         if (now - call.startedAt > maxAgeMs) {
           skippedOlderThanMaxDuration += 1;
           markRestoredCallSkipped(call, "timeout");
-          await persistCallRecord(this.storePath, call);
+          await persistCallRecord(this.storePath, call, this.stateRuntime);
           if (this.closing) {
             break;
           }
@@ -351,7 +344,7 @@ export class CallManager {
             if (result.isTerminal) {
               incrementRestoreStatusCount(skippedTerminalStatuses, result.status);
               markRestoredCallSkipped(call, "completed");
-              await persistCallRecord(this.storePath, call);
+              await persistCallRecord(this.storePath, call, this.stateRuntime);
             } else if (result.isUnknown) {
               keptUnknownProviderStatus += 1;
               verified.set(callId, call);
@@ -415,16 +408,10 @@ export class CallManager {
     return verified;
   }
 
-  /**
-   * Get the current provider.
-   */
   getProvider(): VoiceCallProvider | null {
     return this.provider;
   }
 
-  /**
-   * Initiate an outbound call.
-   */
   async initiateCall(
     to: string,
     sessionKey?: string,
@@ -435,9 +422,6 @@ export class CallManager {
     );
   }
 
-  /**
-   * Speak to user in an active call.
-   */
   async speak(
     callId: CallId,
     text: string,
@@ -446,9 +430,6 @@ export class CallManager {
     return this.runOperation(() => speakWithContext(this.getContext(), callId, text, options));
   }
 
-  /**
-   * Send DTMF digits to an active call.
-   */
   async sendDtmf(callId: CallId, digits: string): Promise<{ success: boolean; error?: string }> {
     return this.runOperation(() => sendDtmfWithContext(this.getContext(), callId, digits));
   }
@@ -472,9 +453,6 @@ export class CallManager {
     return this.runOperation(() => continueCallWithContext(this.getContext(), callId, prompt));
   }
 
-  /**
-   * End an active call.
-   */
   endCall(callId: CallId, options?: { reason?: EndReason }): Promise<CallEndResult> {
     return this.runOperation(() => endCallWithContext(this.getContext(), callId, options));
   }
@@ -494,6 +472,7 @@ export class CallManager {
       config: this.config,
       coreSession: this.coreSession,
       storePath: this.storePath,
+      stateRuntime: this.stateRuntime,
       webhookUrl: this.webhookUrl,
       activeTurnCalls: this.activeTurnCalls,
       endCallOperations: this.endCallOperations,
@@ -508,9 +487,6 @@ export class CallManager {
     };
   }
 
-  /**
-   * Process a webhook event.
-   */
   processEvent(event: NormalizedEvent): Promise<ProcessEventResult> {
     return this.runOperation(() => processManagerEvent(this.getContext(), event));
   }
@@ -588,9 +564,6 @@ export class CallManager {
     });
   }
 
-  /**
-   * Get an active call by ID.
-   */
   getCall(callId: CallId): CallRecord | undefined {
     return this.activeCalls.get(callId);
   }
@@ -604,9 +577,6 @@ export class CallManager {
     );
   }
 
-  /**
-   * Get an active call by provider call ID (e.g., Twilio CallSid).
-   */
   getCallByProviderCallId(providerCallId: string): CallRecord | undefined {
     return getCallByProviderCallIdFromMaps({
       activeCalls: this.activeCalls,
@@ -615,9 +585,6 @@ export class CallManager {
     });
   }
 
-  /**
-   * Get all active calls.
-   */
   getActiveCalls(): CallRecord[] {
     return Array.from(this.activeCalls.values());
   }
@@ -628,13 +595,12 @@ export class CallManager {
     if (active) {
       return active;
     }
-    return this.runOperation(() => findCallInStore(this.storePath, callId));
+    return this.runOperation(() => findCallInStore(this.storePath, callId, this.stateRuntime));
   }
 
-  /**
-   * Get call history (from persisted logs).
-   */
   async getCallHistory(limit = 50): Promise<CallRecord[]> {
-    return this.runOperation(() => getCallHistoryFromStore(this.storePath, limit));
+    return this.runOperation(() =>
+      getCallHistoryFromStore(this.storePath, limit, this.stateRuntime),
+    );
   }
 }

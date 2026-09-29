@@ -1,4 +1,3 @@
-// Twitch plugin module implements twitch client behavior.
 import { RefreshingAuthProvider, StaticAuthProvider } from "@twurple/auth";
 import { ChatClient, LogLevel } from "@twurple/chat";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-resolution";
@@ -19,15 +18,11 @@ import { normalizeToken } from "./utils/twitch.js";
 
 const TWITCH_CHAT_AUTH_INTENTS = ["chat"];
 
-/**
- * Manages Twitch chat client connections
- */
 export class TwitchClientManager {
   private clients = new Map<string, ChatClient>();
   private pendingClients = new Map<string, ChatClient>();
   private connectionPromises = new Map<string, Promise<ChatClient>>();
-  private messageHandlers = new Map<string, (message: TwitchChatMessage) => void>();
-  private messageHandlerTokens = new Map<string, symbol>();
+  private messageHandlers = new Map<string, { handler: (message: TwitchChatMessage) => void }>();
 
   constructor(
     private logger: ChannelLogSink,
@@ -48,9 +43,6 @@ export class TwitchClientManager {
     this.statusSink?.({ connected: false, lifecycle: "recovering", lastError });
   }
 
-  /**
-   * Create an auth provider for the account.
-   */
   private async createAuthProvider(
     account: TwitchAccountConfig,
     normalizedToken: string,
@@ -107,9 +99,6 @@ export class TwitchClientManager {
     return new StaticAuthProvider(account.clientId, normalizedToken);
   }
 
-  /**
-   * Get or create a chat client for an account
-   */
   async getClient(
     account: TwitchAccountConfig,
     cfg?: OpenClawConfig,
@@ -189,8 +178,6 @@ export class TwitchClientManager {
           log: (level, message) => {
             switch (level) {
               case LogLevel.CRITICAL:
-                this.logger.error(message);
-                break;
               case LogLevel.ERROR:
                 this.logger.error(message);
                 break;
@@ -201,8 +188,6 @@ export class TwitchClientManager {
                 this.logger.info(message);
                 break;
               case LogLevel.DEBUG:
-                this.logger.debug?.(message);
-                break;
               case LogLevel.TRACE:
                 this.logger.debug?.(message);
                 break;
@@ -219,12 +204,10 @@ export class TwitchClientManager {
         client.quit();
         throw new Error(`Twitch connection cancelled for ${account.username}`);
       }
-      this.pendingClients.delete(key);
-    } catch (error) {
+    } finally {
       if (this.pendingClients.get(key) === client) {
         this.pendingClients.delete(key);
       }
-      throw error;
     }
 
     this.setupClientHandlers(client, account);
@@ -307,15 +290,11 @@ export class TwitchClientManager {
     });
   }
 
-  /**
-   * Set up message and event handlers for a client
-   */
   private setupClientHandlers(client: ChatClient, account: TwitchAccountConfig): void {
     const key = this.getAccountKey(account);
 
-    // Handle incoming messages
     client.onMessage((channelName, _user, messageText, msg) => {
-      const handler = this.messageHandlers.get(key);
+      const handler = this.messageHandlers.get(key)?.handler;
       if (handler) {
         const from = `twitch:${msg.userInfo.userName}`;
         const preview = sliceUtf16Safe(messageText, 0, 100).replace(/\n/g, "\\n");
@@ -353,36 +332,22 @@ export class TwitchClientManager {
     this.logger.info(`Set up handlers for ${key}`);
   }
 
-  /**
-   * Set a message handler for an account
-   * @returns A function that removes the handler when called
-   */
   onMessage(
     account: TwitchAccountConfig,
     handler: (message: TwitchChatMessage) => void,
   ): () => void {
     const key = this.getAccountKey(account);
-    const token = Symbol(key);
-    this.messageHandlers.set(key, handler);
-    this.messageHandlerTokens.set(key, token);
+    const registration = { handler };
+    this.messageHandlers.set(key, registration);
     return () => {
       // Only remove the exact registration this cleanup closure owns. A later
       // onMessage() may reuse the same callback function for the same account.
-      if (this.messageHandlerTokens.get(key) === token) {
+      if (this.messageHandlers.get(key) === registration) {
         this.messageHandlers.delete(key);
-        this.messageHandlerTokens.delete(key);
       }
     };
   }
 
-  private clearMessageHandler(key: string): void {
-    this.messageHandlers.delete(key);
-    this.messageHandlerTokens.delete(key);
-  }
-
-  /**
-   * Disconnect a client
-   */
   async disconnect(account: TwitchAccountConfig): Promise<void> {
     const key = this.getAccountKey(account);
     const client = this.clients.get(key);
@@ -401,13 +366,10 @@ export class TwitchClientManager {
     }
 
     if (pendingConnection || pendingClient || client) {
-      this.clearMessageHandler(key);
+      this.messageHandlers.delete(key);
     }
   }
 
-  /**
-   * Disconnect all clients
-   */
   async disconnectAll(): Promise<void> {
     this.pendingClients.forEach((client) => client.quit());
     this.clients.forEach((client) => client.quit());
@@ -415,13 +377,9 @@ export class TwitchClientManager {
     this.connectionPromises.clear();
     this.clients.clear();
     this.messageHandlers.clear();
-    this.messageHandlerTokens.clear();
     this.logger.info(" Disconnected all clients");
   }
 
-  /**
-   * Send a message to a channel
-   */
   async sendMessage(
     account: TwitchAccountConfig,
     channel: string,
@@ -432,7 +390,7 @@ export class TwitchClientManager {
     try {
       const client = await this.getClient(account, cfg, accountId);
 
-      // Generate a message ID (Twurple's say() doesn't return the message ID, so we generate one)
+      // Twurple say() does not return a provider message ID.
       const messageId = crypto.randomUUID();
 
       // Pre-chunk so Twurple's raw UTF-16 fallback cannot split surrogate pairs.
@@ -448,9 +406,6 @@ export class TwitchClientManager {
     }
   }
 
-  /**
-   * Generate a unique key for an account
-   */
   public getAccountKey(account: TwitchAccountConfig): string {
     return `${account.username}:${account.channel}`;
   }

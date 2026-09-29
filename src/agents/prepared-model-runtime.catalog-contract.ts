@@ -8,6 +8,8 @@ import type {
   PreparedConfiguredRuntimeModel,
   PreparedRuntimeCapabilityModel,
   PreparedModelRuntimeInput,
+  PreparedModelRuntimeOwner,
+  PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
 import type { AuthStorage, AuthStorageData } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
@@ -40,3 +42,14 @@ export type PreparedModelRuntimeCatalogSource = Readonly<{
   pluginCatalogs: readonly PersistedPluginModelCatalog[];
   providerOutcomes?: readonly ProviderCatalogOutcome[];
 }>;
+
+export type PreparedModelRuntimeCatalogAccessParams = {
+  agentFacts: PreparedModelRuntimeAgentFacts;
+  nativeConfigFingerprint: string;
+  catalogFacts: PreparedModelRuntimeCatalogFacts;
+  pluginGeneration: PreparedModelRuntimePluginGeneration;
+  isCurrent: () => boolean;
+  retirementSignal: AbortSignal;
+  inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttempt"> &
+    Partial<Pick<PreparedModelRuntimeOwner, "provenance">>;
+};

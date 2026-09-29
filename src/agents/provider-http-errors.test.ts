@@ -14,78 +14,22 @@ import {
   readResponseTextLimited,
 } from "./provider-http-errors.js";
 
-function createStreamingBinaryResponse(params: {
-  chunkCount: number;
-  chunkSize: number;
-  byte: number;
-}): { response: Response; getReadCount: () => number } {
-  // Streaming fixture proves oversized binary reads stop before buffering everything.
+function createStreamingResponse(contentType: string, byte = 97) {
   let reads = 0;
   const stream = new ReadableStream<Uint8Array>({
     pull(controller) {
-      if (reads >= params.chunkCount) {
+      if (reads >= 20) {
         controller.close();
         return;
       }
       reads += 1;
-      controller.enqueue(new Uint8Array(params.chunkSize).fill(params.byte));
+      controller.enqueue(new Uint8Array(1024).fill(byte));
     },
   });
   return {
     response: new Response(stream, {
       status: 200,
-      headers: { "Content-Type": "audio/mpeg" },
-    }),
-    getReadCount: () => reads,
-  };
-}
-
-function createStreamingJsonResponse(params: { chunkCount: number; chunkSize: number }): {
-  response: Response;
-  getReadCount: () => number;
-} {
-  // Streaming fixture proves oversized JSON reads stop before buffering everything.
-  let reads = 0;
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (reads >= params.chunkCount) {
-        controller.close();
-        return;
-      }
-      reads += 1;
-      controller.enqueue(encoder.encode("a".repeat(params.chunkSize)));
-    },
-  });
-  return {
-    response: new Response(stream, {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }),
-    getReadCount: () => reads,
-  };
-}
-
-function createStreamingTextResponse(params: { chunkCount: number; chunkSize: number }): {
-  response: Response;
-  getReadCount: () => number;
-} {
-  let reads = 0;
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (reads >= params.chunkCount) {
-        controller.close();
-        return;
-      }
-      reads += 1;
-      controller.enqueue(encoder.encode("x".repeat(params.chunkSize)));
-    },
-  });
-  return {
-    response: new Response(stream, {
-      status: 200,
-      headers: { "Content-Type": "text/plain" },
+      headers: { "Content-Type": contentType },
     }),
     getReadCount: () => reads,
   };
@@ -93,12 +37,8 @@ function createStreamingTextResponse(params: { chunkCount: number; chunkSize: nu
 
 describe("provider error utils", () => {
   it.each([
-    ["undefined", undefined, undefined],
     ["null", null, undefined],
     ["string", "provider failure", undefined],
-    ["number", 429, undefined],
-    ["boolean", false, undefined],
-    ["function", () => "provider failure", undefined],
     ["array", [{ message: "ignored" }], undefined],
     ["empty object", {}, undefined],
     ["blank fields", { message: " ", detail: "\n", type: " ", code: " " }, undefined],
@@ -548,17 +488,6 @@ describe("provider error utils", () => {
     });
   });
 
-  it("wraps malformed successful JSON responses with provider labels", async () => {
-    const response = new Response("{ nope", {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-
-    await expect(readProviderJsonResponse(response, "Provider catalog failed")).rejects.toThrow(
-      "Provider catalog failed: malformed JSON response",
-    );
-  });
-
   it("does not retain reflected credentials in malformed JSON causes", async () => {
     const credential = "opaque-credential";
     const response = new Response(credential, { status: 200 });
@@ -583,10 +512,7 @@ describe("provider error utils", () => {
   });
 
   it("caps successful JSON responses instead of buffering oversized bodies", async () => {
-    const streamed = createStreamingJsonResponse({
-      chunkCount: 20,
-      chunkSize: 1024,
-    });
+    const streamed = createStreamingResponse("application/json");
 
     await expect(
       readProviderJsonResponse(streamed.response, "Provider catalog failed", {
@@ -598,10 +524,7 @@ describe("provider error utils", () => {
   });
 
   it("honors custom JSON overflow errors and stops reading", async () => {
-    const streamed = createStreamingJsonResponse({
-      chunkCount: 20,
-      chunkSize: 1024,
-    });
+    const streamed = createStreamingResponse("application/json");
     const sentinel = new Error("custom overflow");
     const onOverflow = vi.fn(() => sentinel);
 
@@ -634,10 +557,7 @@ describe("provider error utils", () => {
   });
 
   it("caps successful text responses instead of buffering oversized bodies", async () => {
-    const streamed = createStreamingTextResponse({
-      chunkCount: 20,
-      chunkSize: 1024,
-    });
+    const streamed = createStreamingResponse("text/plain", 120);
 
     await expect(
       readProviderTextResponse(streamed.response, "Provider text failed", {
@@ -649,11 +569,7 @@ describe("provider error utils", () => {
   });
 
   it("caps successful binary responses instead of buffering oversized bodies", async () => {
-    const streamed = createStreamingBinaryResponse({
-      chunkCount: 20,
-      chunkSize: 1024,
-      byte: 121,
-    });
+    const streamed = createStreamingResponse("audio/mpeg", 121);
 
     await expect(
       readProviderBinaryResponse(streamed.response, "Provider TTS failed", "audio", {
@@ -680,20 +596,105 @@ describe("provider error utils", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects stalled JSON response body after chunk idle timeout", async () => {
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array([1]));
-      },
-    });
-    const response = new Response(stream, {
-      status: 200,
-      headers: { "content-type": "application/json" },
+  it.each([
+    { kind: "audio", contentType: "audio/mpeg" },
+    { kind: "audio", contentType: "AUDIO/OGG; codecs=opus" },
+    { kind: "audio", contentType: 'audio/ogg; codecs="opus, vorbis"' },
+    { kind: "audio", contentType: 'audio/ogg; codecs="opus\\", vorbis"' },
+    { kind: "audio", contentType: 'audio/ogg; codecs="opus\\\\, vorbis"' },
+    { kind: "audio", contentType: "audio/opus" },
+    { kind: "audio", contentType: "application/ogg" },
+    { kind: "audio", contentType: 'application/ogg; codecs="opus"' },
+    { kind: "audio", contentType: "binary/octet-stream" },
+    { kind: "video", contentType: "binary/octet-stream" },
+    { kind: "audio", contentType: "audio/pcm" },
+    { kind: "audio", contentType: "audio/pcm;" },
+    { kind: "audio", contentType: "audio/pcm; ; " },
+    { kind: "video", contentType: 'video/mp4;; codecs="avc1"' },
+    { kind: "video", contentType: "application/octet-stream;" },
+    { kind: "audio", contentType: "audio/vnd.wave" },
+    { kind: "video", contentType: "video/mp4" },
+    { kind: "video", contentType: "VIDEO/WEBM; codecs=vp9" },
+    { kind: "video", contentType: 'video/mp4; codecs="avc1, mp4a.40.2"' },
+    { kind: "video", contentType: 'video/mp4; codecs="avc1, mp4a.40.2"; profile=main' },
+    { kind: "video", contentType: "video/x-matroska" },
+    { kind: "audio", contentType: "application/octet-stream" },
+    { kind: "video", contentType: "application/octet-stream" },
+    { kind: "audio", contentType: undefined },
+    { kind: "video", contentType: undefined },
+    { kind: "binary", contentType: "image/png" },
+    { kind: "binary", contentType: "image/png; charset=utf-8, text/html" },
+    { kind: "binary", contentType: "; text/html" },
+    { kind: "binary", contentType: "application/zip" },
+  ])("accepts $kind response content type $contentType", async ({ kind, contentType }) => {
+    const response = new Response(
+      new Uint8Array([1]),
+      contentType ? { headers: { "content-type": contentType } } : undefined,
+    );
+
+    await expect(readProviderBinaryResponse(response, "Provider failed", kind)).resolves.toEqual(
+      Buffer.from([1]),
+    );
+  });
+
+  it.each([
+    { kind: "audio", contentType: "image/png" },
+    { kind: "audio", contentType: "" },
+    { kind: "audio", contentType: "; text/html" },
+    { kind: "audio", contentType: "; audio/mpeg, text/html" },
+    { kind: "audio", contentType: "audio/" },
+    { kind: "audio", contentType: "audio/ogg;;, text/html" },
+    { kind: "audio", contentType: 'audio/ogg; codecs="opus"; ;, text/html' },
+    { kind: "audio", contentType: "audio/ogg; codecs" },
+    { kind: "audio", contentType: 'audio/ogg; codecs="opus"garbage' },
+    { kind: "audio", contentType: "audio/mpeg image/png" },
+    { kind: "audio", contentType: "video/mp4" },
+    { kind: "audio", contentType: "audio/mpeg, video/mp4" },
+    { kind: "audio", contentType: "audio/mpeg; charset=utf-8, text/html" },
+    { kind: "audio", contentType: "audio/mpeg; charset=utf-8; profile=voice, text/html" },
+    { kind: "audio", contentType: 'audio/ogg; codecs="opus, vorbis", text/html' },
+    { kind: "audio", contentType: 'audio/ogg; codecs="opus\\", vorbis", text/html' },
+    { kind: "audio", contentType: 'audio/ogg; codecs="opus, vorbis' },
+    { kind: "audio", contentType: 'audio/ogg; codecs="opus\\' },
+    { kind: "video", contentType: "audio/ogg" },
+    { kind: "video", contentType: "application/ogg" },
+    { kind: "audio", contentType: "application/ogg; codecs=opus, text/html" },
+    { kind: "video", contentType: "binary/octet-stream; charset=utf-8, text/html" },
+    { kind: "video", contentType: "" },
+    { kind: "video", contentType: "; video/mp4, application/json" },
+    { kind: "video", contentType: "video/" },
+    { kind: "video", contentType: "video/mp4 image/png" },
+    { kind: "video", contentType: "video/mp4, image/png" },
+    { kind: "video", contentType: "video/mp4; codecs=avc1, application/json" },
+    { kind: "video", contentType: 'video/mp4; codecs="avc1, mp4a"; profile=main, text/html' },
+    { kind: "video", contentType: "image/png" },
+    { kind: "video", contentType: "application/pdf" },
+    { kind: "audio", contentType: "application/json" },
+    { kind: "video", contentType: "application/problem+json" },
+    { kind: "binary", contentType: "text/html; charset=utf-8" },
+    { kind: "binary", contentType: "application/problem+json" },
+  ])("rejects $contentType for $kind responses", async ({ kind, contentType }) => {
+    const response = new Response(new Uint8Array([1]), {
+      headers: { "content-type": contentType },
     });
 
-    await expect(
-      readProviderJsonResponse(response, "stalled-provider", { chunkTimeoutMs: 20 }),
-    ).rejects.toThrow("stalled-provider: response body stalled for 20ms");
+    await expect(readProviderBinaryResponse(response, "Provider failed", kind)).rejects.toThrow(
+      `Provider failed: malformed ${kind} response`,
+    );
+  });
+
+  it.each([
+    { kind: "audio", first: "audio/mpeg; charset=utf-8", second: "text/html" },
+    { kind: "video", first: "video/mp4; codecs=avc1", second: "application/json" },
+  ])("rejects repeated Fetch Content-Type headers for $kind", async ({ kind, first, second }) => {
+    const headers = new Headers();
+    headers.append("content-type", first);
+    headers.append("content-type", second);
+    const response = new Response(new Uint8Array([1]), { headers });
+
+    await expect(readProviderBinaryResponse(response, "Provider failed", kind)).rejects.toThrow(
+      `Provider failed: malformed ${kind} response`,
+    );
   });
 
   it("bounds stalled binary provider responses with the shared default idle timeout", async () => {

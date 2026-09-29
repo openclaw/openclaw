@@ -4,12 +4,10 @@ import { expect, it, vi } from "vitest";
 import { resolvePluginArtifactDeclaredSurface } from "../../plugins/capability-artifact.js";
 import { resolvePluginCapabilityConsent } from "../../plugins/capability-consent.js";
 import { computeDeclaredSurfaceHash } from "../../plugins/capability-summary.js";
-import {
-  readPersistedInstalledPluginIndexInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecords,
-} from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import type { PluginLifecycleRuntimeApply } from "../../plugins/lifecycle.js";
 import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
+import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -64,7 +62,7 @@ it.each([
         resolvePluginArtifactDeclaredSurface(rootDir, state.env, { config }),
       );
       if (kind !== "discovered") {
-        await writePersistedInstalledPluginIndexInstallRecords(
+        await seedInstalledPluginIndex(
           { [pluginId]: { source: "path", sourcePath: rootDir, installPath: rootDir } },
           { env: state.env, config },
         );

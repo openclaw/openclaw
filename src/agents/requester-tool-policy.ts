@@ -22,6 +22,7 @@ import {
   isSubagentEnvelopeSession,
   resolvePersistedSubagentToolPolicyEnvelope,
   resolveSubagentCapabilityStore,
+  type PreparedSessionCapabilityEntry,
   type SessionCapabilityStore,
 } from "./subagents/spawn/subagent-capabilities.js";
 
@@ -47,6 +48,8 @@ type RequesterToolPolicyParams = {
   agentId?: string;
   sessionKey?: string;
   subagentSessionKey?: string;
+  preparedSessionEntry?: PreparedSessionCapabilityEntry;
+  preparedSessionCapabilityStore?: SessionCapabilityStore;
   spawnedBy?: string | null;
   messageProvider?: string | null;
   groupId?: string | null;
@@ -114,40 +117,58 @@ function resolveDelegatedPolicy(
     if (!params.config) {
       throw new Error("Trusted internal handoff policy resolution requires configuration.");
     }
-    const targetSessionKey = resolveRequesterStoreKey(params.config, params.sessionKey);
-    let currentSessionKey = resolveRequesterStoreKey(params.config, provenance.sourceSessionKey);
-    const visited = new Set<string>();
-    for (let depth = 0; depth < MAX_DELEGATION_LINEAGE_DEPTH; depth += 1) {
-      if (visited.has(currentSessionKey)) {
+    const config = params.config;
+    const targetSessionKey = resolveRequesterStoreKey(config, params.sessionKey);
+    const settleBatch = params.trustedInternalHandoff?.settleBatch;
+    const sourceSessionKeys = settleBatch?.sourceSessionKeys ?? [provenance.sourceSessionKey];
+    const envelopes = sourceSessionKeys.map((sourceSessionKey) => {
+      let currentSessionKey = resolveRequesterStoreKey(config, sourceSessionKey);
+      const visited = new Set<string>();
+      for (let depth = 0; depth < MAX_DELEGATION_LINEAGE_DEPTH; depth += 1) {
+        if (visited.has(currentSessionKey)) {
+          return undefined;
+        }
+        visited.add(currentSessionKey);
+        // The private capability admits dashboard children; persisted envelopes
+        // still prove each source's lineage to this requester.
+        const completionStore = resolveSubagentCapabilityStore(currentSessionKey, {
+          cfg: config,
+          store: params.preparedSessionCapabilityStore,
+        });
+        const envelope = resolvePersistedSubagentToolPolicyEnvelope(currentSessionKey, {
+          cfg: config,
+          store: completionStore,
+        });
+        if (!envelope) {
+          return undefined;
+        }
+        const parentSessionKey = resolveRequesterStoreKey(config, envelope.spawnedBy);
+        const completionOwnerSessionKey = envelope.completionOwnerSessionKey
+          ? resolveRequesterStoreKey(config, envelope.completionOwnerSessionKey)
+          : undefined;
+        if ((completionOwnerSessionKey ?? parentSessionKey) === targetSessionKey) {
+          return envelope;
+        }
+        currentSessionKey = parentSessionKey;
+      }
+      return undefined;
+    });
+    const envelope = envelopes[0];
+    if (settleBatch) {
+      // A batch must carry one exact requester policy, never whichever child's
+      // policy happens to sort first or the union of sibling capabilities.
+      const policyKey = (entry: NonNullable<typeof envelope>) =>
+        JSON.stringify([entry.inheritedToolAllow.toSorted(), entry.inheritedToolDeny.toSorted()]);
+      if (
+        !envelope ||
+        envelopes.some((entry) => !entry || policyKey(entry) !== policyKey(envelope))
+      ) {
         return { delegated: false };
       }
-      visited.add(currentSessionKey);
-      // The signed handoff authorizes the one store lookup needed for dashboard
-      // children; the persisted envelope still has to prove lineage and depth.
-      const completionStore = resolveSubagentCapabilityStore(currentSessionKey, {
-        cfg: params.config,
-      });
-      const envelope = resolvePersistedSubagentToolPolicyEnvelope(currentSessionKey, {
-        cfg: params.config,
-        store: completionStore,
-      });
-      if (!envelope) {
-        return { delegated: false };
-      }
-      const parentSessionKey = resolveRequesterStoreKey(params.config, envelope.spawnedBy);
-      const completionOwnerSessionKey = envelope.completionOwnerSessionKey
-        ? resolveRequesterStoreKey(params.config, envelope.completionOwnerSessionKey)
-        : undefined;
-      if ((completionOwnerSessionKey ?? parentSessionKey) === targetSessionKey) {
-        return {
-          delegated: true,
-          source: "completion-handoff",
-          policy: policyFromEnvelope(envelope),
-        };
-      }
-      currentSessionKey = parentSessionKey;
     }
-    return { delegated: false };
+    return envelope
+      ? { delegated: true, source: "completion-handoff", policy: policyFromEnvelope(envelope) }
+      : { delegated: false };
   }
   if (!hasExternalRequester) {
     const ownEnvelope = resolvePersistedSubagentToolPolicyEnvelope(params.subagentSessionKey, {
@@ -191,6 +212,8 @@ export function resolveRequesterToolPolicies(
   const subagentSessionKey = params.subagentSessionKey ?? params.sessionKey;
   const subagentStore = resolveSubagentCapabilityStore(subagentSessionKey, {
     cfg: params.config,
+    preparedSessionEntry: params.preparedSessionEntry,
+    store: params.preparedSessionCapabilityStore,
   });
   const delegatedPolicy = resolveDelegatedPolicy({ ...params, subagentSessionKey }, subagentStore);
   const subagentPolicy =

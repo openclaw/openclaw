@@ -1,4 +1,5 @@
 import {
+  formatCacheMisses,
   formatRuntimeCacheCount,
   formatRuntimeCacheHitPercent,
 } from "./agentic-parity-cache-usage.js";
@@ -10,22 +11,11 @@ function formatRuntimeCacheMisses(diagnostics: RuntimeParityCacheDiagnostics | u
   if (!diagnostics) {
     return "N/A";
   }
-  if (diagnostics.cacheTelemetryTurns === 0) {
-    return diagnostics.unmeasuredPostWarmTurns.length > 0
-      ? `N/A (unmeasured turns ${diagnostics.unmeasuredPostWarmTurns.join(", ")})`
-      : "N/A";
-  }
-  const measuredMisses =
-    diagnostics.cacheMisses.length === 0
-      ? "none"
-      : diagnostics.cacheMisses
-          .map((miss) => `turn ${miss.turn} (${miss.inputTokens} uncached input)`)
-          .join(", ");
-  if (diagnostics.unmeasuredPostWarmTurns.length === 0) {
-    return measuredMisses;
-  }
-  const unknownTurns = `unmeasured turns ${diagnostics.unmeasuredPostWarmTurns.join(", ")}`;
-  return measuredMisses === "none" ? `N/A (${unknownTurns})` : `${measuredMisses}; ${unknownTurns}`;
+  return formatCacheMisses(
+    diagnostics.cacheTelemetryTurns === 0 ? null : diagnostics.cacheMisses,
+    diagnostics.unmeasuredPostWarmTurns,
+    "uncached input",
+  );
 }
 
 export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityReport): string {

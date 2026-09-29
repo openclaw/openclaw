@@ -1,11 +1,7 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { WorkerProfile, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, vi } from "vitest";
 import * as managedBinary from "./crabbox-managed-binary.js";
@@ -14,8 +10,12 @@ import {
   createWorkerArchiveFixture,
 } from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
-import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
-import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
+import type { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
+import {
+  commandResult,
+  createProviderFixtures,
+  nodeEnrollmentFixture,
+} from "./crabbox-worker-provider.test-support.js";
 
 export { managedBinary };
 
@@ -28,34 +28,21 @@ export const NODE_RUNTIME_IDENTITY = {
   nodeBootstrapSha256: createNodeBootstrapFixture().sha256,
   executionMode: "worker-turn" as const,
 };
-const WALLPAPER_PATH = fileURLToPath(
-  new URL("../assets/openclaw-worker-wallpaper.png", import.meta.url),
-);
+
 export const tempDirs: ReturnType<typeof useAutoCleanupTempDirTracker> =
   useAutoCleanupTempDirTracker(afterEach);
-const providers = new Set<ReturnType<typeof createCrabboxWorkerProvider>>();
+const { providers, createProvider } = createProviderFixtures({ sleep: async () => {} });
 afterEach(async () => {
   await Promise.all([...providers].map((provider) => provider.dispose()));
   providers.clear();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
 });
 
 type CommandRunner = NonNullable<Parameters<typeof createCrabboxWorkerProvider>[0]["runCommand"]>;
 export type CommandCall = { argv: string[]; options: Parameters<CommandRunner>[1] };
-
-export function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
 
 export function checkpointResult(
   checkpointId: string,
@@ -84,17 +71,12 @@ export function createWarmProvider(
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => ({
     binary: params?.binary ?? "crabbox",
-    version: "0.55.0",
+    version: "999.0.0",
   }));
   const calls: CommandCall[] = [];
   const warn = vi.fn();
-  const provider = createCrabboxWorkerProvider({
-    openclawRoot: path.resolve(path.sep, "workspace", "openclaw"),
-    pathEnv: "",
-    isExecutable: () => false,
-    wallpaperPath: WALLPAPER_PATH,
+  const provider = createProvider({
     warn,
-    sleep: async () => {},
     ...dependencies,
     runCommand: async (argv, options) => {
       const call = { argv, options };
@@ -142,16 +124,7 @@ export function createWarmProvider(
       return commandResult();
     },
   });
-  providers.add(provider);
   return { provider, calls, stateDir, warn };
-}
-
-export function openWarmImageStore() {
-  return createPluginStateSyncKeyedStoreForTests<WarmProfileRecord>("crabbox", {
-    namespace: "warm-images",
-    maxEntries: 128,
-    overflowPolicy: "reject-new",
-  });
 }
 
 export async function provisionWarmProfile(
@@ -162,20 +135,13 @@ export async function provisionWarmProfile(
   options?: NonNullable<Parameters<WorkerProvider["provision"]>[2]>,
 ) {
   return provider.provision(profile, operationId, {
+    assertCurrent: () => {},
     nodeRuntimeIdentity: NODE_RUNTIME_IDENTITY,
     ...options,
     ...(machineClass ? { machineClass } : {}),
     beginNodeEnrollment:
       options?.beginNodeEnrollment ??
-      (async () => ({
-        mode: "connect",
-        setupCode: "setup-code",
-        setupId: "setup-id",
-        openclawVersion: "2026.8.1",
-        nodeBootstrap: createNodeBootstrapFixture(),
-        displayName: "Warm cloud worker",
-        waitForDeviceId: async () => "device-1",
-      })),
+      (async () => nodeEnrollmentFixture("setup-code", "Warm cloud worker")),
   });
 }
 
@@ -209,6 +175,7 @@ export function createProjectOptions(
     return undefined;
   };
   const options = {
+    assertCurrent: () => controller.signal.throwIfAborted(),
     nodeRuntimeIdentity: {
       nodeBootstrapSha256: createNodeBootstrapFixture().sha256,
       executionMode: "worker-turn" as const,

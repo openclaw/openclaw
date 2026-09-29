@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   executeSqliteQuerySync,
@@ -11,8 +13,8 @@ import { BACKUP_RUN_ERROR_MAX_LENGTH } from "./backup-run-records.contract.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "./openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 type BackupRunDatabase = Pick<OpenClawStateDatabase, "backup_runs">;
 
@@ -39,27 +41,19 @@ function boundedText(value: string | undefined, maxLength: number): string | und
   return trimmed ? truncateUtf16Safe(trimmed, maxLength) : undefined;
 }
 
-function parseBackupRun(row: {
-  id: string;
-  created_at: number;
-  archive_path: string;
-  status: string;
-  manifest_json: string;
-}): BackupRunRecord | undefined {
+function parseBackupRun(row: BackupRunDatabase["backup_runs"]): BackupRunRecord | undefined {
   if (row.status !== "ok" && row.status !== "failed") {
     return undefined;
   }
-  let manifest: unknown;
-  try {
-    manifest = JSON.parse(row.manifest_json) as unknown;
-  } catch {
+  const manifest = safeParseJsonRecord(row.manifest_json);
+  if (!manifest) {
     return undefined;
   }
-  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
-    return undefined;
-  }
-  const value = manifest as Record<string, unknown>;
-  if (value.kind !== "archive" && value.kind !== "sqlite-snapshot" && value.kind !== "git") {
+  if (
+    manifest.kind !== "archive" &&
+    manifest.kind !== "sqlite-snapshot" &&
+    manifest.kind !== "git"
+  ) {
     return undefined;
   }
   return {
@@ -67,10 +61,10 @@ function parseBackupRun(row: {
     createdAt: row.created_at,
     archivePath: row.archive_path,
     status: row.status,
-    kind: value.kind,
-    ...(typeof value.target === "string" ? { target: value.target } : {}),
-    ...(typeof value.error === "string" ? { error: value.error } : {}),
-    ...(value.pushFailed === true ? { pushFailed: true } : {}),
+    kind: manifest.kind,
+    ...(typeof manifest.target === "string" ? { target: manifest.target } : {}),
+    ...(typeof manifest.error === "string" ? { error: manifest.error } : {}),
+    ...(manifest.pushFailed === true ? { pushFailed: true } : {}),
   };
 }
 
@@ -92,12 +86,11 @@ export async function recordBackupRunOutcome(params: {
   if (!existsSync(databasePath)) {
     return;
   }
+  const context = captureOpenClawStateWorkerContext({ path: databasePath, env: params.env });
   const manifest = JSON.stringify({
     kind: params.kind,
-    ...(boundedText(params.target, 512) ? { target: boundedText(params.target, 512) } : {}),
-    ...(boundedText(params.error, BACKUP_RUN_ERROR_MAX_LENGTH)
-      ? { error: boundedText(params.error, BACKUP_RUN_ERROR_MAX_LENGTH) }
-      : {}),
+    target: boundedText(params.target, 512),
+    error: boundedText(params.error, BACKUP_RUN_ERROR_MAX_LENGTH),
     ...(params.pushFailed === true ? { pushFailed: true } : {}),
   });
   const row = {
@@ -107,29 +100,11 @@ export async function recordBackupRunOutcome(params: {
     status: params.status,
     manifest_json: manifest,
   };
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = getNodeSqliteKysely<BackupRunDatabase>(db);
-      executeSqliteQuerySync(db, kysely.insertInto("backup_runs").values(row));
-      // This is a bounded operational log. Hourly scheduled backups must not grow it forever.
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .deleteFrom("backup_runs")
-          .where(
-            "id",
-            "in",
-            kysely
-              .selectFrom("backup_runs")
-              .select("id")
-              .orderBy("created_at", "desc")
-              .orderBy("id", "desc")
-              .limit(2_147_483_647)
-              .offset(200),
-          ),
-      );
-    },
-    { env: params.env, path: databasePath },
+  const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
+  await runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "backup.recordOutcome", input: row }),
+    { existingOnly: true },
   );
 }
 
@@ -159,5 +134,33 @@ export async function readBackupRunFreshness(env: NodeJS.ProcessEnv): Promise<Ba
       ({ db }) => ({ latest: readBackupRun(db), latestOk: readBackupRun(db, "ok") }),
       { env, path: resolveOpenClawStateSqlitePath(env) },
     ) ?? {}
+  );
+}
+
+/** Archive parents are the fallback scratch roots when TMPDIR overlaps a source. */
+export function readBackupArchiveDirectories(env: NodeJS.ProcessEnv): string[] {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => {
+        if (!tableExists(db, "backup_runs")) {
+          return [];
+        }
+        const rows = executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<BackupRunDatabase>(db).selectFrom("backup_runs").selectAll(),
+        ).rows;
+        return [
+          ...new Set(
+            rows.flatMap((row) => {
+              const record = parseBackupRun(row);
+              return record?.kind === "archive" && path.isAbsolute(record.archivePath)
+                ? [path.dirname(record.archivePath)]
+                : [];
+            }),
+          ),
+        ];
+      },
+      { env, path: resolveOpenClawStateSqlitePath(env) },
+    ) ?? []
   );
 }

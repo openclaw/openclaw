@@ -6,11 +6,13 @@ import {
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { describe, expect, it } from "vitest";
-import type { PromotionWeights } from "./short-term-promotion-types.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
   DEFAULT_PROMOTION_MIN_SCORE,
   DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
+  type PromotionWeights,
+} from "./short-term-promotion-types.js";
+import {
   rankShortTermPromotionCandidates,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createDeferredCore } from "../../shared/deferred.js";
 
 /** Tracks capacity-triggered child ticks without leaking the parent timer lifecycle. */
 export function createCronCapacityRecheckTracker(
@@ -10,10 +11,7 @@ export function createCronCapacityRecheckTracker(
   let activationGateResolved = false;
   let activationGateAllowsRecheck = false;
   let closed = false;
-  let resolveActivationGate!: (allowRecheck: boolean) => void;
-  const activationGate = new Promise<boolean>((resolve) => {
-    resolveActivationGate = resolve;
-  });
+  const { promise: activationGate, resolve: resolveActivationGate } = createDeferredCore<boolean>();
   const trackedRechecks = new Set<Promise<void>>();
   // Capacity may be released from an unrelated async chain. Open requests are
   // still parent-owned, so restore the creation context before starting them.

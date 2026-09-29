@@ -72,7 +72,7 @@ it("retains the exact memory shutdown loader before installed artifacts rotate",
   expect(preparedImports).toBeGreaterThan(0);
   // Reject importer entry itself, even if Vitest has an incidental module cached.
   state.rotated = true;
-  await expect(owner.close()).resolves.toEqual({ memoryErrors: [] });
+  await expect(owner.close()).resolves.toEqual({ memoryErrors: [], pluginFailures: [] });
   expect(state.closeMemory).toHaveBeenCalledOnce();
   expect(state.imports).toBe(preparedImports);
 });

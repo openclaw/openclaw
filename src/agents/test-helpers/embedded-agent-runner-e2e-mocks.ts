@@ -64,6 +64,7 @@ export function createEmptyPluginMetadataSnapshot(workspaceDir?: string): Plugin
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      providerAuthContributions: [],
       modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
@@ -97,6 +98,7 @@ function createEmptyPreparedModelRuntimeSnapshot(
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
     modelCatalog: { entries: [], routeVariants: [] },
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores: () => ({
       authStorage: { setRuntimeApiKey: vi.fn() } as never,
@@ -217,9 +219,6 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     };
   };
   vi.doMock("../harness/selection.js", () => ({
-    agentHarnessBuildsOpenClawTools: vi.fn(
-      (harnessId: string) => harnessId === "codex" || harnessId === "copilot",
-    ),
     selectAgentHarness: vi.fn(createMockAgentHarness),
     selectAgentHarnessForPreparedModelProviders: vi.fn(createMockAgentHarness),
     resolveAgentHarnessPolicy: vi.fn(() => ({ runtime: "openclaw" })),

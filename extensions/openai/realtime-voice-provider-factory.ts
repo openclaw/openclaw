@@ -4,6 +4,7 @@ import type {
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
+  RealtimeVoiceProviderConfiguredContext,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceProviderResolveConfigContext,
 } from "openclaw/plugin-sdk/realtime-voice";
@@ -70,23 +71,14 @@ type OpenAIInternalRealtimeVoiceCapabilities = RealtimeVoiceProviderCapabilities
 };
 
 type OpenAIInternalRealtimeVoiceProviderApi = {
-  isBrowserSessionConfigured: (ctx: {
-    cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
-    providerConfig: RealtimeVoiceProviderConfig;
-    agentId?: string;
-  }) => boolean;
-  resolveBrowserSessionCapabilities?: (ctx: {
-    cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
-    providerConfig: RealtimeVoiceProviderConfig;
-    agentId?: string;
-    model?: string;
-    clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
-  }) => OpenAIInternalRealtimeVoiceCapabilities;
-  isGatewayRelayConfigured?: (ctx: {
-    cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
-    providerConfig: RealtimeVoiceProviderConfig;
-    agentId?: string;
-  }) => boolean | undefined;
+  isBrowserSessionConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
+  resolveBrowserSessionCapabilities?: (
+    ctx: RealtimeVoiceProviderConfiguredContext & {
+      model?: string;
+      clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
+    },
+  ) => OpenAIInternalRealtimeVoiceCapabilities;
+  isGatewayRelayConfigured?: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean | undefined;
   resolveGatewayRelayCapabilities?: (ctx: {
     cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
     providerConfig: RealtimeVoiceProviderConfig;
@@ -98,8 +90,8 @@ type OpenAIInternalRealtimeVoiceProviderApi = {
   }) => {
     config: RealtimeVoiceProviderConfig;
     clientHints?: {
-      modelSource: "gateway";
-      gatewayRelaySupported: false;
+      modelSource?: "gateway";
+      gatewayRelaySupported: boolean;
     };
   };
   validateGatewayRelayLaunch?: (ctx: {
@@ -507,20 +499,10 @@ export function buildOpenAIRealtimeVoiceProvider(
       return new OpenAIRealtimeBridge(
         {
           ...req,
-          apiKey: config.apiKey,
-          model: config.model,
+          ...config,
           voice: normalizeOpenAIRealtimeVoice(config.voice),
-          temperature: config.temperature,
-          vadThreshold: config.vadThreshold,
-          silenceDurationMs: config.silenceDurationMs,
-          prefixPaddingMs: config.prefixPaddingMs,
           interruptResponseOnInputAudio:
             req.interruptResponseOnInputAudio ?? config.interruptResponseOnInputAudio,
-          minBargeInAudioEndMs: config.minBargeInAudioEndMs,
-          reasoningEffort: config.reasoningEffort,
-          azureEndpoint: config.azureEndpoint,
-          azureDeployment: config.azureDeployment,
-          azureApiVersion: config.azureApiVersion,
           logger: options?.logger ?? { warn: () => undefined },
         },
         context,

@@ -58,7 +58,7 @@ describe("browser tab routes attachOnly loopback profiles", () => {
 
     const ctx = createBrowserRouteContext({ getState: () => state });
     const { app, getHandlers } = createBrowserRouteApp();
-    registerBrowserTabRoutes(app, ctx as never);
+    registerBrowserTabRoutes(app, ctx);
     const handler = getHandlers.get("/tabs");
     expect(handler).toBeTypeOf("function");
 
@@ -70,7 +70,7 @@ describe("browser tab routes attachOnly loopback profiles", () => {
       state.resolved.remoteCdpTimeoutMs,
       state.resolved.remoteCdpHandshakeTimeoutMs,
       undefined,
-      { onDiagnostic: expect.any(Function) },
+      { signal: expect.any(AbortSignal), onDiagnostic: expect.any(Function) },
     );
     expect(response.statusCode).toBe(200);
     expect(response.body).toEqual({

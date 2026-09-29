@@ -1,6 +1,7 @@
 import { statSync } from "node:fs";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../../infra/disk-space.js";
 import { runGitWorkerOperation, type GitWorkerOperationOptions } from "../../infra/git-worker.js";
+import type { GitWorktreeOperations } from "./git-worktree-operations.js";
 
 const GiB = 1024 ** 3;
 export const WORKTREE_SETUP_HEADROOM_BYTES = 4 * GiB;
@@ -11,10 +12,7 @@ export function requireWorktreeDiskSpace(
   purpose: string,
   snapshot = false,
 ): void {
-  const volumes = new Map<
-    number,
-    { path: string; available: number; total: number; bytes: number }
-  >();
+  const volumes = new Map<number, { path: string; available: number; bytes: number }>();
   for (const demand of demands) {
     const space = tryReadDiskSpace(demand.path);
     if (!space || space.totalBytes === null) {
@@ -31,16 +29,13 @@ export function requireWorktreeDiskSpace(
       volumes.set(device, {
         path: space.checkedPath,
         available: space.availableBytes,
-        total: space.totalBytes,
         bytes: demand.bytes,
       });
     }
   }
   for (const volume of volumes.values()) {
     // Cleanup must still be possible below the operational reserve, but never without snapshot room.
-    const reserve = snapshot
-      ? 128 * 1024 ** 2
-      : Math.max(4 * GiB, Math.min(volume.total / 10, 16 * GiB));
+    const reserve = snapshot ? 128 * 1024 ** 2 : 4 * GiB;
     const required = reserve + volume.bytes;
     if (!Number.isSafeInteger(Math.ceil(required)) || volume.available < required) {
       throw new Error(
@@ -53,10 +48,38 @@ export function requireWorktreeDiskSpace(
 export async function estimateWorktreeGitBytes(
   repoRoot: string,
   ref: string,
-  options: Pick<GitWorkerOperationOptions, "signal" | "assertCurrent"> = {},
+  options: Pick<GitWorkerOperationOptions, "signal" | "assertCurrent" | "git"> = {},
 ): Promise<number> {
   return await runGitWorkerOperation(
-    { type: "worktree.git-size", input: { repoRoot, ref } },
+    {
+      type: "worktree.git-size",
+      input: {
+        repoRoot,
+        ref,
+        replacementRefBase: process.env.GIT_REPLACE_REF_BASE ?? "refs/replace/",
+      },
+    },
+    options,
+  );
+}
+
+/** Budget a full snapshot checkout or the destination blobs written over a source clone. */
+export async function estimateWorktreeCheckoutTransitionBytes(
+  repoRoot: string,
+  baseRef: string,
+  targetRef: string,
+  options: Pick<GitWorkerOperationOptions, "signal" | "assertCurrent"> = {},
+): Promise<GitWorktreeOperations["worktree.checkout-transition-size"]["output"]> {
+  return await runGitWorkerOperation(
+    {
+      type: "worktree.checkout-transition-size",
+      input: {
+        repoRoot,
+        baseRef,
+        targetRef,
+        replacementRefBase: process.env.GIT_REPLACE_REF_BASE ?? "refs/replace/",
+      },
+    },
     options,
   );
 }

@@ -1,3 +1,4 @@
+import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
 import {
   accumulatedStreamText,
   trimAccumulatedStreamPrefix,
@@ -9,16 +10,17 @@ import { isStandaloneToolMessageForDisplay } from "../../lib/chat/message-normal
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import {
+  messageRecoveryKey,
+  type AssistantMessageExpansionState,
+} from "./chat-message-recovery.ts";
 import { resetWorkingProgress } from "./chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
-import { sanitizeStreamText } from "./chat-thread-items.ts";
+import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
+import { readChatThreadMessageIdentity, sanitizeStreamText } from "./chat-thread-items.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
-export {
-  isPendingSendMessage,
-  persistedMessageEntryId,
-  readPendingSendFailure,
-} from "./chat-thread-items.ts";
+export { persistedMessageEntryId, readPendingSendStatus } from "./chat-thread-items.ts";
 export {
   assistantGroupCanOwnActiveRunStatus,
   coalesceActivityRuns,
@@ -29,6 +31,7 @@ export { agentRunFrameGroups, coalesceAgentRunFrames } from "./chat-agent-run-gr
 
 type CachedChatItems = {
   input: BuildChatItemsProps | null;
+  inputOrder: ChatInputOrderState;
   items: ReturnType<typeof buildChatItems>;
   liveStream: {
     index: number;
@@ -75,6 +78,9 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
     previous.senderLabel === next.senderLabel &&
     previous.senderSession?.sessionKey === next.senderSession?.sessionKey &&
     previous.senderSession?.agentId === next.senderSession?.agentId &&
+    previous.senderSession?.label === next.senderSession?.label &&
+    messageClientSourcesKey(previous.sourceClients ?? []) ===
+      messageClientSourcesKey(next.sourceClients ?? []) &&
     JSON.stringify(previous.sender) === JSON.stringify(next.sender) &&
     JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
     previous.isStreaming === next.isStreaming &&
@@ -87,7 +93,8 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
         candidate !== undefined &&
         entry.key === candidate.key &&
         entry.message === candidate.message &&
-        entry.duplicateCount === candidate.duplicateCount
+        entry.duplicateCount === candidate.duplicateCount &&
+        entry.hasVisibleContent === candidate.hasVisibleContent
       );
     })
   );
@@ -112,6 +119,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.text === next.text &&
         previous.label === next.label &&
         previous.startsTurn === next.startsTurn &&
+        previous.boundaryId === next.boundaryId &&
         previous.timestamp === next.timestamp
       );
     case "divider":
@@ -122,9 +130,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.label === next.label &&
         previous.metric === next.metric &&
         previous.description === next.description &&
-        previous.timestamp === next.timestamp &&
-        previous.action?.kind === next.action?.kind &&
-        previous.action?.label === next.action?.label
+        previous.timestamp === next.timestamp
       );
     case "stream":
       return (
@@ -132,6 +138,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.text === next.text &&
         previous.startedAt === next.startedAt &&
         previous.isStreaming === next.isStreaming &&
+        JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
         previous.runId === next.runId &&
         previous.boundaryId === next.boundaryId
       );
@@ -206,6 +213,9 @@ function stabilizeChatItems(
         prior.senderLabel !== item.senderLabel ||
         prior.senderSession?.sessionKey !== item.senderSession?.sessionKey ||
         prior.senderSession?.agentId !== item.senderSession?.agentId ||
+        prior.senderSession?.label !== item.senderSession?.label ||
+        messageClientSourcesKey(prior.sourceClients ?? []) !==
+          messageClientSourcesKey(item.sourceClients ?? []) ||
         senderIdentityKey(prior.sender) !== senderIdentityKey(item.sender)
       ) {
         continue;
@@ -240,10 +250,17 @@ function stabilizeChatItems(
     const prior = previousByKey.get(`${item.kind}\u0000${item.key}`);
     return prior && sameChatItem(prior, item) ? prior : item;
   });
-  return stabilized.length === previous.length &&
-    stabilized.every((item, index) => item === previous[index])
-    ? previous
-    : stabilized;
+  return sameEntries(stabilized, previous) ? previous : stabilized;
+}
+
+function sameEntries<T>(previous?: readonly T[], next?: readonly T[]): boolean {
+  return (
+    previous === next ||
+    (previous !== undefined &&
+      next !== undefined &&
+      previous.length === next.length &&
+      previous.every((entry, index) => entry === next[index]))
+  );
 }
 
 function sameChatItemsStructuralInput(
@@ -264,7 +281,9 @@ function sameChatItemsStructuralInput(
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
     previous.initialTurnId === next.initialTurnId &&
-    previous.pendingInputs === next.pendingInputs &&
+    // renderChat derives this list of immutable Gateway records on every render,
+    // including scroll-driven ones; identity would rebuild all loaded history.
+    sameEntries(previous.pendingInputs, next.pendingInputs) &&
     previous.workspaceSyncPendingRunIds === next.workspaceSyncPendingRunIds &&
     previous.workerSetupPending === next.workerSetupPending &&
     previous.showToolCalls === next.showToolCalls &&
@@ -274,7 +293,10 @@ function sameChatItemsStructuralInput(
     previous.questionPrompts === next.questionPrompts &&
     previous.loading === next.loading &&
     previous.searchOpen === next.searchOpen &&
-    previous.searchQuery === next.searchQuery
+    previous.searchQuery === next.searchQuery &&
+    previous.messageRecovery?.messages === next.messageRecovery?.messages &&
+    previous.messageRecovery?.revision === next.messageRecovery?.revision &&
+    previous.messageRecovery?.agentId === next.messageRecovery?.agentId
   );
 }
 
@@ -302,6 +324,10 @@ function updateCachedLiveStream(cached: CachedChatItems, input: BuildChatItemsPr
   return true;
 }
 
+export function findLiveStreamIndex(items: readonly RenderChatItem[]): number {
+  return items.findIndex((item) => item.kind === "stream" && item.isStreaming);
+}
+
 export function buildCachedChatItems(
   input: BuildChatItemsProps,
 ): ReturnType<typeof buildChatItems> {
@@ -312,6 +338,7 @@ export function buildCachedChatItems(
   }
   const cached = getOrCreateSessionCacheValue(paneCache, input.sessionKey, () => ({
     input: null,
+    inputOrder: { keys: [] },
     items: [],
     liveStream: null,
   }));
@@ -326,10 +353,13 @@ export function buildCachedChatItems(
       return cached.items;
     }
   }
-  const items = stabilizeChatItems(cached.items, buildChatItems(input));
+  if (cached.input?.initialTurnId !== input.initialTurnId) {
+    cached.inputOrder.keys = [];
+  }
+  const items = stabilizeChatItems(cached.items, buildChatItems(input, cached.inputOrder));
   cached.input = input;
   cached.items = items;
-  const liveStreamIndex = items.findIndex((item) => item.kind === "stream" && item.isStreaming);
+  const liveStreamIndex = findLiveStreamIndex(items);
   cached.liveStream =
     liveStreamIndex < 0
       ? null
@@ -353,9 +383,29 @@ export function setExpansionState<T>(values: Map<string, T>, key: string, value:
   expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
 }
 
-export function deleteExpansionState<T>(values: Map<string, T>, key: string): void {
+function deleteExpansionState<T>(values: Map<string, T>, key: string): void {
   if (values.delete(key)) {
     expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
+  }
+}
+
+export function pruneAssistantMessageExpansions(
+  expanded: Map<string, AssistantMessageExpansionState>,
+  agentId: string | undefined,
+  sourceMessages: readonly unknown[],
+): void {
+  // Search and virtualization only hide rows. Prune against source history so
+  // a removed message retires its body/load without refetching hidden rows.
+  const retainedKeys = new Set(
+    sourceMessages
+      .map((message) => readChatThreadMessageIdentity(message)?.id)
+      .filter((id): id is string => typeof id === "string")
+      .map((id) => messageRecoveryKey(agentId, id)),
+  );
+  for (const key of expanded.keys()) {
+    if (!retainedKeys.has(key)) {
+      deleteExpansionState(expanded, key);
+    }
   }
 }
 
@@ -384,11 +434,6 @@ export function getExpandedUserMessages(sessionKey: string): Map<string, boolean
   return getOrCreateSessionCacheValue(expandedUserMessagesBySession, sessionKey, () => new Map());
 }
 
-export type AssistantMessageExpansionState =
-  | { status: "loading"; revision: number }
-  | { status: "error"; revision: number }
-  | { status: "loaded"; markdown: string; revision: number };
-
 export function syncToolCardExpansionState(
   sessionKey: string,
   items: readonly (ChatItem | MessageGroup)[],
@@ -405,6 +450,13 @@ export function syncToolCardExpansionState(
     return;
   }
   const currentToolCardIds = new Set<string>();
+  const retainDisclosure = (id: string) => {
+    currentToolCardIds.add(id);
+    if (!initialized.has(id)) {
+      setExpansionState(expanded, id, autoExpandToolCalls);
+      initialized.add(id);
+    }
+  };
   for (const item of items) {
     if (item.kind !== "group") {
       continue;
@@ -412,24 +464,12 @@ export function syncToolCardExpansionState(
     for (const entry of item.messages) {
       const cards = extractToolCardsCached(entry.message);
       for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
-        const disclosureId = `${entry.key}:toolcard:${cardIndex}`;
-        currentToolCardIds.add(disclosureId);
-        if (initialized.has(disclosureId)) {
-          continue;
-        }
-        setExpansionState(expanded, disclosureId, autoExpandToolCalls);
-        initialized.add(disclosureId);
+        retainDisclosure(`${entry.key}:toolcard:${cardIndex}`);
       }
       if (!isStandaloneToolMessageForDisplay(entry.message)) {
         continue;
       }
-      const disclosureId = `toolmsg:${entry.key}`;
-      currentToolCardIds.add(disclosureId);
-      if (initialized.has(disclosureId)) {
-        continue;
-      }
-      setExpansionState(expanded, disclosureId, autoExpandToolCalls);
-      initialized.add(disclosureId);
+      retainDisclosure(`toolmsg:${entry.key}`);
     }
   }
   if (autoExpandToolCalls && !lastSync?.autoExpandToolCalls) {

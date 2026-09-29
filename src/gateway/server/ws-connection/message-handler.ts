@@ -1,6 +1,5 @@
 // WebSocket message handler validates frames, dispatches gateway RPCs, manages pairing, and reports responses.
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import type { RawData } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -27,6 +26,7 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { isGatewaySuspendControlAvailable } from "../../../infra/gateway-suspend-coordinator.js";
 import { rawDataByteLength } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
 import {
@@ -39,9 +39,13 @@ import {
 import { isWebchatClient } from "../../../utils/message-channel.js";
 import { isLocalishHost, isLoopbackAddress } from "../../net.js";
 import { resolveNodePairingClientIpSource } from "../../node-pairing-auto-approve.js";
-import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
+import {
+  MAX_PREAUTH_PAYLOAD_BYTES,
+  MAX_QUEUED_GATEWAY_PREAUTH_FRAMES,
+} from "../../server-constants.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
+import type { GatewayConnectionFrame } from "../connection-transport.js";
 import { resolveGatewayWsBrowserOrigin } from "../ws-origin-policy.js";
 import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
 import { isStartupNodeConnect } from "./connect-admission.js";
@@ -54,10 +58,7 @@ import type {
   GatewayConnectPhaseContext,
   GatewayWsMessageHandlerParams,
 } from "./message-handler-types.js";
-export type {
-  GatewayWsMessageHandlerParams,
-  WsOriginCheckMetrics,
-} from "./message-handler-types.js";
+export type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 
 const GATEWAY_WORK_ADMISSION_RETRY_AFTER_MS = 1_000;
 const GATEWAY_WORK_ADMISSION_CLOSE_CODE = 1013;
@@ -175,25 +176,32 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       .catch(onError);
   };
 
-  const handleMessage = async (data: RawData, admission?: "continuation") => {
+  const rejectOversizedPreauthFrame = (data: GatewayConnectionFrame): boolean => {
+    const payloadBytes = rawDataByteLength(data);
+    if (payloadBytes <= MAX_PREAUTH_PAYLOAD_BYTES) {
+      return false;
+    }
+    logRejectedLargePayload({
+      surface: "gateway.ws.preauth",
+      bytes: payloadBytes,
+      limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
+      reason: "preauth_frame_limit",
+    });
+    setHandshakeState("failed");
+    setCloseCause("preauth-payload-too-large", {
+      payloadBytes,
+      limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
+    });
+    close(1009, "preauth payload too large");
+    return true;
+  };
+
+  const handleMessage = async (data: GatewayConnectionFrame, admission?: "continuation") => {
     if (isClosed()) {
       return;
     }
 
-    const preauthPayloadBytes = !getClient() ? rawDataByteLength(data) : undefined;
-    if (preauthPayloadBytes !== undefined && preauthPayloadBytes > MAX_PREAUTH_PAYLOAD_BYTES) {
-      logRejectedLargePayload({
-        surface: "gateway.ws.preauth",
-        bytes: preauthPayloadBytes,
-        limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
-        reason: "preauth_frame_limit",
-      });
-      setHandshakeState("failed");
-      setCloseCause("preauth-payload-too-large", {
-        payloadBytes: preauthPayloadBytes,
-        limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
-      });
-      close(1009, "preauth payload too large");
+    if (!getClient() && rejectOversizedPreauthFrame(data)) {
       return;
     }
 
@@ -236,9 +244,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         );
       }
     };
+    const client = getClient();
     try {
       const parsed = JSON.parse(text);
-      const client = getClient();
       if (
         !client &&
         parsed !== null &&
@@ -375,6 +383,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           markHandshakeFailure,
           sendHandshakeErrorResponse,
           sendFrame,
+          onHelloDelivered: flushQueuedHandshakeFrames,
           isWebchatConnect,
           runDetachedConnectWork,
           pendingNodePairingCleanup,
@@ -407,14 +416,15 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       await releasePendingNodePairingCleanup();
       logGateway.error(`parse/handle error: ${String(err)}`);
       logWs("out", "parse-error", { connId, error: formatForLog(err) });
-      if (!getClient()) {
+      // Failed connect frames close even after registration.
+      if (!client) {
         close();
       }
     }
   };
 
   const parsePreauthConnectFrame = (
-    data: RawData,
+    data: GatewayConnectionFrame,
   ): { id: string; params: ConnectParams } | null => {
     if (isClosed() || rawDataByteLength(data) > MAX_PREAUTH_PAYLOAD_BYTES) {
       return null;
@@ -435,7 +445,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     return { id: parsed.id, params: parsed.params };
   };
 
-  const isPreparedControlConnect = (data: RawData): boolean => {
+  const isPreparedControlConnect = (data: GatewayConnectionFrame): boolean => {
     const parsed = parsePreauthConnectFrame(data);
     if (!parsed) {
       return false;
@@ -444,12 +454,14 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     return connectParams.role !== "node" && !claimsWorkerConnectionIdentity(parsed.params);
   };
 
-  const isStartupNodePreauth = (data: RawData): boolean => {
+  const isStartupNodePreauth = (data: GatewayConnectionFrame): boolean => {
     const parsed = parsePreauthConnectFrame(data);
     return parsed ? isStartupNodeConnect(parsed.params) : false;
   };
 
-  const rejectConnectForClosedAdmission = async (data: RawData): Promise<boolean> => {
+  const rejectConnectForClosedAdmission = async (
+    data: GatewayConnectionFrame,
+  ): Promise<boolean> => {
     const parsed = parsePreauthConnectFrame(data);
     if (!parsed) {
       return false;
@@ -487,7 +499,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     return true;
   };
 
-  const handleIncomingMessage = async (data: RawData, requestAdmission?: "continuation") => {
+  const handleIncomingMessage = async (
+    data: GatewayConnectionFrame,
+    requestAdmission?: "continuation",
+  ) => {
     if (getClient()) {
       await handleMessage(data, requestAdmission);
       return;
@@ -510,14 +525,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           return;
         }
       }
-      if (
-        !isGatewayRestartDraining() &&
-        (getGatewaySuspendAdmissionPhase() === "draining" ||
-          getGatewaySuspendAdmissionPhase() === "prepared") &&
-        isPreparedControlConnect(data)
-      ) {
+      if (isGatewaySuspendControlAvailable() && isPreparedControlConnect(data)) {
         // Suspension fences work, not authenticated owner recovery. Operators
-        // can reconnect throughout the held lease; node and worker connects
+        // can reconnect through suspension and its drain; node and worker connects
         // would attach presence/registry state, so they stay refused.
         await handleMessage(data);
         return;
@@ -537,11 +547,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
   };
 
-  socket.on("message", (data) => {
+  const dispatchIncomingMessage = (data: GatewayConnectionFrame, onSettled?: () => void) => {
     // Capture receipt before any await: older requests keep their admitted lifetime,
     // while shutdown frames may only settle an exact pending node owner.
     const admission = params.connectionWork.isClosing ? "continuation" : undefined;
     if (admission && getClient()?.connect.role !== "node") {
+      onSettled?.();
       return;
     }
     void params.connectionWork
@@ -552,6 +563,57 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       )
       .catch((error: unknown) => {
         logGateway.error(`request dispatch failed conn=${connId}: ${formatForLog(error)}`);
-      });
-  });
+      })
+      .finally(onSettled);
+  };
+
+  let queuedHandshakeFrames: GatewayConnectionFrame[] | undefined;
+  function flushQueuedHandshakeFrames() {
+    const frames = queuedHandshakeFrames?.splice(0) ?? [];
+    queuedHandshakeFrames = undefined;
+    if (isClosed()) {
+      return;
+    }
+    for (const frame of frames) {
+      onMessage(frame);
+    }
+  }
+
+  const onMessage = (data: GatewayConnectionFrame): void => {
+    if (isClosed()) {
+      return;
+    }
+    if (queuedHandshakeFrames) {
+      // Keep the preauth cap authoritative for pipelined frames until this
+      // connection actually owns an admitted client.
+      if (rejectOversizedPreauthFrame(data)) {
+        queuedHandshakeFrames.length = 0;
+        return;
+      }
+      if (queuedHandshakeFrames.length >= MAX_QUEUED_GATEWAY_PREAUTH_FRAMES - 1) {
+        setHandshakeState("failed");
+        setCloseCause("handshake-message-overflow", {
+          queuedFrames: queuedHandshakeFrames.length,
+        });
+        queuedHandshakeFrames.length = 0;
+        close(1008, "too many pending handshake frames");
+        return;
+      }
+      queuedHandshakeFrames.push(data);
+      return;
+    }
+
+    if (getClient()) {
+      dispatchIncomingMessage(data);
+      return;
+    }
+
+    // Reserve the first handshake only. Hello delivery retires pre-auth limits and
+    // replays queued frames; the final settlement callback remains a failure-path drain.
+    queuedHandshakeFrames = [];
+    dispatchIncomingMessage(data, flushQueuedHandshakeFrames);
+  };
+
+  socket.on("message", onMessage);
+  return onMessage;
 }

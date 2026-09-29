@@ -1,16 +1,21 @@
-import { createMeetingNodeBrowserFixture } from "openclaw/plugin-sdk/test-fixtures";
+import {
+  createMeetingNodeBrowserFixture,
+  useMeetingTestState,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 import { teamsMeetingsConfig } from "./config.js";
 
 const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
+const testState = useMeetingTestState(createOpenClawTestState);
 
 const realtimeMocks = vi.hoisted(() => ({
   speak: vi.fn(),
-  startAgent: vi.fn(async () => ({
+  startAgent: vi.fn(async ({ transport }: { transport: { stop(): Promise<void> } }) => ({
     getHealth: () => ({}),
     providerId: "test",
     speak: realtimeMocks.speak,
-    stop: vi.fn(async () => {}),
+    stop: vi.fn(() => transport.stop()),
   })),
 }));
 
@@ -68,15 +73,17 @@ describe("Microsoft Teams meetings node realtime recovery", () => {
             },
     });
     harness.state.inCall = false;
+    const logger = { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
     const runtime = new TeamsMeetingsRuntime({
       config: resolveTeamsMeetingsConfig({
         chrome: { waitForInCallMs: 1 },
         chromeNode: { node: "node-1" },
       }),
       fullConfig: {},
-      logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      logger,
       runtime: harness.runtime,
     });
+    testState.track(runtime, { readWarnings: () => logger.warn.mock.calls });
 
     const joined = await runtime.join({
       message: undefined,
@@ -97,5 +104,8 @@ describe("Microsoft Teams meetings node realtime recovery", () => {
     );
     expect(realtimeMocks.speak).toHaveBeenCalledWith("hello");
     expect(joined.session.chrome?.audioBridge).toMatchObject({ type: "node-command-pair" });
+    expect(harness.state.audioCaptureId).toEqual(expect.any(String));
+    await runtime.leave(joined.session.id);
+    expect(harness.state.audioCaptureId).toBeUndefined();
   });
 });

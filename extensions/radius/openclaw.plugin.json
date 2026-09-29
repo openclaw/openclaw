@@ -14,6 +14,8 @@
       "method": "oauth",
       "choiceId": "radius",
       "appGuidedAuth": "oauth",
+      "credentialOnly": true,
+      "channelLogin": {},
       "choiceLabel": "Radius (browser sign-in)",
       "groupId": "radius",
       "groupLabel": "Radius",

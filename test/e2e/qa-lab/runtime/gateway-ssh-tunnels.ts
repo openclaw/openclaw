@@ -4,12 +4,13 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { finished } from "node:stream/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import { gatewayStatusCommand } from "../../../../src/commands/gateway-status.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import { startGatewayServer } from "../../../../src/gateway/server.js";
@@ -414,7 +415,7 @@ exec "$@"
     cwd: options.repoRoot,
     detached: true,
     env: process.env,
-    stdio: ["ignore", "ignore", "pipe"],
+    stdio: [options.fixtureReadyPath ? "pipe" : "ignore", "ignore", "pipe"],
   });
   if (options.fixtureProcessPath && child.pid) {
     await fs.writeFile(options.fixtureProcessPath, `${child.pid}\n`, "utf8");
@@ -562,7 +563,10 @@ export async function runGatewaySshTunnels(
       fixtureReadyPath
         ? async () => {
             await fs.writeFile(fixtureReadyPath, "ready\n", "utf8");
-            await new Promise<void>(() => {});
+            // The parent's open pipe keeps this fixture alive until its deliberate SIGKILL.
+            process.stdin.resume();
+            await finished(process.stdin);
+            throw new Error("Gateway SSH tunnel fixture lost its parent before termination");
           }
         : undefined,
     );

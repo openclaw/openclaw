@@ -4,6 +4,7 @@ import { withTimeout } from "../utils/with-timeout.js";
 
 export { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 export { truncateCodePoints } from "@openclaw/normalization-core/code-points";
+export { findGraphemeChunkEnd } from "@openclaw/normalization-core/grapheme";
 
 export {
   estimateToolResultTextChars,

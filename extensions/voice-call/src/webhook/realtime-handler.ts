@@ -1,4 +1,3 @@
-// Voice Call plugin module implements realtime handler behavior.
 import { randomUUID } from "node:crypto";
 import http from "node:http";
 import type { Duplex } from "node:stream";
@@ -18,15 +17,22 @@ import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   readRealtimeVoiceConsultQuestion,
   readSpeakableRealtimeVoiceToolResult,
+  resolveRealtimeVoiceBargeIn,
+  resolveRealtimeVoiceSessionPolicy,
   type RealtimeVoiceForcedConsultHandle,
-  type RealtimeVoiceBridgeSession,
+  type RealtimeVoiceBridgeSession as ActiveRealtimeVoiceBridge,
   type RealtimeVoiceCloseReason,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceProviderPlugin,
+  type ResolvedRealtimeVoiceProvider,
   type RealtimeVoiceSessionHarness,
   type TalkEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import { resolveVoiceCallPublicPathPrefix, type VoiceCallRealtimeConfig } from "../config.js";
@@ -83,18 +89,6 @@ function buildGreetingInstructions(
   return baseInstructions
     ? `${baseInstructions}\n\n${intro} "${trimmedGreeting}"`
     : `${intro} "${trimmedGreeting}"`;
-}
-
-function readConsultArgText(args: unknown, key: string): string | undefined {
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
-    return undefined;
-  }
-  const value = (args as Record<string, unknown>)[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function readConsultQuestionText(args: unknown): string | undefined {
-  return readRealtimeVoiceConsultQuestion(args);
 }
 
 function normalizeTranscriptText(text: string): string {
@@ -196,7 +190,7 @@ function limitPartialUserTranscript(text: string): string {
 }
 
 function withFallbackConsultQuestion(args: unknown, fallback: string | undefined): unknown {
-  const providerQuestion = readConsultQuestionText(args);
+  const providerQuestion = readRealtimeVoiceConsultQuestion(args);
   const question = fallback?.trim();
   if (providerQuestion) {
     if (
@@ -204,7 +198,7 @@ function withFallbackConsultQuestion(args: unknown, fallback: string | undefined
       providerQuestion.length <= 40 &&
       question.length >= providerQuestion.length + 8
     ) {
-      const context = readConsultArgText(args, "context");
+      const context = normalizeOptionalString(asOptionalRecord(args)?.context);
       const fallbackContext = `Realtime provider supplied a shorter consult question: ${providerQuestion}`;
       return args && typeof args === "object" && !Array.isArray(args)
         ? {
@@ -238,15 +232,6 @@ function buildForcedConsultSpeechPrompt(result: string): string {
   ].join("\n");
 }
 
-type PendingStreamToken = {
-  expiry: number;
-  from?: string;
-  to?: string;
-  direction?: "inbound" | "outbound";
-  providerName?: "twilio" | "telnyx";
-  callId?: string;
-};
-
 type StreamSessionRequest = {
   providerName?: "twilio" | "telnyx";
   callId?: string;
@@ -254,6 +239,8 @@ type StreamSessionRequest = {
   to?: string;
   direction?: "inbound" | "outbound";
 };
+
+type PendingStreamToken = StreamSessionRequest & { expiry: number };
 
 export type StreamSession = {
   token: string;
@@ -265,11 +252,10 @@ type RealtimeCallRegistration = {
   instructions: string;
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
+  capabilities?: ResolvedRealtimeVoiceProvider["capabilities"];
 };
 
 export type ResolveRealtimeCallRegistration = (call: CallRecord) => RealtimeCallRegistration;
-
-type ActiveRealtimeVoiceBridge = RealtimeVoiceBridgeSession;
 
 type RealtimeSpeakResult = {
   success: boolean;
@@ -295,7 +281,7 @@ type NativeConsultState = {
   startedAt: number;
   promise: Promise<unknown>;
   cancellation: Promise<void>;
-  cancelled: boolean;
+  readonly cancelled: boolean;
   cancel: () => void;
   partialUserTranscript?: string;
 };
@@ -804,8 +790,19 @@ export class RealtimeCallHandler {
     }
 
     let registration: RealtimeCallRegistration;
+    let sessionPolicy: ReturnType<typeof resolveRealtimeVoiceSessionPolicy>;
     try {
       registration = this.resolveCallRegistration(callRecord);
+      sessionPolicy = resolveRealtimeVoiceSessionPolicy({
+        isAgentProxy: false,
+        capabilities: registration.capabilities,
+        configuredToolPolicy: this.config.toolPolicy,
+        configuredConsultPolicy: this.config.consultPolicy === "always" ? "always" : "auto",
+        requireWakeName: undefined,
+        configuredWakeNames: undefined,
+        cfg: this.coreConfig ?? {},
+        agentId: registration.agentId,
+      });
     } catch (error) {
       console.error(
         `[voice-call] Failed to resolve realtime call registration callId=${callId} providerCallId=${callSid}: ${formatErrorMessage(error)}`,
@@ -842,7 +839,19 @@ export class RealtimeCallHandler {
       return null;
     }
     const previousTelephonyBinding = this.activeTelephonyBindingsByCallId.get(callId);
-    const { agentId, instructions, provider: realtimeProvider, providerConfig } = registration;
+    const {
+      agentId,
+      instructions,
+      provider: realtimeProvider,
+      providerConfig,
+      capabilities,
+    } = registration;
+    const { handlesAgentConsult, toolPolicy } = sessionPolicy;
+    if (handlesAgentConsult) {
+      console.warn(
+        "[voice-call] This realtime model uses native agent delegation; the end-call and custom realtime function tools are unavailable.",
+      );
+    }
     const initialGreetingInstructions = buildGreetingInstructions(instructions, initialGreeting);
     const harness = createRealtimeVoiceSessionHarness({
       talk: {
@@ -870,8 +879,8 @@ export class RealtimeCallHandler {
           });
       },
     });
-    let providerHandlesInputAudioBargeIn =
-      realtimeProvider.capabilities?.handlesInputAudioBargeIn === true;
+    const providerHandlesInputAudioBargeIn =
+      (capabilities ?? realtimeProvider.capabilities)?.handlesInputAudioBargeIn === true;
     const cancelOutputAudioForBargeIn = (
       source: "local" | "provider",
       interruptProvider?: (audioPlaybackActive: boolean) => void,
@@ -1005,10 +1014,61 @@ export class RealtimeCallHandler {
       cfg: this.coreConfig,
       agentId,
       providerConfig,
+      capabilities,
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
       interruptResponseOnInputAudio,
-      instructions,
-      tools: this.config.tools,
+      instructions: handlesAgentConsult
+        ? `${instructions}\n\nUse native agent delegation for OpenClaw work. End-call and custom realtime function tools are unavailable in this session; the caller can hang up to end the call.`
+        : instructions,
+      tools: handlesAgentConsult ? [] : this.config.tools,
+      ...(handlesAgentConsult
+        ? {
+            runAgentConsult: async (request) => {
+              const owner = nativeConsultOwner.current;
+              const generation = continuityGeneration;
+              request.signal?.throwIfAborted();
+              await transcriptPersistence;
+              if (
+                !owner ||
+                sessionClosed ||
+                generation !== continuityGeneration ||
+                !this.isActiveBridgeOwner(callId, owner)
+              ) {
+                throw new Error("Realtime call delegation owner is no longer active");
+              }
+              if (toolPolicy === "none") {
+                throw new Error("Agent consultation is disabled for this call");
+              }
+              const result = await this.executeToolCall(
+                owner,
+                callId,
+                randomUUID(),
+                REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+                { question: request.prompt },
+                harness.ensureTurn(),
+                harness,
+                userTranscriptOwner,
+                { signal: request.signal },
+              );
+              request.signal?.throwIfAborted();
+              if (
+                sessionClosed ||
+                generation !== continuityGeneration ||
+                !this.isActiveBridgeOwner(callId, owner)
+              ) {
+                throw new Error("Realtime call delegation owner is no longer active");
+              }
+              const text = readSpeakableRealtimeVoiceToolResult(result, {
+                keys: ["text", "output"],
+                maxChars: FORCED_CONSULT_RESULT_MAX_CHARS,
+              });
+              if (!text) {
+                throw new Error("Agent consultation returned no spoken answer");
+              }
+              return { text };
+            },
+          }
+        : {}),
       initialGreetingInstructions,
       triggerGreetingOnReady: Boolean(initialGreetingInstructions),
       audioSink: {
@@ -1113,6 +1173,7 @@ export class RealtimeCallHandler {
           const generation = continuityGeneration;
           transcriptPersistence = this.manager.processEvent(event).then(() => {
             if (
+              handlesAgentConsult ||
               sessionClosed ||
               generation !== continuityGeneration ||
               !this.getUserTranscriptState(callId, userTranscriptOwner) ||
@@ -1171,7 +1232,7 @@ export class RealtimeCallHandler {
         console.log(
           `[voice-call] realtime tool call received callId=${callId} providerCallId=${callSid} tool=${toolEvent.name}`,
         );
-        return this.executeToolCall(
+        await this.executeToolCall(
           sessionLocal,
           callId,
           toolEvent.callId || toolEvent.itemId,
@@ -1315,8 +1376,14 @@ export class RealtimeCallHandler {
     const session = candidate;
     this.commitUserTranscriptOwnerAdoption(callId, userTranscriptAdoption);
     nativeConsultOwner.current = session;
-    providerHandlesInputAudioBargeIn =
-      session.bridge.handlesInputAudioBargeIn ?? providerHandlesInputAudioBargeIn;
+    const localBargeIn =
+      !(session.bridge.handlesInputAudioBargeIn ?? providerHandlesInputAudioBargeIn) &&
+      resolveRealtimeVoiceBargeIn({
+        configuredBargeIn: undefined,
+        interruptResponseOnInputAudio,
+        capabilities,
+        outputAudioMode: session.bridge.outputAudioMode,
+      });
     const previousConsultSession = this.consultSessionsByCallId.get(callId);
     if (previousConsultSession && previousConsultSession.owner !== session) {
       this.cancelConsultSession(callId, previousConsultSession.owner);
@@ -1334,7 +1401,7 @@ export class RealtimeCallHandler {
         console.log(
           `[voice-call] realtime local speech detected callId=${callId} providerCallId=${callSid}`,
         );
-        if (!providerHandlesInputAudioBargeIn) {
+        if (localBargeIn) {
           cancelOutputAudioForBargeIn("local", (audioPlaybackActive) => {
             session.handleBargeIn({ audioPlaybackActive });
           });
@@ -1626,7 +1693,6 @@ export class RealtimeCallHandler {
     if (!state || state.owner !== owner) {
       return;
     }
-    state.cancelled = true;
     this.nativeConsultsInFlightByCallId.delete(callId);
     state.cancel();
   }
@@ -1924,38 +1990,20 @@ export class RealtimeCallHandler {
       ...(callerMeta.to ? { to: callerMeta.to } : {}),
     };
 
-    const callRecord = await this.resolveRealtimeCall(callSid, callerMeta, baseFields);
-    if (!callRecord) {
-      return null;
-    }
-
-    return { callRecord, baseFields };
-  }
-
-  private async resolveRealtimeCall(
-    callSid: string,
-    callerMeta: Omit<PendingStreamToken, "expiry">,
-    baseFields: {
-      providerCallId: string;
-      timestamp: number;
-      direction: "inbound" | "outbound";
-      from?: string;
-      to?: string;
-    },
-  ): Promise<CallRecord | null> {
+    let callRecord: CallRecord | undefined;
     if (callerMeta.callId) {
       const call = await this.manager.getCallForStream(callerMeta.callId);
-      return call?.providerCallId === callSid ? call : null;
+      callRecord = call?.providerCallId === callSid ? call : undefined;
+    } else {
+      await this.manager.processEvent({
+        id: `realtime-initiated-${callSid}`,
+        callId: callSid,
+        type: "call.initiated",
+        ...baseFields,
+      });
+      callRecord = this.manager.getCallByProviderCallId(callSid);
     }
-
-    await this.manager.processEvent({
-      id: `realtime-initiated-${callSid}`,
-      callId: callSid,
-      type: "call.initiated",
-      ...baseFields,
-    });
-
-    return this.manager.getCallByProviderCallId(callSid) ?? null;
+    return callRecord ? { callRecord, baseFields } : null;
   }
 
   private async executeEndCallTool(params: {
@@ -2022,10 +2070,11 @@ export class RealtimeCallHandler {
     turnId: string,
     harness: RealtimeVoiceSessionHarness,
     userTranscriptOwner: UserTranscriptState,
-  ): Promise<void> {
+    delegation?: { signal?: AbortSignal },
+  ): Promise<unknown> {
     if (name === REALTIME_VOICE_END_CALL_TOOL_NAME) {
       await this.executeEndCallTool({ bridge, callId, bridgeCallId, turnId, harness });
-      return;
+      return undefined;
     }
     const handler = this.toolHandlers.get(name);
     const startedAt = Date.now();
@@ -2043,12 +2092,16 @@ export class RealtimeCallHandler {
         final: true,
       });
     };
-    const submitFinalToolResult = async (result: unknown): Promise<void> => {
-      await bridge.submitToolResult(bridgeCallId, result);
+    const submitFinalToolResult = async (result: unknown): Promise<unknown> => {
+      if (!delegation) {
+        await bridge.submitToolResult(bridgeCallId, result);
+      }
       emitFinalToolEvent(result);
+      return result;
     };
     const submitWorkingResponse = async (): Promise<void> => {
       if (
+        !delegation &&
         handler &&
         name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME &&
         bridge.bridge.supportsToolResultContinuation &&
@@ -2069,7 +2122,7 @@ export class RealtimeCallHandler {
     };
     if (name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
       if (this.activeBridgesByCallId.get(callId) !== bridge) {
-        return;
+        return undefined;
       }
       const coordinator = harness.forcedConsults;
       const forcedMatch = coordinator.recordNativeConsult(args, bridgeCallId);
@@ -2088,19 +2141,17 @@ export class RealtimeCallHandler {
         if (forcedConsult) {
           forcedConsult.sendSpeechPrompt = false;
         }
-        await submitFinalToolResult({
+        return await submitFinalToolResult({
           status: "cancelled",
           message: "OpenClaw cancelled this consult before completion. Do not restart it.",
         });
-        return;
       }
       if (forcedConsult) {
         if (forcedConsult.completedAt || forcedMatch.kind === "already_delivered") {
-          await submitFinalToolResult({
+          return await submitFinalToolResult({
             status: "already_delivered",
             message: "OpenClaw already delivered this consult result internally. Do not repeat it.",
           });
-          return;
         }
         forcedConsult.sendSpeechPrompt = false;
         const result = await forcedConsult.promise.catch(
@@ -2111,10 +2162,9 @@ export class RealtimeCallHandler {
           forcedConsult.owner !== bridge ||
           this.forcedConsultsByCallId.get(callId) !== forcedConsult
         ) {
-          return;
+          return undefined;
         }
-        await submitFinalToolResult(result);
-        return;
+        return await submitFinalToolResult(result);
       }
 
       const existingNativeConsult = this.nativeConsultsInFlightByCallId.get(callId);
@@ -2125,10 +2175,9 @@ export class RealtimeCallHandler {
         await submitWorkingResponse();
         const outcome = await waitForNativeConsult(existingNativeConsult);
         if (outcome.kind === "cancelled") {
-          return;
+          return undefined;
         }
-        await submitFinalToolResult(outcome.result);
-        return;
+        return await submitFinalToolResult(outcome.result);
       }
 
       const abortController = new AbortController();
@@ -2145,25 +2194,32 @@ export class RealtimeCallHandler {
         startedAt,
         promise: consult,
         cancellation,
-        cancelled: false,
+        get cancelled() {
+          return abortController.signal.aborted;
+        },
         // Provider continuity owns the consult lifetime, not only its eventual result.
         cancel: () => {
           abortController.abort(new Error("Realtime native consult owner was cancelled."));
           releaseCancellation();
         },
       };
+      if (delegation?.signal?.aborted) {
+        state.cancel();
+      } else {
+        delegation?.signal?.addEventListener("abort", state.cancel, { once: true });
+      }
       this.nativeConsultsInFlightByCallId.set(callId, state);
       void (async () => {
         try {
           await submitWorkingResponse();
-          if (state.cancelled) {
+          if (state.cancelled || !this.isActiveBridgeOwner(callId, bridge)) {
             return undefined;
           }
           await Promise.race([
             this.waitForConsultTranscriptSettle(callId, userTranscriptOwner, startedAt),
             state.cancellation,
           ]);
-          if (state.cancelled) {
+          if (state.cancelled || !this.isActiveBridgeOwner(callId, bridge)) {
             return undefined;
           }
           const context = {
@@ -2185,7 +2241,7 @@ export class RealtimeCallHandler {
       try {
         const outcome = await waitForNativeConsult(state);
         if (outcome.kind === "cancelled") {
-          return;
+          return undefined;
         }
         const result = outcome.result;
         const failed = hasResultError(result);
@@ -2201,12 +2257,13 @@ export class RealtimeCallHandler {
             state.partialUserTranscript,
           );
         }
+        return result;
       } finally {
+        delegation?.signal?.removeEventListener("abort", state.cancel);
         if (this.nativeConsultsInFlightByCallId.get(callId) === state) {
           this.nativeConsultsInFlightByCallId.delete(callId);
         }
       }
-      return;
     }
     console.log(
       `[voice-call] realtime tool call executing callId=${callId} tool=${name} hasHandler=${Boolean(handler)}`,
@@ -2228,7 +2285,7 @@ export class RealtimeCallHandler {
     console.log(
       `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${error === undefined ? "ok" : "error"} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
     );
-    await submitFinalToolResult(result);
+    return await submitFinalToolResult(result);
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

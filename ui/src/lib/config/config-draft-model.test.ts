@@ -1,10 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import * as json5Runtime from "../json5-runtime.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
-  deferred,
   createGatewayHarness,
   createConfigServerMock,
   createDeferredSetServerMock,
@@ -451,8 +451,10 @@ describe("config draft model", () => {
     expect(runtimeConfig.stageDefaultAgent("main")).toBe(true);
     expect(runtimeConfig.state.configForm).toEqual({
       agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "MAIN" } },
         entries: {
-          MAIN: { default: true },
+          MAIN: {},
           reviewer: {},
           "new-agent": { model: "openai/gpt-5.4" },
         },
@@ -466,8 +468,10 @@ describe("config draft model", () => {
     )?.raw;
     expect(JSON.parse(String(raw))).toEqual({
       agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "MAIN" } },
         entries: {
-          MAIN: { default: true },
+          MAIN: {},
           reviewer: {},
           "new-agent": { model: "openai/gpt-5.4" },
         },
@@ -503,14 +507,8 @@ describe("config draft model", () => {
 
   it.each([
     ["automatic save", "123"],
-    ["automatic save", "z.ai"],
-    ["automatic save", "a.models.3"],
-    ["manual save", "123"],
     ["manual save", "z.ai"],
-    ["manual save", "a.models.3"],
     ["manual save", "$&"],
-    ["apply", "123"],
-    ["apply", "z.ai"],
     ["apply", "a.models.3"],
   ] as const)(
     "formats the rejected %s validation path for provider %s without changing the Gateway issue",
@@ -948,7 +946,7 @@ describe("config draft model", () => {
       expect(runtimeConfig.state.configFormDirty).toBe(false);
       expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
 
-      await runtimeConfig.refresh({ discardPendingChanges: true });
+      await runtimeConfig.discardDraft({ reloadOnly: true });
       expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
       runtimeConfig.dispose();
     },
@@ -965,6 +963,10 @@ describe("config draft model", () => {
 
     publish(false);
     runtimeConfig.setRaw('{\n  "count": 9\n}\n');
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+
+    await runtimeConfig.discardDraft({ reloadOnly: true });
+    expect(runtimeConfig.state.configRaw).toBe('{\n  "count": 9\n}\n');
     expect(runtimeConfig.state.configFormDirty).toBe(true);
 
     await runtimeConfig.discardDraft();

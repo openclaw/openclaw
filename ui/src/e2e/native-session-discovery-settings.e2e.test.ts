@@ -156,7 +156,9 @@ suite.define(() => {
       await warning.waitFor({ state: "visible" });
       await expect.poll(() => tooltipTitleText(warning)).toContain("[NODE_LIST_FAILED]");
       await expect.poll(() => tooltipTitleText(warning)).toContain("pairing database is locked");
-      await expect.poll(() => tooltipTitleText(warning)).toContain("Settings > Plugins");
+      await expect
+        .poll(() => tooltipTitleText(warning))
+        .toContain("Settings > Appearance > Session sources");
       expect(await page.getByText("Available native session", { exact: true }).count()).toBe(1);
       expect(await page.locator('[data-session-catalog-host="node:registry"]').count()).toBe(0);
 
@@ -173,19 +175,16 @@ suite.define(() => {
         settingLabel: string,
         expected: boolean,
       ) => {
-        await page.goto(`${suite.server.baseUrl}settings/plugins/${pluginId}`);
+        await page.goto(`${suite.server.baseUrl}settings/plugins/${pluginId}?view=settings`);
         await waitForControlUiRoute(page, {
           pathname: `/settings/plugins/${pluginId}`,
           routeId: "plugin-settings",
         });
         const setting = page.locator(".settings-row", { hasText: settingLabel });
-        await setting.locator("xpath=ancestor::details[1]/summary").click();
         await setting.waitFor({ state: "visible" });
         expect(await setting.getByText("eligible paired nodes.", { exact: false }).count()).toBe(1);
         expect(
-          await setting
-            .locator("wa-switch")
-            .evaluate((element) => (element as HTMLElement & { checked: boolean }).checked),
+          await setting.getByRole("checkbox", { name: settingLabel, exact: true }).isChecked(),
         ).toBe(expected);
       };
       await readDiscoverySetting("codex", "Discover Codex Sessions", true);

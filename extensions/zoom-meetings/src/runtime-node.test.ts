@@ -1,20 +1,25 @@
-import { createMeetingNodeBrowserFixture } from "openclaw/plugin-sdk/test-fixtures";
+import {
+  createMeetingNodeBrowserFixture,
+  useMeetingTestState,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 import { zoomMeetingsConfig } from "./config.js";
 
 const resolveZoomMeetingsConfig = zoomMeetingsConfig.resolveConfig;
+const testState = useMeetingTestState(createOpenClawTestState);
 
 const realtimeMocks = vi.hoisted(() => ({
   healths: [] as Array<{ bridgeClosed: boolean }>,
   speak: vi.fn(),
-  startAgent: vi.fn(async () => {
+  startAgent: vi.fn(async ({ transport }: { transport: { stop(): Promise<void> } }) => {
     const health = { bridgeClosed: false };
     realtimeMocks.healths.push(health);
     return {
       getHealth: () => health,
       providerId: "test",
       speak: realtimeMocks.speak,
-      stop: vi.fn(async () => {}),
+      stop: vi.fn(() => transport.stop()),
     };
   }),
 }));
@@ -73,6 +78,7 @@ describe("Zoom meetings node realtime recovery", () => {
             },
     });
     harness.state.inCall = false;
+    const logger = { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
     const runtime = new ZoomMeetingsRuntime({
       config: resolveZoomMeetingsConfig({
         chrome: { waitForInCallMs: 1 },
@@ -80,9 +86,10 @@ describe("Zoom meetings node realtime recovery", () => {
         realtime: { agentId: "consult" },
       }),
       fullConfig: {},
-      logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      logger,
       runtime: harness.runtime,
     });
+    testState.track(runtime, { readWarnings: () => logger.warn.mock.calls });
 
     const joined = await runtime.join({
       agentId: "support",
@@ -111,6 +118,11 @@ describe("Zoom meetings node realtime recovery", () => {
     expect(realtimeMocks.speak).toHaveBeenCalledWith("hello");
     expect(joined.session.chrome?.audioBridge).toMatchObject({ type: "node-command-pair" });
 
+    const firstEngine = await realtimeMocks.startAgent.mock.results[0]?.value;
+    if (!firstEngine) {
+      throw new Error("Expected the initial meeting engine");
+    }
+    await firstEngine.stop();
     realtimeMocks.healths[0]!.bridgeClosed = true;
     await runtime.status(joined.session.id);
     const recovered = await runtime.speak(joined.session.id, "again");
@@ -119,5 +131,8 @@ describe("Zoom meetings node realtime recovery", () => {
     expect(realtimeMocks.startAgent).toHaveBeenCalledTimes(2);
     expect(realtimeMocks.speak).toHaveBeenCalledWith("again");
     expect(joined.session.chrome?.health?.bridgeClosed).toBe(false);
+    expect(harness.state.audioCaptureId).toEqual(expect.any(String));
+    await runtime.leave(joined.session.id);
+    expect(harness.state.audioCaptureId).toBeUndefined();
   });
 });

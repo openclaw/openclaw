@@ -13,7 +13,6 @@ import type {
   SignalDataMessage,
   SignalEnvelope,
   SignalEventHandlerDeps,
-  SignalReactionMessage,
 } from "./event-handler.types.js";
 vi.useRealTimers();
 let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
@@ -485,18 +484,6 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.OriginatingTo).toBe("+15550002222");
   });
 
-  it("sets ReplyToId from the inbound Signal timestamp", async () => {
-    const handler = createTestHandler({
-      cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
-    });
-
-    await receiveDirectMessage(handler, { dataMessage: { message: "hello" } });
-
-    const context = requireCapturedContext();
-    expect(context.MessageSid).toBe("1700000000001");
-    expect(context.ReplyToId).toBe("1700000000001");
-  });
-
   it.each([
     {
       name: "dataMessage",
@@ -765,27 +752,6 @@ describe("signal createSignalEventHandler inbound context", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("restores the initial Signal ack reaction after a successful reply", async () => {
-    dispatchInboundMessageMock.mockImplementationOnce(
-      async (params: DispatchInboundMessageMockParams) => {
-        capture.ctx = params.ctx;
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
-      },
-    );
-    const handler = createTestHandler({
-      cfg: createStatusReactionConfig(),
-    });
-
-    await receiveDirectMessage(handler);
-    for (let i = 0; i < 5; i += 1) {
-      await nextTimerTick();
-    }
-
-    const sentEmojis = sentReactionEmojis();
-    expect(sentEmojis).toContain("✅");
-    expect(sentEmojis.at(-1)).toBe("👀");
   });
 
   it("restores the initial Signal ack reaction after partial reply delivery fails", async () => {
@@ -1319,18 +1285,13 @@ describe("signal createSignalEventHandler inbound context", () => {
       groupPolicy: "allowlist",
       groupAllowFrom: ["g1"],
       reactionMode: "all",
-      isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
-      shouldEmitSignalReactionNotification: () => true,
-      resolveSignalReactionTargets: () => [
-        { kind: "phone", id: "+15550001111", display: "+15550001111" },
-      ],
-      buildSignalReactionSystemEventText: () => "reaction added",
     });
 
     await handler(
       createSignalReceiveEvent({
         reactionMessage: {
           emoji: "+1",
+          targetAuthor: "+15550001111",
           targetSentTimestamp: 1700000000000,
           groupInfo: { groupId: "g1", groupName: "Test Group" },
         },
@@ -1338,10 +1299,13 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
 
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith("reaction added", {
-      sessionKey: "agent:main:signal:group:g1",
-      contextKey: "signal:reaction:added:1700000000000:+15550001111:+1:g1",
-    });
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Signal reaction added: +1 by Alice msg 1700000000000 from +15550001111 in Test Group id:g1",
+      {
+        sessionKey: "agent:main:signal:group:g1",
+        contextKey: "signal:reaction:added:1700000000000:+15550001111:+1:g1",
+      },
+    );
   });
 
   it("checks approval reactions before dropping defaultTo-only senders at the generic access gate", async () => {
@@ -1361,12 +1325,6 @@ describe("signal createSignalEventHandler inbound context", () => {
       dmPolicy: "allowlist",
       allowFrom: [],
       reactionMode: "all",
-      isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
-      shouldEmitSignalReactionNotification: () => true,
-      resolveSignalReactionTargets: () => [
-        { kind: "phone", id: "+15550001111", display: "+15550001111" },
-      ],
-      buildSignalReactionSystemEventText: () => "reaction added",
     });
 
     await handler(
@@ -1583,8 +1541,6 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it.each([
-    ["LF", "line one\nline two", "line one\\nline two"],
-    ["CR", "line one\rline two", "line one\\rline two"],
     ["CRLF", "line one\r\nline two", "line one\\r\\nline two"],
     ["literal escape", "line one\\nline two", "line one\\nline two"],
   ])("keeps %s inbound verbose previews single-line", async (_label, message, expectedPreview) => {

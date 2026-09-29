@@ -4,15 +4,21 @@ fn main() {
         "bootstrap",
         "build_info",
         "check_for_updates",
+        "close_connection_settings",
         "connect_discovered_gateway",
         "connect_remote_gateway",
         "discover_gateways",
+        "gateway_request",
+        "gateway_profile_request",
         "gateway_action",
         "install_cli",
         "native_browser_request",
+        "native_device_settings_request",
         "open_release_page",
         "relaunch",
         "updater_ready",
+        "window_chrome_drag",
+        "window_chrome_request",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new()

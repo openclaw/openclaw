@@ -12,6 +12,7 @@ import {
   getLoadedRuntimePluginRegistry,
   registryContainsRuntimePluginIds,
 } from "./active-runtime-registry.js";
+import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 import { resolvePluginRegistrationConfigKey } from "./loader-registration-config.js";
@@ -71,6 +72,8 @@ export function createProviderRegistryResolver(dependencies: {
     },
     manifestRegistry: NonNullable<PluginLoadOptions["manifestRegistry"]>,
     declaredOwners: DeclaredProviderOwnerIndex,
+    getNormalizedConfig: () => NormalizedPluginsConfig,
+    retained: boolean,
   ) {
     const apiOwnerHint = resolveProviderConfigApiOwnerHint(params);
     const ownerRef = declaredOwners.has(normalizeProviderId(params.provider))
@@ -84,17 +87,21 @@ export function createProviderRegistryResolver(dependencies: {
           provider: ownerRef,
           manifestRegistry,
         }) ?? []);
-    // Activation helpers still run beside a declared receiver. Their triggers do
-    // not confer ownership of another provider's executable hooks.
-    const runtimePluginIds = sortUniqueStrings(
-      [params.provider, ...(apiOwnerHint ? [apiOwnerHint] : [])].flatMap((provider) =>
-        resolveManifestActivationPluginIds({
-          ...params,
-          trigger: { kind: "provider", provider },
-          manifestRecords: manifestRegistry.plugins,
-        }),
-      ),
-    );
+    // Retained generations project resolved owners without loading or checking
+    // activation helpers. Unowned refs still need those ids for their projection.
+    const runtimePluginIds =
+      retained && ownerIds.length > 0
+        ? []
+        : sortUniqueStrings(
+            [params.provider, ...(apiOwnerHint ? [apiOwnerHint] : [])].flatMap((provider) =>
+              resolveManifestActivationPluginIds({
+                ...params,
+                trigger: { kind: "provider", provider },
+                manifestRecords: manifestRegistry.plugins,
+                normalizedConfig: getNormalizedConfig(),
+              }),
+            ),
+          );
     return {
       provider: params.provider,
       ownerPluginIds: ownerIds,
@@ -107,7 +114,11 @@ export function createProviderRegistryResolver(dependencies: {
     params: ProviderResolutionInputs,
     manifestRegistry?: PluginLoadOptions["manifestRegistry"],
     declaredProviderOwners = buildDeclaredProviderOwnerIndex(manifestRegistry?.plugins ?? []),
+    retained = false,
   ) {
+    let normalizedConfig: NormalizedPluginsConfig | undefined;
+    const getNormalizedConfig = () =>
+      (normalizedConfig ??= normalizePluginsConfig(params.config?.plugins));
     const providerOwners = manifestRegistry
       ? (params.providerRefs ?? []).map((provider) =>
           resolveProviderOwnerSelection(
@@ -119,6 +130,8 @@ export function createProviderRegistryResolver(dependencies: {
             },
             manifestRegistry,
             declaredProviderOwners,
+            getNormalizedConfig,
+            retained,
           ),
         )
       : [];
@@ -157,16 +170,11 @@ export function createProviderRegistryResolver(dependencies: {
             ])
           : undefined,
       declaredProviderOwners,
-      providerRegistrationPluginIds: new Set(
-        (manifestRegistry?.plugins ?? [])
-          .filter(
-            (plugin) => plugin.providers.length > 0 || (plugin.setup?.providers?.length ?? 0) > 0,
-          )
-          .map((plugin) => plugin.id),
-      ),
-      runtimeRegistrationPluginIds: new Set(
-        providerOwners.flatMap((owner) => owner.runtimePluginIds),
-      ),
+      providerOwners,
+      // SAFETY: Candidate validation fills the manifest memo before reading it.
+      providerRegistrationPluginIds: undefined as Set<string> | undefined,
+      // SAFETY: Candidate validation fills the runtime-owner memo before reading it.
+      runtimeRegistrationPluginIds: undefined as Set<string> | undefined,
       unownedProviderRefs: manifestRegistry
         ? providerOwners
             .filter((owner) => owner.ownerPluginIds.length === 0)
@@ -205,7 +213,12 @@ export function createProviderRegistryResolver(dependencies: {
         : resolvePluginMetadataSnapshot({ config: params.config ?? {}, env, workspaceDir }));
     const inputs = { ...sourceParams, env, workspaceDir };
     const selection = snapshot
-      ? prepareProviderSelection(inputs, snapshot.manifestRegistry, snapshot.declaredProviderOwners)
+      ? prepareProviderSelection(
+          inputs,
+          snapshot.manifestRegistry,
+          snapshot.declaredProviderOwners,
+          retained,
+        )
       : undefined;
     const loadOptions =
       snapshot && selection && !retained
@@ -355,6 +368,18 @@ export function createProviderRegistryResolver(dependencies: {
       return undefined;
     }
     if (lookup) {
+      // Retained generations own their registrations. Ordinary candidates share
+      // completeness preparation across request-to-active fallback on the selection.
+      selection.providerRegistrationPluginIds ??= new Set(
+        (selection.manifestRegistry?.plugins ?? [])
+          .filter(
+            (plugin) => plugin.providers.length > 0 || (plugin.setup?.providers?.length ?? 0) > 0,
+          )
+          .map((plugin) => plugin.id),
+      );
+      selection.runtimeRegistrationPluginIds ??= new Set(
+        selection.providerOwners.flatMap((owner) => owner.runtimePluginIds),
+      );
       const providerOwners = new Set(registry.providers.map((entry) => entry.pluginId));
       // Manifest-preseeded record.providerIds cannot prove registration. Rows do;
       // activation-only helpers instead need a successful capability-enabled pass.
@@ -416,15 +441,18 @@ export function createProviderRegistryResolver(dependencies: {
     const { inputs, snapshot } = prepared;
     let { loadOptions } = prepared;
     const { env, workspaceDir } = inputs;
-    const registrationConfigKey =
-      !generationRegistry && params.config !== undefined
-        ? resolvePluginRegistrationConfigKey(
-            loadOptions ?? {
-              config: params.config,
-              activationSourceConfig: resolvePluginActivationSourceConfig(params),
-            },
-          )
-        : undefined;
+    let registrationConfigKey: string | undefined;
+    if (!generationRegistry && params.config !== undefined) {
+      const registrationConfig = loadOptions ?? {
+        config: params.config,
+        activationSourceConfig: resolvePluginActivationSourceConfig(params),
+      };
+      registrationConfigKey = resolvePluginRegistrationConfigKey({
+        runtimeEntries: normalizePluginsConfig(registrationConfig.config?.plugins).entries,
+        sourceEntries: normalizePluginsConfig(registrationConfig.activationSourceConfig?.plugins)
+          .entries,
+      });
+    }
     if (params.skipIfLoadInFlight && loadOptions && isPluginRegistryLoadInFlight(loadOptions)) {
       return undefined;
     }
@@ -496,6 +524,7 @@ export function createProviderRegistryResolver(dependencies: {
             inputs,
             context?.manifestRegistry,
             context?.declaredProviderOwners,
+            Boolean(generationRegistry),
           );
         const { lookup, aliasOwners } = prepareRegistry(registry, selection);
         if (

@@ -131,3 +131,38 @@ export function writeNpmLifecycleFixture(path: string) {
   );
   chmodSync(path, 0o755);
 }
+
+export function writeNpmRawConfigFixture(
+  path: string,
+  options: { prefixInstaller: boolean; globalConfig: boolean; logCalls: boolean },
+) {
+  writeFileSync(
+    path,
+    [
+      options.prefixInstaller ? "#!/bin/bash" : "#!/usr/bin/env bash",
+      ...(options.logCalls ? ['printf "%s\\n" "$*" >> "$NPM_FAKE_CALLS"'] : []),
+      'if [[ "$1" == "config" && "$2" == "get" ]]; then',
+      '  if [[ "$3" == "min-release-age" ]]; then',
+      "    printf 'null\\n'",
+      "    exit 0",
+      "  fi",
+      ...(options.globalConfig
+        ? [
+            '  if [[ "$3" == "globalconfig" ]]; then',
+            '    printf "%s\\n" "$NPM_FAKE_GLOBALCONFIG"',
+            "    exit 0",
+            "  fi",
+          ]
+        : []),
+      '  if [[ "$3" == "before" ]]; then',
+      "    printf '2026-01-01T00:00:00.000Z\\n'",
+      "    exit 0",
+      "  fi",
+      "fi",
+      'printf "%s\\n" "$@" > "$NPM_FAKE_INSTALL_ARGS"',
+      "exit 0",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(path, 0o755);
+}

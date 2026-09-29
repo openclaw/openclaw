@@ -68,3 +68,26 @@ export function resolveUpdateCandidatePluginPath(
         path.relative(path.parse(source).root, source),
       );
 }
+
+/** Decode the ancestry retained by published drivers for external plugin copies. */
+export function resolveUpdateCandidatePluginSourcePath(
+  rehearsalRoot: string,
+  copiedPath: string,
+): string | undefined {
+  const root = path.parse(copiedPath).root;
+  const namespace = path.join(rehearsalRoot, "candidate-plugins", sha256Hex(root));
+  if (
+    !root ||
+    path.normalize(copiedPath) !== copiedPath ||
+    !isPathInside(namespace, copiedPath) ||
+    namespace === copiedPath
+  ) {
+    return undefined;
+  }
+  // Other Windows volumes/UNC roots and managed state-relative copies lost their
+  // original root in the published protocol. A matching path is not source authority.
+  const source = path.join(root, path.relative(namespace, copiedPath));
+  return resolveUpdateCandidatePluginPath(rehearsalRoot, rehearsalRoot, source) === copiedPath
+    ? source
+    : undefined;
+}

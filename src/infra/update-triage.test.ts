@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import * as exec from "../process/exec.js";
@@ -51,10 +52,7 @@ describe("update triage child lifecycle", () => {
         });
         const cwdStat = await fs.stat(state.workspaceDir);
         let release!: () => void;
-        let started!: () => void;
-        const validating = new Promise<void>((resolve) => {
-          started = resolve;
-        });
+        const { promise: validating, resolve: started } = createDeferred();
         const blocked = new Promise<void>((resolve) => {
           release = resolve;
         });
@@ -126,10 +124,7 @@ describe("update triage child lifecycle", () => {
   it("does not launch diagnostics after its owner closes during root discovery", async () => {
     const { target, receiptPath } = await createInstalledTriage();
     let releaseRoot!: (root: string) => void;
-    let started!: () => void;
-    const discovering = new Promise<void>((resolve) => {
-      started = resolve;
-    });
+    const { promise: discovering, resolve: started } = createDeferred();
     let current = true;
     const pending = runUpdateFailureTriage({
       failure: { error: "Update failed" },

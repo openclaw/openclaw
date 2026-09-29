@@ -42,15 +42,40 @@ OpenClaw also creates Docker sandbox containers with an init process and
 mounted read-only at `/agent`; write operations to the agent workspace are
 rejected, while the configured tmpfs paths remain writable.
 
+File tools require a host-backed bind mount. A tmpfs or image volume can hide
+files below a workspace bind; file tools report those paths as container-only
+instead of reading the hidden host files. Use `exec` to access that storage.
+A deeper explicit bind restores file-tool access when it is visible in the
+container. Mount destinations reached through symlinks, or stacked mounts with
+different backing storage, also require `exec` when their host projection cannot
+be established from the container's mount table.
+
+For recently used containers, changes to bind sources or access modes, or to
+tmpfs destinations or read-only modes below a bind, require scoped recreation.
+Other tmpfs options, such as size, mode, and uid, keep the normal configuration
+change behavior: a hot container stays running with a recreation notice, while
+a stopped or expired container is replaced. Recreate explicitly to apply those
+options immediately.
+
 To expose host GPUs, set `agents.defaults.sandbox.docker.gpus` (or the per-agent override) to a value like `"all"` or `"device=GPU-uuid"`. This is passed to the selected container engine's Docker-compatible `--gpus` flag and requires compatible host GPU setup. Podman requires version 5.0 or newer for this option.
 
 <Warning>
 **Docker-out-of-Docker (DooD) constraints**
 
-If you deploy the OpenClaw Gateway itself as a Docker container, it orchestrates sibling sandbox containers using the host's Docker socket (DooD). This introduces a path mapping constraint:
+If the Gateway runs in Docker, it creates sibling sandbox containers through the host's Docker socket.
+Keep workspace paths in `openclaw.json` relative to the Gateway filesystem, such as `/home/node/.openclaw/workspace`.
+OpenClaw translates managed workspace, agent-workspace, and skill mounts into the Docker host's paths automatically.
+Shell and browser containers use the same mapping rules.
+Nested Gateway binds are projected too, with their read-only permissions preserved.
 
-- **Config requires host paths**: `openclaw.json` `workspace` must contain the **host's absolute path** (e.g. `/home/user/.openclaw/workspaces`), not the internal Gateway container path. The Docker daemon evaluates paths relative to the host OS namespace, not the Gateway's own namespace.
-- **Matching volume map required**: The Gateway process also writes bridge files to that `workspace` path. Give the Gateway container an identical volume map (`-v /home/user/.openclaw:/home/user/.openclaw`) so the same host path resolves correctly from inside the Gateway container too. Mismatched mappings surface as `EACCES` when the Gateway writes workspace files.
+- Bind-mount the workspace and OpenClaw state directories into the Gateway. Their host and Gateway paths can differ.
+- Use the Docker daemon that runs the Gateway. OpenClaw verifies its container identity before trusting the daemon's mount table.
+- Managed sources and their visible nested mounts must come from bind mounts. Named volumes, tmpfs, and files in the Gateway image are unsupported sources for sibling sandbox mounts.
+- A writable sandbox requires a writable Gateway bind. Use `workspaceAccess: "ro"` for read-only Gateway sources.
+- Explicit `sandbox.docker.binds` and `sandbox.browser.binds` retain their host-path contract. OpenClaw does not translate these operator-supplied sources.
+- Restart the Gateway after changing its mounts or Docker connection. If an existing sandbox has different mounts, OpenClaw reports a scoped `sandbox recreate` command.
+  Recently used containers remain running until you recreate them, but OpenClaw refuses to reuse their stale mounts.
+
 - **Codex code mode**: when an OpenClaw sandbox is active, OpenClaw disables Codex app-server native Code Mode, user MCP servers, and app-backed plugin execution for that turn (those run from the Gateway-host app-server process, not the OpenClaw sandbox backend), unless the sandbox tool policy exposes the required tools and you opt into the experimental sandbox exec-server path. Shell access then routes through OpenClaw sandbox-backed tools such as `sandbox_exec` and `sandbox_process`. Do not mount the host Docker socket into agent sandbox containers or custom Codex sandboxes. See [Codex Harness](/plugins/codex-harness) for the full behavior.
 
 On Ubuntu/AppArmor hosts with Docker sandbox mode enabled, Codex app-server `workspace-write` shell execution needs unprivileged user namespaces inside the sandbox container, and this can fail before shell startup when the service user cannot create them. This needs an unprivileged network namespace too when Docker sandbox egress is disabled (`network: "none"`, the default). Common symptoms: `bwrap: setting up uid map: Permission denied` and `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`. Run `openclaw doctor`; if it reports a Codex bwrap namespace probe failure, prefer an AppArmor profile that grants the required namespaces to the OpenClaw service process. `kernel.apparmor_restrict_unprivileged_userns=0` is a host-wide fallback with security tradeoffs; use it only when that host posture is acceptable.

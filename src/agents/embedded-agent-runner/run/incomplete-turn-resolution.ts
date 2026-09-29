@@ -1,8 +1,8 @@
-/** Resolves incomplete-turn payloads, continuation evidence, and run liveness. */
 import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import {
   hasAcceptedSessionSpawn,
   hasCompletionMessageSessionSpawn,
@@ -12,10 +12,15 @@ import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers.js";
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
+import { renderAssistantRequestFailureCopy } from "../../failover/assistant-request-failure-copy.js";
+import { resolveReplyFailoverFacts } from "../../failover/request-error-facts.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { hasCommittedMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
+import {
+  hasCommittedMessagingToolDeliveryEvidence,
+  resolveSourceReplyDelivery,
+} from "../delivery-evidence.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
 import {
   hasAsyncActivity,
@@ -24,7 +29,6 @@ import {
 } from "./attempt-terminal-evidence.js";
 import {
   classifyAssistantTurn,
-  hasOnlySilentAssistantReply,
   isIncompleteTerminalAssistantTurn,
   joinAssistantTexts,
   type IncompleteTurnAttempt,
@@ -101,9 +105,8 @@ export function resolveIncompleteTurnPayloadText(params: {
   }
 
   if (
-    hasOnlySilentAssistantReply(params.attempt.assistantTexts) ||
     params.attempt.hasToolMediaBlockReply ||
-    hasCommittedMessagingToolDeliveryEvidence(params.attempt)
+    resolveSourceReplyDelivery(params.attempt) !== "missing"
   ) {
     return null;
   }
@@ -112,7 +115,15 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  if (hasAsyncActivity(params.attempt.toolMetas)) {
+  // Failed or incomplete model steps still need a warning when their lifecycle
+  // snapshot contains unfinished work; only a normal stop can leave that work pending.
+  if (
+    hasAsyncActivity(params.attempt.toolMetas) ||
+    (!params.aborted &&
+      assistant?.stopReason === "stop" &&
+      (params.attempt.itemLifecycle.activeCount > 0 ||
+        params.attempt.itemLifecycle.completedCount < params.attempt.itemLifecycle.startedCount))
+  ) {
     return null;
   }
 
@@ -127,8 +138,23 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
+  const { promptError } = projectAgentRunAttemptTerminal(params.attempt.terminal);
+  const failureFacts = promptError
+    ? resolveReplyFailoverFacts(promptError, formatErrorMessage(promptError))
+    : undefined;
+  // A non-replayable harness failure may have no assistant message to carry its error.
+  // Share classified copy with thrown failures; never display raw prompt diagnostics.
+  const promptFailureText = failureFacts
+    ? (failureFacts.providerRequestError?.userMessage ??
+      failureFacts.formatFailureText ??
+      renderAssistantRequestFailureCopy({
+        reason: failureFacts.reason,
+        status: failureFacts.status,
+        code: failureFacts.code,
+      }))
+    : undefined;
   if (params.hadPotentialSideEffects || params.attempt.replayMetadata.hadPotentialSideEffects) {
-    return "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.";
+    return `${promptFailureText ?? "⚠️ Agent couldn't generate a response."} Note: some tool actions may have already been executed — please verify before retrying.`;
   }
   if (assistant && isProviderRefusalAssistantError(assistant)) {
     return formatUserFacingAssistantErrorText(assistant);
@@ -148,7 +174,7 @@ export function resolveIncompleteTurnPayloadText(params: {
       }),
     });
   }
-  return "⚠️ Agent couldn't generate a response. Please try again.";
+  return promptFailureText ?? "⚠️ Agent couldn't generate a response. Please try again.";
 }
 
 /**
@@ -163,48 +189,24 @@ export function shouldRetryMissingAssistantTurn(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): boolean {
-  if (
+  return !(
     params.payloadCount !== 0 ||
     params.aborted ||
-    Boolean(params.promptError) ||
+    params.promptError ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
     resolveCurrentAttemptAssistant(params.attempt) ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError
-  ) {
-    return false;
-  }
-
-  if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {
-    return false;
-  }
-
-  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
-    return false;
-  }
-
-  if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
-    return false;
-  }
-
-  if (hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns)) {
-    return false;
-  }
-
-  if (hasAsyncActivity(params.attempt.toolMetas)) {
-    return false;
-  }
-
-  if (
+    params.attempt.lastToolError ||
+    joinAssistantTexts(params.attempt.assistantTexts).length > 0 ||
+    hasCommittedMessagingToolDeliveryEvidence(params.attempt) ||
+    hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
+    hasAsyncActivity(params.attempt.toolMetas) ||
     (params.attempt.itemLifecycle?.startedCount ?? 0) > 0 ||
-    (params.attempt.itemLifecycle?.activeCount ?? 0) > 0
-  ) {
-    return false;
-  }
-
-  return !params.attempt.replayMetadata.hadPotentialSideEffects;
+    (params.attempt.itemLifecycle?.activeCount ?? 0) > 0 ||
+    params.attempt.replayMetadata.hadPotentialSideEffects
+  );
 }
 
 /** Fields needed to determine whether a yielded turn already delivered or can continue. */
@@ -245,10 +247,6 @@ export const YIELD_DIAGNOSTIC_TEXT =
 export const TRUNCATED_REPLY_NOTICE_TEXT =
   "⚠️ Reply truncated at the model's output token limit. The text above is partial — ask to continue it.";
 
-function isToolResultRole(role: string): boolean {
-  return role === "toolresult" || role === "tool_result" || role === "tool";
-}
-
 function readMessageTextContent(message: AgentMessage): string | undefined {
   const content = (message as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -278,7 +276,7 @@ function hasTrailingSilentToolResult(messages: readonly AgentMessage[]): boolean
       continue;
     }
     const role = normalizeLowercaseStringOrEmpty(message?.role);
-    if (isToolResultRole(role)) {
+    if (role === "toolresult" || role === "tool_result" || role === "tool") {
       if ((message as { isError?: boolean }).isError === true) {
         return false;
       }
@@ -331,11 +329,14 @@ export function resolveReplayInvalidFlag(params: {
   incompleteTurnText?: string | null;
 }): boolean {
   const terminal = projectAgentRunAttemptTerminal(params.attempt.terminal);
+  const replaySafeProviderRefusal =
+    params.attempt.replayMetadata.replaySafe &&
+    isProviderRefusalAssistantError(resolveCurrentAttemptAssistant(params.attempt));
   return (
     !params.attempt.replayMetadata.replaySafe ||
     terminal.promptErrorSource === "compaction" ||
     terminal.timedOutDuringCompaction ||
-    Boolean(params.incompleteTurnText)
+    (Boolean(params.incompleteTurnText) && !replaySafeProviderRefusal)
   );
 }
 

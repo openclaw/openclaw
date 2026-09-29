@@ -31,6 +31,7 @@ export const ConnectErrorDetailCodes = {
   AUTH_IDENTITY_HEADER_REQUIRED: "AUTH_IDENTITY_HEADER_REQUIRED",
   AUTH_VERIFIED_USER_REQUIRED: "AUTH_VERIFIED_USER_REQUIRED",
   AUTHENTICATED_PROFILE_UNAVAILABLE: "AUTHENTICATED_PROFILE_UNAVAILABLE",
+  OPERATOR_ACCESS_DENIED: "OPERATOR_ACCESS_DENIED",
   CONTROL_UI_BUILD_MISMATCH: "CONTROL_UI_BUILD_MISMATCH",
   CONTROL_UI_ORIGIN_NOT_ALLOWED: "CONTROL_UI_ORIGIN_NOT_ALLOWED",
   PROTOCOL_MISMATCH: "PROTOCOL_MISMATCH",
@@ -105,12 +106,9 @@ const CONNECT_RECOVERY_NEXT_STEP_VALUES: ReadonlySet<ConnectRecoveryNextStep> = 
   "review_auth_configuration",
 ]);
 
-const CONNECT_PAIRING_REQUIRED_REASON_VALUES: ReadonlySet<ConnectPairingRequiredReason> = new Set([
-  "not-paired",
-  "role-upgrade",
-  "scope-upgrade",
-  "metadata-upgrade",
-]);
+const CONNECT_PAIRING_REQUIRED_REASON_VALUES: ReadonlySet<ConnectPairingRequiredReason> = new Set(
+  Object.values(ConnectPairingRequiredReasons),
+);
 const PAIRING_CONNECT_REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 const PAIRING_CONNECT_REASON_METADATA: Readonly<
@@ -254,16 +252,17 @@ export function readConnectErrorRecoveryAdvice(details: unknown): ConnectErrorRe
     typeof details.canRetryWithDeviceToken === "boolean"
       ? details.canRetryWithDeviceToken
       : undefined;
-  const normalizedNextStep = normalizeOptionalProtocolString(details.recommendedNextStep) ?? "";
-  const recommendedNextStep = CONNECT_RECOVERY_NEXT_STEP_VALUES.has(
-    normalizedNextStep as ConnectRecoveryNextStep,
-  )
-    ? (normalizedNextStep as ConnectRecoveryNextStep)
-    : undefined;
   return {
     canRetryWithDeviceToken,
-    recommendedNextStep,
+    recommendedNextStep: normalizeConnectRecoveryNextStep(details.recommendedNextStep),
   };
+}
+
+function normalizeConnectRecoveryNextStep(value: unknown): ConnectRecoveryNextStep | undefined {
+  const normalized = normalizeOptionalProtocolString(value) ?? "";
+  return CONNECT_RECOVERY_NEXT_STEP_VALUES.has(normalized as ConnectRecoveryNextStep)
+    ? (normalized as ConnectRecoveryNextStep)
+    : undefined;
 }
 
 function normalizePairingConnectReason(value: unknown): ConnectPairingRequiredReason | undefined {
@@ -388,12 +387,7 @@ export function readPairingConnectErrorDetails(
   const remediationHint =
     normalizeOptionalProtocolString(details.remediationHint) ??
     buildPairingConnectRemediationHint(reason);
-  const normalizedNextStep = normalizeOptionalProtocolString(details.recommendedNextStep) ?? "";
-  const recommendedNextStep = CONNECT_RECOVERY_NEXT_STEP_VALUES.has(
-    normalizedNextStep as ConnectRecoveryNextStep,
-  )
-    ? (normalizedNextStep as ConnectRecoveryNextStep)
-    : undefined;
+  const recommendedNextStep = normalizeConnectRecoveryNextStep(details.recommendedNextStep);
   const deviceId = normalizeOptionalProtocolString(details.deviceId);
   const requestedRole = normalizeOptionalProtocolString(details.requestedRole);
   const requestedScopes = normalizeOptionalTrimmedStringList(details.requestedScopes);

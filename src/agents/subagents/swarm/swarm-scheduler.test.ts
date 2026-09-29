@@ -10,7 +10,6 @@ import {
   isSwarmRunWaitingForCapacity,
   holdQueuedSwarmRun,
   releaseSwarmRun,
-  removeQueuedSwarmRun,
   reserveSwarmRun,
 } from "./swarm-scheduler.js";
 import { testing } from "./swarm-scheduler.test-support.js";
@@ -146,10 +145,16 @@ describe("swarm scheduler", () => {
     expect(isSwarmRunWaitingForCapacity("two", owner)).toBe(false);
     await hold?.release();
     expect(isSwarmRunWaitingForCapacity("two", owner)).toBe(true);
-    expect(removeQueuedSwarmRun("two")).toBe(true);
-    expect(waits).toEqual([true, false, true, false]);
-    releaseSwarmRun("one");
-    await vi.waitFor(() => expect(started).toEqual(["one", "three"]));
+    const removal = holdQueuedSwarmRun("two");
+    assert(removal);
+    try {
+      expect(removal.withdraw()).toBe(true);
+      expect(waits).toEqual([true, false, true, false]);
+      releaseSwarmRun("one");
+      await vi.waitFor(() => expect(started).toEqual(["one", "three"]));
+    } finally {
+      await removal.release();
+    }
   });
 
   it.each([false, true])(
@@ -216,6 +221,37 @@ describe("swarm scheduler", () => {
       expect(releaseSwarmRun("capacity")).toBe(true);
     },
   );
+
+  it("joins a released reservation's pending launch before shutdown cleanup", async () => {
+    const lifecycleOwner = {};
+    const entered = createDeferred();
+    const finishLaunch = createDeferred();
+    const onRemoved = vi.fn(async () => undefined);
+    enqueueSwarmRun({
+      groupId: "released-launch",
+      runId: "pending-launch",
+      maxConcurrent: 1,
+      activeRunIds: [],
+      lifecycleOwner,
+      start: async () => {
+        entered.resolve();
+        await finishLaunch.promise;
+      },
+      onStartFailure: () => true,
+      onRemoved,
+    });
+    await entered.promise;
+    expect(releaseSwarmRun("pending-launch")).toBe(true);
+    const closing = closeSwarmScheduler(lifecycleOwner);
+    try {
+      await flushMicrotasks();
+      expect(onRemoved).not.toHaveBeenCalled();
+    } finally {
+      finishLaunch.resolve();
+    }
+    await closing;
+    expect(onRemoved).toHaveBeenCalledExactlyOnceWith("shutdown");
+  });
 
   it("preserves restored active slots when shutting down queued launch resources", async () => {
     const start = vi.fn(async () => undefined);

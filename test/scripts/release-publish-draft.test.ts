@@ -16,7 +16,10 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 
-it("renders and verifies an old pinned target using trusted publication tooling", () => {
+function publicationFixture({
+  releaseVersion = "2026.9.4",
+  toolingVersion = "2026.9.5",
+}: { releaseVersion?: string; toolingVersion?: string } = {}) {
   const root = realpathSync(createTempDir("release-publish-historical-tooling-"));
   const repository = resolve(".");
   mkdirSync(join(root, "scripts"));
@@ -26,7 +29,7 @@ it("renders and verifies an old pinned target using trusted publication tooling"
   );
   writeFileSync(
     join(root, "CHANGELOG.md"),
-    "# Changelog\n\n## 2026.9.4\n\n### Fixes\n\n- Frozen release fix.\n",
+    `# Changelog\n\n## ${releaseVersion}\n\n### Fixes\n\n- Frozen release fix.\n`,
   );
   const git = (args: string[]) =>
     execFileSync("git", args, {
@@ -50,15 +53,26 @@ it("renders and verifies an old pinned target using trusted publication tooling"
   const targetSha = git(["rev-parse", "HEAD"]);
   writeFileSync(join(root, "CHANGELOG.md"), "Working tree content must not be published.\n");
   mkdirSync(join(root, ".release-harness/scripts/lib"), { recursive: true });
+  writeFileSync(
+    join(root, ".release-harness/package.json"),
+    `${JSON.stringify({ version: toolingVersion }, null, 2)}\n`,
+  );
   for (const source of [
     "scripts/render-github-release-notes.mts",
+    "scripts/openclaw-npm-extended-stable-release.mjs",
     "scripts/lib/release-changelog.mjs",
     "scripts/lib/release-notes-compaction.mjs",
+    "scripts/lib/release-version.mjs",
     "scripts/lib/release-publish-children.sh",
   ]) {
     copyFileSync(join(repository, source), join(root, ".release-harness", source));
   }
   symlinkSync(join(repository, "node_modules"), join(root, "node_modules"), "dir");
+  return { root, repository, targetSha };
+}
+
+it("renders and verifies an old pinned target using trusted publication tooling", () => {
+  const { root, repository, targetSha } = publicationFixture();
   const workflow = parse(
     readFileSync(join(repository, ".github/workflows/openclaw-release-publish.yml"), "utf8"),
   );
@@ -104,11 +118,54 @@ canonical_release_body_matches "$NOTES_FILE"
   expect(verified).toBe(`${prepared}\n\n${readFileSync(proof, "utf8").trimEnd()}`);
 });
 
+it("renders the extended-stable context through the real publication entry point", () => {
+  const releaseVersion = "2026.7.35";
+  const toolingVersion = "2026.9.5";
+  const { root, repository, targetSha } = publicationFixture({ releaseVersion, toolingVersion });
+  const workflow = parse(
+    readFileSync(join(repository, ".github/workflows/openclaw-release-publish.yml"), "utf8"),
+  );
+  const prepare = workflow.jobs.publish.steps.find(
+    (step: { name?: string }) => step.name === "Prepare GitHub release notes",
+  );
+  const result = spawnSync(
+    process.platform === "darwin" ? "/bin/bash" : "bash",
+    ["-c", prepare.run],
+    {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...createNestedGitEnv(),
+        GITHUB_WORKSPACE: root,
+        RUNNER_TEMP: root,
+        GITHUB_REPOSITORY: "openclaw/openclaw",
+        RELEASE_TAG: `v${releaseVersion}`,
+        RELEASE_NPM_DIST_TAG: "extended-stable",
+        TARGET_SHA: targetSha,
+        GITHUB_REF: "refs/tags/release-publish/aaaaaaaaaaaa-1",
+        PARENT_WORKFLOW_SHA: "a".repeat(40),
+      },
+    },
+  );
+
+  expect(result.status, result.stderr).toBe(0);
+  expect(
+    readFileSync(join(root, "release-notes.md"), "utf8").startsWith(
+      "This is a gateway-only `extended-stable` release, which is our current equivalent to LTS. " +
+        "This release is OpenClaw from the end of July 2026, plus critical security updates, " +
+        "reliability and performance fixes, and features like new model support. " +
+        "The current latest version of OpenClaw is " +
+        "[2026.9.5](https://github.com/openclaw/openclaw/releases#release-v2026.9.5)\n\n",
+    ),
+  ).toBe(true);
+});
+
 it.each([
   { existing: "draft", distTag: "latest", command: "edit" },
   { existing: "draft", distTag: "beta", command: "edit" },
   { existing: "missing", distTag: "latest", command: "create" },
   { existing: "public", distTag: "latest", command: undefined },
+  { existing: "diverged-public", distTag: "latest", command: undefined },
 ])(
   "prepares $existing release on $distTag without promoting a draft",
   ({ existing, distTag, command }) => {
@@ -123,7 +180,7 @@ it.each([
         `
 source "$OWNER_SCRIPT"
 verify_release_tag_target() { :; }
-canonical_release_body_matches() { :; }
+canonical_release_body_matches() { [[ "$EXISTING" != diverged-public ]]; }
 gh() {
   if [[ "$1 $2" == "release view" ]]; then
     [[ "$EXISTING" != missing ]] || return 1
@@ -159,7 +216,7 @@ create_or_update_github_release
         },
       },
     );
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, result.stderr).toBe(existing === "diverged-public" ? 1 : 0);
     if (!command) {
       expect(existsSync(commands)).toBe(false);
       return;
@@ -221,3 +278,89 @@ gh() {
     expect(existsSync(commands)).toBe(false);
   },
 );
+
+it.each([
+  { state: "missing", body: "canonical", error: undefined },
+  { state: "matching", body: "proof", error: undefined },
+  { state: "different", body: "canonical", error: "differs from this release run" },
+  { state: "missing", body: "different", error: "Public release notes are no longer canonical" },
+  { state: "missing", body: "wrong-sha", error: "does not match" },
+])("resumes a public release with $state evidence and $body notes", ({ state, body, error }) => {
+  const { root, targetSha } = publicationFixture();
+  const notes = "## 2026.9.4\n\n### Fixes\n\n- Frozen release fix.";
+  const releaseBody =
+    body === "different"
+      ? "Unrelated release notes"
+      : body === "proof" || body === "wrong-sha"
+        ? `${notes}\n\n### Release verification\n\n- release SHA: \`${body === "wrong-sha" ? "b".repeat(40) : targetSha}\``
+        : notes;
+  const assetName = "openclaw-2026.9.4-release-manifest.json";
+  writeFileSync(
+    join(root, "release.json"),
+    JSON.stringify({
+      isDraft: false,
+      body: releaseBody,
+      assets: state === "missing" ? [] : [{ name: assetName }],
+      url: "https://github.com/fixture/repository/releases/tag/v2026.9.4",
+    }),
+  );
+  writeFileSync(join(root, "manifest.json"), '{"source":"frozen"}');
+  writeFileSync(
+    join(root, "existing.json"),
+    state === "different" ? '{"source":"changed"}' : '{"source":"frozen"}',
+  );
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      `
+source "$GITHUB_WORKSPACE/.release-harness/scripts/lib/release-publish-children.sh"
+verify_release_tag_target() { :; }
+gh() {
+  case "$1 $2" in
+    "release view") cat "$RUNNER_TEMP/release.json" ;;
+    "release download")
+      local destination=""
+      while (( $# > 0 )); do
+        if [[ "$1" == --dir ]]; then destination="$2"; break; fi
+        shift
+      done
+      cp "$RUNNER_TEMP/existing.json" "$destination/$ASSET_NAME"
+      ;;
+    "release upload") printf '%s\\n' "$@" >> "$RUNNER_TEMP/uploads" ;;
+    *) echo "Unexpected mutation: $*" >&2; return 1 ;;
+  esac
+}
+prepared_release_notes_file="$RUNNER_TEMP/prepared.md"
+render_github_release_notes "$prepared_release_notes_file"
+guard_existing_public_release
+create_or_update_github_release
+attach_or_verify_release_asset "$RUNNER_TEMP/manifest.json" "$ASSET_NAME"
+`,
+    ],
+    {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...createNestedGitEnv(),
+        GITHUB_WORKSPACE: root,
+        RUNNER_TEMP: root,
+        GITHUB_STEP_SUMMARY: join(root, "summary"),
+        GITHUB_REPOSITORY: "fixture/repository",
+        RELEASE_TAG: "v2026.9.4",
+        TARGET_SHA: targetSha,
+        GITHUB_REF: "refs/tags/release-publish/aaaaaaaaaaaa-1",
+        PARENT_WORKFLOW_SHA: "a".repeat(40),
+        PUBLISH_OPENCLAW_NPM: "true",
+        RELEASE_NPM_DIST_TAG: "latest",
+        ASSET_NAME: assetName,
+      },
+    },
+  );
+  expect(result.status, result.stderr).toBe(error ? 1 : 0);
+  if (error) {
+    expect(result.stderr).toContain(error);
+  }
+  expect(existsSync(join(root, "uploads"))).toBe(state === "missing" && !error);
+  expect(JSON.parse(readFileSync(join(root, "release.json"), "utf8")).body).toBe(releaseBody);
+});

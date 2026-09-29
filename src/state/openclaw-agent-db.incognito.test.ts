@@ -1,16 +1,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareAgentDeleteDatabases } from "../agents/agent-delete-databases.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { beginAgentDeletionJournal } from "./agent-deletion-journal.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPath,
-  closeOpenClawAgentDatabases,
   closeOpenClawAgentDatabasesForTest,
-  IncognitoAgentDatabasePathCollisionError,
+  getOpenClawAgentDatabaseIfOpen,
   isIncognitoOpenClawAgentSqlitePath,
   listOpenClawRegisteredAgentDatabases,
   listOpenIncognitoAgentDatabases,
@@ -19,16 +20,20 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "./openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
+import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "./openclaw-state-db.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  for (const tempDir of tempDirs.splice(0)) {
-    fs.rmSync(tempDir, { force: true, recursive: true });
-  }
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    cleanup();
+  });
 });
 
 describe("incognito agent database", () => {
@@ -84,57 +89,46 @@ describe("incognito agent database", () => {
     ).toBe(true);
   });
 
-  it.each([false, true])(
-    "rejects deletion-fenced opens and writes and retires prepared statements (held: %s)",
-    (held) => {
-      const stateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "incognito-delete-")));
-      tempDirs.push(stateDir);
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "worker", env });
-      const options = { agentId: "worker", env, path: sentinel };
-      const database = held ? openOpenClawAgentDatabase(options) : undefined;
-      const writeSql =
-        "UPDATE schema_meta SET updated_at = updated_at + 1 WHERE meta_key = 'primary'";
-      const retained = database?.db.prepare(writeSql);
-      beginAgentDeletionJournal(
-        {
-          agentId: "worker",
-          operationId: "delete-worker",
-          agentDir: path.dirname(sentinel),
-          workspaceDir: path.join(stateDir, "workspace-worker"),
-          sessionsDir: path.join(stateDir, "agents", "worker", "sessions"),
-          deleteFiles: true,
-        },
-        { env },
-      );
+  it("rejects deletion-fenced opens and writes and retires prepared statements", async () => {
+    const stateDir = fs.realpathSync(tempDirs.make("incognito-delete-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "worker", env });
+    const options = { agentId: "worker", env, path: sentinel };
+    const database = openOpenClawAgentDatabase(options);
+    const writeSql =
+      "UPDATE schema_meta SET updated_at = updated_at + 1 WHERE meta_key = 'primary'";
+    const retained = database.db.prepare(writeSql);
+    beginAgentDeletionJournal(
+      {
+        agentId: "worker",
+        operationId: "delete-worker",
+        agentDir: path.dirname(sentinel),
+        workspaceDir: path.join(stateDir, "workspace-worker"),
+        sessionsDir: path.join(stateDir, "agents", "worker", "sessions"),
+        deleteFiles: true,
+      },
+      { env },
+    );
 
-      expect.soft(() => openOpenClawAgentDatabase(options)).toThrow("is deleted");
-      expect
-        .soft(() =>
-          runOpenClawAgentWriteTransaction(({ db }) => db.prepare(writeSql).run(), options),
-        )
-        .toThrow("is deleted");
-      const plan = prepareAgentDeleteDatabases(
-        { agents: { entries: { worker: {}, kept: {} } } },
-        "worker",
-        path.dirname(sentinel),
-        { env },
-      );
-      if (database && retained) {
-        expect.soft(database.db.isOpen).toBe(false);
-        expect.soft(() => retained.run()).toThrow();
-      }
-      expect(plan.registrationPaths).not.toContain(sentinel);
-      expect(plan.fileGroups.flat()).not.toContain(sentinel);
-      expect(fs.existsSync(sentinel)).toBe(false);
-    },
-  );
+    expect.soft(() => openOpenClawAgentDatabase(options)).toThrow("is deleted");
+    expect
+      .soft(() => runOpenClawAgentWriteTransaction(({ db }) => db.prepare(writeSql).run(), options))
+      .toThrow("is deleted");
+    const plan = await prepareAgentDeleteDatabases(
+      { agents: { entries: { worker: {}, kept: {} } } },
+      "worker",
+      path.dirname(sentinel),
+      { env },
+    );
+    expect.soft(database.db.isOpen).toBe(false);
+    expect.soft(() => retained.run()).toThrow();
+    expect(plan.registrationPaths).not.toContain(sentinel);
+    expect(plan.fileGroups.flat()).not.toContain(sentinel);
+    expect(fs.existsSync(sentinel)).toBe(false);
+  });
 
   it("does not allocate an in-memory database for a read-only miss", () => {
-    const stateDir = fs.realpathSync(
-      fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "openclaw-incognito-read-miss-")),
-    );
-    tempDirs.push(stateDir);
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-incognito-read-miss-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
     const before = listOpenIncognitoAgentDatabases();
@@ -151,10 +145,7 @@ describe("incognito agent database", () => {
   });
 
   it("refuses a file at the reserved sentinel path before opening in memory", () => {
-    const stateDir = fs.realpathSync(
-      fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "openclaw-incognito-collision-")),
-    );
-    tempDirs.push(stateDir);
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-incognito-collision-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
     fs.mkdirSync(path.dirname(sentinel), { recursive: true });
@@ -166,7 +157,7 @@ describe("incognito agent database", () => {
     } catch (error) {
       collision = error;
     }
-    expect(collision).toBeInstanceOf(IncognitoAgentDatabasePathCollisionError);
+    expect(collision).toBeInstanceOf(Error);
     expect(collision).toMatchObject({
       name: "IncognitoAgentDatabasePathCollisionError",
       path: sentinel,
@@ -182,10 +173,7 @@ describe("incognito agent database", () => {
   });
 
   it("boots the canonical schema in one cached memory handle without touching its sentinel path", () => {
-    const stateDir = fs.realpathSync(
-      fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "openclaw-incognito-db-")),
-    );
-    tempDirs.push(stateDir);
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-incognito-db-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
     const beforeGeneration = readOpenIncognitoAgentDatabaseGeneration();
@@ -232,21 +220,56 @@ describe("incognito agent database", () => {
     expect(readOpenIncognitoAgentDatabaseGeneration()).toBe(closedGeneration);
   });
 
-  it("advances once when close-all removes incognito membership", () => {
-    const stateDir = fs.realpathSync(
-      fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "openclaw-incognito-close-all-")),
-    );
-    tempDirs.push(stateDir);
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
-    openOpenClawAgentDatabase({ agentId: "main", env, path: sentinel });
-    const openedGeneration = readOpenIncognitoAgentDatabaseGeneration();
+  it("keeps only its shared authority handle warm when shared state opens after Incognito", () => {
+    const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("incognito-authority-")) };
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const options = {
+      agentId: "worker",
+      env,
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "worker", env }),
+    };
+    const incognito = openOpenClawAgentDatabase(options);
+    expect(fs.readdirSync(env.OPENCLAW_STATE_DIR)).toEqual([]);
+    const shared = openOpenClawStateDatabase({ env });
+    const unrelated = openOpenClawStateDatabase({
+      path: path.join(tempDirs.make("unrelated-authority-"), "state.sqlite"),
+    });
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS + 1);
+    expect(shared.db.isOpen).toBe(true);
+    expect(unrelated.db.isOpen).toBe(false);
+    expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(incognito);
 
-    closeOpenClawAgentDatabases();
-    const closedGeneration = readOpenIncognitoAgentDatabaseGeneration();
-    expect(closedGeneration).toBeGreaterThan(openedGeneration);
+    closeOpenClawAgentDatabaseByPath(options.path);
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+    expect(shared.db.isOpen).toBe(false);
+    const later = openOpenClawStateDatabase({ env });
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+    expect(later.db.isOpen).toBe(false);
+  });
 
-    closeOpenClawAgentDatabases();
-    expect(readOpenIncognitoAgentDatabaseGeneration()).toBe(closedGeneration);
+  it("allows explicit shared-state replacement and releases retention after the last Incognito closes", () => {
+    const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("incognito-replacement-")) };
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const shared = openOpenClawStateDatabase({ env });
+    const openIncognito = (agentId: string) => {
+      const options = {
+        agentId,
+        env,
+        path: resolveIncognitoOpenClawAgentSqlitePath({ agentId, env }),
+      };
+      return { options, database: openOpenClawAgentDatabase(options) };
+    };
+    const first = openIncognito("first");
+    const second = openIncognito("second");
+    openClawStateDatabaseCache.closeOpenClawStateDatabaseByPath(shared.path);
+    expect(shared.db.isOpen).toBe(false);
+    const replacement = openOpenClawStateDatabase({ env });
+    closeOpenClawAgentDatabaseByPath(first.options.path);
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+    expect(replacement.db.isOpen).toBe(true);
+    expect(getOpenClawAgentDatabaseIfOpen(second.options)).toBe(second.database);
+    closeOpenClawAgentDatabaseByPath(second.options.path);
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+    expect(replacement.db.isOpen).toBe(false);
   });
 });

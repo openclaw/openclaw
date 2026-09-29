@@ -1,5 +1,6 @@
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
+import type { Model } from "../../../llm/types.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
 import type { ModelFallbackRouteResolution } from "../../model-fallback.types.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-runtime.types.js";
@@ -7,6 +8,7 @@ import type { CompactionRequestBudget } from "../../sessions/compaction/request-
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import type { DeferredEmbeddedRunLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import type { EmbeddedRunCompletionCheck } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export type CompactionAccountingTarget = Readonly<
@@ -17,7 +19,7 @@ export type CompactionAccountingTarget = Readonly<
 /** Ordered producer observations; unknown context never borrows an older request's usage. */
 export type EmbeddedContextAccountingEvent = Readonly<
   | { kind: "compaction"; tokensAfter: number | undefined }
-  | { kind: "model"; contextTokens: number | undefined }
+  | { kind: "model"; contextTokens: number | undefined; successful: boolean }
 >;
 
 /** Writer custody is independent of telemetry; an absent snapshot is not observed unknown context. */
@@ -34,6 +36,14 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  /** Fail-closed caller input admission against the actual prepared model, before dispatch. */
+  assertModelInput?: (model: Pick<Model, "input">) => void;
+  /** Reset deferred terminal facts when the host admits a new attempt, before preparation. */
+  onAttemptStart?: () => void;
+  /** Keep a bounded auxiliary tool set directly visible after runtime admission. */
+  disableToolSearch?: true;
+  /** Restrict history/search to an explicitly observed session, not this run's store key. */
+  sessionReadScopeKey?: string;
   /** Candidate producers have already resolved the model against their captured metadata. */
   requestedRouteResolution?: ModelFallbackRouteResolution;
   onCompactionRequestBudget?: (budget: CompactionRequestBudget | undefined) => void;
@@ -69,6 +79,8 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
 export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
   Pick<RunEmbeddedAgentInternalParams, "onContextAccountingEvent" | "onCompactionRequestBudget"> & {
     compactionCountOwner?: "subscription" | "caller";
+    /** Current-run committed plan facts; retained across attempts, never loaded from history. */
+    completionCheck?: EmbeddedRunCompletionCheck;
   };
 
 export type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentInternalParams & {

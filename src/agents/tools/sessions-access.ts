@@ -1,8 +1,3 @@
-/**
- * Session visibility and access helpers for session tools.
- *
- * Adds OpenClaw session-key alias normalization and sandbox requester scoping over SDK visibility contracts.
- */
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -47,8 +42,7 @@ export {
 } from "../../plugin-sdk/session-visibility.js";
 
 type SessionToolAccessDenied = Extract<SessionVisibilityDecision, { allowed: false }>;
-export type SessionToolAccessResult = SessionVisibilityDecision;
-export type SessionToolActionOperation =
+type SessionToolActionOperation =
   | "archive"
   | "create"
   | "delete"
@@ -57,7 +51,7 @@ export type SessionToolActionOperation =
   | "reset"
   | "restore"
   | "send";
-export type SessionToolActionFact = "committed" | "conflict" | "no-op" | "scheduled";
+type SessionToolActionFact = "committed" | "conflict" | "no-op" | "scheduled";
 
 type DescribedSessionVisibilityRow = SessionVisibilityRow & { sessionId?: string };
 
@@ -218,6 +212,7 @@ export async function resolveSessionToolAccess(params: {
   displayAction?: SessionAccessAction | "search";
   requesterAgentId: string;
   requesterSessionKey: string;
+  sessionReadScopeKey?: string;
   mainSessionKey?: string;
   authorizationTargetSessionKey?: string;
   targetAgentId: string;
@@ -226,7 +221,7 @@ export async function resolveSessionToolAccess(params: {
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
   callGateway?: AgentToolGatewayRequestCaller;
-}): Promise<SessionToolAccessResult> {
+}): Promise<SessionVisibilityDecision> {
   const authorizationTargetSessionKey =
     params.authorizationTargetSessionKey ?? params.targetSessionKey;
   const deny = (denial: SessionToolAccessDenied) => {
@@ -238,7 +233,22 @@ export async function resolveSessionToolAccess(params: {
     });
     return denial;
   };
-  const scoped = createSessionVisibilityChecker.resolveScopedAccess({
+  if (params.sessionReadScopeKey) {
+    // Invocation read caps are ceilings: a grant held by the observed session
+    // must not widen the auxiliary reader beyond that selected session.
+    const capped = createSessionVisibilityDecisionChecker({
+      action: params.action,
+      defaultAgentId: params.targetAgentId,
+      requesterAgentId: params.requesterAgentId,
+      requesterSessionKey: params.sessionReadScopeKey,
+      visibility: "self",
+      a2aPolicy: params.a2aPolicy,
+    }).check({ key: authorizationTargetSessionKey, agentId: params.targetAgentId });
+    if (!capped.allowed) {
+      return deny(capped);
+    }
+  }
+  const scoped = await createSessionVisibilityChecker.resolveScopedAccessAsync({
     action: params.action,
     requesterSessionKey: params.requesterSessionKey,
     // A bare key is not globally unique under explicit ownership. Callers

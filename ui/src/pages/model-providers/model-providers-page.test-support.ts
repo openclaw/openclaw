@@ -1,24 +1,47 @@
-import { vi } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import { afterEach, expect, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type {
   ModelAuthStatusProvider,
   ModelAuthStatusResult,
+  ModelCatalogResult,
   ModelsProbeResult,
 } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { createGatewayMetadataObserver } from "../../app/gateway-observers.ts";
+import type { SelectPicker } from "../../components/select-picker.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import type {
   RuntimeConfigExternalMutationOptions,
   RuntimeConfigExternalMutationResult,
 } from "../../lib/config/config-gateway-operations.ts";
+import {
+  currentConfigObject,
+  type RuntimeConfigState,
+} from "../../lib/config/config-state-model.ts";
+import {
+  createRuntimeConfigCapability,
+  type RuntimeConfigCapability,
+} from "../../lib/config/runtime-config-capability.ts";
 import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
+import { beginModelCatalogRead, publishModelCatalogResult } from "../../lib/model-catalog-cache.ts";
+import { peekModelCatalog } from "../../lib/model-catalog-store.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
-import type { ModelBehaviorConfig } from "./config-mutation.ts";
-import type { DefaultModelSelection } from "./data.ts";
+import { updatePickers } from "../../test-helpers/select-picker.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
+import type { DefaultModelSelection, ModelBehaviorConfig } from "./data.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
 import type { ModelProviderProfileActionsController } from "./profile-actions-controller.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import "./model-providers-page.ts";
+
+const configOwners = new Set<RuntimeConfigCapability>();
+afterEach(() => {
+  for (const owner of configOwners) {
+    owner.dispose();
+  }
+  configOwners.clear();
+});
 
 export type ModelProvidersPageTestElement = HTMLElement & {
   context: ApplicationContext;
@@ -32,10 +55,9 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   defaultsDraft: (DefaultModelSelection & Partial<ModelBehaviorConfig>) | null;
   keyDraft: string;
   keyEditorProvider: string | null;
-  profileActions: Pick<ModelProviderProfileActionsController, "logout" | "setOrder">;
+  profileActions: Pick<ModelProviderProfileActionsController, "logout" | "setOrder" | "probe">;
   messages: Record<string, { kind: "success" | "error"; text: string; warning?: string }>;
   profileOrders: Record<string, string[]>;
-  probe: (cardId: string, providers: string[]) => Promise<void>;
   probeResults: Record<string, ModelsProbeResult>;
   refresh: (reason: "forced") => Promise<void>;
   routeData: ModelProvidersRouteData | undefined;
@@ -44,9 +66,73 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   selectedAgentId: string;
 };
 
-export type AgentSelectElement = HTMLElement & {
-  onSelect: (value: string) => void;
+const modelPickerLabels = {
+  primary: "Model",
+  utility: "Utility Model",
+  fallback: "Fallback Model",
+  decision: "Decision Model",
 };
+
+export function modelPicker(page: Element, role: keyof typeof modelPickerLabels): SelectPicker {
+  const picker = page.querySelector<SelectPicker>(
+    `.model-providers__defaults openclaw-select-picker:has([role="listbox"][aria-label="${modelPickerLabels[role]}"])`,
+  );
+  expect(picker, `${role} model picker`).not.toBeNull();
+  return picker!;
+}
+
+export function chatModelPickers(page: Element): SelectPicker[] {
+  return (["primary", "utility", "fallback"] as const).map((role) => modelPicker(page, role));
+}
+
+export async function retryCatalog(page: ModelProvidersPageTestElement): Promise<void> {
+  await page.updateComplete;
+  const retry = page.querySelector<HTMLButtonElement>(".model-providers__catalog-progress button");
+  expect(retry?.textContent?.trim()).toBe("Retry");
+  retry!.click();
+  await page.updateComplete;
+}
+
+export async function drainPageUpdates(page: ModelProvidersPageTestElement): Promise<void> {
+  // Drain every promise continuation before checking that a retired result stayed absent.
+  await setImmediate();
+  await page.updateComplete;
+  await updatePickers(page);
+}
+
+export function displayedCatalog(page: ModelProvidersPageTestElement) {
+  return peekModelCatalog(
+    page.context.gateway.snapshot.client!,
+    { agentId: page.selectedAgentId },
+    { allowStale: true },
+  );
+}
+
+export function publishCatalog(
+  context: ApplicationContext,
+  agentId: string,
+  result: ModelCatalogResult,
+) {
+  const client = context.gateway.snapshot.client!;
+  const scope = { agentId };
+  expect(publishModelCatalogResult(beginModelCatalogRead(client, scope), scope, result)).toBe(true);
+}
+
+export async function openModelPicker(
+  page: HTMLElement,
+  role: keyof typeof modelPickerLabels = "primary",
+): Promise<void> {
+  await updatePickers(page);
+  const picker = modelPicker(page, role);
+  const trigger = picker.querySelector<HTMLButtonElement>(".picker-select__trigger");
+  expect(trigger).not.toBeNull();
+  if (trigger!.getAttribute("aria-expanded") === "true") {
+    trigger!.click();
+    await picker.updateComplete;
+  }
+  trigger!.click();
+  await picker.updateComplete;
+}
 
 export function createAuthStatus(
   providers: Partial<ModelAuthStatusProvider>[] = [{}],
@@ -70,7 +156,6 @@ export function createAuthStatus(
 export function createApiKeyProviderData(): ModelProvidersData {
   return {
     ...EMPTY_MODEL_PROVIDERS_DATA,
-    config: {},
     authStatus: {
       ...createAuthStatus([
         {
@@ -122,7 +207,11 @@ export function createHarness(initialScopeId: string) {
       case "models.list":
         return { models: [] };
       case "config.get":
-        return { config: {}, hash: "hash" };
+        return {
+          config: { agents: { defaults: { thinkingDefault: "low", fastModeDefault: "auto" } } },
+          hash: "hash",
+          valid: true,
+        };
       case "usage.status":
         if (usageStatusRejects) {
           throw new Error("usage.status unavailable");
@@ -139,15 +228,50 @@ export function createHarness(initialScopeId: string) {
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: null,
+    hello: {
+      type: "hello-ok",
+      protocol: 3,
+      auth: { role: "operator", scopes: ["operator.admin"] },
+      features: {
+        methods: [
+          "config.get",
+          "config.patch",
+          "config.set",
+          "config.apply",
+          "models.list",
+          "models.authStatus",
+          "models.probe",
+          "models.authSetApiKey",
+          "models.authLogout",
+          "models.authOrderSet",
+          "models.authLogin",
+          "usage.status",
+          "sessions.usage",
+          "wizard.start",
+          "wizard.next",
+          "wizard.cancel",
+          "wizard.status",
+        ],
+      },
+    },
     assistantAgentId: "main",
     sessionKey: "main",
     lastError: null,
     lastErrorCode: null,
   };
   const gatewaySource = createApplicationGateway(snapshot);
+  const metadata = createGatewayMetadataObserver(
+    (current) => current === gatewaySource.gateway.snapshot,
+  );
+  let previousSnapshot = { ...snapshot };
+  gatewaySource.gateway.subscribe((next) => {
+    const previous = previousSnapshot;
+    previousSnapshot = { ...next };
+    metadata.synchronize(previous, next);
+  });
   let selectionListener: (() => void) | undefined;
-  const agentSelection = {
+  const settingsAgentSelection = {
+    intentRevision: 0,
     state: {
       selectedId: initialScopeId as string | null,
       scopeId: initialScopeId as string | null,
@@ -161,26 +285,14 @@ export function createHarness(initialScopeId: string) {
       };
     },
   };
-  let runtimeConfigListener: (() => void) | undefined;
+  const runtimeConfigListeners = new Set<(state: RuntimeConfigState) => void>();
   const subscribe = () => () => undefined;
-  const runtimeConfig = {
-    canPatch: true,
-    state: {
-      connected: true,
-      configSnapshot: { config: {} },
-      configForm: {
-        agents: { defaults: { thinkingDefault: "low", fastModeDefault: "auto" } },
-      },
-      configLoading: false,
-      configSaving: false,
-      configApplying: false,
-      configNeedsApply: false,
-      configFormMode: "form",
-      configFormDirty: false,
-      configAutoSaveStatus: "idle",
-      lastError: null as string | null,
-    },
-    ensureLoaded: vi.fn(async (): Promise<void> => undefined),
+  const owner = createRuntimeConfigCapability(gatewaySource.gateway);
+  configOwners.add(owner);
+  const subscribeConfig = owner.subscribe.bind(owner);
+  const runExternalMutation = owner.runExternalMutation;
+  const runtimeConfig = Object.assign(owner, {
+    ensureLoaded: vi.fn(owner.ensureLoaded),
     patch: vi.fn(async () => true),
     beforeExternalDispatch: vi.fn(async (): Promise<void> => undefined),
     runExternalMutation: vi.fn(
@@ -189,34 +301,24 @@ export function createHarness(initialScopeId: string) {
         options: RuntimeConfigExternalMutationOptions<T> = {},
       ): Promise<RuntimeConfigExternalMutationResult<T>> => {
         await runtimeConfig.beforeExternalDispatch();
-        const client = snapshot.client;
-        if (!client || (options.canDispatch && !options.canDispatch())) {
-          return { ok: false, reason: "unavailable", error: "Scope changed before dispatch" };
-        }
-        const value = await task(client);
-        await runtimeConfig.refresh();
-        return {
-          ok: true,
-          value,
-          refresh: runtimeConfig.state.lastError
-            ? { ok: false, error: runtimeConfig.state.lastError }
-            : { ok: true },
-        };
+        return await runExternalMutation(task, options);
       },
     ),
     patchForm: vi.fn(),
     removeFormValue: vi.fn(),
-    refresh: vi.fn(async () => undefined),
+    refresh: vi.fn(owner.refresh),
     save: vi.fn(async () => true),
     apply: vi.fn(async () => true),
     discardDraft: vi.fn(async () => undefined),
-    subscribe(listener: () => void) {
-      runtimeConfigListener = listener;
+    subscribe(listener: (state: RuntimeConfigState) => void) {
+      runtimeConfigListeners.add(listener);
+      const release = subscribeConfig(listener);
       return () => {
-        runtimeConfigListener = undefined;
+        runtimeConfigListeners.delete(listener);
+        release();
       };
     },
-  };
+  });
   const context = {
     gateway: gatewaySource.gateway,
     agents: {
@@ -237,7 +339,11 @@ export function createHarness(initialScopeId: string) {
       refreshList: vi.fn(),
       subscribe,
     },
-    agentSelection,
+    settingsAgentSelection,
+    agentSelection: {
+      state: { selectedId: "main", scopeId: "main" },
+      subscribe: () => () => undefined,
+    },
     runtimeConfig,
     overlays: {
       snapshot: { updateRunning: false, updateReconciliationPending: false },
@@ -246,11 +352,16 @@ export function createHarness(initialScopeId: string) {
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
   return {
-    agentSelection,
+    settingsAgentSelection,
     context,
+    gatewaySource,
     deferNextAuthStatus,
     notifySelection: () => selectionListener?.(),
-    notifyRuntimeConfig: () => runtimeConfigListener?.(),
+    notifyRuntimeConfig: () => {
+      for (const listener of runtimeConfigListeners) {
+        listener(runtimeConfig.state);
+      }
+    },
     publishEvent: (event: GatewayEventFrame) => {
       // The app invalidates shared facts before delivering publication events to pages.
       if (
@@ -259,6 +370,9 @@ export function createHarness(initialScopeId: string) {
       ) {
         invalidateModelAuthStatusRequests(snapshot.client);
         invalidateChatMetadataStore(snapshot.client);
+      }
+      if (event.event === "config.changed" && !runtimeConfig.state.configFormDirty) {
+        void runtimeConfig.refresh();
       }
       gatewaySource.publishEvent(event);
     },
@@ -282,9 +396,23 @@ export function requestCount(request: ReturnType<typeof vi.fn>, method: string):
   return request.mock.calls.filter(([candidate]) => candidate === method).length;
 }
 
+export async function waitForProviders(
+  page: ModelProvidersPageTestElement,
+  expectedConfig?: Record<string, unknown>,
+): Promise<void> {
+  await page.context.runtimeConfig.ensureLoaded();
+  await waitForFast(() => {
+    expect(page.data?.updatedAt).toEqual(expect.any(Number));
+    expect(page.context.runtimeConfig.state.configLoading).toBe(false);
+    if (expectedConfig) {
+      expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(expectedConfig);
+    }
+  });
+}
+
 export async function advanceUsageRetries(): Promise<void> {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    await vi.advanceTimersByTimeAsync(5_000);
+  for (const delay of [5_000, 10_000, 20_000]) {
+    await vi.advanceTimersByTimeAsync(delay);
   }
 }
 
@@ -302,7 +430,8 @@ export function createEmptyModelProvidersRouteData(
     gatewaySnapshot: { ...context.gateway.snapshot, phase: "stopped", client: null },
     data: EMPTY_MODEL_PROVIDERS_DATA,
     client: null,
-    agentId: context.agentSelection.state.selectedId,
+    agentId: context.settingsAgentSelection.state.selectedId,
+    selectionIntentRevision: context.settingsAgentSelection.intentRevision,
   };
 }
 
@@ -314,4 +443,37 @@ export function appendPage(context: ApplicationContext) {
   page.routeData = createEmptyModelProvidersRouteData(context);
   document.body.append(page);
   return page;
+}
+
+export function clickLoginChoice(page: ModelProvidersPageTestElement, choice: string) {
+  const option = page.data?.authStatus?.providerCapabilities
+    ?.flatMap((provider) => provider.loginOptions ?? [])
+    .find((candidate) => candidate.id === choice);
+  expect(option).toBeDefined();
+  const button = [
+    ...page.querySelectorAll<HTMLButtonElement>("[data-models-login-choice] button"),
+  ].find((candidate) => candidate.querySelector("strong")?.textContent === option!.label);
+  expect(button).toBeDefined();
+  button!.click();
+}
+
+export async function startSelectedLogin(page: ModelProvidersPageTestElement, choice: string) {
+  clickLoginChoice(page, choice);
+  await waitForFast(() =>
+    expect(page.querySelector<HTMLInputElement>('input[name="wizard-text"]')?.disabled).toBe(false),
+  );
+}
+
+export async function submitCredential(page: ModelProvidersPageTestElement) {
+  const manual = page.querySelector<HTMLDetailsElement>(".wizard-step__manual-entry");
+  if (manual && !manual.open) {
+    manual.querySelector<HTMLElement>("summary")!.click();
+    expect(manual.open).toBe(true);
+  }
+  const input = page.querySelector<HTMLInputElement>('input[name="wizard-text"]')!;
+  input.value = "synthetic-test-credential";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  await page.updateComplete;
+  page.querySelector<HTMLButtonElement>('.wizard-step__form button[type="submit"]')!.click();
+  await waitForFast(() => expect(input.disabled).toBe(true));
 }

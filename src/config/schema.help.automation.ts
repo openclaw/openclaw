@@ -8,6 +8,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     'DM session scoping: "main" keeps continuity, while "per-peer", "per-channel-peer", and "per-account-channel-peer" increase isolation. Use isolated modes for shared inboxes or multi-account deployments.',
   "session.groupScope":
     'Group/channel session scoping: "per-group" keeps rooms separate while the agent main session ambiently watches them, independently of dmScope; "main" merges room context into main and needs no watch. Use "main" only for trusted rooms.',
+  "session.notifyOnCreate":
+    "Queue a system notice in the owning agent's Home session when a session is created (default: true). Notices include available title and creator metadata and are read on the next Home turn or heartbeat. Set false to disable; drafts, incognito, internal sessions, and scheduled cron runs are excluded.",
   "session.identityLinks":
     "Maps canonical identities to provider-prefixed peer IDs so equivalent users resolve to one DM thread (example: telegram:123456). Use this when the same human appears across multiple channels or accounts.",
   "session.resetTriggers":
@@ -272,7 +274,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "messages.groupChat.mentionPatterns":
     "Safe case-insensitive regex patterns used to detect explicit mentions/trigger phrases in group chats. Use precise patterns to reduce false positives in high-volume channels; invalid or unsafe nested-repetition patterns are ignored.",
   "messages.groupChat.historyLimit":
-    "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses.",
+    "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses. Automatic prompt history is capped at 200 messages. The JSON integer maximum selects the channel default window (50 for shared group history), not an unlimited window.",
   "messages.groupChat.unmentionedInbound":
     'Controls how unmentioned always-on group chatter is submitted. "user_request" treats it as a user request; "room_event" submits it as quiet context where visible output requires the message tool.',
   "messages.groupChat.visibleReplies":
@@ -360,5 +362,5 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "messages.statusReactions.enabled":
     "Enable lifecycle status reactions on supported channels. Discord treats unset as enabled when ack reactions are active; Slack, Signal, Telegram, and WhatsApp require this to be true before lifecycle reactions are used. Slack uses native assistant thread status for progress by default.",
   "messages.inbound.debounceMs":
-    "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
+    "Quiet window (ms) for batching rapid inbound messages from the same sender. Telegram defaults to 300ms when neither a global nor channel override is set; other channels default to 0. Zero disables ordinary burst batching, but Telegram still reassembles near-limit long-message chunks.",
 };

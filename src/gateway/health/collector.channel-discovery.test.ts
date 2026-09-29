@@ -38,7 +38,11 @@ describe("Gateway health channel discovery", () => {
     async (audience) => {
       state = await createOpenClawTestState({ label: "health-admitted-accounts" });
       const config: OpenClawConfig = {
-        agents: { ownership: "explicit", entries: { main: {} } },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {} },
+        },
         bindings: [{ agentId: "main", match: { channel: "admitted-chat", accountId: "bound" } }],
       };
       vi.spyOn(configRuntime, "getRuntimeConfig").mockReturnValue(config);

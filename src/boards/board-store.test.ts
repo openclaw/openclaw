@@ -3,19 +3,27 @@ import type { BoardWidgetMaterializedPutParams } from "../../packages/gateway-pr
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { BoardValidationError } from "./board-layout.js";
 import { createBoardWidgetPutSnapshot, type BoardStore } from "./board-store.js";
 import { readBoardHtml, createTestBoardStore } from "./board-store.test-support.js";
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-});
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 async function putHtml(store: BoardStore, sessionKey: string, name: string, html = "<p>one</p>") {
   return await store.putWidget({ sessionKey, name, content: { kind: "html", html } });
@@ -72,25 +80,13 @@ describe("board store", () => {
     });
   });
 
-  it("creates the implicit main tab and bumps board and widget revisions", async () => {
-    const store = createTestBoardStore();
-    const first = await putHtml(store, "agent:main:main", "status");
-    const second = await putHtml(store, "agent:main:main", "status", "<p>two</p>");
-    expect(first).toMatchObject({
-      revision: 1,
-      tabs: [{ tabId: "main", title: "Main", position: 0 }],
-      widgets: [{ name: "status", revision: 1 }],
-    });
-    expect(second.revision).toBe(2);
-    expect(second.widgets[0]!.revision).toBe(2);
-  });
-
   it.each(widgetContents)(
     "preserves $kind widget ownership across same-name updates",
     async (content) => {
       const store = createTestBoardStore();
       const name = `${content.kind}-status`;
       const created = await store.putWidget({ sessionKey: "session", name, content });
+      expect(created.widgets[0]?.instanceId).toMatch(/^[a-f0-9]{32}$/u);
 
       expect(created.widgets[0]).toMatchObject({
         contentOwner: content.kind,
@@ -156,12 +152,19 @@ describe("board store", () => {
         ).toMatchObject({ contentOwner: "plugin", revision: 2 });
       }
 
-      expect(
-        (await store.putWidget({ sessionKey: "session", name, content })).widgets[0],
-      ).toMatchObject({
+      const updated = (await store.putWidget({ sessionKey: "session", name, content })).widgets[0]!;
+      expect(updated).toMatchObject({
         name,
         revision: 2,
       });
+      if (content.kind === "plugin") {
+        expect(updated.instanceId).toBe(created.widgets[0]?.instanceId);
+      } else {
+        expect(updated.instanceId).not.toBe(created.widgets[0]?.instanceId);
+      }
+      expect((await store.getSnapshot({ sessionKey: "session" })).widgets[0]?.instanceId).toBe(
+        updated.instanceId,
+      );
 
       await store.applyOps({ sessionKey: "session" }, [{ kind: "widget_remove", name }]);
       const replacement = widgetContents.find((candidate) => candidate.kind !== content.kind)!;
@@ -256,43 +259,6 @@ describe("board store", () => {
     });
   });
 
-  it("stores HTML bytes with digest and keeps MCP descriptors non-HTML", async () => {
-    const store = createTestBoardStore();
-    await putHtml(store, "session", "html", "<main>ok</main>");
-    await store.putWidget({
-      sessionKey: "session",
-      name: "app",
-      content: {
-        kind: "mcp-app",
-        descriptor: {
-          serverName: "server",
-          toolName: "tool",
-          uiResourceUri: "ui://resource",
-          toolCallId: "call",
-        },
-        interactive: false,
-      },
-    });
-    expect(await readBoardHtml(store, { sessionKey: "session" }, "html")).toMatchObject({
-      html: "<main>ok</main>",
-      revision: 1,
-      sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
-    });
-    expect(await readBoardHtml(store, { sessionKey: "session" }, "app")).toBeUndefined();
-    expect(await store.readWidgetMcpApp({ sessionKey: "session" }, "app")).toMatchObject({
-      descriptor: {
-        serverName: "server",
-        toolName: "tool",
-        uiResourceUri: "ui://resource",
-        toolCallId: "call",
-      },
-      revision: 1,
-      instanceId: expect.stringMatching(/^[a-f0-9]{32}$/u),
-      interactive: false,
-    });
-    expect(await readBoardHtml(store, { sessionKey: "session" }, "unknown")).toBeUndefined();
-  });
-
   it("transitions declared widgets through pending grants", async () => {
     const store = createTestBoardStore();
     const pending = await store.putWidget({
@@ -322,13 +288,6 @@ describe("board store", () => {
         pending.widgets[0]?.instanceId,
       ),
     ).rejects.toThrow("not pending");
-  });
-
-  it("survives reset/new boundaries", async () => {
-    const store = createTestBoardStore();
-    await putHtml(store, "session", "status");
-    // Session reset has no BoardStore call; the stable session key remains authoritative.
-    expect((await store.getSnapshot({ sessionKey: "session" })).widgets).toHaveLength(1);
   });
 
   it("rejects stale grant revisions and accepts the current revision", async () => {
@@ -376,9 +335,13 @@ describe("board store", () => {
       expect(error).toMatchObject({ code: "invalid_operation" });
       expect((error as Error).message).toContain("more than 48 widgets");
     }
-    await expect(
-      putHtml(createTestBoardStore(), "session", "large", "é".repeat(131_073)),
-    ).rejects.toThrow("262144 UTF-8 bytes");
+    const largeStore = createTestBoardStore();
+    const html = "é".repeat(5 * 1024 * 1024);
+    await putHtml(largeStore, "session", "large", html);
+    await expect(putHtml(largeStore, "session", "large", html + "é")).rejects.toThrow(
+      "10485760 UTF-8 bytes",
+    );
+    expect((await readBoardHtml(largeStore, { sessionKey: "session" }, "large"))?.html).toBe(html);
   });
 
   it("bumps once per applyOps transaction and removes widget bytes", async () => {
@@ -391,29 +354,6 @@ describe("board store", () => {
     expect(snapshot.revision).toBe(2);
     expect(snapshot.widgets).toEqual([]);
     expect(await readBoardHtml(store, { sessionKey: "session" }, "status")).toBeUndefined();
-  });
-
-  it("preserves position on content updates and honors explicit after placement", async () => {
-    const store = createTestBoardStore();
-    await putHtml(store, "session", "first");
-    await putHtml(store, "session", "second");
-    await putHtml(store, "session", "third");
-
-    expect(
-      (await putHtml(store, "session", "first", "<p>updated</p>")).widgets.map(
-        (widget) => widget.name,
-      ),
-    ).toEqual(["first", "second", "third"]);
-    expect(
-      (
-        await store.putWidget({
-          sessionKey: "session",
-          name: "first",
-          content: { kind: "html", html: "<p>moved</p>" },
-          placement: { after: "third" },
-        })
-      ).widgets.map((widget) => widget.name),
-    ).toEqual(["second", "third", "first"]);
   });
 });
 

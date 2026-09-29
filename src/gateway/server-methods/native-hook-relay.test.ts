@@ -8,6 +8,7 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { nativeHookRelayState } from "../../agents/harness/native-hook-relay-state.js";
 import {
   testing,
   registerNativeHookRelay,
@@ -34,6 +35,76 @@ afterEach(async () => {
 });
 
 describe("native hook relay gateway method", () => {
+  it("cancels a closed one-shot Gateway connection and discards its late approval", async () => {
+    await withOpenClawTestState({ label: "relay-gateway-disconnect" }, async () => {
+      const entered = createDeferredCore<AbortSignal | undefined>();
+      const release = createDeferredCore();
+      const cancelled = createDeferredCore();
+      const onResolution = vi.fn(() => cancelled.resolve());
+      const admitExecution = vi.fn();
+      const relay = registerOwnedNativeHookRelay({
+        provider: "codex",
+        sessionId: "gateway-disconnect",
+        runId: "gateway-disconnect",
+        executionAdmission: { toolNames: ["exec"], admit: admitExecution },
+        runBeforeToolCall: async ({ signal }) => {
+          entered.resolve(signal);
+          await release.promise;
+          return {
+            blocked: false,
+            params: {},
+            deferredApproval: {
+              approval: { title: "fixture", description: "fixture", onResolution },
+              toolName: "exec",
+              baseParams: {},
+            },
+          };
+        },
+      });
+      await relay.ready;
+      const connection = new AbortController();
+      const pending = invokeNativeHook(
+        {
+          provider: "codex",
+          relayId: relay.relayId,
+          generation: relay.generation,
+          event: "pre_tool_use",
+          rawPayload: { tool_name: "Bash", tool_input: {}, tool_use_id: "disconnected-call" },
+        },
+        connection.signal,
+      );
+      try {
+        const signal = await entered.promise;
+        connection.abort();
+        expectInvalidRequest(await pending, "aborted");
+        expect(signal?.aborted).toBe(true);
+        expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeDefined();
+        release.resolve();
+        await cancelled.promise;
+        expect(onResolution).toHaveBeenCalledExactlyOnceWith("cancelled");
+        expect(admitExecution).not.toHaveBeenCalled();
+        expect(
+          nativeHookRelayState.pendingPreToolUseApprovals.has(
+            JSON.stringify([relay.relayId, "disconnected-call"]),
+          ),
+        ).toBe(false);
+        const next = await invokeNativeHook({
+          provider: "codex",
+          relayId: relay.relayId,
+          generation: relay.generation,
+          event: "post_tool_use",
+          rawPayload: POST_TOOL_USE_PAYLOAD,
+        });
+        expect(next).toHaveBeenCalledWith(true, { stdout: "", stderr: "", exitCode: 0 });
+      } finally {
+        release.resolve();
+        await pending;
+        relay.unregister();
+        await relay.drain();
+      }
+    });
+  });
+
   it("returns its synchronous handle before reading stored MCP policy", async () => {
     await withOpenClawTestState({ label: "relay-policy-registration" }, async () => {
       const read = vi.spyOn(mcpGrants, "loadMcpToolGrants");
@@ -329,7 +400,8 @@ describe("native hook relay gateway method", () => {
             closure === "owner-close" ? "fixture native owner closed" : "registration is inactive";
           await expect(preparation).rejects.toThrow(expectedError);
           const respond = await invocation;
-          expectInvalidRequest(respond, expectedError);
+          // Invocation cancellation stops its wait before preparation rechecks the owner.
+          expectInvalidRequest(respond, closure === "abort" ? "aborted" : expectedError);
           expect(requester.mock.calls.length).toBe(0);
         } finally {
           paused.resume.resolve();
@@ -449,7 +521,7 @@ describe("native hook relay gateway method", () => {
   });
 });
 
-async function invokeNativeHook(params: Record<string, unknown>) {
+async function invokeNativeHook(params: Record<string, unknown>, connectionSignal?: AbortSignal) {
   const respond = viRespond();
   await expectDefined(
     nativeHookRelayHandlers["nativeHook.invoke"],
@@ -457,7 +529,16 @@ async function invokeNativeHook(params: Record<string, unknown>) {
   )({
     req: { type: "req", id: "1", method: "nativeHook.invoke" },
     params,
-    client: null,
+    client: connectionSignal
+      ? {
+          connectionSignal,
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: { id: "cli", version: "test", platform: "test", mode: "cli" },
+          },
+        }
+      : null,
     isWebchatConnect: () => false,
     respond,
     context: {} as never,

@@ -4,7 +4,12 @@ import {
   type ExistingAgentSchemaMeta,
 } from "../state/openclaw-agent-db-metadata.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
+import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { configureSqliteReadOnlyPragmas } from "./sqlite-wal.js";
@@ -53,4 +58,40 @@ export function readSqliteSchemaHeader(
         : {}),
     };
   });
+}
+
+function readSqliteSchemaHeaderSnapshot(
+  location: string,
+  signal?: AbortSignal,
+  agentSchemaVersionForOwnership?: number,
+): SqliteSchemaHeader {
+  signal?.throwIfAborted();
+  const database = openNodeSqliteDatabase(location, { readOnly: true });
+  return runWithSqliteCleanup(
+    { release: () => database.close() },
+    "SQLite schema header read",
+    () => {
+      setSqliteBusyTimeout(database, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
+      return readSqliteSchemaHeader(database, agentSchemaVersionForOwnership);
+    },
+  );
+}
+
+/** Consume a private snapshot and retain both read and cleanup failures. */
+export function readSqliteSchemaHeaderFromSnapshot(
+  prepared: PreparedSqliteReadOnlyLocation,
+  signal?: AbortSignal,
+  agentSchemaVersionForOwnership?: number,
+): SqliteSchemaHeader {
+  return runWithSqliteCleanup(
+    {
+      release: () => {
+        if (!prepared.cleanup()) {
+          throw new Error(`SQLite read-only worker snapshot cleanup failed: ${prepared.location}`);
+        }
+      },
+    },
+    "SQLite schema header snapshot",
+    () => readSqliteSchemaHeaderSnapshot(prepared.location, signal, agentSchemaVersionForOwnership),
+  );
 }

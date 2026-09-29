@@ -1,4 +1,4 @@
-// Irc tests cover channel plugin behavior.
+import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -10,7 +10,6 @@ vi.mock("./client.js", () => ({
   connectIrcClient: hoisted.connectIrcClient,
 }));
 
-import { PAIRING_APPROVED_MESSAGE } from "./channel-api.js";
 import { ircPlugin } from "./channel.js";
 import { ircOutboundBaseAdapter } from "./outbound-base.js";
 import type { CoreConfig } from "./types.js";
@@ -118,6 +117,7 @@ describe("ircPlugin pairing.notifyApproval", () => {
     expect(hoisted.sendPrivmsg).toHaveBeenCalledExactlyOnceWith(
       "paired-user",
       PAIRING_APPROVED_MESSAGE,
+      undefined,
     );
   });
 });

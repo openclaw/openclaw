@@ -3,7 +3,9 @@ import {
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
   GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 } from "../../daemon/constants.js";
+import { mergePathPrepend } from "../../infra/path-prepend.js";
 import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
+import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 
 const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_HOME",
@@ -15,6 +17,41 @@ const MANAGED_UPDATE_SELECTOR_ENV_KEYS = [
   "OPENCLAW_HOME",
   ...GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 ] as const;
+
+/** Recovery can be printed inside an owned-env scope that the operator's shell never had. */
+export function resolveServiceRecoveryContext(
+  params: Parameters<typeof resolveOwnedManagedUpdateEnv>[0],
+): { env: NodeJS.ProcessEnv; command: string } {
+  const env = resolveOwnedManagedUpdateEnv(params);
+  const keys = [
+    ...new Set([...MANAGED_UPDATE_SELECTOR_ENV_KEYS, ...SERVICE_REFRESH_PATH_ENV_KEYS]),
+  ];
+  if (process.platform === "win32") {
+    return {
+      env,
+      command: keys
+        .map((key) =>
+          env[key] === undefined
+            ? `Remove-Item Env:${key} -ErrorAction SilentlyContinue`
+            : `$env:${key} = ${quotePowerShellArg(env[key])}`,
+        )
+        .join("; "),
+    };
+  }
+  const assigned = keys.flatMap((key) =>
+    env[key] === undefined ? [] : [`${key}=${quoteCliArg(env[key])}`],
+  );
+  const unset = keys.filter((key) => env[key] === undefined);
+  return {
+    env,
+    command: [
+      assigned.length ? `export ${assigned.join(" ")}` : "",
+      unset.length ? `unset ${unset.join(" ")}` : "",
+    ]
+      .filter(Boolean)
+      .join("; "),
+  };
+}
 
 function applyManagedServiceSelectorEnv(params: {
   baseEnv: NodeJS.ProcessEnv;
@@ -50,15 +87,13 @@ export function resolveServiceRefreshEnv(
     if (!rawValue) {
       continue;
     }
-    if (rawValue.startsWith("~") || path.isAbsolute(rawValue) || path.win32.isAbsolute(rawValue)) {
-      resolvedEnv[key] = rawValue;
-      continue;
-    }
-    if (!invocationCwd) {
-      resolvedEnv[key] = rawValue;
-      continue;
-    }
-    resolvedEnv[key] = path.resolve(invocationCwd, rawValue);
+    resolvedEnv[key] =
+      !invocationCwd ||
+      rawValue.startsWith("~") ||
+      path.isAbsolute(rawValue) ||
+      path.win32.isAbsolute(rawValue)
+        ? rawValue
+        : path.resolve(invocationCwd, rawValue);
   }
   return resolvedEnv;
 }
@@ -95,32 +130,42 @@ export async function withOwnedManagedUpdateEnv<T>(
   }
 }
 
-export async function withUpdateInProgressEnv<T>(
-  invocationCwd: string | undefined,
+/** Restore only this phase's overrides; other environment writes remain with their owners. */
+export async function withUpdateEnv<T>(
+  overrides: NodeJS.ProcessEnv,
   run: () => Promise<T>,
 ): Promise<T> {
-  const env = resolveServiceRefreshEnv(process.env, invocationCwd);
-  env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-  const scopedKeys = Object.keys(env).filter(
-    (key) => key === "OPENCLAW_UPDATE_IN_PROGRESS" || env[key] !== process.env[key],
-  );
-  const previousValues = scopedKeys.map((key) => [key, process.env[key]] as const);
-  // Package replacement can remove cwd. All phase owners must share the
-  // invocation's resolved selectors until cleanup finishes.
-  for (const key of scopedKeys) {
-    process.env[key] = env[key];
-  }
-  try {
-    return await run();
-  } finally {
-    for (const [key, value] of previousValues) {
+  const previous = Object.keys(overrides).map((key) => [key, process.env[key]] as const);
+  const apply = (entries: Iterable<readonly [string, string | undefined]>) => {
+    for (const [key, value] of entries) {
       if (value === undefined) {
         delete process.env[key];
       } else {
         process.env[key] = value;
       }
     }
+  };
+  apply(Object.entries(overrides));
+  try {
+    return await run();
+  } finally {
+    apply(previous);
   }
+}
+
+export async function withUpdateInProgressEnv<T>(
+  invocationCwd: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const env = resolveServiceRefreshEnv(process.env, invocationCwd);
+  env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+  // Package replacement can remove cwd. Retain resolved selectors through cleanup.
+  const overrides = Object.fromEntries(
+    Object.entries(env).filter(
+      ([key, value]) => key === "OPENCLAW_UPDATE_IN_PROGRESS" || value !== process.env[key],
+    ),
+  );
+  return await withUpdateEnv(overrides, run);
 }
 
 export function stripGatewayServiceMarkerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -177,10 +222,14 @@ export function resolveUpdateTargetEnv(params?: {
   baseEnv?: NodeJS.ProcessEnv;
   serviceEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
+  nodeRunner?: string;
 }): NodeJS.ProcessEnv {
   const resolvedEnv = disableUpdatedPackageCompileCacheEnv(
     resolveServiceRefreshEnv(params?.baseEnv ?? process.env, params?.invocationCwd),
   );
+  if (params?.nodeRunner) {
+    resolvedEnv.PATH = mergePathPrepend(resolvedEnv.PATH, [path.dirname(params.nodeRunner)]);
+  }
   if (!params?.serviceEnv) {
     return resolvedEnv;
   }

@@ -60,6 +60,7 @@ function routeData(sessionRow: GatewaySessionRow): DashboardsRouteData {
     basePath: "",
     fallbackAgentId: "main",
     mainKey: "main",
+    globalScope: false,
   };
 }
 
@@ -294,6 +295,7 @@ describe("DashboardsPage", () => {
         basePath: "",
         fallbackAgentId: "main",
         mainKey: "main",
+        globalScope: false,
       };
       const provider = createApplicationContextProvider(context);
       provider.append(element);
@@ -358,6 +360,7 @@ describe("DashboardsPage", () => {
       basePath: "",
       fallbackAgentId: "main",
       mainKey: "main",
+      globalScope: false,
     };
     document.body.append(element);
     await element.updateComplete;

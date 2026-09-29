@@ -4,14 +4,28 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { EXEC_RETENTION_CAP_NOTE, renderExecOutputText } from "./bash-tools.exec-output.js";
 import type { ExecToolArgs } from "./bash-tools.exec-request-preparation.js";
-import { type ExecProcessOutcome, resolveExecTarget } from "./bash-tools.exec-runtime.js";
+import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
 import type {
+  ExecProcessOutcome,
   ExecToolApprovalReview,
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { failedTextResult, textResult } from "./tools/common.js";
+
+export function createExecProcessSettlement() {
+  const settlement: {
+    outcome: ExecProcessOutcome | null;
+    settle: (outcome: ExecProcessOutcome) => void;
+  } = {
+    outcome: null,
+    settle(outcome: ExecProcessOutcome) {
+      settlement.outcome = outcome;
+    },
+  };
+  return settlement;
+}
 
 export function attachExecApprovalReview(
   result: AgentToolResult<ExecToolDetails>,

@@ -254,8 +254,8 @@ describe("chat composer queue reordering", () => {
   });
 
   it.each([
-    { key: "ArrowUp", expected: ["c", 1] },
-    { key: "ArrowDown", expected: ["c", 3] },
+    { key: "ArrowUp", expected: ["c", "b"] },
+    { key: "ArrowDown", expected: ["c", "d"] },
   ])("moves the focused row on $key", ({ key, expected }) => {
     const onQueueMove = vi.fn();
     const container = renderQueue({
@@ -316,6 +316,7 @@ describe("chat composer queue reordering", () => {
     // Every row keeps the column; only the rows that may move keep it live.
     expect(grips.every((grip) => grip !== null)).toBe(true);
     expect(grips.map((grip) => grip!.hasAttribute("disabled"))).toEqual([true, false, false]);
+    expect(grips.map((grip) => grip?.getAttribute("draggable"))).toEqual(["false", "true", "true"]);
     expect(grips[0]?.getAttribute("aria-label")).toBe(t("chat.queue.reorderUnavailable"));
     expect(grips[0]?.hasAttribute("aria-keyshortcuts")).toBe(false);
   });
@@ -559,6 +560,7 @@ describe("chat composer queue reordering", () => {
   it.each([
     { sendState: "failed" as const, label: t("common.failed") },
     { sendState: "unconfirmed" as const, label: t("chat.queue.states.needsReview") },
+    { sendState: "held" as const, label: t("chat.queue.states.needsReview") },
   ])("keeps an offline $sendState row terminal with its diagnostic", ({ sendState, label }) => {
     const container = renderQueue({
       offline: true,
@@ -589,6 +591,7 @@ describe("chat composer queue reordering", () => {
   it.each([
     { sendState: "failed" as const, label: t("common.failed") },
     { sendState: "unconfirmed" as const, label: t("chat.queue.states.needsReview") },
+    { sendState: "held" as const, label: t("chat.queue.states.needsReview") },
   ])("keeps a $sendState row labeled without a diagnostic", ({ sendState, label }) => {
     const container = renderQueue({
       queue: [{ id: sendState, text: sendState, createdAt: 1, sendState }],
@@ -599,23 +602,6 @@ describe("chat composer queue reordering", () => {
     expect(row?.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe(label);
     expect(row?.querySelectorAll(".chat-queue__badge")).toHaveLength(1);
     expect(row?.querySelector(".chat-queue__error")).toBeNull();
-  });
-
-  it("keeps a row that already joined a run out of the reorder set", () => {
-    const container = renderQueue({
-      queue: [
-        { id: "pending", text: "pending", createdAt: 1, pendingRunId: "run-1" },
-        waiting("b", 2),
-        waiting("c", 3),
-      ],
-      onQueueMove: vi.fn(),
-      onQueueRemove: vi.fn(),
-    });
-
-    const rows = [...container.querySelectorAll(".chat-queue__item")];
-    expect(
-      rows.map((row) => row.querySelector(".chat-queue__grip")?.getAttribute("draggable")),
-    ).toEqual(["false", "true", "true"]);
   });
 
   it("offers no move to a row alone between locked rows, and refuses a drop from across one", () => {
@@ -671,6 +657,6 @@ describe("chat composer queue reordering", () => {
     Object.defineProperty(drop, "dataTransfer", { value: dataTransfer });
     rows[0]!.dispatchEvent(drop);
 
-    expect(onQueueMove.mock.calls).toEqual([["c", 0]]);
+    expect(onQueueMove.mock.calls).toEqual([["c", "a"]]);
   });
 });

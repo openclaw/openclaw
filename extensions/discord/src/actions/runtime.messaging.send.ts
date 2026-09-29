@@ -7,26 +7,20 @@ import {
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isDiscordThreadChannelType } from "../channel-type.js";
-import { coerceDiscordComponentParam } from "../components.js";
+import { coerceDiscordComponentParam, readDiscordComponentSpec } from "../components.js";
 import {
   createReusableDiscordReplyReference,
   resolveDiscordReplyReference,
 } from "../reply-reference.js";
+import { sendDiscordComponentMessage } from "../send.components.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
+import * as discordMessagingActionRuntime from "../send.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "../send.shared.js";
-import * as discordMessagingActionRuntime from "./runtime.messaging.runtime.js";
+import { resolveDiscordChannelId } from "../targets.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 import { readDiscordAutoArchiveDurationParam } from "./runtime.shared.js";
-
-function hasDiscordComponentObjectKeys(value: unknown): value is Record<string, unknown> {
-  return Boolean(
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.keys(value as Record<string, unknown>).length > 0,
-  );
-}
 
 function resolveActionReplyReference(ctx: DiscordMessagingActionContext, replyToId?: string) {
   const reply = ctx.options?.reply;
@@ -42,18 +36,11 @@ function resolveActionReplyReference(ctx: DiscordMessagingActionContext, replyTo
 }
 
 function readDiscordThreadArchiveTimestamp(thread: unknown): string | undefined {
-  if (!thread || typeof thread !== "object" || Array.isArray(thread)) {
-    return undefined;
-  }
-  const record = thread as Record<string, unknown>;
-  const metadata = record.thread_metadata;
-  if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
-    const archiveTimestamp = (metadata as Record<string, unknown>).archive_timestamp;
-    if (typeof archiveTimestamp === "string" && archiveTimestamp.trim()) {
-      return archiveTimestamp;
-    }
-  }
-  return undefined;
+  const metadata = asOptionalRecord(asOptionalRecord(thread)?.thread_metadata);
+  const archiveTimestamp = metadata?.archive_timestamp;
+  return typeof archiveTimestamp === "string" && archiveTimestamp.trim()
+    ? archiveTimestamp
+    : undefined;
 }
 
 type DiscordThreadListActionResult = {
@@ -81,10 +68,7 @@ function normalizeDiscordThreadListActionResult(params: {
   limit?: number;
   before?: string;
 }): DiscordThreadListActionResult {
-  const record =
-    params.value && typeof params.value === "object" && !Array.isArray(params.value)
-      ? (params.value as Record<string, unknown>)
-      : undefined;
+  const record = asOptionalRecord(params.value);
   const threadItems = Array.isArray(record?.threads) ? record.threads : [];
   const hasMore = record?.has_more === true;
   const nextBefore =
@@ -131,7 +115,7 @@ async function appendDiscordThreadRenameResult(
 
   let channelId: string;
   try {
-    channelId = discordMessagingActionRuntime.resolveDiscordChannelId(params.target);
+    channelId = resolveDiscordChannelId(params.target);
   } catch {
     return {
       ...params.payload,
@@ -202,9 +186,11 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const suppressEmbeds =
         ctx.params.suppressEmbeds === undefined ? undefined : ctx.params.suppressEmbeds === true;
       const rawComponents = coerceDiscordComponentParam(ctx.params.components);
-      const componentSpec = hasDiscordComponentObjectKeys(rawComponents)
-        ? discordMessagingActionRuntime.readDiscordComponentSpec(rawComponents)
-        : null;
+      const componentRecord = asOptionalRecord(rawComponents);
+      const componentSpec =
+        componentRecord && Object.keys(componentRecord).length > 0
+          ? readDiscordComponentSpec(componentRecord)
+          : null;
       const components: DiscordSendComponents | undefined =
         Array.isArray(rawComponents) || typeof rawComponents === "function"
           ? (rawComponents as DiscordSendComponents)
@@ -239,23 +225,19 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         const payload = componentSpec.text
           ? componentSpec
           : { ...componentSpec, text: normalizedContent };
-        const result = await discordMessagingActionRuntime.sendDiscordComponentMessage(
-          to,
-          payload,
-          {
-            ...ctx.withOpts(),
-            silent,
-            reply: resolveActionReplyReference(ctx, replyTo),
-            sessionKey: sessionKey ?? undefined,
-            agentId: agentId ?? undefined,
-            mediaUrl: mediaUrl ?? undefined,
-            filename: filename ?? undefined,
-            mediaAccess: ctx.options?.mediaAccess,
-            mediaLocalRoots: ctx.options?.mediaLocalRoots,
-            mediaReadFile: ctx.options?.mediaReadFile,
-            ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
-          },
-        );
+        const result = await sendDiscordComponentMessage(to, payload, {
+          ...ctx.withOpts(),
+          silent,
+          reply: resolveActionReplyReference(ctx, replyTo),
+          sessionKey: sessionKey ?? undefined,
+          agentId: agentId ?? undefined,
+          mediaUrl: mediaUrl ?? undefined,
+          filename: filename ?? undefined,
+          mediaAccess: ctx.options?.mediaAccess,
+          mediaLocalRoots: ctx.options?.mediaLocalRoots,
+          mediaReadFile: ctx.options?.mediaReadFile,
+          ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
+        });
         return jsonResult(
           await appendDiscordThreadRenameResult(ctx, {
             payload: { ok: true, result, components: true },
@@ -336,12 +318,17 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         appliedTags: appliedTags ?? undefined,
       };
       try {
-        const thread = await discordMessagingActionRuntime.createThreadDiscord(
-          channelId,
-          payload,
-          ctx.withOpts(),
-        );
-        return jsonResult({ ok: true, thread });
+        const { initialMessageDelivery, ...thread } =
+          await discordMessagingActionRuntime.createThreadDiscord(
+            channelId,
+            payload,
+            ctx.withOpts(),
+          );
+        return jsonResult({
+          ok: true,
+          thread,
+          ...(initialMessageDelivery ? { threadSnapshot: "creation", initialMessageDelivery } : {}),
+        });
       } catch (error) {
         if (error instanceof DiscordThreadInitialMessageError) {
           const initialMessageDelivery = error.initialMessageDelivery;

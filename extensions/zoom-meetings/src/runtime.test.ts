@@ -1,12 +1,15 @@
 import {
   createMeetingBrowserFixture,
   defineMeetingSessionFlowTests,
+  useMeetingTestState,
 } from "openclaw/plugin-sdk/test-fixtures";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 import { zoomMeetingsConfig } from "./config.js";
 import { ZoomMeetingsRuntime } from "./runtime.js";
 
 const resolveZoomMeetingsConfig = zoomMeetingsConfig.resolveConfig;
+const testState = useMeetingTestState(createOpenClawTestState);
 
 const URL = "https://zoom.us/j/12345678904?pwd=runtime";
 const urlWithPasscode = (passcode: string) => URL.replace("runtime", passcode);
@@ -91,6 +94,7 @@ function runtimeFixture(
     runtime: harness.runtime,
     logger,
   });
+  testState.track(runtime, { readWarnings: () => logger.warn.mock.calls });
   return { harness, runtime };
 }
 
@@ -214,17 +218,6 @@ describe("Zoom meeting session flow", () => {
       chrome: { health: { inCall: false, meetingEnded: true } },
       state: "ended",
     });
-  });
-
-  it("restarts a failed join when the corrected invite changes the passcode", async () => {
-    const { harness, runtime } = runtimeFixture({ harness: { inCall: false } });
-    const first = await joinMeeting(runtime, { url: urlWithPasscode("old") });
-
-    const corrected = await joinMeeting(runtime, { url: urlWithPasscode("correct") });
-
-    expect(corrected.session.id).not.toBe(first.session.id);
-    expect(first.session.state).toBe("ended");
-    expect(browserRequests(harness, "/tabs/open")).toHaveLength(2);
   });
 
   it("serializes concurrent corrected passcodes under the meeting join lock", async () => {

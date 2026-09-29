@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -16,6 +17,10 @@ describe("session event wake target concurrency", () => {
 
   function setSessionEventWakeHandler(handler: SessionEventWakeHandler): void {
     currentHandlerDisposer = setRuntimeSessionEventWakeHandler(handler);
+  }
+
+  function requestCronWake(options: Omit<WakeRequest, "source" | "intent">): void {
+    requestSessionEventWake({ source: "cron", intent: "event", coalesceMs: 0, ...options });
   }
 
   beforeEach(() => {
@@ -75,24 +80,58 @@ describe("session event wake target concurrency", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
+  it.each([100, 5_000])(
+    "preserves distinct target deadlines with a new %ims wake",
+    async (delay) => {
+      vi.useFakeTimers();
+      const handled: Array<{ reason: string | undefined; at: number }> = [];
+      const startedAt = Date.now();
+      setSessionEventWakeHandler(async (request) => {
+        handled.push({ reason: request.reason, at: Date.now() - startedAt });
+        return { status: "ran", durationMs: 1 };
+      });
+      for (const [reason, coalesceMs] of [
+        ["existing", 1_000],
+        ["new", delay],
+      ] as const) {
+        requestSessionEventWake({
+          source: "session-state",
+          intent: "immediate",
+          reason,
+          sessionKey: `agent:main:${reason}`,
+          coalesceMs,
+        });
+      }
+      await vi.advanceTimersByTimeAsync(Math.min(delay, 1_000) - 1);
+      expect(handled).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handled).toEqual([
+        { reason: delay < 1_000 ? "new" : "existing", at: Math.min(delay, 1_000) },
+      ]);
+      await vi.advanceTimersByTimeAsync(Math.abs(delay - 1_000));
+      expect(handled).toEqual(
+        [
+          { reason: "existing", at: 1_000 },
+          { reason: "new", at: delay },
+        ].toSorted((left, right) => left.at - right.at),
+      );
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    },
+  );
+
   it("starts independent target wakes without waiting for a blocked agent", async () => {
     vi.useFakeTimers();
-    let finishBlockedWake: (() => void) | undefined;
-    const blockedWake = new Promise<void>((resolve) => {
-      finishBlockedWake = resolve;
-    });
+    const blockedWake = createDeferred();
     const handler = vi.fn(async (request: WakeRequest) => {
       if (request.agentId === "blocked") {
-        await blockedWake;
+        await blockedWake.promise;
       }
       return { status: "ran" as const, durationMs: 1 };
     });
     setSessionEventWakeHandler(handler);
 
     for (const agentId of ["blocked", "ready-a", "ready-b"]) {
-      requestSessionEventWake({
-        source: "cron",
-        intent: "event",
+      requestCronWake({
         reason: `cron:${agentId}`,
         agentId,
         sessionKey: `agent:${agentId}:main`,
@@ -109,7 +148,7 @@ describe("session event wake target concurrency", () => {
       ]);
       expect(getActiveGatewayRootWorkCount()).toBe(1);
     } finally {
-      finishBlockedWake?.();
+      blockedWake.resolve();
       await vi.advanceTimersByTimeAsync(0);
     }
 
@@ -142,41 +181,32 @@ describe("session event wake target concurrency", () => {
 
   it("starts newly requested target wakes while another agent remains blocked", async () => {
     vi.useFakeTimers();
-    let finishBlockedWake: (() => void) | undefined;
-    const blockedWake = new Promise<void>((resolve) => {
-      finishBlockedWake = resolve;
-    });
+    const blockedWake = createDeferred();
     const handler = vi.fn(async (request: WakeRequest) => {
       if (request.agentId === "blocked") {
-        await blockedWake;
+        await blockedWake.promise;
       }
       return { status: "ran" as const, durationMs: 1 };
     });
     setSessionEventWakeHandler(handler);
-    requestSessionEventWake({
-      source: "cron",
-      intent: "event",
+    requestCronWake({
       reason: "cron:blocked",
       agentId: "blocked",
       sessionKey: "agent:blocked:main",
-      coalesceMs: 0,
     });
 
     try {
       await vi.advanceTimersByTimeAsync(1);
-      requestSessionEventWake({
-        source: "cron",
-        intent: "event",
+      requestCronWake({
         reason: "cron:ready",
         agentId: "ready",
         sessionKey: "agent:ready:main",
-        coalesceMs: 0,
       });
       await vi.advanceTimersByTimeAsync(1);
       expect(handler.mock.calls.map(([request]) => request.agentId)).toEqual(["blocked", "ready"]);
       expect(getActiveGatewayRootWorkCount()).toBe(1);
     } finally {
-      finishBlockedWake?.();
+      blockedWake.resolve();
       await vi.advanceTimersByTimeAsync(0);
     }
 
@@ -185,34 +215,25 @@ describe("session event wake target concurrency", () => {
 
   it("serializes redundant agent-plus-session identity with the same canonical session", async () => {
     vi.useFakeTimers();
-    let finishFirstWake: (() => void) | undefined;
-    const firstWakeFinished = new Promise<void>((resolve) => {
-      finishFirstWake = resolve;
-    });
+    const firstWakeFinished = createDeferred();
     const handler = vi.fn(async (request: WakeRequest) => {
       if (request.reason === "session-only") {
-        await firstWakeFinished;
+        await firstWakeFinished.promise;
       }
       return { status: "ran" as const, durationMs: 1 };
     });
     setSessionEventWakeHandler(handler);
     const sessionKey = "agent:main:guildchat:channel:123";
 
-    requestSessionEventWake({
-      source: "cron",
-      intent: "event",
+    requestCronWake({
       reason: "session-only",
       sessionKey,
-      coalesceMs: 0,
     });
     await vi.advanceTimersByTimeAsync(1);
-    requestSessionEventWake({
-      source: "cron",
-      intent: "event",
+    requestCronWake({
       reason: "redundant-agent",
       agentId: "main",
       sessionKey,
-      coalesceMs: 0,
     });
 
     try {
@@ -220,7 +241,7 @@ describe("session event wake target concurrency", () => {
       expect(handler.mock.calls.map(([request]) => request.reason)).toEqual(["session-only"]);
       expect(getActiveGatewayRootWorkCount()).toBe(1);
     } finally {
-      finishFirstWake?.();
+      firstWakeFinished.resolve();
       await vi.advanceTimersByTimeAsync(0);
     }
 
@@ -233,30 +254,21 @@ describe("session event wake target concurrency", () => {
 
   it("runs an unscoped wake as an exclusive barrier between targeted groups", async () => {
     vi.useFakeTimers();
-    let finishBeforeBarrier: (() => void) | undefined;
-    let finishBarrier: (() => void) | undefined;
-    const beforeBarrierFinished = new Promise<void>((resolve) => {
-      finishBeforeBarrier = resolve;
-    });
-    const barrierFinished = new Promise<void>((resolve) => {
-      finishBarrier = resolve;
-    });
+    const beforeBarrierFinished = createDeferred();
+    const barrierFinished = createDeferred();
     const handler = vi.fn(async (request: WakeRequest) => {
       if (request.reason === "before-barrier") {
-        await beforeBarrierFinished;
+        await beforeBarrierFinished.promise;
       } else if (request.reason === "global-barrier") {
-        await barrierFinished;
+        await barrierFinished.promise;
       }
       return { status: "ran" as const, durationMs: 1 };
     });
     setSessionEventWakeHandler(handler);
 
-    requestSessionEventWake({
-      source: "cron",
-      intent: "event",
+    requestCronWake({
       reason: "before-barrier",
       sessionKey: "agent:main:main",
-      coalesceMs: 0,
     });
     await vi.advanceTimersByTimeAsync(1);
     requestSessionEventWake({
@@ -266,19 +278,16 @@ describe("session event wake target concurrency", () => {
       coalesceMs: 0,
     });
     for (const agentId of ["ops", "support"]) {
-      requestSessionEventWake({
-        source: "cron",
-        intent: "event",
+      requestCronWake({
         reason: `after-barrier:${agentId}`,
         sessionKey: `agent:${agentId}:main`,
-        coalesceMs: 0,
       });
     }
     await vi.advanceTimersByTimeAsync(1);
     expect(handler.mock.calls.map(([request]) => request.reason)).toEqual(["before-barrier"]);
     expect(getActiveGatewayRootWorkCount()).toBe(1);
 
-    finishBeforeBarrier?.();
+    beforeBarrierFinished.resolve();
     await vi.advanceTimersByTimeAsync(0);
     expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
       "before-barrier",
@@ -286,7 +295,7 @@ describe("session event wake target concurrency", () => {
     ]);
     expect(getActiveGatewayRootWorkCount()).toBe(1);
 
-    finishBarrier?.();
+    barrierFinished.resolve();
     await vi.advanceTimersByTimeAsync(0);
     expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
       "before-barrier",
@@ -312,13 +321,10 @@ describe("session event wake target concurrency", () => {
 
     for (let index = 0; index < 9; index += 1) {
       const agentId = `target-${index}`;
-      requestSessionEventWake({
-        source: "cron",
-        intent: "event",
+      requestCronWake({
         reason: `cron:${agentId}`,
         agentId,
         sessionKey: `agent:${agentId}:main`,
-        coalesceMs: 0,
       });
     }
 
@@ -375,13 +381,10 @@ describe("session event wake target concurrency", () => {
     setSessionEventWakeHandler(oldHandler);
 
     function requestTarget(agentId: string): void {
-      requestSessionEventWake({
-        source: "cron",
-        intent: "event",
+      requestCronWake({
         reason: `cron:${agentId}`,
         agentId,
         sessionKey: `agent:${agentId}:main`,
-        coalesceMs: 0,
       });
     }
 
@@ -446,29 +449,20 @@ describe("session event wake target concurrency", () => {
 
   it("aborts the disposed generation without letting its stale disposer abort a replacement", async () => {
     vi.useFakeTimers();
-    let finishOldWake: (() => void) | undefined;
-    let finishNewWake: (() => void) | undefined;
-    const oldWakeFinished = new Promise<void>((resolve) => {
-      finishOldWake = resolve;
-    });
-    const newWakeFinished = new Promise<void>((resolve) => {
-      finishNewWake = resolve;
-    });
+    const oldWakeFinished = createDeferred();
+    const newWakeFinished = createDeferred();
     let oldSignal: AbortSignal | undefined;
     let newSignal: AbortSignal | undefined;
     const oldHandler = vi.fn(async (_request: WakeRequest, signal: AbortSignal) => {
       oldSignal = signal;
-      await oldWakeFinished;
+      await oldWakeFinished.promise;
       return { status: "ran" as const, durationMs: 1 };
     });
     const disposeOld = setRuntimeSessionEventWakeHandler(oldHandler);
     currentHandlerDisposer = disposeOld;
-    requestSessionEventWake({
-      source: "cron",
-      intent: "event",
+    requestCronWake({
       reason: "generation-owned",
       sessionKey: "agent:main:main",
-      coalesceMs: 0,
     });
     await vi.advanceTimersByTimeAsync(1);
     expect(oldSignal?.aborted).toBe(false);
@@ -480,7 +474,7 @@ describe("session event wake target concurrency", () => {
 
     const newHandler = vi.fn(async (_request: WakeRequest, signal: AbortSignal) => {
       newSignal = signal;
-      await newWakeFinished;
+      await newWakeFinished.promise;
       return { status: "ran" as const, durationMs: 1 };
     });
     const disposeNew = setRuntimeSessionEventWakeHandler(newHandler);
@@ -494,8 +488,8 @@ describe("session event wake target concurrency", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(1);
 
     disposeNew();
-    finishOldWake?.();
-    finishNewWake?.();
+    oldWakeFinished.resolve();
+    newWakeFinished.resolve();
     await vi.advanceTimersByTimeAsync(0);
     expect(newSignal?.aborted).toBe(true);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
@@ -503,20 +497,15 @@ describe("session event wake target concurrency", () => {
 
   it("does not apply an active target's old delay to a newly ready wake", async () => {
     vi.useFakeTimers();
-    let finishBlockedWake: (() => void) | undefined;
-    const blockedWake = new Promise<void>((resolve) => {
-      finishBlockedWake = resolve;
-    });
+    const blockedWake = createDeferred();
     const handler = vi.fn(async (request: WakeRequest) => {
       if (request.reason === "cron:blocked") {
-        await blockedWake;
+        await blockedWake.promise;
       }
       return { status: "ran" as const, durationMs: 1 };
     });
     setSessionEventWakeHandler(handler);
-    requestSessionEventWake({
-      source: "cron",
-      intent: "event",
+    requestCronWake({
       reason: "cron:blocked",
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -536,7 +525,7 @@ describe("session event wake target concurrency", () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(handler).toHaveBeenCalledOnce();
     } finally {
-      finishBlockedWake?.();
+      blockedWake.resolve();
       await vi.advanceTimersByTimeAsync(0);
     }
 
@@ -549,14 +538,11 @@ describe("session event wake target concurrency", () => {
 
   it("does not delay a ready target behind another target's deferred retry", async () => {
     vi.useFakeTimers();
-    let finishBlockedWake: (() => void) | undefined;
-    const blockedWake = new Promise<void>((resolve) => {
-      finishBlockedWake = resolve;
-    });
+    const blockedWake = createDeferred();
     let deferredAttempts = 0;
     const handler = vi.fn(async (request: WakeRequest) => {
       if (request.reason === "cron:blocked") {
-        await blockedWake;
+        await blockedWake.promise;
       }
       if (request.agentId === "deferred" && deferredAttempts++ === 0) {
         return {
@@ -568,13 +554,10 @@ describe("session event wake target concurrency", () => {
       return { status: "ran" as const, durationMs: 1 };
     });
     setSessionEventWakeHandler(handler);
-    requestSessionEventWake({
-      source: "cron",
-      intent: "event",
+    requestCronWake({
       reason: "cron:blocked",
       agentId: "main",
       sessionKey: "agent:main:main",
-      coalesceMs: 0,
     });
 
     try {
@@ -602,7 +585,7 @@ describe("session event wake target concurrency", () => {
         "exec-event",
       ]);
     } finally {
-      finishBlockedWake?.();
+      blockedWake.resolve();
       await vi.advanceTimersByTimeAsync(0);
     }
 

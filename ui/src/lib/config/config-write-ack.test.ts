@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigPatchAck } from "./config-gateway-operations.ts";
 import {
@@ -7,7 +8,6 @@ import {
   createConfigCapabilityHarness,
   createConfigServerMock,
   createDeferredSetServerMock,
-  deferred,
 } from "./config-test-harness.ts";
 
 describe("acknowledged config revision", () => {
@@ -36,8 +36,8 @@ describe("acknowledged config revision", () => {
   it("an independent write cannot flush a reconnect-paused draft during disposal", async () => {
     vi.useFakeTimers();
     const store = createConfigServerMock();
-    const started = deferred<void>();
-    const release = deferred<void>();
+    const started = deferred();
+    const release = deferred();
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "config.patch") {
         started.resolve();
@@ -138,7 +138,7 @@ describe("acknowledged config revision", () => {
         await expect(runtimeConfig.save()).resolves.toBe(true);
         expect(submissions).toEqual([{ raw: '{"count":2,"enabled":true}', baseHash: "hash-2" }]);
       }
-      runtimeConfig.resetDraft();
+      runtimeConfig.setWritesSuspended(true);
       runtimeConfig.dispose();
     },
   );
@@ -153,8 +153,8 @@ describe("acknowledged config revision", () => {
     async ({ method, dispose }) => {
       vi.useFakeTimers();
       const store = createConfigServerMock();
-      const started = deferred<void>();
-      const release = deferred<void>();
+      const started = deferred();
+      const release = deferred();
       let independentWrite = true;
       const request = vi.fn(async (requestMethod: string, params?: unknown) => {
         if (requestMethod === method && independentWrite) {
@@ -201,8 +201,8 @@ describe("acknowledged config revision", () => {
   it("a CAS patch no-op keeps the authored document and excludes runtime defaults from the next save", async () => {
     vi.useFakeTimers();
     const store = createConfigServerMock();
-    const started = deferred<void>();
-    const release = deferred<void>();
+    const started = deferred();
+    const release = deferred();
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "config.patch") {
         started.resolve();
@@ -283,8 +283,8 @@ describe("acknowledged config revision", () => {
   it("config.patch adopts its revision and preserves an in-flight form edit", async () => {
     vi.useFakeTimers();
     const store = createConfigServerMock();
-    const started = deferred<void>();
-    const release = deferred<void>();
+    const started = deferred();
+    const release = deferred();
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "config.patch") {
         started.resolve();
@@ -408,7 +408,7 @@ describe("acknowledged config revision", () => {
     } else {
       expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
     }
-    runtimeConfig.resetDraft();
+    runtimeConfig.setWritesSuspended(true);
     runtimeConfig.dispose();
   });
 });

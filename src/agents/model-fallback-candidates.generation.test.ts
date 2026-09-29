@@ -13,10 +13,113 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import { createModelFallbackConfig } from "./test-helpers/model-fallback-config-fixture.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 describe("fallback candidates across provider generations", () => {
   afterEach(() => resetPluginRuntimeStateForTest());
+
+  it("refreshes native candidates when an agent switches to and from ACP", () => {
+    const agent: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string] = {
+      model: "agent/pinned",
+    };
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { model: { primary: "native/primary", fallbacks: ["native/backup"] } },
+        entries: { worker: agent },
+      },
+    };
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [] });
+    const resolve = () =>
+      resolveModelCandidateChain({
+        cfg,
+        agentId: "worker",
+        provider: "native",
+        model: "primary",
+        allowPluginNormalization: false,
+      }).map(({ provider, model }) => `${provider}/${model}`);
+    withPluginRuntimeGenerationScope({ metadataSnapshot }, () => {
+      expect(resolve()).toEqual(["native/primary", "agent/pinned"]);
+      agent.runtime = { type: "acp" };
+      expect(resolve()).toEqual(["native/primary", "native/backup"]);
+      agent.runtime = undefined;
+      expect(resolve()).toEqual(["native/primary", "agent/pinned"]);
+    });
+  });
+
+  it.each(["defaults", "agent"])(
+    "refreshes cached primary candidates when %s utility selection or separation changes",
+    (scope) => {
+      const provider = `utility-cache-${scope}`;
+      const cfg: OpenClawConfig = {
+        agents: { defaults: {}, entries: { worker: {} } },
+        models: {
+          providers: {
+            [provider]: {
+              baseUrl: "http://127.0.0.1:9/v1",
+              models: ["small", "large"].map((id) =>
+                makeProviderModelFixture({
+                  id,
+                  provider,
+                  api: "openai-completions",
+                  baseUrl: "http://127.0.0.1:9/v1",
+                }),
+              ),
+            },
+          },
+        },
+      };
+      const metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [] });
+      const owner = expectDefined(
+        scope === "defaults" ? cfg.agents?.defaults : cfg.agents?.entries?.worker,
+        "utility config owner",
+      );
+      const resolve = () =>
+        resolveModelCandidateChain({
+          cfg,
+          agentId: "worker",
+          provider: "ordinary",
+          model: "requested",
+          requestedRouteResolution: "resolved",
+          allowPluginNormalization: false,
+        });
+      withPluginRuntimeGenerationScope({ metadataSnapshot }, () => {
+        for (const [utilityModel, utilityModelSeparation, primaryModel] of [
+          [undefined, undefined, "small"],
+          [`${provider}/small`, undefined, "small"],
+          [`${provider}/small`, true, "large"],
+          [`${provider}/small`, undefined, "small"],
+          ["", true, "small"],
+        ] as const) {
+          owner.utilityModel = utilityModel;
+          cfg.meta = utilityModelSeparation
+            ? { migrations: { utilityModelSeparation } }
+            : undefined;
+          expect(
+            resolve().map(({ provider: selectedProvider, model, routeOrigin }) => ({
+              provider: selectedProvider,
+              model,
+              routeOrigin,
+            })),
+          ).toEqual([
+            { provider: "ordinary", model: "requested", routeOrigin: "requested" },
+            { provider, model: primaryModel, routeOrigin: "configured-primary" },
+          ]);
+        }
+        owner.utilityModel = `${provider}/small`;
+        owner.model = { fallbacks: [`${provider}/small`] };
+        expect(resolve()).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              provider,
+              model: "small",
+              routeOrigin: "configured-fallback",
+            }),
+          ]),
+        );
+      });
+    },
+  );
 
   describe("captured requested policy", () => {
     const provider = "captured-policy";
@@ -155,16 +258,10 @@ describe("fallback candidates across provider generations", () => {
       const requestedModel =
         origin === "requested" ? "latest" : origin === "configured-primary" ? "other" : "primary";
       const runtimeInput = manifestAlias ? "release" : "latest";
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: {
-              primary: `${provider}/${origin === "configured-primary" ? "latest" : "primary"}`,
-              fallbacks: origin === "configured-primary" ? [] : [`${provider}/latest`],
-            },
-          },
-        },
-      };
+      const cfg: OpenClawConfig = createModelFallbackConfig(
+        `${provider}/${origin === "configured-primary" ? "latest" : "primary"}`,
+        origin === "configured-primary" ? [] : [`${provider}/latest`],
+      );
       const metadataSnapshot = createPluginMetadataSnapshotFixture({
         plugins: [
           {
@@ -344,9 +441,7 @@ describe("fallback candidates across provider generations", () => {
 
   it("deduplicates the runtime-refined primary against an already resolved request", () => {
     const provider = "deduplicated-primary";
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: `${provider}/latest`, fallbacks: [] } } },
-    };
+    const cfg: OpenClawConfig = createModelFallbackConfig(`${provider}/latest`, []);
     const metadataSnapshot = createPluginMetadataSnapshotFixture({
       plugins: [{ id: provider, providers: [provider] }],
     });

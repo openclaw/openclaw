@@ -1,4 +1,5 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -9,6 +10,7 @@ import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
+import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { StreamFn } from "../../runtime/index.js";
 import {
   createAssistant,
@@ -32,87 +34,19 @@ import {
   getEmbeddedSessionPromptState,
   clearEmbeddedSessionPromptStates,
 } from "../session-prompt-state.js";
+import { runEmbeddedAttemptPromptPhase } from "./attempt-prompt-phase.js";
+import type {
+  PromptPreflightCall,
+  PromptSubmissionCall,
+} from "./attempt-prompt-phase.test-support.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
-const mocks = vi.hoisted(() => ({
-  applyPromptToolsAllow: vi.fn(),
-  beforeAgentRun: vi.fn(),
-  handlePromptError: vi.fn(),
-  handleMidTurnPrecheck: vi.fn(),
-  observePrompt: vi.fn(),
-  prepareGooglePromptCache: vi.fn(),
-  preparePromptAssembly: vi.fn(),
-  preparePromptContext: vi.fn(),
-  preparePromptExecution: vi.fn(),
-  preparePromptPreflight: vi.fn(),
-  releasePendingSteering: vi.fn(),
-  removeTrailingPrecheckError: vi.fn(),
-  resolveApiKey: vi.fn(),
-  submitPrompt: vi.fn(),
-  debug: vi.fn(),
-  warn: vi.fn(),
-}));
+// Register the shared module mocks before importing any runtime dependency.
+const { createFixture, mocks } = await vi.hoisted(
+  async () => await import("./attempt-prompt-phase.test-support.js"),
+);
 
-vi.mock("../../subagents/registry/subagent-registry.js", () => ({
-  releasePendingAgentSteeringItems: mocks.releasePendingSteering,
-  ackPendingAgentSteeringItems: vi.fn(),
-}));
-vi.mock("../google-prompt-cache.js", () => ({
-  prepareGooglePromptCacheStreamFn: mocks.prepareGooglePromptCache,
-}));
-vi.mock("../logger.js", () => ({
-  log: { debug: mocks.debug, warn: mocks.warn },
-}));
-vi.mock("../stream-resolution.js", () => ({
-  resolveEmbeddedAgentApiKey() {
-    return mocks.resolveApiKey();
-  },
-}));
-vi.mock("./attempt-before-agent-run.js", () => ({
-  runEmbeddedAttemptBeforeAgentRun: mocks.beforeAgentRun,
-}));
-vi.mock("./attempt-prompt-build.js", () => ({
-  prepareEmbeddedAttemptPromptAssembly: mocks.preparePromptAssembly,
-  prepareEmbeddedAttemptPromptContext: mocks.preparePromptContext,
-}));
-vi.mock("./attempt-prompt-submit.js", () => ({
-  handleEmbeddedAttemptPromptError: mocks.handlePromptError,
-  submitEmbeddedAttemptPrompt: mocks.submitPrompt,
-}));
-vi.mock("./prompt-image-preparation.js", () => ({
-  prepareEmbeddedAttemptPromptExecution: mocks.preparePromptExecution,
-}));
-vi.mock("./attempt-prompt-preflight.js", () => ({
-  handleEmbeddedAttemptMidTurnPrecheck: mocks.handleMidTurnPrecheck,
-  prepareEmbeddedAttemptPromptPreflight: mocks.preparePromptPreflight,
-}));
-vi.mock("./attempt-prompt-support.js", () => ({
-  applyPromptBuildToolsAllow: mocks.applyPromptToolsAllow,
-  observeEmbeddedAttemptPrompt: mocks.observePrompt,
-}));
-vi.mock("./attempt-transcript-helpers.js", () => ({
-  removeTrailingMidTurnPrecheckAssistantError: mocks.removeTrailingPrecheckError,
-}));
-
-import {
-  projectAgentRunAttemptTerminal,
-  type AgentRunAttemptTerminal,
-} from "../../agent-run-terminal-outcome.js";
-import {
-  runEmbeddedAttemptPromptPhase,
-  type EmbeddedAttemptPromptState,
-} from "./attempt-prompt-phase.js";
-import type { prepareEmbeddedAttemptPromptPreflight } from "./attempt-prompt-preflight.js";
-import type { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
-
-type PromptPhaseInput = Parameters<typeof runEmbeddedAttemptPromptPhase>[0];
-type AssemblyCall = {
-  applyPromptBuildToolsAllow: (toolsAllow: string[] | undefined) => string[];
-  setLeasedSteering: (lease: { leaseId: string; runIds: string[] }) => void;
-};
-type PromptPreflightCall = Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0];
-type PromptSubmissionCall = Parameters<typeof submitEmbeddedAttemptPrompt>[0];
 type PromptErrorCall = {
   error: unknown;
   markYieldAborted: () => void;
@@ -122,212 +56,13 @@ type PromptErrorCall = {
   yieldMessage: string | null;
 };
 
-function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 } = {}) {
-  const order: string[] = [];
-  const promptState: EmbeddedAttemptPromptState = {
-    contextBudgetStatus: undefined,
-    preflightRecovery: undefined,
-    yieldAborted: false,
-  };
-  const executionState: PromptPhaseInput["state"] = {
-    beforeAgentRunBlockedBy: undefined,
-    terminal: { kind: "ok" },
-    trajectoryEndRecorded: false,
-  };
-  const yieldState = {
-    yieldAbortSettled: null as Promise<void> | null,
-    yieldDetected: false,
-    yieldMessage: null as string | null,
-  };
-  const activeSession = {
-    messages: [],
-    agent: {
-      state: { messages: [] },
-      streamFn: vi.fn(),
-    },
-  };
-  const sessionManager = {
-    getHeader: () => ({ version: 3 }),
-    appendCustomEntry: vi.fn(),
-    getEntries: vi.fn(() => []),
-  };
-  const sessionRuntimeState = { systemPromptText: "system", prePromptMessageCount: 1 };
-  const stopAcceptingSteerMessages = vi.fn(() => {
-    order.push("stop-steering");
-  });
-
-  mocks.preparePromptAssembly.mockImplementation(async (input: AssemblyCall) => {
-    order.push("assembly");
-    const lease = { leaseId: "lease-1", runIds: ["run-1"] };
-    input.applyPromptBuildToolsAllow(undefined);
-    input.setLeasedSteering(lease);
-    return {
-      hookCtx: {},
-      leasedSteering: lease,
-      transcriptLeafId: "leaf-1",
-    };
-  });
-  mocks.preparePromptContext.mockImplementation(() => {
-    order.push("context");
-    return {
-      aggregatePressureEngaged: false,
-      contextTokenBudget: 32_000,
-      currentUserTimestampOverride: { timestamp: 123, text: "hello" },
-      effectivePrompt: "hello",
-      hookMessagesForCurrentPrompt: [],
-      llmBoundaryPromptForPrecheck: pendingPrompt,
-      prePromptMessageCount: 2,
-      promptForModel: "hello",
-      promptForSession: "hello",
-      promptSubmission: { prompt: "hello", runtimeOnly: false },
-      promptToolResultAggregateMaxChars: 2_000,
-      promptToolResultMaxChars: 1_000,
-      runtimeContextMessageForCurrentTurn: { role: "custom", content: "runtime" },
-      systemPromptForHook: "system",
-    };
-  });
-  mocks.beforeAgentRun.mockImplementation(async () => {
-    order.push("before-agent-run");
-    return undefined;
-  });
-  mocks.resolveApiKey.mockResolvedValue("test-key");
-  mocks.prepareGooglePromptCache.mockImplementation(async () => {
-    order.push("google-cache");
-    return undefined;
-  });
-  mocks.preparePromptExecution.mockImplementation(async () => {
-    order.push("images");
-    return {
-      images: Array.from({ length: pendingImageCount }, () => ({
-        type: "image",
-        data: "aW1hZ2U=",
-        mimeType: "image/png",
-      })),
-      imageFactIndexes: [null],
-      detectedRefs: [],
-      failedMediaCount: 0,
-      loadedCount: 1,
-      skippedCount: 0,
-    };
-  });
-  mocks.observePrompt.mockImplementation(() => {
-    order.push("observe");
-    return { skipPromptSubmission: false };
-  });
-  mocks.preparePromptPreflight.mockImplementation(async (preflightInput: PromptPreflightCall) => {
-    order.push("preflight");
-    return preflightInput.state;
-  });
-  mocks.submitPrompt.mockImplementation(async (submissionInput: PromptSubmissionCall) => {
-    order.push("submit");
-    submissionInput.onFinalPromptText("hello");
-    submissionInput.onSteeringAcknowledged();
-  });
-  mocks.handlePromptError.mockResolvedValue({});
-  const input = {
-    attempt: {
-      model: { id: "model-1", provider: "test" },
-      modelId: "model-1",
-      provider: "test",
-      runId: "run-1",
-      sessionId: "session-1",
-    },
-    isRawModelRun: false,
-    runAbortController: new AbortController(),
-    state: executionState,
-    sessionLock: {
-      withOwnedTranscriptWrite: async <T>(operation: () => Promise<T> | T) => await operation(),
-    },
-    setup: {
-      effectiveFsWorkspaceOnly: false,
-      effectiveWorkspace: "/tmp/workspace",
-      sandbox: null,
-      sessionAgentId: "main",
-    },
-    diagnostics: { diagnosticTrace: {}, runTrace: {} },
-    prepared: {
-      sessionRuntime: {
-        agentSession: {
-          activeSession,
-          hookRunner: null,
-          setActiveSessionSystemPrompt: vi.fn(),
-          settingsManager: { getCompactionReserveTokens: () => 77 },
-        },
-        boundary: {
-          includeBoundaryTimestamp: false,
-          setCurrentUserTimestampOverride: vi.fn(),
-        },
-        cacheTrace: null,
-        contextGuards: { takePendingMidTurnPrecheckRequest: () => undefined },
-        preparedUserTurnMessage: {
-          role: "user",
-          content: "hello",
-          timestamp: 100,
-          __openclaw: { senderName: "Alice" },
-        },
-        sessionManager,
-        sessionPromptState: {},
-        state: sessionRuntimeState,
-        toolResultPromptProjectionState: {},
-        trajectoryRecorder: null,
-        transcriptPolicy: { appendOnlyRuntimeContext: true },
-        transport: {
-          effectiveAgentTransport: "sse",
-          effectiveExtraParams: {},
-          streamStrategy: "default",
-          compactionReplayEnabled: false,
-        },
-      },
-      systemPrompt: { runtimeInfo: { model: "model-1" } },
-      toolCatalog: {
-        toolSearch: { compacted: false },
-        toolSearchRunPlan: { capabilityToolNames: new Set(["read"]) },
-      },
-      promptToolPolicy: {
-        current: {
-          activeToolNames: ["read"],
-          effectiveTools: [{ name: "read" }],
-          uncompactedEffectiveTools: [{ name: "read" }],
-          tools: [{ name: "read" }],
-        },
-        apply(toolsAllow: string[] | undefined) {
-          Object.assign(this.current, mocks.applyPromptToolsAllow({ toolsAllow }));
-          return this.current;
-        },
-        refresh: vi.fn(),
-      },
-    },
-    preparedStreamRuntime: {
-      cache: {},
-      history: {
-        contextEngineAssemblySucceeded: false,
-        contextEnginePromptAuthority: "assembled",
-      },
-      promptActiveSession: vi.fn(),
-      stream: { stopAcceptingSteerMessages },
-    },
-    lifecycle: { readYieldState: () => yieldState },
-  } as unknown as PromptPhaseInput;
-
-  return {
-    input,
-    order,
-    promptState,
-    sessionRuntimeState,
-    readState: () => ({
-      ...promptState,
-      ...projectAgentRunAttemptTerminal(executionState.terminal),
-    }),
-    yieldState,
-  };
-}
-
 beforeEach(() => {
   for (const mock of Object.values(mocks)) {
     mock.mockReset();
   }
   mocks.applyPromptToolsAllow.mockReturnValue({
     activeToolNames: ["read"],
+    callableToolNames: ["read"],
     effectiveTools: [{ name: "read" }],
     uncompactedEffectiveTools: [{ name: "read" }],
     tools: [{ name: "read" }],
@@ -365,7 +100,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       const tool = { name: "read", description: "Read text", parameters: Type.Object({}) };
       for (const [index, cacheRead] of [10_000, 0, 10_000].entries()) {
         await session.agent.streamFn(testModel, {
-          systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}turn ${index}`,
+          systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}stable suffix`,
           messages: [],
           tools: [{ ...tool, description: index === 2 ? "Read workspace text" : tool.description }],
         });
@@ -772,7 +507,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       expect.objectContaining({
         images: [expect.objectContaining({ type: "image" })],
         appendOnlyRuntimeContext: true,
-        leasedSteering: { leaseId: "lease-1", runIds: ["run-1"] },
+        leasedSteering: { leaseId: "lease-1", runIds: ["run-1"], isCurrent: expect.any(Function) },
         modelPrompt: "hello",
         runtimeContextMessage: expect.objectContaining({ content: "runtime" }),
         transcriptLeafId: "leaf-1",
@@ -787,12 +522,19 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     const admission = prepareSystemAgentRunAdmission({}, "prompt-owner", "main", "prompt-session");
     try {
       const admitted = await admission.admit("embedded");
-      const prepareAssembly = mocks.preparePromptAssembly.getMockImplementation()!;
+      const prepareAssembly = expectDefined(
+        mocks.preparePromptAssembly.getMockImplementation(),
+        "prompt assembly fixture",
+      );
       mocks.preparePromptAssembly.mockImplementationOnce(async (...args) => ({
         ...(await prepareAssembly(...args)),
         assertHostActive: resolveAdmittedRunActiveAssertion(admitted),
       }));
-      const context = mocks.preparePromptContext.getMockImplementation()!();
+      const prepareContext = expectDefined(
+        mocks.preparePromptContext.getMockImplementation(),
+        "prompt context fixture",
+      );
+      const context = prepareContext();
       const lookup = createDeferred<typeof context>();
       const entered = createDeferred();
       mocks.preparePromptContext.mockImplementationOnce(() => {
@@ -961,6 +703,41 @@ describe("runEmbeddedAttemptPromptPhase", () => {
 
     expect(fixture.readState().promptError).toBe(providerError);
     expect(fixture.readState().promptErrorSource).toBe("prompt");
+  });
+
+  it("releases transferred steering when prompt assembly rejects an invalidated result", async () => {
+    const fixture = createFixture();
+    const invalidationError = new Error("queued child result lost authority");
+    const prepareAssembly = expectDefined(
+      mocks.preparePromptAssembly.getMockImplementation(),
+      "prompt assembly fixture",
+    );
+    mocks.preparePromptAssembly.mockImplementationOnce(async (...args) => {
+      await prepareAssembly(...args);
+      throw invalidationError;
+    });
+    mocks.handlePromptError.mockImplementationOnce(async (input: PromptErrorCall) => {
+      fixture.order.push("prompt-error");
+      input.releaseLeasedSteering(input.error);
+      return { promptFailure: { error: input.error, source: "prompt" } };
+    });
+
+    await expect(
+      runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState),
+    ).resolves.toEqual({
+      promptStartedAt: expect.any(Number),
+      transcriptLeafId: null,
+    });
+
+    expect(mocks.releasePendingSteering).toHaveBeenCalledExactlyOnceWith({
+      error: invalidationError.message,
+      leaseId: "lease-1",
+      runIds: ["run-1"],
+    });
+    expect(fixture.readState().promptError).toBe(invalidationError);
+    expect(mocks.preparePromptContext).not.toHaveBeenCalled();
+    expect(mocks.submitPrompt).not.toHaveBeenCalled();
+    expect(fixture.order).toEqual(["assembly", "prompt-error", "stop-steering"]);
   });
 
   it("releases steering when preflight skips provider submission", async () => {

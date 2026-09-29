@@ -17,9 +17,11 @@ import type { NativeDeviceSettingsCapability } from "./app/native-device-setting
 import { readGatewayOperatorAccess } from "./app/operator-access.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
 import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
+import { createChromeExtensionSetupResult } from "./test-helpers/chrome-extension-setup.ts";
 import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
+  createTauriDeviceSettingsSnapshot,
 } from "./test-helpers/native-device-settings.ts";
 
 const settingsGroups = visibleSettingsNavigationGroups(true);
@@ -35,11 +37,7 @@ describe("sidebar entries", () => {
       openSystemSettings: () => undefined,
       openPanel: () => undefined,
       checkForUpdates: () => undefined,
-      installChromeExtension: async () => ({
-        nativeHostRegistered: false,
-        installRequested: false,
-        discoveredProfiles: 0,
-      }),
+      setupChromeExtension: async (action) => createChromeExtensionSetupResult({ action }),
       refresh: () => undefined,
       dispose: () => undefined,
     };
@@ -56,8 +54,8 @@ describe("sidebar entries", () => {
     expect(search("Dock icon", capability)).toContainEqual(
       expect.objectContaining({ routeId: "device" }),
     );
-    expect(search("computer presence", null)).toEqual([]);
-    expect(search("computer presence", capability)).toContainEqual(
+    expect(search("System-wide presence detection", null)).toEqual([]);
+    expect(search("System-wide presence detection", capability)).toContainEqual(
       expect.objectContaining({ routeId: "device-permissions" }),
     );
     const browserGroups = visibleSettingsNavigationGroups(canAdmin);
@@ -71,7 +69,7 @@ describe("sidebar entries", () => {
     );
     expect(
       getStaticCommandPaletteCatalogItems(canAdmin, capability).some(
-        (item) => item.routeId === "updates",
+        (item) => item.action === "nav:updates",
       ),
     ).toBe(true);
     expect(browserGroups.some((group) => group.labelKey === "nav.settingsGroupDevice")).toBe(false);
@@ -79,6 +77,20 @@ describe("sidebar entries", () => {
       labelKey: "nav.settingsGroupDevice",
       routes: ["device", "device-permissions"],
     });
+    for (const platform of ["linux", "windows"] as const) {
+      const desktopCapability = {
+        ...capability,
+        snapshot: createTauriDeviceSettingsSnapshot(platform),
+      };
+      expect(visibleSettingsNavigationGroups(canAdmin, desktopCapability)[1]).toEqual({
+        labelKey: "nav.settingsGroupThisComputer",
+        routes: ["device"],
+      });
+      expect(search("Desktop sharing", desktopCapability)).toContainEqual(
+        expect.objectContaining({ routeId: "device" }),
+      );
+      expect(search("Precise location", desktopCapability)).toEqual([]);
+    }
     expect(
       visibleSettingsNavigationGroups(canAdmin, { ...capability, snapshot: null })[1]?.labelKey,
     ).toBe("nav.settingsGroupThisDevice");
@@ -115,7 +127,7 @@ describe("sidebar entries", () => {
       "Launch at login",
       "Quick Chat",
       "Cookie sync",
-      "computer presence",
+      "System-wide presence detection",
     ]) {
       expect(search(query, capability)).not.toEqual([]);
       expect(search(query, iosCapability)).toEqual([]);
@@ -134,11 +146,13 @@ describe("sidebar entries", () => {
       expect(isSettingsNavigationRouteVisible(route, canAdmin, capability)).toBe(true);
       expect(browserGroups.flatMap((group) => group.routes)).not.toContain(route);
       expect(
-        getStaticCommandPaletteCatalogItems(canAdmin).some((item) => item.routeId === route),
+        getStaticCommandPaletteCatalogItems(canAdmin).some(
+          (item) => item.action === `nav:${route}`,
+        ),
       ).toBe(false);
       expect(
         getStaticCommandPaletteCatalogItems(canAdmin, capability).some(
-          (item) => item.routeId === route,
+          (item) => item.action === `nav:${route}`,
         ),
       ).toBe(true);
     }
@@ -147,6 +161,7 @@ describe("sidebar entries", () => {
     expect(DEFAULT_SIDEBAR_ENTRIES).toEqual([
       "route:agents-home",
       "route:dashboards",
+      "route:systems",
       "route:cron",
       "route:plugins",
     ]);
@@ -265,11 +280,19 @@ describe("sidebar entries", () => {
     );
   });
 
+  it("preserves opaque descriptor IDs in plugin positions", () => {
+    const entries = ["plugin:reports/daily/team:summary", "plugin:reports/日报 summary"];
+    expect(normalizeSidebarEntries(entries)).toEqual(entries);
+    expect(parseSidebarEntry("plugin:reports/")).toBeNull();
+    expect(parseSidebarEntry("plugin:/report")).toBeNull();
+  });
+
   it("normalizes persisted entries, dropping malformed and duplicate values", () => {
     expect(
       normalizeSidebarEntries([
         "route:usage",
         "session:agent:main:test",
+        "route:cron",
         "route:tasks",
         "route:usage",
         "route:worktrees",
@@ -277,7 +300,7 @@ describe("sidebar entries", () => {
         "usage",
         7,
       ]),
-    ).toEqual(["route:usage", "session:agent:main:test", "route:tasks"]);
+    ).toEqual(["route:usage", "session:agent:main:test", "route:cron"]);
     expect(normalizeSidebarEntries([])).toEqual([]);
   });
 
@@ -293,10 +316,10 @@ describe("sidebar entries", () => {
   });
 
   it("puts every hidden nav route into the More section", () => {
-    const entries = ["route:tasks", "session:agent:main:test", "route:usage"] as const;
+    const entries = ["route:cron", "session:agent:main:test", "route:usage"] as const;
     const more = sidebarMoreRoutes(entries);
-    expect(more).not.toContain("tasks");
+    expect(more).not.toContain("cron");
     expect(more).not.toContain("usage");
-    expect(new Set(["tasks", "usage", ...more])).toEqual(new Set(SIDEBAR_NAV_ROUTES));
+    expect(new Set(["cron", "usage", ...more])).toEqual(new Set(SIDEBAR_NAV_ROUTES));
   });
 });

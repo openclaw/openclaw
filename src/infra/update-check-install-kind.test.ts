@@ -4,7 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as processExec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resolveUpdateInstallKind } from "./update-check.js";
+import {
+  checkUpdateStatus,
+  resolveUpdateInstallIdentity,
+  resolveUpdateInstallKind,
+} from "./update-check.js";
 
 async function initGit(...args: string[]): Promise<void> {
   const result = await processExec.runCommandWithTimeout(["git", "init", ...args], {
@@ -13,9 +17,79 @@ async function initGit(...args: string[]): Promise<void> {
   expect(result.code, result.stderr).toBe(0);
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe("resolveUpdateInstallKind", () => {
+  it.each([
+    { scope: "kind", timeoutMs: undefined, discoveryMs: 5_000 },
+    { scope: "identity", timeoutMs: 45_000, discoveryMs: 40_000 },
+    { scope: "status", timeoutMs: 25_000, discoveryMs: 24_000 },
+    { scope: "kind", timeoutMs: 50, discoveryMs: 100 },
+  ])(
+    "preserves Git ownership through slow $scope discovery with budget $timeoutMs",
+    async ({ scope, timeoutMs, discoveryMs }) => {
+      await withTestDir({ prefix: "openclaw-update-install-budget-" }, async (root) => {
+        await initGit(root);
+        const runCommand = processExec.runCommandWithTimeout;
+        const observed = await runCommand(["git", "-C", root, "rev-parse", "--show-toplevel"], {
+          timeoutMs: 5000,
+        });
+        expect(observed.code, observed.stderr).toBe(0);
+        vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+          if (!argv.includes("--show-toplevel")) {
+            return await runCommand(argv, options);
+          }
+          const allowance = typeof options === "number" ? options : options.timeoutMs;
+          if (allowance === undefined) {
+            throw new Error("Git discovery requires a finite allowance");
+          }
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, Math.min(discoveryMs, allowance));
+          });
+          return allowance < discoveryMs
+            ? {
+                ...observed,
+                code: null,
+                stdout: "",
+                signal: "SIGTERM",
+                killed: true,
+                termination: "timeout",
+              }
+            : observed;
+        });
+        vi.useFakeTimers();
+        const options = { timeoutMs, signal: undefined };
+        const pending =
+          scope === "kind"
+            ? resolveUpdateInstallKind(root, options)
+            : scope === "identity"
+              ? resolveUpdateInstallIdentity({ root, ...options }).then(
+                  (result) => result.installKind,
+                )
+              : checkUpdateStatus({ root, ...options, includeRegistry: false }).then(
+                  (result) => result.installKind,
+                );
+        const outcome = pending.then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        await vi.advanceTimersByTimeAsync(discoveryMs);
+        if (timeoutMs !== undefined && timeoutMs < discoveryMs) {
+          expect(await outcome).toMatchObject({
+            error: expect.objectContaining({
+              message: expect.stringContaining("Git did not finish within its 0.05s budget"),
+            }),
+          });
+        } else {
+          expect(await outcome).toEqual({ value: "git" });
+        }
+      });
+    },
+  );
+
   it("classifies exact Git ownership with one subprocess per root", async () => {
     await withTestDir({ prefix: "openclaw-update-install-kind-" }, async (base) => {
       const root = path.join(base, "repo");
@@ -24,6 +98,7 @@ describe("resolveUpdateInstallKind", () => {
       await initGit("--separate-git-dir", path.join(base, "git-dir"), root);
       await fs.symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
       await fs.mkdir(nested, { recursive: true });
+      await fs.writeFile(path.join(nested, "package.json"), '{"name":"openclaw"}');
       const runCommand = vi.spyOn(processExec, "runCommandWithTimeout");
 
       await expect(resolveUpdateInstallKind(root)).resolves.toBe("git");
@@ -38,6 +113,7 @@ describe("resolveUpdateInstallKind", () => {
     "does not treat a %s Git marker as a checkout",
     async (marker) => {
       await withTestDir({ prefix: "openclaw-update-install-marker-" }, async (root) => {
+        await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw"}');
         if (marker === "invalid-file") {
           await fs.writeFile(path.join(root, ".git"), "not a Git directory pointer\n");
         } else if (marker === "invalid-directory") {
@@ -62,9 +138,9 @@ describe("resolveUpdateInstallKind", () => {
     });
   });
 
-  it("keeps unavailable and undiscovered roots distinct", async () => {
+  it("leaves unavailable and undiscovered roots unclassified", async () => {
     await withTestDir({ prefix: "openclaw-update-install-missing-" }, async (base) => {
-      await expect(resolveUpdateInstallKind(path.join(base, "missing"))).resolves.toBe("package");
+      await expect(resolveUpdateInstallKind(path.join(base, "missing"))).resolves.toBe("unknown");
       await expect(resolveUpdateInstallKind(null)).resolves.toBe("unknown");
     });
   });

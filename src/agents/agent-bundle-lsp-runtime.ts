@@ -63,6 +63,7 @@ type LspPositionParams = {
   uri: string;
   line: number;
   character: number;
+  includeDeclaration?: boolean;
 };
 
 const LSP_SHUTDOWN_GRACE_MS = 500;
@@ -81,10 +82,6 @@ function createLspSession(serverName: string, child: OwnedStdioProcess): LspSess
     disposed: false,
     forceClose: false,
   };
-}
-
-function registerActiveLspSession(session: LspSession): void {
-  activeBundleLspSessions.add(session);
 }
 
 function rememberLspFailure(session: LspSession, error: Error): void {
@@ -250,6 +247,12 @@ function lspAbortError(signal?: AbortSignal): Error {
     : createAbortError("LSP request aborted", { cause: signal?.reason });
 }
 
+function throwIfLspAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw lspAbortError(signal);
+  }
+}
+
 function lspSessionDisposedError(): Error {
   return new Error("LSP session disposed");
 }
@@ -368,21 +371,29 @@ function handleIncomingData(session: LspSession, chunk: Buffer | string) {
   }
 }
 
-async function initializeSession(session: LspSession): Promise<LspServerCapabilities> {
-  const result = (await sendRequest(session, "initialize", {
-    processId: process.pid,
-    rootUri: null,
-    capabilities: {
-      textDocument: {
-        hover: { contentFormat: ["plaintext", "markdown"] },
-        completion: { completionItem: { snippetSupport: false } },
-        definition: {},
-        references: {},
+async function initializeSession(
+  session: LspSession,
+  signal?: AbortSignal,
+): Promise<LspServerCapabilities> {
+  const result = (await sendRequest(
+    session,
+    "initialize",
+    {
+      processId: process.pid,
+      rootUri: null,
+      capabilities: {
+        textDocument: {
+          hover: { contentFormat: ["plaintext", "markdown"] },
+          completion: { completionItem: { snippetSupport: false } },
+          definition: {},
+          references: {},
+        },
       },
     },
-  })) as { capabilities?: LspServerCapabilities } | undefined;
+    signal,
+  )) as { capabilities?: LspServerCapabilities } | undefined;
+  throwIfLspAborted(signal);
 
-  // Send initialized notification
   session.process.stdin?.write(
     encodeLspMessage({ jsonrpc: "2.0", method: "initialized", params: {} }),
   );
@@ -440,14 +451,12 @@ async function disposeSessions(sessions: Iterable<LspSession>): Promise<void> {
 
 function createLspPositionTool(params: {
   session: LspSession;
-  toolName: string;
   label: string;
   description: string;
-  method: string;
-  resultLabel: string;
+  method: "hover" | "definition" | "references";
 }): AnyAgentTool {
   return {
-    name: params.toolName,
+    name: `lsp_${params.method}_${params.session.serverName}`,
     label: params.label,
     description: params.description,
     parameters: {
@@ -456,6 +465,14 @@ function createLspPositionTool(params: {
         uri: { type: "string", description: "File URI (file:///path/to/file)" },
         line: { type: "number", description: "Zero-based line number" },
         character: { type: "number", description: "Zero-based character offset" },
+        ...(params.method === "references"
+          ? {
+              includeDeclaration: {
+                type: "boolean",
+                description: "Include the declaration in results",
+              },
+            }
+          : {}),
       },
       required: ["uri", "line", "character"],
     },
@@ -463,90 +480,43 @@ function createLspPositionTool(params: {
       const position = input as LspPositionParams;
       const result = await sendRequest(
         params.session,
-        params.method,
+        `textDocument/${params.method}`,
         {
           textDocument: { uri: position.uri },
           position: { line: position.line, character: position.character },
+          ...(params.method === "references"
+            ? { context: { includeDeclaration: position.includeDeclaration ?? true } }
+            : {}),
         },
         signal,
       );
-      return formatLspResult(params.session.serverName, params.resultLabel, result);
+      return formatLspResult(params.session.serverName, params.method, result);
     },
   };
 }
 
 function buildLspTools(session: LspSession): AnyAgentTool[] {
-  const tools: AnyAgentTool[] = [];
-  const caps = session.capabilities;
   const serverLabel = session.serverName;
-
-  if (caps.hoverProvider) {
-    tools.push(
-      createLspPositionTool({
-        session,
-        toolName: `lsp_hover_${serverLabel}`,
-        label: `LSP Hover (${serverLabel})`,
-        description: `Get hover information for a symbol at a position in a file via the ${serverLabel} language server.`,
-        method: "textDocument/hover",
-        resultLabel: "hover",
-      }),
-    );
-  }
-
-  if (caps.definitionProvider) {
-    tools.push(
-      createLspPositionTool({
-        session,
-        toolName: `lsp_definition_${serverLabel}`,
-        label: `LSP Go to Definition (${serverLabel})`,
-        description: `Find the definition of a symbol at a position in a file via the ${serverLabel} language server.`,
-        method: "textDocument/definition",
-        resultLabel: "definition",
-      }),
-    );
-  }
-
-  if (caps.referencesProvider) {
-    tools.push({
-      name: `lsp_references_${serverLabel}`,
+  const definitions = [
+    {
+      method: "hover",
+      label: `LSP Hover (${serverLabel})`,
+      description: `Get hover information for a symbol at a position in a file via the ${serverLabel} language server.`,
+    },
+    {
+      method: "definition",
+      label: `LSP Go to Definition (${serverLabel})`,
+      description: `Find the definition of a symbol at a position in a file via the ${serverLabel} language server.`,
+    },
+    {
+      method: "references",
       label: `LSP Find References (${serverLabel})`,
       description: `Find all references to a symbol at a position in a file via the ${serverLabel} language server.`,
-      parameters: {
-        type: "object",
-        properties: {
-          uri: { type: "string", description: "File URI (file:///path/to/file)" },
-          line: { type: "number", description: "Zero-based line number" },
-          character: { type: "number", description: "Zero-based character offset" },
-          includeDeclaration: {
-            type: "boolean",
-            description: "Include the declaration in results",
-          },
-        },
-        required: ["uri", "line", "character"],
-      },
-      execute: async (_toolCallId, input, signal) => {
-        const params = input as {
-          uri: string;
-          line: number;
-          character: number;
-          includeDeclaration?: boolean;
-        };
-        const result = await sendRequest(
-          session,
-          "textDocument/references",
-          {
-            textDocument: { uri: params.uri },
-            position: { line: params.line, character: params.character },
-            context: { includeDeclaration: params.includeDeclaration ?? true },
-          },
-          signal,
-        );
-        return formatLspResult(serverLabel, "references", result);
-      },
-    });
-  }
-
-  return tools;
+    },
+  ] as const;
+  return definitions
+    .filter(({ method }) => session.capabilities[`${method}Provider`])
+    .map((definition) => createLspPositionTool({ session, ...definition }));
 }
 
 function formatLspResult(
@@ -567,10 +537,12 @@ function formatLspResult(
 export async function createBundleLspToolRuntime(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  abortSignal?: AbortSignal;
   reservedToolNames?: Iterable<string>;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   dependencies?: BundleLspRuntimeDependencies;
 }): Promise<BundleLspToolRuntime> {
+  throwIfLspAborted(params.abortSignal);
   const dependencies = params.dependencies ?? defaultBundleLspRuntimeDependencies;
   const loaded = dependencies.loadLspConfig({
     workspaceDir: params.workspaceDir,
@@ -580,7 +552,6 @@ export async function createBundleLspToolRuntime(params: {
   for (const diagnostic of loaded.diagnostics) {
     logWarn(`bundle-lsp: ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
-  // Skip spawning when no LSP servers are configured.
   if (Object.keys(loaded.lspServers).length === 0) {
     return { tools: [], sessions: [], dispose: async () => {} };
   }
@@ -595,6 +566,7 @@ export async function createBundleLspToolRuntime(params: {
 
   try {
     for (const [serverName, rawServer] of Object.entries(loaded.lspServers)) {
+      throwIfLspAborted(params.abortSignal);
       const launch = resolveStdioMcpServerLaunchConfig(rawServer);
       if (!launch.ok) {
         logWarn(`bundle-lsp: skipped server "${serverName}" because ${launch.reason}.`);
@@ -604,11 +576,16 @@ export async function createBundleLspToolRuntime(params: {
       let session: LspSession | undefined;
 
       try {
-        session = createLspSession(serverName, await dependencies.spawnServerProcess(launchConfig));
-        registerActiveLspSession(session);
+        session = createLspSession(
+          serverName,
+          await dependencies.spawnServerProcess(launchConfig, { abortSignal: params.abortSignal }),
+        );
+        activeBundleLspSessions.add(session);
         attachLspProcessHandlers(session);
+        throwIfLspAborted(params.abortSignal);
 
-        const capabilities = await initializeSession(session);
+        const capabilities = await initializeSession(session, params.abortSignal);
+        throwIfLspAborted(params.abortSignal);
         session.capabilities = capabilities;
         sessions.push(session);
 
@@ -641,9 +618,12 @@ export async function createBundleLspToolRuntime(params: {
         } else if (error instanceof OwnedStdioCleanupError) {
           recordAgentCleanupFailure();
         }
-        logWarn(
-          `bundle-lsp: failed to start server "${serverName}" (${describeStdioMcpServerLaunchConfig(launchConfig)}): ${String(error)}`,
-        );
+        if (!params.abortSignal?.aborted || error instanceof OwnedStdioCleanupError) {
+          logWarn(
+            `bundle-lsp: failed to start server "${serverName}" (${describeStdioMcpServerLaunchConfig(launchConfig)}): ${String(error)}`,
+          );
+        }
+        throwIfLspAborted(params.abortSignal);
       }
     }
 

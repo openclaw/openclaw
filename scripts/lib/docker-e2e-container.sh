@@ -29,112 +29,19 @@ docker_e2e_timeout_cmd() {
   if ! timeout_bin="$(docker_e2e_timeout_bin)"; then
     if command -v node >/dev/null 2>&1; then
       echo "timeout command not found; using Node watchdog for Docker command timeout ${timeout_value}" >&2
-      node --input-type=module -e '
-const [, timeoutValue, command, ...args] = process.argv;
-
-const parseTimeoutMs = (value) => {
-  const match = /^([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)?$/u.exec(String(value ?? "").trim());
-  if (!match) {
-    throw new Error(`unsupported timeout value: ${value}`);
-  }
-  const amount = Number(match[1]);
-  const unit = match[2] ?? "s";
-  const multiplier = unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : 3_600_000;
-  return Math.max(1, Math.ceil(amount * multiplier));
-};
-
-if (!command) {
-  console.error("missing command for Node watchdog");
-  process.exit(1);
-}
-
-const { spawn } = await import("node:child_process");
-let timeoutMs;
-try {
-  timeoutMs = parseTimeoutMs(timeoutValue);
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-}
-
-const child = spawn(command, args, {
-  detached: process.platform !== "win32",
-  stdio: "inherit",
-});
-let timedOut = false;
-let parentSignal = null;
-let parentSignalTimer = null;
-const signalExitCodes = new Map([
-  ["SIGHUP", 129],
-  ["SIGINT", 130],
-  ["SIGTERM", 143],
-]);
-const killGraceMs = Number.parseInt(
-  process.env.OPENCLAW_DOCKER_TIMEOUT_KILL_GRACE_MS || "30000",
-  10,
-);
-const killTarget = process.platform === "win32" ? child.pid : -child.pid;
-const killChild = (signal) => {
-  if (!child.pid) {
-    return;
-  }
-  try {
-    process.kill(killTarget, signal);
-  } catch {
-    try {
-      child.kill(signal);
-    } catch {}
-  }
-};
-const timer = setTimeout(() => {
-  timedOut = true;
-  console.error(`Docker command timed out after ${timeoutValue}`);
-  killChild("SIGTERM");
-  setTimeout(() => killChild("SIGKILL"), killGraceMs).unref();
-}, timeoutMs);
-const forwardSignal = (signal) => {
-  if (parentSignal) {
-    killChild("SIGKILL");
-    process.exit(signalExitCodes.get(signal) ?? 1);
-  }
-  parentSignal = signal;
-  clearTimeout(timer);
-  killChild(signal);
-  parentSignalTimer = setTimeout(() => {
-    killChild("SIGKILL");
-    process.exit(signalExitCodes.get(signal) ?? 1);
-  }, killGraceMs);
-  parentSignalTimer.unref();
-};
-process.once("SIGINT", forwardSignal);
-process.once("SIGTERM", forwardSignal);
-process.once("SIGHUP", forwardSignal);
-child.on("exit", (code, signal) => {
-  clearTimeout(timer);
-  if (parentSignalTimer) {
-    clearTimeout(parentSignalTimer);
-  }
-  if (timedOut) {
-    process.exit(124);
-  }
-  if (parentSignal) {
-    process.exit(signalExitCodes.get(parentSignal) ?? 1);
-  }
-  if (code !== null) {
-    process.exit(code);
-  }
-  if (signal) {
-    process.kill(process.pid, signal);
-  }
-  process.exit(1);
-});
-child.on("error", (error) => {
-  clearTimeout(timer);
-  console.error(error.message);
-  process.exit(127);
-});
-' "$timeout_value" "$@"
-      return
+      # Keep argv unchanged: Node historically parses option-like timeout values.
+      local helper_source="$DOCKER_E2E_CONTAINER_LIB_DIR/docker-e2e-watchdog.mjs"
+      helper_source="${helper_source//\\/\\\\}"
+      helper_source="${helper_source//\"/\\\"}"
+      helper_source="${helper_source//$'\n'/\\n}"
+      helper_source="${helper_source//$'\r'/\\r}"
+      node --input-type=module -e "
+import { pathToFileURL } from 'node:url';
+const { runWatchdog } = await import(pathToFileURL(\"$helper_source\").href);
+const [, timeoutValue, ...args] = process.argv;
+await runWatchdog('docker', timeoutValue, args);
+" "$timeout_value" "$@"
+      return "$?"
     fi
     echo "timeout command not found; cannot bound Docker command after ${timeout_value}" >&2
     return 127
@@ -152,7 +59,8 @@ docker_e2e_docker_cmd() {
     shift
     docker_e2e_docker_run_resource_args "$@" || return $?
     docker_e2e_docker_run_with_resource_diagnostics "$timeout_value" "$@"
-    return
+    # A bare return in an EXIT trap can restore the trap's original status.
+    return "$?"
   fi
   docker_e2e_timeout_cmd "$timeout_value" docker "$@"
 }
@@ -168,7 +76,7 @@ docker_e2e_docker_run_cmd() {
     shift
     docker_e2e_docker_run_resource_args "$@" || return $?
     docker_e2e_docker_run_with_resource_diagnostics "$timeout_value" "$@"
-    return
+    return "$?"
   fi
   docker_e2e_timeout_cmd "$timeout_value" docker "$@"
 }
@@ -316,6 +224,23 @@ docker_e2e_container_exec_bash() {
   local container_name="$1"
   shift
   docker_e2e_docker_cmd exec "$container_name" bash -lc "$*"
+}
+
+docker_e2e_wait_for_proof() {
+  local container_name="$1"
+  local attempts="$2"
+  for _ in $(seq 1 "$attempts"); do
+    if docker exec "$container_name" test -f /tmp/openclaw-proof-ready; then
+      return 0
+    fi
+    if [ "$(docker inspect --format '{{.State.Running}}' "$container_name")" != "true" ]; then
+      docker logs "$container_name" >&2
+      return 1
+    fi
+    sleep 1
+  done
+  docker logs "$container_name" >&2
+  return 1
 }
 
 docker_e2e_wait_container_bash() {

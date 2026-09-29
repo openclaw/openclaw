@@ -1,9 +1,12 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAuthHealthSummary } from "../../../agents/auth-health.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../../../agents/auth-profiles/credential-fixtures.test-support.js";
 import { testing as externalAuthTesting } from "../../../agents/auth-profiles/external-auth.test-support.js";
 import { resolveAuthProfileOrder } from "../../../agents/auth-profiles/order.js";
 import {
@@ -28,7 +31,7 @@ import {
   collectStaleConfiguredAuthOrderWarnings,
   maybeRepairStaleConfiguredAuthOrders,
 } from "./stale-auth-order.js";
-import { repairStaleConfiguredAuthOrders } from "./stale-auth-order.test-support.js";
+import { repairStaleConfiguredAuthOrders, withStateDir } from "./stale-auth-order.test-support.js";
 
 const pluginMetadataMocks = vi.hoisted(() => {
   const snapshot = {
@@ -71,17 +74,14 @@ function tokenStore(params: {
   token?: string;
   expires?: number;
 }): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      [params.profileId]: {
-        type: "token",
-        provider: params.provider ?? "claude-cli",
-        token: params.token ?? "setup-token",
-        ...(params.expires === undefined ? {} : { expires: params.expires }),
-      },
+  return createAuthProfileStoreFixture({
+    [params.profileId]: {
+      type: "token",
+      provider: params.provider ?? "claude-cli",
+      token: params.token ?? "setup-token",
+      ...(params.expires === undefined ? {} : { expires: params.expires }),
     },
-  };
+  });
 }
 
 function writeTokenStore(agentDir: string, params: Parameters<typeof tokenStore>[0]): void {
@@ -105,17 +105,6 @@ function repair(
     stores,
     ...(runtimeProfileIds ? { runtimeProfileIds } : {}),
   });
-}
-
-async function withStateDir<T>(prefix: string, run: (stateDir: string) => Promise<T>): Promise<T> {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  try {
-    return await run(stateDir);
-  } finally {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
 }
 
 describe("repairStaleConfiguredAuthOrders", () => {
@@ -229,12 +218,9 @@ describe("repairStaleConfiguredAuthOrders", () => {
         },
       } satisfies OpenClawConfig;
       writePersistedAuthProfileStoreRaw(
-        {
-          version: 1,
-          profiles: {
-            "openai:manual": { type: "api_key", provider: "openai", key: "stored-key" },
-          },
-        },
+        createAuthProfileStoreFixture({
+          "openai:manual": { type: "api_key", provider: "openai", key: "stored-key" },
+        }),
         path.join(stateDir, "agents", "main", "agent"),
       );
 
@@ -259,12 +245,9 @@ describe("repairStaleConfiguredAuthOrders", () => {
         },
       } satisfies OpenClawConfig;
       writePersistedAuthProfileStoreRaw(
-        {
-          version: 1,
-          profiles: {
-            "openai:fallback": { type: "api_key", provider: "openai", key: "stored-key" },
-          },
-        },
+        createAuthProfileStoreFixture({
+          "openai:fallback": { type: "api_key", provider: "openai", key: "stored-key" },
+        }),
         path.join(stateDir, "agents", "main", "agent"),
       );
 
@@ -413,28 +396,22 @@ describe("repairStaleConfiguredAuthOrders", () => {
         },
       },
     } satisfies OpenClawConfig;
-    const mainStore: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "anthropic:oauth": {
-          type: "oauth",
-          provider: "anthropic",
-          access: "access",
-          refresh: "refresh",
-          expires: Date.now() + 60_000,
-        },
+    const mainStore: AuthProfileStore = createAuthProfileStoreFixture({
+      "anthropic:oauth": {
+        type: "oauth",
+        provider: "anthropic",
+        access: "access",
+        refresh: "refresh",
+        expires: Date.now() + 60_000,
       },
-    };
-    const childStore: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "claude-cli:token": {
-          type: "token",
-          provider: "claude-cli",
-          token: "setup-token",
-        },
+    });
+    const childStore: AuthProfileStore = createAuthProfileStoreFixture({
+      "claude-cli:token": {
+        type: "token",
+        provider: "claude-cli",
+        token: "setup-token",
       },
-    };
+    });
 
     const result = repair(cfg, [mainStore, childStore]);
 
@@ -770,16 +747,9 @@ describe("repairStaleConfiguredAuthOrders", () => {
         auth: { order: { openai: ["openai:runtime-only"] } },
       } satisfies OpenClawConfig;
       writePersistedAuthProfileStoreRaw(
-        {
-          version: 1,
-          profiles: {
-            "openai:main-seed": {
-              type: "api_key",
-              provider: "openai",
-              key: "api-key",
-            },
-          },
-        },
+        createAuthProfileStoreFixture({
+          "openai:main-seed": createApiKeyCredential("openai", "api-key"),
+        }),
         path.join(stateDir, "agents", "main", "agent"),
       );
       externalAuthTesting.setResolveExternalAuthProfilesForTest((params) =>

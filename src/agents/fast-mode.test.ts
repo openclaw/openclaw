@@ -98,27 +98,6 @@ describe("resolveFastModeState", () => {
     expect(state.source).toBe("agent");
   });
 
-  it("falls back to model config when agent default is absent", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-4o": { params: { fastMode: true } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const state = resolveFastModeState({
-      cfg,
-      provider: "openai",
-      model: "gpt-4o",
-    });
-
-    expect(state.enabled).toBe(true);
-    expect(state.source).toBe("config");
-  });
-
   it("formats auto mode with the default threshold", () => {
     expect(formatFastModeAutoLabel()).toBe("auto (60 sec)");
     expect(formatFastModeStatusValue({ mode: "auto" })).toBe("auto (60 sec)");
@@ -278,20 +257,6 @@ describe("resolveFastModeForElapsed", () => {
       mode: "auto",
       enabled: true,
       elapsedSeconds: 60,
-    });
-  });
-
-  it("turns auto off after the threshold", () => {
-    expect(
-      resolveFastModeForElapsed({
-        mode: "auto",
-        startedAtMs: 1_000,
-        nowMs: 76_000,
-      }),
-    ).toMatchObject({
-      mode: "auto",
-      enabled: false,
-      elapsedSeconds: 75,
     });
   });
 

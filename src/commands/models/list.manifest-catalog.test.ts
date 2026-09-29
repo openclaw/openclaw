@@ -4,8 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
   resolvePluginContributionOwners: vi.fn(),
-  getPluginRecord: vi.fn(),
-  isPluginEnabled: vi.fn(),
+  isInstalledPluginEnabled: vi.fn(),
   getRemoteModelCatalogProviderOverlay: vi.fn(),
 }));
 
@@ -13,9 +12,9 @@ vi.mock("../../plugins/plugin-registry-contributions.js", () => ({
   resolvePluginContributionOwners: mocks.resolvePluginContributionOwners,
 }));
 
-vi.mock("../../plugins/plugin-registry-snapshot.js", () => ({
-  getPluginRecord: mocks.getPluginRecord,
-  isPluginEnabled: mocks.isPluginEnabled,
+vi.mock("../../plugins/installed-plugin-index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/installed-plugin-index.js")>()),
+  isInstalledPluginEnabled: mocks.isInstalledPluginEnabled,
 }));
 
 vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
@@ -142,8 +141,7 @@ describe("loadStaticManifestCatalogRowsForList", () => {
     mocks.getRemoteModelCatalogProviderOverlay.mockReturnValue({
       models: [{ id: "gpt-refreshed", name: "Refreshed GPT" }],
     });
-    mocks.getPluginRecord.mockReturnValue({ pluginId: "openai" });
-    mocks.isPluginEnabled.mockReturnValue(true);
+    mocks.isInstalledPluginEnabled.mockReturnValue(true);
 
     const params = {
       cfg: {},

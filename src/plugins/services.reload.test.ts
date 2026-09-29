@@ -42,6 +42,7 @@ describe("plugin service reload", () => {
         pluginId: "exporter",
         origin: "workspace",
         source: "test",
+        id: "exporter",
         service: {
           id: "exporter",
           start(ctx) {
@@ -57,6 +58,7 @@ describe("plugin service reload", () => {
         pluginId: "sibling",
         origin: "workspace",
         source: "test",
+        id: "sibling",
         service: {
           id: "sibling",
           start(ctx) {
@@ -134,6 +136,7 @@ describe("plugin service reload", () => {
           pluginId: "exporter",
           origin: "workspace",
           source: "test",
+          id: "exporter",
           service: {
             id: "exporter",
             start() {
@@ -152,6 +155,7 @@ describe("plugin service reload", () => {
           pluginId: "sibling",
           origin: "workspace",
           source: "test",
+          id: "sibling",
           service: { id: "sibling", start() {}, stop: siblingStop },
         },
       );
@@ -183,6 +187,7 @@ describe("plugin service reload", () => {
           pluginId: id,
           origin: "workspace",
           source: "test",
+          id: id.trim(),
           service: {
             id,
             start: (ctx) => {
@@ -417,6 +422,7 @@ describe("plugin service reload", () => {
       pluginId: record.id,
       origin: "workspace",
       source: "test",
+      id: "late-start",
       service: instance.wrap({
         id: "late-start",
         async start() {

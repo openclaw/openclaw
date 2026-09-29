@@ -70,6 +70,7 @@ export function createCarrierLifecycleHarness(
   options: {
     endCall?: CallManager["endCall"];
     initialMessage?: string;
+    toolPolicy?: ReturnType<typeof createRealtimeConfig>["toolPolicy"];
     resolveCallRegistration?: ResolveRealtimeCallRegistration;
     streamDisconnectLifecycle?: StreamDisconnectLifecycle;
   } = {},
@@ -111,7 +112,10 @@ export function createCarrierLifecycleHarness(
       }),
   );
   const handler = new RealtimeCallHandler(
-    createRealtimeConfig(),
+    {
+      ...createRealtimeConfig(),
+      ...(options.toolPolicy ? { toolPolicy: options.toolPolicy } : {}),
+    },
     {
       processEvent,
       updateCallMetadata,

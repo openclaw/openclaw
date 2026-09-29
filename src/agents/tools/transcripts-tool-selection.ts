@@ -1,12 +1,12 @@
 import {
   activeSessions,
   authorizeTranscriptSource,
-  readTranscriptStringParam,
   resolveSourceProvider,
   type TranscriptCaptureSelection,
   type TranscriptsRuntimeContext,
 } from "../../transcripts/capture.js";
 import type { TranscriptSessionDescriptor } from "../../transcripts/provider-types.js";
+import { readTranscriptStringParam } from "../../transcripts/source-locator.js";
 import { transcriptSessionSelector, type TranscriptsStore } from "../../transcripts/store.js";
 import { toolText } from "./transcripts-tool-result.js";
 

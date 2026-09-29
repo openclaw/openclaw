@@ -1,4 +1,3 @@
-// Line plugin module implements signature behavior.
 import crypto from "node:crypto";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 

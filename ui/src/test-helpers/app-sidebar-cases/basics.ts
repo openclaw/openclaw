@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
-import {
-  SIDEBAR_SESSION_NAV_COLLAPSE_QUERY,
-  sessionRefFromPath,
-} from "../../app-session-route-paths.ts";
+import { sessionRefFromPath } from "../../app-session-route-paths.ts";
 import {
   SESSION_FACE_PREFERENCE_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
@@ -186,7 +183,6 @@ describe("AppSidebar new session navigation", () => {
     await sidebar.updateComplete;
 
     const link = sidebar.querySelector<HTMLAnchorElement>(".sidebar-session-catalog-new")!;
-    expect(sidebar.querySelector(".sidebar-session-catalog-new-spacer")).toBeNull();
     expect(link.getAttribute("aria-label")).toBe("New session — Claude Code");
     expect(link.getAttribute("href")).toBe("/new?agent=research&catalog=claude");
     const contextMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
@@ -252,9 +248,7 @@ describe("AppSidebar agent chip", () => {
       ?.getAttribute("href");
     const sessionUrl = new URL(href ?? "", window.location.origin);
     expect(sessionUrl.pathname).toBe("/chat/research/telegram/12345");
-    expect(sessionUrl.searchParams.get(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name)).toBe(
-      SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value,
-    );
+    expect(sessionUrl.search).toBe("");
     expect(sessionRefFromPath(sessionUrl.pathname)).toMatchObject({
       kind: "literal",
       sessionKey: "agent:research:telegram:12345",
@@ -308,7 +302,7 @@ describe("AppSidebar agent chip", () => {
     // createSessionState stamps ascending updatedAt, so the last key is newest.
     expect(setSessionKey).not.toHaveBeenCalled();
     expect(onNavigate).toHaveBeenCalledWith("chat", {
-      pathname: "/chat/main/00000002",
+      pathname: "/chat/main/00000002000040008000000000000000",
       search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(taskKey)}`,
     });
   });
@@ -400,14 +394,16 @@ describe("AppSidebar agent chip", () => {
     ).not.toContain("Online");
 
     sidebar.connected = false;
-    sidebar.offline = true;
+    sidebar.connectionStatus = "reconnecting";
     await sidebar.updateComplete;
     const card = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
     expect(card?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe("Owner");
     expect(card?.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
-    const connectionStatus = sidebar.querySelector(".sidebar-footer-bar__status");
-    expect(connectionStatus?.getAttribute("aria-live")).toBe("polite");
-    expect(connectionStatus?.textContent).toContain("Offline");
+    const connectionStatus = sidebar.querySelector(".gateway-status");
+    expect(
+      sidebar.querySelector('.sidebar-footer-bar > [role="status"]')?.getAttribute("aria-live"),
+    ).toBe("polite");
+    expect(connectionStatus?.textContent).not.toContain("Offline");
     expect(connectionStatus?.textContent).toContain("Reconnecting…");
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle-row")).toBeNull();
 
@@ -418,10 +414,10 @@ describe("AppSidebar agent chip", () => {
     menu?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: retry }, bubbles: true }));
     expect(onRetryConnect).toHaveBeenCalledOnce();
 
-    sidebar.offline = false;
+    sidebar.connectionStatus = null;
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
-    expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
+    expect(sidebar.querySelector(".gateway-status")).toBeNull();
   });
 
   it("shows the Home ring without an agent subtitle during an active run", async () => {
@@ -585,13 +581,20 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).not.toBeNull();
   });
 
-  it("promotes main-session children to top-level threads, including alias parent keys", async () => {
+  it.each([
+    { key: "main", mainKey: "main", pinned: false },
+    { key: "agent:main:main", mainKey: "main", pinned: true },
+    { key: "agent:main:workspace", mainKey: "workspace", pinned: false },
+    { key: "global", mainKey: "main", pinned: true, scope: "global" },
+  ])("shows only Home for $key even with subagents", async ({ key, mainKey, pinned, scope }) => {
     const gateway = createGateway({} as GatewayBrowserClient);
-    // The gateway row uses the unprefixed "main" alias; children index under
-    // that literal key, so promotion must follow the row's key, not only the
-    // synthesized agent:main:main form.
-    const harness = createSessionsHarness("main", ["main"]);
-    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    const harness = createSessionsHarness("main", [key]);
+    const { sidebar } = await mountSidebar(gateway, harness.sessions, "panel", {
+      defaultId: "main",
+      mainKey,
+      scope: scope === "global" ? "global" : "per-sender",
+      agents: [{ id: "main", identity: { name: "Molty" } }],
+    });
     harness.publishList({
       result: {
         ts: 2,
@@ -600,38 +603,63 @@ describe("AppSidebar agent chip", () => {
         defaults: { modelProvider: null, model: null, contextTokens: null },
         sessions: [
           {
-            key: "main",
-            kind: "direct",
+            key,
+            kind: scope === "global" ? "global" : "direct",
+            label: "[OpenClaw heartbeat poll]",
+            category: "Team",
+            pinned,
             updatedAt: 5,
             childSessions: ["agent:main:subagent:thread-a"],
           },
           {
             key: "agent:main:subagent:thread-a",
-            spawnedBy: "main",
+            spawnedBy: key,
             kind: "direct",
             label: "Spawned thread",
             updatedAt: 4,
+            hasActiveRun: true,
+            status: "running",
           },
         ],
       },
     });
     await sidebar.updateComplete;
 
-    // The main row hides behind the identity card; its child surfaces as a
-    // top-level (non-child) thread row.
-    expect(sidebar.querySelector('[data-session-key="main"]')).toBeNull();
-    const promoted = sidebar.querySelector('[data-session-key="agent:main:subagent:thread-a"]');
-    expect(promoted).not.toBeNull();
-    expect(promoted?.classList.contains("sidebar-recent-session--child")).toBe(false);
-    expect(promoted?.textContent).toContain("Spawned thread");
-    expect(promoted?.querySelector("[data-sidebar-session-pin]")).toBeNull();
-    promoted?.querySelector<HTMLButtonElement>("[data-session-menu]")?.click();
+    expect(sidebar.querySelectorAll('.nav-item--home[href="/chat/main"]')).toHaveLength(1);
+    expect(sidebar.querySelector(`[data-session-key="${key}"]`)).toBeNull();
+    expect(sidebar.querySelector(`[data-child-session-toggle="${key}"]`)).toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:subagent:thread-a"]')).toBeNull();
+    expect(
+      sidebar.querySelector('.nav-item--home .session-glyph__ring[aria-label="Subagents working"]'),
+    ).not.toBeNull();
+
+    const result = harness.sessions.state.result!;
+    harness.publishList({
+      result: {
+        ...result,
+        ts: 3,
+        sessions: result.sessions.map((row) =>
+          row.key === "agent:main:subagent:thread-a"
+            ? Object.assign({}, row, {
+                hasActiveRun: false,
+                status: "failed",
+                endedAt: 6,
+                updatedAt: 6,
+                lastRunError: "Review failed",
+              })
+            : row,
+        ),
+      },
+    });
     await sidebar.updateComplete;
-    const menu = sidebar.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-session-menu",
+    expect(sidebar.querySelectorAll(".nav-item--home")).toHaveLength(1);
+    expect(sidebar.querySelector(`[data-session-key="${key}"]`)).toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-glyph__ring")).toBeNull();
+    expect(
+      sidebar.querySelector('.nav-item--home [data-session-attention="error"]'),
+    ).not.toBeNull();
+    expect(sidebar.querySelector(".nav-item--home")?.textContent).toContain(
+      "Child session Spawned thread failed: Review failed",
     );
-    expect(menu).not.toBeNull();
-    await menu?.updateComplete;
-    expect(menu?.querySelector('[value="toggle-pin"]')).toBeNull();
   });
 });

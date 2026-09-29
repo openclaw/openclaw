@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
+import {
+  parseDateFirstTimestampMs,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
 import type { SessionCatalogTranscriptItem } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
-import { formatToolSummary, resolveToolDisplay } from "../agents/tool-display.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
@@ -12,14 +15,12 @@ import { SessionTranscriptColdError } from "../config/sessions/session-cold-stor
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import {
-  extractProjectedText,
-  isAssistantTextContentType,
-} from "./chat-display-projection.helpers.js";
+import { isAssistantTextContentType } from "./chat-display-projection.helpers.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
-import { projectSessionCatalogSourceParticipant } from "./session-catalog-identity.js";
+import { isSuppressedControlReplyText } from "./control-reply-text.js";
+import { createSessionCatalogSourceParticipantProjector } from "./session-catalog-identity.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
-import { projectTranscriptEntryMessage } from "./session-transcript-message.js";
+import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
 
 export type SessionTranscriptCatalogPage = {
@@ -96,95 +97,72 @@ function boundedText(text: string): Pick<SessionCatalogTranscriptItem, "text" | 
     : { text: redacted };
 }
 
-function projectContentItem(role: unknown, value: unknown): SessionCatalogTranscriptItem {
+function projectContentItem(
+  role: unknown,
+  value: unknown,
+): SessionCatalogTranscriptItem | undefined {
+  if (role !== "user" && role !== "assistant") {
+    return undefined;
+  }
   const block = asOptionalRecord(value);
-  const contentType = block?.type;
-  if (contentType === "toolCall" || contentType === "tool_use" || contentType === "function_call") {
-    const summary = formatToolSummary(
-      resolveToolDisplay({
-        name: typeof block?.name === "string" ? block.name : undefined,
-        args: block?.arguments ?? block?.input,
-      }),
-    );
-    return { type: "toolCall", ...boundedText(summary) };
-  }
-  if (
-    contentType === "thinking" ||
-    contentType === "reasoning" ||
-    contentType === "redacted_thinking"
-  ) {
-    const text = typeof block?.thinking === "string" ? block.thinking : block?.text;
-    return { type: "reasoning", ...(typeof text === "string" ? boundedText(text) : {}) };
-  }
-  if (
-    contentType === "toolResult" ||
-    contentType === "tool_result" ||
-    role === "toolResult" ||
-    role === "tool_result" ||
-    role === "tool"
-  ) {
-    const text =
-      typeof value === "string"
-        ? value
-        : typeof block?.text === "string"
-          ? block.text
-          : extractProjectedText(block?.content);
-    return { type: "toolResult", ...boundedText(text) };
+  if (typeof value !== "string" && !isAssistantTextContentType(block?.type)) {
+    return undefined;
   }
   const text = typeof value === "string" ? value : block?.text;
-  const isText = typeof value === "string" || isAssistantTextContentType(contentType);
-  const type =
-    isText && role === "user"
-      ? "userMessage"
-      : isText && role === "assistant"
-        ? "agentMessage"
-        : "other";
-  return { type, ...(typeof text === "string" ? boundedText(text) : {}) };
+  if (
+    typeof text !== "string" ||
+    !text.trim() ||
+    (role === "assistant" && isSuppressedControlReplyText(text))
+  ) {
+    return undefined;
+  }
+  return { type: role === "user" ? "userMessage" : "agentMessage", ...boundedText(text) };
 }
 
 function projectMessageItems(
   message: Record<string, unknown>,
   params: CatalogReadParams,
+  projectSender: ReturnType<typeof createSessionCatalogSourceParticipantProjector>,
 ): SessionCatalogTranscriptItem[] {
   const metadata = asOptionalRecord(message["__openclaw"]);
   const identity =
     message.role === "user" ? readTranscriptSenderIdentity(metadata?.senderIdentity) : undefined;
   const senderName = metadata?.senderName ?? message.senderLabel;
   const sender = identity
-    ? projectSessionCatalogSourceParticipant({
+    ? projectSender({
         ...params,
         identity,
         label: typeof senderName === "string" ? senderName : undefined,
       })
     : undefined;
-  const timestamp = message.timestamp ?? metadata?.recordTimestampMs;
-  const milliseconds =
-    typeof timestamp === "number"
-      ? timestamp
-      : typeof timestamp === "string"
-        ? Date.parse(timestamp)
-        : Number.NaN;
-  const date = Number.isFinite(milliseconds) ? new Date(milliseconds) : undefined;
-  const timestampText = date && Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+  const timestampText = timestampMsToIsoString(
+    parseDateFirstTimestampMs(message.timestamp ?? metadata?.recordTimestampMs),
+  );
   const content = Array.isArray(message.content)
     ? message.content
     : [message.content ?? message.text];
   return content
-    .map((block, index) =>
-      Object.assign(projectContentItem(message.role, block), {
-        ...(metadata?.truncated === true ? { truncated: true } : {}),
-        ...(typeof metadata?.id === "string" ? { id: `${metadata.id}:${index}` } : {}),
-        ...(timestampText ? { timestamp: timestampText } : {}),
-        ...(typeof message.model === "string"
-          ? { model: redactToolPayloadText(message.model).slice(0, 200) }
-          : {}),
-        ...(sender ? { sender } : {}),
-      }),
-    )
+    .flatMap((block, index) => {
+      const item = projectContentItem(message.role, block);
+      if (!item) {
+        return [];
+      }
+      return [
+        Object.assign(item, {
+          ...(metadata?.truncated === true ? { truncated: true } : {}),
+          ...(typeof metadata?.id === "string" ? { id: `${metadata.id}:${index}` } : {}),
+          ...(timestampText ? { timestamp: timestampText } : {}),
+          ...(typeof message.model === "string"
+            ? { model: redactToolPayloadText(message.model).slice(0, 200) }
+            : {}),
+          ...(sender ? { sender } : {}),
+        }),
+      ];
+    })
     .toReversed();
 }
 
-/** Reads the native display projection without joining the source Gateway's writer lifecycle. */
+/** Reads conversation text without joining the source Gateway's writer lifecycle. */
 export async function readSessionTranscriptCatalogPage(
   params: CatalogReadParams,
 ): Promise<SessionTranscriptCatalogPage> {
@@ -205,7 +183,16 @@ export async function readSessionTranscriptCatalogPage(
     storePath,
   };
   const scopeHash = createHash("sha256")
-    .update(JSON.stringify([params.agentId, params.sessionKey, entry.sessionId, storePath]))
+    // Item offsets from the earlier tool-inclusive projection cannot resume this view.
+    .update(
+      JSON.stringify([
+        "conversation",
+        params.agentId,
+        params.sessionKey,
+        entry.sessionId,
+        storePath,
+      ]),
+    )
     .digest("base64url");
   const snapshot = readCatalogHistoryPage(scope, {
     offset: 0,
@@ -242,6 +229,7 @@ export async function readSessionTranscriptCatalogPage(
   let skip = cursor?.skip ?? 0;
   let scanned = 0;
   const items: SessionCatalogTranscriptItem[] = [];
+  const projectSender = createSessionCatalogSourceParticipantProjector();
   while (before > 0 && items.length < limit && scanned < MAX_CATALOG_SCAN_MESSAGES) {
     const page = readCatalogHistoryPage(scope, {
       offset: snapshot.totalMessages - before,
@@ -255,17 +243,14 @@ export async function readSessionTranscriptCatalogPage(
     ) {
       throw new Error("Session transcript changed during this read; retry the page.");
     }
-    const projected = projectChatDisplayMessages(
-      page.events.map(({ event, seq, displayPosition }) =>
-        projectTranscriptEntryMessage(event, seq, displayPosition),
-      ),
-      { maxChars: MAX_CATALOG_TEXT_CHARS },
-    );
+    const projected = projectChatDisplayMessages(page.events.map(sqliteMessageEventWithSeq), {
+      maxChars: MAX_CATALOG_TEXT_CHARS,
+    });
     const bySequence = new Map<unknown, SessionCatalogTranscriptItem[]>();
     for (const message of projected.toReversed()) {
       const seq = asOptionalRecord(message["__openclaw"])?.seq;
       const previous = bySequence.get(seq) ?? [];
-      previous.push(...projectMessageItems(message, params));
+      previous.push(...projectMessageItems(message, params, projectSender));
       bySequence.set(seq, previous);
     }
     for (const event of page.events.toReversed()) {
@@ -335,10 +320,8 @@ export function readSessionTranscriptCatalogTitle(params: {
     if (page.olderOffset !== undefined || page.omittedOversized) {
       return undefined;
     }
-    for (const { event, seq, displayPosition } of page.events) {
-      const message = projectSessionDisplayMessage(
-        projectTranscriptEntryMessage(event, seq, displayPosition),
-      );
+    for (const event of page.events) {
+      const message = projectSessionDisplayMessage(sqliteMessageEventWithSeq(event));
       if (message?.role === "user") {
         const derived = deriveSessionTitle(params.entry, message.text);
         return derived ? boundedText(derived).text : undefined;

@@ -1,12 +1,15 @@
 import { consume } from "@lit/context";
 import { Task, TaskStatus } from "@lit/task";
-import { AppBridge, PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
+import type {
+  CallToolResult,
+  ListToolsRequest,
+  ListToolsResult,
+} from "@modelcontextprotocol/client";
 import {
-  type CallToolResult,
-  type ListToolsRequest,
-  ListToolsRequestSchema,
-  type ListToolsResult,
-} from "@modelcontextprotocol/sdk/types.js";
+  AppBridge,
+  McpUiHostContextSchema,
+  PostMessageTransport,
+} from "@modelcontextprotocol/ext-apps/app-bridge";
 import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol";
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
@@ -39,8 +42,6 @@ type McpAppViewPayload = {
 type HostContext = NonNullable<
   NonNullable<ConstructorParameters<typeof AppBridge>[3]>["hostContext"]
 >;
-type ScheduleFrame = (callback: FrameRequestCallback) => number;
-type ScheduleFallback = (callback: () => void, delayMs: number) => number;
 type McpAppResources = {
   bridge: OpenClawAppBridge | null;
   cleanups: Set<() => void>;
@@ -57,27 +58,29 @@ type McpAppBinding = {
 
 const MCP_APP_TEARDOWN_TIMEOUT_MS = 250;
 
-async function waitForMcpAppHandlerRegistration(
-  scheduleFrame: ScheduleFrame = window.requestAnimationFrame.bind(window),
-  scheduleFallback: ScheduleFallback = window.setTimeout.bind(window),
-): Promise<void> {
+async function waitForMcpAppHandlerRegistration(): Promise<void> {
   await Promise.race([
     new Promise<void>((resolve) => {
-      scheduleFrame(() => {
-        scheduleFrame(() => resolve());
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => resolve());
       });
     }),
     new Promise<void>((resolve) => {
-      scheduleFallback(resolve, 1_000);
+      window.setTimeout(resolve, 1_000);
     }),
   ]);
 }
 
-function hostContext(element: Element | undefined, height: number): HostContext {
+function hostContext(
+  element: Element | undefined,
+  height: number,
+  fillContainer: boolean,
+): HostContext {
   const rect = element?.getBoundingClientRect();
   const touch = navigator.maxTouchPoints > 0 || window.matchMedia?.("(pointer: coarse)").matches;
   const themeMode = document.documentElement.dataset.themeMode;
-  return {
+  // The SDK schema preserves optional style values while normalizing its complete key map.
+  return McpUiHostContextSchema.parse({
     theme:
       themeMode === "light" || themeMode === "dark"
         ? themeMode
@@ -88,7 +91,7 @@ function hostContext(element: Element | undefined, height: number): HostContext 
     availableDisplayModes: ["inline"],
     containerDimensions: {
       width: Math.max(1, Math.round(rect?.width || window.innerWidth)),
-      height,
+      height: fillContainer ? Math.max(0, Math.round(rect?.height ?? 0)) : height,
     },
     locale: navigator.language || undefined,
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -102,7 +105,7 @@ function hostContext(element: Element | undefined, height: number): HostContext 
     // these say what it actually resolves to. Republished by the same theme
     // subscription that re-sends this context.
     styles: { variables: collectMcpAppStyleVariables() },
-  };
+  });
 }
 
 class OpenClawAppBridge extends AppBridge {
@@ -115,7 +118,7 @@ class OpenClawAppBridge extends AppBridge {
   }
 
   setListToolsHandler(handler: (params: ListToolsRequest["params"]) => Promise<ListToolsResult>) {
-    this.replaceRequestHandler(ListToolsRequestSchema, (request) => handler(request.params));
+    this.replaceRequestHandler("tools/list", (request) => handler(request.params));
   }
 }
 
@@ -130,6 +133,11 @@ export class McpAppView extends LitElement {
       min-height: 160px;
     }
     .mount:empty {
+      min-height: 0;
+    }
+    :host([fill-container]),
+    :host([fill-container]) .mount {
+      height: 100%;
       min-height: 0;
     }
     iframe {
@@ -151,7 +159,7 @@ export class McpAppView extends LitElement {
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) viewId = "";
   @property({ type: Number }) height = 600;
-  @property({ type: Boolean }) fixedHeight = false;
+  @property({ type: Boolean, attribute: "fill-container", reflect: true }) fillContainer = false;
   @property() override title = "";
   protected readonly i18nController = new I18nController(this);
   private readonly mount = createRef<HTMLDivElement>();
@@ -182,13 +190,12 @@ export class McpAppView extends LitElement {
   override updated(changedProperties: PropertyValues<this>) {
     if (this.resources) {
       this.resources.iframe.title = this.title || t("mcpApp.title");
-      if (
-        changedProperties.has("height") ||
-        (changedProperties.has("fixedHeight") && this.fixedHeight)
-      ) {
+      if (changedProperties.has("height") || changedProperties.has("fillContainer")) {
         this.resources.frameHeight = this.height;
-        this.resources.iframe.style.height = `${this.height}px`;
-        this.resources.bridge?.setHostContext(hostContext(this.mount.value, this.height));
+        this.resources.iframe.style.height = this.fillContainer ? "100%" : `${this.height}px`;
+        this.resources.bridge?.setHostContext(
+          hostContext(this.mount.value, this.height, this.fillContainer),
+        );
       }
     }
   }
@@ -227,13 +234,6 @@ export class McpAppView extends LitElement {
     };
   }
 
-  private runResourceCleanups(resources: McpAppResources) {
-    for (const cleanup of resources.cleanups) {
-      resources.cleanups.delete(cleanup);
-      cleanup();
-    }
-  }
-
   private async teardownResources(resources: McpAppResources | null | undefined) {
     if (!resources || resources.disposed) {
       await this.teardownPromise;
@@ -243,7 +243,10 @@ export class McpAppView extends LitElement {
     if (this.resources === resources) {
       this.resources = null;
     }
-    this.runResourceCleanups(resources);
+    for (const cleanup of resources.cleanups) {
+      resources.cleanups.delete(cleanup);
+      cleanup();
+    }
     const teardown = (async () => {
       if (resources.bridge) {
         let timeout: number | undefined;
@@ -310,7 +313,7 @@ export class McpAppView extends LitElement {
       // The isolated proxy binds its parent before accepting messages. Only the
       // Control UI origin is disclosed; path/query data remains suppressed.
       iframe.referrerPolicy = "origin";
-      iframe.style.height = `${this.height}px`;
+      iframe.style.height = this.fillContainer ? "100%" : `${this.height}px`;
       // The proxy listener is a dedicated origin that never serves host data,
       // so Apps retain their required origin capabilities without reaching Control UI.
       iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms");
@@ -371,7 +374,7 @@ export class McpAppView extends LitElement {
           payload.updateModelContextSupported === true,
           payload.messageSupported === true,
         ),
-        { hostContext: hostContext(mount, this.height) },
+        { hostContext: hostContext(mount, this.height, this.fillContainer) },
       );
       createdResources.bridge = bridge;
       const request = (method: string, params: Record<string, unknown>) =>
@@ -428,11 +431,11 @@ export class McpAppView extends LitElement {
         (await request("mcp.app.readResource", { uri: params.uri })) as never;
       bridge.onopenlink = async ({ url }) => (openExternalUrlSafe(url) ? {} : { isError: true });
       bridge.onsizechange = ({ height }) => {
-        if (height !== undefined && !this.fixedHeight) {
+        if (height !== undefined && !this.fillContainer) {
           const nextHeight = Math.min(1200, Math.max(160, Math.round(height)));
           createdResources.frameHeight = nextHeight;
           iframe.style.height = `${nextHeight}px`;
-          bridge.setHostContext(hostContext(mount, nextHeight));
+          bridge.setHostContext(hostContext(mount, nextHeight, this.fillContainer));
         }
       };
       const initialized = new Promise<void>((resolve) => {
@@ -467,7 +470,7 @@ export class McpAppView extends LitElement {
       }
       signal.throwIfAborted();
       const updateHostContext = () =>
-        bridge.setHostContext(hostContext(mount, createdResources.frameHeight));
+        bridge.setHostContext(hostContext(mount, createdResources.frameHeight, this.fillContainer));
       const hostContextCleanup = this.context?.theme.subscribe(updateHostContext);
       if (hostContextCleanup) {
         this.addResourceCleanup(createdResources, hostContextCleanup);

@@ -1,9 +1,3 @@
-/**
- * Builds the suspension request for an embedded run failure.
- *
- * The run owns the canonical agent id; failure callers only carry agentDir,
- * which cannot identify the owner of an unregistered or shared directory.
- */
 import type { SessionSuspensionParams } from "../../session-suspension.js";
 
 export function buildEmbeddedFailureSuspension(params: {

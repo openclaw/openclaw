@@ -3,12 +3,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { nativeGatewaysCapability } from "../app/native-gateways.runtime.ts";
-import {
-  createGatewayHarness,
-  createSessions,
-  mountSidebar,
-  setupSidebarTest,
-} from "../test-helpers/app-sidebar.ts";
+import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
+import { createGatewayHarness, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
@@ -77,13 +73,13 @@ describe("AppSidebar native Gateway menu", () => {
     expect(
       rows.map((row) => row.querySelector(".sidebar-gateway-health")?.getAttribute("aria-label")),
     ).toEqual(["Connected", "Unreachable", "Unknown status"]);
-    expect(rows.map((row) => row.querySelector('[slot="details"] kbd')?.textContent)).toEqual([
-      "⌘1",
-      "⌘2",
-      "⌘3",
-    ]);
-    for (const row of rows) {
-      expect(row.querySelector("kbd")?.getAttribute("aria-hidden")).toBe("true");
+    expect(
+      rows.map((row) =>
+        row.querySelector('[slot="details"] kbd')?.textContent?.replace(/\s+/gu, "").trim(),
+      ),
+    ).toEqual(["⌘1", undefined, "⌘3"]);
+    for (const shortcut of menu.querySelectorAll("kbd")) {
+      expect(shortcut.getAttribute("aria-hidden")).toBe("true");
     }
     expect(rows[0]!.querySelector(".sidebar-gateway-primary")?.textContent).toBe("primary");
     expect(rows[1]!.querySelector(".sidebar-gateway-primary")).toBeNull();
@@ -131,7 +127,9 @@ describe("AppSidebar native Gateway menu", () => {
     await sidebar.updateComplete;
     const manyRows = sidebar.querySelectorAll('wa-dropdown-item[value^="gateway:"]');
     expect(manyRows).toHaveLength(10);
-    expect(manyRows[8]!.querySelector('[slot="details"] kbd')?.textContent).toBe("⌘9");
+    expect(
+      manyRows[8]!.querySelector('[slot="details"] kbd')?.textContent?.replace(/\s+/gu, "").trim(),
+    ).toBe("⌘9");
     expect(manyRows[9]!.querySelector("kbd")).toBeNull();
   });
 });

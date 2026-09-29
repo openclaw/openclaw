@@ -4,6 +4,7 @@ import type {
   WorkerMachineOption,
   WorkerOperatingSystem,
   WorkerProfile,
+  WorkerProvider,
 } from "../../plugins/types.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import {
@@ -20,7 +21,9 @@ export function createWorkerMachineCatalog(
   const { requireWorkerProfile } = options;
   type MachineCatalog = {
     providerId: string;
+    provider: WorkerProvider | undefined;
     settings: WorkerProfile;
+    providerDisplayId?: string;
     machines?: readonly WorkerMachineOption[];
     systems?: readonly WorkerOperatingSystem[];
     warmup?: Promise<void>;
@@ -48,13 +51,28 @@ export function createWorkerMachineCatalog(
       return undefined;
     }
     const settings = requireWorkerProfile(profile.settings ?? {});
+    const provider = options.resolveProvider(profile.provider);
     let catalog = machineCatalogs.get(profileId);
     if (
       !catalog ||
       catalog.providerId !== profile.provider ||
+      catalog.provider !== provider ||
       !isDeepStrictEqual(catalog.settings, settings)
     ) {
-      catalog = { providerId: profile.provider, settings: structuredClone(settings) };
+      // Plugin reload replaces provider objects without changing profile settings.
+      catalog = { providerId: profile.provider, provider, settings: structuredClone(settings) };
+      try {
+        const displayId = provider?.resolveDisplayId?.(structuredClone(settings));
+        if (
+          typeof displayId === "string" &&
+          /^[a-z][a-z0-9-]{0,63}$/.test(displayId) &&
+          displayId.trim() === displayId
+        ) {
+          catalog.providerDisplayId = displayId;
+        }
+      } catch {
+        // Cosmetic metadata must not hide profiles or leak settings in diagnostics.
+      }
       machineCatalogs.set(profileId, catalog);
       machineCatalogChanged(profileId, catalog);
     }
@@ -116,8 +134,13 @@ export function createWorkerMachineCatalog(
   };
 
   const readMachineShape = (
-    record: WorkerEnvironmentRecord,
+    record:
+      | Pick<WorkerEnvironmentRecord, "profileSnapshot" | "profileId" | "providerId">
+      | undefined,
   ): SessionPlacementMachine | undefined => {
+    if (!record) {
+      return undefined;
+    }
     const snapshot = record.profileSnapshot;
     const machineClass =
       typeof snapshot.machineClass === "string" ? snapshot.machineClass : undefined;
@@ -154,6 +177,14 @@ export function createWorkerMachineCatalog(
   };
 
   return {
+    readProviderDisplayId: (profileId: string) => {
+      try {
+        return machineCatalogFor(profileId)?.providerDisplayId;
+      } catch {
+        // Invalid profile settings retain the existing catalog failure path.
+        return undefined;
+      }
+    },
     listMachineOptions,
     listOperatingSystems,
     readMachineShape,

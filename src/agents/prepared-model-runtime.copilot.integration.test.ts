@@ -106,6 +106,7 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
       runtimePluginSelections: [selection],
     },
     metadata,
+    vi.fn(),
   );
 
   expect(runtimePluginRegistry).not.toBe(root);

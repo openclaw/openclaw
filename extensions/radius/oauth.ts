@@ -148,12 +148,22 @@ export async function loginRadiusOAuth(ctx: ProviderAuthContext): Promise<OAuthC
   );
   assertCurrent();
   const device = parseDevice(payload);
-  await ctx.prompter.note(
-    `Open ${device.verificationUri} and enter code ${device.userCode} to sign in to Radius.`,
-    "Radius sign-in",
-  );
+  if (ctx.prompter.deviceCode) {
+    await ctx.openUrl(device.verificationUri);
+    await ctx.prompter.deviceCode({
+      title: "Radius sign-in",
+      code: device.userCode,
+      expiresInMinutes: Math.ceil((device.expiresAt - Date.now()) / 60_000),
+      message: "Enter this one-time code to sign in to Radius.",
+    });
+  } else {
+    await ctx.prompter.note(
+      `Open ${device.verificationUri} and enter code ${device.userCode} to sign in to Radius.`,
+      "Radius sign-in",
+    );
+  }
   assertCurrent();
-  if (!ctx.isRemote) {
+  if (!ctx.isRemote && !ctx.prompter.deviceCode) {
     try {
       await ctx.openUrl(device.verificationUri);
     } catch {

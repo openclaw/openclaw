@@ -1,8 +1,7 @@
-// Image operation helpers normalize image transforms and adapter calls.
 import {
   isRastermillUnavailableError,
   RastermillUnavailableError,
-  readImageProbeFromHeader as readRastermillImageProbeFromHeader,
+  readImageProbeFromHeader,
   type ImageProbe,
   type ImageMetadata,
 } from "rastermill";
@@ -11,6 +10,7 @@ import { convertBmpToPngWithWorker, createImageProcessor } from "./image-process
 
 export { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
 export { createImageProcessor } from "./image-processor.js";
+export { readImageProbeFromHeader };
 
 export type { ImageMetadata, ImageProbe };
 
@@ -67,12 +67,21 @@ function resolveDisplayImageMetadata(probe: ImageProbe | null): ImageMetadata | 
 
 /** Reads display dimensions from image header bytes without invoking a full image decode. */
 export function readImageMetadataFromHeader(buffer: Buffer): ImageMetadata | null {
-  return resolveDisplayImageMetadata(readRastermillImageProbeFromHeader(buffer));
+  return resolveDisplayImageMetadata(readImageProbeFromHeader(buffer));
 }
 
-/** Reads image probe data from header bytes without invoking a full image decode. */
-export function readImageProbeFromHeader(buffer: Buffer): ImageProbe | null {
-  return readRastermillImageProbeFromHeader(buffer);
+/** Detects animated WebP before a single-frame image transform can discard its frames. */
+export function isAnimatedWebpBuffer(buffer: Buffer): boolean {
+  // Rastermill's probe has no animation flag. RFC 9649 §2.7 defines this VP8X bit.
+  return (
+    buffer.length >= 30 &&
+    buffer.toString("ascii", 0, 4) === "RIFF" &&
+    buffer.toString("ascii", 8, 12) === "WEBP" &&
+    buffer.toString("ascii", 12, 16) === "VP8X" &&
+    buffer.readUInt32LE(16) >= 10 &&
+    buffer.readUInt32LE(16) <= buffer.length - 20 &&
+    (buffer.readUInt8(20) & 0x02) !== 0
+  );
 }
 
 function wrapRastermillUnavailable(operation: string, error: unknown): never {
@@ -128,7 +137,7 @@ export async function convertImageToPng(buffer: Buffer): Promise<Buffer> {
   try {
     return (await createImageProcessor().encode(buffer, { format: "png" })).data;
   } catch (error) {
-    const probe = readRastermillImageProbeFromHeader(buffer);
+    const probe = readImageProbeFromHeader(buffer);
     const withinPixelLimit =
       probe &&
       probe.format === "bmp" &&

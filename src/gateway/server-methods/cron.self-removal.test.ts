@@ -9,7 +9,11 @@ import { hasActiveCronJobs } from "../../cron/active-jobs.js";
 import { CronService, type CronEvent } from "../../cron/service.js";
 import { setupCronServiceSuite } from "../../cron/service.test-harness.js";
 import type { CronServiceDeps } from "../../cron/service/state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { cronHandlers } from "./cron.js";
 import type { GatewayClient, RespondFn } from "./types.js";
@@ -23,6 +27,8 @@ describe.each(
 )("cron $payloadKind self-removal through $path execution", ({ path, payloadKind }) => {
   it.each([60, 0])("finishes its current run with timeoutSeconds=%s", async (timeoutSeconds) => {
     const { storePath } = await makeStorePath();
+    const clock = createGatewaySchedulerClock(Date.now());
+    const scheduler = createTestGatewayScheduler(clock.clock);
     const events: CronEvent[] = [];
     let abortedAfterRemoval: boolean | undefined;
     let activeAfterRemoval: boolean | undefined;
@@ -42,7 +48,7 @@ describe.each(
       });
       try {
         const admitted = await admission.admit("embedded");
-        executionIdentity?.onPostAdmission?.(admitted);
+        await executionIdentity?.onPostAdmission?.(admitted);
         const delegatedAuthority = expectDefined(
           getAdmittedRunDelegatedAuthority(admitted),
           "live scheduled admission",
@@ -90,6 +96,7 @@ describe.each(
       }
     };
     const cron = new CronService({
+      scheduler,
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",
@@ -106,7 +113,7 @@ describe.each(
           name: "self-cleanup",
           enabled: true,
           deleteAfterRun: false,
-          schedule: { kind: "at", at: new Date(Date.now() + 1_000).toISOString() },
+          schedule: { kind: "at", at: new Date(clock.clock.now() + 1_000).toISOString() },
           sessionTarget: "isolated",
           wakeMode: "next-heartbeat",
           payload:
@@ -121,22 +128,25 @@ describe.each(
         await cron.run(job.id, "force");
       } else {
         await cron.start();
-        await vi.advanceTimersByTimeAsync(1_000);
+        await clock.advanceBy(1_000);
       }
-      expect(events.filter((event) => event.action === "finished")).toEqual([
-        expect.objectContaining({
-          jobId: job.id,
-          status: "ok",
-          completionStatus: "succeeded",
-          summary: "final reply after self-cleanup",
-        }),
-      ]);
-      expect(abortedAfterRemoval).toBe(false);
-      expect(activeAfterRemoval).toBe(true);
-      expect(hasActiveCronJobs()).toBe(false);
+      await vi.waitFor(() => {
+        expect(events.filter((event) => event.action === "finished")).toEqual([
+          expect.objectContaining({
+            jobId: job.id,
+            status: "ok",
+            completionStatus: "succeeded",
+            summary: "final reply after self-cleanup",
+          }),
+        ]);
+        expect(abortedAfterRemoval).toBe(false);
+        expect(activeAfterRemoval).toBe(true);
+        expect(hasActiveCronJobs()).toBe(false);
+      });
       expect(await cron.readJob(job.id)).toBeUndefined();
     } finally {
       cron.stop();
+      await scheduler.stop();
     }
   });
 });

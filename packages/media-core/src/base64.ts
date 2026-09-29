@@ -38,15 +38,16 @@ export function estimateBase64DecodedBytes(base64: string): number {
   return Math.max(0, estimated);
 }
 
-function isBase64DataChar(code: number): boolean {
-  return (
-    (code >= 0x41 && code <= 0x5a) ||
-    (code >= 0x61 && code <= 0x7a) ||
-    (code >= 0x30 && code <= 0x39) ||
-    code === 0x2b ||
-    code === 0x2f
-  );
+/** Validates the attachment dialect: padded, no whitespace, nonzero pad bits allowed. */
+export function isValidBase64(value: string): boolean {
+  return inspectBase64(value, "attachment") !== undefined;
 }
+
+export type Base64Facts = {
+  base64: string;
+  decodedBytes: number;
+  canonicalPadBits: boolean;
+};
 
 function base64DataValue(code: number): number {
   if (code >= 0x41 && code <= 0x5a) {
@@ -58,7 +59,7 @@ function base64DataValue(code: number): number {
   if (code >= 0x30 && code <= 0x39) {
     return code - 0x30 + 52;
   }
-  return code === 0x2b ? 62 : 63;
+  return code === 0x2b ? 62 : code === 0x2f ? 63 : -1;
 }
 
 /**
@@ -66,18 +67,33 @@ function base64DataValue(code: number): number {
  * base64 only when the input has valid alphabet, padding, and length.
  */
 export function canonicalizeBase64(base64: string): string | undefined {
+  const facts = inspectBase64(base64, "canonical");
+  return facts?.canonicalPadBits ? facts.base64 : undefined;
+}
+
+/** One validating pass for the canonical and strict attachment dialects. */
+export function inspectBase64(
+  base64: string,
+  dialect: "canonical" | "attachment",
+): Base64Facts | undefined {
+  if (dialect === "attachment" && (base64.length === 0 || base64.length % 4 !== 0)) {
+    return undefined;
+  }
   // Single validating pass; the output buffer is allocated lazily on the first
   // whitespace and bounded by the input length, so canonical input returns
-  // unchanged with zero allocations and no input shape multiplies intermediates.
+  // unchanged without copying the payload or multiplying intermediates.
   let out: Buffer | undefined;
   let outLen = 0;
   let padding = 0;
   let sawPadding = false;
-  let lastDataCode = 0;
+  let lastDataValue = 0;
 
   for (let i = 0; i < base64.length; i += 1) {
     const code = base64.charCodeAt(i);
     if (code <= 0x20) {
+      if (dialect === "attachment") {
+        return undefined;
+      }
       if (out === undefined) {
         // First whitespace: backfill the validated prefix [0, i).
         out = Buffer.allocUnsafe(base64.length - 1);
@@ -94,10 +110,12 @@ export function canonicalizeBase64(base64: string): string | undefined {
         return undefined;
       }
       sawPadding = true;
-    } else if (sawPadding || !isBase64DataChar(code)) {
-      return undefined;
     } else {
-      lastDataCode = code;
+      const value = base64DataValue(code);
+      if (sawPadding || value < 0) {
+        return undefined;
+      }
+      lastDataValue = value;
     }
     if (out !== undefined) {
       out[outLen] = code;
@@ -114,11 +132,12 @@ export function canonicalizeBase64(base64: string): string | undefined {
   }
   const effectivePadding = remainder === 0 ? padding : 4 - remainder;
   const padBitMask = effectivePadding === 2 ? 0x0f : effectivePadding === 1 ? 0x03 : 0;
-  if (padBitMask !== 0 && (base64DataValue(lastDataCode) & padBitMask) !== 0) {
-    return undefined;
-  }
   // Every kept character was validated against the base64 alphabet (ASCII),
   // so a latin1 decode reproduces them exactly.
   const cleaned = out === undefined ? base64 : out.subarray(0, outLen).toString("latin1");
-  return remainder === 0 ? cleaned : cleaned + "=".repeat(4 - remainder);
+  return {
+    base64: remainder === 0 ? cleaned : cleaned + "=".repeat(4 - remainder),
+    decodedBytes: Math.floor((cleanedLength * 3) / 4) - padding,
+    canonicalPadBits: (lastDataValue & padBitMask) === 0,
+  };
 }

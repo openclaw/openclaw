@@ -9,11 +9,7 @@ import { getLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-h
 import { parseTtsDirectives } from "./directives.js";
 import { createSpeechProviderRegistry } from "./provider-registry-core.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
-import type {
-  SpeechProviderOverrides,
-  TtsDirectiveOverrides,
-  TtsDirectiveParseResult,
-} from "./provider-types.js";
+import type { TtsDirectiveOverrides, TtsDirectiveParseResult } from "./provider-types.js";
 import { resolveTtsProvider } from "./tts-provider-resolution.js";
 import { resolveTtsConfig, resolveTtsPrefsPath, resolveTtsRuntimeConfig } from "./tts-settings.js";
 
@@ -116,17 +112,16 @@ export function resolveExplicitTtsOverrides(params: {
       ...(modelId ? { modelId } : {}),
     },
   });
-  if ((voiceId || modelId) && (!providerOverrides || Object.keys(providerOverrides).length === 0)) {
+  if (!providerOverrides || Object.keys(providerOverrides).length === 0) {
     throw new Error(
       `TTS provider "${selectedProvider}" ignored the requested model or voice overrides.`,
     );
   }
 
-  const overridesRecord = providerOverrides as SpeechProviderOverrides;
   return {
     provider: selectedProvider,
     providerOverrides: {
-      [provider.id]: overridesRecord,
+      [provider.id]: providerOverrides,
     },
   };
 }

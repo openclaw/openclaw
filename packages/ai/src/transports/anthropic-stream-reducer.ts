@@ -42,6 +42,7 @@ import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.
 import {
   coerceTransportToolCallArguments,
   finalizeTerminalToolCallArguments,
+  iterateModelStream,
   sanitizeTransportPayloadText,
   transportAbortError,
   type WritableTransportStream,
@@ -70,7 +71,6 @@ export async function consumeAnthropicStream(params: {
   let costModel = model;
   let messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined;
   let inputTransformations: unknown[] | undefined;
-  const anthropicStream = params.events;
   try {
     const blocks: AnthropicStreamBlock[] = output.content;
     const blockIndexes = new Map<number, number>();
@@ -90,9 +90,13 @@ export async function consumeAnthropicStream(params: {
     const pendingThinkingSignatures = new Map<number, string>();
     const allowReasoningContentReplay =
       managed && resolveProviderEndpoint(model).endpointClass === "xiaomi-native";
-    const reasoningContentThinkingBlocks = new Map<number, number>();
-    const reasoningContentTextBlocks = new Map<number, number>();
+    const reasoningContentBlocks = {
+      thinking: new Map<number, number>(),
+      text: new Map<number, number>(),
+    };
+    let sawMessageStart = false;
     let sawMessageStop = false;
+    let sawStopReason = false;
     const pendingTextEnds: Array<Extract<AssistantMessageEvent, { type: "text_end" }>> = [];
     // Hold text_end until tool-boundary classification is known.
     const flushPendingTextEnds = () => {
@@ -110,7 +114,8 @@ export async function consumeAnthropicStream(params: {
     };
     const eventIndexKey = (eventIndex: unknown) =>
       typeof eventIndex === "number" ? eventIndex : -1;
-    const appendReasoningContentThinkingDelta = (
+    const appendReasoningContentDelta = (
+      kind: "thinking" | "text",
       eventIndex: unknown,
       rawText: unknown,
     ): boolean => {
@@ -121,98 +126,53 @@ export async function consumeAnthropicStream(params: {
       if (text.length === 0) {
         return false;
       }
+      const indexes = reasoningContentBlocks[kind];
       const key = eventIndexKey(eventIndex);
-      let contentIndex = reasoningContentThinkingBlocks.get(key);
+      let contentIndex = indexes.get(key);
       let block = contentIndex === undefined ? undefined : blocks[contentIndex];
-      if (!block || block.type !== "thinking") {
-        block = { type: "thinking", thinking: "", thinkingSignature: "reasoning_content" };
+      if (!block || block.type !== kind) {
+        block =
+          kind === "thinking"
+            ? { type: "thinking", thinking: "", thinkingSignature: "reasoning_content" }
+            : { type: "text", text: "" };
         output.content.push(block);
         contentIndex = output.content.length - 1;
-        reasoningContentThinkingBlocks.set(key, contentIndex);
-        eventSink.push({
-          type: "thinking_start",
-          contentIndex,
-          partial: output,
-        });
+        indexes.set(key, contentIndex);
+        eventSink.push({ type: `${kind}_start`, contentIndex, partial: output });
       }
       if (contentIndex === undefined) {
         return false;
       }
-      appendAssistantThinking(block, text);
-      block.thinkingSignature = "reasoning_content";
-      eventSink.push({
-        type: "thinking_delta",
-        contentIndex,
-        delta: text,
-        partial: output,
-      });
-      return true;
-    };
-    const appendReasoningContentTextDelta = (eventIndex: unknown, rawText: unknown): boolean => {
-      if (typeof rawText !== "string") {
-        return false;
+      if (block.type === "thinking") {
+        appendAssistantThinking(block, text);
+        block.thinkingSignature = "reasoning_content";
+      } else if (block.type === "text") {
+        block.text += text;
       }
-      const text = sanitizeTransportPayloadText(rawText);
-      if (text.length === 0) {
-        return false;
-      }
-      const key = eventIndexKey(eventIndex);
-      let contentIndex = reasoningContentTextBlocks.get(key);
-      let block = contentIndex === undefined ? undefined : blocks[contentIndex];
-      if (!block || block.type !== "text") {
-        block = { type: "text", text: "" };
-        output.content.push(block);
-        contentIndex = output.content.length - 1;
-        reasoningContentTextBlocks.set(key, contentIndex);
-        eventSink.push({
-          type: "text_start",
-          contentIndex,
-          partial: output,
-        });
-      }
-      if (contentIndex === undefined) {
-        return false;
-      }
-      block.text += text;
-      eventSink.push({
-        type: "text_delta",
-        contentIndex,
-        delta: text,
-        partial: output,
-      });
+      eventSink.push({ type: `${kind}_delta`, contentIndex, delta: text, partial: output });
       return true;
     };
     const finishReasoningContentSidecars = (eventIndex: unknown) => {
       const key = eventIndexKey(eventIndex);
-      const thinkingContentIndex = reasoningContentThinkingBlocks.get(key);
-      if (thinkingContentIndex !== undefined) {
-        reasoningContentThinkingBlocks.delete(key);
-        const block = output.content[thinkingContentIndex];
-        if (block?.type === "thinking") {
+      for (const kind of ["thinking", "text"] as const) {
+        const indexes = reasoningContentBlocks[kind];
+        const contentIndex = indexes.get(key);
+        if (contentIndex === undefined) {
+          continue;
+        }
+        indexes.delete(key);
+        const block = output.content[contentIndex];
+        if (block?.type === kind) {
           eventSink.push({
-            type: "thinking_end",
-            contentIndex: thinkingContentIndex,
-            content: block.thinking,
+            type: `${kind}_end`,
+            contentIndex,
+            content: block.type === "thinking" ? block.thinking : block.text,
             partial: output,
           });
         }
       }
-      const textContentIndex = reasoningContentTextBlocks.get(key);
-      if (textContentIndex === undefined) {
-        return;
-      }
-      reasoningContentTextBlocks.delete(key);
-      const block = output.content[textContentIndex];
-      if (block?.type === "text") {
-        eventSink.push({
-          type: "text_end",
-          contentIndex: textContentIndex,
-          content: block.text,
-          partial: output,
-        });
-      }
     };
-    for await (const rawEvent of anthropicStream) {
+    for await (const rawEvent of iterateModelStream(params.events, options.signal)) {
       const event = asRecord(rawEvent);
       // A serving-model fallback replaces the initial snapshot; report only once at completion.
       inputTransformations = readAnthropicInputTransformations(event) ?? inputTransformations;
@@ -224,6 +184,7 @@ export async function consumeAnthropicStream(params: {
         throw new Error(readStringField(error, "message") || "Anthropic Messages stream failed");
       }
       if (event.type === "message_start") {
+        sawMessageStart = true;
         const message = asOptionalObjectRecord(event.message);
         const usage = asRecord(message?.usage);
         output.responseId = typeof message?.id === "string" ? message.id : undefined;
@@ -415,7 +376,8 @@ export async function consumeAnthropicStream(params: {
         let index = eventIndex === undefined ? undefined : blockIndexes.get(eventIndex);
         let block = index === undefined ? undefined : blocks[index];
         if (allowReasoningContentReplay) {
-          const appendedThinking = appendReasoningContentThinkingDelta(
+          const appendedThinking = appendReasoningContentDelta(
+            "thinking",
             event.index,
             delta?.reasoning_content,
           );
@@ -442,7 +404,7 @@ export async function consumeAnthropicStream(params: {
                 });
                 appendedContent = true;
               } else {
-                appendedContent = appendReasoningContentTextDelta(event.index, text);
+                appendedContent = appendReasoningContentDelta("text", event.index, text);
               }
             }
           }
@@ -562,10 +524,7 @@ export async function consumeAnthropicStream(params: {
             content: block.text,
             partial: output,
           });
-          finishReasoningContentSidecars(event.index);
-          continue;
-        }
-        if (block.type === "thinking") {
+        } else if (block.type === "thinking") {
           if (pendingSignature !== undefined) {
             block.thinkingSignature = pendingSignature;
           }
@@ -575,13 +534,10 @@ export async function consumeAnthropicStream(params: {
             content: block.thinking,
             partial: output,
           });
-          finishReasoningContentSidecars(event.index);
-          continue;
-        }
-        if (block.type === "toolCall") {
+        } else if (block.type === "toolCall") {
           sealedToolCalls.push({ block, contentIndex: index });
-          finishReasoningContentSidecars(event.index);
         }
+        finishReasoningContentSidecars(event.index);
         continue;
       }
       if (event.type === "message_delta") {
@@ -589,6 +545,7 @@ export async function consumeAnthropicStream(params: {
         const delta = asOptionalObjectRecord(event.delta);
         const usage = asOptionalObjectRecord(event.usage);
         if (typeof delta?.stop_reason === "string" && delta.stop_reason) {
+          sawStopReason = true;
           if (delta.stop_reason === "refusal") {
             applyAnthropicRefusal(output, delta.stop_details, model.provider);
           } else {
@@ -623,6 +580,11 @@ export async function consumeAnthropicStream(params: {
     }
     if ([...blockIndexes.values()].some((index) => blocks[index]?.type === "toolCall")) {
       throw new Error("Provider completed stream with an incomplete tool call");
+    }
+    // Proxies may omit message_stop, but EOF cannot complete a started response
+    // without a terminal fact. Preserve their existing empty/ping-only behavior.
+    if ((sawMessageStart || blocks.length > 0) && !sawMessageStop && !sawStopReason) {
+      throw new Error("Anthropic stream ended before a terminal event");
     }
     // Fine-grained tool streaming delivers tool input without server-side JSON
     // validation, so repair invalid string literals before rejecting the turn.

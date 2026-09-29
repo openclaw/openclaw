@@ -224,7 +224,7 @@ it.each([
     } else {
       expect(selectedEntry.startsWith(rehearsal.stateDir + path.sep)).toBe(true);
     }
-    expect(await fs.readFile(shared)).toEqual(liveDatabase);
+    expect((await fs.readFile(shared)).equals(liveDatabase)).toBe(true);
     expect(await fs.readFile(path.join(sourcePlugin, "index.js"))).toEqual(liveEntry);
     expect(config.plugins?.installs?.demo?.sourcePath).toBe(locator);
     expect(

@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
@@ -33,13 +34,24 @@ function invocationRow(row: GatewaySessionRow): GatewaySessionRow {
     sharingRole: row.sharingRole,
     visibility: row.visibility,
     archived: row.archived,
+    worktree: row.worktree ? { ...row.worktree } : undefined,
+    repositoryWorkspaceId: row.repositoryWorkspaceId,
+    repository: row.repository ? { ...row.repository } : undefined,
   };
 }
 
 function authority(row: GatewaySessionRow): string {
-  return JSON.stringify([row.sessionId, row.sharingRole, row.visibility, row.archived === true]);
+  const workspace = row.repositoryWorkspaceId
+    ? ["repository", row.repositoryWorkspaceId, row.repository?.branch]
+    : ["worktree", row.worktree?.id, row.worktree?.branch, row.worktree?.repoRoot];
+  return JSON.stringify([
+    row.sessionId,
+    row.sharingRole,
+    row.visibility,
+    row.archived === true,
+    ...workspace,
+  ]);
 }
-
 function identity(snapshot: SessionGateway["snapshot"]): string {
   return JSON.stringify([
     snapshot.selfUser?.identity ?? null,
@@ -197,6 +209,19 @@ export function createSessionGitHubPublication(host: Host) {
             }).result?.sessions[0]
           : row,
       );
+      if (asNullableRecord(payload)?.reason === "github-publication") {
+        const entry = entries.get(key);
+        if (entry?.current()) {
+          entry.controller.invalidate();
+        }
+      }
+    },
+    invalidate() {
+      for (const entry of entries.values()) {
+        if (entry.current()) {
+          entry.controller.invalidate();
+        }
+      }
     },
     clear() {
       for (const [key, entry] of entries) {

@@ -1,7 +1,7 @@
 // Voice Call API module exposes the plugin public contract.
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
 // Doctor enumeration cold-loads this closure; the state-DB helpers stay behind a
 // lazy doctor-repair-runtime import so enumeration never pulls the kysely/state-db graph.
 import type { OpenClawStateDatabaseSchemaMigration } from "openclaw/plugin-sdk/doctor-repair-runtime";
@@ -28,6 +28,7 @@ import {
   resolveVoiceCallLegacyCallLogPath,
 } from "./src/manager/store.js";
 import { resolveDefaultVoiceCallStoreDir } from "./src/store-path.js";
+import { resolveUserPath } from "./src/utils.js";
 
 // Doctor state migration for Voice Call legacy JSONL call logs.
 
@@ -38,23 +39,6 @@ type PreparedLegacyCallRecord = {
   chunks: CallRecordEventChunk[];
   meta: CallRecordEventMeta;
 };
-
-/** Resolve home from doctor env with OS fallback. */
-function resolveHome(env: NodeJS.ProcessEnv): string {
-  return env.HOME?.trim() || os.homedir();
-}
-
-/** Resolve config paths, including "~", against the doctor env home. */
-function resolveUserPath(input: string, env: NodeJS.ProcessEnv): string {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  if (trimmed.startsWith("~")) {
-    return path.resolve(trimmed.replace(/^~(?=$|[\\/])/, () => resolveHome(env)));
-  }
-  return path.resolve(trimmed);
-}
 
 /** Read the configured voice-call store path from either package id. */
 function getVoiceCallConfigStore(config: PluginDoctorStateMigrationParams["config"]): string {
@@ -106,7 +90,7 @@ function resolveVoiceCallStorePath(params: {
 }): string {
   const configuredStore = getVoiceCallConfigStore(params.config);
   if (configuredStore) {
-    return resolveUserPath(configuredStore, params.env);
+    return resolveUserPath(configuredStore, () => params.env.HOME?.trim() || os.homedir());
   }
   return resolveDefaultVoiceCallStoreDir(params.env);
 }
@@ -146,6 +130,8 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
       return "Skill Workshop proposals -> per-agent Workshop directory ownership";
     case "prepared-worker-ownership-v17":
       return "prepared workers -> one-use capacity and fixed workspace ownership";
+    case "github-publication-requester-authority-v18":
+      return "GitHub publication receipts -> original requesting authority";
     case "worker-placement-execution-mode-v8":
       return "cloud worker placements -> execution-mode claims";
     case "operator-approvals-system-agent":
@@ -270,9 +256,14 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "voice-call-calls-jsonl-to-plugin-state",
     label: "Voice Call call log",
     async detectLegacyState(params) {
+      const storePath = resolveVoiceCallStorePath(params);
+      // An absent store has neither legacy logs nor a plugin-local database.
+      // Existing stores still need schema detection even without calls.jsonl.
+      if (!existsSync(storePath)) {
+        return null;
+      }
       const { detectOpenClawStateDatabaseSchemaMigrations } =
         await import("openclaw/plugin-sdk/doctor-repair-runtime");
-      const storePath = resolveVoiceCallStorePath(params);
       const filePath = resolveVoiceCallLegacyCallLogPath(storePath);
       const { entries } = await readLegacyCallRecords(filePath);
       const schemaMigrations = detectOpenClawStateDatabaseSchemaMigrations({
@@ -296,11 +287,14 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       };
     },
     async migrateLegacyState(params) {
-      const { detectOpenClawStateDatabaseSchemaMigrations, repairOpenClawStateDatabaseSchema } =
-        await import("openclaw/plugin-sdk/doctor-repair-runtime");
       const changes: string[] = [];
       const warnings: string[] = [];
       const storePath = resolveVoiceCallStorePath(params);
+      if (!existsSync(storePath)) {
+        return { changes, warnings };
+      }
+      const { detectOpenClawStateDatabaseSchemaMigrations, repairOpenClawStateDatabaseSchema } =
+        await import("openclaw/plugin-sdk/doctor-repair-runtime");
       const filePath = resolveVoiceCallLegacyCallLogPath(storePath);
       const { entries, warnings: readWarnings } = await readLegacyCallRecords(filePath);
       warnings.push(...readWarnings);

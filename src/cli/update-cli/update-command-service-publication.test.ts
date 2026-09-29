@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { runNodeMain } from "../../../scripts/run-node.mts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import type { GatewayService } from "../../daemon/service.js";
 import {
@@ -9,13 +11,25 @@ import {
   mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
 import * as gatewayLocks from "../../infra/gateway-lock.js";
+import { tryAcquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as portProbe from "../../infra/ports-probe.js";
-import { tryAcquireExclusiveSqliteCoordinator } from "../../infra/sqlite-coordinator.js";
-import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
+import * as updateCheck from "../../infra/update-check.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  getOpenClawDatabaseMaintenanceScope,
+  runOutsideOpenClawDatabaseMaintenanceScope,
+} from "../../state/openclaw-state-db-async-lifecycle.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { createUpdateCommandFailureResult } from "./update-command-result.js";
+import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 import { withGatewayRuntimeArtifactPublication } from "./update-command-service-maintenance.js";
 
 const mocks = vi.hoisted(() => ({ service: vi.fn<() => GatewayService>() }));
@@ -55,7 +69,7 @@ async function withRuntimePublicationFixture(
     root: string;
     env: NodeJS.ProcessEnv;
     service: GatewayService;
-    coordinatorPath: string;
+    databasePath: string;
   }) => Promise<void>,
 ): Promise<void> {
   await withServiceHome(async (home) => {
@@ -80,12 +94,7 @@ async function withRuntimePublicationFixture(
     mocks.service.mockReturnValue(service);
     vi.spyOn(gatewayLocks, "readActiveGatewayLockIdentity").mockResolvedValue(undefined);
     vi.spyOn(portProbe, "probePortUsage").mockResolvedValue("free");
-    const coordinator = acquireGatewayLifecycleCoordinator({
-      databasePath: resolveOpenClawStateSqlitePath(env),
-      busyTimeoutMs: 0,
-    });
-    coordinator.release();
-    await run({ home, root, env, service, coordinatorPath: coordinator.path });
+    await run({ home, root, env, service, databasePath: resolveOpenClawStateSqlitePath(env) });
     expect(service.stop).not.toHaveBeenCalled();
     expect(service.start).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
@@ -93,39 +102,228 @@ async function withRuntimePublicationFixture(
   });
 }
 
+it("keeps Task Scheduler timeout details in the source-build failure report", () =>
+  withRuntimePublicationFixture(async ({ root, env, service }) => {
+    vi.mocked(service.readCommand).mockRejectedValue(
+      new ServiceInspectionError("windows-task-inspection-failed", {
+        kind: "timeout",
+        timeoutMs: 731,
+      }),
+    );
+    const spawn = vi.fn();
+    const error = await runNodeMain({ cwd: root, args: ["--version"], env, spawn }).catch(
+      (caughtError: unknown) => caughtError,
+    );
+    const result = createUpdateCommandFailureResult({
+      mode: "git",
+      root,
+      durationMs: 0,
+      failure: { cause: error },
+    });
+    expect(result.reason).toBe("runtime-artifact-publication");
+    expect(service.readCommand).toHaveBeenCalled();
+    expect(result.failedStep.failureFacts?.[0]?.message).toContain("timed out after 731 ms");
+    expect(spawn).not.toHaveBeenCalled();
+  }));
+
+it.each([undefined, "stale-profile"])(
+  "preserves the serving installation and points back to the original doctor command (profile=%s)",
+  (profile) =>
+    withRuntimePublicationFixture(async ({ root, env, service }) => {
+      vi.mocked(service.readRuntime).mockResolvedValue({
+        status: "running",
+        pid: 23456,
+        systemd: { managerUid: 2001 },
+      });
+      const entry = path.join(root, "dist", "entry.js");
+      const before = await fs.readFile(entry, "utf8");
+      const spawn = vi.fn(() => {
+        throw new Error("Automatic build started under the serving Gateway");
+      });
+      const attempt = runNodeMain({
+        cwd: root,
+        args: [...(profile ? ["--profile", profile] : []), "doctor"],
+        env: { ...env, OPENCLAW_RUNNER_LOG: "0" },
+        spawn,
+      });
+      await expect(attempt).rejects.toThrow(/affected Gateway.*running/);
+      await expect(attempt).rejects.toThrow(
+        `openclaw${profile ? ` --profile ${profile}` : ""} gateway stop`,
+      );
+      await expect(attempt).rejects.toThrow("retry the original command");
+      expect(spawn).not.toHaveBeenCalled();
+      expect(
+        vi
+          .mocked(service.readRuntime)
+          .mock.calls.some(([observedEnv]) => observedEnv?.OPENCLAW_PROFILE === profile),
+      ).toBe(true);
+      expect(await fs.readFile(entry, "utf8")).toBe(before);
+    }),
+);
+
+it("holds Gateway startup custody until the automatic source build exits", () =>
+  withRuntimePublicationFixture(async ({ root, env, databasePath }) => {
+    let builds = 0;
+    const spawn = (_command: string, args: string[]) => {
+      if (args.some((arg) => arg.endsWith("scripts/build-all.mts"))) {
+        builds += 1;
+        const competingStartup = tryAcquireGatewayStateOwner(databasePath);
+        competingStartup?.release();
+        expect(competingStartup).toBeNull();
+      }
+      return {
+        on(event: string, listener: (code: number, signal: null) => void) {
+          if (event === "exit") {
+            queueMicrotask(() => listener(0, null));
+          }
+        },
+      };
+    };
+    expect(
+      await runNodeMain({
+        cwd: root,
+        args: ["doctor"],
+        env: { ...env, OPENCLAW_RUNNER_LOG: "0" },
+        spawn,
+      }),
+    ).toBe(0);
+    expect(builds).toBe(1);
+  }));
+
 it.each([
-  "running",
+  { changed: true, sourceRuntimePrepared: undefined },
+  { changed: false, sourceRuntimePrepared: undefined },
+  { changed: true, sourceRuntimePrepared: false },
+  { changed: true, sourceRuntimePrepared: true },
+])(
+  "parks before changed runtime publication (changed=$changed, prepared=$sourceRuntimePrepared)",
+  ({ changed, sourceRuntimePrepared }) =>
+    withRuntimePublicationFixture(async ({ root, env, service }) => {
+      vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("git");
+      const scripts = path.join(root, "scripts");
+      const artifact = path.join(root, "dist-runtime", "published.txt");
+      await fs.mkdir(path.join(scripts, "lib"), { recursive: true });
+      await fs.writeFile(
+        path.join(scripts, "stage-bundled-plugin-runtime.mts"),
+        `import fs from "node:fs/promises";
+export function prepareBundledPluginRuntime() {
+  if (${sourceRuntimePrepared === true}) throw new Error("Prepared runtime must not be staged again");
+  return {
+    changed: ${changed},
+    async publish(assertCurrent) {
+      await assertCurrent();
+      await fs.writeFile(${JSON.stringify(artifact)}, "candidate");
+    },
+    async cleanup() {},
+  };
+}
+`,
+      );
+      await fs.writeFile(
+        path.join(scripts, "lib", "dist-artifact-ownership.mts"),
+        sourceRuntimePrepared === false
+          ? "throw new Error('The admitted runtime must not load the legacy lock owner');\n"
+          : "export async function withDistArtifactOwnership(_root, run) { return await run(); }\n",
+      );
+      await fs.writeFile(artifact, "original");
+      const lock = vi.mocked(gatewayLocks.readActiveGatewayLockIdentity);
+      lock.mockResolvedValue({ pid: process.pid, createdAt: "now", port: 18789 });
+      const park = vi.fn(async () => {
+        expect(service.readRuntime).not.toHaveBeenCalled();
+        expect(lock).not.toHaveBeenCalled();
+        expect(await fs.readFile(artifact, "utf8")).toBe("original");
+        lock.mockResolvedValue(undefined);
+      });
+      const readExpiry = () => {
+        const value = openOpenClawStateDatabase({ env })
+          .db.prepare(
+            "SELECT expires_at FROM state_leases WHERE scope = 'core:plugin-lifecycle' AND lease_key = 'global'",
+          )
+          .get()?.expires_at;
+        if (typeof value !== "number") {
+          throw new Error("Expected a persisted plugin lifecycle lease expiry");
+        }
+        return value;
+      };
+      const leaseMs = 1_000;
+      vi.useFakeTimers({
+        toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+      });
+      try {
+        await expect(
+          withPluginLifecycleLease({ env, waitMs: 0, leaseMs }, async (lease) => {
+            // The worker acquires against its real clock; align the controlled timer clock afterward.
+            vi.setSystemTime(readExpiry() - leaseMs);
+            const result = await completeSourceUpdateRuntime({
+              root,
+              sourceRuntimePrepared,
+              timeoutMs: 1_000,
+              lease,
+              beforePublication: park,
+              beforePersistentEffect: async () => {
+                const maintenance = getOpenClawDatabaseMaintenanceScope();
+                expect(maintenance).toBeDefined();
+                maintenance?.assertDatabaseAccess(lease.databasePath);
+                runOutsideOpenClawDatabaseMaintenanceScope(() => {
+                  expect(() => openOpenClawStateDatabase({ env })).toThrow("offline maintenance");
+                });
+                const before = readExpiry();
+                await vi.advanceTimersByTimeAsync(leaseMs * 4);
+                lease.assertOwned();
+                expect(readExpiry()).toBeGreaterThan(before + leaseMs * 3);
+                expect(lease.signal.aborted).toBe(false);
+              },
+            });
+            expect(getOpenClawDatabaseMaintenanceScope()).toBeUndefined();
+            const afterPublication = readExpiry();
+            await vi.advanceTimersByTimeAsync(leaseMs * 4);
+            lease.assertOwned();
+            expect(readExpiry()).toBeGreaterThan(afterPublication + leaseMs * 3);
+            return result;
+          }),
+        ).resolves.toEqual({ changed: changed && sourceRuntimePrepared !== true });
+        const published = changed && sourceRuntimePrepared !== true;
+        expect(park).toHaveBeenCalledTimes(published ? 1 : 0);
+        expect(await fs.readFile(artifact, "utf8")).toBe(published ? "candidate" : "original");
+        if (published) {
+          expect(lock).toHaveBeenCalled();
+        } else {
+          expect(service.readRuntime).not.toHaveBeenCalled();
+          expect(lock).not.toHaveBeenCalled();
+        }
+      } finally {
+        vi.useRealTimers();
+        closeOpenClawStateDatabaseForTest();
+      }
+    }),
+);
+
+it.each([
   "unknown runtime",
   "unknown command",
   "unknown load state",
-  "respawn enabled",
-  "active lock",
+  "respawn disabled",
   "unknown lock",
-  "busy listener",
   "explicit listener",
   "unknown listener",
-  "running after coordinator",
   "lock after coordinator",
 ])("refuses changed runtime publication with %s", (scenario) =>
   withRuntimePublicationFixture(async ({ root, env, service }) => {
-    if (scenario === "running" || scenario === "unknown runtime") {
+    if (scenario === "unknown runtime") {
       vi.mocked(service.readRuntime).mockResolvedValue({
-        status: scenario === "running" ? "running" : "unknown",
+        status: "unknown",
         systemd: { managerUid: 2001 },
       });
     } else if (scenario === "unknown command") {
       vi.mocked(service.readCommand).mockResolvedValue(null);
     } else if (scenario === "unknown load state") {
       vi.mocked(service.isLoaded).mockRejectedValue(new Error("inspection failed"));
-    } else if (scenario === "respawn enabled") {
+    } else if (scenario === "respawn disabled") {
       mockProcessPlatform("darwin");
-      vi.mocked(service.isEnabled!).mockResolvedValue(true);
-    } else if (scenario === "active lock" || scenario === "lock after coordinator") {
-      const lock = vi.mocked(gatewayLocks.readActiveGatewayLockIdentity);
-      lock.mockResolvedValue({ pid: process.pid, createdAt: "now", port: 18789 });
-      if (scenario === "lock after coordinator") {
-        lock.mockResolvedValueOnce(undefined);
-      }
+    } else if (scenario === "lock after coordinator") {
+      vi.mocked(gatewayLocks.readActiveGatewayLockIdentity)
+        .mockResolvedValue({ pid: process.pid, createdAt: "now", port: 18789 })
+        .mockResolvedValueOnce(undefined);
     } else if (scenario === "unknown lock") {
       vi.mocked(gatewayLocks.readActiveGatewayLockIdentity).mockRejectedValue(new Error("unknown"));
     } else if (scenario === "explicit listener") {
@@ -141,14 +339,8 @@ it.each([
       vi.mocked(portProbe.probePortUsage).mockImplementation(async (port) =>
         port === 19420 ? "busy" : "free",
       );
-    } else if (scenario === "busy listener" || scenario === "unknown listener") {
-      vi.mocked(portProbe.probePortUsage).mockResolvedValue(
-        scenario === "busy listener" ? "busy" : "unknown",
-      );
-    } else {
-      vi.mocked(service.readRuntime)
-        .mockResolvedValueOnce({ status: "stopped", systemd: { managerUid: 2001 } })
-        .mockResolvedValue({ status: "running", systemd: { managerUid: 2001 } });
+    } else if (scenario === "unknown listener") {
+      vi.mocked(portProbe.probePortUsage).mockResolvedValue("unknown");
     }
     const publish = vi.fn(async () => "published");
     await expect(
@@ -156,14 +348,16 @@ it.each([
         { root, env, timeoutMs: 200, assertCurrent() {} },
         publish,
       ),
-    ).rejects.toThrow(/affected Gateway.*retry the update/);
+    ).rejects.toThrow(
+      /affected Gateway.*openclaw gateway status --deep.*openclaw gateway stop.*retry the original command/,
+    );
     expect(publish).not.toHaveBeenCalled();
   }),
 );
 
 it("refuses changed runtime publication while another process owns Gateway presence", () =>
-  withRuntimePublicationFixture(async ({ root, env, coordinatorPath }) => {
-    const other = tryAcquireExclusiveSqliteCoordinator(coordinatorPath);
+  withRuntimePublicationFixture(async ({ root, env, databasePath }) => {
+    const other = tryAcquireGatewayStateOwner(databasePath);
     expect(other).not.toBeNull();
     const publish = vi.fn(async () => "published");
     try {
@@ -179,26 +373,21 @@ it("refuses changed runtime publication while another process owns Gateway prese
     }
   }));
 
-it.each(["stopped", "absent"])(
-  "publishes changed artifacts for an affirmatively %s Gateway",
-  (state) =>
-    withRuntimePublicationFixture(async ({ root, env, service, coordinatorPath }) => {
-      if (state === "absent") {
-        service.isAbsent = vi.fn(async () => true);
-      }
-      await expect(
-        withGatewayRuntimeArtifactPublication(
-          { root, env, timeoutMs: 200, assertCurrent() {} },
-          async (assertCurrent) => {
-            await Promise.resolve();
-            await assertCurrent();
-            expect(tryAcquireExclusiveSqliteCoordinator(coordinatorPath)).toBeNull();
-            return "published";
-          },
-        ),
-      ).resolves.toBe("published");
-    }),
-);
+it("publishes changed artifacts for an affirmatively absent Gateway", () =>
+  withRuntimePublicationFixture(async ({ root, env, service, databasePath }) => {
+    service.isAbsent = vi.fn(async () => true);
+    await expect(
+      withGatewayRuntimeArtifactPublication(
+        { root, env, timeoutMs: 200, assertCurrent() {} },
+        async (assertCurrent) => {
+          await Promise.resolve();
+          await assertCurrent();
+          expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
+          return "published";
+        },
+      ),
+    ).resolves.toBe("published");
+  }));
 
 it.each([
   "disjoint",
@@ -207,7 +396,7 @@ it.each([
   "shared SDK parent",
   "nested shared output",
 ])("distinguishes physical runtime paths from current/releases ownership: %s", (scenario) =>
-  withRuntimePublicationFixture(async ({ home, root, env, service, coordinatorPath }) => {
+  withRuntimePublicationFixture(async ({ home, root, env, service, databasePath }) => {
     const snapshot = path.join(home, "releases", "previous");
     await fs.mkdir(path.join(snapshot, "dist"), { recursive: true });
     await fs.writeFile(path.join(snapshot, "package.json"), JSON.stringify({ name: "openclaw" }));
@@ -251,7 +440,7 @@ it.each([
       systemd: { managerUid: 2001 },
     });
     vi.mocked(portProbe.probePortUsage).mockResolvedValue("busy");
-    const other = tryAcquireExclusiveSqliteCoordinator(coordinatorPath);
+    const other = tryAcquireGatewayStateOwner(databasePath);
     expect(other).not.toBeNull();
     const publish = vi.fn(async (assertCurrent: () => Promise<void>) => {
       await assertCurrent();
@@ -313,7 +502,6 @@ it.each(["inspection", "publication"])(
 
 it.each([
   "running",
-  "unknown runtime",
   "changed launcher",
   "replaced entrypoint",
   "changed manager",
@@ -335,9 +523,9 @@ it.each([
     await fs.writeFile(untouched, "original");
     const beforePersistentEffect = async () => {
       await Promise.resolve();
-      if (change === "running" || change === "unknown runtime") {
+      if (change === "running") {
         vi.mocked(service.readRuntime).mockResolvedValue({
-          status: change === "running" ? "running" : "unknown",
+          status: "running",
           systemd: { managerUid: 2001 },
         });
       } else if (change === "changed manager") {
@@ -437,7 +625,7 @@ it("permits its output-root replacement and new alias descendants while retainin
   }));
 
 it("holds native and Gateway exclusion through publication rollback and closes its assertion", () =>
-  withRuntimePublicationFixture(async ({ root, env, coordinatorPath }) => {
+  withRuntimePublicationFixture(async ({ root, env, databasePath }) => {
     let retainedAssertion: (() => Promise<void>) | undefined;
     let rolledBack = false;
     await expect(
@@ -447,14 +635,14 @@ it("holds native and Gateway exclusion through publication rollback and closes i
           retainedAssertion = assertCurrent;
           try {
             await assertCurrent();
-            expect(tryAcquireExclusiveSqliteCoordinator(coordinatorPath)).toBeNull();
+            expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
             throw new Error("publication failed");
           } finally {
             await withGatewayServiceOperationLock(env, async (assertNative) => {
               await Promise.resolve();
               await assertCurrent();
               assertNative();
-              expect(tryAcquireExclusiveSqliteCoordinator(coordinatorPath)).toBeNull();
+              expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
               rolledBack = true;
             });
           }
@@ -463,7 +651,89 @@ it("holds native and Gateway exclusion through publication rollback and closes i
     ).rejects.toThrow("publication failed");
     expect(rolledBack).toBe(true);
     await expect(retainedAssertion!()).rejects.toThrow(/ownership has closed/);
-    const released = tryAcquireExclusiveSqliteCoordinator(coordinatorPath);
+    const released = tryAcquireGatewayStateOwner(databasePath);
     expect(released).not.toBeNull();
     released?.release();
   }));
+
+it.each([false, true])(
+  "settles cleanup writes and releases publication custody after disposal fails (publication failed: %s)",
+  (publicationFailed) =>
+    withRuntimePublicationFixture(async ({ root, env, databasePath }) => {
+      openOpenClawStateDatabase({ env });
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      const publicationFailure = new Error("publication failed before cleanup");
+      const cleanupFailure = new Error("publication resource disposal failed");
+      let accepted: Promise<void> | undefined;
+      let settled = false;
+      let observedError: unknown;
+      const publication = withGatewayRuntimeArtifactPublication(
+        { root, env, timeoutMs: 200, assertCurrent() {} },
+        async () => {
+          const maintenance = getOpenClawDatabaseMaintenanceScope();
+          if (!maintenance) {
+            throw new Error("Expected publication maintenance authority");
+          }
+          maintenance.own({}, "shared-resources", () => {
+            accepted = maintenance.run(async () => {
+              entered.resolve();
+              await resume.promise;
+              openOpenClawStateDatabase({ env })
+                .db.prepare(
+                  "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES ('publication-cleanup-proof', 'true', 1)",
+                )
+                .run();
+            });
+            throw cleanupFailure;
+          });
+          if (publicationFailed) {
+            throw publicationFailure;
+          }
+          return "published";
+        },
+      ).then(
+        () => {
+          settled = true;
+        },
+        (error: unknown) => {
+          settled = true;
+          observedError = error;
+        },
+      );
+      try {
+        await entered.promise;
+        // Let the rejected disposal batch settle while its accepted write is still blocked.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(settled).toBe(false);
+        expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
+        resume.resolve();
+        await publication;
+        await accepted;
+        expect(observedError).toEqual(
+          publicationFailed
+            ? expect.objectContaining({
+                cause: publicationFailure,
+                errors: [publicationFailure, cleanupFailure],
+              })
+            : cleanupFailure,
+        );
+        const next = tryAcquireGatewayStateOwner(databasePath);
+        expect(next).not.toBeNull();
+        next?.release();
+        expect(
+          openOpenClawStateDatabase({ env })
+            .db.prepare(
+              "SELECT value_json FROM config_machine_state WHERE state_key = 'publication-cleanup-proof'",
+            )
+            .get(),
+        ).toEqual({ value_json: "true" });
+      } finally {
+        resume.resolve();
+        await publication;
+        closeOpenClawStateDatabaseForTest();
+      }
+    }),
+);

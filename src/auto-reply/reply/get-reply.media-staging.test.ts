@@ -80,13 +80,7 @@ it.each(["remote preprocessing", "local staging"] as const)(
             },
           );
         vi.mocked(applyMediaUnderstanding).mockReset().mockResolvedValue({
-          outputs: [],
-          decisions: [],
           extractedFileImages: [],
-          appliedImage: false,
-          appliedAudio: false,
-          appliedVideo: false,
-          appliedFile: false,
         });
         vi.mocked(runPreparedReply).mockReset().mockResolvedValue({ text: "must not reply" });
         mocks.createInternalHookEvent.mockClear();
@@ -203,13 +197,7 @@ it.each([
       });
       vi.mocked(stageSandboxMedia).mockReset().mockResolvedValue({ staged: new Map() });
       vi.mocked(applyMediaUnderstanding).mockReset().mockResolvedValue({
-        outputs: [],
-        decisions: [],
         extractedFileImages: [],
-        appliedImage: false,
-        appliedAudio: false,
-        appliedVideo: false,
-        appliedFile: false,
       });
       vi.mocked(runPreparedReply).mockReset().mockResolvedValue({ text: "ready" });
       mocks.createInternalHookEvent.mockClear();

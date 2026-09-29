@@ -3,8 +3,8 @@ import type OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { reasoningTagTextPolicy, type OpenAICompletionsOptions } from "../provider-options.js";
-// OpenAI completions provider adapts chat completions to the agent runtime.
 import { createAssistantOutput } from "../transports/assistant-output.js";
+import { prepareModelRequestBody } from "../transports/model-request-body.js";
 import {
   resolveOpenAICompletionsCompat,
   type ResolvedOpenAICompletionsCompat,
@@ -81,12 +81,14 @@ export const streamOpenAICompletions: StreamFunction<
         compat,
         cacheRetention,
       });
+      const encodeBody = prepareModelRequestBody(options);
       const nextParams = await options?.onPayload?.(params, model);
       if (nextParams !== undefined) {
         params = nextParams as typeof params;
       }
       firstEventAbort = createFirstStreamEventAbortController(options?.signal);
       const requestOptions = {
+        ...(await encodeBody(params)),
         signal: firstEventAbort.signal,
         ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
         maxRetries: 0,
@@ -231,12 +233,11 @@ export const streamSimpleOpenAICompletions: StreamFunction<
   const clampedReasoning = options?.reasoning
     ? clampThinkingLevel(model, options.reasoning)
     : undefined;
-  const reasoningEffort = clampedReasoning === "off" ? undefined : clampedReasoning;
   const toolChoice = (options as OpenAICompletionsOptions | undefined)?.toolChoice;
 
   return streamOpenAICompletions(model, context, {
     ...base,
-    reasoningEffort,
+    reasoningEffort: clampedReasoning,
     toolChoice,
   } satisfies OpenAICompletionsOptions);
 };

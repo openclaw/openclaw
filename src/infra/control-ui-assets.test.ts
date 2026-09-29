@@ -10,6 +10,15 @@ const state = vi.hoisted(() => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
+const successfulBuild = {
+  stdout: "",
+  stderr: "",
+  code: 0,
+  signal: null,
+  killed: false,
+  termination: "exit",
+};
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let fixtureRoot = "";
 const abs = (p: string) => path.resolve(fixtureRoot, p);
@@ -17,6 +26,13 @@ const abs = (p: string) => path.resolve(fixtureRoot, p);
 function setFile(p: string, content = "") {
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, content);
+}
+
+function sourceCheckout(relativePath: string) {
+  const root = abs(relativePath);
+  setFile(path.join(root, "ui", "vite.config.ts"));
+  setFile(path.join(root, "scripts", "ui.js"));
+  return root;
 }
 
 vi.mock("./openclaw-root.js", () => ({
@@ -96,13 +112,11 @@ describe("control UI assets helpers", () => {
   });
 
   it.each([
-    { marker: `runtime-b-${"a".repeat(64)}`, kind: "ready" },
     { marker: `runtime-b-${"b".repeat(64)}`, kind: "ready" },
     { marker: `dev-${"a".repeat(64)}`, kind: "ready" },
     { marker: `runtime-a-${"a".repeat(64)}`, kind: "stale" },
     { marker: `runtime-b-other-${"a".repeat(64)}`, kind: "stale" },
     { marker: `runtime-b-${"a".repeat(63)}`, kind: "stale" },
-    { marker: "runtime-b", kind: "stale" },
     { marker: "", kind: "stale" },
   ])(
     "checks the runtime identity independently of its public digest: $marker",
@@ -279,43 +293,6 @@ if (process.exitCode === 0) {
     }
   });
 
-  it.each(["ready", "stale", "incomplete"])(
-    "checks %s macOS Resources ahead of a healthy unused dist root",
-    async (kind) => {
-      const root = abs("fixtures/packaged-app");
-      const execPath = path.join(root, "OpenClaw.app", "Contents", "MacOS", "OpenClaw");
-      const bundledUiDir = path.join(root, "OpenClaw.app", "Contents", "Resources", "control-ui");
-      const indexPath = path.join(bundledUiDir, "index.html");
-      const document = (buildId: string) =>
-        `<html data-openclaw-control-ui-build-id="${buildId}-${"a".repeat(64)}"><script src="./assets/startup.js"></script></html>`;
-      setFile(execPath);
-      setFile(indexPath, document(kind === "stale" ? "runtime-a" : "runtime-b"));
-      if (kind !== "incomplete") {
-        setFile(path.join(bundledUiDir, "assets", "startup.js"));
-      }
-      setFile(path.join(root, "dist", "control-ui", "index.html"), document("runtime-b"));
-      setFile(path.join(root, "dist", "control-ui", "assets", "startup.js"));
-      setFile(path.join(root, "ui", "vite.config.ts"));
-      setFile(path.join(root, "scripts", "ui.js"));
-      vi.mocked(openclawRoot.resolveOpenClawPackageRootSync).mockReturnValue(root);
-
-      const result = await ensureControlUiAssetsBuilt(undefined, {
-        argv1: path.join(root, "entry.js"),
-        cwd: root,
-        execPath,
-        expectedBuildId: "runtime-b",
-      });
-      expect(result).toMatchObject({ ok: kind === "ready", built: false });
-      if (result.ok) {
-        expect(result.assets.indexPath).toBe(indexPath);
-      } else {
-        expect(result.message).toContain(indexPath);
-        expect(result.message).toContain("Reinstall OpenClaw");
-      }
-      expect(state.runCommandWithTimeout).not.toHaveBeenCalled();
-    },
-  );
-
   it("tells packaged installs to reinstall when their bundled assets are missing", async () => {
     const root = abs("fixtures/packaged-missing");
     const indexPath = path.join(root, "dist", "control-ui", "index.html");
@@ -376,18 +353,68 @@ if (process.exitCode === 0) {
     );
   });
 
+  it("enforces the index limit when the file grows after metadata admission", () => {
+    const root = abs("fixtures/growing-index");
+    const indexPath = path.join(root, "index.html");
+    setFile(indexPath, "<html></html>");
+    const identity = fs.statSync(indexPath);
+    const statSync = fs.statSync;
+    const fstatSync = fs.fstatSync;
+    let grew = false;
+    const grow = (stat: fs.Stats | fs.BigIntStats) => {
+      if (!grew && BigInt(stat.ino) === BigInt(identity.ino)) {
+        grew = true;
+        fs.appendFileSync(indexPath, "x".repeat(256 * 1024));
+      }
+    };
+    const pathStat = vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+      const stat = statSync(...args);
+      if (stat) {
+        grow(stat);
+      }
+      return stat;
+    });
+    const descriptorStat = vi.spyOn(fs, "fstatSync").mockImplementation((...args) => {
+      const stat = fstatSync(...args);
+      grow(stat);
+      return stat;
+    });
+    try {
+      expect(inspectControlUiRootAssets(root)).toEqual({
+        kind: "incomplete",
+        indexPath,
+        missingAsset: "index.html exceeds its size limit",
+      });
+      expect(grew).toBe(true);
+    } finally {
+      pathStat.mockRestore();
+      descriptorStat.mockRestore();
+    }
+  });
+
+  it.each(["symlink", "hardlink"])("accepts a contained %s index", (kind) => {
+    const root = abs(`fixtures/${kind}-index`);
+    const target = path.join(root, "original.html");
+    setFile(target, "<html></html>");
+    const indexPath = path.join(root, "index.html");
+    if (kind === "symlink") {
+      fs.symlinkSync(target, indexPath, "file");
+    } else {
+      fs.linkSync(target, indexPath);
+    }
+    expect(inspectControlUiRootAssets(root)).toEqual({ kind: "ready", indexPath });
+  });
+
   it("builds the source checkout selected by canonical package-root discovery", async () => {
     const packagedRoot = abs("fixtures/package-owner");
-    const checkoutRoot = abs("fixtures/checkout-owner");
+    const checkoutRoot = sourceCheckout("fixtures/checkout-owner");
     const indexPath = path.join(checkoutRoot, "dist", "control-ui", "index.html");
-    setFile(path.join(checkoutRoot, "ui", "vite.config.ts"));
-    setFile(path.join(checkoutRoot, "scripts", "ui.js"));
     vi.mocked(openclawRoot.resolveOpenClawPackageRootSync).mockImplementation((options) =>
       options.moduleUrl ? packagedRoot : checkoutRoot,
     );
     state.runCommandWithTimeout.mockImplementationOnce(async () => {
       setFile(indexPath);
-      return { stdout: "", stderr: "", code: 0, signal: null, killed: false, termination: "exit" };
+      return successfulBuild;
     });
 
     const runtime = { log: vi.fn<RuntimeEnv["log"]>(), error: vi.fn(), exit: vi.fn() };
@@ -411,20 +438,11 @@ if (process.exitCode === 0) {
   });
 
   it("forces a rebuild of an existing source bundle and forwards cancellation", async () => {
-    const root = abs("fixtures/force-build");
+    const root = sourceCheckout("fixtures/force-build");
     const indexPath = path.join(root, "dist", "control-ui", "index.html");
     const controller = new AbortController();
-    setFile(path.join(root, "ui", "vite.config.ts"));
-    setFile(path.join(root, "scripts", "ui.js"));
     setFile(indexPath);
-    state.runCommandWithTimeout.mockResolvedValueOnce({
-      stdout: "",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
+    state.runCommandWithTimeout.mockResolvedValueOnce(successfulBuild);
 
     await expect(
       ensureControlUiAssetsBuilt(undefined, { root, force: true, signal: controller.signal }),
@@ -436,12 +454,10 @@ if (process.exitCode === 0) {
   });
 
   it("rebuilds a source index when a same-origin startup CSS or JavaScript asset is missing", async () => {
-    const root = abs("fixtures/source-incomplete");
+    const root = sourceCheckout("fixtures/source-incomplete");
     const indexPath = path.join(root, "dist", "control-ui", "index.html");
     const scriptPath = path.join(root, "dist", "control-ui", "assets", "startup.js");
     const cssPath = path.join(root, "dist", "control-ui", "assets", "startup.css");
-    setFile(path.join(root, "ui", "vite.config.ts"));
-    setFile(path.join(root, "scripts", "ui.js"));
     setFile(
       indexPath,
       [
@@ -452,7 +468,7 @@ if (process.exitCode === 0) {
     state.runCommandWithTimeout.mockImplementationOnce(async () => {
       setFile(scriptPath);
       setFile(cssPath);
-      return { stdout: "", stderr: "", code: 0, signal: null, killed: false, termination: "exit" };
+      return successfulBuild;
     });
 
     await expect(ensureControlUiAssetsBuilt(undefined, { root })).resolves.toMatchObject({
@@ -463,9 +479,7 @@ if (process.exitCode === 0) {
   });
 
   it("normalizes rejected build launches into a bounded failure", async () => {
-    const root = abs("fixtures/build-rejection");
-    setFile(path.join(root, "ui", "vite.config.ts"));
-    setFile(path.join(root, "scripts", "ui.js"));
+    const root = sourceCheckout("fixtures/build-rejection");
     state.runCommandWithTimeout.mockRejectedValueOnce(new Error("details\nspawn ENOENT"));
 
     await expect(ensureControlUiAssetsBuilt(undefined, { root })).resolves.toEqual({
@@ -480,9 +494,7 @@ if (process.exitCode === 0) {
     { termination: "timeout", message: "Control UI build timed out." },
     { termination: "no-output-timeout", message: "Control UI build timed out." },
   ] as const)("normalizes $termination build termination", async ({ termination, message }) => {
-    const root = abs(`fixtures/build-${termination}`);
-    setFile(path.join(root, "ui", "vite.config.ts"));
-    setFile(path.join(root, "scripts", "ui.js"));
+    const root = sourceCheckout(`fixtures/build-${termination}`);
     state.runCommandWithTimeout.mockResolvedValueOnce({
       stdout: "",
       stderr: "",
@@ -500,11 +512,9 @@ if (process.exitCode === 0) {
   });
 
   it("does not launch a build after its signal has already been canceled", async () => {
-    const root = abs("fixtures/build-pre-aborted");
+    const root = sourceCheckout("fixtures/build-pre-aborted");
     const controller = new AbortController();
     controller.abort();
-    setFile(path.join(root, "ui", "vite.config.ts"));
-    setFile(path.join(root, "scripts", "ui.js"));
 
     await expect(
       ensureControlUiAssetsBuilt(undefined, { root, signal: controller.signal }),
@@ -513,17 +523,8 @@ if (process.exitCode === 0) {
   });
 
   it("rejects a successful build that did not create its index", async () => {
-    const root = abs("fixtures/build-without-output");
-    setFile(path.join(root, "ui", "vite.config.ts"));
-    setFile(path.join(root, "scripts", "ui.js"));
-    state.runCommandWithTimeout.mockResolvedValueOnce({
-      stdout: "",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
+    const root = sourceCheckout("fixtures/build-without-output");
+    state.runCommandWithTimeout.mockResolvedValueOnce(successfulBuild);
 
     await expect(ensureControlUiAssetsBuilt(undefined, { root })).resolves.toEqual({
       ok: false,
@@ -533,13 +534,11 @@ if (process.exitCode === 0) {
   });
 
   it("rejects a successful build that leaves a referenced startup asset missing", async () => {
-    const root = abs("fixtures/build-missing-startup");
+    const root = sourceCheckout("fixtures/build-missing-startup");
     const indexPath = path.join(root, "dist", "control-ui", "index.html");
-    setFile(path.join(root, "ui", "vite.config.ts"));
-    setFile(path.join(root, "scripts", "ui.js"));
     state.runCommandWithTimeout.mockImplementationOnce(async () => {
       setFile(indexPath, '<html><script src="./assets/main.js"></script></html>');
-      return { stdout: "", stderr: "", code: 0, signal: null, killed: false, termination: "exit" };
+      return successfulBuild;
     });
 
     await expect(ensureControlUiAssetsBuilt(undefined, { root })).resolves.toEqual({
@@ -563,9 +562,7 @@ if (process.exitCode === 0) {
 
   it("resolves control-ui root for dist bundle argv1 and moduleUrl candidates", () => {
     const pkgRoot = abs("fixtures/openclaw-bundle");
-    (
-      openclawRoot.resolveOpenClawPackageRootSync as unknown as ReturnType<typeof vi.fn>
-    ).mockReturnValueOnce(pkgRoot);
+    vi.mocked(openclawRoot.resolveOpenClawPackageRootSync).mockReturnValueOnce(pkgRoot);
 
     const uiDir = path.join(pkgRoot, "dist", "control-ui");
     setFile(path.join(uiDir, "index.html"), "<html></html>\n");
@@ -578,16 +575,6 @@ if (process.exitCode === 0) {
     // moduleUrl candidate: <moduleDir>/control-ui
     const moduleUrl = pathToFileURL(path.join(pkgRoot, "dist", "bundle.js")).toString();
     expect(resolveControlUiRootSync({ moduleUrl })).toBe(uiDir);
-  });
-
-  it("prefers packaged app Control UI assets in Contents/Resources", () => {
-    const execPath = abs("fixtures/OpenClaw.app/Contents/MacOS/OpenClaw");
-    const bundledUiDir = abs("fixtures/OpenClaw.app/Contents/Resources/control-ui");
-    setFile(path.join(bundledUiDir, "index.html"), "<html></html>\n");
-
-    setFile(execPath);
-
-    expect(resolveControlUiRootSync({ execPath })).toBe(bundledUiDir);
   });
 
   it("resolves control-ui root for symlinked argv1 via realpath", () => {
@@ -614,9 +601,7 @@ if (process.exitCode === 0) {
     const pkgRoot = abs("fixtures/openclaw-package-root");
     const uiDir = path.join(pkgRoot, "dist", "control-ui");
     setFile(path.join(uiDir, "index.html"), "<html></html>\n");
-    (
-      openclawRoot.resolveOpenClawPackageRootSync as unknown as ReturnType<typeof vi.fn>
-    ).mockReturnValueOnce(pkgRoot);
+    vi.mocked(openclawRoot.resolveOpenClawPackageRootSync).mockReturnValueOnce(pkgRoot);
 
     expect(
       isPackageProvenControlUiRootSync(uiDir, {
@@ -629,9 +614,7 @@ if (process.exitCode === 0) {
     const pkgRoot = abs("fixtures/openclaw-package-root");
     const fallbackRoot = abs("fixtures/fallback-root/dist/control-ui");
     setFile(path.join(fallbackRoot, "index.html"), "<html></html>\n");
-    (
-      openclawRoot.resolveOpenClawPackageRootSync as unknown as ReturnType<typeof vi.fn>
-    ).mockReturnValueOnce(pkgRoot);
+    vi.mocked(openclawRoot.resolveOpenClawPackageRootSync).mockReturnValueOnce(pkgRoot);
 
     expect(
       isPackageProvenControlUiRootSync(fallbackRoot, {

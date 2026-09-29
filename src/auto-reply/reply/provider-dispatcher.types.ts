@@ -14,7 +14,8 @@ import type {
 } from "./reply-dispatcher.js";
 
 type DispatchReplyContext = MsgContext | FinalizedMsgContext;
-type DispatchReplyOptions = Omit<GetReplyOptions, "onBlockReply"> & PluginCommandReplyOptions;
+type DispatchReplyOptions = Omit<GetReplyOptions, "onBlockReply" | "onPreparedBlockReply"> &
+  PluginCommandReplyOptions;
 
 /** Buffered block dispatcher entry point used by provider reply flows. */
 export type DispatchReplyWithBufferedBlockDispatcher = (params: {

@@ -6,23 +6,20 @@ import { AnthropicVertex as AnthropicVertexSdk } from "@anthropic-ai/vertex-sdk"
 import { GoogleAuth, type GoogleAuthOptions } from "google-auth-library";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
-  clampThinkingLevel,
+  adjustMaxTokensForThinking,
   stream as streamDefault,
   type Model,
-  type ModelThinkingLevel,
   type ProviderStreamOptions,
 } from "openclaw/plugin-sdk/llm";
+import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
-  resolveClaudeFable5ModelIdentity,
-  resolveClaudeModelIdentity,
-  resolveClaudeMythos5ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   requiresClaudeMandatoryAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
-  supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { resolveAnthropicThinkingEffort } from "openclaw/plugin-sdk/provider-stream-shared";
 import { copyProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
 import { resolveAnthropicVertexClientRegion } from "./region-endpoint.js";
@@ -52,8 +49,6 @@ type AnthropicVertexTransportOptions = ProviderStreamOptions & {
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
 };
 
-type AnthropicVertexEffort = NonNullable<AnthropicVertexTransportOptions["effort"]>;
-type AnthropicVertexAdaptiveEffort = AnthropicVertexEffort | "xhigh";
 type AnthropicVertexClientOptions = {
   baseURL?: string;
   googleAuth: GoogleAuth;
@@ -74,77 +69,14 @@ const defaultAnthropicVertexStreamDeps: AnthropicVertexStreamDeps = {
   streamAnthropic: streamDefault,
 };
 
-function isClaudeOpus47OrNewerModel(modelId: string): boolean {
-  return supportsClaudeNativeXhighEffort({ id: modelId });
-}
-
-function isClaudeFable5Model(modelId: string): boolean {
-  return resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined;
-}
-
-function isClaudeSonnet5Model(modelId: string): boolean {
-  return resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined;
-}
-
-function isClaudeOpus5Model(modelId: string): boolean {
-  return resolveClaudeOpus5ModelIdentity({ id: modelId }) !== undefined;
-}
-
-function isClaudeMythos5Model(modelId: string): boolean {
-  return resolveClaudeMythos5ModelIdentity({ id: modelId }) !== undefined;
-}
-
-function supportsAdaptiveThinking(modelId: string): boolean {
-  return supportsClaudeAdaptiveThinking({ id: modelId });
-}
-
-function mapAnthropicAdaptiveEffort(
-  reasoning: ModelThinkingLevel,
-  model: Model<"anthropic-messages">,
-  modelId: string,
-): AnthropicVertexAdaptiveEffort {
-  const clampModel =
-    typeof model.params?.canonicalModelId === "string" ? { ...model, reasoning: true } : model;
-  const resolvedReasoning = clampThinkingLevel(clampModel, reasoning);
-  const mapped = model.thinkingLevelMap?.[resolvedReasoning];
-  if (typeof mapped === "string") {
-    return mapped as AnthropicVertexAdaptiveEffort;
-  }
-  const effortMap: Record<string, AnthropicVertexAdaptiveEffort> = {
-    off: "low",
-    minimal: "low",
-    low: "low",
-    medium: "medium",
-    high: "high",
-    xhigh: isClaudeFable5Model(modelId)
-      ? "xhigh"
-      : isClaudeOpus47OrNewerModel(modelId) || isClaudeMythos5Model(modelId)
-        ? "xhigh"
-        : "high",
-    max:
-      supportsClaudeNativeMaxEffort({ id: modelId }) || isClaudeMythos5Model(modelId)
-        ? "max"
-        : "high",
-  };
-  return effortMap[resolvedReasoning] ?? "high";
-}
-
 function resolveAnthropicVertexMaxTokens(params: {
   modelMaxTokens: number | undefined;
   requestedMaxTokens: number | undefined;
 }): number | undefined {
-  const modelMax =
-    typeof params.modelMaxTokens === "number" &&
-    Number.isFinite(params.modelMaxTokens) &&
-    params.modelMaxTokens > 0
-      ? Math.floor(params.modelMaxTokens)
-      : undefined;
-  const requested =
-    typeof params.requestedMaxTokens === "number" &&
-    Number.isFinite(params.requestedMaxTokens) &&
-    params.requestedMaxTokens > 0
-      ? Math.floor(params.requestedMaxTokens)
-      : undefined;
+  const modelLimit = asPositiveFiniteNumber(params.modelMaxTokens);
+  const requestedLimit = asPositiveFiniteNumber(params.requestedMaxTokens);
+  const modelMax = modelLimit === undefined ? undefined : Math.floor(modelLimit);
+  const requested = requestedLimit === undefined ? undefined : Math.floor(requestedLimit);
 
   if (modelMax !== undefined && requested !== undefined) {
     return Math.min(requested, modelMax);
@@ -195,29 +127,26 @@ export function createAnthropicVertexStreamFn(
       modelMaxTokens: transportModel.maxTokens,
       requestedMaxTokens: options?.maxTokens,
     });
-    const contractModelId = resolveClaudeModelIdentity(model);
     // Sonnet 5 and Opus 5 default thinking on when the caller omits reasoning.
     const adaptiveDefaultClaude5 =
-      isClaudeSonnet5Model(contractModelId) || isClaudeOpus5Model(contractModelId);
-    const mandatoryAdaptiveThinking = requiresClaudeMandatoryAdaptiveThinking({
-      id: contractModelId,
-    });
+      resolveClaudeSonnet5ModelIdentity(transportModel) !== undefined ||
+      resolveClaudeOpus5ModelIdentity(transportModel) !== undefined;
+    const mandatoryAdaptiveThinking = requiresClaudeMandatoryAdaptiveThinking(transportModel);
+    const adaptiveModel = supportsClaudeAdaptiveThinking(transportModel);
     const requestedReasoning = options?.reasoning;
     const reasoning =
       requestedReasoning === "off" && mandatoryAdaptiveThinking
         ? "low"
         : (requestedReasoning ?? (adaptiveDefaultClaude5 ? "high" : undefined));
     const adaptiveThinking =
-      mandatoryAdaptiveThinking ||
-      Boolean(reasoning && reasoning !== "off" && supportsAdaptiveThinking(contractModelId));
+      mandatoryAdaptiveThinking || Boolean(reasoning && reasoning !== "off" && adaptiveModel);
     const temperature =
-      adaptiveThinking ||
-      isClaudeOpus47OrNewerModel(contractModelId) ||
-      isClaudeMythos5Model(contractModelId)
+      adaptiveThinking || supportsClaudeNativeXhighEffort(transportModel)
         ? undefined
         : options?.temperature;
     const opts: AnthropicVertexTransportOptions = copyProviderAcceptanceObserver(options, {
       client,
+      thinkingEnabled: mandatoryAdaptiveThinking,
       ...(temperature !== undefined ? { temperature } : {}),
       ...(maxTokens !== undefined ? { maxTokens } : {}),
       signal: options?.signal,
@@ -236,30 +165,23 @@ export function createAnthropicVertexStreamFn(
     if (reasoning === "off") {
       opts.thinkingEnabled = false;
     } else if (reasoning) {
-      if (supportsAdaptiveThinking(contractModelId)) {
+      if (adaptiveModel) {
         opts.thinkingEnabled = true;
-        opts.effort = mapAnthropicAdaptiveEffort(
-          reasoning,
-          transportModel,
-          contractModelId,
-        ) as AnthropicVertexEffort;
+        opts.effort = resolveAnthropicThinkingEffort(transportModel, reasoning);
       } else {
-        const budgets = options?.thinkingBudgets;
-        const thinkingBudgetTokens =
-          (budgets && reasoning in budgets
-            ? budgets[reasoning as keyof typeof budgets]
-            : undefined) ?? 10000;
-        const requestMaxTokens = opts.maxTokens ?? transportModel.maxTokens;
-        opts.thinkingEnabled =
-          thinkingBudgetTokens >= 1024 && thinkingBudgetTokens < requestMaxTokens;
+        const adjusted = adjustMaxTokensForThinking(
+          maxTokens,
+          transportModel.maxTokens,
+          reasoning,
+          options?.thinkingBudgets,
+        );
+        opts.thinkingEnabled = adjusted.thinkingBudget >= 1024;
+        // A disabled budget must not inflate the caller's visible-output cap.
         if (opts.thinkingEnabled) {
-          opts.thinkingBudgetTokens = thinkingBudgetTokens;
+          opts.maxTokens = adjusted.maxTokens;
+          opts.thinkingBudgetTokens = adjusted.thinkingBudget;
         }
       }
-    } else if (mandatoryAdaptiveThinking) {
-      opts.thinkingEnabled = true;
-    } else {
-      opts.thinkingEnabled = false;
     }
 
     return deps.streamAnthropic(transportModel, context, opts);
@@ -275,7 +197,7 @@ function resolveAnthropicVertexSdkBaseUrl(baseUrl?: string): string | undefined 
   try {
     const url = new URL(trimmed);
     const normalizedPath = url.pathname.replace(/\/+$/, "");
-    if (!normalizedPath || normalizedPath === "") {
+    if (!normalizedPath) {
       url.pathname = "/v1";
       return url.toString().replace(/\/$/, "");
     }

@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements socket timing behavior.
 import type {
   AnyMessageContent,
   MiscMessageGenerationOptions,

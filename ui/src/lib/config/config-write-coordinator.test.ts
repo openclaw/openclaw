@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import {
   GatewayRequestError,
   type GatewayBrowserClient,
@@ -8,7 +9,6 @@ import {
 import type { ConfigSnapshot } from "../../api/types.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
-  deferred,
   createConfigServerMock,
   createDeferredSetServerMock,
   createConfigCapabilityHarness,
@@ -200,7 +200,9 @@ describe("config write coordinator", () => {
     expect(runtimeConfig.state.configNeedsApply).toBe(false);
     expect(runtimeConfig.state.lastError).toContain("disk full");
 
-    // No retry loop; only the next edit reschedules a save.
+    // Resuming the updater is not new edit intent or an explicit retry.
+    runtimeConfig.setWritesSuspended(true);
+    runtimeConfig.setWritesSuspended(false);
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 10);
     expect(setCalls).toBe(1);
     runtimeConfig.patchForm(["count"], 3);
@@ -330,32 +332,35 @@ describe("config write coordinator", () => {
     expect(submissions).toHaveLength(1);
   });
 
-  it("drains in-flight saves before a discard without trailing the discarded bytes", async () => {
-    vi.useFakeTimers();
-    const { request, submissions, firstSet } = createDeferredSetServerMock();
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
+  it.each([false, true])(
+    "drains saves without trailing discarded bytes (reloadOnly: %s)",
+    async (reloadOnly) => {
+      vi.useFakeTimers();
+      const { request, submissions, firstSet } = createDeferredSetServerMock();
+      const { runtimeConfig } = createConfigCapabilityHarness(
+        request as GatewayBrowserClient["request"],
+      );
+      await runtimeConfig.ensureLoaded();
 
-    runtimeConfig.patchForm(["count"], 2);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(submissions).toHaveLength(1);
+      runtimeConfig.patchForm(["count"], 2);
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      expect(submissions).toHaveLength(1);
 
-    // A mid-flight edit would normally spawn a trailing save; a discard must
-    // wait for the flight and then throw the draft away instead.
-    runtimeConfig.patchForm(["count"], 3);
-    const discardPromise = runtimeConfig.discardDraft();
-    firstSet.resolve({});
-    await vi.advanceTimersByTimeAsync(0);
-    await discardPromise;
+      // A mid-flight edit would normally spawn a trailing save; a discard must
+      // wait for the flight and then throw the draft away instead.
+      runtimeConfig.patchForm(["count"], 3);
+      const discardPromise = runtimeConfig.discardDraft({ reloadOnly });
+      firstSet.resolve({});
+      await vi.advanceTimersByTimeAsync(0);
+      await discardPromise;
 
-    expect(submissions).toHaveLength(1);
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
-    // The draft ends clean against the acked/reloaded state, not the old bytes.
-    expect(runtimeConfig.state.configForm).toEqual({ count: 2 });
-    runtimeConfig.dispose();
-  });
+      expect(submissions).toHaveLength(1);
+      expect(runtimeConfig.state.configFormDirty).toBe(false);
+      // The draft ends clean against the acked/reloaded state, not the old bytes.
+      expect(runtimeConfig.state.configForm).toEqual({ count: 2 });
+      runtimeConfig.dispose();
+    },
+  );
 
   it("suspends config writes while the app updater runs and resumes after", async () => {
     vi.useFakeTimers();
@@ -979,31 +984,38 @@ describe("config write coordinator", () => {
     runtimeConfig.dispose();
   });
 
-  it("drains in-flight saves before a discarding refresh", async () => {
-    vi.useFakeTimers();
-    const { request, submissions, firstSet } = createDeferredSetServerMock();
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
+  it.each([false, true])(
+    "preserves the offline discard policy after draining (reloadOnly: %s)",
+    async (reloadOnly) => {
+      vi.useFakeTimers();
+      const { request, submissions, firstSet } = createDeferredSetServerMock();
+      const { runtimeConfig, publish } = createConfigCapabilityHarness(
+        request as GatewayBrowserClient["request"],
+      );
+      await runtimeConfig.ensureLoaded();
 
-    runtimeConfig.patchForm(["count"], 2);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(submissions).toHaveLength(1);
+      runtimeConfig.patchForm(["count"], 2);
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      expect(submissions).toHaveLength(1);
 
-    // Same barrier as discardDraft: the settling flight must not trail the
-    // just-discarded edit back to disk after the refresh.
-    runtimeConfig.patchForm(["count"], 3);
-    const refreshPromise = runtimeConfig.refresh({ discardPendingChanges: true });
-    firstSet.resolve({});
-    await vi.advanceTimersByTimeAsync(0);
-    await refreshPromise;
+      runtimeConfig.patchForm(["count"], 3);
+      const discardPromise = runtimeConfig.discardDraft({ reloadOnly });
+      publish(false);
+      await discardPromise;
 
-    expect(submissions).toHaveLength(1);
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
-    expect(runtimeConfig.state.configForm).toEqual({ count: 2 });
-    runtimeConfig.dispose();
-  });
+      expect(runtimeConfig.state.configForm).toEqual({ count: reloadOnly ? 3 : 1 });
+      expect(runtimeConfig.state.configFormDirty).toBe(reloadOnly);
+      expect(request.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(1);
+
+      // A disconnected write's late acknowledgement cannot replace either result.
+      firstSet.resolve({});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(submissions).toHaveLength(1);
+      expect(runtimeConfig.state.configForm).toEqual({ count: reloadOnly ? 3 : 1 });
+      expect(runtimeConfig.state.configFormDirty).toBe(reloadOnly);
+      runtimeConfig.dispose();
+    },
+  );
 
   it("flushes a scheduled form autosave before config.patch and re-arms after", async () => {
     vi.useFakeTimers();

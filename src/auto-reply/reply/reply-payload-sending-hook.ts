@@ -4,21 +4,22 @@ import type {
   PluginHookReplyPayloadSendingContext,
   PluginHookReplyUsageState,
 } from "../../plugins/hook-types.js";
-import { copyReplyPayloadMetadata } from "../reply-payload.js";
-import type { ReplyPayload } from "../reply-payload.js";
+import { copyReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 
 /** Runs plugin hooks that may rewrite or cancel an outbound reply payload. */
-export async function runReplyPayloadSendingHook(params: {
-  payload: ReplyPayload;
-  kind: ReplyDispatchKind;
-  channel?: string;
-  sessionKey?: string;
-  runId?: string;
-  usageState?: PluginHookReplyUsageState;
-  context: PluginHookReplyPayloadSendingContext;
-}): Promise<ReplyPayload | null> {
-  const hookRunner = getGlobalHookRunner();
+export async function runReplyPayloadSendingHook(
+  params: {
+    payload: ReplyPayload;
+    kind: ReplyDispatchKind;
+    channel?: string;
+    sessionKey?: string;
+    runId?: string;
+    usageState?: PluginHookReplyUsageState;
+    context: PluginHookReplyPayloadSendingContext;
+  },
+  hookRunner = getGlobalHookRunner(),
+): Promise<ReplyPayload | null> {
   if (!hookRunner?.hasHooks("reply_payload_sending")) {
     return params.payload;
   }
@@ -38,6 +39,6 @@ export async function runReplyPayloadSendingHook(params: {
   if (result?.cancel) {
     return null;
   }
-  const payload = (result?.payload as ReplyPayload | undefined) ?? params.payload;
+  const payload = result?.payload ?? params.payload;
   return copyReplyPayloadMetadata(params.payload, payload);
 }

@@ -4,7 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -16,19 +17,64 @@ import type { TerminalPtyHandle } from "./terminal-pty.js";
 
 const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: os.tmpdir(), TERM: "dumb" };
 const handles: TerminalPtyHandle[] = [];
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const handle of handles.splice(0)) {
     handle.kill();
-  }
-  for (const directory of tempDirs.splice(0)) {
-    fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
 describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
-  it("preserves terminal input, resize ordering, and final output before exit", async () => {
+  it.each(["before", "after"] as const)(
+    "checks launch policy %s the PTY start message",
+    async (timing) => {
+      const directory = tempDirs.make("openclaw-pty-policy-");
+      const marker = path.join(directory, "started");
+      let allowed = true;
+      const starting = spawnNodeTerminalPty(
+        {
+          file: "/bin/sh",
+          args: ["-c", "touch started; IFS= read -r input; printf 'completed\\n'"],
+          cwd: directory,
+          env,
+          cols: 80,
+          rows: 24,
+        },
+        () => {
+          if (!allowed) {
+            throw new Error("PTY policy revoked");
+          }
+        },
+      );
+      if (timing === "before") {
+        // The Node helper has started, but its boot acknowledgement has not arrived.
+        allowed = false;
+        await expect(starting).rejects.toThrow("PTY policy revoked");
+        expect(fs.existsSync(marker)).toBe(false);
+      } else {
+        const handle = await starting;
+        handles.push(handle);
+        allowed = false;
+        const done = createDeferredCore<{ exitCode: number; signal?: number }>();
+        let output = "";
+        handle.onData((data) => {
+          output += data;
+        });
+        handle.onExit((event) => done.resolve(event));
+        handle.write("continue\r");
+        expect((await done.promise).exitCode).toBe(0);
+        expect(output).toContain("completed");
+        expect(fs.existsSync(marker)).toBe(true);
+      }
+    },
+  );
+
+  it("preserves terminal input, resize ordering, and final output with a non-Node shim first on PATH", async () => {
+    const directory = tempDirs.make("openclaw-pty-node-shim-");
+    fs.writeFileSync(path.join(directory, "node"), "#!/bin/sh\nexit 42\n", { mode: 0o755 });
+    vi.stubEnv("PATH", `${directory}${path.delimiter}${process.env.PATH ?? ""}`);
     const handle = await spawnNodeTerminalPty({
       file: "/bin/sh",
       args: [
@@ -59,8 +105,7 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
   });
 
   it("retains bounded pipe output while paused and drains it before reporting exit", async () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pty-output-"));
-    tempDirs.push(directory);
+    const directory = tempDirs.make("openclaw-pty-output-");
     const payload = "x".repeat(2 * 1024 * 1024);
     const file = path.join(directory, "output.txt");
     fs.writeFileSync(file, payload);

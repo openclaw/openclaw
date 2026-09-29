@@ -1,13 +1,13 @@
-import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { attachModelProviderLocalServiceReconciler } from "../agents/provider-local-service-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import {
+  hasConfiguredModelProvider,
   resolveModelCatalogScope,
   resolveProviderConfigApiOwnerHint,
 } from "./provider-config-owner.js";
-import { findProviderRuntimePluginInRegistry } from "./provider-registry-selection.js";
+import { findProviderRuntimeRegistrationInRegistry } from "./provider-registry-selection.js";
 import { matchesProviderPluginRef } from "./provider-registry-shared.js";
 import type { createProviderRegistryResolver } from "./providers.runtime-core.js";
 import type {
@@ -91,15 +91,6 @@ export function createProviderHookRuntime(
     );
   }
 
-  function hasConfiguredModelProvider(params: {
-    provider: string;
-    config?: OpenClawConfig;
-  }): boolean {
-    return (
-      findNormalizedProviderValue(params.config?.models?.providers, params.provider) !== undefined
-    );
-  }
-
   function resolveLoadedProviderPluginsForHooks(params: {
     config?: OpenClawConfig;
     workspaceDir?: string;
@@ -160,16 +151,19 @@ export function createProviderHookRuntime(
       activate: false,
       skipIfLoadInFlight: true,
     });
+    const registration = selection
+      ? findProviderRuntimeRegistrationInRegistry({
+          registry: selection.registry,
+          provider: params.provider,
+          ownerRefs,
+          isOwnerEligible: (id) => selection.isProviderOwnerEligible(id, params.provider),
+        })
+      : undefined;
     return {
       ...params,
       ...(selection ? { workspaceDir: selection.workspaceDir } : {}),
-      plugin: selection
-        ? findProviderRuntimePluginInRegistry({
-            registry: selection.registry,
-            provider: params.provider,
-            ownerRefs,
-            isOwnerEligible: (id) => selection.isProviderOwnerEligible(id, params.provider),
-          })
+      plugin: registration
+        ? Object.assign({}, registration.provider, { pluginId: registration.pluginId })
         : undefined,
     };
   }
@@ -207,13 +201,16 @@ export function createProviderHookRuntime(
       activate: false,
       skipIfLoadInFlight: true,
     });
-    return selection
-      ? findProviderRuntimePluginInRegistry({
+    const registration = selection
+      ? findProviderRuntimeRegistrationInRegistry({
           registry: selection.registry,
           provider: params.provider,
           ownerRefs: [],
           isOwnerEligible: (id) => selection.isProviderOwnerEligible(id, params.provider),
         })
+      : undefined;
+    return registration
+      ? Object.assign({}, registration.provider, { pluginId: registration.pluginId })
       : undefined;
   }
 
@@ -251,7 +248,7 @@ export function createProviderHookRuntime(
     const resolved = ensureProviderRuntimePluginHandle(params).plugin?.resolveAuthProfileId?.(
       params.context,
     );
-    return typeof resolved === "string" && resolved.trim() ? resolved.trim() : undefined;
+    return normalizeOptionalString(resolved);
   }
 
   function resolveProviderFollowupFallbackRoute(

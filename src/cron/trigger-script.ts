@@ -60,6 +60,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
+import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   bindGatewayContextResolver,
@@ -142,10 +144,15 @@ type CronTriggerEvaluatorDeps = {
 };
 
 type TriggerRuntimeCacheEntry = {
-  promise: Promise<PreparedTriggerRuntime>;
+  promise: Promise<CachedTriggerRuntime>;
   configEpoch: OpenClawConfig;
   agentId: string;
   toolsAllowKey: string;
+};
+
+type CachedTriggerRuntime = PreparedTriggerRuntime & {
+  isCurrent: () => boolean;
+  invalidate: () => void;
 };
 
 function resolveTriggerAgentId(config: OpenClawConfig, agentId?: string): string {
@@ -280,15 +287,14 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
   const runHeadless = deps.runHeadless ?? runCodeModeScriptHeadless;
   const prepareRuntime =
     deps.prepareRuntime ?? ((params) => prepareTriggerRuntime(params, deps.loadPluginRegistry));
-  // Config identity is the reload epoch; caching the preparation promise makes
-  // concurrent cold evaluations for one job single-flight. Cache only preparation:
+  // Config and plugin lifecycle identity bound preparation reuse. Cache only preparation:
   // tool instances capture run authority, abort signals, and secret egress state.
   const runtimeCache = new Map<string, TriggerRuntimeCacheEntry>();
 
   const resolveCachedRuntime = async (
     request: Parameters<PrepareTriggerRuntime>[0],
     scope: ReturnType<typeof createHeadlessDeadlineScope>,
-  ): Promise<PreparedTriggerRuntime> => {
+  ): Promise<CachedTriggerRuntime> => {
     const agentId = resolveTriggerAgentId(request.runtimeConfig, request.agentId);
     const toolsAllowKey = JSON.stringify([
       request.toolsAllow ?? null,
@@ -321,7 +327,19 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         throw error;
       }
     }
-    const promise = prepareRuntime({ ...request, signal: scope.signal });
+    const promise = prepareRuntime({ ...request, signal: scope.signal }).then((runtime) => ({
+      ...runtime,
+      isCurrent: runtime.pluginRegistry
+        ? (capturePluginLifecycleAuthority(runtime.pluginRegistry, undefined, {
+            scopedRuntime: true,
+          }) ?? (() => false))
+        : () => true,
+      invalidate: () => {
+        if (runtimeCache.get(request.jobId) === entry) {
+          runtimeCache.delete(request.jobId);
+        }
+      },
+    }));
     const entry: TriggerRuntimeCacheEntry = {
       promise,
       configEpoch: request.runtimeConfig,
@@ -345,7 +363,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       wallClockMs: number;
       maxToolCalls: number;
       label: string;
-      onExecutionStarted?: () => void;
+      onExecutionStarted?: () => void | Promise<void>;
     },
   ): Promise<
     | { kind: "completed"; result: Extract<CodeModeHeadlessResult, { status: "completed" }> }
@@ -359,50 +377,24 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     const catalogRef = createToolSearchCatalogRef();
     let admission: PreparedAgentRunAdmission | undefined;
     try {
-      const runtime = await resolveCachedRuntime(
-        {
-          runtimeConfig: resolveCronActiveRuntimeConfig(deps.config),
-          jobId: params.job.id,
-          agentId: params.job.agentId,
+      const request = {
+        runtimeConfig: resolveCronActiveRuntimeConfig(deps.config),
+        jobId: params.job.id,
+        agentId: params.job.agentId,
+        toolsAllow: params.job.payload.toolsAllow,
+        scheduledToolPolicy: resolveCronScheduledToolPolicy({
           toolsAllow: params.job.payload.toolsAllow,
-          scheduledToolPolicy: resolveCronScheduledToolPolicy({
-            toolsAllow: params.job.payload.toolsAllow,
-            scheduledToolPolicy: params.job.scheduledToolPolicy,
-            owner: params.job.owner,
-          }),
-          execTarget: params.job.toolsAllowExecTarget,
-        },
-        evaluationScope,
-      );
-
+          scheduledToolPolicy: params.job.scheduledToolPolicy,
+          owner: params.job.owner,
+        }),
+        execTarget: params.job.toolsAllowExecTarget,
+      };
       const runId = `cron-trigger:${params.job.id}:${crypto.randomUUID()}`;
-      admission = prepareAgentRunAdmission({
-        cfg: runtime.context.config,
-        operationalRunInstance: createOperationalRunInstanceRef(runId),
-        facts: {
-          runId,
-          agentId: runtime.context.agentId,
-          ingress: params.executionIdentity?.ingress ?? {
-            kind: "schedule",
-            boundary: "cron.script",
-            state: "present",
-          },
-          ...(params.executionIdentity?.invoker
-            ? { invoker: params.executionIdentity.invoker }
-            : {}),
-        },
-      });
-      const admitted = await admission.admit("gateway");
-      bindGatewayContextResolver(admitted, deps.resolveGatewayContext);
-      params.executionIdentity?.onPostAdmission?.(admitted);
-      const assertAdmitted = resolveAdmittedRunActiveAssertion(admitted, evaluationScope.signal);
-      const caller = createAdmittedGatewayToolCallerIdentity({
-        admittedRunContext: admitted,
-        agentId: runtime.context.agentId,
-        sessionKey: runtime.context.sessionKey,
-        receiptAuthority: assertActive,
-        approvalSignals: [evaluationScope.signal],
-      });
+      let runtime: CachedTriggerRuntime | undefined;
+      let tools: AnyAgentTool[];
+      let admitted: AdmittedRunContext | undefined;
+      let assertAdmitted: ReturnType<typeof resolveAdmittedRunActiveAssertion>;
+      let caller: ReturnType<typeof createAdmittedGatewayToolCallerIdentity>;
       function assertActive() {
         if (
           !assertAdmitted ||
@@ -412,6 +404,76 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           throw new Error("cron script invocation is no longer active");
         }
         assertAdmitted();
+      }
+      for (let refresh = 0; ; refresh += 1) {
+        try {
+          runtime = await resolveCachedRuntime(request, evaluationScope);
+          if (!runtime.isCurrent()) {
+            throw new PluginInstanceUnavailableError();
+          }
+          if (!admitted) {
+            admission = prepareAgentRunAdmission({
+              cfg: runtime.context.config,
+              operationalRunInstance: createOperationalRunInstanceRef(runId),
+              facts: {
+                runId,
+                agentId: runtime.context.agentId,
+                ingress: params.executionIdentity?.ingress ?? {
+                  kind: "schedule",
+                  boundary: "cron.script",
+                  state: "present",
+                },
+                ...(params.executionIdentity?.invoker
+                  ? { invoker: params.executionIdentity.invoker }
+                  : {}),
+              },
+            });
+            admitted = await admission.admit("gateway");
+            bindGatewayContextResolver(admitted, deps.resolveGatewayContext);
+            await params.executionIdentity?.onPostAdmission?.(admitted);
+            assertAdmitted = resolveAdmittedRunActiveAssertion(admitted, evaluationScope.signal);
+            caller = createAdmittedGatewayToolCallerIdentity({
+              admittedRunContext: admitted,
+              agentId: runtime.context.agentId,
+              sessionKey: runtime.context.sessionKey,
+              receiptAuthority: assertActive,
+              approvalSignals: [evaluationScope.signal],
+            });
+          }
+          assertActive();
+          if (!runtime.isCurrent()) {
+            throw new PluginInstanceUnavailableError();
+          }
+          const selected = runtime;
+          const authority = admitted;
+          tools = withPluginRuntimeRegistryScope(selected.pluginRegistry, () =>
+            selected.createTools(authority, evaluationScope.signal),
+          );
+          if (!runtime.isCurrent()) {
+            throw new PluginInstanceUnavailableError();
+          }
+          break;
+        } catch (error) {
+          if (
+            error instanceof CodeModeHeadlessAbortError ||
+            error instanceof CodeModeHeadlessTimeoutError ||
+            evaluationScope.signal.aborted
+          ) {
+            throw error;
+          }
+          if (refresh > 0) {
+            runtime?.invalidate();
+            return scriptFailure(
+              `Plugin tool refresh failed before the script started: ${formatErrorMessageWithCode(error)}`,
+              "plugin_reload_failed",
+            );
+          }
+          if (!(error instanceof PluginInstanceUnavailableError)) {
+            throw error;
+          }
+          runtime?.invalidate();
+          // Retry setup once with the same admission and deadline, never script execution.
+        }
       }
       const ctx: ToolSearchToolContext = {
         ...runtime.context,
@@ -441,18 +503,19 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           }),
       };
 
-      return await withPluginRuntimeRegistryScope(runtime.pluginRegistry, async () => {
+      const selectedRuntime = runtime;
+      return await withPluginRuntimeRegistryScope(selectedRuntime.pluginRegistry, async () => {
         assertActive();
         registerHeadlessToolSearchCatalog({
           catalogRef,
-          tools: runtime.createTools(admitted, evaluationScope.signal),
-          hookContext: { ...runtime.context, runId },
+          tools,
+          hookContext: { ...selectedRuntime.context, runId },
         });
         const remainingWallClockMs = Math.ceil(evaluationScope.deadline - performance.now());
         if (remainingWallClockMs <= 0) {
           throw new CodeModeHeadlessTimeoutError(`${params.label} timed out`);
         }
-        params.onExecutionStarted?.();
+        await params.onExecutionStarted?.();
         assertActive();
         const result = await runHeadless({
           ctx,

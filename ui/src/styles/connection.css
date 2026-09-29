@@ -31,6 +31,13 @@
   color: var(--muted);
 }
 
+.config-host__placeholder {
+  display: inline-block;
+  width: 65%;
+  height: 1em;
+  vertical-align: -0.1em;
+}
+
 .config-host__address {
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
@@ -123,6 +130,62 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--space-2);
+}
+
+.settings-row.connection-ping,
+.settings-row.connection-activity {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.connection-ping__trend.gateway-vital,
+.connection-activity .gateway-vital {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.connection-ping__trend.gateway-vital {
+  min-height: 92px;
+}
+
+.connection-ping__stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.connection-ping__stats dt {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.connection-ping__stats dd {
+  margin: var(--space-1) 0 0;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-lg);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.connection-ping__stats dd span {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 400;
+}
+
+.connection-ping__error {
+  display: block;
+  color: var(--warn);
+}
+
+@media (max-width: 400px) {
+  .connection-ping__stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .connection-details {

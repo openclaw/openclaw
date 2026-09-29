@@ -1,14 +1,23 @@
+import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type {
   ControlUiComponentHandle,
   ControlUiComponents,
 } from "../../../src/plugin-sdk/control-ui-components.js";
-import type { RouteId } from "../app-routes.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readGatewayOperatorAccess } from "../app/operator-access.ts";
 import { icons } from "../components/icons.ts";
 
+function resolveAppearanceColor(value: string | null | undefined): string {
+  const color = normalizeSessionColorValue(value ?? "");
+  if (color) {
+    return `var(--session-color-${color})`;
+  }
+  const raw = value?.trim() ?? "";
+  return /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/iu.test(raw) ? raw : "";
+}
+
 export function createControlUiComponents(options: {
-  current: () => ApplicationContext<RouteId>;
+  current: () => ApplicationContext;
   signal: AbortSignal;
   onError: (error: unknown) => void;
 }): ControlUiComponents {
@@ -16,8 +25,9 @@ export function createControlUiComponents(options: {
     container: HTMLElement,
     initial: P,
     load: () => Promise<E>,
-    apply: (element: E, props: P, current: () => ApplicationContext<RouteId>) => void,
+    apply: (element: E, props: P, current: () => ApplicationContext) => void,
     listen?: (element: E, props: () => P) => () => void,
+    observe?: (context: ApplicationContext, refresh: () => void) => () => void,
   ): ControlUiComponentHandle<P> {
     options.current();
     options.signal.throwIfAborted();
@@ -66,6 +76,9 @@ export function createControlUiComponents(options: {
         container.append(element);
         const context = current();
         const stops = [context.gateway.subscribe(refresh), context.agents.subscribe(refresh)];
+        if (observe) {
+          stops.push(observe(context, refresh));
+        }
         unsubscribe = () => stops.forEach((stop) => stop());
       })
       .catch((error: unknown) => {
@@ -85,6 +98,68 @@ export function createControlUiComponents(options: {
   }
 
   return {
+    resolveAppearanceColor(value) {
+      options.current();
+      options.signal.throwIfAborted();
+      return resolveAppearanceColor(value);
+    },
+    mountAgentAvatar: (container, props) =>
+      mount(
+        container,
+        props,
+        async () => {
+          const { AgentAvatar } = await import("../components/agent-avatar.ts");
+          return new AgentAvatar();
+        },
+        (element, next, current) => {
+          const context = current();
+          const agentsList = context.agents.state.agentsList;
+          const id = next.agentId || agentsList?.defaultId || "";
+          element.option = {
+            value: id,
+            label: next.label,
+            agent: agentsList?.agents.find((agent) => agent.id === id) ?? { id },
+          };
+          element.identity = context.agentIdentity.get(id);
+          void context.agentIdentity.ensure([id]);
+        },
+        undefined,
+        (context, refresh) => context.agentIdentity.subscribe(refresh),
+      ),
+    mountAppearancePicker: (container, props) =>
+      mount(
+        container,
+        props,
+        async () => {
+          const { AppearancePicker } = await import("../components/appearance-picker.ts");
+          return new AppearancePicker();
+        },
+        (element, next, current) => {
+          element.props = {
+            ...next,
+            onChange: (appearance) => {
+              current();
+              next.onChange(appearance);
+            },
+          };
+        },
+      ),
+    mountAppearanceGlyph: (container, props) =>
+      mount(
+        container,
+        props,
+        async () => {
+          const { AppearanceGlyph } = await import("../components/appearance-picker.ts");
+          return new AppearanceGlyph();
+        },
+        (element, next) => {
+          element.props = next;
+          element.style.setProperty(
+            "--appearance-color",
+            resolveAppearanceColor(next.color) || "var(--muted)",
+          );
+        },
+      ),
     mountDialog: (container, props) =>
       mount(
         container,
@@ -134,11 +209,52 @@ export function createControlUiComponents(options: {
           element.placeholder = next.placeholder ?? "";
           element.accessibleLabel = next.accessibleLabel;
           element.menuLabel = next.menuLabel ?? "";
+          element.variant = next.variant ?? "default";
           element.disabled = next.disabled ?? false;
           element.onSelect = (value) => {
             current();
             next.onSelect(value);
           };
+        },
+      ),
+    mountSelectPicker: (container, props) =>
+      mount(
+        container,
+        props,
+        async () => {
+          const { SelectPicker } = await import("../components/select-picker.ts");
+          return new SelectPicker();
+        },
+        (element, next, current) => {
+          element.className = "settings-select picker-select";
+          element.params = {
+            options: next.options,
+            value: next.value,
+            label: next.accessibleLabel,
+            searchable: next.searchable,
+            disabled: next.disabled,
+            onChange: (value) => {
+              current();
+              next.onSelect(value);
+            },
+          };
+        },
+      ),
+    mountSessionSummary: (container, props) =>
+      mount(
+        container,
+        props,
+        async () => {
+          await import("./control-ui-session-summary.ts");
+          return document.createElement("openclaw-plugin-session-summary");
+        },
+        (element, next, current) => {
+          element.session = next.session;
+          element.gateway = current().gateway;
+          element.agents = current().agents.state.agentsList?.agents ?? [];
+          element.agentIdentity = current().agentIdentity;
+          element.presented = next.presented;
+          element.requestUpdate();
         },
       ),
     mountDashboard: (container, props) =>

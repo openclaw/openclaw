@@ -18,6 +18,7 @@ import { logWarn } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 
 export type RunCronAgentTurnParams = {
+  admissionSource?: import("../../agents/admitted-run-context.js").AdmittedRunContext["admissionSource"];
   cfg: OpenClawConfig;
   deps: CliDeps;
   job: CronStoredJob;
@@ -37,36 +38,9 @@ export type RunCronAgentTurnParams = {
   skillsSnapshot?: SkillSnapshot;
 };
 
-export function resolveCronAgentTurnMessage(input: RunCronAgentTurnParams): string {
-  if (input.job.payload.kind === "agentTurn") {
-    return input.job.payload.message;
-  }
-  return input.message;
-}
-
 export type WithRunSession = (
   result: Omit<RunCronAgentTurnResult, "sessionId" | "sessionKey">,
 ) => RunCronAgentTurnResult;
-
-const CRON_EXECUTION_ROOT_RUNTIME_ERROR =
-  "collection review requires a runtime that enforces the Workshop root through OpenClaw tools";
-
-export class CronExecutionRootRuntimeError extends Error {
-  constructor() {
-    super(CRON_EXECUTION_ROOT_RUNTIME_ERROR);
-    this.name = "CronExecutionRootRuntimeError";
-  }
-}
-
-export function assertCronExecutionRootRuntime(
-  executionRoot: string | undefined,
-  runtime: string,
-  rootedCliExecution: boolean,
-): void {
-  if (executionRoot && runtime !== "openclaw" && !rootedCliExecution) {
-    throw new CronExecutionRootRuntimeError();
-  }
-}
 
 const sessionAccessorRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/session-accessor.js"),
@@ -85,10 +59,6 @@ export async function loadCronExternalContentRuntime() {
   return await cronExternalContentRuntimeLoader.load();
 }
 
-async function loadCronAuthProfileRuntime() {
-  return await cronAuthProfileRuntimeLoader.load();
-}
-
 function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
   return (
     Boolean(cfg.auth?.profiles && Object.keys(cfg.auth.profiles).length > 0) ||
@@ -103,6 +73,7 @@ function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
  * persistence will write.
  */
 export async function resolveCronAuthSelection(params: {
+  agentId: string;
   cfg: OpenClawConfig;
   provider: string;
   modelId: string;
@@ -123,8 +94,9 @@ export async function resolveCronAuthSelection(params: {
   ) {
     return undefined;
   }
-  const runtime = await loadCronAuthProfileRuntime();
+  const runtime = await cronAuthProfileRuntimeLoader.load();
   return await runtime.resolveSessionAuthSelection({
+    agentId: params.agentId,
     cfg: params.cfg,
     provider: params.provider,
     modelId: params.modelId,
@@ -139,7 +111,7 @@ export async function resolveCronAuthSelection(params: {
   });
 }
 
-type CronAuthProfileRuntime = Awaited<ReturnType<typeof loadCronAuthProfileRuntime>>;
+type CronAuthProfileRuntime = typeof import("./run-auth-profile.runtime.js");
 
 export async function retireRolledCronSessionMcpRuntime(params: {
   job: CronJob;
@@ -168,6 +140,8 @@ export function appendCronUnattendedRunPreamble(
   commandBody: string,
   opts: { externalHook: boolean },
 ) {
+  // Keep the suffix static for prompt caching. External hooks cannot override
+  // this trusted guidance or gain permission to remove jobs through fenced content.
   const core = `This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly ${SILENT_REPLY_TOKEN}. If something failed, state plainly what failed and what you tried — the scheduler owns retries and failure alerts.`;
   const trustedExtra =
     " Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, remove it if your available tools allow.";

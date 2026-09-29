@@ -5,32 +5,25 @@ import {
   resolveAgentHarnessSessionStoreError,
   resolveAgentHarnessSessionStoreTransitionError,
 } from "../../sessions/agent-harness-session-key.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
+  deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import {
-  SessionEntryLifecycleUpsertConflictError,
-  type SessionArchivedTranscriptCleanupRule,
-} from "./session-accessor.lifecycle-types.js";
+import { SessionEntryLifecycleUpsertConflictError } from "./session-accessor.lifecycle-types.js";
 import {
   prunePublishedSessionArchivesByRetention,
   publishSessionStateArchives,
 } from "./session-accessor.sqlite-archive-store.js";
-import {
-  materializeSessionStateDeletePlans,
-  type MaterializedSessionStateDeletePlan,
-} from "./session-accessor.sqlite-archive.js";
+import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
+import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
+import { withNativeSessionCommitContext } from "./session-accessor.sqlite-commit-context.js";
 import type {
   SessionLifecycleArchivedTranscript,
   DeletedAgentSessionEntryPurgeParams,
   SessionEntryLifecycleMutationResult,
-  SessionEntryLifecycleRemoval,
-  SessionEntryLifecycleUpsert,
-  SessionEntryReplacementSnapshot,
-  SessionEntryReplacementUpdate,
-  SessionEntryStatus,
 } from "./session-accessor.sqlite-contract.js";
 import {
   runPreparedSqliteSessionWrite,
@@ -41,7 +34,6 @@ import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equal
 import {
   deleteLegacySessionEntryRows,
   deleteSessionEntryRows,
-  readExactSessionEntryJson,
   readExactSessionEntryRow,
   readSessionEntryCount,
   readSessionEntryStore,
@@ -55,7 +47,9 @@ import {
 } from "./session-accessor.sqlite-identity.js";
 import {
   assertPlannedLifecycleArtifactEntriesUnchanged,
+  assertRawSessionEntryRemovalUnchanged,
   collectProjectedReferencedSessionIds,
+  collectSessionStateIdsForEntry,
   deleteMaterializedSessionStatePlans,
   deletePlannedLifecycleArtifactEntries,
   planSessionStateAfterEntryRemoval,
@@ -64,6 +58,7 @@ import {
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   ProjectedLifecycleMutation,
+  SessionEntryLifecycleMutationParams,
   SessionEntryMaintenancePlan,
   SessionEntryRemovalPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
@@ -71,10 +66,9 @@ import {
   applySessionEntryMaintenance,
   finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort,
 } from "./session-accessor.sqlite-maintenance.js";
-import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { appendSessionResetBoundary } from "./session-accessor.sqlite-reset-boundary.js";
 import {
-  cloneSessionEntry,
+  captureLifecycleDatabaseScope,
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
   runExclusiveSqliteSessionWrite,
@@ -82,8 +76,9 @@ import {
   withSqliteSessionDatabase,
 } from "./session-accessor.sqlite-scope.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
-import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
+
+export { applySessionEntryExactReplacements as applySessionEntryReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 
 type SessionArchiveRuntime = typeof import("../../gateway/session-archive.runtime.js");
 let sessionArchiveRuntimePromise: Promise<SessionArchiveRuntime> | undefined;
@@ -91,23 +86,6 @@ let sessionArchiveRuntimePromise: Promise<SessionArchiveRuntime> | undefined;
 function loadSessionArchiveRuntime() {
   sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
   return sessionArchiveRuntimePromise;
-}
-
-export async function applySessionEntryReplacements<T>(params: {
-  assertCommitAllowed?: () => void;
-  activeSessionKey?: string;
-  agentId?: string;
-  consumePendingReset?: boolean;
-  requireWriteSuccess?: boolean;
-  sessionKeys?: readonly string[];
-  statuses?: readonly SessionEntryStatus[];
-  skipMaintenance?: boolean;
-  storePath: string;
-  update: (
-    entries: SessionEntryReplacementSnapshot[],
-  ) => Promise<SessionEntryReplacementUpdate<T>> | SessionEntryReplacementUpdate<T>;
-}): Promise<T> {
-  return await applySessionEntryExactReplacements(params);
 }
 
 /**
@@ -177,10 +155,11 @@ export async function applySessionStoreProjection<T>(params: {
         });
         return {
           deletedEntries: deletedOwners,
-          commit: () =>
+          commit: (assertSourceCurrent) =>
             withSqliteSessionDatabase(toDatabaseOptions(resolved), () => {
               runOpenClawAgentWriteTransaction(
                 (transactionDb) => {
+                  assertSourceCurrent?.();
                   for (const sessionKey of changedKeys) {
                     const current = readExactSessionEntryRow(transactionDb, sessionKey)?.entry;
                     if (!sqliteSessionEntriesEqual(current, before[sessionKey])) {
@@ -192,7 +171,7 @@ export async function applySessionStoreProjection<T>(params: {
                   for (const sessionKey of changedKeys) {
                     const entry = projected[sessionKey];
                     if (entry) {
-                      writeSessionEntry(transactionDb, sessionKey, cloneSessionEntry(entry), {
+                      writeSessionEntry(transactionDb, sessionKey, structuredClone(entry), {
                         previousEntry: before[sessionKey] ?? null,
                       });
                     } else {
@@ -232,8 +211,7 @@ function readProjectedRemovalEntry(
   projected: ProjectedLifecycleMutation["removals"][number],
   allowCanonicalRepair = false,
 ): SessionEntry | undefined {
-  const expectedRawEntryJson = projected.removal.expectedRawEntryJson;
-  if (expectedRawEntryJson === undefined) {
+  if (projected.removal.expectedRawEntryJson === undefined) {
     return (
       allowCanonicalRepair
         ? readExactSessionEntryRowForCanonicalRepair(database, projected.sessionKey, {
@@ -242,44 +220,22 @@ function readProjectedRemovalEntry(
         : readExactSessionEntryRow(database, projected.sessionKey)
     )?.entry;
   }
-  if (readExactSessionEntryJson(database, projected.sessionKey) !== expectedRawEntryJson) {
-    throw new Error(
-      `SQLite session entry changed before raw lifecycle removal for ${projected.sessionKey}`,
-    );
-  }
+  assertRawSessionEntryRemovalUnchanged(database, projected.sessionKey, projected.removal);
   return projected.expectedEntry;
 }
 
 /** Applies exact lifecycle removals/upserts using SQLite session rows. */
-export async function applySessionEntryLifecycleMutation(params: {
-  agentId?: string;
-  env?: NodeJS.ProcessEnv;
-  storePath: string;
-  removals?: Iterable<SessionEntryLifecycleRemoval>;
-  upserts?: Iterable<SessionEntryLifecycleUpsert>;
-  activeSessionKey?: string;
-  maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
-  skipMaintenance?: boolean;
-  cleanupArchivedTranscripts?: {
-    rules: SessionArchivedTranscriptCleanupRule[];
-    nowMs?: number;
-  };
-  captureArtifactCleanupError?: boolean;
-  /** Doctor-only bypass while exact malformed rows are removed in the same transaction. */
-  allowCanonicalRepair?: boolean;
-  /** Doctor-only synchronous state transfer that commits with the destination entry. */
-  afterUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
-  /** Synchronous caller-authority guard checked immediately before lifecycle writes. */
-  beforeCommitInTransaction?: () => void;
-  /** Runs after the SQLite commit and before fallible artifact publication. */
-  onLifecycleCommitted?: () => void;
-}): Promise<SessionEntryLifecycleMutationResult> {
-  const resolved = resolveSqliteScope({
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    env: params.env,
-    sessionKey: "",
-    storePath: params.storePath,
-  });
+export async function applySessionEntryLifecycleMutation(
+  params: SessionEntryLifecycleMutationParams,
+): Promise<SessionEntryLifecycleMutationResult> {
+  const resolved = captureLifecycleDatabaseScope(
+    resolveSqliteScope({
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      env: params.env,
+      sessionKey: "",
+      storePath: params.storePath,
+    }),
+  );
   const removals = [...(params.removals ?? [])];
   const upserts = [...(params.upserts ?? [])];
   let artifactCleanupError: unknown;
@@ -339,187 +295,232 @@ export async function applySessionEntryLifecycleMutation(params: {
               },
             }
           : {}),
-        commit: () =>
-          withSqliteSessionDatabase(toDatabaseOptions(resolved), () =>
-            commitProjectedLifecycleMutation(
-              materializedRemovalPlans,
-              removalArchiveMaterializationFailed,
+        commit: (assertSourceCurrent?: () => void) =>
+          withSqliteSessionDatabase(toDatabaseOptions(resolved), (database) =>
+            withNativeSessionCommitContext(
+              database,
+              resolved.env,
+              (source) =>
+                commitProjectedLifecycleMutation(
+                  materializedRemovalPlans,
+                  removalArchiveMaterializationFailed,
+                  () => {
+                    assertSourceCurrent?.();
+                    source?.assertCurrent();
+                  },
+                ),
+              params.afterCommitted,
             ),
           ),
       };
     },
     "session.lifecycle.mutate",
+    params.withCommit,
   );
   const committed = preparedWrite.result;
-  params.onLifecycleCommitted?.();
 
   function commitProjectedLifecycleMutation(
     removalPlans: MaterializedSessionStateDeletePlan[],
     materializationFailed: boolean,
+    assertSourceCurrent?: () => void,
   ) {
     let beforeCount = 0;
     const removedSessionKeys: string[] = [];
     let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
+    let pendingArchives = true;
     const maintenancePlans: SessionEntryMaintenancePlan[] = [];
-    const publish = runOpenClawAgentWriteTransaction((transactionDb) => {
-      params.beforeCommitInTransaction?.();
-      beforeCount = readSessionEntryCount(transactionDb);
-      const validatedRemovals = projected.removals.filter((removal) => {
-        if (materializationFailed && removal.removal.archiveRemovedTranscript === true) {
-          return false;
-        }
-        const entry = readProjectedRemovalEntry(
-          transactionDb,
-          removal,
-          params.allowCanonicalRepair,
-        );
-        if (!sqliteSessionEntriesEqual(entry, removal.expectedEntry)) {
-          const replacedInSameMutation = projected.upsertedEntries.some(
-            (upsert) => upsert.sessionKey === removal.sessionKey,
-          );
-          throw new Error(
-            replacedInSameMutation
-              ? `SQLite session entry has stale lifecycle state for ${removal.sessionKey}`
-              : `SQLite session entry changed before lifecycle removal for ${removal.sessionKey}`,
-          );
-        }
-        const shouldRemove = shouldRemoveSessionEntry(entry, removal.removal);
+    const publish = runOpenClawAgentWriteTransaction(
+      (transactionDb) => {
+        params.beforeCommitInTransaction?.();
+        assertSourceCurrent?.();
         if (
-          !shouldRemove &&
-          projected.upsertedEntries.some((upsert) => upsert.sessionKey === removal.sessionKey)
+          projected.archiveRecovery?.databaseIdentity ===
+          readOpenClawAgentDatabaseIdentity(transactionDb).identity
         ) {
-          throw new Error(
-            `SQLite session entry has stale lifecycle state for ${removal.sessionKey}`,
-          );
+          pendingArchives = projected.archiveRecovery.pending;
         }
-        return shouldRemove;
-      });
-      archivedTranscripts = deleteMaterializedSessionStatePlans(
-        transactionDb,
-        removalPlans,
-        undefined,
-        new Set(validatedRemovals.map((removal) => removal.sessionKey)),
-      );
-      const legacyReplacementTargets = new Map<
-        string,
-        { canonicalKey: string; rehomeMembers: boolean }
-      >();
-      for (const {
-        sessionKey,
-        entry,
-        expectedEntry,
-        routeContext,
-        resetBoundary,
-      } of projected.upsertedEntries) {
-        const sameKeyRemoval = validatedRemovals.find(
-          (removal) => removal.sessionKey === sessionKey,
+        if (params.onLifecycleCommitted) {
+          deferOpenClawAgentPostCommitPublication(transactionDb, params.onLifecycleCommitted);
+        }
+        beforeCount = readSessionEntryCount(transactionDb);
+        const validatedRemovals = projected.removals.filter((removal) => {
+          if (materializationFailed && removal.removal.archiveRemovedTranscript === true) {
+            return false;
+          }
+          const entry = readProjectedRemovalEntry(
+            transactionDb,
+            removal,
+            params.allowCanonicalRepair,
+          );
+          if (!sqliteSessionEntriesEqual(entry, removal.expectedEntry)) {
+            const replacedInSameMutation = projected.upsertedEntries.some(
+              (upsert) => upsert.sessionKey === removal.sessionKey,
+            );
+            throw new Error(
+              replacedInSameMutation
+                ? `SQLite session entry has stale lifecycle state for ${removal.sessionKey}`
+                : `SQLite session entry changed before lifecycle removal for ${removal.sessionKey}`,
+            );
+          }
+          const shouldRemove = shouldRemoveSessionEntry(entry, removal.removal);
+          if (
+            !shouldRemove &&
+            projected.upsertedEntries.some((upsert) => upsert.sessionKey === removal.sessionKey)
+          ) {
+            throw new Error(
+              `SQLite session entry has stale lifecycle state for ${removal.sessionKey}`,
+            );
+          }
+          return shouldRemove;
+        });
+        archivedTranscripts = deleteMaterializedSessionStatePlans(
+          transactionDb,
+          removalPlans,
+          undefined,
+          new Set(validatedRemovals.map((removal) => removal.sessionKey)),
         );
-        const currentEntry = sameKeyRemoval
-          ? readProjectedRemovalEntry(transactionDb, sameKeyRemoval, params.allowCanonicalRepair)
-          : (params.allowCanonicalRepair
-              ? readExactSessionEntryRowForCanonicalRepair(transactionDb, sessionKey, {
-                  allowMalformedRowRepair: true,
-                })
-              : readExactSessionEntryRow(transactionDb, sessionKey)
-            )?.entry;
-        const expectedCurrentEntry = expectedEntry ?? sameKeyRemoval?.expectedEntry;
-        if (!sqliteSessionEntriesEqual(currentEntry, expectedCurrentEntry)) {
-          if (sameKeyRemoval) {
+        const legacyReplacementTargets = new Map<
+          string,
+          { canonicalKey: string; rehomeMembers: boolean }
+        >();
+        for (const {
+          sessionKey,
+          entry,
+          expectedEntry,
+          routeContext,
+          resetBoundary,
+        } of projected.upsertedEntries) {
+          const sameKeyRemoval = validatedRemovals.find(
+            (removal) => removal.sessionKey === sessionKey,
+          );
+          const currentEntry = sameKeyRemoval
+            ? readProjectedRemovalEntry(transactionDb, sameKeyRemoval, params.allowCanonicalRepair)
+            : (params.allowCanonicalRepair
+                ? readExactSessionEntryRowForCanonicalRepair(transactionDb, sessionKey, {
+                    allowMalformedRowRepair: true,
+                  })
+                : readExactSessionEntryRow(transactionDb, sessionKey)
+              )?.entry;
+          const expectedCurrentEntry = expectedEntry ?? sameKeyRemoval?.expectedEntry;
+          if (!sqliteSessionEntriesEqual(currentEntry, expectedCurrentEntry)) {
+            if (sameKeyRemoval) {
+              throw new Error(`SQLite session entry has stale lifecycle state for ${sessionKey}`);
+            }
+            throw new SessionEntryLifecycleUpsertConflictError(sessionKey);
+          }
+          if (sameKeyRemoval && !shouldRemoveSessionEntry(currentEntry, sameKeyRemoval.removal)) {
             throw new Error(`SQLite session entry has stale lifecycle state for ${sessionKey}`);
           }
-          throw new SessionEntryLifecycleUpsertConflictError(sessionKey);
-        }
-        if (sameKeyRemoval && !shouldRemoveSessionEntry(currentEntry, sameKeyRemoval.removal)) {
-          throw new Error(`SQLite session entry has stale lifecycle state for ${sessionKey}`);
-        }
-        if (resetBoundary && expectedEntry?.sessionId) {
-          const boundaryScope = { ...resolved, sessionId: expectedEntry.sessionId, sessionKey };
-          appendSessionResetBoundary(transactionDb, boundaryScope, expectedEntry, resetBoundary);
-        }
-        writeSessionEntry(transactionDb, sessionKey, entry, {
-          allowStoredAliases: params.allowCanonicalRepair === true,
-          preserveNodeSuggestions: params.allowCanonicalRepair === true,
-          previousEntry: expectedCurrentEntry ?? null,
-          ...(routeContext !== undefined ? { routeContext } : {}),
-        });
-        const relatedRemovalKeys = validatedRemovals.flatMap((removal) => {
-          const removedSessionId = removal.expectedEntry.sessionId;
-          return removal.sessionKey !== sessionKey &&
-            (removedSessionId === entry.sessionId || removedSessionId === entry.previousSessionId)
-            ? [removal.sessionKey]
-            : [];
-        });
-        rehomeSessionWindows(transactionDb, sessionKey, relatedRemovalKeys);
-        for (const legacyKey of relatedRemovalKeys) {
-          const removedEntry = validatedRemovals.find(
-            (removal) => removal.sessionKey === legacyKey,
-          )?.expectedEntry;
-          legacyReplacementTargets.set(legacyKey, {
-            canonicalKey: sessionKey,
-            rehomeMembers: removedEntry?.sessionId === entry.sessionId,
+          if (resetBoundary && expectedEntry?.sessionId) {
+            const boundaryScope = { ...resolved, sessionId: expectedEntry.sessionId, sessionKey };
+            appendSessionResetBoundary(transactionDb, boundaryScope, expectedEntry, resetBoundary);
+          }
+          writeSessionEntry(transactionDb, sessionKey, entry, {
+            allowStoredAliases: params.allowCanonicalRepair === true,
+            preserveNodeSuggestions: params.allowCanonicalRepair === true,
+            previousEntry: expectedCurrentEntry ?? null,
+            ...(routeContext !== undefined ? { routeContext } : {}),
           });
+          const relatedRemovalKeys = validatedRemovals.flatMap((removal) => {
+            const removedSessionId = removal.expectedEntry.sessionId;
+            return removal.sessionKey !== sessionKey &&
+              (removedSessionId === entry.sessionId || removedSessionId === entry.previousSessionId)
+              ? [removal.sessionKey]
+              : [];
+          });
+          rehomeSessionWindows(transactionDb, sessionKey, relatedRemovalKeys);
+          for (const legacyKey of relatedRemovalKeys) {
+            const removedEntry = validatedRemovals.find(
+              (removal) => removal.sessionKey === legacyKey,
+            )?.expectedEntry;
+            legacyReplacementTargets.set(legacyKey, {
+              canonicalKey: sessionKey,
+              rehomeMembers: removedEntry?.sessionId === entry.sessionId,
+            });
+          }
         }
-      }
-      params.afterUpsertsInTransaction?.(transactionDb);
-      const upsertedKeys = new Set(projected.upsertedEntries.map((upsert) => upsert.sessionKey));
-      for (const removal of validatedRemovals) {
-        if (upsertedKeys.has(removal.sessionKey)) {
-          continue;
-        }
-        const entry = readProjectedRemovalEntry(
-          transactionDb,
-          removal,
-          params.allowCanonicalRepair,
-        );
-        if (!sqliteSessionEntriesEqual(entry, removal.expectedEntry)) {
-          throw new Error(
-            `SQLite session entry changed before lifecycle removal for ${removal.sessionKey}`,
-          );
-        }
-        if (!shouldRemoveSessionEntry(entry, removal.removal)) {
-          continue;
-        }
-        const replacement = legacyReplacementTargets.get(removal.sessionKey);
-        if (replacement) {
-          deleteLegacySessionEntryRows(
+        params.afterUpsertsInTransaction?.(transactionDb);
+        params.afterFreshUpsertsInTransaction?.(transactionDb);
+        const upsertedKeys = new Set(projected.upsertedEntries.map((upsert) => upsert.sessionKey));
+        for (const removal of validatedRemovals) {
+          if (upsertedKeys.has(removal.sessionKey)) {
+            continue;
+          }
+          const entry = readProjectedRemovalEntry(
             transactionDb,
-            [removal.sessionKey],
-            replacement.canonicalKey,
-            {
-              rehomeMembers: replacement.rehomeMembers,
-              validatedEntries: new Map([[removal.sessionKey, entry]]),
-            },
+            removal,
+            params.allowCanonicalRepair,
           );
-        } else {
-          deleteSessionEntryRows(transactionDb, removal.sessionKey, {
-            deleteOwnedWindows: removal.removal.deleteOwnedWindows === true,
-            deliveryCleanupKeys: removal.removal.deliveryCleanupKeys,
-            validatedEntry: entry,
-          });
+          if (!sqliteSessionEntriesEqual(entry, removal.expectedEntry)) {
+            throw new Error(
+              `SQLite session entry changed before lifecycle removal for ${removal.sessionKey}`,
+            );
+          }
+          if (!shouldRemoveSessionEntry(entry, removal.removal)) {
+            continue;
+          }
+          const replacement = legacyReplacementTargets.get(removal.sessionKey);
+          if (replacement) {
+            deleteLegacySessionEntryRows(
+              transactionDb,
+              [removal.sessionKey],
+              replacement.canonicalKey,
+              {
+                rehomeMembers: replacement.rehomeMembers,
+                validatedEntries: new Map([[removal.sessionKey, entry]]),
+              },
+            );
+          } else {
+            deleteSessionEntryRows(transactionDb, removal.sessionKey, {
+              deleteOwnedWindows: removal.removal.deleteOwnedWindows === true,
+              deliveryCleanupKeys: removal.removal.deliveryCleanupKeys,
+              validatedEntry: entry,
+            });
+          }
+          removedSessionKeys.push(removal.sessionKey);
         }
-        removedSessionKeys.push(removal.sessionKey);
-      }
-      maintenancePlans.push(
-        applySessionEntryMaintenance(transactionDb, {
-          activeSessionKey: params.activeSessionKey ?? "",
-          archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
-          forceMaintenance: params.maintenanceOverride !== undefined,
-          maintenanceConfig: params.maintenanceOverride
-            ? { ...resolveMaintenanceConfig(), ...params.maintenanceOverride }
-            : undefined,
-          skipMaintenance: params.skipMaintenance,
-          storePath: params.storePath,
-        }),
-      );
-      return prepareLifecycleIdentityPublication({
-        database: transactionDb,
-        agentId: resolved.agentId,
-        projected,
-        removedSessionKeys,
-      });
-    }, toDatabaseOptions(resolved));
+        maintenancePlans.push(
+          applySessionEntryMaintenance(transactionDb, {
+            activeSessionKey: params.activeSessionKey ?? "",
+            archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+            forceMaintenance: params.maintenanceOverride !== undefined,
+            maintenanceConfig: params.maintenanceOverride
+              ? { ...resolveMaintenanceConfig(), ...params.maintenanceOverride }
+              : undefined,
+            skipMaintenance: params.skipMaintenance,
+            storePath: params.storePath,
+          }),
+        );
+        return prepareLifecycleIdentityPublication({
+          database: transactionDb,
+          agentId: resolved.agentId,
+          projected,
+          removedSessionKeys,
+        });
+      },
+      toDatabaseOptions(resolved),
+      { operationLabel: "session.lifecycle.project" },
+    );
     publish();
-    return { archivedTranscripts, beforeCount, maintenancePlans, removedSessionKeys };
+    return {
+      archivedTranscripts,
+      beforeCount,
+      maintenancePlans,
+      removedSessionKeys,
+      // Fresh upserts do not own unrelated archive recovery. Removal retries and
+      // Doctor transfers still publish when this commit produced no new archive.
+      publishArchives:
+        archivedTranscripts.length > 0 ||
+        params.allowCanonicalRepair === true ||
+        params.afterUpsertsInTransaction !== undefined ||
+        removals.length > 0 ||
+        ((pendingArchives ||
+          params.withCommit !== undefined ||
+          projected.upsertedEntries.some(({ resetBoundary }) => resetBoundary !== undefined)) &&
+          (params.skipMaintenance !== true ||
+            projected.upsertedEntries.length === 0 ||
+            projected.upsertedEntries.some(({ expectedEntry }) => expectedEntry !== undefined))),
+    };
   }
 
   const { archivedTranscripts: maintenanceArchivedTranscripts, ...maintenance } =
@@ -530,10 +531,12 @@ export async function applySessionEntryLifecycleMutation(params: {
     );
   let publishedRemovalTranscripts: SessionLifecycleArchivedTranscript[] = [];
   try {
-    publishedRemovalTranscripts = await publishSessionStateArchives(
-      resolved,
-      committed.archivedTranscripts,
-    );
+    if (committed.publishArchives) {
+      publishedRemovalTranscripts = await publishSessionStateArchives(
+        resolved,
+        committed.archivedTranscripts,
+      );
+    }
   } catch (error) {
     captureArtifactCleanupError(error);
   }
@@ -602,7 +605,7 @@ export async function purgeDeletedAgentSessionEntries(
         if (!entry) {
           continue;
         }
-        entryRemovals.push({ expectedEntry: cloneSessionEntry(entry), sessionKey });
+        entryRemovals.push({ expectedEntry: structuredClone(entry), sessionKey });
         removedEntriesToArchive.push(entry);
         delete remainingStore[sessionKey];
       }
@@ -610,6 +613,7 @@ export async function purgeDeletedAgentSessionEntries(
         database,
         excludedSessionKeys: entryRemovals.map((removal) => removal.sessionKey),
         projectedStore: remainingStore,
+        candidateSessionIds: removedEntriesToArchive.flatMap(collectSessionStateIdsForEntry),
       });
       const deletePlans = removedEntriesToArchive.flatMap((entry) =>
         planSessionStateAfterEntryRemoval({
@@ -636,44 +640,49 @@ export async function purgeDeletedAgentSessionEntries(
         async () => {
           let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
           const maintenancePlans: SessionEntryMaintenancePlan[] = [];
-          const publishRemovals = runOpenClawAgentWriteTransaction((transactionDb) => {
-            const currentOwnedSessionKeys = Object.keys(readSessionEntryStore(transactionDb))
-              .filter(
-                (sessionKey) =>
-                  resolveStoredSessionOwnerAgentId({
-                    cfg: params.cfg,
-                    agentId: params.storeAgentId,
-                    sessionKey,
-                  }) === params.agentId,
-              )
-              .toSorted();
-            const plannedSessionKeys = prepared.entryRemovals
-              .map((removal) => removal.sessionKey)
-              .toSorted();
-            if (JSON.stringify(currentOwnedSessionKeys) !== JSON.stringify(plannedSessionKeys)) {
-              throw new Error("SQLite deleted-agent session entries changed before purge");
-            }
-            assertPlannedLifecycleArtifactEntriesUnchanged(transactionDb, prepared.entryRemovals);
-            archivedTranscripts = deleteMaterializedSessionStatePlans(
-              transactionDb,
-              materializedPlans,
-              undefined,
-              new Set(prepared.entryRemovals.map((removal) => removal.sessionKey)),
-            );
-            deletePlannedLifecycleArtifactEntries(transactionDb, prepared.entryRemovals);
-            const publish = prepareCommittedSessionEntryRemovals(
-              resolved.agentId,
-              prepared.entryRemovals,
-            );
-            maintenancePlans.push(
-              applySessionEntryMaintenance(transactionDb, {
-                activeSessionKey: "",
-                archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
-                storePath: params.storePath,
-              }),
-            );
-            return publish;
-          }, toDatabaseOptions(resolved));
+          const publishRemovals = runOpenClawAgentWriteTransaction(
+            (transactionDb) => {
+              const currentOwnedSessionKeys = Object.keys(readSessionEntryStore(transactionDb))
+                .filter(
+                  (sessionKey) =>
+                    resolveStoredSessionOwnerAgentId({
+                      cfg: params.cfg,
+                      agentId: params.storeAgentId,
+                      sessionKey,
+                    }) === params.agentId,
+                )
+                .toSorted();
+              const plannedSessionKeys = prepared.entryRemovals
+                .map((removal) => removal.sessionKey)
+                .toSorted();
+              if (JSON.stringify(currentOwnedSessionKeys) !== JSON.stringify(plannedSessionKeys)) {
+                throw new Error("SQLite deleted-agent session entries changed before purge");
+              }
+              assertPlannedLifecycleArtifactEntriesUnchanged(transactionDb, prepared.entryRemovals);
+              archivedTranscripts = deleteMaterializedSessionStatePlans(
+                transactionDb,
+                materializedPlans,
+                undefined,
+                new Set(prepared.entryRemovals.map((removal) => removal.sessionKey)),
+              );
+              deletePlannedLifecycleArtifactEntries(transactionDb, prepared.entryRemovals);
+              const publish = prepareCommittedSessionEntryRemovals(
+                resolved.agentId,
+                readOpenClawAgentDatabaseIdentity(transactionDb).identity,
+                prepared.entryRemovals,
+              );
+              maintenancePlans.push(
+                applySessionEntryMaintenance(transactionDb, {
+                  activeSessionKey: "",
+                  archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+                  storePath: params.storePath,
+                }),
+              );
+              return publish;
+            },
+            toDatabaseOptions(resolved),
+            { operationLabel: "session.entry.purge-deleted-agent" },
+          );
           publishRemovals();
           return { archivedTranscripts, maintenancePlans };
         },
@@ -692,5 +701,3 @@ export async function purgeDeletedAgentSessionEntries(
   ];
   emitArchivedTranscriptUpdates(archivedTranscripts);
 }
-
-/** Fully replaces rows for one transcript in the additive SQLite transcript store. */

@@ -109,7 +109,7 @@ export function resetMcpCliTestState(): void {
   readMcpOAuthCredentialsStatus.mockResolvedValue({
     state: "unauthenticated",
   });
-  countMcpOAuthPrincipals.mockReturnValue(0);
+  countMcpOAuthPrincipals.mockResolvedValue(0);
 }
 
 export async function cleanupMcpCliTestState(): Promise<void> {

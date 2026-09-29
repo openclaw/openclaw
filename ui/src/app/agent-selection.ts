@@ -39,7 +39,9 @@ type AgentSelectionState = {
 
 export type AgentSelectionCapability = {
   readonly state: AgentSelectionState;
-  set: (agentId: string | null) => void;
+  /** Changes on explicit selection intent or Gateway replacement, including same-id intent. */
+  readonly intentRevision: number;
+  set: (agentId: string | null, options?: { background?: boolean }) => void;
   setScope: (agentId: string | null) => void;
   subscribe: (listener: (state: AgentSelectionState) => void) => () => void;
 };
@@ -52,10 +54,15 @@ export function selectApplicationSession(params: {
   gateway: { setSessionKey: (sessionKey: string) => void };
   sessionKey: string;
   agentId?: string | null;
+  background?: boolean;
 }): void {
   const agentId = params.agentId?.trim() || parseAgentSessionKey(params.sessionKey)?.agentId;
   if (agentId) {
-    params.selection.set(normalizeAgentId(agentId));
+    if (params.background) {
+      params.selection.set(normalizeAgentId(agentId), { background: true });
+    } else {
+      params.selection.set(normalizeAgentId(agentId));
+    }
   }
   params.gateway.setSessionKey(params.sessionKey);
 }
@@ -65,10 +72,24 @@ export function createAgentSelectionCapability(
   roster: AgentSelectionRoster,
   persistence?: AgentSelectionPersistence,
   preferences?: AgentSelectionPreferences,
+  options: { requireConfiguredAgent?: boolean } = {},
 ): AgentSelectionCapability & { dispose: () => void } {
   const reconcileSelectedId = (value: string | null): string | null => {
     const selectedId = value?.trim() ? normalizeAgentId(value) : null;
     const agentsList = roster.state.agentsList;
+    if (options.requireConfiguredAgent) {
+      const agents = agentsList?.agents.filter((agent) => agent.kind !== "system") ?? [];
+      const hasAgent = (id: string | null) =>
+        agents.some((agent) => normalizeAgentId(agent.id) === id);
+      const defaultId = agentsList ? normalizeAgentId(agentsList.defaultId) : null;
+      return hasAgent(selectedId)
+        ? selectedId
+        : hasAgent(defaultId)
+          ? defaultId
+          : agents[0]
+            ? normalizeAgentId(agents[0].id)
+            : null;
+    }
     if (!agentsList || agentsList.agents.length === 0) {
       return selectedId;
     }
@@ -94,6 +115,12 @@ export function createAgentSelectionCapability(
       ? normalizeAgentId(gateway.snapshot.assistantAgentId)
       : null;
   const initialSelectedId = reconcileSelectedId(initialId);
+  // Deep links may arrive before the roster. Keep their intent private until
+  // it is a configured target, so consumers cannot issue RPCs to an unknown id.
+  let pendingConfiguredId =
+    options.requireConfiguredAgent && !roster.state.agentsList && persistedId
+      ? normalizeAgentId(persistedId)
+      : null;
   let teamMode = preferences?.settings.sidebarAgentsMode === "roster";
   const rememberedScope = (fallback: string | null) =>
     resolveScopeId(
@@ -110,22 +137,28 @@ export function createAgentSelectionCapability(
   );
   let state: AgentSelectionState = {
     selectedId: initialSelectedId,
-    scopeId: teamMode ? null : previousScopeId,
+    scopeId: options.requireConfiguredAgent ? initialSelectedId : teamMode ? null : previousScopeId,
   };
   let assistantAgentId = gateway.snapshot.assistantAgentId
     ? normalizeAgentId(gateway.snapshot.assistantAgentId)
     : null;
-  let followsGatewayDefault = !persistedId || initialSelectedId !== normalizeAgentId(persistedId);
+  let followsGatewayDefault =
+    !persistedId || (!pendingConfiguredId && initialSelectedId !== normalizeAgentId(persistedId));
   if (persistedId && followsGatewayDefault) {
     persistence?.save(gatewayUrl, null);
   }
   const listeners = new Set<(next: AgentSelectionState) => void>();
+  let intentRevision = 0;
 
   const publish = (next: AgentSelectionState) => {
     const selectedId = reconcileSelectedId(next.selectedId);
     // Selection and page scope move together when a configured agent vanishes.
     // Otherwise route-derived agent ids keep sending agent-scoped RPCs to a dead target.
-    const scopeId = teamMode || selectedId === next.selectedId ? next.scopeId : selectedId;
+    const scopeId = options.requireConfiguredAgent
+      ? selectedId
+      : teamMode || selectedId === next.selectedId
+        ? next.scopeId
+        : selectedId;
     const reconciled = { selectedId, scopeId: resolveScopeId(scopeId) };
     if (state.selectedId === reconciled.selectedId && state.scopeId === reconciled.scopeId) {
       return;
@@ -166,6 +199,8 @@ export function createAgentSelectionCapability(
     const nextGatewayUrl = gateway.connection.gatewayUrl;
     if (nextGatewayUrl !== gatewayUrl) {
       gatewayUrl = nextGatewayUrl;
+      intentRevision += 1;
+      pendingConfiguredId = null;
       const nextPersistedId = persistence?.load(gatewayUrl)?.trim();
       followsGatewayDefault = !nextPersistedId;
       const selectedId = nextPersistedId ? normalizeAgentId(nextPersistedId) : nextAssistantAgentId;
@@ -194,6 +229,22 @@ export function createAgentSelectionCapability(
     }
   });
   const stopRoster = roster.subscribe(() => {
+    if (options.requireConfiguredAgent) {
+      const requestedId =
+        pendingConfiguredId ?? (followsGatewayDefault ? assistantAgentId : state.selectedId);
+      const selectedId = reconcileSelectedId(requestedId);
+      if (roster.state.agentsList) {
+        pendingConfiguredId = null;
+        if (!followsGatewayDefault && selectedId !== requestedId) {
+          followsGatewayDefault = true;
+          persistence?.save(gatewayUrl, null);
+        }
+      } else if (!followsGatewayDefault) {
+        pendingConfiguredId = requestedId;
+      }
+      publish({ selectedId, scopeId: selectedId });
+      return;
+    }
     const nextIds = new Set(
       roster.state.agentsList?.agents.map((agent) => normalizeAgentId(agent.id)),
     );
@@ -239,22 +290,37 @@ export function createAgentSelectionCapability(
     }
   });
 
+  const setSelectedId = (agentId: string | null, intent?: { background?: boolean }) => {
+    // Route hydration binds ownership without promoting its roster above the transcript.
+    if (!intent?.background) {
+      intentRevision += 1;
+    }
+    const selectedId = agentId?.trim() ? normalizeAgentId(agentId) : null;
+    pendingConfiguredId =
+      options.requireConfiguredAgent && !roster.state.agentsList ? selectedId : null;
+    // Team navigation changes chat ownership without replacing a page's filter.
+    // Establish ownership before publish notifies synchronous subscribers.
+    followsGatewayDefault =
+      !selectedId || (!pendingConfiguredId && reconcileSelectedId(selectedId) !== selectedId);
+    if (!teamMode) {
+      scopeNeedsRoster = !roster.state.agentsList;
+    }
+    persistence?.save(gatewayUrl, followsGatewayDefault ? null : selectedId);
+    publish({ selectedId, scopeId: teamMode ? state.scopeId : selectedId });
+  };
   return {
     get state() {
       return state;
     },
-    set(agentId) {
-      const selectedId = agentId?.trim() ? normalizeAgentId(agentId) : null;
-      // Team navigation changes chat ownership without replacing a page's filter.
-      // Establish ownership before publish notifies synchronous subscribers.
-      followsGatewayDefault = !selectedId || reconcileSelectedId(selectedId) !== selectedId;
-      if (!teamMode) {
-        scopeNeedsRoster = !roster.state.agentsList;
-      }
-      persistence?.save(gatewayUrl, followsGatewayDefault ? null : selectedId);
-      publish({ selectedId, scopeId: teamMode ? state.scopeId : selectedId });
+    get intentRevision() {
+      return intentRevision;
     },
+    set: setSelectedId,
     setScope(agentId) {
+      if (options.requireConfiguredAgent) {
+        setSelectedId(agentId);
+        return;
+      }
       scopeNeedsRoster = false;
       const scopeId = agentId?.trim() ? normalizeAgentId(agentId) : null;
       publish({ ...state, scopeId });

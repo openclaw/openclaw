@@ -1,12 +1,11 @@
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { consumeSwarmStructuredOutput } from "../../tools/structured-output-tool.js";
 import { ensureCompletionState } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { updateSubagentArchiveAtMs } from "../registry/subagent-registry-helpers.js";
-import type {
-  SubagentRunRecord,
-  SwarmCollectorStatus,
-} from "../registry/subagent-registry.types.js";
+import type { SwarmCollectorStatus } from "../registry/subagent-registry-read.types.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { loadSubagentSessionEntry } from "../registry/subagent-session-reconciliation.js";
 
 function resolveStatus(
@@ -27,10 +26,32 @@ function resolveStatus(
   return hasStructuredResult && entry.execution.outcome?.error === "completed" ? "done" : "failed";
 }
 
+export function prepareTerminatedCollectorLaunch(
+  entry: SubagentRunRecord,
+  endedAt: number,
+  error: string,
+  getRuntimeConfig: () => OpenClawConfig,
+): void {
+  entry.swarmLaunchPending = false;
+  entry.collectorLaunchCleanupPending = true;
+  entry.queuedLaunch = undefined;
+  entry.execution = { ...entry.execution, status: "terminal", endedAt };
+  entry.completion = {
+    required: false,
+    resultText:
+      entry.execution.outcome?.status === "error"
+        ? (entry.execution.outcome.error ?? error)
+        : error,
+    capturedAt: endedAt,
+  };
+  updateSwarmCollectorCompletion(entry, getRuntimeConfig());
+}
+
 /** Freeze the waitable collector record after raw completion capture. */
 export function updateSwarmCollectorCompletion(
   entry: SubagentRunRecord,
   cfg: OpenClawConfig,
+  prepared?: { entry: SessionEntry | undefined },
 ): boolean {
   if (!entry.collect) {
     return false;
@@ -55,7 +76,9 @@ export function updateSwarmCollectorCompletion(
     ? (captured?.schemaError ??
       (captured?.structured === undefined ? "structured_output was not called" : undefined))
     : undefined;
-  const session = loadSubagentSessionEntry({ childSessionKey: entry.childSessionKey });
+  const session = prepared
+    ? prepared.entry
+    : loadSubagentSessionEntry({ childSessionKey: entry.childSessionKey });
   const usage =
     typeof session?.inputTokens === "number" || typeof session?.outputTokens === "number"
       ? {

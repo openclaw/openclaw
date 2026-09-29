@@ -59,67 +59,49 @@ internal class SafeWebFetcher(
     rejectOversizedBody: Boolean,
   ): SafeWebBody? =
     withContext(Dispatchers.IO) {
-      fetchBlocking(
-        originalUrl = originalUrl,
-        accept = accept,
-        allowedContentTypes = allowedContentTypes,
-        maxBytes = maxBytes,
-        rejectOversizedBody = rejectOversizedBody,
-      )
-    }
+      var currentUrl =
+        originalUrl
+          .toHttpUrlOrNull()
+          ?.takeIf(::isSafeWebUrl)
+          ?.takeIf(hostPolicy)
+          ?: return@withContext null
+      val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+      for (redirects in 0..SAFE_WEB_MAX_REDIRECTS) {
+        val remainingNanos = deadlineNanos - System.nanoTime()
+        if (remainingNanos <= 0L) return@withContext null
+        val request =
+          Request
+            .Builder()
+            .url(currentUrl)
+            .header("Accept", accept)
+            .get()
+            .build()
+        val call = client.newCall(request)
+        call.timeout().timeout(remainingNanos, TimeUnit.NANOSECONDS)
 
-  private suspend fun fetchBlocking(
-    originalUrl: String,
-    accept: String,
-    allowedContentTypes: Set<String>,
-    maxBytes: Int,
-    rejectOversizedBody: Boolean,
-  ): SafeWebBody? {
-    var currentUrl =
-      originalUrl
-        .toHttpUrlOrNull()
-        ?.takeIf(::isSafeWebUrl)
-        ?.takeIf(hostPolicy)
-        ?: return null
-    val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
-    var redirects = 0
+        val response = call.executeCancellable() ?: return@withContext null
+        response.use {
+          if (it.isRedirect) {
+            if (redirects >= SAFE_WEB_MAX_REDIRECTS) return@withContext null
+            currentUrl = resolveRedirect(currentUrl, it.header("Location"), hostPolicy) ?: return@withContext null
+            continue
+          }
+          if (!it.isSuccessful) return@withContext null
+          val contentType = it.body.contentType() ?: return@withContext null
+          val contentTypeName = "${contentType.type}/${contentType.subtype}".lowercase(Locale.US)
+          if (contentTypeName !in allowedContentTypes) return@withContext null
 
-    while (true) {
-      val remainingNanos = deadlineNanos - System.nanoTime()
-      if (remainingNanos <= 0L) return null
-      val request =
-        Request
-          .Builder()
-          .url(currentUrl)
-          .header("Accept", accept)
-          .get()
-          .build()
-      val call = client.newCall(request)
-      call.timeout().timeout(remainingNanos, TimeUnit.NANOSECONDS)
-
-      val response = call.executeCancellable() ?: return null
-      response.use {
-        if (it.isRedirect) {
-          if (redirects >= SAFE_WEB_MAX_REDIRECTS) return null
-          currentUrl = resolveRedirect(currentUrl, it.header("Location"), hostPolicy) ?: return null
-          redirects += 1
-          continue
+          val bytes = call.awaitBodyRead { readBody(it.body, maxBytes, rejectOversizedBody) } ?: return@withContext null
+          return@withContext SafeWebBody(
+            url = currentUrl,
+            bytes = bytes,
+            charset = contentType.charset(Charsets.UTF_8) ?: Charsets.UTF_8,
+            contentType = contentTypeName,
+          )
         }
-        if (!it.isSuccessful) return null
-        val contentType = it.body.contentType() ?: return null
-        val contentTypeName = "${contentType.type}/${contentType.subtype}".lowercase(Locale.US)
-        if (contentTypeName !in allowedContentTypes) return null
-
-        val bytes = call.awaitBodyRead { readBody(it.body, maxBytes, rejectOversizedBody) } ?: return null
-        return SafeWebBody(
-          url = currentUrl,
-          bytes = bytes,
-          charset = contentType.charset(Charsets.UTF_8) ?: Charsets.UTF_8,
-          contentType = contentTypeName,
-        )
       }
+      null
     }
-  }
 }
 
 internal sealed interface RemoteImageResult {

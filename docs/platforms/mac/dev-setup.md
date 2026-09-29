@@ -51,6 +51,18 @@ then replaces the previous app. `scripts/restart-mac.sh` uses
 the same path; `SKIP_TSC=1` does not bypass the runtime build. Existing
 content-checked build caches still avoid unnecessary declaration work.
 
+Worker pruning follows module imports, runtime launch descriptors, and named
+worker entrypoints transitively. Helpers launched by another retained worker
+remain packaged with their imports and runtime dependencies.
+
+The private worker preserves the app's saved desktop-sharing preference and
+profile selection. Packaging checks startup with sharing enabled, disabled,
+and unspecified, including named-profile launches, before and after signing.
+
+Set `OPENCLAW_NODE_VERSION=<version>` when packaging to select a supported Node
+version for every private worker. If unset or empty, the CLI installer's default
+applies. Packaging installs and verifies the complete worker with that runtime.
+
 Each worker keeps native binaries that support its architecture and omits
 incompatible macOS, Linux, and Windows prebuilds. This prevents unused Intel-only
 dependencies from triggering macOS compatibility warnings in Apple silicon
@@ -120,6 +132,13 @@ windows, and WebKit starts helper processes. A temporary `HOME`, `TMPDIR`, or
 named app profile alone is not a sandbox: fixed preferences domains and
 Keychain access can still reach macOS services outside those directories.
 
+The native test bundle links `OpenClawWebKitTestSupport`, which suppresses WebKit
+Screen Time observation for every `WKWebView` in the test process. WebKit removes
+its KVO observer on the main thread during deallocation while ScreenTime delivers
+configuration on a private queue. Tearing down a windowed HTTP(S) web view right
+after its first commit can hit this race and abort the process with
+`NSInternalInconsistencyException`. Product builds keep Screen Time.
+
 The `macos-swift` GitHub CI job builds the tests with the runner's normal
 SwiftPM caches, then runs the built suite through `scripts/test-macos-native.mts`.
 Each invocation selects private `HOME` and `CFFIXED_USER_HOME`,
@@ -127,8 +146,8 @@ Each invocation selects private `HOME` and `CFFIXED_USER_HOME`,
 bundle loads. Tools honoring `TMPDIR` use that launcher-owned directory;
 Foundation uses Darwin's per-user temp directory, owned and discarded by the
 disposable OS worker. The full suite explicitly selects the default profile, preserving
-its local Gateway lifecycle contracts. AppState isolation tests run separately
-with a unique named profile; no test is run twice. The child environment excludes
+its local Gateway lifecycle contracts. AppState lifecycle tests and the interactive
+chat fixture run separately with a unique named profile; no test is run twice. The child environment excludes
 inherited app settings and credentials while retaining toolchain and runtime
 loader paths. Before Swift starts, the launcher creates an empty-password test
 Keychain under its private `HOME/Library/Keychains`, unlocks it, disables automatic
@@ -152,12 +171,18 @@ test build:
 ```bash
 node scripts/test-macos-native.mts named \
   --package-path apps/macos --build-system native --enable-code-coverage \
-  --skip-build --filter AppStateIsolationTests
+  --skip-build --filter "AppStateIsolationTests|ProfileChatPreferencesTests"
 ```
 
 The ordinary CI invocation bounds Swift Testing parallelism to the runner's logical
-CPU count, capped at 12, and runs the default and named partitions sequentially with
-coverage. Local `scripts/prepush-ci.sh` runs Swift lint/format checks and a release
+CPU count, capped at 12. It runs three disjoint partitions sequentially with coverage
+instrumentation: the default-profile suite, rendered Quick Chat in a fresh default-profile
+process, and named-profile fixtures. The rendered partition preserves catalog, disclosure,
+and shortcut order without sharing process-wide executor changes from other tests.
+Both interactive fixtures use Swift Testing and start an AppKit-owned run loop before
+exercising native menus, so XCTest does not have to regain its outer wait loop afterward. Historical targets
+with the launcher keep their original default- and named-profile partitions.
+Local `scripts/prepush-ci.sh` runs Swift lint/format checks and a release
 build, but does not run native tests. For native changes it exits nonzero with a
 requirement to obtain the exact commit's `macos-swift` CI result; local build
 success is not native test success.

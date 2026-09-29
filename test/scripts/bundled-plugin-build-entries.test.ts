@@ -6,6 +6,7 @@ import {
   collectChannelConfigDoctorBuildEntries,
   collectPluginDeclarationSourceEntries,
   collectRootPackageExcludedExtensionDirs,
+  collectSourceCheckoutPluginBuildEntries,
   DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
   listBundledPluginBuildEntries,
   listBundledPluginPackArtifacts,
@@ -123,6 +124,23 @@ describe("bundled plugin build entries", () => {
     };
 
     expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
+  });
+
+  it.each([
+    ["openai", "realtime-quicksilver-audio.worker", false],
+    ["openai", "realtime-quicksilver-socket.worker", false],
+    ["discord", "src/voice/audio-worker.runtime", true],
+  ] as const)("emits %s/%s through its owning build", (id, worker, isolated) => {
+    const entry = collectSourceCheckoutPluginBuildEntries().find((plugin) => plugin.id === id);
+    const plan = resolvePluginNpmRuntimeBuildPlan({ packageDir: `extensions/${id}` });
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expect(entry?.isolated).toBe(isolated);
+    expect(entry?.sourceEntries).toContain(`./${worker}.ts`);
+    expect(plan?.entry[worker]).toBe(path.resolve(`extensions/${id}/${worker}.ts`));
+    expect(plan?.runtimeBuildOutputs).toContain(`./dist/${worker}.js`);
+    expect(plan?.runtimeExtensions).not.toContain(`./dist/${worker}.js`);
+    expect(artifacts.includes(`dist/extensions/${id}/${worker}.js`)).toBe(!isolated);
   });
 
   it("keeps the Matrix packaged runtime shim in its package-owned build", () => {
@@ -446,7 +464,7 @@ describe("bundled plugin build entries", () => {
   it("excludes externalized meeting plugins from bundled artifacts", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
-    for (const pluginId of ["teams-meetings", "zoom-meetings"]) {
+    for (const pluginId of ["slack-huddles", "teams-meetings", "zoom-meetings"]) {
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/index.js`);
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/openclaw.plugin.json`);
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/package.json`);

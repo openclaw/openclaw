@@ -16,6 +16,7 @@ import {
   OwnedStdioCleanupError,
   type OwnedStdioProcess,
 } from "../process/owned-stdio.js";
+import type { ProcessCleanupResult } from "../process/supervisor/types.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
 type McpStdioDecoder = Pick<ReadBuffer, "append" | "readMessage" | "clear">;
@@ -50,6 +51,7 @@ export class OpenClawStdioClientTransport implements Transport {
   private closeNotified = false;
   private readonly startupAbort = new AbortController();
   private startupCleanupError?: OwnedStdioCleanupError;
+  private cleanup?: ProcessCleanupResult;
 
   constructor(private readonly serverParams: OpenClawStdioServerParameters) {
     this.readBuffer = serverParams.decoder ?? new ReadBuffer();
@@ -157,6 +159,10 @@ export class OpenClawStdioClientTransport implements Transport {
     return this.process?.pid ?? null;
   }
 
+  get cleanupResult() {
+    return this.cleanup;
+  }
+
   private notifyClosed(): void {
     if (this.closeNotified) {
       return;
@@ -191,7 +197,7 @@ export class OpenClawStdioClientTransport implements Transport {
           throw this.startupCleanupError;
         }
         if (this.process) {
-          await closeOwnedStdioProcess(this.process, { force: this.forceRequested });
+          this.cleanup = await closeOwnedStdioProcess(this.process, { force: this.forceRequested });
         }
       } catch (error) {
         recordAgentCleanupFailure();

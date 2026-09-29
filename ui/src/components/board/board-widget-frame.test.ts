@@ -113,63 +113,90 @@ describe("board widget frame terminal failure message", () => {
 });
 
 describe("board widget frame scroll handoff", () => {
-  it("reissues scroll authority after the sandbox replaces its inner document", () => {
-    const widget = {
-      name: "long-dashboard",
-      revision: 1,
-      viewTicket: "ticket",
-    } as BoardWidget;
-    const lifecycle = new BoardWidgetFrameLifecycle({
-      active: () => true,
-      connected: () => true,
-      context: () => undefined,
-      refreshFrame: () => undefined,
-      reportContentHeight: () => {},
-      scrollBy: () => {},
-      requestUpdate: () => {},
-      resolveFrameUrl: () => () => "/__openclaw__/board/long-dashboard",
-      root: () => document,
-      widget: () => widget,
-    });
-    const frame = document.createElement("iframe");
-    frame.className = "board-widget__frame";
-    document.body.append(frame);
-    const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
-    const internals = lifecycle as unknown as LifecycleInternals & {
-      notifyBoardHost: (event: Event) => void;
-    };
-    internals.sandboxOrigin = "https://sandbox.example";
-    internals.sandboxHost = {
-      frame,
-      dispose: () => {},
-      handleMessage: () => {},
-      setActive: () => {},
-      update: () => {},
-    };
-    lifecycle.connect();
+  it.each([true, false])(
+    "reissues scroll authority after document readiness while active=%s",
+    (activeAtReady) => {
+      let active = true;
+      const scrollBy = vi.fn();
+      const widget = {
+        name: "long-dashboard",
+        revision: 1,
+        viewTicket: "ticket",
+      } as BoardWidget;
+      const lifecycle = new BoardWidgetFrameLifecycle({
+        active: () => active,
+        connected: () => true,
+        context: () => undefined,
+        refreshFrame: () => undefined,
+        reportContentHeight: () => {},
+        scrollBy,
+        requestUpdate: () => {},
+        resolveFrameUrl: () => () => "/__openclaw__/board/long-dashboard",
+        root: () => document,
+        widget: () => widget,
+      });
+      const frame = document.createElement("iframe");
+      frame.className = "board-widget__frame";
+      document.body.append(frame);
+      const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
+      const internals = lifecycle as unknown as LifecycleInternals & {
+        notifyBoardHost: (event: Event) => void;
+      };
+      internals.sandboxOrigin = "https://sandbox.example";
+      internals.sandboxHost = {
+        frame,
+        dispose: () => {},
+        handleMessage: () => {},
+        setActive: () => {},
+        update: () => {},
+      };
+      lifecycle.connect();
 
-    internals.notifyBoardHost({ currentTarget: frame } as unknown as Event);
-    const initialMessages = postMessage.mock.calls.filter(
-      ([message]) => (message as { type?: string }).type === "openclaw:widget-board-host",
-    );
-    expect(initialMessages).toHaveLength(1);
-    const initialNonce = (initialMessages[0]![0] as { nonce?: string }).nonce;
+      internals.notifyBoardHost({ currentTarget: frame } as unknown as Event);
+      const initialMessages = postMessage.mock.calls.filter(
+        ([message]) => (message as { type?: string }).type === "openclaw:widget-board-host",
+      );
+      expect(initialMessages).toHaveLength(1);
+      const initialNonce = (initialMessages[0]![0] as { nonce?: string }).nonce;
 
-    window.dispatchEvent(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        origin: "https://sandbox.example",
-        data: { type: "openclaw:widget-bridge-ready" },
-      }),
-    );
+      if (!activeAtReady) {
+        active = false;
+        lifecycle.activityChanged();
+      }
 
-    const readyMessages = postMessage.mock.calls.filter(
-      ([message]) => (message as { type?: string }).type === "openclaw:widget-board-host",
-    );
-    expect(readyMessages).toHaveLength(2);
-    expect((readyMessages[1]![0] as { nonce?: string }).nonce).not.toBe(initialNonce);
-    lifecycle.disconnect();
-  });
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: frame.contentWindow,
+          origin: "https://sandbox.example",
+          data: { type: "openclaw:widget-bridge-ready" },
+        }),
+      );
+
+      if (!activeAtReady) {
+        active = true;
+        lifecycle.activityChanged();
+      }
+
+      const readyMessages = postMessage.mock.calls.filter(
+        ([message]) => (message as { type?: string }).type === "openclaw:widget-board-host",
+      );
+      expect(readyMessages).toHaveLength(2);
+      expect((readyMessages[1]![0] as { nonce?: string }).nonce).not.toBe(initialNonce);
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: frame.contentWindow,
+          origin: "https://sandbox.example",
+          data: {
+            type: "openclaw:widget-scroll",
+            deltaY: 48,
+            nonce: (readyMessages[1]![0] as { nonce?: string }).nonce,
+          },
+        }),
+      );
+      expect(scrollBy).toHaveBeenCalledWith(48);
+      lifecycle.disconnect();
+    },
+  );
 
   it("accepts a finite vertical remainder only from its exact iframe and nonce", () => {
     const widget = { name: "long-dashboard", revision: 1 } as BoardWidget;

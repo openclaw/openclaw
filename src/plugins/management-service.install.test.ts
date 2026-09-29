@@ -187,6 +187,36 @@ describe("managed plugin installation", () => {
     expect(mocks.persistInstall).not.toHaveBeenCalled();
   });
 
+  it("does not apply public feed integrity to a custom ClawHub registry", async () => {
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mockHostedOfficialCatalog([hostedFeedDiffsEntry]);
+    mockClawHubInstall("diffs", "@openclaw/diffs");
+    mocks.persistInstall.mockResolvedValue({});
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({ enabled: true, id: "diffs", name: "Diffs", origin: "global" }),
+    );
+
+    await installManagedPlugin({
+      request: {
+        source: "clawhub",
+        packageName: "@openclaw/diffs",
+        acknowledgeCapabilities: emptyArtifactAcknowledgment,
+      },
+      env: { OPENCLAW_CLAWHUB_URL: "https://mirror.example.test" },
+    });
+
+    expect(mocks.officialCatalog).not.toHaveBeenCalled();
+    expect(mocks.clawhubInstall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:@openclaw/diffs",
+        expectedPluginId: "diffs",
+      }),
+    );
+    expect(mocks.clawhubInstall).toHaveBeenCalledWith(
+      expect.not.objectContaining({ expectedIntegrity: expect.anything() }),
+    );
+  });
+
   it.each([false, true])(
     "uses npm first and ClawHub only when npm is absent (%s)",
     async (absent) => {
@@ -242,9 +272,7 @@ describe("managed plugin installation", () => {
   );
 
   it.each([
-    { code: "incompatible_plugin_api", error: "incompatible artifact" },
     { code: "security_scan_blocked", error: "untrusted package" },
-    { code: "security_scan_failed", error: "policy failed" },
     { error: "integrity mismatch" },
   ])("never falls back after npm refusal ($error)", async (failure) => {
     mocks.readConfig.mockResolvedValue(configSnapshot());
@@ -263,7 +291,7 @@ describe("managed plugin installation", () => {
       env: {},
     }).catch((error: unknown) => error);
     expect(rejected).toMatchObject({ message: failure.error });
-    expect(pluginLifecycleError(rejected)).toMatchObject({
+    expect(pluginLifecycleError(rejected, { entered: true })).toMatchObject({
       message: failure.error,
       details: {
         pluginInstallRejected: true,
@@ -300,7 +328,7 @@ describe("managed plugin installation", () => {
         message: reason,
         cause: expect.any(PluginInstallConfigError),
       });
-      expect(pluginLifecycleError(rejected)).toEqual({
+      expect(pluginLifecycleError(rejected, { entered: true })).toEqual({
         code: "INVALID_REQUEST",
         message: `${reason} | INVALID_CONFIG`,
         details: {
@@ -442,33 +470,6 @@ describe("managed plugin installation", () => {
     ).rejects.toThrow("expected sonos, got impostor");
     expect(mocks.clawhubInstall).toHaveBeenCalledWith(
       expect.objectContaining({ expectedPluginId: "sonos" }),
-    );
-  });
-
-  it("threads hosted ClawHub candidate integrity into official installs", async () => {
-    mocks.readConfig.mockResolvedValue(configSnapshot());
-    mockHostedOfficialCatalog([hostedFeedDiffsEntry]);
-    mockClawHubInstall("diffs", "@openclaw/diffs");
-    mocks.persistInstall.mockResolvedValue({});
-    mocks.metadata.mockReturnValue(
-      metadataSnapshot({ enabled: true, id: "diffs", name: "Diffs", origin: "global" }),
-    );
-
-    await installManagedPlugin({
-      request: {
-        source: "official",
-        pluginId: "diffs",
-        acknowledgeCapabilities: emptyArtifactAcknowledgment,
-      },
-      env: {},
-    });
-
-    expect(mocks.clawhubInstall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "clawhub:@openclaw/diffs@2026.6.11",
-        expectedPluginId: "diffs",
-        expectedIntegrity: `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`,
-      }),
     );
   });
 

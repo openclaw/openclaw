@@ -1,7 +1,8 @@
 // Real child Gateway and real WebSocket authentication; no handler/client authority injection.
 import { randomUUID } from "node:crypto";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { WebSocket, type RawData } from "ws";
+import type { RawData } from "ws";
+import { WebSocket } from "../../../../packages/gateway-client/src/websocket.test-support.js";
 import type { HelloOk, ResponseFrame } from "../../../../packages/gateway-protocol/src/index.js";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SkillLibraryFile } from "../../../../packages/gateway-protocol/src/schema/skill-library.js";
@@ -145,7 +146,12 @@ export class SkillLibraryWireClient {
     }
   }
 
-  async request<T>(method: string, params: unknown, timeoutMs = 30_000): Promise<T> {
+  async request<T>(
+    method: string,
+    params: unknown,
+    timeoutMs = 30_000,
+    options?: { expectedProfileId?: string },
+  ): Promise<T> {
     const id = randomUUID();
     return await new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -153,7 +159,15 @@ export class SkillLibraryWireClient {
         reject(new Error(`${method} timed out`));
       }, timeoutMs);
       this.pending.set(id, { resolve: (value) => resolve(value as T), reject, timer });
-      this.socket.send(JSON.stringify({ type: "req", id, method, params }));
+      this.socket.send(
+        JSON.stringify({
+          type: "req",
+          id,
+          method,
+          params,
+          expectedProfileId: options?.expectedProfileId,
+        }),
+      );
     });
   }
 
@@ -198,6 +212,8 @@ export async function createSkillLibraryWireInstance(): Promise<OpenClawTestInst
       bind: "loopback",
       port: instance.port,
       trustedProxies: ["127.0.0.1", "::1"],
+      // The Gateway approves the local device; the fixture approves its command surface.
+      nodes: { pairing: { autoApproveLocal: true } },
       auth: {
         mode: "trusted-proxy",
         password: instance.gatewayToken,

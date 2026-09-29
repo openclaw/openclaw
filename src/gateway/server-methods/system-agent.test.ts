@@ -3,17 +3,18 @@ import "./system-agent.mocks.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { applyWizardMetadata } from "../../commands/onboard-helpers.js";
+import { createConfigIO, readConfigFileSnapshot } from "../../config/config.js";
 import {
   hashRuntimeConfigValue,
   setRuntimeConfigAppliedHash,
 } from "../../config/runtime-snapshot.js";
-import { createRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import { SystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
+import { detectSetupInference } from "../../system-agent/setup-inference-detect.js";
 import type { ActivateSetupInferenceParams } from "../../system-agent/setup-inference.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import type { WizardSession } from "../../wizard/session.js";
@@ -21,6 +22,7 @@ import * as setupAdmission from "./setup-admission.js";
 import type { SystemAgentChatSession } from "./system-agent.js";
 import {
   callChat,
+  defaultClient,
   inferenceFallbackMocks,
   makeContext,
   makeRespond,
@@ -115,7 +117,7 @@ describe("openclaw.setup", () => {
           sessionId,
           authChoice: "custom-api-key",
         },
-        client: { internal: { isLocalClient } },
+        client: { ...defaultClient, internal: { isLocalClient } },
         context,
         respond,
       } as never);
@@ -239,6 +241,17 @@ describe("openclaw.setup", () => {
 });
 
 describe("openclaw.chat", () => {
+  let pendingDiscovery: Promise<void> | undefined;
+
+  afterEach(async () => {
+    // A timeout does not cancel the body. Join it before the outer fixture resets
+    // mocks and env, so its lazy RPC import cannot overlap the next case's import.
+    if (pendingDiscovery) {
+      await Promise.allSettled([pendingDiscovery]);
+      pendingDiscovery = undefined;
+    }
+  });
+
   it("refuses to create a session before inference is available", async () => {
     inferenceFallbackMocks.verify.mockResolvedValueOnce({
       ok: false,
@@ -296,54 +309,71 @@ describe("openclaw.chat", () => {
 
   it.each(["none", "doctor"])(
     "returns unchecked discovery through selected-agent detection after %s metadata",
-    async (metadataCommand) => {
-      const stateDir = systemAgentTempDirs.make("openclaw-native-catalog-consent-");
-      const configPath = path.join(stateDir, "openclaw.json");
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-      const { createConfigIO } = await import("../../config/io.factory.js");
-      const io = createConfigIO({
-        env: { ...process.env, OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_STATE_DIR: stateDir },
-        homedir: () => stateDir,
-      });
-      const { applyWizardMetadata } = await import("../../commands/onboard-helpers.js");
-      const initialConfig = { agents: { entries: { main: { default: true }, research: {} } } };
-      await io.writeConfigFile(
-        metadataCommand === "doctor"
-          ? applyWizardMetadata(initialConfig, { command: "doctor", mode: "local" })
-          : initialConfig,
-      );
-      const before = fs.readFileSync(configPath, "utf8");
-      const { detectSetupInference } = await import("../../system-agent/setup-inference-detect.js");
-      setupInferenceDetectionMocks.detectSetupInferenceIsolated.mockImplementation(async (params) =>
-        detectSetupInference(
+    (metadataCommand) => {
+      pendingDiscovery = (async () => {
+        const stateDir = systemAgentTempDirs.make("openclaw-native-catalog-consent-");
+        const configPath = path.join(stateDir, "openclaw.json");
+        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+        vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+        const io = createConfigIO({
+          env: { ...process.env, OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_STATE_DIR: stateDir },
+          homedir: () => stateDir,
+        });
+        // Exercise first-write privacy separately from roster arrangement: the
+        // ownership-transition writer also runs unrelated legacy cron migration.
+        await io.writeConfigFile(
+          metadataCommand === "doctor"
+            ? applyWizardMetadata({}, { command: "doctor", mode: "local" })
+            : {},
+        );
+        const { sourceConfig } = await io.readConfigFileSnapshot();
+        fs.writeFileSync(
+          configPath,
+          JSON.stringify({
+            ...sourceConfig,
+            agents: {
+              ...sourceConfig.agents,
+              ownership: "explicit",
+              entries: { main: {}, research: {} },
+            },
+          }),
+        );
+        const before = fs.readFileSync(configPath, "utf8");
+        const detectInferenceBackends = vi.fn(async () => []);
+        setupInferenceDetectionMocks.detectSetupInferenceIsolated.mockImplementation(
+          async (params) =>
+            detectSetupInference(
+              {
+                detectInferenceBackends,
+                resolveManifestProviderAuthChoices: () => [],
+              },
+              params?.agentId,
+            ),
+        );
+        const { calls, respond } = makeRespond();
+        await systemAgentHandler("openclaw.setup.detect")({
+          params: { agentId: "research" },
+          respond,
+        } as never);
+        expect(calls).toMatchObject([
           {
-            detectInferenceBackends: async () => [],
-            resolveManifestProviderAuthChoices: () => [],
-            probeLocalCommand: async (command) => ({ command, found: false }),
+            ok: true,
+            payload: {
+              nativeSessionCatalogPreferenceRequired: true,
+              nativeSessionCatalogs: expect.arrayContaining([
+                expect.objectContaining({ pluginId: "anthropic" }),
+                expect.objectContaining({ pluginId: "codex" }),
+              ]),
+            },
           },
-          params?.agentId,
-        ),
-      );
-      const { calls, respond } = makeRespond();
-      await systemAgentHandler("openclaw.setup.detect")({
-        params: { agentId: "research" },
-        respond,
-      } as never);
-      expect(calls).toMatchObject([
-        {
-          ok: true,
-          payload: {
-            nativeSessionCatalogPreferenceRequired: true,
-            nativeSessionCatalogs: expect.arrayContaining([
-              expect.objectContaining({ pluginId: "anthropic" }),
-              expect.objectContaining({ pluginId: "codex" }),
-            ]),
-          },
-        },
-      ]);
-      expect(fs.readFileSync(configPath, "utf8")).toBe(before);
-      expect(setupInferenceMocks.activateSetupInference).not.toHaveBeenCalled();
+        ]);
+        expect(detectInferenceBackends).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "research" }),
+        );
+        expect(fs.readFileSync(configPath, "utf8")).toBe(before);
+        expect(setupInferenceMocks.activateSetupInference).not.toHaveBeenCalled();
+      })();
+      return pendingDiscovery;
     },
   );
 
@@ -466,18 +496,11 @@ describe("openclaw.chat", () => {
     expect(calls[0]?.ok).toBe(false);
   });
 
-  it.each([
-    "applied",
-    "applied-restart-required",
-    "restart-pending",
-    "failed",
-    "stopped",
-    "superseded",
-  ] as const)(
-    "settles setup after the Gateway application receipt without holding its lane: %s",
+  it.each(["applied", "restart-required", "failed"] as const)(
+    "settles setup completion without holding its lane: %s",
     async (outcome) => {
-      const application = createRuntimeConfigWriteApplication();
-      const claim = expectDefined(application.claim(), "application claim");
+      const release = createDeferred();
+      const failure = new Error("activation completion failed");
       const result = {
         ok: true as const,
         modelRef: "openai/gpt-5.6-luna",
@@ -486,7 +509,13 @@ describe("openclaw.chat", () => {
       };
       setupInferenceMocks.activateSetupInference.mockImplementation(
         async (params: ActivateSetupInferenceParams) => {
-          params.onRuntimeApplication?.(application);
+          params.onActivationCompletion?.(async () => {
+            await release.promise;
+            if (outcome === "failed") {
+              throw failure;
+            }
+            return outcome === "restart-required";
+          });
           return result;
         },
       );
@@ -509,54 +538,29 @@ describe("openclaw.chat", () => {
         } as never);
         expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledOnce();
       } finally {
-        claim.settle(outcome);
-        if (
-          outcome === "applied" ||
-          outcome === "applied-restart-required" ||
-          outcome === "restart-pending"
-        ) {
-          await pending;
+        release.resolve();
+        if (outcome === "failed") {
+          await expect(pending).rejects.toBe(failure);
         } else {
-          await expect(pending).rejects.toThrow(
-            outcome === "superseded" ? "newer settings" : "Restart the Gateway before chatting",
-          );
+          await pending;
         }
       }
-      if (
-        outcome === "applied" ||
-        outcome === "applied-restart-required" ||
-        outcome === "restart-pending"
-      ) {
-        expect(calls).toEqual([
-          {
-            ok: true,
-            payload: outcome === "applied" ? result : { ...result, gatewayRestartRequired: true },
-            error: undefined,
-          },
-        ]);
-      } else {
-        // The RPC error stops automatic candidate fallthrough after a saved choice.
-        expect(calls).toEqual([]);
-      }
+      expect(calls).toEqual(
+        outcome === "failed"
+          ? []
+          : [
+              {
+                ok: true,
+                payload:
+                  outcome === "restart-required"
+                    ? { ...result, gatewayRestartRequired: true }
+                    : result,
+                error: undefined,
+              },
+            ],
+      );
     },
   );
-
-  it("reports restart required when the committed setup application is unclaimed", async () => {
-    setupInferenceMocks.activateSetupInference.mockImplementation(
-      async (params: ActivateSetupInferenceParams) => {
-        params.onRuntimeApplication?.(createRuntimeConfigWriteApplication());
-        return { ok: true, modelRef: "openai/gpt-5.6-luna", latencyMs: 1, lines: [] };
-      },
-    );
-    const { calls, respond } = makeRespond();
-    await expect(
-      systemAgentHandler("openclaw.setup.activate")({
-        params: { kind: "codex-cli" },
-        respond,
-      } as never),
-    ).rejects.toThrow("Restart the Gateway before chatting");
-    expect(calls).toEqual([]);
-  });
 
   it.each(["success", "task error", "response error"])(
     "keeps admitted setup on the gateway lane without relabeling %s as non-admission",
@@ -617,8 +621,7 @@ describe("openclaw.chat", () => {
         workspace: "/tmp/work",
         surface: "gateway",
         runtime: expect.objectContaining({ exit: expect.any(Function) }),
-        onRuntimeApplication: expect.any(Function),
-        onCredentialActivation: expect.any(Function),
+        onActivationCompletion: expect.any(Function),
       });
       expect(calls).toEqual(
         outcome === "success" ? [{ ok: true, payload: activationResult, error: undefined }] : [],
@@ -643,12 +646,32 @@ describe("openclaw.chat", () => {
     const call = await callChat(makeContext(sessions), {
       sessionId: "s1",
       message: "What about this page?",
-      context: { page: "  /settings/channels  ", source: "client" },
+      context: {
+        page: "  /settings/channels  ",
+        source: "client",
+        plugin: {
+          id: "example",
+          name: "Example",
+          config: { apiKey: "never forwarded" },
+          setting: {
+            path: ["accounts", "name.with.dots"],
+            label: "Account",
+            value: "never forwarded",
+          },
+        },
+      },
     });
 
     expect(call.ok).toBe(true);
     expect(handle).toHaveBeenCalledWith("What about this page?", {
-      uiContext: { page: "/settings/channels" },
+      uiContext: {
+        page: "/settings/channels",
+        plugin: {
+          id: "example",
+          name: "Example",
+          setting: { path: ["accounts", "name.with.dots"], label: "Account" },
+        },
+      },
     });
   });
 
@@ -671,6 +694,45 @@ describe("openclaw.chat", () => {
 
     expect(call.ok).toBe(true);
     expect(handle).toHaveBeenCalledWith("Status please.");
+  });
+
+  it.each([
+    { id: "bad?id", name: "Example" },
+    { id: "example", name: "n".repeat(97) },
+  ])("drops an invalid plugin reference while keeping the human turn", async (plugin) => {
+    const engine = makeVerifiedEngine();
+    const handle = vi.spyOn(engine, "handle").mockResolvedValue({ text: "Ready.", action: "none" });
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+    const call = await callChat(makeContext(sessions), {
+      sessionId: "s1",
+      message: "Help with this",
+      context: { page: "plugin-settings", plugin },
+    });
+    expect(call.ok).toBe(true);
+    expect(handle).toHaveBeenCalledWith("Help with this", {
+      uiContext: { page: "plugin-settings" },
+    });
+  });
+
+  it("bounds escaped plugin reference data before forwarding it", async () => {
+    const engine = makeVerifiedEngine();
+    const handle = vi.spyOn(engine, "handle").mockResolvedValue({ text: "Ready.", action: "none" });
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+    await callChat(makeContext(sessions), {
+      sessionId: "s1",
+      message: "Help with this",
+      context: {
+        page: "plugin-settings",
+        plugin: {
+          id: "example",
+          name: "Example",
+          setting: { path: Array(16).fill("\u0000".repeat(64)), label: "Large" },
+        },
+      },
+    });
+    expect(handle).toHaveBeenCalledWith("Help with this", {
+      uiContext: { page: "plugin-settings", plugin: { id: "example", name: "Example" } },
+    });
   });
 
   it("does not pass UI context to welcome-only turns", async () => {
@@ -698,7 +760,7 @@ describe("openclaw.chat", () => {
     const call = await callChat(makeContext(sessions), {
       sessionId: "s1",
       message: "How is this machine doing?",
-      context: { page: "dashboard" },
+      context: { page: "dashboard", plugin: { id: "example", name: "Example", installed: false } },
     });
 
     expect(call.payload).toMatchObject({ reply: "Everything is healthy." });
@@ -711,8 +773,8 @@ describe("openclaw.chat", () => {
       2,
       expect.objectContaining({ role: "assistant", text: "Everything is healthy." }),
     );
-    expect(JSON.stringify(transcriptStoreMocks.appendTranscriptTurn.mock.calls)).not.toContain(
-      "ui-context",
+    expect(JSON.stringify(transcriptStoreMocks.appendTranscriptTurn.mock.calls)).not.toMatch(
+      /ui-context|plugin-reference|Example/,
     );
   });
 

@@ -1,7 +1,13 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  persistSubagentRunsToDiskOrThrow,
+  useSubagentControlFixture,
+} from "./subagent-control.test-support.js";
 /** Cancellation retains selected descendants across committed ancestor retirement. */
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
@@ -9,26 +15,39 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
-import { getDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.js";
-import { setDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.test-support.js";
-import { getTaskById, findTaskByRunId } from "../../../tasks/task-registry.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  records,
+  requesterWakeDriver,
+  seedSubagentCompletionDelivery,
+} from "../completion/subagent-completion-admission.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
-import { useSubagentControlFixture } from "./subagent-control.test-support.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
-import { registerSubagentRun, markSubagentRunTerminated } from "./subagent-registry.js";
+import { persistSubagentRunsToDiskAsyncOrThrow } from "./subagent-registry-state.js";
+import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
-  settleSubagentRegistryPersistenceWork,
-  writeSubagentSessionEntry,
-} from "./subagent-registry.persistence.test-support.js";
+  activateSubagentRegistry,
+  initSubagentRegistry,
+  markSubagentRunTerminated,
+  registerSubagentRun,
+  resumeSubagentRun,
+} from "./subagent-registry.js";
+import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import { upsertSubagentRunRowInDatabase } from "./subagent-registry.store.kernel.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import { releaseSubagentRun, testing } from "./subagent-registry.test-helpers.js";
+import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
 const { persist, gateway } = fixture;
@@ -38,10 +57,8 @@ it.each([
   { transition: "retirement with retained predecessor", cancel: true },
   { transition: "retirement write rollback", cancel: true },
   { transition: "successor registration write rollback", cancel: true },
-  { transition: "successor required-task rollback", cancel: true },
   { transition: "accepted successor released", cancel: false },
   { transition: "accepted successor released without retirement", cancel: false },
-  { transition: "retained successor after failed rollback", cancel: false },
   { transition: "session replacement", cancel: false },
   { transition: "lifecycle rotation", cancel: false },
   { transition: "controller replacement", cancel: false },
@@ -68,7 +85,7 @@ it.each([
       defaultSessionId: "child-session",
     });
     if (transition === "retirement with retained predecessor") {
-      registerSubagentRun({
+      await registerSubagentRun({
         runId: "predecessor",
         childSessionKey: ancestorKey,
         requesterSessionKey: controllerSessionKey,
@@ -85,7 +102,7 @@ it.each([
       ["ancestor", ancestorKey, controllerSessionKey, false],
       ["child", childKey, ancestorKey, true],
     ] as const) {
-      registerSubagentRun({
+      await registerSubagentRun({
         runId,
         childSessionKey,
         requesterSessionKey: owner,
@@ -101,8 +118,9 @@ it.each([
     }
     const ancestor = subagentRuns.get("ancestor")!;
     const child = subagentRuns.get("child")!;
-    const task = findTaskByRunId("child")!;
-    expect(markSubagentRunTerminated({ runId: "ancestor", suppressTaskDelivery: true })).toBe(1);
+    expect(await markSubagentRunTerminated({ runId: "ancestor", suppressTaskDelivery: true })).toBe(
+      1,
+    );
     expect(ancestor.killReconciliation).toMatchObject({
       killedAt: now,
       suppressTaskDelivery: true,
@@ -151,7 +169,7 @@ it.each([
             await testing.sweepOnceForTests();
             if (transition === "retirement write rollback") {
               await vi.waitFor(() => expect(retirementRejected).toBe(true));
-              await settleSubagentRegistryPersistenceWork();
+              await fixture.settle();
               expect(subagentRuns.get("ancestor")).toBe(ancestor);
               persist.mockImplementation(persistSubagentRunsToDiskOrThrow);
             } else {
@@ -159,19 +177,6 @@ it.each([
             }
           }
           if (transition.includes("successor")) {
-            const taskRuntime = getDetachedTaskLifecycleRuntime();
-            const failTask =
-              transition.includes("required-task") || transition.includes("failed rollback");
-            if (failTask) {
-              setDetachedTaskLifecycleRuntime({
-                ...taskRuntime,
-                createQueuedTaskRun: () => {
-                  expect(subagentRuns.has("successor")).toBe(true);
-                  expect(loadSubagentRegistryFromSqlite().has("successor")).toBe(true);
-                  throw new Error("required task rejected");
-                },
-              });
-            }
             persist.mockImplementation((runs, ids) => {
               if (
                 transition === "successor registration write rollback" ||
@@ -193,13 +198,14 @@ it.each([
                 cleanup: "keep",
                 queued: true,
                 expectsCompletionMessage: false,
-                taskRowOwnership: "required",
               });
             try {
               if (transition.startsWith("accepted successor")) {
-                register();
+                await register();
               } else {
-                expect(register).toThrow(/rejected/);
+                await expect(register()).rejects.toThrow(
+                  "Queued subagent registry persistence failed",
+                );
               }
               if (cancel) {
                 expect(subagentRuns.has("successor")).toBe(false);
@@ -210,7 +216,6 @@ it.each([
                 releaseSubagentRun("successor");
               }
             } finally {
-              setDetachedTaskLifecycleRuntime(taskRuntime);
               persist.mockImplementation(persistSubagentRunsToDiskOrThrow);
             }
           } else if (transition === "session replacement") {
@@ -226,7 +231,7 @@ it.each([
           } else if (transition === "controller replacement") {
             ancestor.controllerSessionKey = "agent:other:main";
           } else if (transition === "new direct child after retirement") {
-            registerSubagentRun({
+            await registerSubagentRun({
               runId: "late",
               childSessionKey: "agent:main:subagent:late-child",
               requesterSessionKey: ancestorKey,
@@ -260,12 +265,10 @@ it.each([
       expect(result).toMatchObject({ status: "ok", killed: cancel ? 1 : 0 });
       if (cancel) {
         expect(child.collectorCompletion?.status).toBe("killed");
-        expect(getTaskById(task.taskId)?.status).toBe("cancelled");
         expect(dispatch).not.toHaveBeenCalled();
       } else {
         expect(child.killIntent).toBeUndefined();
         expect(child.collectorCompletion).toBeUndefined();
-        expect(getTaskById(task.taskId)?.status).toBe("queued");
         await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
       }
       if (transition === "retirement with retained predecessor") {
@@ -274,7 +277,7 @@ it.each([
       if (transition === "new direct child after retirement") {
         expect(lateDispatch).toHaveBeenCalledOnce();
         expect(subagentRuns.get("late")?.killIntent).toBeUndefined();
-        expect(findTaskByRunId("late")?.status).toBe("queued");
+        expect(resolveSubagentSessionStatus(subagentRuns.get("late"))).toBe("queued");
       }
     } finally {
       releaseSwarmRun("blocker");
@@ -312,7 +315,7 @@ it.each(
     ["draining-ancestor", ancestorKey, controllerSessionKey, false],
     ["draining-child", childKey, ancestorKey, true],
   ] as const) {
-    registerSubagentRun({
+    await registerSubagentRun({
       runId,
       childSessionKey,
       requesterSessionKey: owner,
@@ -366,9 +369,9 @@ it.each(
     await entered.promise;
     // Independent canonical termination during the drain, followed by modeled
     // reconciliation ageing. A fresh provisional kill must still retain its row.
-    expect(markSubagentRunTerminated({ runId: ancestor.runId, suppressTaskDelivery: true })).toBe(
-      1,
-    );
+    expect(
+      await markSubagentRunTerminated({ runId: ancestor.runId, suppressTaskDelivery: true }),
+    ).toBe(1);
     expect(subagentRuns.get(ancestor.runId)).toBe(ancestor);
     expect(ancestor.killReconciliation?.killedAt).toBe(now);
     clock.mockReturnValue(now + PROVISIONAL_KILL_RECONCILIATION_MS);
@@ -397,12 +400,12 @@ it.each(
     if (transition !== "ordinary retirement") {
       expect(child.killIntent).toBeUndefined();
       expect(child.collectorCompletion).toBeUndefined();
-      expect(findTaskByRunId(child.runId)?.status).toBe("queued");
+      expect(resolveSubagentSessionStatus(subagentRuns.get(child.runId))).toBe("queued");
       await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
       return;
     }
     expect(child.collectorCompletion?.status, JSON.stringify(result)).toBe("killed");
-    expect(findTaskByRunId(child.runId)?.status).toBe("cancelled");
+    expect(resolveSubagentSessionStatus(subagentRuns.get(child.runId))).toBe("killed");
     expect(dispatch).not.toHaveBeenCalled();
     expect(result).toMatchObject(
       boundary === "bulk"
@@ -442,7 +445,7 @@ it.each(["default", "template", "fixed JSON-style", "exact SQLite"])(
       { storePath, sessionKey: childSessionKey },
       { sessionId, updatedAt: Date.now() },
     );
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "fixed-store-child",
       childSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -485,7 +488,7 @@ it.each(["default", "template", "fixed JSON-style", "exact SQLite"])(
 it("does not create a missing child database while binding cancellation", async () => {
   const childSessionKey = "agent:missing:subagent:unprepared";
   const databasePath = path.join(fixture.stateDir, "agents/missing/agent/openclaw-agent.sqlite");
-  registerSubagentRun({
+  await registerSubagentRun({
     runId: "unprepared",
     childSessionKey,
     requesterSessionKey: "agent:main:main",
@@ -535,4 +538,297 @@ it("does not create a missing child database while binding cancellation", async 
     releaseSwarmRun("missing-blocker");
     releaseSwarmRun("unprepared");
   }
+});
+
+describe("restored historical cancellation ownership", () => {
+  const { wake, announce, capture, cleanup } = fixture;
+  let settleRootWork: ReturnType<typeof observeRootWork>;
+
+  beforeEach(() => {
+    settleRootWork = observeRootWork();
+    vi.mocked(persistSubagentRunsToDiskAsyncOrThrow).mockReset();
+    vi.mocked(resolveContextEngine).mockReset();
+    wake.mockReset().mockImplementation(async (params) => {
+      await params.completeBatch([params.settledEntry], 1, {
+        delivered: false,
+        path: "none",
+        error: "requester unavailable",
+      });
+      return false;
+    });
+    announce.mockReset().mockResolvedValue("delivered");
+    capture.mockReset().mockResolvedValue(undefined);
+    cleanup.mockReset().mockResolvedValue(undefined);
+  });
+
+  afterEach(async () => {
+    await settleRootWork();
+  });
+
+  async function settle() {
+    await settleRootWork(true);
+    await fixture.settle();
+  }
+
+  function historicalCancellation() {
+    const input = records();
+    const endedAt = Date.now() - 9 * 24 * 60 * 60_000;
+    input.subagent = createSubagentRunRecord({
+      runId: input.subagent.runId,
+      generation: 1,
+      taskRunId: input.subagent.taskRunId,
+      childSessionKey: input.subagent.childSessionKey,
+      createdAt: endedAt - 60_000,
+      startedAt: endedAt - 50_000,
+      endedAt,
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "error", error: "stopped" },
+      cleanup: "keep",
+      cleanupHandled: true,
+      cleanupCompletedAt: endedAt,
+      suppressAnnounceReason: "killed",
+      killReconciliation: { killedAt: endedAt - 2 },
+      expectsCompletionMessage: true,
+      completion: { required: true },
+      delivery: { status: "pending" },
+      requesterSettleWake: { status: "dispatching", attemptCount: 3, rearmGeneration: 1 },
+    });
+    return input;
+  }
+
+  function persistRetiredOwner(input: ReturnType<typeof records>) {
+    const database = openOpenClawStateDatabase();
+    seedSubagentCompletionDelivery({ ...input, databaseOptions: { database } });
+  }
+
+  function restore() {
+    initSubagentRegistry();
+    // These terminal-only fixtures need a live owner but never dispatch a model turn.
+    const gatewayContext = { resolveGatewayContext: () => gatewayContext as never };
+    activateSubagentRegistry(() => gatewayContext as never);
+  }
+
+  function expectNoExecutionReplay() {
+    expect(announce).not.toHaveBeenCalled();
+    expect(capture).not.toHaveBeenCalled();
+    expect(cleanup).not.toHaveBeenCalled();
+    expect(fixture.gateway).not.toHaveBeenCalled();
+  }
+
+  it("reconciles the kill owner before waking retained native completion without repeating cleanup", async () => {
+    const input = historicalCancellation();
+    persistRetiredOwner(input);
+    restore();
+    resumeSubagentRun(input.subagent.runId, "restore");
+    await settle();
+    await testing.sweepOnceForTests();
+    await settle();
+
+    const saved = loadSubagentRegistryFromSqlite().get(input.subagent.runId)!;
+    expect(saved.killReconciliation).toBeUndefined();
+    expect(saved.requesterSettleWake).toBeUndefined();
+    expect(saved.execution).toEqual(input.subagent.execution);
+    expect(saved.cleanupCompletedAt).toBe(input.subagent.cleanupCompletedAt);
+    expect(saved.delivery).toMatchObject({ status: "failed", lastError: "requester unavailable" });
+    expect(saved.completion).toEqual({
+      required: true,
+      capturedAt: input.subagent.execution.endedAt,
+      resultText: null,
+    });
+    expect(wake).toHaveBeenCalledOnce();
+    expectNoExecutionReplay();
+  });
+
+  it.each([false, true])(
+    "settles an uncaptured retained cancellation wake before retiring it (yielded=%s)",
+    async (yielded) => {
+      const input = historicalCancellation();
+      const endedAt = Date.now() - 2 * 24 * 60 * 60_000;
+      input.subagent.createdAt = endedAt - 60_000;
+      input.subagent.execution.startedAt = endedAt - 50_000;
+      input.subagent.execution.endedAt = endedAt;
+      input.subagent.cleanupCompletedAt = endedAt + 30_000;
+      input.subagent.killReconciliation = {
+        killedAt: endedAt + 30_000,
+        taskCancellationAccepted: true,
+      };
+      input.subagent.completionTarget = "parent";
+      input.subagent.requesterSettleWake = {
+        status: "dispatching",
+        attemptCount: 3,
+        batchRunIds: [input.subagent.runId],
+        rearmGeneration: 1,
+        ...(yielded ? { requesterYieldBatch: true, afterRequesterYield: true } : {}),
+      };
+      persistRetiredOwner(input);
+      restore();
+      resumeSubagentRun(input.subagent.runId, "restore");
+      await settle();
+      await testing.sweepOnceForTests();
+      await settle();
+
+      expect(
+        loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.requesterSettleWake,
+      ).toBeUndefined();
+      await testing.sweepOnceForTests();
+      await settle();
+      expect(loadSubagentRegistryFromSqlite().has(input.subagent.runId)).toBe(false);
+      expect(wake).toHaveBeenCalledOnce();
+      expectNoExecutionReplay();
+    },
+  );
+
+  it("leaves a newer persisted kill marker untouched by the restored snapshot", async () => {
+    const input = historicalCancellation();
+    persistRetiredOwner(input);
+    restore();
+    const updated = structuredClone(input.subagent);
+    updated.killReconciliation = { killedAt: Date.now() };
+    upsertSubagentRunRowInDatabase(openOpenClawStateDatabase(), bindSubagentRunRecord(updated));
+
+    resumeSubagentRun(input.subagent.runId, "restore");
+    await settle();
+    await testing.sweepOnceForTests();
+    await settle();
+
+    expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)).toEqual(updated);
+    expect(wake).not.toHaveBeenCalled();
+    expectNoExecutionReplay();
+  });
+
+  it("defers a rejected historical retirement write without aborting resume", async () => {
+    const input = historicalCancellation();
+    persistRetiredOwner(input);
+    restore();
+    const database = openOpenClawStateDatabase();
+    database.db.exec(`CREATE TRIGGER reject_retired_cancellation
+      BEFORE UPDATE ON subagent_runs
+      BEGIN SELECT RAISE(ABORT, 'retirement write rejected'); END`);
+    try {
+      expect(() => resumeSubagentRun(input.subagent.runId, "restore")).not.toThrow();
+      await settle();
+      const saved = loadSubagentRegistryFromSqlite().get(input.subagent.runId)!;
+      expect(saved.killReconciliation).toEqual(input.subagent.killReconciliation);
+      expect(saved.requesterSettleWake).toEqual(input.subagent.requesterSettleWake);
+      expect(wake).not.toHaveBeenCalled();
+    } finally {
+      database.db.exec("DROP TRIGGER reject_retired_cancellation");
+    }
+
+    resumeSubagentRun(input.subagent.runId, "restore");
+    await settle();
+    expect(
+      loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.requesterSettleWake,
+    ).toBeUndefined();
+    expect(wake).toHaveBeenCalledOnce();
+    expectNoExecutionReplay();
+  });
+
+  it.each(["before restore", "transaction", "commit"] as const)(
+    "preserves a newer child generation instead of waking the retired cancellation (%s)",
+    async (stage) => {
+      const input = historicalCancellation();
+      persistRetiredOwner(input);
+      const successor = createSubagentRunRecord({
+        runId: "successor-run",
+        childSessionKey: input.subagent.childSessionKey,
+        generation: 2,
+        createdAt: input.subagent.createdAt + 1,
+        endedAt: input.subagent.execution.endedAt,
+        outcome: { status: "ok" },
+        cleanup: "keep",
+        cleanupHandled: true,
+        cleanupCompletedAt: input.subagent.cleanupCompletedAt,
+        expectsCompletionMessage: false,
+        completion: { required: false, resultText: "completed", capturedAt: Date.now() },
+        delivery: { status: "not_required" },
+      });
+      if (stage === "before restore") {
+        upsertSubagentRunRowInDatabase(
+          openOpenClawStateDatabase(),
+          bindSubagentRunRecord(successor),
+        );
+      } else {
+        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+        vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+          (grantOwner, attachment) =>
+            createAdmission((request, grant) => {
+              if (request.stage === stage) {
+                subagentRuns.set(successor.runId, successor);
+              }
+              grantOwner(request, grant);
+            }, attachment),
+        );
+      }
+      restore();
+      const originalBefore = loadSubagentRegistryFromSqlite().get(input.subagent.runId);
+      const successorBefore = structuredClone(
+        stage === "before restore" ? subagentRuns.get(successor.runId) : successor,
+      );
+      resumeSubagentRun(input.subagent.runId, "restore");
+      await settle();
+      const before = loadSubagentRegistryFromSqlite().get(successor.runId);
+      await testing.sweepOnceForTests();
+      await settle();
+
+      expect(loadSubagentRegistryFromSqlite().get(successor.runId)).toEqual(before);
+      expect(subagentRuns.get(successor.runId)).toEqual(successorBefore);
+      expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)).toEqual(originalBefore);
+      expect(wake).not.toHaveBeenCalled();
+      expectNoExecutionReplay();
+    },
+  );
+
+  it("keeps ordinary yielded wakes ahead of terminal cleanup", async () => {
+    const input = historicalCancellation();
+    input.subagent.pauseReason = "sessions_yield";
+    input.subagent.endedReason = undefined;
+    input.subagent.killReconciliation = undefined;
+    input.subagent.execution.outcome = undefined;
+    input.subagent.cleanupCompletedAt = undefined;
+    input.subagent.cleanupHandled = false;
+    input.subagent.requesterSettleWake!.retireAfterSettle = true;
+    persistRetiredOwner(input);
+    restore();
+    await settle();
+    await testing.sweepOnceForTests();
+    await settle();
+
+    const saved = loadSubagentRegistryFromSqlite().get(input.subagent.runId)!;
+    expect(saved.requesterSettleWake).toBeUndefined();
+    expect(saved.execution).toEqual(input.subagent.execution);
+    expect(saved.pauseReason).toBe("sessions_yield");
+    expect(saved.delivery).toEqual(input.subagent.delivery);
+    expect(wake).toHaveBeenCalledOnce();
+    expectNoExecutionReplay();
+  });
+
+  it.each([-1, 0, 1])(
+    "does not reopen a cleaned cancellation for a delayed killed callback (%ims)",
+    async (offset) => {
+      const input = historicalCancellation();
+      input.subagent.killReconciliation = undefined;
+      persistRetiredOwner(input);
+      subagentRuns.set(input.subagent.runId, input.subagent);
+      const driver = requesterWakeDriver([input]);
+      const before = structuredClone(input.subagent);
+      try {
+        await driver.controller.completeSubagentRun({
+          runId: input.subagent.runId,
+          expectedEntry: input.subagent,
+          endedAt: input.subagent.execution.endedAt! + offset,
+          reason: SUBAGENT_ENDED_REASON_KILLED,
+          outcome: { status: "error", error: "stopped" },
+          triggerCleanup: true,
+        });
+
+        expect(input.subagent).toEqual(before);
+        expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)).toEqual(before);
+        expect(driver.wake).not.toHaveBeenCalled();
+        expectNoExecutionReplay();
+      } finally {
+        driver.controller.clearScheduledResumeTimers();
+      }
+    },
+  );
 });

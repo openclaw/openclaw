@@ -37,7 +37,7 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
   ): Promise<{ subscriptions: WorkboardNotificationSubscription[] }> {
     const boardId = normalizeBoardId(input.boardId);
     const cardId = normalizeBoundedString(input.cardId, undefined, 120, "card id");
-    const subscriptions = (await this.subscriptionStore.entries())
+    const subscriptions = (await this.subscriptionStore.entries({ boardId, cardId }))
       .map((entry) => entry.value)
       .filter(
         (entry): entry is PersistedWorkboardNotificationSubscription =>
@@ -56,7 +56,7 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
     }));
   }
 
-  private async collectNotificationEvents(input: WorkboardNotificationEventsInput = {}): Promise<{
+  async notificationEvents(input: WorkboardNotificationEventsInput = {}): Promise<{
     subscription?: WorkboardNotificationSubscription;
     events: WorkboardNotification[];
   }> {
@@ -84,7 +84,13 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
     const effectiveSessionKey = subscription?.sessionKey;
     const effectiveRunId = subscription?.runId;
     const events: WorkboardNotification[] = [];
-    for (const card of await this.list({ boardId: effectiveBoardId })) {
+    const selectedCard = effectiveCardId ? await this.get(effectiveCardId) : undefined;
+    const cards = effectiveCardId
+      ? selectedCard
+        ? [selectedCard]
+        : []
+      : await this.list({ boardId: effectiveBoardId });
+    for (const card of cards) {
       if (card.metadata?.archivedAt || (effectiveCardId && card.id !== effectiveCardId)) {
         continue;
       }
@@ -140,13 +146,6 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
     return { ...(subscription ? { subscription } : {}), events: sorted };
   }
 
-  async notificationEvents(input: WorkboardNotificationEventsInput = {}): Promise<{
-    subscription?: WorkboardNotificationSubscription;
-    events: WorkboardNotification[];
-  }> {
-    return await this.collectNotificationEvents(input);
-  }
-
   async advanceNotificationEvents(input: WorkboardNotificationEventsInput = {}): Promise<{
     subscription?: WorkboardNotificationSubscription;
     events: WorkboardNotification[];
@@ -161,7 +160,7 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
       throw new Error("subscriptionId is required to advance notification events.");
     }
     return await this.enqueueMutation(async () => {
-      const result = await this.collectNotificationEvents({ ...input, subscriptionId });
+      const result = await this.notificationEvents({ ...input, subscriptionId });
       if (!result.subscription || !result.events.length) {
         return result;
       }

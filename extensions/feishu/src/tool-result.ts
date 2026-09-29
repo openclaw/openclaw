@@ -1,4 +1,3 @@
-// Feishu plugin module implements tool result behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";

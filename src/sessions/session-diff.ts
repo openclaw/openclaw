@@ -3,8 +3,6 @@ import type { SessionDiffBaseline } from "../config/sessions/types.js";
 import { runGitReadOperation } from "../infra/git-read-cache.js";
 import type { GitCheckoutDiffInput } from "../infra/git-read-operations.js";
 
-export { parseNameStatusZ, parseNumstatZ, splitPatchByFile } from "./session-diff-parser.js";
-
 export async function loadCheckoutDiff(
   params: GitCheckoutDiffInput & { sessionKey: string },
 ): Promise<SessionsDiffResult> {

@@ -18,19 +18,15 @@ export type CommandGroupDescriptorSpec<TArgs extends unknown[] = []> = readonly 
   register: (program: Command, ...args: TArgs) => Promise<void> | void,
 ];
 
-type CommandGroupEntryLike = {
-  placeholders: NamedCommandDescriptor[];
-  register: (program: Command) => Promise<void> | void;
-};
-
 /** Bind descriptors and registration arguments without importing the command modules. */
 export function buildCommandGroupEntries<TArgs extends unknown[]>(
   descriptors: readonly NamedCommandDescriptor[],
   specs: readonly CommandGroupDescriptorSpec<TArgs>[],
   ...args: TArgs
-): CommandGroupEntryLike[] {
+) {
   const descriptorsByName = new Map(descriptors.map((descriptor) => [descriptor.name, descriptor]));
   return specs.map(([commandNames, register]) => ({
+    names: commandNames,
     placeholders: commandNames.map((name) => {
       const descriptor = descriptorsByName.get(name);
       if (!descriptor) {
@@ -38,6 +34,6 @@ export function buildCommandGroupEntries<TArgs extends unknown[]>(
       }
       return descriptor;
     }),
-    register: (program) => register(program, ...args),
+    register: (program: Command) => register(program, ...args),
   }));
 }

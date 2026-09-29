@@ -755,6 +755,7 @@ describe("diagnostic support export", () => {
       env: {
         ...process.env,
         HOME: tempDir,
+        OPENCLAW_CONFIG_PATH: path.join(tempDir, "missing-config.json"),
         OPENCLAW_STATE_DIR: tempDir,
       },
       stateDir: tempDir,
@@ -777,6 +778,7 @@ describe("diagnostic support export", () => {
     });
 
     const entries = await readZipTextEntries(outputPath);
+    expect(entries["summary.md"]).toContain("config file not found");
     expect(Object.keys(entries).toSorted()).toContain("status/gateway-status.json");
     expect(Object.keys(entries).toSorted()).toContain("health/gateway-health.json");
 
@@ -860,6 +862,8 @@ describe("diagnostic support export", () => {
     expect(combined).not.toContain(fakeToken);
     expect(combined).toContain('"parseOk": false');
     expect(combined).toContain("config stat failed with token");
+    expect(entries["summary.md"]).toContain("config stat failed with token");
+    expect(entries["summary.md"]).not.toContain("config file not found");
     expect(combined).toContain("Attach this zip to the bug report");
   });
 

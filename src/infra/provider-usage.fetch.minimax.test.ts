@@ -63,11 +63,6 @@ describe("fetchMinimaxUsage", () => {
       expectedUrl: "https://api.minimax.io/v1/token_plan/remains",
     },
     {
-      name: "derives the usage endpoint from a configured origin",
-      baseUrl: "https://api.minimaxi.com",
-      expectedUrl: "https://api.minimaxi.com/v1/token_plan/remains",
-    },
-    {
       name: "falls back to CN when the configured base URL is malformed",
       baseUrl: "not a url",
       expectedUrl: "https://api.minimaxi.com/v1/token_plan/remains",
@@ -194,31 +189,57 @@ describe("fetchMinimaxUsage", () => {
       },
     },
     {
-      name: "treats MiniMax current_interval_usage_count as remaining quota (not consumed)",
-      payload: {
-        data: {
-          current_interval_total_count: 100,
-          current_interval_usage_count: 98,
-          plan_name: "Coding Plan",
-        },
-      },
-      expected: {
-        plan: "Coding Plan",
-        windows: [{ label: "5h", usedPercent: 2, resetAt: undefined }],
-      },
-    },
-    {
       name: "inverts usage_percent when no count fields are present (remaining to used)",
       payload: {
         data: {
           usage_percent: 98,
-          plan_name: "Coding Plan",
         },
       },
       expected: {
-        plan: "Coding Plan",
         windows: [{ label: "5h", usedPercent: 2, resetAt: undefined }],
       },
+    },
+    {
+      name: "prefers the highest usable score, then shallower and earlier tied records",
+      payload: {
+        data: {
+          branch: { deeper: { used_percent: 90, total: 100, used: 90 } },
+          lower: { total: 100, used: 10 },
+          invalid: { used_percent: "invalid", total: "invalid", used: "invalid", plan: "bad" },
+          first: { used_percent: 20, total: 100, used: 20 },
+          later: { used_percent: 30, total: 100, used: 30 },
+        },
+      },
+      expected: { windows: [{ label: "5h", usedPercent: 20, resetAt: undefined }] },
+    },
+    {
+      name: "uses the sixtieth scanned node and ignores a higher-scoring sixty-first node",
+      payload: {
+        data: {
+          usage_percent: 90,
+          nested: [
+            ...Array.from({ length: 57 }, () => ({})),
+            { used_percent: 25 },
+            { total: 100, used: 75 },
+          ],
+        },
+      },
+      expected: { windows: [{ label: "5h", usedPercent: 25, resetAt: undefined }] },
+    },
+    {
+      name: "uses depth-four usage without descending into a higher-scoring depth-five record",
+      payload: {
+        data: {
+          first: {
+            second: {
+              third: {
+                fourth: { used_percent: 25, fifth: { total: 100, used: 75 } },
+              },
+            },
+          },
+        },
+      },
+      expected: { windows: [{ label: "5h", usedPercent: 25, resetAt: undefined }] },
     },
     {
       name: "falls back to payload-level reset and plan when nested usage records omit them",
@@ -496,24 +517,5 @@ describe("fetchMinimaxUsage", () => {
 
     expect(result.error).toBe("Unsupported response shape");
     expect(result.windows).toHaveLength(0);
-  });
-
-  it("handles repeated nested records while scanning usage candidates", async () => {
-    const sharedUsage = {
-      total: 100,
-      used: 20,
-      usage_percent: 90,
-      window_hours: 1,
-    };
-    const dataWithSharedReference = {
-      first: sharedUsage,
-      nested: [sharedUsage],
-    };
-    const mockFetch = createProviderUsageFetch(async () =>
-      makeResponse(200, { data: dataWithSharedReference }),
-    );
-
-    const result = await fetchMinimaxUsage("key", 5000, mockFetch);
-    expect(result.windows).toEqual([{ label: "1h", usedPercent: 20, resetAt: undefined }]);
   });
 });

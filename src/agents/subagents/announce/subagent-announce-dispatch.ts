@@ -20,6 +20,7 @@ type SubagentAnnounceDeliveryFailureReason =
   | "generated_media_missing"
   | "message_tool_delivery_missing"
   | "requester_abandoned"
+  | "requester_turn_pending"
   | "source_owner_changed"
   | "steer_dropped"
   | "visible_reply_missing";
@@ -36,6 +37,7 @@ export type SubagentAnnounceDeliveryResult = {
   enqueuedAt?: number;
   /** Direct delivery that already committed the requester's visible final. */
   requesterVisibleFinalDelivered?: true;
+  storeReplaced?: true;
   /** Bounded visible final returned by the direct requester synthesis turn. */
   finalAssistantVisibleText?: string;
   reason?: SubagentAnnounceDeliveryFailureReason;
@@ -60,6 +62,17 @@ type SubagentAnnounceDispatchPhaseResult = {
   error?: string;
 };
 
+export function sourceOwnerChangedResult(): SubagentAnnounceDeliveryResult {
+  return {
+    delivered: false,
+    path: "none",
+    reason: "source_owner_changed",
+    error: "subagent source lifecycle changed before completion delivery",
+    terminal: true,
+    disposition: "intentional_non_delivery",
+  };
+}
+
 /** Converts a steer outcome into the shared delivery result shape. */
 function mapSteerOutcomeToDeliveryResult(
   outcome: SubagentAnnounceSteerOutcome,
@@ -73,14 +86,7 @@ function mapSteerOutcomeToDeliveryResult(
     };
   }
   if (outcome.status === "source_owner_changed") {
-    return {
-      delivered: false,
-      path: "none",
-      reason: "source_owner_changed",
-      error: "subagent source lifecycle changed before completion delivery",
-      terminal: true,
-      disposition: "intentional_non_delivery",
-    };
+    return sourceOwnerChangedResult();
   }
   return {
     delivered: false,
@@ -124,31 +130,20 @@ export async function runSubagentAnnounceDispatch(params: {
     });
   }
 
-  if (params.requireDirectDelivery) {
-    // Settle synthesis needs its own delivery turn; steering can inherit a
-    // message-tool-only completion turn and silently suppress the final reply.
-    const primaryDirect = await params.direct();
-    appendPhase("direct-primary", primaryDirect);
-    return withPhases(primaryDirect);
-  }
-
-  if (!params.expectsCompletionMessage) {
+  // Settle synthesis needs its own delivery turn; steering can inherit a
+  // message-tool-only completion turn and silently suppress the final reply.
+  const allowSteerFallback = !params.requireDirectDelivery && params.expectsCompletionMessage;
+  if (!params.requireDirectDelivery && !params.expectsCompletionMessage) {
     const primarySteerOutcome = await params.steer();
     const primarySteer = mapSteerOutcomeToDeliveryResult(primarySteerOutcome);
     appendPhase("steer-primary", primarySteer);
-    if (primarySteer.delivered) {
+    if (
+      primarySteer.delivered ||
+      primarySteer.terminal ||
+      primarySteerOutcome.status === "dropped"
+    ) {
       return withPhases(primarySteer);
     }
-    if (primarySteer.terminal) {
-      return withPhases(primarySteer);
-    }
-    if (primarySteerOutcome.status === "dropped") {
-      return withPhases(primarySteer);
-    }
-
-    const primaryDirect = await params.direct();
-    appendPhase("direct-primary", primaryDirect);
-    return withPhases(primaryDirect);
   }
 
   // Completion handoff prefers direct delivery first so the completion agent's
@@ -156,7 +151,9 @@ export async function runSubagentAnnounceDispatch(params: {
   const primaryDirect = await params.direct();
   appendPhase("direct-primary", primaryDirect);
   if (
+    !allowSteerFallback ||
     primaryDirect.delivered ||
+    primaryDirect.reason === "requester_turn_pending" ||
     primaryDirect.disposition === "session_queued" ||
     primaryDirect.disposition === "intentional_non_delivery" ||
     primaryDirect.disposition === "ambiguous" ||
@@ -172,10 +169,7 @@ export async function runSubagentAnnounceDispatch(params: {
   const fallbackSteerOutcome = await params.steer();
   const fallbackSteer = mapSteerOutcomeToDeliveryResult(fallbackSteerOutcome);
   appendPhase("steer-fallback", fallbackSteer);
-  if (fallbackSteer.delivered) {
-    return withPhases(fallbackSteer);
-  }
-  if (fallbackSteer.terminal) {
+  if (fallbackSteer.delivered || fallbackSteer.terminal) {
     return withPhases(fallbackSteer);
   }
 

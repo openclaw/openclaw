@@ -2,6 +2,15 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
 
+type CliBackendNoOutputWatchdog = {
+  /** Fraction of overall timeout used when fixed timeout is not set. */
+  noOutputTimeoutRatio?: number;
+  /** Lower bound for computed watchdog timeout. */
+  minMs?: number;
+  /** Upper bound for computed watchdog timeout. */
+  maxMs?: number;
+};
+
 /** Static command adapter owned by a CLI backend plugin registration. */
 export type CliBackendConfig = {
   /** CLI command to execute (absolute path or on PATH). */
@@ -74,23 +83,9 @@ export type CliBackendConfig = {
     /** No-output watchdog tuning (fresh vs resumed runs). */
     watchdog?: {
       /** Fresh/new sessions (non-resume). */
-      fresh?: {
-        /** Fraction of overall timeout used when fixed timeout is not set. */
-        noOutputTimeoutRatio?: number;
-        /** Lower bound for computed watchdog timeout. */
-        minMs?: number;
-        /** Upper bound for computed watchdog timeout. */
-        maxMs?: number;
-      };
+      fresh?: CliBackendNoOutputWatchdog;
       /** Resume sessions. */
-      resume?: {
-        /** Fraction of overall timeout used when fixed timeout is not set. */
-        noOutputTimeoutRatio?: number;
-        /** Lower bound for computed watchdog timeout. */
-        minMs?: number;
-        /** Upper bound for computed watchdog timeout. */
-        maxMs?: number;
-      };
+      resume?: CliBackendNoOutputWatchdog;
     };
   };
 };

@@ -1,5 +1,5 @@
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   QuestionGetResultSchema,
   QuestionListResultSchema,
@@ -23,6 +23,10 @@ import {
 } from "../agents/tools/gateway-caller-context.js";
 import { createGatewayQuestionCanceller } from "../agents/tools/gateway-question-lifecycle.js";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import {
   EmbeddedQuestionBroker,
   clearEmbeddedQuestionBroker,
   getEmbeddedQuestionBroker,
@@ -30,9 +34,16 @@ import {
 } from "./embedded-question-broker.js";
 
 const brokers: EmbeddedQuestionBroker[] = [];
+let clock: ReturnType<typeof createGatewaySchedulerClock>;
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+
+beforeEach(() => {
+  clock = createGatewaySchedulerClock();
+  scheduler = createTestGatewayScheduler(clock.clock);
+});
 
 function createBroker() {
-  const broker = new EmbeddedQuestionBroker();
+  const broker = new EmbeddedQuestionBroker(scheduler);
   brokers.push(broker);
   return broker;
 }
@@ -56,11 +67,12 @@ function requestParams(): QuestionRequestParams {
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const broker of brokers.splice(0)) {
     clearEmbeddedQuestionBroker(broker);
     broker.stop();
   }
+  await scheduler.stop();
   vi.useRealTimers();
 });
 
@@ -115,7 +127,7 @@ describe("EmbeddedQuestionBroker", () => {
       if (ending === "cancel") {
         broker.resolve({ id: request.id, cancel: true });
       } else if (ending === "expiry") {
-        await vi.advanceTimersByTimeAsync(5_000);
+        await clock.advanceBy(5_000);
       } else if (ending === "run-abort") {
         run.abort();
       } else {

@@ -1,7 +1,8 @@
-/** Finalizes cron task rows and active markers after timer outcome persistence. */
+/** Finalizes cron receipts and active markers after timer outcome persistence. */
 import { clearCronJobActive, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import {
   CronRunReceiptRevisionError,
+  finishCronRunReceipt,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import { isCronRunTriggerStateRetiredInDatabase } from "../store/run-receipt-trigger-state.js";
@@ -9,12 +10,13 @@ import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types
 import type { CronJob } from "../types.js";
 import { locked } from "./locked.js";
 import { releaseQueuedCronRun, supersedeActivatedCronRun } from "./run-admission.js";
-import { cronRunReceiptPersistHooks, supersedeServiceCronRunReceipt } from "./run-receipts.js";
-import { recomputeUnownedCronSchedules } from "./run-recovery.js";
+import { recordQuietCronEvaluation } from "./run-history.js";
+import { cronRunReceiptPersistHooks } from "./run-receipts.js";
+import { publishCronRuntimeRows } from "./runtime-publication.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
+import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
-import { ensureLoaded, publishCronRuntimeRows, runPostPersistCronNotifications } from "./store.js";
-import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
+import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import { emitCronOutcomeEventForJob, recordCronOutcomeForJob } from "./timer-outcome-events.js";
 import { applyOutcomeToAuthoritativeJob, applyOutcomeToStoredJob } from "./timer-outcomes.js";
@@ -107,7 +109,7 @@ export async function finalizeCompletedCronRunOutcomes(
     isCronActiveJobMarkerCurrent(outcome.activeJobMarker);
   try {
     await locked(state, async () => {
-      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      await ensureLoaded(state, { forceReload: true });
       // Payload outcomes survive a failed row write as recovery facts. Quiet
       // evaluations have no payload outcome and finalize only after the commit.
       for (const outcome of outcomes) {
@@ -117,9 +119,8 @@ export async function finalizeCompletedCronRunOutcomes(
           );
           applyOutcomeToAuthoritativeJob(state, taskJob, outcome, {
             deferredNotifications: [],
-            emit: false,
           });
-          recordCronOutcomeForJob(state, taskJob, outcome);
+          await recordCronOutcomeForJob(state, taskJob, outcome);
         }
       }
       // Retirement fences publication, not the exact receipt's durable result.
@@ -154,14 +155,14 @@ export async function finalizeCompletedCronRunOutcomes(
       const transactionHooks: CronStoreTransactionHooks | undefined =
         receiptHooks.length > 0
           ? {
-              beforeWrite: (database) => {
+              beforeWrite: (database, receiptSchema) => {
                 for (const hooks of receiptHooks) {
-                  hooks.beforeWrite?.(database);
+                  hooks.beforeWrite?.(database, receiptSchema);
                 }
               },
-              afterWrite: (database) => {
+              afterWrite: (database, receiptSchema) => {
                 for (const hooks of receiptHooks) {
-                  hooks.afterWrite?.(database);
+                  hooks.afterWrite?.(database, receiptSchema);
                 }
               },
               afterCommit: () => {
@@ -189,7 +190,6 @@ export async function finalizeCompletedCronRunOutcomes(
             if (
               applyOutcomeToAuthoritativeJob(state, job, outcome, {
                 deferredNotifications: postPersistNotifications,
-                emit: false,
                 triggerStateRetired:
                   outcome.runReceipt &&
                   isCronRunTriggerStateRetiredInDatabase({ database, handle: outcome.runReceipt }),
@@ -216,7 +216,7 @@ export async function finalizeCompletedCronRunOutcomes(
       );
       for (const outcome of finalizedOutcomes) {
         if (outcome.status === "ok" && outcome.triggerEval?.fired === false) {
-          tryFinishCronTaskRunWithoutHistory(state, outcome);
+          await recordQuietCronEvaluation(state, outcome);
         }
         if (!canPublish(outcome)) {
           // Observe retired rows without publishing their schedule changes when
@@ -241,7 +241,7 @@ export async function finalizeCompletedCronRunOutcomes(
         if (plan.job) {
           emitCronOutcomeEventForJob(state, plan.job, plan.outcome);
         } else {
-          applyOutcomeToStoredJob(state, plan.outcome, {
+          await applyOutcomeToStoredJob(state, plan.outcome, {
             deferredNotifications: postPersistNotifications,
           });
         }
@@ -254,14 +254,12 @@ export async function finalizeCompletedCronRunOutcomes(
       }
       publishCronRuntimeRows(state);
       try {
-        const maintenance = recomputeUnownedCronSchedules(
+        await recomputeUnownedCronSchedules(
           state,
           opts?.repairFutureCronNextRunAtMs === false
             ? { repairFutureCronNextRunAtMs: false }
             : undefined,
         );
-        applyCronRuntimeRowsToState(state, maintenance.jobs);
-        runPostPersistCronNotifications(state, maintenance.notifications);
       } catch (error) {
         state.deps.log.warn(
           { err: String(error) },
@@ -288,14 +286,13 @@ export async function finalizeCompletedCronRunOutcomes(
               reason: error.message,
             });
           } else {
-            supersedeServiceCronRunReceipt(stale.runReceipt, state.deps.nowMs(), error.message);
+            finishCronRunReceipt({
+              handle: stale.runReceipt,
+              status: "superseded",
+              finishedAtMs: state.deps.nowMs(),
+              error: error.message,
+            });
           }
-          tryFinishCronTaskRunWithoutHistory(state, {
-            taskRunId: stale.taskRunId,
-            status: "skipped",
-            error: error.message,
-            endedAt: state.deps.nowMs(),
-          });
         }
         const remaining = outcomes.filter((outcome) => outcome !== stale);
         return await finalizeCompletedCronRunOutcomes(state, remaining, opts);

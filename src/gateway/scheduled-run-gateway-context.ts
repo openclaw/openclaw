@@ -6,10 +6,13 @@
  * no context and fail mid-run. RPC-triggered runs already inherit a scope from
  * their caller and must keep it.
  */
+import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 type ScheduledGatewayContextResolver = () => GatewayRequestContext | undefined;
@@ -44,21 +47,26 @@ export function fenceScheduledGatewayContextResolver(
   return resolveScheduledContext;
 }
 
-/**
- * Runs scheduler-owned work with a Gateway context.
- *
- * Detached work replaces any request scope inherited when it was queued or
- * armed. Caller-owned work must stay outside this boundary.
- */
-export async function runWithScheduledGatewayContext<T>(params: {
-  resolveGatewayContext?: ScheduledGatewayContextResolver;
-  run: () => Promise<T>;
-}): Promise<T> {
-  const resolveGatewayContext = params.resolveGatewayContext;
-  if (!resolveGatewayContext) {
-    return await params.run();
-  }
-  return await withPluginRuntimeGatewayContextResolver(resolveGatewayContext, params.run, {
-    inheritRequestScope: false,
-  });
+/** Capture host resources; detached runs replace inherited request and tool-caller scopes. */
+export function createScheduledGatewayRunner(
+  resolveGatewayContext?: ScheduledGatewayContextResolver,
+) {
+  const spawnBroker = getSpawnBroker();
+  const runWithReadOnlyWorkers = captureSqliteReadOnlyWorkerScope();
+  return async <T>(run: () => Promise<T>): Promise<T> =>
+    await withoutGatewayToolCallerIdentity(() =>
+      runWithSpawnBroker(spawnBroker, async () => {
+        const runWithWorkers = () => runWithReadOnlyWorkers(run);
+        if (!resolveGatewayContext) {
+          return await runWithWorkers();
+        }
+        return await withPluginRuntimeGatewayContextResolver(
+          resolveGatewayContext,
+          runWithWorkers,
+          {
+            inheritRequestScope: false,
+          },
+        );
+      }),
+    );
 }

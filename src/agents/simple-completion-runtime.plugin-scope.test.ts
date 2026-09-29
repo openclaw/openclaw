@@ -25,7 +25,7 @@ import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModel,
-  acquireSimpleCompletionModel,
+  acquireSimpleCompletionModelWithSelection,
   acquireSimpleCompletionModelForAgent,
 } from "./simple-completion-runtime.js";
 import type { SimpleCompletionModelResolver } from "./simple-completion-scope.js";
@@ -79,8 +79,14 @@ module.exports = {
         if (!response.ok) throw new Error("fixture reload failed: HTTP " + response.status);
       },
       wrapSimpleCompletionStreamFn({ streamFn }) {
+        let invocation = 0;
         return (model, context, options) => streamFn(model, context, {
-          ...options, headers: { ...options?.headers, "x-completion-wrapper": owner },
+          ...options, headers: {
+            ...options?.headers,
+            "x-completion-wrapper": owner,
+            "x-completion-sequence": String(++invocation),
+            "x-completion-reasoning": options?.reasoning ?? "omitted",
+          },
         });
       },
     });
@@ -102,7 +108,7 @@ afterEach(async () => {
 describe("simple completion prepared plugin scope", () => {
   it.each([
     {
-      name: "direct provider and model",
+      name: "caller-selected provider and model",
       expectedModelId: "selected-model",
       mode: "direct",
     },
@@ -196,13 +202,10 @@ module.exports = {
           }
           return acquired;
         }
-        const acquired = await acquireSimpleCompletionModel({
-          cfg: config,
-          agentId: "main",
-          modelResolver,
-          provider: selected.providerId,
-          modelId: expectedModelId,
-        });
+        const acquired = await acquireSimpleCompletionModelWithSelection(
+          { cfg: config, agentId: "main", modelResolver },
+          () => ({ selection: { provider: selected.providerId, modelId: expectedModelId } }),
+        );
         if (!("error" in acquired)) {
           acquiredResource = acquired;
         }
@@ -225,7 +228,7 @@ module.exports = {
   });
 
   it.each(["acquired", "borrowed", "empty"] as const)(
-    "keeps %s transport ownership across ambient replacement and repeated completion",
+    "keeps %s transport ownership and wrapper state across ambient replacement and repeated completion",
     async (mode) => {
       const tempRoot = fs.realpathSync(tempRoots.makeTempDir());
       const selected = createTransportOwnerFixture(path.join(tempRoot, "selected"), "A");
@@ -245,6 +248,8 @@ module.exports = {
           requestCount,
           request.headers["x-completion-stream"] ?? "none",
           request.headers["x-completion-wrapper"] ?? "none",
+          request.headers["x-completion-sequence"] ?? "none",
+          request.headers["x-completion-reasoning"] ?? "none",
           request.headers.authorization,
         ].join("|");
         response.writeHead(200, { "content-type": "text/event-stream" });
@@ -370,7 +375,12 @@ module.exports = {
                 preparedModelRuntime: lease.snapshot,
               });
             } else {
-              const acquired = await acquireSimpleCompletionModel(modelParams);
+              const acquired = await acquireSimpleCompletionModelForAgent({
+                cfg,
+                agentId: "main",
+                agentDir: input.agentDir,
+                modelRef: `${selected.providerId}/selected-model`,
+              });
               if (!("error" in acquired)) {
                 preparedResource = acquired;
               }
@@ -380,7 +390,12 @@ module.exports = {
               throw new Error(prepared.error);
             }
             if (mode === "acquired") {
-              const repeatedPreparation = await acquireSimpleCompletionModel(modelParams);
+              const repeatedPreparation = await acquireSimpleCompletionModelForAgent({
+                cfg,
+                agentId: "main",
+                agentDir: input.agentDir,
+                modelRef: `${selected.providerId}/selected-model`,
+              });
               if ("error" in repeatedPreparation) {
                 throw new Error(repeatedPreparation.error);
               }
@@ -394,16 +409,25 @@ module.exports = {
             expect(isColdPluginRuntimeLoaded(ambient)).toBe(true);
             const owner = mode === "empty" ? "none" : "A";
             const auth = mode === "empty" ? "fixture-auth-source" : "fixture-auth-A";
-            for (const turn of [1, 2]) {
+            for (const [index, reasoning] of (["off", "max", undefined] as const).entries()) {
+              const turn = index + 1;
               const result = await completeWithPreparedSimpleCompletionModel({
                 model: prepared.model,
                 auth: prepared.auth,
                 cfg,
                 context: { messages: [{ role: "user", content: `Turn ${turn}`, timestamp: turn }] },
+                options: { reasoning },
               });
+              const wrapperState =
+                mode === "empty" ? "none|none" : `${turn}|${reasoning ?? "omitted"}`;
               expect(result).toMatchObject({
                 stopReason: "stop",
-                content: [{ type: "text", text: `${turn}|${owner}|${owner}|Bearer ${auth}` }],
+                content: [
+                  {
+                    type: "text",
+                    text: `${turn}|${owner}|${owner}|${wrapperState}|Bearer ${auth}`,
+                  },
+                ],
               });
             }
             expect(prepared.model.api).toBe("openai-completions");
@@ -508,13 +532,11 @@ module.exports = {
         OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
       };
       await withEnvAsync(env, async () => {
-        const prepared = await acquireSimpleCompletionModel({
+        const prepared = await acquireSimpleCompletionModelForAgent({
           cfg,
           agentId: "main",
           agentDir: path.join(tempRoot, "agent"),
-          workspaceDir: selected.rootDir,
-          provider: selected.providerId,
-          modelId: "selected-model",
+          modelRef: `${selected.providerId}/selected-model`,
         });
         if ("error" in prepared) {
           throw new Error(prepared.error);

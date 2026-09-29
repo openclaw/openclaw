@@ -25,6 +25,7 @@ import type {
 export type ResolvedRealtimeVoiceProvider = {
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
+  capabilities?: InternalRealtimeVoiceProviderCapabilities;
 };
 
 /** Inputs for resolving a configured or auto-selected realtime voice provider. */
@@ -52,6 +53,7 @@ export type ResolveConfiguredRealtimeVoiceProviderParams = {
   surface?: RealtimeVoiceProviderResolveConfigContext["surface"];
   autoRespondToAudio?: RealtimeVoiceProviderResolveConfigContext["autoRespondToAudio"];
   requiredCapabilities?: RealtimeVoiceProviderResolveConfigContext["requiredCapabilities"];
+  clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
   noRegisteredProviderMessage?: string;
 };
 
@@ -178,5 +180,13 @@ export function resolveConfiguredRealtimeVoiceProvider(
   return {
     provider: resolution.provider,
     providerConfig: resolution.providerConfig,
+    capabilities: resolveRealtimeVoiceProviderCapabilities({
+      provider: resolution.provider,
+      providerConfig: resolution.providerConfig,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      surface: params.surface,
+      clientControl: params.clientControl,
+    }),
   };
 }

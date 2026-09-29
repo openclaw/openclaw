@@ -14,6 +14,7 @@ import {
   deviceBootstrapProfilesEqual,
   type DeviceBootstrapProfile,
 } from "../../../shared/device-bootstrap-profile.js";
+import { captureGatewayAuthPolicy } from "../../auth-policy.js";
 import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import { withSerializedCredentialFallbackAttempt } from "../../rate-limit-attempt-serialization.js";
@@ -274,7 +275,7 @@ async function authenticateGatewayConnectCore(
     sharedAuthOk,
     authMethod,
   });
-  let preserveLocalCliSharedAuthScopes = shouldPreserveLocalCliSharedAuthScopes({
+  const preserveLocalCliSharedAuthScopes = shouldPreserveLocalCliSharedAuthScopes({
     connectParams,
     locality: pairingLocality,
     hasBrowserOriginHeader,
@@ -380,21 +381,7 @@ async function authenticateGatewayConnectCore(
     requireBootstrapToken: startupBootstrapConnect,
     rateLimiter: authRateLimiter,
     clientIp: browserRateLimitClientIp,
-    async verifyBootstrapToken({
-      deviceId,
-      publicKey,
-      token,
-      role: roleLocal,
-      scopes: scopesLocal,
-    }) {
-      return await verifyDeviceBootstrapToken({
-        deviceId,
-        publicKey,
-        token,
-        role: roleLocal,
-        scopes: scopesLocal,
-      });
-    },
+    verifyBootstrapToken: verifyDeviceBootstrapToken,
     async verifyDeviceToken(paramsLocal) {
       return await verifyDeviceToken({
         ...paramsLocal,
@@ -417,13 +404,6 @@ async function authenticateGatewayConnectCore(
     authMethod,
   });
   skipLocalBackendSelfPairing = shouldSkipLocalBackendSelfPairing({
-    connectParams,
-    locality: pairingLocality,
-    hasBrowserOriginHeader,
-    sharedAuthOk,
-    authMethod,
-  });
-  preserveLocalCliSharedAuthScopes = shouldPreserveLocalCliSharedAuthScopes({
     connectParams,
     locality: pairingLocality,
     hasBrowserOriginHeader,
@@ -533,6 +513,10 @@ async function authenticateGatewayConnectCore(
   });
 
   return {
+    authPolicy: captureGatewayAuthPolicy(context.configSnapshot, {
+      role,
+      verifiedIdentity: authResult.user,
+    }),
     resolvedAuth,
     minProtocol,
     maxProtocol,

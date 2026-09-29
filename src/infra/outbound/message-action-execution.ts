@@ -17,6 +17,7 @@ import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
+import { isChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMessagePresentation } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -27,11 +28,14 @@ import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
-import type {
-  MessageActionGateway,
-  MessageActionResult,
-  ResolvedActionContext,
+import { assertOutboundHandoffCurrent, OutboundHandoffRejectedError } from "./deliver-handoff.js";
+import {
+  createChannelActionContext,
+  type MessageActionGateway,
+  type MessageActionResult,
+  type ResolvedActionContext,
 } from "./message-action-contracts.js";
+import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import { resolveAndApplyOutboundThreadId } from "./message-action-threading.js";
 import {
   resolveOutboundMessageGatewayOptions,
@@ -47,9 +51,10 @@ import { executePollAction } from "./outbound-send-service.js";
 import {
   beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery,
-  isDeliveredCurrentSourceReply,
   reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
+
+export { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 
 const log = createSubsystemLogger("outbound/message-action");
 
@@ -58,50 +63,6 @@ const log = createSubsystemLogger("outbound/message-action");
 const loadMessageActionGatewayRuntime = createLazyRuntimeModule(
   () => import("./message.gateway.runtime.js"),
 );
-
-export function annotateSourceDelivery<T extends MessageActionResult>(
-  result: T,
-  ctx: ResolvedActionContext,
-  replyToIsExplicit: boolean,
-): T {
-  // Current-source identity comes from the authorized route and delivery receipt,
-  // not the reply mode; automatic runs also use this marker to avoid false fallbacks.
-  const authorization = ctx.input.messageActionAuthorization;
-  if (result.kind === "broadcast" || !authorization?.toolContext) {
-    return result;
-  }
-  const mirrorParams = {
-    action: result.action,
-    channel: ctx.channel,
-    actionParams: ctx.params,
-    cfg: ctx.cfg,
-    accountId: ctx.accountId,
-    currentAccountId: authorization.requesterAccountId ?? ctx.input.defaultAccountId,
-    sessionKey: ctx.input.sessionKey,
-    sessionId: ctx.input.sessionId,
-    agentId: ctx.agentId,
-    toolContext: authorization.toolContext,
-    deliveredPayload: result.payload,
-    replyToIsExplicit,
-  };
-  if (!isDeliveredCurrentSourceReply(mirrorParams)) {
-    return result;
-  }
-  const payload = asResultRecord(result.payload);
-  const details = asResultRecord(result.toolResult?.details);
-  return {
-    ...result,
-    payload: payload ? { ...payload, sourceReplyRoute: "current-source" } : result.payload,
-    ...(result.toolResult
-      ? {
-          toolResult: {
-            ...result.toolResult,
-            details: { ...details, sourceReplyRoute: "current-source" },
-          },
-        }
-      : {}),
-  } as T;
-}
 
 const MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS = 60_000;
 const MESSAGE_ACTION_RECONCILIATION_MAX_MS = 9 * 60_000;
@@ -198,6 +159,24 @@ function isConfirmedGatewayMessageActionRejection(error: unknown): boolean {
     typeof details === "object" &&
     (details as { method?: unknown }).method === "message.action"
   );
+}
+
+export function projectMessageActionPartialDelivery(error: unknown) {
+  const directDelivery = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
+  const gatewayDelivery =
+    error instanceof Error && error.name === "GatewayClientRequestError"
+      ? asResultRecord(asResultRecord(error)?.details)?.partialDelivery
+      : undefined;
+  const deliveryResult = directDelivery ?? gatewayDelivery;
+  return deliveryResult === undefined
+    ? undefined
+    : {
+        ok: false as const,
+        deliveryStatus: "partial_failed" as const,
+        sentBeforeError: true as const,
+        error: formatErrorMessage(error),
+        result: deliveryResult,
+      };
 }
 
 export function projectGatewayQueuedDeliveryResult(error: unknown) {
@@ -297,12 +276,21 @@ export async function executeGatewayAction(
   if (ctx.dryRun || !ctx.gateway) {
     return null;
   }
-  if (!ctx.channelPlugin?.actions?.handleAction) {
+  const channelPlugin = ctx.channelPlugin;
+  const supportsCanonicalGatewayDelivery =
+    Boolean(ctx.input.messageActionAuthorization?.scheduled && ctx.gateway.request) &&
+    channelPlugin?.outbound?.deliveryMode === "gateway" &&
+    ((params.action === "send" &&
+      Boolean(channelPlugin.message?.send?.text || channelPlugin.outbound.sendText)) ||
+      (params.action === "poll" && Boolean(channelPlugin.outbound.sendPoll))) &&
+    (!channelPlugin.actions?.handleAction ||
+      channelPlugin.actions.supportsAction?.({ action: params.action }) === false);
+  if (!channelPlugin?.actions?.handleAction && !supportsCanonicalGatewayDelivery) {
     return null;
   }
   const executionMode =
-    ctx.channelPlugin.actions.resolveExecutionMode?.({ action: params.action }) ?? "local";
-  if (executionMode !== "gateway") {
+    channelPlugin.actions?.resolveExecutionMode?.({ action: params.action }) ?? "local";
+  if (executionMode !== "gateway" && !supportsCanonicalGatewayDelivery) {
     return null;
   }
   const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
@@ -349,6 +337,7 @@ export async function executeGatewayAction(
   let hadUnknownDeliveryOutcome = false;
   let payload: unknown;
   try {
+    assertOutboundHandoffCurrent(ctx.input.assertDirectAdapterHandoff);
     payload = await callGatewayMessageAction<unknown>({
       gateway: ctx.gateway,
       abortSignal: ctx.input.abortSignal,
@@ -373,14 +362,22 @@ export async function executeGatewayAction(
       },
     });
   } catch (error) {
-    if (
-      callerOwnsTerminalReceipt &&
-      !hadUnknownDeliveryOutcome &&
-      isConfirmedGatewayMessageActionRejection(error)
-    ) {
-      await cancelTerminalSourceReplyDelivery(terminalDeliveryReceipt);
+    const partialDelivery = ctx.input.messageActionAuthorization?.scheduled
+      ? projectMessageActionPartialDelivery(error)
+      : undefined;
+    if (partialDelivery !== undefined) {
+      payload = partialDelivery;
+    } else {
+      if (
+        callerOwnsTerminalReceipt &&
+        !hadUnknownDeliveryOutcome &&
+        (error instanceof OutboundHandoffRejectedError ||
+          isConfirmedGatewayMessageActionRejection(error))
+      ) {
+        await cancelTerminalSourceReplyDelivery(terminalDeliveryReceipt);
+      }
+      throw error;
     }
-    throw error;
   }
   if (callerOwnsTerminalReceipt) {
     try {
@@ -400,7 +397,36 @@ export async function executeGatewayAction(
       });
     }
   }
-  return params.result(payload);
+  const result = params.result(payload);
+  if (!supportsCanonicalGatewayDelivery) {
+    return result;
+  }
+  const partialDelivery = asResultRecord(payload)?.deliveryStatus === "partial_failed";
+  if (result.kind === "send") {
+    return {
+      ...result,
+      handledBy: "core",
+      ...(partialDelivery
+        ? {}
+        : {
+            // SAFETY: successful canonical Gateway sends return MessageSendResult payloads.
+            sendResult: payload as Extract<MessageActionResult, { kind: "send" }>["sendResult"],
+          }),
+    };
+  }
+  if (result.kind === "poll") {
+    return {
+      ...result,
+      handledBy: "core",
+      ...(partialDelivery
+        ? {}
+        : {
+            // SAFETY: successful canonical Gateway polls return MessagePollResult payloads.
+            pollResult: payload as Extract<MessageActionResult, { kind: "poll" }>["pollResult"],
+          }),
+    };
+  }
+  return result;
 }
 
 export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<MessageActionResult> {
@@ -447,14 +473,14 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
   });
   const pollReplyToIsExplicit = Boolean(readToolStringParam(params, "replyTo"));
   if (gatewayPluginAction) {
-    return annotateSourceDelivery(gatewayPluginAction, ctx, pollReplyToIsExplicit);
+    return await annotateSourceDelivery(gatewayPluginAction, ctx, pollReplyToIsExplicit);
   }
 
   const poll = await executePollAction({
     ctx: {
       ...ctx,
-      // Poll actions expose requester IDs and turn context, without send-only
-      // authority or media grants. Preserve that plugin boundary independently.
+      // Poll actions expose requester IDs, turn context, and the same live
+      // provider-call fence as every other scheduled message action.
       mediaAccess: undefined,
       input: {
         cfg,
@@ -467,6 +493,10 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
         sessionId: input.sessionId,
         inboundEventKind: input.inboundEventKind,
         toolContext: input.toolContext,
+        messageActionAuthorization: input.messageActionAuthorization,
+        gatewayOwnedDelivery: input.gatewayOwnedDelivery,
+        onPlatformSendDispatch: input.onPlatformSendDispatch,
+        assertDirectAdapterHandoff: input.assertDirectAdapterHandoff,
       },
       silent: silent ?? undefined,
     },
@@ -499,7 +529,7 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
     },
   });
 
-  return annotateSourceDelivery(
+  return await annotateSourceDelivery(
     {
       kind: "poll",
       channel,
@@ -527,21 +557,23 @@ export async function executeMessagePlugin(
     mediaAccess,
     accountId,
     dryRun,
-    gateway,
     input,
     abortSignal,
-    agentId,
   } = ctx;
   throwIfAborted(abortSignal);
   const action = input.action as Exclude<ChannelMessageActionName, "send" | "poll" | "broadcast">;
+  const actionResult = {
+    kind: "action" as const,
+    channel,
+    action,
+    ...(ctx.resolvedTarget ? { to: ctx.resolvedTarget.to } : {}),
+    dryRun,
+  };
   if (dryRun) {
     return {
-      kind: "action",
-      channel,
-      action,
+      ...actionResult,
       handledBy: "dry-run",
       payload: { ok: true, dryRun: true, channel, action },
-      dryRun: true,
     };
   }
 
@@ -580,60 +612,62 @@ export async function executeMessagePlugin(
   const gatewayPluginAction = await executeGatewayAction(ctx, {
     action,
     result: (payload) => ({
-      kind: "action",
-      channel,
-      action,
+      ...actionResult,
       handledBy: "plugin",
       payload,
-      dryRun,
     }),
   });
   const replyToIsExplicit = Boolean(readToolStringParam(params, "replyTo"));
   if (gatewayPluginAction) {
     // Gateway-owned actions must execute where the live channel runtime exists.
-    return annotateSourceDelivery(gatewayPluginAction, ctx, replyToIsExplicit);
+    return await annotateSourceDelivery(gatewayPluginAction, ctx, replyToIsExplicit);
   }
 
   const authorization = input.messageActionAuthorization;
-  const handled = await dispatchChannelMessageAction({
-    channel,
-    action,
-    cfg,
-    params,
-    mediaAccess,
-    mediaLocalRoots: mediaAccess.localRoots,
-    mediaReadFile: mediaAccess.readFile,
-    accountId: accountId ?? undefined,
-    requesterAccountId:
-      authorization !== undefined
-        ? authorization.requesterAccountId
-        : (input.requesterAccountId ?? undefined),
-    requesterSenderId:
-      authorization !== undefined
-        ? authorization.requesterSenderId
-        : (input.requesterSenderId ?? undefined),
-    senderIsOwner: input.senderIsOwner,
-    conversationReadOrigin: normalizeConversationReadInvocationOrigin(input.conversationReadOrigin),
-    sessionKey: input.sessionKey,
-    sessionId: input.sessionId,
-    inboundEventKind: input.inboundEventKind,
-    agentId,
-    gateway,
-    toolContext: authorization !== undefined ? authorization.toolContext : input.toolContext,
-    dryRun,
-  });
+  let handled;
+  try {
+    handled = await dispatchChannelMessageAction({
+      ...createChannelActionContext({ ctx, action, mediaAccess }),
+      progressSnapshot: input.progressSnapshot,
+      requesterAccountId:
+        authorization !== undefined
+          ? authorization.requesterAccountId
+          : (input.requesterAccountId ?? undefined),
+      requesterSenderId:
+        authorization !== undefined
+          ? authorization.requesterSenderId
+          : (input.requesterSenderId ?? undefined),
+      toolContext: authorization !== undefined ? authorization.toolContext : input.toolContext,
+      messageActionAuthorization: authorization,
+      deliveryRetryOwner: input.actionOrigin === "message-tool" ? "caller" : undefined,
+      skipQueue: input.skipQueue,
+    });
+  } catch (error) {
+    const partialDelivery = input.messageActionAuthorization?.scheduled
+      ? projectMessageActionPartialDelivery(error)
+      : undefined;
+    if (partialDelivery) {
+      return await annotateSourceDelivery(
+        {
+          ...actionResult,
+          handledBy: "plugin",
+          payload: partialDelivery,
+        },
+        ctx,
+        replyToIsExplicit,
+      );
+    }
+    throw error;
+  }
   if (!handled) {
     throw new Error(`Message action ${action} not supported for channel ${channel}.`);
   }
-  return annotateSourceDelivery(
+  return await annotateSourceDelivery(
     {
-      kind: "action",
-      channel,
-      action,
+      ...actionResult,
       handledBy: "plugin",
       payload: extractToolPayload(handled),
       toolResult: handled,
-      dryRun,
     },
     ctx,
     replyToIsExplicit,

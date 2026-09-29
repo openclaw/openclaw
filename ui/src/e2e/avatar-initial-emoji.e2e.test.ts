@@ -144,7 +144,7 @@ suite.define(() => {
         const response = await page.goto(`${suite.server.baseUrl}settings/agents`);
         expect(response?.status()).toBe(200);
         await gateway.waitForRequest("agents.list");
-        const agentSelect = page.locator("openclaw-agents-page openclaw-agent-select");
+        const agentSelect = page.locator(".settings-sidebar__agent openclaw-agent-select");
         await agentSelect.locator(".agent-select__trigger").click();
         const emojiItem = agentSelect.getByRole("menuitemradio", {
           name: "🚀Rocket",
@@ -206,7 +206,7 @@ suite.define(() => {
         expect(response?.status()).toBe(200);
         await gateway.waitForRequest("agents.list");
         await gateway.waitForRequest("config.get");
-        const agentSelect = page.locator("openclaw-agents-page openclaw-agent-select");
+        const agentSelect = page.locator(".settings-sidebar__agent openclaw-agent-select");
         await agentSelect.locator(".agent-select__trigger").click();
         await agentSelect.getByRole("menuitemradio", { name: "Rocket", exact: true }).click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/emoji/tools");

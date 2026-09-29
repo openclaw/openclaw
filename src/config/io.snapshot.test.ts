@@ -27,8 +27,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-function createContext(root: string) {
-  const configPath = path.join(root, "openclaw.json");
+function createContext(root: string, configPath = path.join(root, "openclaw.json")) {
   const env: NodeJS.ProcessEnv = {
     HOME: root,
     USERPROFILE: root,
@@ -46,27 +45,132 @@ function createContext(root: string) {
 }
 
 describe("config snapshot plugin metadata", () => {
-  it.each(["full", "core-only"] as const)(
-    "keeps legacy roster channel discovery owned by %s validation",
-    async (pluginValidation) => {
-      const root = tempDirs.make("openclaw-config-roster-metadata-");
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "retains an inaccessible config parent as a read failure rather than a missing config",
+    async () => {
+      const root = tempDirs.make("openclaw-config-inaccessible-parent-");
+      const parent = path.join(root, "restricted");
+      fs.mkdirSync(parent);
+      const configPath = path.join(parent, "openclaw.json");
+      const source = '{"gateway":{"mode":"local"}}';
+      fs.writeFileSync(configPath, source);
+      const context = createContext(root, configPath);
+      context.options.pluginValidation = "core-only";
+      fs.chmodSync(parent, 0);
+      try {
+        expect(fs.existsSync(configPath)).toBe(false);
+        const snapshot = await readConfigFileSnapshotFromContext(context);
+        expect(snapshot).toMatchObject({
+          valid: false,
+          raw: null,
+          readError: { code: "EACCES" },
+          issues: [{ errorCode: "CONFIG_READ_FAILED" }],
+        });
+      } finally {
+        fs.chmodSync(parent, 0o700);
+      }
+      expect(fs.readFileSync(configPath, "utf8")).toBe(source);
+    },
+  );
+
+  it("preserves source paths across core-only and prepared plugin reads with a Windows home", async () => {
+    const root = tempDirs.make("openclaw-config-windows-paths-");
+    const context = createContext(root);
+    const windowsHome = "C:\\Users\\fixture";
+    const resolve = path.resolve;
+    const resolveWindows = path.win32.resolve;
+    vi.spyOn(path, "resolve").mockImplementation((...segments) =>
+      segments.some((segment) => segment.startsWith(windowsHome))
+        ? resolveWindows(...segments)
+        : resolve(...segments),
+    );
+    context.pathResolution = { env: {}, homedir: () => windowsHome };
+    const plugins = {
+      enabled: false,
+      entries: { wiki: { config: { store: { path: "~/.openclaw/wiki" } } } },
+    };
+    fs.writeFileSync(context.configPath, JSON.stringify({ plugins }));
+    context.options.pluginValidation = "core-only";
+    const core = await readConfigFileSnapshotFromContext(context);
+    context.options.pluginValidation = "full";
+    const { snapshot: full } = await readConfigFileSnapshotWithPluginMetadataFromContext(context, {
+      prepareValidation: "runtime",
+    });
+
+    expect(core.valid).toBe(true);
+    expect(full.valid).toBe(true);
+    expect(core.sourceConfig).toEqual(full.sourceConfig);
+    for (const snapshot of [core, full]) {
+      expect(snapshot.authoredConfig?.plugins).toEqual(plugins);
+      expect(snapshot.sourceConfig.plugins).toEqual(plugins);
+      expect(snapshot.sourceConfigBeforeMigrations?.plugins).toEqual(plugins);
+      expect(snapshot.runtimeConfig.plugins?.entries?.wiki?.config).toEqual({
+        store: { path: "C:\\Users\\fixture\\.openclaw\\wiki" },
+      });
+    }
+  });
+
+  it.each([
+    { useInclude: false, invalid: true },
+    { useInclude: true, invalid: false },
+  ])(
+    "pairs authored references with their resolved read (include: $useInclude, invalid: $invalid)",
+    async ({ useInclude, invalid }) => {
+      const root = tempDirs.make("openclaw-config-authored-snapshot-");
       const context = createContext(root);
-      context.options.pluginValidation = pluginValidation;
+      context.deps.env.PLUGIN_TOKEN = "read-time-token";
+      const plugins = {
+        enabled: false,
+        entries: { retired: { config: { token: "${PLUGIN_TOKEN}" } } },
+      };
+      fs.writeFileSync(path.join(root, "plugins.json"), JSON.stringify(plugins));
       fs.writeFileSync(
         context.configPath,
         JSON.stringify({
-          agents: { list: [{ id: "primary", default: true }, { id: "secondary" }] },
-          channels: { discord: { enabled: false } },
+          gateway: { auth: { token: "${PLUGIN_TOKEN}" } },
+          plugins: useInclude ? { $include: "plugins.json" } : plugins,
+          ...(invalid ? { nodeHost: { browserProxy: { enabled: "invalid" } } } : {}),
         }),
       );
-      const discovery = vi.spyOn(channelPresence, "listChannelIdsForOwnershipMigration");
+
       const snapshot = await readConfigFileSnapshotFromContext(context);
-      expect(snapshot.valid).toBe(true);
-      expect(snapshot.config.agents?.entries).toEqual({ primary: {}, secondary: {} });
-      expect(snapshot.config.agents?.defaults?.systemAgent?.agentId).toBe("primary");
-      expect(discovery.mock.calls.length > 0).toBe(pluginValidation === "full");
+      const hash = snapshot.hash;
+      context.deps.env.PLUGIN_TOKEN = "later-token";
+      fs.writeFileSync(path.join(root, "plugins.json"), "{}");
+
+      expect(snapshot.valid).toBe(!invalid);
+      expect(snapshot.authoredConfig?.plugins).toEqual(plugins);
+      expect(snapshot.authoredConfig?.gateway?.auth?.token).toBe("${PLUGIN_TOKEN}");
+      expect(snapshot.sourceConfigBeforeMigrations?.gateway?.auth?.token).toBe("read-time-token");
+      expect(snapshot.sourceConfigBeforeMigrations?.plugins?.entries?.retired?.config).toEqual({
+        token: "read-time-token",
+      });
+      expect(snapshot.parsed).toMatchObject({
+        plugins: useInclude ? { $include: "plugins.json" } : plugins,
+      });
+      expect(snapshot.hash).toBe(hash);
+      expect(snapshot.path).toBe(context.configPath);
     },
   );
+
+  it("keeps legacy roster channel discovery owned by full validation", async () => {
+    const root = tempDirs.make("openclaw-config-roster-metadata-");
+    const context = createContext(root);
+    context.options.pluginValidation = "full";
+    fs.writeFileSync(
+      context.configPath,
+      JSON.stringify({
+        agents: { list: [{ id: "primary", default: true }, { id: "secondary" }] },
+        channels: { discord: { enabled: false } },
+      }),
+    );
+    const discovery = vi.spyOn(channelPresence, "listChannelIdsForOwnershipMigration");
+    const snapshot = await readConfigFileSnapshotFromContext(context);
+    expect(snapshot.valid).toBe(true);
+    expect(snapshot.config.agents?.entries).toEqual({ primary: {}, secondary: {} });
+    expect(snapshot.config.agents?.defaults?.systemAgent?.agentId).toBe("primary");
+    expect(discovery).toHaveBeenCalled();
+  });
 
   it.each(["full", "core-only"] as const)(
     "keeps invalid snapshot Doctor contracts owned by %s validation",
@@ -79,7 +183,7 @@ describe("config snapshot plugin metadata", () => {
         JSON.stringify({
           nodeHost: { browserProxy: { enabled: "invalid" } },
           channels: { discord: {} },
-          routing: { allowFrom: ["fixture"] },
+          session: { typingMode: "thinking" },
         }),
       );
       const doctor = vi.spyOn(doctorLegacy, "findDoctorLegacyConfigIssues");
@@ -91,7 +195,7 @@ describe("config snapshot plugin metadata", () => {
         ]),
       );
       expect(snapshot.legacyIssues).toEqual(
-        expect.arrayContaining([expect.objectContaining({ path: "routing.allowFrom" })]),
+        expect.arrayContaining([expect.objectContaining({ path: "session.typingMode" })]),
       );
       expect(doctor.mock.calls.length > 0).toBe(pluginValidation === "full");
     },
@@ -202,6 +306,7 @@ describe("config snapshot plugin metadata", () => {
     const result = await readConfigFileSnapshotWithPluginMetadataFromContext(context);
 
     expect(result.snapshot.valid).toBe(false);
+    expect(result.snapshot.authoredConfig).toBeUndefined();
     expect(result.pluginMetadataSnapshot).toBeUndefined();
     expect(loader).not.toHaveBeenCalled();
   });

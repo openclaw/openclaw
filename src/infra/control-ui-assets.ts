@@ -10,6 +10,8 @@ import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../gateway/control-ui-root-assets.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { openRootFileSync, readFileDescriptorBoundedSync } from "./boundary-file-read.js";
+import { FsSafeError } from "./fs-safe.js";
 import { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
 export function formatControlUiSourceCommand(root: string, action: "build" | "dev"): string {
@@ -70,11 +72,10 @@ function resolveControlUiRepoRoot(opts: {
 }
 
 async function resolveControlUiDistIndexPath(
-  argv1OrOpts?: string | { argv1?: string; moduleUrl?: string },
+  opts: ControlUiRootResolveOptions,
 ): Promise<string | null> {
-  const argv1 =
-    typeof argv1OrOpts === "string" ? argv1OrOpts : (argv1OrOpts?.argv1 ?? process.argv[1]);
-  const moduleUrl = typeof argv1OrOpts === "object" ? argv1OrOpts?.moduleUrl : undefined;
+  const argv1 = opts.argv1 ?? process.argv[1];
+  const moduleUrl = opts.moduleUrl;
   if (!argv1) {
     return null;
   }
@@ -215,8 +216,7 @@ export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {})
     cwd,
   });
 
-  // Packaged app: prefer bundled resources, then support legacy alongside-executable layout.
-  addCandidate(candidates, execDir ? path.join(execDir, "../Resources/control-ui") : null);
+  // Support legacy packaged runtimes that place assets alongside the executable.
   addCandidate(candidates, execDir ? path.join(execDir, "control-ui") : null);
   if (moduleDir) {
     // dist/<bundle>.js -> dist/control-ui
@@ -297,11 +297,32 @@ function inspectControlUiAssetHealth(
   }
   let html: string;
   try {
-    if (fs.statSync(indexPath).size > 256 * 1024) {
+    const opened = openRootFileSync({
+      absolutePath: indexPath,
+      rootPath: path.dirname(indexPath),
+      boundaryLabel: "control ui root",
+      rejectSymlinks: false,
+      rejectHardlinks: false,
+      maxBytes: 256 * 1024,
+    });
+    if (!opened.ok) {
+      if (opened.error instanceof FsSafeError && opened.error.code === "too-large") {
+        throw opened.error;
+      }
+      return { kind: "missing-index", indexPath };
+    }
+    try {
+      html = readFileDescriptorBoundedSync(opened.fd, 256 * 1024).toString("utf8");
+    } finally {
+      fs.closeSync(opened.fd);
+    }
+  } catch (error) {
+    if (
+      error instanceof RangeError ||
+      (error instanceof FsSafeError && error.code === "too-large")
+    ) {
       return { kind: "incomplete", indexPath, missingAsset: "index.html exceeds its size limit" };
     }
-    html = fs.readFileSync(indexPath, "utf8");
-  } catch {
     return { kind: "missing-index", indexPath };
   }
   let references = 0;

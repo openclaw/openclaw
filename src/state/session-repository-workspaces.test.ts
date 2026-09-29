@@ -2,13 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { closeOpenClawStateDatabaseByPath } from "./openclaw-state-db-cache.js";
-import {
-  ensureRepositoryWorkspacePendingResultSchema,
-  hasRepositoryWorkspacePendingResultSchema,
-} from "./openclaw-state-db-schema-additive.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { ensureRepositoryWorkspacePendingResultSchema } from "./openclaw-state-db-schema-additive.js";
+import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
@@ -81,28 +79,30 @@ it("retries rolled-back first-use pending owner DDL and preserves the committed 
   database.db.exec(
     "ALTER TABLE worker_workspace_pending_results DROP COLUMN repository_workspace_id",
   );
-  expect(hasRepositoryWorkspacePendingResultSchema(database.db)).toBe(false);
+  const hasPendingRepositoryColumn = (db = database.db) =>
+    tableHasColumn(db, "worker_workspace_pending_results", "repository_workspace_id");
+  expect(hasPendingRepositoryColumn()).toBe(false);
   expect(() =>
     runOpenClawStateWriteTransaction(
       ({ db }) => {
         ensureRepositoryWorkspacePendingResultSchema(db);
-        expect(hasRepositoryWorkspacePendingResultSchema(db)).toBe(true);
+        // A later first-use writer must not cache this uncommitted column.
+        ensureRepositoryWorkspacePendingResultSchema(db);
+        expect(hasPendingRepositoryColumn(db)).toBe(true);
         throw new Error("pending result rolled back");
       },
       { database },
     ),
   ).toThrow("pending result rolled back");
-  expect(hasRepositoryWorkspacePendingResultSchema(database.db)).toBe(false);
+  expect(hasPendingRepositoryColumn()).toBe(false);
   runOpenClawStateWriteTransaction(({ db }) => ensureRepositoryWorkspacePendingResultSchema(db), {
     database,
   });
-  expect(hasRepositoryWorkspacePendingResultSchema(database.db)).toBe(true);
+  expect(hasPendingRepositoryColumn()).toBe(true);
   closeOpenClawStateDatabaseByPath(database.path);
-  expect(
-    hasRepositoryWorkspacePendingResultSchema(
-      openOpenClawStateDatabase({ path: database.path }).db,
-    ),
-  ).toBe(true);
+  expect(hasPendingRepositoryColumn(openOpenClawStateDatabase({ path: database.path }).db)).toBe(
+    true,
+  );
 });
 
 it("creates one stable logical-session owner without widening replayed setup intent", async () => {
@@ -190,4 +190,51 @@ it("reopens the accepted owner and deletes only its own artifacts", async () => 
   });
   expect(reopened.get(sibling.workspaceId)).toEqual(sibling);
   expect((await fs.stat(reopened.artifactPath(sibling.workspaceId))).isDirectory()).toBe(true);
+});
+
+it("publishes repository row changes only after committed creation, revisions, and deletion", async () => {
+  const { database, store } = await fixture();
+  const changed = vi.fn();
+  const unsubscribe = sessionChanges.subscribe(changed);
+  try {
+    expect(() =>
+      runOpenClawStateWriteTransaction(
+        () => {
+          store.create(source);
+          expect(changed).not.toHaveBeenCalled();
+          throw new Error("rollback repository");
+        },
+        { database },
+      ),
+    ).toThrow("rollback repository");
+    expect(changed).not.toHaveBeenCalled();
+    const initial = store.create(source);
+    expect(changed).toHaveBeenCalledExactlyOnceWith({
+      agentId: source.agentId,
+      sessionKey: source.sessionKey,
+    });
+    const bound = store.bindBase({
+      workspaceId: initial.workspaceId,
+      expectedRevision: initial.revision,
+      baseCommit,
+      baseManifestHash,
+      assertCurrent,
+    });
+    store.acceptCheckpoint({
+      workspaceId: bound.workspaceId,
+      expectedRevision: bound.revision,
+      checkpointRef: "refs/openclaw/worker-results/row-signal",
+      manifestHash: baseManifestHash,
+      assertCurrent,
+    });
+    await store.delete({ workspaceId: initial.workspaceId, assertCurrent });
+    expect(changed).toHaveBeenCalledTimes(4);
+    expect(
+      changed.mock.calls.every(
+        ([change]) => change.agentId === source.agentId && change.sessionKey === source.sessionKey,
+      ),
+    ).toBe(true);
+  } finally {
+    unsubscribe();
+  }
 });

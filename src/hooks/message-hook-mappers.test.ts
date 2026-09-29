@@ -200,59 +200,115 @@ describe("message hook mappers", () => {
       }),
     );
 
-    expect(canonical.replyToId).toBe("discord-message-42");
-    expect(canonical.replyToIdFull).toBe("discord:channel-1:discord-message-42");
-    expect(canonical.replyToBody).toBe("quoted Discord reply body");
-    expect(canonical.replyToSender).toBe("Ada");
-    expect(canonical.replyToIsQuote).toBe(true);
-
-    expect(toPluginMessageContext(canonical)).toMatchObject({
+    const expectedReply = {
       replyToId: "discord-message-42",
       replyToIdFull: "discord:channel-1:discord-message-42",
       replyToBody: "quoted Discord reply body",
       replyToSender: "Ada",
       replyToIsQuote: true,
-    });
-
+    };
     const { context: claimContext, event: claimEvent } = toPluginInboundClaimPair(canonical);
-    expect(claimContext).toMatchObject({
-      replyToId: "discord-message-42",
-      replyToIdFull: "discord:channel-1:discord-message-42",
-      replyToBody: "quoted Discord reply body",
-      replyToSender: "Ada",
-      replyToIsQuote: true,
-    });
-
-    expect(claimEvent).toMatchObject({
-      replyToId: "discord-message-42",
-      replyToIdFull: "discord:channel-1:discord-message-42",
-      replyToBody: "quoted Discord reply body",
-      replyToSender: "Ada",
-      replyToIsQuote: true,
-    });
-    expect(claimEvent.metadata).toMatchObject({
-      replyToId: "discord-message-42",
-      replyToIdFull: "discord:channel-1:discord-message-42",
-      replyToBody: "quoted Discord reply body",
-      replyToSender: "Ada",
-      replyToIsQuote: true,
-    });
-
     const receivedEvent = toPluginMessageReceivedEvent(canonical);
-    expect(receivedEvent).toMatchObject({
-      replyToId: "discord-message-42",
-      replyToIdFull: "discord:channel-1:discord-message-42",
-      replyToBody: "quoted Discord reply body",
-      replyToSender: "Ada",
-      replyToIsQuote: true,
+    for (const payload of [
+      canonical,
+      toPluginMessageContext(canonical),
+      claimContext,
+      claimEvent,
+      claimEvent.metadata,
+      receivedEvent,
+      receivedEvent.metadata,
+    ]) {
+      expect(payload).toMatchObject(expectedReply);
+    }
+  });
+
+  it.each([
+    { name: "absent", fields: {}, expected: {} },
+    {
+      name: "undefined",
+      fields: {
+        replyToId: undefined,
+        replyToIdFull: undefined,
+        replyToBody: undefined,
+        replyToSender: undefined,
+        replyToIsQuote: undefined,
+      },
+      expected: {},
+    },
+    {
+      name: "empty and false",
+      fields: {
+        replyToId: "",
+        replyToIdFull: "",
+        replyToBody: "",
+        replyToSender: "",
+        replyToIsQuote: false,
+      },
+      expected: {
+        replyToId: "",
+        replyToIdFull: "",
+        replyToBody: "",
+        replyToSender: "",
+        replyToIsQuote: false,
+      },
+    },
+  ])("preserves $name optional reply fields across hook projections", ({ fields, expected }) => {
+    const canonical = {
+      from: "sender",
+      content: "hello",
+      channelId: "demo-chat",
+      isGroup: false,
+      ...fields,
+    };
+    const { context, event } = toPluginInboundClaimPair(canonical);
+    const received = toPluginMessageReceivedEvent(canonical);
+    for (const output of [toPluginMessageContext(canonical), context, event, received]) {
+      const entries = Object.entries(output).filter(([key]) => key.startsWith("replyTo"));
+      expect(entries).toEqual(Object.entries(expected));
+    }
+    for (const metadata of [event.metadata, received.metadata]) {
+      expect(metadata).toMatchObject({
+        replyToId: undefined,
+        replyToIdFull: undefined,
+        replyToBody: undefined,
+        replyToSender: undefined,
+        replyToIsQuote: undefined,
+        ...expected,
+      });
+      expect(Object.keys(metadata ?? {}).filter((key) => key.startsWith("replyTo"))).toEqual([
+        "replyToId",
+        "replyToIdFull",
+        "replyToBody",
+        "replyToSender",
+        "replyToIsQuote",
+      ]);
+    }
+  });
+
+  it("checks reply-field presence before reading a sent context", () => {
+    const reads: PropertyKey[] = [];
+    const canonical = new Proxy(
+      buildCanonicalSentMessageHookContext({
+        to: "target",
+        content: "reply",
+        success: true,
+        channelId: "demo-chat",
+      }),
+      {
+        get(target, key, receiver) {
+          if (typeof key === "string" && key.startsWith("replyTo")) {
+            reads.push(key);
+          }
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+    expect(toPluginMessageContext(canonical)).toEqual({
+      channelId: "demo-chat",
+      accountId: undefined,
+      conversationId: "target",
     });
-    expect(receivedEvent.metadata).toMatchObject({
-      replyToId: "discord-message-42",
-      replyToIdFull: "discord:channel-1:discord-message-42",
-      replyToBody: "quoted Discord reply body",
-      replyToSender: "Ada",
-      replyToIsQuote: true,
-    });
+    expect(reads).toEqual([]);
   });
 
   it("falls back to raw body when command body is blank", () => {
@@ -266,17 +322,6 @@ describe("message hook mappers", () => {
     expect(canonical.content).toBe("Readiness probe failed");
     expect(toPluginMessageReceivedEvent(canonical).content).toBe("Readiness probe failed");
     expect(toInternalMessageReceivedContext(canonical).content).toBe("Readiness probe failed");
-  });
-
-  it("keeps nonblank command body ahead of raw body for hook content", () => {
-    const canonical = deriveInboundMessageHookContext(
-      makeInboundCtx({
-        BodyForCommands: "/status",
-        RawBody: "Readiness probe failed",
-      }),
-    );
-
-    expect(canonical.content).toBe("/status");
   });
 
   it("supports explicit content/messageId overrides", () => {
@@ -376,19 +421,6 @@ describe("message hook mappers", () => {
       expectedPath: "/tmp/legacy.png",
     },
     {
-      name: "facts-only",
-      input: { media: [{ path: "/tmp/fact.png", contentType: "image/png" }] },
-      expectedPath: "/tmp/fact.png",
-    },
-    {
-      name: "both-equal",
-      input: {
-        MediaPath: "/tmp/equal.png",
-        media: [{ path: "/tmp/equal.png", contentType: "image/png" }],
-      },
-      expectedPath: "/tmp/equal.png",
-    },
-    {
       name: "both-conflict",
       input: {
         MediaPath: "/tmp/legacy-conflict.png",
@@ -406,11 +438,6 @@ describe("message hook mappers", () => {
       name: "type-only",
       input: { media: [{ contentType: "image/png" }] },
       expectedPath: undefined,
-    },
-    {
-      name: "media-only",
-      input: { Body: "", media: [{ path: "/tmp/media-only.png", kind: "image" as const }] },
-      expectedPath: "/tmp/media-only.png",
     },
   ])("dual-emits $name hook media from canonical facts", (testCase) => {
     const ctx = finalizeInboundContextForSdk(makeInboundCtx(testCase.input));

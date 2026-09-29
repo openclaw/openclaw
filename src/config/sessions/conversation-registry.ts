@@ -4,10 +4,13 @@ import {
   withOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentReadOnlyDatabase,
 } from "../../state/openclaw-agent-db-readonly.js";
+import { withOpenClawAgentDatabaseWrite } from "../../state/openclaw-agent-db-write.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { ConversationIdentity, ConversationKind } from "./conversation-identity.js";
 import {
@@ -52,21 +55,53 @@ export type ConversationRecord = {
 
 export type ConversationRegistryScope = {
   agentId: string;
+  /** Physical schema owner captured with an exact store locator. */
+  databaseAgentId?: string;
   env?: NodeJS.ProcessEnv;
   storePath?: string;
+};
+
+export type PreparedConversationRegistryScope = {
+  agentId: string;
+  databaseAgentId: string;
+  env: NodeJS.ProcessEnv;
+  storePath: string;
 };
 
 export function resolveConversationRegistryScope(params: {
   agentId: string;
   config: OpenClawConfig;
-}): ConversationRegistryScope {
-  const configuredStore = params.config.session?.store;
-  return {
+}): PreparedConversationRegistryScope {
+  const scope = {
     agentId: params.agentId,
-    ...(configuredStore
-      ? { storePath: resolveSessionStorePathCore(configuredStore, { agentId: params.agentId }) }
-      : {}),
+    storePath: resolveSessionStorePathCore(params.config.session?.store, {
+      agentId: params.agentId,
+    }),
   };
+  return pinConversationDatabaseScope(scope).scope;
+}
+
+function pinConversationDatabaseScope(input: ConversationRegistryScope) {
+  const env = { ...(input.env ?? process.env) };
+  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  const options =
+    input.databaseAgentId && input.storePath
+      ? { agentId: input.databaseAgentId, path: input.storePath, env }
+      : toDatabaseOptions(resolveSqliteReadScope({ ...input, env }));
+  const storePath = resolveOpenClawAgentSqlitePath(options);
+  return {
+    options: { ...options, path: storePath },
+    scope: { ...input, databaseAgentId: options.agentId, storePath, env },
+  };
+}
+
+/** Keep the logical agent and physical store fixed while its synchronous write waits. */
+export function runConversationDatabaseWrite<T>(
+  input: ConversationRegistryScope,
+  operation: (scope: PreparedConversationRegistryScope) => T,
+): Promise<T> {
+  const { options, scope } = pinConversationDatabaseScope(input);
+  return withOpenClawAgentDatabaseWrite(options, () => operation(scope));
 }
 
 function normalizeConversationRef(value: string): string {
@@ -162,6 +197,7 @@ function selectConversationRows(
     limit?: number;
     primarySession?: { sessionId: string; sessionKey: string };
     currentBindingOnly?: boolean;
+    currentSession?: { sessionKey: string; sessionId: string };
   } = {},
 ): ConversationRecord[] {
   const resolved = resolveSqliteReadScope({
@@ -213,6 +249,11 @@ function selectConversationRows(
         normalizeConversationRef(options.conversationRef),
       );
     }
+    if (options.currentSession) {
+      query = query
+        .where("sn.session_key", "=", options.currentSession.sessionKey)
+        .where("s.session_id", "=", options.currentSession.sessionId);
+    }
     if (options.primarySession) {
       // The window's primary pointer, not address recency, owns this route.
       // Require its current node so reset/deleted sessions cannot lend old facts.
@@ -248,17 +289,19 @@ function selectConversationRows(
     ).rows;
     const unique = new Map<string, MappedConversationRow>();
     for (const row of rows) {
+      const existing = unique.get(row.conversation_id);
+      if (existing?.associationIsCurrent) {
+        continue;
+      }
       const mapped = mapConversationRow(row);
       if (!mapped) {
         continue;
       }
-      const existing = unique.get(mapped.record.conversationRef);
       if (!existing) {
         unique.set(mapped.record.conversationRef, mapped);
         continue;
       }
       if (
-        !existing.associationIsCurrent &&
         mapped.associationIsCurrent &&
         mapped.record.sessionId &&
         mapped.record.sessionKey &&
@@ -340,10 +383,12 @@ export function resolveConversation(
 export function resolveCurrentConversationSession(
   scope: ConversationRegistryScope,
   conversationRef: string,
+  currentSession?: { sessionKey: string; sessionId: string },
 ): { sessionKey: string; sessionId: string } | undefined {
   const [conversation] = selectConversationRows(scope, {
     conversationRef: normalizeConversationRef(conversationRef),
     currentBindingOnly: true,
+    currentSession,
     limit: 1,
   });
   return conversation?.sessionKey && conversation.sessionId

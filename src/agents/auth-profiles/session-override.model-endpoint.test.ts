@@ -112,7 +112,7 @@ it.each([
           },
           agentId,
         );
-        const model = resolveModelWithRegistry({
+        const model = await resolveModelWithRegistry({
           cfg,
           provider: "arcee",
           modelId: "trinity-large-thinking",
@@ -137,6 +137,7 @@ it.each([
         };
         await replaceSessionEntry(scope, sessionEntry);
         const selection = await resolveSessionAuthSelection({
+          agentId,
           cfg,
           provider: "arcee",
           modelId: "trinity-large-thinking",

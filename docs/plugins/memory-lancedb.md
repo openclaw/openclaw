@@ -65,12 +65,17 @@ with the current memory provider.
 }
 ```
 
-Restart the Gateway after installation, then verify it loaded:
+Installation applies to a running Gateway automatically, and configuration
+changes apply with the default hybrid reload mode. If the Gateway is offline,
+start it after configuration. Check the application result and inspect the
+plugin's runtime registration:
 
 ```bash
-openclaw gateway restart
-openclaw plugins list
+openclaw plugins inspect memory-lancedb --runtime --json
 ```
+
+See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)
+and [Hot reload](/gateway/configuration/hot-reload).
 
 ## Embedding config
 
@@ -104,10 +109,10 @@ remain unchanged.
 
 <Warning>
 `embedding.provider`, `embedding.model`, and `embedding.dimensions` define the
-persisted LanceDB index identity and do not change live. Before restarting with
-a new identity, plan a LanceDB re-embedding or rebuild so every stored row uses
-the new vector space and dimensions. The plugin does not re-embed existing rows
-automatically.
+persisted LanceDB index identity. Before changing any of them, plan a LanceDB
+re-embedding or rebuild so every stored row uses the new vector space and
+dimensions. Automatic plugin reload creates a new instance with the changed
+identity; it does not re-embed existing rows.
 </Warning>
 
 OpenAI Codex / ChatGPT OAuth is not an OpenAI Platform embeddings credential.
@@ -248,6 +253,10 @@ entry, or one inheriting a disabled top-level search, also gets none of the `mem
 or `memory_forget` tools and does not participate in automatic recall or
 capture, even when the plugin-level `autoRecall`/`autoCapture` flags are on.
 
+Incognito sessions skip automatic recall and capture. Their prompts are not
+sent to the embedding provider for automatic recall, and `memory_store` refuses
+to save them. Explicit tool calls still follow their normal data-handling rules.
+
 ## Commands
 
 `memory-lancedb` registers the `ltm` CLI namespace whenever it is installed
@@ -258,6 +267,11 @@ openclaw ltm list [--agent <id>] [--limit <n>] [--order-by-created-at]
 openclaw ltm search <query> [--agent <id>] [--limit <n>]
 openclaw ltm stats [--agent <id>]
 ```
+
+`ltm stats` gives its database read 60 seconds after plugin registration. It
+stops the isolated reader before reporting a timeout, without creating a memory
+table or changing existing memory data. A database with no memory table reports
+zero. Plugin discovery and source capture happen before this deadline starts.
 
 `ltm query` runs a non-vector query directly against the LanceDB table:
 

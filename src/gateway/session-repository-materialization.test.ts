@@ -16,7 +16,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as cloneRuntime from "../projects/project-clone-runtime.js";
 import { ProjectCloneError } from "../projects/project-clone-runtime.js";
 import * as projectCloning from "../projects/project-clone.js";
-import { registerClonedProjectRegistry } from "../projects/project-registry.js";
+import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
 import * as secretsRuntime from "../secrets/runtime-state.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -25,8 +25,8 @@ import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-
 import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "./github-repository-publication-snapshot.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
+import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
-import { readActualWorkspaceManifest } from "./worker-environments/workspace-reconcile-core.js";
 
 const exec = promisify(execFile);
 const git = async (cwd: string, args: string[]) =>
@@ -196,7 +196,7 @@ describe("explicit repository move to Gateway", () => {
       const baseCommit = await git(source, ["rev-parse", "HEAD"]);
       const url = "https://github.com/openclaw/materialization-fixture.git";
       await registerClonedProjectRegistry({ path: source, name: "Fixture", originUrl: url });
-      const base = await readActualWorkspaceManifest({ root: source, baseCommit });
+      const base = await captureWorkspaceManifest({ root: source, baseCommit });
       const remote = state.path("remote");
       await exec("git", ["clone", "--", source, remote]);
       await fsp.writeFile(path.join(remote, "published[1].ignored"), "publishable\n");
@@ -205,7 +205,7 @@ describe("explicit repository move to Gateway", () => {
       await fsp.writeFile(path.join(remote, "edited.txt"), "accepted\n");
       await fsp.writeFile(path.join(remote, "added.txt"), "new\n");
       await fsp.rm(path.join(remote, "deleted.txt"));
-      const current = await readActualWorkspaceManifest({ root: remote, baseCommit });
+      const current = await captureWorkspaceManifest({ root: remote, baseCommit });
       const publicationStagingRoot = state.path("publication-snapshot");
       const publicationDigest =
         outcome === "publication unavailable"

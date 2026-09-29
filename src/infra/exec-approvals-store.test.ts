@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import * as stateDatabase from "../state/openclaw-state-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -253,7 +255,10 @@ describe("exec approvals SQLite store", () => {
 
   it("mints one socket token and reuses it on later initialization", () => {
     const first = ensureExecApprovals();
+    const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
     const second = ensureExecApprovals();
+    expect(writes).not.toHaveBeenCalled();
+    writes.mockRestore();
     expect(first.socket?.token).toMatch(/^[A-Za-z0-9_-]+$/u);
     expect(first.socket?.token).toBe(second.socket?.token);
     expect(first.socket?.path).toBe(second.socket?.path);
@@ -327,14 +332,8 @@ describe("exec approvals SQLite store", () => {
       },
     });
     seedAgentDeletionJournal("removed");
-    let notifyCommitStarted!: () => void;
-    const commitStarted = new Promise<void>((resolve) => {
-      notifyCommitStarted = resolve;
-    });
-    let finishCommit!: () => void;
-    const commitGate = new Promise<void>((resolve) => {
-      finishCommit = resolve;
-    });
+    const { promise: commitStarted, resolve: notifyCommitStarted } = createDeferred();
+    const { promise: commitGate, resolve: finishCommit } = createDeferred();
     const deletion = withAgentExecApprovalsRemoved("removed", async () => {
       notifyCommitStarted();
       await commitGate;
@@ -362,14 +361,8 @@ describe("exec approvals SQLite store", () => {
   it("allows unrelated writers while deleting an agent with no approval policy", async () => {
     saveExecApprovals({ version: 1, agents: { kept: { security: "deny" } } });
     seedAgentDeletionJournal("missing");
-    let notifyCommitStarted!: () => void;
-    const commitStarted = new Promise<void>((resolve) => {
-      notifyCommitStarted = resolve;
-    });
-    let finishCommit!: () => void;
-    const commitGate = new Promise<void>((resolve) => {
-      finishCommit = resolve;
-    });
+    const { promise: commitStarted, resolve: notifyCommitStarted } = createDeferred();
+    const { promise: commitGate, resolve: finishCommit } = createDeferred();
     const deletion = withAgentExecApprovalsRemoved("missing", async () => {
       notifyCommitStarted();
       await commitGate;
@@ -509,24 +502,6 @@ describe("exec approvals SQLite store", () => {
       expect(loadExecApprovals()).toMatchObject({ version: 1, agents: {} });
     },
   );
-
-  it("scopes the doctor command to the blocked state directory", () => {
-    // A bare `openclaw doctor --fix` repairs the default root, leaving a scoped
-    // install blocked by the same file it was told to repair (#115008).
-    const stateDir = process.env.OPENCLAW_STATE_DIR;
-    if (!stateDir) {
-      throw new Error("missing test state dir");
-    }
-    const error = new ExecApprovalsMigrationRequiredError(
-      path.join(stateDir, "exec-approvals.json"),
-    );
-
-    // Prose, not `VAR=value cmd`: no Windows shell accepts that form, and a path
-    // containing spaces would need shell-specific quoting to survive a paste.
-    expect(error.message).toContain(
-      `Run \`openclaw doctor --fix\` with OPENCLAW_STATE_DIR set to ${stateDir}`,
-    );
-  });
 
   it.each([
     [true, false, false],

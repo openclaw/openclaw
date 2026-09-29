@@ -9,6 +9,8 @@ import {
   SessionParticipantSchema,
   SessionParticipantIdentitySchema,
 } from "./session-participant.js";
+import { SessionActivitySummarySchema } from "./sessions-activity-summary.js";
+import { SessionProviderReviewProjectionSchema } from "./sessions-provider-review.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
 export const SessionPermissionModeSchema = Type.Union([
@@ -28,6 +30,7 @@ export const SessionRunStatusSchema = Type.Union([
   Type.Literal("running"),
   Type.Literal("done"),
   Type.Literal("failed"),
+  Type.Literal("interrupted"),
   Type.Literal("killed"),
   Type.Literal("timeout"),
 ]);
@@ -115,6 +118,8 @@ export const SessionRowSchema = Type.Object(
     color: Type.Optional(Type.String()),
     channelAvatarUrl: Type.Optional(NonEmptyString),
     boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
+    /** Shared dashboard default; absent means split. */
+    boardPresentation: Type.Optional(Type.Union([Type.Literal("split"), Type.Literal("expanded")])),
     displayName: Type.Optional(Type.String()),
     derivedTitle: Type.Optional(Type.String()),
     lastMessagePreview: Type.Optional(Type.String()),
@@ -129,7 +134,14 @@ export const SessionRowSchema = Type.Object(
     chatType: Type.Optional(
       Type.Union([Type.Literal("direct"), Type.Literal("group"), Type.Literal("channel")]),
     ),
+    activitySummary: Type.Optional(SessionActivitySummarySchema),
     updatedAt: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
+    /** Gateway sampling time, retained when a read reuses a cached projection. */
+    snapshotAt: Type.Optional(Type.Number()),
+    /** Connection-scoped presentation identity on full event ancestor rows. */
+    ancestorRevision: Type.Optional(NonEmptyString),
+    /** Personal list preference for the authenticated viewer; not session visibility. */
+    hiddenFromInvolvingMe: Type.Optional(Type.Boolean()),
     archived: Type.Optional(Type.Boolean()),
     archivedAt: Type.Optional(Type.Number()),
     archivedBy: Type.Optional(SessionCreatedActorSchema),
@@ -143,12 +155,14 @@ export const SessionRowSchema = Type.Object(
     lastInteractionAt: Type.Optional(Type.Number()),
     status: Type.Optional(SessionRunStatusSchema),
     lastRunError: Type.Optional(Type.String()),
+    providerReview: Type.Optional(SessionProviderReviewProjectionSchema),
     /** Exact run that produced the latest terminal lifecycle projection. */
     lastRunId: Type.Optional(NonEmptyString),
     restartRecoveryStatus: Type.Optional(Type.Literal("tombstoned")),
     activeLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.String()),
     parentSessionKey: Type.Optional(Type.String()),
+    parentSessionId: Type.Optional(Type.String()),
     controlOwnerSessionKey: Type.Optional(Type.String()),
     childSessions: Type.Optional(Type.Array(Type.String())),
     forkedFromParent: Type.Optional(Type.Boolean()),
@@ -178,7 +192,15 @@ export const SessionRowSchema = Type.Object(
     execCwd: Type.Optional(Type.String()),
     spawnedWorkspaceDir: Type.Optional(Type.String()),
     spawnedCwd: Type.Optional(Type.String()),
+    /** Persisted project registry association, distinct from a cloud repository workspace. */
+    projectId: Type.Optional(Type.String()),
+    /** Persisted task cwd or spawned workspace; no filesystem resolution is implied. */
+    workspaceDir: Type.Optional(Type.String()),
     permissionMode: Type.Optional(SessionPermissionModeSchema),
+    /** Authorized per-chat containment opt-out; omission follows configured sandbox policy. */
+    sandboxMode: Type.Optional(Type.Literal("off")),
+    /** Administrator consent to the exact external runtime's own permissions for this incarnation. */
+    nativeRuntimeConsent: Type.Optional(NonEmptyString),
     permissionModePending: Type.Optional(Type.Boolean()),
     sessionRoot: Type.Optional(Type.String()),
     createdVia: Type.Optional(
@@ -238,10 +260,27 @@ export const SessionRowSchema = Type.Object(
   { additionalProperties: true },
 );
 
+/** Unchanged presentation of an ancestor previously delivered on this connection. */
+export const SessionAncestorRefSchema = closedObject({
+  key: NonEmptyString,
+  sessionId: Type.Optional(Type.String()),
+  agentId: Type.Optional(NonEmptyString),
+  revision: NonEmptyString,
+  snapshotAt: Type.Number(),
+});
+
+/** Complete visible ancestor coverage shared by sessions.changed and session.message. */
+export const SessionEventAncestorsSchema = closedObject({
+  ancestorSessions: Type.Array(SessionRowSchema, { maxItems: 64 }),
+  ancestorSessionRefs: Type.Optional(Type.Array(SessionAncestorRefSchema, { maxItems: 64 })),
+});
+
 export type SessionCreatedActor = Static<typeof SessionCreatedActorSchema>;
 export type SessionPermissionMode = Static<typeof SessionPermissionModeSchema>;
 export type SessionOwner = Static<typeof SessionOwnerSchema>;
 export type SessionRunStatus = Static<typeof SessionRunStatusSchema>;
 export type SessionToolOverrides = Static<typeof SessionToolOverridesSchema>;
 export type SessionRow = Static<typeof SessionRowSchema>;
+export type SessionAncestorRef = Static<typeof SessionAncestorRefSchema>;
+export type SessionEventAncestors = Static<typeof SessionEventAncestorsSchema>;
 export type SessionEntryArchiveReason = Static<typeof SessionEntryArchiveReasonSchema>;

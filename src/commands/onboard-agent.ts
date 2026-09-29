@@ -177,16 +177,9 @@ export async function ensureOnboardingAgent(params: {
   });
   const sessionMigration = await migrateLegacyMainSessionKeys({
     cfg: after.config,
-    mode: "automatic",
-    // Unlike creation bookkeeping, convergence can wait for the next startup.
-    beforePersistentApply: params.beforePersistentApply,
+    mode: "detect",
   });
-  const sessionMigrationWarnings =
-    sessionMigration.armed && !sessionMigration.complete
-      ? [
-          `Legacy main-agent session history migration is incomplete${sessionMigration.warnings.length > 0 ? `: ${sessionMigration.warnings.join("; ")}` : ""}. Run \`openclaw doctor --fix\`; OpenClaw will also retry at next startup.`,
-        ]
-      : [];
+  const sessionMigrationWarnings = sessionMigration.warnings;
   return {
     config,
     configBase: after.config,

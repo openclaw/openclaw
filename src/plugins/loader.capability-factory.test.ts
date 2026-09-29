@@ -13,7 +13,10 @@ import {
   registryContainsRuntimePluginIds,
   resolveCompatibleRuntimePluginRegistry,
 } from "./active-runtime-registry.js";
-import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
+import type {
+  PluginCapabilityCatalogContext,
+  PluginCapabilityCatalogHostContext,
+} from "./capability-catalog-context.types.js";
 import { isPluginRegistryLoadInFlight, resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import { loadOpenClawPluginsWithInternalOverrides } from "./loader-runtime-load.js";
@@ -24,6 +27,7 @@ import {
   resetPluginLoaderTestStateForTest,
   writePlugin,
 } from "./loader.test-fixtures.js";
+import * as nativeModuleRequire from "./native-module-require.js";
 import {
   createPluginCache,
   getPluginCache,
@@ -47,7 +51,7 @@ const families = [
 ] as const;
 const contextSymbol = Symbol.for("fixture.capability-context");
 
-function createContext(): PluginCapabilityCatalogContext {
+function createContext(): PluginCapabilityCatalogHostContext {
   const unavailable = () => {
     throw new Error("registration invoked a host operation");
   };
@@ -60,6 +64,7 @@ function createContext(): PluginCapabilityCatalogContext {
     resolveProviderAuthProfileApiKey: unavailable,
     resolveApiKeyForProvider: unavailable,
     captureWsEvent: unavailable,
+    captureWsEventAsync: unavailable,
     createDebugProxyWebSocketAgent: unavailable,
     resolveDebugProxySettings: unavailable,
     fetchWithSsrFGuard: unavailable,
@@ -187,17 +192,19 @@ it("retains the creating cache generation when broad services initialize later",
     expect(getPluginCache()).toBe(owner);
     return runtime;
   });
-  const loadPluginModule = vi.fn(() => {
-    expect(getPluginCache()).toBe(owner);
-    return { createPluginRuntime };
-  });
-  const lazyRuntime = withPluginCache(owner, () => createLazyPluginRuntime({ loadPluginModule }));
-  expect(loadPluginModule).not.toHaveBeenCalled();
+  const loadRuntimeModule = vi
+    .spyOn(nativeModuleRequire, "tryNativeRequireModule")
+    .mockImplementation(() => {
+      expect(getPluginCache()).toBe(owner);
+      return { ok: true, moduleExport: { createPluginRuntime } };
+    });
+  const lazyRuntime = withPluginCache(owner, () => createLazyPluginRuntime({}));
+  expect(loadRuntimeModule).not.toHaveBeenCalled();
   withPluginCache(replacement, () => {
     expect(lazyRuntime.events).toBe(runtime.events);
     expect(lazyRuntime.events).toBe(runtime.events);
   });
-  expect(loadPluginModule).toHaveBeenCalledTimes(1);
+  expect(loadRuntimeModule).toHaveBeenCalledTimes(1);
   expect(createPluginRuntime).toHaveBeenCalledTimes(1);
 });
 
@@ -267,6 +274,7 @@ describe.each(["cjs", "ts"] as const)("%s capability factory registration", (ext
       'api.logger.info("inside registration");' + registerFactories,
       (options, root) => {
         let inFlightAtRegistration: boolean | undefined;
+        let registrations = 0;
         const authored: PluginLoadOptions = Object.freeze({
           ...options,
           activate: true,
@@ -274,6 +282,7 @@ describe.each(["cjs", "ts"] as const)("%s capability factory registration", (ext
           logger: {
             info: (message) => {
               if (message.includes("inside registration")) {
+                registrations += 1;
                 inFlightAtRegistration = isPluginRegistryLoadInFlight(authored);
               }
             },
@@ -293,6 +302,10 @@ describe.each(["cjs", "ts"] as const)("%s capability factory registration", (ext
         const bound = getPluginRuntimeLoadContext(registry)!;
         const prepared = { ...authored, manifestRegistry: bound.manifestRegistry };
         expect(resolveCompatibleRuntimePluginRegistry(prepared)).toBe(registry);
+        expect(loadOpenClawPlugins(prepared) === registry).toBe(true);
+        expect(resolveCompatibleRuntimePluginRegistry(authored) === registry).toBe(true);
+        expect(resolveCompatibleRuntimePluginRegistry(prepared) === registry).toBe(true);
+        expect(registrations).toBe(1);
         expect(loadOpenClawPlugins(authored)).toBe(registry);
         expect(resolveCompatibleRuntimePluginRegistry(prepared)).toBe(registry);
         const changedManifest = {

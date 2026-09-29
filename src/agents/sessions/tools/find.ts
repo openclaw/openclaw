@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { Type } from "typebox";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
+import { waitForCommandSpawn } from "../../../process/exec-spawn.js";
 import { spawnCommand } from "../../../process/exec.js";
 /**
  * Built-in find session tool.
@@ -11,6 +11,7 @@ import { spawnCommand } from "../../../process/exec.js";
  */
 import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { textResult } from "../../tools/tool-results.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { appendBoundedTextTail, formatStderrTail, normalizePositiveLimit } from "./limits.js";
@@ -25,6 +26,7 @@ import {
 } from "./render-utils.js";
 import type { FindToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { findSchema } from "./tool-schemas.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
 
 function isInsideGitRepository(searchPath: string): boolean {
@@ -40,13 +42,6 @@ function isInsideGitRepository(searchPath: string): boolean {
   }
 }
 
-const findSchema = Type.Object({
-  pattern: Type.String({
-    description: "File glob, e.g. **/*.ts.",
-  }),
-  path: Type.Optional(Type.String({ description: "Search dir; default cwd." })),
-  limit: Type.Optional(Type.Integer({ description: "Max results; default 1000." })),
-});
 const DEFAULT_LIMIT = 1000;
 
 /**
@@ -63,12 +58,6 @@ export interface FindOperations {
     options: { ignore: string[]; limit: number },
   ) => Promise<string[]> | string[];
 }
-
-const defaultFindOperations: FindOperations = {
-  exists: existsSync,
-  // This is a placeholder. Actual fd execution happens in execute() when no custom glob is provided.
-  glob: () => [],
-};
 
 export interface FindToolOptions {
   /** Custom operations for find. Default: local filesystem plus fd */
@@ -120,10 +109,7 @@ function buildFindResult(params: {
   searchPath: string;
   effectiveLimit: number;
   limitNotice: string;
-}): {
-  content: Array<{ type: "text"; text: string }>;
-  details: FindToolDetails;
-} {
+}) {
   const resultLimitReached = params.paths.length > params.effectiveLimit;
   const rawOutput = params.paths
     .slice(0, params.effectiveLimit)
@@ -153,10 +139,7 @@ function buildFindResult(params: {
   if (notices.length > 0) {
     details.content += `\n\n[${notices.join(". ")}]`;
   }
-  return {
-    content: [{ type: "text", text: details.content }],
-    details,
-  };
+  return textResult(details.content, details);
 }
 
 export function createFindToolDefinition(
@@ -171,16 +154,7 @@ export function createFindToolDefinition(
     description: `Find by glob; paths relative to search dir. Respects .gitignore. Caps ${DEFAULT_LIMIT} results/${DEFAULT_MAX_BYTES / 1024}KB.`,
     promptSnippet: "Find files by glob pattern (respects .gitignore)",
     parameters: findSchema,
-    async execute(
-      toolCallId,
-      { pattern, path: searchDir, limit }: { pattern: string; path?: string; limit?: number },
-      signal?: AbortSignal,
-      onUpdate?,
-      ctx?,
-    ) {
-      void toolCallId;
-      void onUpdate;
-      void ctx;
+    async execute(_toolCallId, { pattern, path: searchDir, limit }, signal, _onUpdate, _ctx) {
       return new Promise((resolve, reject) => {
         if (signal?.aborted) {
           reject(new Error("Operation aborted"));
@@ -214,11 +188,9 @@ export function createFindToolDefinition(
             const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
             // One extra candidate distinguishes an exact-size result from a truncated one.
             const observationLimit = effectiveLimit + 1;
-            const ops = customOps ?? defaultFindOperations;
-
             // If custom operations provide glob(), use that instead of fd.
             if (customOps?.glob) {
-              if (!(await ops.exists(searchPath))) {
+              if (!(await customOps.exists(searchPath))) {
                 settle(() => reject(new Error(`Path not found: ${searchPath}`)));
                 return;
               }
@@ -226,7 +198,7 @@ export function createFindToolDefinition(
                 settle(() => reject(new Error("Operation aborted")));
                 return;
               }
-              const results = await ops.glob(pattern, searchPath, {
+              const results = await customOps.glob(pattern, searchPath, {
                 ignore: ["**/node_modules/**", "**/.git/**"],
                 limit: observationLimit,
               });
@@ -236,10 +208,11 @@ export function createFindToolDefinition(
               }
               if (results.length === 0) {
                 settle(() =>
-                  resolve({
-                    content: [{ type: "text", text: "No files found matching pattern" }],
-                    details: { content: "No files found matching pattern" },
-                  }),
+                  resolve(
+                    textResult("No files found matching pattern", {
+                      content: "No files found matching pattern",
+                    }),
+                  ),
                 );
                 return;
               }
@@ -293,17 +266,28 @@ export function createFindToolDefinition(
               reject: false,
               stdio: ["ignore", "pipe", "pipe"],
             });
-            releaseChildProcessOutputAfterExit(child.nodeChildProcess);
-            const rl = createInterface({ input: child.stdout });
-            let stderr = "";
-            let stderrDroppedBytes = 0;
-            const lines: string[] = [];
-
-            stopChild = () => {
+            const stop = () => {
               if (!child.nodeChildProcess.killed) {
                 child.kill();
               }
             };
+            stopChild = stop;
+            if (child.pid === undefined) {
+              await waitForCommandSpawn(child);
+            }
+            if (settled) {
+              stop();
+              return;
+            }
+            releaseChildProcessOutputAfterExit(child.nodeChildProcess);
+            if (!child.stdout) {
+              const result = await child;
+              throw result instanceof Error ? result : new Error("fd stdout is unavailable");
+            }
+            const rl = createInterface({ input: child.stdout });
+            let stderr = "";
+            let stderrDroppedBytes = 0;
+            const lines: string[] = [];
 
             const cleanup = () => {
               rl.close();
@@ -355,10 +339,11 @@ export function createFindToolDefinition(
               }
               if (!output) {
                 settle(() =>
-                  resolve({
-                    content: [{ type: "text", text: "No files found matching pattern" }],
-                    details: { content: "No files found matching pattern" },
-                  }),
+                  resolve(
+                    textResult("No files found matching pattern", {
+                      content: "No files found matching pattern",
+                    }),
+                  ),
                 );
                 return;
               }

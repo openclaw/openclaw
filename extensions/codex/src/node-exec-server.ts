@@ -52,6 +52,7 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
     cap: CODEX_NODE_EXEC_SERVER_CAPABILITY,
     dangerous: true,
     duplex: true,
+    hasActiveWork: () => activeProcesses.size > 0,
     onDisconnect: async () => {
       await Promise.all([...activeProcesses].map(async (terminate) => await terminate()));
     },
@@ -76,47 +77,42 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
       }
       const placement = parseCodexNodePlacementWorkspace(request.placement);
       if (
-        !context?.acquireManagedWorkspace ||
+        !context?.acquireManagedWorkspaceAsync ||
         context.sessionKey !== placement.sessionKey ||
         io.signal.aborted
       ) {
         throw new Error("Codex node exec-server requires active managed placement authority.");
       }
-      const workspace = context.acquireManagedWorkspace({
+      if (!context.prepareExecAuthorization) {
+        throw new Error(
+          "Codex node execution requires node-local exec policy support; update the node.",
+        );
+      }
+      const runtimeIo = context.signal
+        ? { ...io, signal: AbortSignal.any([io.signal, context.signal]) }
+        : io;
+      const assertExecAuthorized = context.prepareExecAuthorization(request.authorization);
+      const { runCodexNodeExecServer } = await import("./node-exec-server.runtime.js");
+      runtimeIo.signal.throwIfAborted();
+      const workspace = await context.acquireManagedWorkspaceAsync({
         workspaceDir: placement.cwd,
         environmentId: placement.environmentId,
         sessionId: placement.sessionId,
         ownerEpoch: placement.ownerEpoch,
         sessionKey: placement.sessionKey,
       });
-      const frames = io.frames;
-      let unsubscribe: (() => void) | undefined;
       try {
-        if (!context.prepareExecAuthorization) {
-          throw new Error(
-            "Codex node execution requires node-local exec policy support; update the node.",
-          );
-        }
-        const assertExecAuthorized = context.prepareExecAuthorization(request.authorization);
-        const { runCodexNodeExecServer } = await import("./node-exec-server.runtime.js");
-        return await runCodexNodeExecServer({
-          workspaceDir: workspace.workspaceDir,
-          homeDir: workspace.homeDir,
-          io,
-          activeProcesses,
-          assertExecAuthorized,
-          // Listener registration announces readiness, so the child must own it first.
-          onFrameReceiver: (receiver) => {
-            unsubscribe = frames.onMessage(receiver);
-          },
-        });
-      } finally {
-        try {
-          unsubscribe?.();
-        } finally {
-          workspace.release();
-        }
+        runtimeIo.signal.throwIfAborted();
+      } catch (error) {
+        workspace.release();
+        throw error;
       }
+      return await runCodexNodeExecServer({
+        workspace,
+        io: runtimeIo,
+        activeProcesses,
+        assertExecAuthorized,
+      });
     },
   };
 }

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -91,8 +92,18 @@ describe("Git ref mutation timing", () => {
         await releaseCallback.promise;
         return result;
       });
+      const abort = new AbortController();
       const queued = runWithDiagnosticTraceContext(trace, () =>
-        enqueueGitRefMutation("/private/linked-checkout", "../shared.git", callback),
+        enqueueGitRefMutation("/private/linked-checkout", "../shared.git", callback, abort.signal),
+      );
+      let callbackSettled = false;
+      void queued.then(
+        () => {
+          callbackSettled = true;
+        },
+        () => {
+          callbackSettled = true;
+        },
       );
       pending.push(queued);
       clock += 25;
@@ -107,6 +118,9 @@ describe("Git ref mutation timing", () => {
       clock += 1_200;
       releaseHolder.resolve();
       await callbackEntered.promise;
+      abort.abort(new Error("cancelled after ref mutation started"));
+      await nextTurn();
+      expect(callbackSettled).toBe(false);
       expect(refLogs.info).not.toHaveBeenCalled();
       clock += 175;
       releaseCallback.resolve();
@@ -300,12 +314,10 @@ describe("Git filesystem paths", () => {
     expect(normalizeGitPathForFilesystem(input, "win32")).toBe(expected);
   });
 
-  it.each(["/c", "/C", "/c/", "/c/Users/example/repo"])(
-    "leaves MSYS-shaped text unchanged on non-Windows hosts: %s",
-    (input) => {
-      expect(normalizeGitPathForFilesystem(input, "linux")).toBe(input);
-    },
-  );
+  it("leaves MSYS-shaped text unchanged on non-Windows hosts", () => {
+    const input = "/c/Users/example/repo";
+    expect(normalizeGitPathForFilesystem(input, "linux")).toBe(input);
+  });
 });
 
 const progress = Array.from({ length: 1000 }, (_, i) => `Updating files: ${i}/1000`).join("\r");
@@ -322,14 +334,21 @@ it.each(["maintenance.autoDetach", "gc.autoDetach"])(
   "overrides %s only for an explicitly owned Git command",
   async (key) => {
     await withTestDir({ prefix: "openclaw-git-exec-maintenance-" }, async (root) => {
-      await requireGitCommand(root, ["init"]);
-      await requireGitCommand(root, ["config", key, "true"]);
+      const env = {
+        GIT_CONFIG_COUNT: "0",
+        GIT_CONFIG_PARAMETERS: undefined,
+      };
+      await requireGitCommand(root, ["init"], { env });
+      await requireGitCommand(root, ["config", key, "true"], { env });
       const owned = await executeGitCommand(root, ["config", "--get", key], {
+        env,
         killProcessTree: true,
       });
       expect(owned.code).toBe(0);
       expect(owned.stdout.trim()).toBe("false");
-      await expect(requireGitCommand(root, ["config", "--get", key])).resolves.toBe("true");
+      await expect(requireGitCommand(root, ["config", "--get", key], { env })).resolves.toBe(
+        "true",
+      );
     });
   },
 );

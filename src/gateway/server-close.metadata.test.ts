@@ -18,7 +18,6 @@ import { getActiveSecretsRuntimeSnapshotState } from "../secrets/runtime-state.j
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { getFreePort } from "../test-utils/ports.js";
 import { createGatewayMetadataCloseFixture as createFixture } from "./server-close.metadata.test-support.js";
 import { loadGatewayPlugins } from "./server-plugins.js";
 import type { GatewayServer } from "./server-public.js";
@@ -34,7 +33,7 @@ it.each(["success", "failure"] as const)(
     let closing: Promise<unknown> | undefined;
     let restoreClose: (() => void) | undefined;
     try {
-      const port = await getFreePort();
+      const port = await fixture.reservePort();
       const server = await fixture.start(port);
       const kernel = fixture.kernels.get(port);
       assert(kernel);
@@ -73,10 +72,11 @@ it.each(["success", "failure"] as const)(
         .mockImplementation(async (...args) => {
           entered.resolve();
           await release.promise;
-          await close(...args);
+          const result = await close(...args);
           if (outcome === "failure") {
             throw failure;
           }
+          return result;
         });
       restoreClose = () => held.mockRestore();
       closing = server.close({ reason: "retire bound context" }).catch((error: unknown) => error);
@@ -138,9 +138,9 @@ it.each(["success", "failure"] as const)(
       });
     let starting: Promise<GatewayServer | Error> | undefined;
     try {
-      const firstPort = await getFreePort();
+      const firstPort = await fixture.reservePort();
       const firstServer = await fixture.start(firstPort);
-      secondPort = await getFreePort();
+      secondPort = await fixture.reservePort();
       const first = fixture.kernels.get(firstPort);
       assert(first);
       const initial = first.getPluginMetadataSnapshot();
@@ -168,7 +168,7 @@ it.each(["success", "failure"] as const)(
         nextConfig: first.cfgAtStart,
         sourceConfig: first.cfgAtStart,
         changedPaths: [],
-        prepareConfigEffects: () => {},
+        prepareConfigEffects: () => async () => {},
         pluginLifecycle: {
           reason: "reload",
           operationId: "concurrent-bootstrap",
@@ -228,7 +228,7 @@ it("joins managed setup cleanup before releasing shared state and secrets", asyn
   const release = createDeferredCore();
   let closing: Promise<void> | undefined;
   try {
-    const port = await getFreePort();
+    const port = await fixture.reservePort();
     const server = await fixture.start(port);
     const kernel = fixture.kernels.get(port);
     assert(kernel);
@@ -280,7 +280,7 @@ it("refuses a new Gateway until the final shared-state reset finishes", async ()
   let closing: Promise<void> | undefined;
   let reset: { enabled: boolean } | undefined;
   try {
-    const port = await getFreePort();
+    const port = await fixture.reservePort();
     const server = await fixture.start(port);
     const kernel = fixture.kernels.get(port);
     assert(kernel);
@@ -309,7 +309,7 @@ it("refuses a new Gateway until the final shared-state reset finishes", async ()
     ]);
     expect(setupOwner.lifecycle.signal.aborted).toBe(true);
     expect(() => callback()).toThrow("reloaded or disabled");
-    const attempted = await fixture.start(await getFreePort()).then(
+    const attempted = await fixture.start(await fixture.reservePort()).then(
       (admitted) => ({ admitted }),
       (error: unknown) => ({ error }),
     );
@@ -317,7 +317,7 @@ it("refuses a new Gateway until the final shared-state reset finishes", async ()
     release.resolve();
     await closing;
     reset.enabled = false;
-    const nextPort = await getFreePort();
+    const nextPort = await fixture.reservePort();
     const successor = await fixture.start(nextPort);
     const next = fixture.kernels.get(nextPort);
     assert(next);

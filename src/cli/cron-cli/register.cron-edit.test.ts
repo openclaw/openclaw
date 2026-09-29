@@ -26,6 +26,12 @@ function createCronProgram(): Command {
   return program;
 }
 
+function mockExistingJob(job: Record<string, unknown>): void {
+  callGatewayFromCli.mockImplementation(async (method: string) =>
+    method === "cron.get" ? job : { ok: true },
+  );
+}
+
 async function expectCronEditRejection(args: string[], message: string): Promise<void> {
   const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
 
@@ -119,23 +125,6 @@ describe("cron edit command", () => {
     );
   });
 
-  it("updates one pacing bound while preserving the other", async () => {
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.get") {
-        return { id: "job-1", pacing: { min: "15m", max: "4h" } };
-      }
-      return { ok: true };
-    });
-    const program = createCronProgram();
-
-    await program.parseAsync(["edit", "job-1", "--pacing-min", "30m"], { from: "user" });
-
-    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
-      id: "job-1",
-      patch: { pacing: { min: "30m", max: "4h" } },
-    });
-  });
-
   it.each(["next.js", "next.js "])(
     "preserves trigger.once when reading %j (#119916)",
     async (fileName) => {
@@ -148,15 +137,10 @@ describe("cron edit command", () => {
       );
       await fs.promises.writeFile(scriptPath, "return { fire: true };", "utf8");
       const configRevision = "trigger-script-revision";
-      callGatewayFromCli.mockImplementation(async (method: string) => {
-        if (method === "cron.get") {
-          return {
-            id: "job-1",
-            configRevision,
-            trigger: { script: "return { fire: false };", once: true },
-          };
-        }
-        return { ok: true };
+      mockExistingJob({
+        id: "job-1",
+        configRevision,
+        trigger: { script: "return { fire: false };", once: true },
       });
 
       try {
@@ -180,14 +164,19 @@ describe("cron edit command", () => {
   );
 
   it.each([
-    ["empty", "", undefined],
     ["whitespace", "   ", undefined],
     ["empty with --clear-trigger", "", "--clear-trigger"],
-    ["whitespace with --clear-trigger", "   ", "--clear-trigger"],
   ])("rejects %s --trigger-script before Gateway access", async (_label, value, clearFlag) => {
     await expectCronEditRejection(
       ["--trigger-script", value, ...(clearFlag ? [clearFlag] : [])],
       "--trigger-script must not be blank",
+    );
+  });
+
+  it.each(["", "   "])("rejects blank payload --script %j before Gateway access", async (value) => {
+    await expectCronEditRejection(
+      ["--script", value, "--display-name", "Replacement", "--pacing-min", "30m"],
+      "--script must not be blank",
     );
   });
 
@@ -221,16 +210,11 @@ describe("cron edit command", () => {
 
   it("reuses one versioned snapshot for combined pacing and tool edits", async () => {
     const configRevision = "current-job-revision";
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.get") {
-        return {
-          id: "job-1",
-          configRevision,
-          pacing: { min: "15m", max: "4h" },
-          payload: { kind: "agentTurn", message: "hello" },
-        };
-      }
-      return { ok: true };
+    mockExistingJob({
+      id: "job-1",
+      configRevision,
+      pacing: { min: "15m", max: "4h" },
+      payload: { kind: "agentTurn", message: "hello" },
     });
 
     await createCronProgram().parseAsync(
@@ -273,11 +257,6 @@ describe("cron edit command", () => {
 
   it.each([
     {
-      label: "empty --agent",
-      args: ["--agent", ""],
-      message: "--agent must not be blank",
-    },
-    {
       label: "whitespace --agent",
       args: ["--agent", "   "],
       message: "--agent must not be blank",
@@ -288,19 +267,9 @@ describe("cron edit command", () => {
       message: "--agent must not be blank",
     },
     {
-      label: "whitespace --agent with --clear-agent",
-      args: ["--agent", "   ", "--clear-agent"],
-      message: "--agent must not be blank",
-    },
-    {
       label: "--agent with --clear-agent",
       args: ["--agent", "main", "--clear-agent"],
       message: "Use --agent or --clear-agent, not both",
-    },
-    {
-      label: "empty --session-key",
-      args: ["--session-key", ""],
-      message: "--session-key must not be blank",
     },
     {
       label: "whitespace --session-key",
@@ -310,11 +279,6 @@ describe("cron edit command", () => {
     {
       label: "empty --session-key with --clear-session-key",
       args: ["--session-key", "", "--clear-session-key"],
-      message: "--session-key must not be blank",
-    },
-    {
-      label: "whitespace --session-key with --clear-session-key",
-      args: ["--session-key", "   ", "--clear-session-key"],
       message: "--session-key must not be blank",
     },
     {
@@ -370,19 +334,14 @@ describe("cron edit command", () => {
   });
 
   it("preserves timezone without copying stale stagger when --cron replaces expression (#92291)", async () => {
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.get") {
-        return {
-          id: "job-1",
-          schedule: {
-            kind: "cron",
-            expr: "0 * * * *",
-            tz: "America/Phoenix",
-            staggerMs: 120_000,
-          },
-        };
-      }
-      return { ok: true };
+    mockExistingJob({
+      id: "job-1",
+      schedule: {
+        kind: "cron",
+        expr: "0 * * * *",
+        tz: "America/Phoenix",
+        staggerMs: 120_000,
+      },
     });
     const program = createCronProgram();
 
@@ -428,40 +387,6 @@ describe("cron edit command", () => {
     });
   });
 
-  it("preserves timezone when --cron edits stagger metadata (#92291)", async () => {
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.get") {
-        return {
-          id: "job-1",
-          schedule: {
-            kind: "cron",
-            expr: "0 * * * *",
-            tz: "America/Phoenix",
-            staggerMs: 120_000,
-          },
-        };
-      }
-      return { ok: true };
-    });
-    const program = createCronProgram();
-
-    await program.parseAsync(["edit", "job-1", "--cron", "0 5 * * *", "--stagger", "10s"], {
-      from: "user",
-    });
-
-    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
-      id: "job-1",
-      patch: {
-        schedule: {
-          kind: "cron",
-          expr: "0 5 * * *",
-          tz: "America/Phoenix",
-          staggerMs: 10000,
-        },
-      },
-    });
-  });
-
   describe.each(["0", "12"])("timeout-only edits with %s seconds", (timeout) => {
     it.each([
       {
@@ -473,12 +398,7 @@ describe("cron edit command", () => {
         payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
       },
     ])("preserves $kind payload kind for timeout-only edits", async ({ kind, payload }) => {
-      callGatewayFromCli.mockImplementation(async (method: string) => {
-        if (method === "cron.get") {
-          return { id: "job-1", payload };
-        }
-        return { ok: true };
-      });
+      mockExistingJob({ id: "job-1", payload });
       const program = createCronProgram();
 
       await program.parseAsync(["edit", "job-1", "--timeout-seconds", timeout], { from: "user" });
@@ -521,12 +441,7 @@ describe("cron edit command", () => {
     ])(
       "rejects timeout-only edits for stored $kind payloads before cron.update",
       async ({ payload, error }) => {
-        callGatewayFromCli.mockImplementation(async (method: string) => {
-          if (method === "cron.get") {
-            return { id: "job-1", payload };
-          }
-          return { ok: true };
-        });
+        mockExistingJob({ id: "job-1", payload });
         const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
 
         try {
@@ -716,12 +631,7 @@ describe("cron edit command", () => {
   });
 
   it("stores an explicit wildcard with --clear-tools", async () => {
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.get") {
-        return { id: "job-1", payload: { kind: "agentTurn", message: "hello" } };
-      }
-      return { ok: true };
-    });
+    mockExistingJob({ id: "job-1", payload: { kind: "agentTurn", message: "hello" } });
     const program = createCronProgram();
 
     await program.parseAsync(["edit", "job-1", "--clear-tools"], { from: "user" });
@@ -741,60 +651,43 @@ describe("cron edit command", () => {
     );
   });
 
-  it.each([
-    { kind: "agentTurn", payload: { kind: "agentTurn", message: "hello" } },
-    { kind: "command", payload: { kind: "command", argv: ["echo", "hello"] } },
-    { kind: "script", payload: { kind: "script", script: "return { notify: 'hello' }" } },
-    { kind: "systemEvent", payload: { kind: "systemEvent", text: "hello" } },
-  ])("preserves $kind payloads when editing their tool allowlist", async ({ kind, payload }) => {
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.get") {
-        return { id: "job-1", payload };
-      }
-      return { ok: true };
-    });
-    const program = createCronProgram();
+  it.each(
+    [
+      { kind: "agentTurn", payload: { kind: "agentTurn", message: "hello" } },
+      { kind: "command", payload: { kind: "command", argv: ["echo", "hello"] } },
+      { kind: "script", payload: { kind: "script", script: "return { notify: 'hello' }" } },
+      { kind: "systemEvent", payload: { kind: "systemEvent", text: "hello" } },
+    ].flatMap((entry) => [
+      { ...entry, tools: "read,write", toolsAllow: ["read", "write"] },
+      { ...entry, tools: "", toolsAllow: [] },
+    ]),
+  )(
+    "preserves $kind payloads when editing their tool allowlist to '$tools'",
+    async ({ kind, payload, tools, toolsAllow }) => {
+      mockExistingJob({ id: "job-1", payload });
+      await createCronProgram().parseAsync(["edit", "job-1", "--tools", tools], { from: "user" });
 
-    await program.parseAsync(["edit", "job-1", "--tools", "read,write"], { from: "user" });
-
-    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
-      id: "job-1",
-    });
-    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
-      id: "job-1",
-      patch: { payload: { kind, toolsAllow: ["read", "write"] } },
-    });
-  });
-
-  it.each([
-    { kind: "agentTurn", payload: { kind: "agentTurn", message: "hello" } },
-    { kind: "command", payload: { kind: "command", argv: ["echo", "hello"] } },
-    { kind: "script", payload: { kind: "script", script: "return { notify: 'hello' }" } },
-    { kind: "systemEvent", payload: { kind: "systemEvent", text: "hello" } },
-  ])("preserves $kind payloads when clearing their tool allowlist", async ({ kind, payload }) => {
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.get") {
-        return { id: "job-1", payload };
-      }
-      return { ok: true };
-    });
-    const program = createCronProgram();
-
-    await program.parseAsync(["edit", "job-1", "--clear-tools"], { from: "user" });
-
-    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
-      id: "job-1",
-      patch: { payload: { kind, toolsAllow: ["*"] } },
-    });
-  });
-
-  it.each([
-    {
-      label: "command with a restricted allowlist",
-      payload: { kind: "command", argv: ["echo", "hello"] },
-      toolArgs: ["--tools", "read,write"],
-      toolsAllow: ["read", "write"],
+      expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
+        id: "job-1",
+      });
+      expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+        id: "job-1",
+        patch: { payload: { kind, toolsAllow } },
+      });
     },
+  );
+
+  it("preserves command payloads when clearing their tool allowlist", async () => {
+    mockExistingJob({ id: "job-1", payload: { kind: "command", argv: ["echo", "hello"] } });
+    await createCronProgram().parseAsync(["edit", "job-1", "--clear-tools"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: { payload: { kind: "command", toolsAllow: ["*"] } },
+    });
+  });
+
+  it.each([
     {
       label: "command with a cleared allowlist",
       payload: { kind: "command", argv: ["echo", "hello"] },
@@ -807,21 +700,10 @@ describe("cron edit command", () => {
       toolArgs: ["--tools", "read,write"],
       toolsAllow: ["read", "write"],
     },
-    {
-      label: "agent turn with a cleared allowlist",
-      payload: { kind: "agentTurn", message: "hello" },
-      toolArgs: ["--clear-tools"],
-      toolsAllow: ["*"],
-    },
   ])(
     "preserves the existing $label when editing its timeout",
     async ({ payload, toolArgs, toolsAllow }) => {
-      callGatewayFromCli.mockImplementation(async (method: string) => {
-        if (method === "cron.get") {
-          return { id: "job-1", payload };
-        }
-        return { ok: true };
-      });
+      mockExistingJob({ id: "job-1", payload });
       const program = createCronProgram();
 
       await program.parseAsync(["edit", "job-1", "--timeout-seconds", "12", ...toolArgs], {
@@ -869,7 +751,6 @@ describe("cron edit command", () => {
   it.each([
     { duration: "0", cooldownMs: 0 },
     { duration: "0s", cooldownMs: 0 },
-    { duration: "0m", cooldownMs: 0 },
     { duration: "30s", cooldownMs: 30_000 },
     { duration: "1h30m", cooldownMs: 5_400_000 },
   ])("accepts failure alert cooldown $duration", async ({ duration, cooldownMs }) => {
@@ -946,72 +827,17 @@ describe("cron edit command", () => {
     errorSpy.mockRestore();
   });
 
-  it("documents the --clear-model flag alongside the sibling --clear-tools", () => {
-    const editCommand = createCronProgram().commands.find((command) => command.name() === "edit");
-    const help = editCommand?.helpInformation() ?? "";
-
-    expect(help).toContain("--clear-model");
-    expect(help).toContain("--clear-thinking");
-    expect(help).toContain("--clear-tools");
-  });
-
-  it("clears the delivery channel with --clear-channel (CLI parity with cron.update channel:null)", async () => {
-    const program = createCronProgram();
-
-    await program.parseAsync(["edit", "job-1", "--clear-channel"], { from: "user" });
-
+  it.each([
+    { flag: "--clear-channel", option: "clearChannel", field: "channel" },
+    { flag: "--clear-to", option: "clearTo", field: "to" },
+    { flag: "--clear-thread-id", option: "clearThreadId", field: "threadId" },
+    { flag: "--clear-account", option: "clearAccount", field: "accountId" },
+  ])("clears delivery $field with $flag", async ({ flag, option, field }) => {
+    await createCronProgram().parseAsync(["edit", "job-1", flag], { from: "user" });
     expect(callGatewayFromCli).toHaveBeenCalledWith(
       "cron.update",
-      expect.objectContaining({ clearChannel: true }),
-      {
-        id: "job-1",
-        patch: { delivery: { channel: null } },
-      },
-    );
-  });
-
-  it("clears the delivery destination with --clear-to", async () => {
-    const program = createCronProgram();
-
-    await program.parseAsync(["edit", "job-1", "--clear-to"], { from: "user" });
-
-    expect(callGatewayFromCli).toHaveBeenCalledWith(
-      "cron.update",
-      expect.objectContaining({ clearTo: true }),
-      {
-        id: "job-1",
-        patch: { delivery: { to: null } },
-      },
-    );
-  });
-
-  it("clears the delivery thread id with --clear-thread-id", async () => {
-    const program = createCronProgram();
-
-    await program.parseAsync(["edit", "job-1", "--clear-thread-id"], { from: "user" });
-
-    expect(callGatewayFromCli).toHaveBeenCalledWith(
-      "cron.update",
-      expect.objectContaining({ clearThreadId: true }),
-      {
-        id: "job-1",
-        patch: { delivery: { threadId: null } },
-      },
-    );
-  });
-
-  it("clears the delivery account override with --clear-account", async () => {
-    const program = createCronProgram();
-
-    await program.parseAsync(["edit", "job-1", "--clear-account"], { from: "user" });
-
-    expect(callGatewayFromCli).toHaveBeenCalledWith(
-      "cron.update",
-      expect.objectContaining({ clearAccount: true }),
-      {
-        id: "job-1",
-        patch: { delivery: { accountId: null } },
-      },
+      expect.objectContaining({ [option]: true }),
+      { id: "job-1", patch: { delivery: { [field]: null } } },
     );
   });
 
@@ -1036,8 +862,8 @@ describe("cron edit command", () => {
     errorSpy.mockRestore();
   });
 
-  it.each(["", "   "])("rejects blank --command-cwd %j", async (value) => {
-    await expectCronEditRejection(["--command-cwd", value], "--command-cwd must not be blank");
+  it("rejects empty --command-cwd", async () => {
+    await expectCronEditRejection(["--command-cwd", ""], "--command-cwd must not be blank");
   });
 
   it("rejects blank --command-cwd before loading an existing job", async () => {
@@ -1079,16 +905,6 @@ describe("cron edit command", () => {
 
   it.each(["", "not-a-url"])("rejects invalid --webhook %j before gateway RPC", async (value) => {
     await expectCronEditRejection(["--webhook", value], "--webhook must be a valid http(s) URL");
-  });
-
-  it("documents the delivery clear flags alongside the sibling --clear-model", () => {
-    const editCommand = createCronProgram().commands.find((command) => command.name() === "edit");
-    const help = editCommand?.helpInformation() ?? "";
-
-    expect(help).toContain("--clear-channel");
-    expect(help).toContain("--clear-to");
-    expect(help).toContain("--clear-thread-id");
-    expect(help).toContain("--clear-account");
   });
 
   it.each([

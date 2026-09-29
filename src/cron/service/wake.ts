@@ -5,13 +5,13 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { resolveCronDeliverySessionKey } from "../session-target.js";
-import type { CronJob } from "../types.js";
+import type { CronNotificationJob } from "./notification-intents.js";
 import type { CronServiceState } from "./state.js";
 
 /** Keeps safety notices with their creator and limits failure routes to explicit origins. */
 export function enqueueCronNotification(
   state: CronServiceState,
-  job: CronJob,
+  job: CronNotificationJob,
   text: string,
   kind: "auto-disabled" | "failure-alert",
 ): void {

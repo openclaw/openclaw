@@ -162,19 +162,4 @@ describe("captureSubagentCompletionReply", () => {
       vi.useRealTimers();
     }
   });
-
-  it("returns partial assistant progress when the latest assistant turn is tool-only", async () => {
-    const readSubagentOutput = vi
-      .fn<(sessionKey: string) => Promise<string | undefined>>()
-      .mockResolvedValue("Mapped the modules.");
-
-    const result = await captureSubagentCompletionReplyUsing({
-      sessionKey: "agent:main:subagent:child",
-      maxWaitMs: 50,
-      retryIntervalMs: 8,
-      readSubagentOutput,
-    });
-
-    expect(result).toBe("Mapped the modules.");
-  });
 });

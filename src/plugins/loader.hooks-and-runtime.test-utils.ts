@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { createAgentToolResultMiddlewareRunner } from "../agents/harness/tool-result-middleware.js";
 import { withEnv } from "../test-utils/env.js";
 import { createHookRunner } from "./hooks.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
@@ -29,6 +30,9 @@ import {
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createPluginRegistryOwner, setActivePluginRegistry } from "./runtime.js";
 
 afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
@@ -504,7 +508,7 @@ ${channelPluginSource({
       expectSetupRuntimeLoaded: true,
     },
     {
-      name: "merges bundled runtime plugin into setup-runtime channel loads",
+      name: "initializes both setup and runtime graphs before merging setup-runtime channels",
       fixture: {
         id: "setup-runtime-bundled-runtime-merge-test",
         label: "Setup Runtime Bundled Runtime Merge Test",
@@ -518,12 +522,17 @@ ${channelPluginSource({
           makePluginLoaderTempDir(),
           "bundled-runtime-applied.txt",
         ),
+        bundledSetupRuntimeMarker: path.join(
+          makePluginLoaderTempDir(),
+          "setup-runtime-applied.txt",
+        ),
       },
       loadOptions: { setupIntent: true },
       expectFullLoaded: true,
       expectSetupLoaded: true,
       expectedChannels: 1,
       expectBundledFullRuntimeLoaded: true,
+      expectSetupRuntimeLoaded: true,
     },
     {
       name: "defaults ordinary unconfigured channel loads to the full runtime",
@@ -793,26 +802,6 @@ ${channelPluginSource({
     expect(registry.channels).toHaveLength(0);
     expect(fs.existsSync(built.fullMarker)).toBe(false);
     expect(fs.existsSync(runtimeMarker)).toBe(false);
-  });
-
-  it("isolates loadSetupPlugin errors as per-plugin diagnostics instead of crashing registry load", () => {
-    useNoBundledPlugins();
-    const pluginDir = createSetupFailureFixture({
-      id: "setup-entry-throws-test",
-      setupEntrySource: THROWING_SETUP_ENTRY_SOURCE,
-    });
-    const registry = loadSetupPlugins({
-      paths: [pluginDir],
-      ids: ["setup-entry-throws-test"],
-    });
-
-    // The registry load should NOT crash; the error should be recorded as a
-    // per-plugin diagnostic rather than aborting the whole load.
-    expect(registry.diagnostics.length).toBeGreaterThanOrEqual(1);
-    const diagnostic = registry.diagnostics.find(
-      (d) => d.pluginId === "setup-entry-throws-test" && d.level === "error",
-    );
-    expect(diagnostic?.message).toContain("failed to load setup entry");
   });
 
   it("keeps healthy sibling channel plugins loadable when a setup entry throws", () => {
@@ -1128,13 +1117,11 @@ ${channelPluginSource({
     const plugin = writePlugin({
       id: "hook-policy",
       filename: "hook-policy.cjs",
-      body: `module.exports = { id: "hook-policy", register(api) {
-    api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
-    api.on("before_model_resolve", () => ({
-      modelOverride: "demo-model",
-      providerOverride: "demo-provider",
-    }));
-  } };`,
+      registration: `api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
+      api.on("before_model_resolve", () => ({
+        modelOverride: "demo-model",
+        providerOverride: "demo-provider",
+      }));`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -1173,13 +1160,11 @@ ${channelPluginSource({
     const plugin = writePlugin({
       id: "next-turn-policy",
       filename: "next-turn-policy.cjs",
-      body: `module.exports = { id: "next-turn-policy", register(api) {
-    void api.session.workflow.enqueueNextTurnInjection({
-      sessionKey: "global",
-      agentId: "work",
-      text: "blocked context",
-    });
-  } };`,
+      registration: `void api.session.workflow.enqueueNextTurnInjection({
+        sessionKey: "global",
+        agentId: "work",
+        text: "blocked context",
+      });`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -1214,9 +1199,7 @@ ${channelPluginSource({
     const plugin = writePlugin({
       id: "hook-policy-default",
       filename: "hook-policy-default.cjs",
-      body: `module.exports = { id: "hook-policy-default", register(api) {
-    api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
-  } };`,
+      registration: `api.on("before_prompt_build", () => ({ prependContext: "prepend" }));`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -1241,10 +1224,8 @@ ${channelPluginSource({
     const plugin = writePlugin({
       id: "hook-timeouts",
       filename: "hook-timeouts.cjs",
-      body: `module.exports = { id: "hook-timeouts", register(api) {
-    api.on("before_prompt_build", () => ({ prependContext: "prepend" }), { timeoutMs: 5000 });
-    api.on("before_model_resolve", () => ({ providerOverride: "demo-provider" }));
-  } };`,
+      registration: `api.on("before_prompt_build", () => ({ prependContext: "prepend" }), { timeoutMs: 5000 });
+      api.on("before_model_resolve", () => ({ providerOverride: "demo-provider" }));`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -1345,16 +1326,107 @@ ${channelPluginSource({
     }
   });
 
+  it.each([
+    { successor: "removed", preserved: true },
+    { successor: "replaced", replaced: true, preserved: false },
+    { successor: "removed while Gateway B is live and active", gatewayB: true, preserved: true },
+    {
+      successor: "removed and Gateway A is closing while Gateway B is live and active",
+      gatewayB: true,
+      closeGatewayA: true,
+      preserved: false,
+    },
+    {
+      // A published build shares this process state but never links its registries.
+      successor: "removed from a registry a published build left unlinked",
+      unlinked: true,
+      gatewayB: true,
+      preserved: false,
+    },
+  ])(
+    "keeps a run's tool result only when its middleware plugin was $successor",
+    async ({ successor, replaced, gatewayB, closeGatewayA, unlinked, preserved }) => {
+      useNoBundledPlugins();
+      const pluginId = `tool-result-middleware-${successor}`;
+      const plugin = writePlugin({
+        id: pluginId,
+        filename: `${pluginId}.cjs`,
+        registration: `api.registerAgentToolResultMiddleware((event) => ({
+          result: { ...event.result, content: [{ type: "text", text: "compacted" }] },
+        }), { runtimes: ["openclaw"] });`,
+      });
+      updatePluginManifest(plugin, { contracts: { agentToolResultMiddleware: ["openclaw"] } });
+      const registry = loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: { allow: [pluginId] },
+      });
+      const record = registry.plugins.find((entry) => entry.id === pluginId);
+      const instance = record && getPluginInstance(record);
+      const entry = registry.agentToolResultMiddlewares[0];
+      if (!instance || !entry) {
+        throw new Error("expected a loaded middleware plugin instance");
+      }
+      setActivePluginRegistry(registry);
+      const gatewayA = unlinked ? undefined : createPluginRegistryOwner(registry);
+      // A run resolves its middleware once and keeps that list.
+      const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+        entry.handler,
+      ]);
+      const event = {
+        toolCallId: "call-1",
+        toolName: "exec",
+        args: {},
+        result: { content: [{ type: "text" as const, text: "exit 0" }], details: {} },
+      };
+      expect((await runner.applyToolResultMiddleware(event)).content).toEqual([
+        { type: "text", text: "compacted" },
+      ]);
+
+      const next = createEmptyPluginRegistry();
+      if (replaced) {
+        next.plugins.push({ ...record });
+      }
+      setActivePluginRegistry(next);
+      gatewayA?.publish(next);
+      if (gatewayB) {
+        // Gateway B becomes the process-active projection without this plugin.
+        const other = createEmptyPluginRegistry();
+        setActivePluginRegistry(other);
+        createPluginRegistryOwner(other);
+      }
+      if (closeGatewayA) {
+        await gatewayA?.close();
+      }
+      await instance.dispose();
+      // Callable and cyclic details survive only on the untouched no-middleware path.
+      const details: Record<string, unknown> = { format: () => "exit 0" };
+      details.self = details;
+      const raw = { content: [{ type: "text" as const, text: "exit 0" }], details };
+      const result = await runner.applyToolResultMiddleware({ ...event, result: raw });
+      if (preserved) {
+        // The removed plugin no longer post-processes: same result as no middleware.
+        expect(result).toBe(raw);
+        expect(
+          await createAgentToolResultMiddlewareRunner(
+            { runtime: "openclaw" },
+            [],
+          ).applyToolResultMiddleware({ ...event, result: raw }),
+        ).toBe(raw);
+      } else {
+        // A replacement, a closing owner or no owner link: the stale handler fails closed.
+        expect(result.details).toEqual({ status: "error", middlewareError: true });
+      }
+    },
+  );
+
   it("leaves agent tool-result middleware unbounded when no timeout is configured", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "tool-result-middleware-no-timeout",
       filename: "tool-result-middleware-no-timeout.cjs",
-      body: `module.exports = { id: "tool-result-middleware-no-timeout", register(api) {
-    api.registerAgentToolResultMiddleware(() => new Promise(() => {}), {
-      runtimes: ["openclaw"],
-    });
-  } };`,
+      registration: `api.registerAgentToolResultMiddleware(() => new Promise(() => {}), {
+        runtimes: ["openclaw"],
+      });`,
     });
     updatePluginManifest(plugin, {
       contracts: { agentToolResultMiddleware: ["openclaw"] },
@@ -1398,9 +1470,7 @@ ${channelPluginSource({
     const plugin = writePlugin({
       id: "after-tool-call-option-timeout",
       filename: "after-tool-call-option-timeout.cjs",
-      body: `module.exports = { id: "after-tool-call-option-timeout", register(api) {
-    api.on("after_tool_call", () => new Promise(() => {}), { timeoutMs: 30 });
-  } };`,
+      registration: `api.on("after_tool_call", () => new Promise(() => {}), { timeoutMs: 30 });`,
     });
     const registry = loadRegistryFromSinglePlugin({
       plugin,
@@ -1428,17 +1498,15 @@ ${channelPluginSource({
     const plugin = writePlugin({
       id: "conversation-hooks",
       filename: "conversation-hooks.cjs",
-      body: `module.exports = { id: "conversation-hooks", register(api) {
-    api.on("before_model_resolve", () => undefined);
-    api.on("agent_turn_prepare", () => undefined);
-    api.on("before_prompt_build", () => undefined);
-    api.on("before_agent_reply", () => undefined);
-    api.on("llm_input", () => undefined);
-    api.on("llm_output", () => undefined);
-    api.on("before_agent_finalize", () => undefined);
-    api.on("agent_end", () => undefined);
-    api.on("before_agent_run", () => undefined);
-  } };`,
+      registration: `api.on("before_model_resolve", () => undefined);
+      api.on("agent_turn_prepare", () => undefined);
+      api.on("before_prompt_build", () => undefined);
+      api.on("before_agent_reply", () => undefined);
+      api.on("llm_input", () => undefined);
+      api.on("llm_output", () => undefined);
+      api.on("before_agent_finalize", () => undefined);
+      api.on("agent_end", () => undefined);
+      api.on("before_agent_run", () => undefined);`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -1462,17 +1530,15 @@ ${channelPluginSource({
     const plugin = writePlugin({
       id: "conversation-hooks-allowed",
       filename: "conversation-hooks-allowed.cjs",
-      body: `module.exports = { id: "conversation-hooks-allowed", register(api) {
-    api.on("before_model_resolve", () => undefined);
-    api.on("agent_turn_prepare", () => undefined);
-    api.on("before_prompt_build", () => undefined);
-    api.on("before_agent_reply", () => undefined);
-    api.on("llm_input", () => undefined);
-    api.on("llm_output", () => undefined);
-    api.on("before_agent_finalize", () => undefined);
-    api.on("agent_end", () => undefined);
-    api.on("before_agent_run", () => undefined);
-  } };`,
+      registration: `api.on("before_model_resolve", () => undefined);
+      api.on("agent_turn_prepare", () => undefined);
+      api.on("before_prompt_build", () => undefined);
+      api.on("before_agent_reply", () => undefined);
+      api.on("llm_input", () => undefined);
+      api.on("llm_output", () => undefined);
+      api.on("before_agent_finalize", () => undefined);
+      api.on("agent_end", () => undefined);
+      api.on("before_agent_run", () => undefined);`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -1507,17 +1573,15 @@ ${channelPluginSource({
     const plugin = writePlugin({
       id: "reply-hook-trigger-eligibility",
       filename: "reply-hook-trigger-eligibility.cjs",
-      body: `module.exports = { id: "reply-hook-trigger-eligibility", register(api) {
-    api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["heartbeat", "cron", "heartbeat"] });
-    api.on("before_agent_reply", () => undefined);
-    api.on("before_agent_reply", () => undefined, { eligibleTriggers: [] });
-    api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["heartbeat", "unknown"] });
-    api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["manual"] });
-    api.on("before_agent_reply", () => undefined, { eligibleTriggers: "heartbeat" });
-    api.on("before_agent_reply", () => undefined, { eligibleTriggers: Array(1) });
-    api.on("before_agent_reply", () => undefined, { eligibleTriggers: [, "heartbeat"] });
-    api.on("before_tool_call", () => undefined, { eligibleTriggers: ["heartbeat"] });
-  } };`,
+      registration: `api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["heartbeat", "cron", "heartbeat"] });
+      api.on("before_agent_reply", () => undefined);
+      api.on("before_agent_reply", () => undefined, { eligibleTriggers: [] });
+      api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["heartbeat", "unknown"] });
+      api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["manual"] });
+      api.on("before_agent_reply", () => undefined, { eligibleTriggers: "heartbeat" });
+      api.on("before_agent_reply", () => undefined, { eligibleTriggers: Array(1) });
+      api.on("before_agent_reply", () => undefined, { eligibleTriggers: [, "heartbeat"] });
+      api.on("before_tool_call", () => undefined, { eligibleTriggers: ["heartbeat"] });`,
     });
 
     const registry = loadRegistryFromSinglePlugin({

@@ -1,3 +1,5 @@
+import type { TemplateResult } from "lit";
+import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-diff-panel.ts";
@@ -13,6 +15,7 @@ type SidebarFullMessageRequest = {
   sessionKey: string;
   agentId?: string;
   messageId: string;
+  maxChars?: number;
 };
 
 export type SidebarFullMessageLoader = (
@@ -57,8 +60,8 @@ type AttachmentSidebarSource = {
 export type AttachmentSidebarState =
   | { status: "pending" }
   | ({ status: "ready" } & AttachmentSidebarSource)
-  | { status: "unavailable" }
-  | { status: "error"; reason: string };
+  | { status: "unavailable"; onRetry?: () => void }
+  | { status: "error"; reason: string; onRetry?: () => void };
 
 export type AttachmentSidebarRuntime = {
   sessionKey?: string;
@@ -70,7 +73,7 @@ export type AttachmentSidebarRuntime = {
   resolveArtifactDownload?: ArtifactDownloadResolver;
 };
 
-type AttachmentSidebarContent = {
+type AttachmentSidebarContent = Omit<AttachmentSidebarSource, "src"> & {
   kind: "attachment";
   attachmentKind?: "audio" | "video" | "document" | "image";
   title: string;
@@ -78,13 +81,11 @@ type AttachmentSidebarContent = {
   src?: string;
   mimeType?: string | null;
   sourceIdentity?: string;
-  playback?: ChatMediaPlaybackMode;
-  authToken?: string | null;
-  sizeBytes?: number;
-  durationMs?: number;
-  width?: number;
-  height?: number;
   voiceNote?: boolean;
+  plainText?: boolean;
+  renderActions?: () => TemplateResult;
+  /** Authorize and read fresh bytes for each explicit download. */
+  download?: (signal: AbortSignal) => Promise<Blob | null>;
   resolveSource?: (
     onRequestUpdate: () => void,
     runtime: AttachmentSidebarRuntime,
@@ -113,32 +114,49 @@ type FileSidebarEdit = {
   fetchLatest: () => Promise<{ content: string; hash: string; editable: boolean } | null>;
 };
 
-type FileSidebarContent = {
+export type FileSidebarNavigation = { line: number };
+
+export type FileSidebarContent = {
   kind: "file";
   path: string;
   name: string;
   content: string;
   /** Stable per-session identity used to retain an unsaved in-memory draft. */
   draftKey?: string;
+  /** Captured display context; the draft key is opaque and never a UI label. */
+  draftContext?: { sessionKey: string; sessionTitle: string; paneLabel?: string };
   root?: string | null;
+  mimeType?: string;
   language?: string;
   line?: number | null;
+  /** New identity for an explicit line request; ordinary tab selection retains it. */
+  navigation?: FileSidebarNavigation;
   rawText?: string | null;
   edit?: FileSidebarEdit;
 };
 
+export type ToolOutputSidebarContent = {
+  kind: "tool-output";
+  card: ToolCard;
+  sessionKey?: string;
+  agentId?: string;
+};
+
 export type SidebarContent =
+  | ToolOutputSidebarContent
   | MarkdownSidebarContent
   | CanvasSidebarContent
   | ImageSidebarContent
   | AttachmentSidebarContent
   | FileSidebarContent
-  | SessionDiffSidebarContent
-  | { kind: "task"; taskId: string };
+  | SessionDiffSidebarContent;
 
-export type SidebarSelection =
+export type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "tool-output" }>;
+
+export type SidebarSelection = (
   | SidebarContent
   | { kind: "loading" }
-  // A failed open keeps owning the Review tab; an empty selection falls back to
-  // the session diff, which reads as if the click had opened something else.
-  | { kind: "unavailable"; message: string };
+  // Keep failed opens attached to their selected surface instead of falling back
+  // to unrelated content.
+  | { kind: "unavailable"; message: string }
+) & { fileTab?: { id: string; label: string } };

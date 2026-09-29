@@ -1,11 +1,3 @@
-// Dockable gateway browser panel for the Control UI shell.
-//
-// Renders the gateway-controlled browser (the same one agents drive through
-// the browser plugin) as a screenshot-backed remote view with tabs, a URL bar,
-// and two capture modes: annotate (freehand markup packaged into a chat
-// prompt + attachment) and inspect (element details at the pointer). Works in
-// any regular browser — no native webview required — and equally inside the
-// macOS app's dashboard.
 import { nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -13,8 +5,9 @@ import { hasNativeBrowserBridge } from "../../app/native-browser-bridge.ts";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
-import { DockLayoutController, dockPanelStyles } from "../dock-layout-controller.ts";
+import { DockLayoutController } from "../dock-layout-controller.ts";
 import { browserPanelLayout } from "../dock-panel-layout.ts";
+import { dockPanelStyles } from "../dock-panel-styles.ts";
 import {
   PANEL_HOSTED_TABS_CHANGE_EVENT,
   type PanelHostedTabsElement,
@@ -24,14 +17,20 @@ import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
+import { browserRequestReferencedTabs, type BrowserDashboardTarget } from "./browser-client.ts";
 import {
   BrowserPanelController,
   type BrowserPanelControllerHost,
 } from "./browser-panel-controller.ts";
-import { renderBrowserPanelChrome, type BrowserPanelDock } from "./browser-panel-render.ts";
+import { renderBrowserPanelChrome } from "./browser-panel-render.ts";
 import { browserPanelHostedTabs } from "./browser-panel-tabs.ts";
 import { browserPanelStyles } from "./browser-panel.styles.ts";
-import { browserTabKey, readBrowserTabTarget, type BrowserTabSelection } from "./browser-target.ts";
+import {
+  browserTabKey,
+  readBrowserTabTarget,
+  type BrowserTabSelection,
+  type BrowserTabTarget,
+} from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
 /** `<openclaw-browser-panel>` — the dockable gateway browser surface. */
@@ -61,9 +60,15 @@ class OpenClawBrowserPanel
   @property({ type: Boolean }) refreshOnPresentation = true;
 
   @property({ attribute: false }) sessionKey = "";
+  @property({ attribute: false }) sessionTabs: BrowserTabTarget[] = [];
   @property({ attribute: false }) preferredTab?: BrowserTabSelection;
+  /** A dashboard presents only its owned remote tab; its owner controls removal and restart. */
+  @property({ attribute: false }) fixedTab?: BrowserTabTarget;
+  @property({ attribute: false }) dashboardTarget?: BrowserDashboardTarget;
 
   private activeSessionKey = "";
+  private activeDashboardKey: string | undefined;
+  private activeSessionTabsKey: string | undefined;
   private consumedPreferredRevision?: string;
   private lastHostedTabsChangeKey?: string;
   private readonly browserPanelController = new BrowserPanelController(this);
@@ -72,7 +77,6 @@ class OpenClawBrowserPanel
     reservationPrefix: "browser",
     isAvailable: () => this.available,
   });
-  private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
   private viewportResizeObserver: ResizeObserver | null = null;
   private observedViewportElement: Element | null = null;
 
@@ -86,7 +90,7 @@ class OpenClawBrowserPanel
   override connectedCallback(): void {
     super.connectedCallback();
     if (!this.embedded) {
-      window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
     }
     // A settings takeover can already own the viewport when the panel mounts.
     // Suppress before the restored open state refreshes a dock nobody can see.
@@ -98,7 +102,7 @@ class OpenClawBrowserPanel
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
     this.viewportResizeObserver?.disconnect();
     this.viewportResizeObserver = null;
     this.observedViewportElement = null;
@@ -107,9 +111,9 @@ class OpenClawBrowserPanel
   override updated(changed: Map<string, unknown>): void {
     if (changed.has("embedded")) {
       if (this.embedded) {
-        window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+        window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
       } else {
-        window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+        window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
       }
     }
     if (changed.has("suppressed")) {
@@ -124,6 +128,12 @@ class OpenClawBrowserPanel
     const presentationChanged =
       this.embedded && (changed.has("embedded") || changed.has("presented"));
     const contextChanged = this.synchronizeBrowserContext();
+    const sessionTabsKey =
+      !this.dashboardTarget && this.sessionKey.trim()
+        ? JSON.stringify(browserRequestReferencedTabs(this.sessionTabs).map(browserTabKey))
+        : undefined;
+    const sessionTabsChanged = this.activeSessionTabsKey !== sessionTabsKey;
+    this.activeSessionTabsKey = sessionTabsKey;
     // Keep preferred metadata for the explicit handler to consume, but let the
     // pending toggle choose its route before any automatic follow or refresh.
     const followedPreferred = this.refreshOnPresentation && this.followPreferredTab();
@@ -137,6 +147,8 @@ class OpenClawBrowserPanel
         !followedPreferred &&
         (contextChanged || presentationChanged || gatewayAvailabilityChanged)
       ) {
+        void this.browserPanelController.refreshAll();
+      } else if (this.refreshOnPresentation && !followedPreferred && sessionTabsChanged) {
         void this.browserPanelController.refreshAll();
       }
     } else if (gatewayAvailabilityChanged) {
@@ -157,7 +169,7 @@ class OpenClawBrowserPanel
     }
     this.browserPanelController.native.presentation.update();
     this.dockLayout.syncReservation();
-    this.browserPanelController.paintOverlay();
+    this.browserPanelController.input.paintOverlay();
     const viewportElement = this.renderRoot.querySelector(".bp-viewport");
     if (viewportElement !== this.observedViewportElement) {
       // The viewport is transient while the dock opens, closes, or becomes unavailable.
@@ -208,40 +220,48 @@ class OpenClawBrowserPanel
   private synchronizeBrowserContext(): boolean {
     const clientChanged = this.browserPanelController.synchronizeClient();
     const sessionChanged = this.activeSessionKey !== this.sessionKey;
-    if (sessionChanged) {
+    const dashboardKey = JSON.stringify(this.dashboardTarget);
+    const dashboardChanged = this.activeDashboardKey !== dashboardKey;
+    if (sessionChanged || dashboardChanged) {
       this.activeSessionKey = this.sessionKey;
+      this.activeDashboardKey = dashboardKey;
       this.browserPanelController.operations.resetRoute();
       this.browserPanelController.resetBrowserState();
     }
-    if (clientChanged || sessionChanged) {
+    if (clientChanged || sessionChanged || dashboardChanged) {
       this.browserPanelController.native.cancelPendingActivation();
       this.browserPanelController.native.cancelCapture();
       this.consumedPreferredRevision = undefined;
     }
-    return clientChanged || sessionChanged;
+    return clientChanged || sessionChanged || dashboardChanged;
   }
 
   private preferredRevision(): string | undefined {
-    const preferred = this.preferredTab;
+    const preferred = this.preferredSelection;
     return preferred && readBrowserTabTarget(preferred.tab)
       ? JSON.stringify([browserTabKey(preferred.tab), preferred.revision])
       : undefined;
   }
 
+  private get preferredSelection(): BrowserTabSelection | undefined {
+    return this.fixedTab ? { tab: this.fixedTab, revision: "dashboard" } : this.preferredTab;
+  }
+
   private followPreferredTab(): boolean {
     const revision = this.preferredRevision();
+    const preferred = this.preferredSelection;
     if (
       !this.browserPanelIsOpen() ||
       !this.available ||
       !this.client ||
-      !this.preferredTab ||
+      !preferred ||
       !revision ||
       revision === this.consumedPreferredRevision
     ) {
       return false;
     }
     this.consumedPreferredRevision = revision;
-    const tab = readBrowserTabTarget(this.preferredTab.tab);
+    const tab = readBrowserTabTarget(preferred.tab);
     if (tab) {
       // Session results own the panel route and view, not the user's physical browser focus.
       void this.browserPanelController.selectTab(tab.targetId, tab, { focusBrowserTab: false });
@@ -265,7 +285,10 @@ class OpenClawBrowserPanel
     }
   }
 
-  handleToggleRequest(event: Event): void {
+  readonly handleToggleRequest = (event: Event): void => {
+    if (this.fixedTab) {
+      return;
+    }
     const detail =
       event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
         ? (event.detail as BrowserPanelToggleDetail)
@@ -275,69 +298,50 @@ class OpenClawBrowserPanel
     if (detail?.browserTab !== undefined && !browserTab) {
       return;
     }
+    const normalizedRequestedUrl =
+      typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
+    let shouldRefresh = true;
     if (this.embedded) {
       if (!this.browserPanelIsOpen() || detail?.open === false || !this.available) {
         return;
       }
-      const normalizedRequestedUrl =
-        typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
-      if (normalizedRequestedUrl) {
-        void this.browserPanelController.openUrl(normalizedRequestedUrl, {
-          newTab: true,
-          native: detail?.native,
-        });
-      } else if (browserTab) {
-        // Consume the current result so it cannot replace this explicit card choice.
-        this.consumedPreferredRevision = this.preferredRevision();
-        void this.browserPanelController.selectTab(browserTab.targetId, browserTab);
-      } else if (detail?.newTab === true) {
-        this.browserPanelController.beginNewTab();
-      } else if (!this.followPreferredTab()) {
-        void this.browserPanelController.refreshAll();
+    } else {
+      if (detail?.dock === "right" || detail?.dock === "bottom") {
+        this.dockLayout.setDock(detail.dock, false);
       }
-      return;
-    }
-    if (detail?.dock === "right" || detail?.dock === "bottom") {
-      this.dockLayout.setDock(detail.dock, false);
-    }
-    if (detail?.open === false) {
-      this.closePanel();
-      return;
-    }
-    const normalizedRequestedUrl =
-      typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
-    if (normalizedRequestedUrl || detail?.open === true) {
+      if (detail?.open === false) {
+        this.closePanel();
+        return;
+      }
+      if (!normalizedRequestedUrl && detail?.open !== true) {
+        this.toggle();
+        return;
+      }
       if (!this.available) {
         return;
       }
-      const wasOpen = this.dockLayout.open;
+      shouldRefresh = !this.dockLayout.open;
       this.dockLayout.setOpen(true);
-      if (normalizedRequestedUrl) {
-        void this.browserPanelController.openUrl(normalizedRequestedUrl, {
-          newTab: true,
-          native: detail?.native,
-        });
-      } else if (browserTab) {
-        // Consume the current result so it cannot replace this explicit card choice.
-        this.consumedPreferredRevision = this.preferredRevision();
-        void this.browserPanelController.selectTab(browserTab.targetId, browserTab);
-      } else if (detail?.newTab === true) {
-        this.browserPanelController.beginNewTab();
-      } else if (!wasOpen && !this.followPreferredTab()) {
-        void this.browserPanelController.refreshAll();
-      }
-      return;
     }
-    this.toggle();
-  }
+    if (normalizedRequestedUrl) {
+      void this.browserPanelController.openUrl(normalizedRequestedUrl, {
+        newTab: true,
+        native: detail?.native,
+      });
+    } else if (browserTab) {
+      // Consume the current result so it cannot replace this explicit card choice.
+      this.consumedPreferredRevision = this.preferredRevision();
+      void this.browserPanelController.selectTab(browserTab.targetId, browserTab);
+    } else if (detail?.newTab === true) {
+      this.browserPanelController.beginNewTab();
+    } else if (shouldRefresh && !this.followPreferredTab()) {
+      void this.browserPanelController.refreshAll();
+    }
+  };
 
   private closePanel(): void {
     this.browserPanelController.suspendView();
     this.dockLayout.setOpen(false);
-  }
-
-  private setDock(dock: BrowserPanelDock): void {
-    this.dockLayout.setDock(dock);
   }
 
   override render() {
@@ -349,7 +353,7 @@ class OpenClawBrowserPanel
       this.dockLayout.dock,
       this.dockLayout.height,
       this.dockLayout.width,
-      (dock) => this.setDock(dock),
+      (dock) => this.dockLayout.setDock(dock),
       () => this.closePanel(),
       this.dockLayout.renderResizer("bp", t("browser.resize")),
       this.embedded,
@@ -358,8 +362,6 @@ class OpenClawBrowserPanel
   }
 }
 
-// Guarded define (not @customElement) so re-imports under a shared registry —
-// e.g. vitest with isolate=false — don't throw "already registered".
 if (!customElements.get("openclaw-browser-panel")) {
   customElements.define("openclaw-browser-panel", OpenClawBrowserPanel);
 }

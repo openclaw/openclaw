@@ -1,12 +1,12 @@
-/**
- * sessions_history built-in tool.
- *
- * Reads bounded, redacted session transcript history after session visibility filtering.
- */
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
-import type { ChatPendingInputsPage } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import {
+  ChatHistoryParamsSchema,
+  ChatPendingInputsPageSchema,
+  type ChatHistoryDeltaResult,
+  type ChatPendingInputsPage,
+} from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
@@ -15,7 +15,6 @@ import { redactToolPayloadText } from "../../logging/redact.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
-import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import {
   describeSessionLinkRule,
   describeSessionsHistoryTool,
@@ -49,29 +48,20 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionsHistoryToolSchema = Type.Object({
-  sessionKey: Type.String(),
-  limit: optionalPositiveIntegerSchema(),
-  offset: Type.Optional(
-    Type.Integer({
-      minimum: 0,
-      description:
-        "Plain-pagination offset. Ignored when messageId is set (anchored reads window history around messageId instead).",
-    }),
-  ),
-  pendingBefore: optionalPositiveIntegerSchema(),
-  messageId: Type.Optional(
-    Type.String({
-      minLength: 1,
-      description:
-        "Return history around this message id. Ignores offset; limit still bounds the window.",
-    }),
-  ),
-  sessionId: Type.Optional(
-    Type.String({
-      minLength: 1,
-      description: "Transcript session id that owns messageId. Requires messageId.",
-    }),
-  ),
+  sessionKey: ChatHistoryParamsSchema.properties.sessionKey,
+  limit: ChatHistoryParamsSchema.properties.limit,
+  offset: Type.With(ChatHistoryParamsSchema.properties.offset, {
+    description:
+      "Plain-pagination offset. Ignored when messageId is set; limit still bounds anchored history.",
+  }),
+  pendingBefore: ChatHistoryParamsSchema.properties.pendingBefore,
+  messageId: Type.With(ChatHistoryParamsSchema.properties.messageId, {
+    description: "Return history around this message id. Ignores offset; limit bounds the window.",
+  }),
+  sessionId: Type.With(ChatHistoryParamsSchema.properties.sessionId, {
+    description:
+      "Transcript session id that owns messageId. Requires messageId; omit for the latest tail.",
+  }),
   includeTools: Type.Optional(Type.Boolean()),
 });
 
@@ -94,26 +84,8 @@ const SessionsHistoryOutputSchema = Type.Union([
       nextOffset: Type.Optional(Type.Number()),
       hasMore: Type.Optional(Type.Boolean()),
       totalMessages: Type.Optional(Type.Number()),
-      pendingInputs: Type.Optional(
-        Type.Object(
-          {
-            items: Type.Array(
-              Type.Object(
-                {
-                  id: Type.String(),
-                  acceptedAt: Type.Number(),
-                  state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
-                  message: Type.Unknown(),
-                },
-                { additionalProperties: false },
-              ),
-            ),
-            total: Type.Number(),
-            nextBefore: Type.Optional(Type.Number()),
-          },
-          { additionalProperties: false },
-        ),
-      ),
+      windowReset: Type.Optional(Type.Boolean()),
+      pendingInputs: Type.Optional(ChatPendingInputsPageSchema),
     },
     { additionalProperties: false },
   ),
@@ -129,23 +101,12 @@ const SessionsHistoryOutputSchema = Type.Union([
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
 const SESSIONS_HISTORY_PENDING_MAX_BYTES = 4096;
-type GatewayCaller = AgentToolGatewayRequestCaller;
-type ChatHistoryPaginationMetadata = {
-  offset?: number;
-  nextOffset?: number;
-  hasMore?: boolean;
-  totalMessages?: number;
-};
-
-function readOffsetParam(params: Record<string, unknown>): number | undefined {
-  const offset = readNonNegativeIntegerParam(params, "offset");
-  if (params.offset !== undefined && offset === undefined) {
-    throw new ToolInputError("offset must be a non-negative integer");
+type ChatHistoryPaginationMetadata = Partial<
+  Record<"offset" | "nextOffset" | "totalMessages", number> & {
+    hasMore: boolean;
+    windowReset: boolean;
   }
-  return offset;
-}
-
-// sandbox policy handling is shared with sessions-list-tool via sessions-helpers.ts
+>;
 
 function truncateHistoryText(
   text: string,
@@ -166,41 +127,6 @@ function truncateHistoryText(
   return { text: `${cut}\n…(truncated)…`, truncated: true, redacted };
 }
 
-function sanitizeHistoryContentBlock(
-  block: unknown,
-  maxChars: number,
-): {
-  block: unknown;
-  truncated: boolean;
-  redacted: boolean;
-} {
-  if (!block || typeof block !== "object") {
-    return { block, truncated: false, redacted: false };
-  }
-  const entry = { ...(block as Record<string, unknown>) };
-  let truncated = false;
-  let redacted = false;
-  if (typeof entry.text === "string") {
-    const res = truncateHistoryText(entry.text, maxChars);
-    entry.text = res.text;
-    truncated ||= res.truncated;
-    redacted ||= res.redacted;
-  }
-  if (entry.type === "thinking" && typeof entry.thinking === "string") {
-    const res = truncateHistoryText(entry.thinking, maxChars);
-    entry.thinking = res.text;
-    truncated ||= res.truncated;
-    redacted ||= res.redacted;
-  }
-  if (typeof entry.partialJson === "string") {
-    const res = truncateHistoryText(entry.partialJson, maxChars);
-    entry.partialJson = res.text;
-    truncated ||= res.truncated;
-    redacted ||= res.redacted;
-  }
-  return { block: entry, truncated, redacted };
-}
-
 function sanitizeHistoryMessage(
   message: unknown,
   maxChars = SESSIONS_HISTORY_TEXT_MAX_CHARS,
@@ -215,36 +141,40 @@ function sanitizeHistoryMessage(
   const entry = { ...(message as Record<string, unknown>) };
   let truncated = false;
   let redacted = false;
+  const sanitizeText = (text: string) => {
+    const result = truncateHistoryText(text, maxChars);
+    truncated ||= result.truncated;
+    redacted ||= result.redacted;
+    return result.text;
+  };
   // Tool result details often contain very large nested payloads.
-  if ("details" in entry) {
-    delete entry.details;
-    truncated = true;
-  }
-  if ("usage" in entry) {
-    delete entry.usage;
-    truncated = true;
-  }
-  if ("cost" in entry) {
-    delete entry.cost;
-    truncated = true;
+  for (const field of ["details", "usage", "cost"]) {
+    if (field in entry) {
+      delete entry[field];
+      truncated = true;
+    }
   }
 
   if (typeof entry.content === "string") {
-    const res = truncateHistoryText(entry.content, maxChars);
-    entry.content = res.text;
-    truncated ||= res.truncated;
-    redacted ||= res.redacted;
+    entry.content = sanitizeText(entry.content);
   } else if (Array.isArray(entry.content)) {
-    const updated = entry.content.map((block) => sanitizeHistoryContentBlock(block, maxChars));
-    entry.content = updated.map((item) => item.block);
-    truncated ||= updated.some((item) => item.truncated);
-    redacted ||= updated.some((item) => item.redacted);
+    entry.content = entry.content.map((block: unknown) => {
+      if (!block || typeof block !== "object") {
+        return block;
+      }
+      const content = { ...(block as Record<string, unknown>) };
+      const fields =
+        content.type === "thinking" ? ["text", "thinking", "partialJson"] : ["text", "partialJson"];
+      for (const field of fields) {
+        if (typeof content[field] === "string") {
+          content[field] = sanitizeText(content[field]);
+        }
+      }
+      return content;
+    });
   }
   if (typeof entry.text === "string") {
-    const res = truncateHistoryText(entry.text, maxChars);
-    entry.text = res.text;
-    truncated ||= res.truncated;
-    redacted ||= res.redacted;
+    entry.text = sanitizeText(entry.text);
   }
   return { message: entry, truncated, redacted };
 }
@@ -303,26 +233,13 @@ function enforceSessionsHistoryHardCap(params: {
 }
 
 function readHistoryMessageSeq(message: unknown): number | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const meta = (message as Record<string, unknown>)["__openclaw"];
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return undefined;
-  }
-  const seq = (meta as Record<string, unknown>).seq;
-  return asPositiveSafeInteger(seq);
+  const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+  return asPositiveSafeInteger(meta?.seq);
 }
 
 function readHistoryMessageId(message: unknown): string | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const meta = (message as Record<string, unknown>)["__openclaw"];
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return undefined;
-  }
-  const id = (meta as Record<string, unknown>).id;
+  const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+  const id = meta?.id;
   return typeof id === "string" && id.length > 0 ? id : undefined;
 }
 
@@ -338,17 +255,16 @@ function capSessionsHistoryAroundMessage(
 
   let start = anchorIndex;
   let end = anchorIndex + 1;
-  let cappedItems = items.slice(start, end);
-  let bytes = jsonUtf8Bytes(cappedItems);
+  let bytes = jsonUtf8Bytes([items[anchorIndex]]);
   let canGrowOlder = start > 0;
   let canGrowNewer = end < items.length;
   while (canGrowOlder || canGrowNewer) {
     if (canGrowOlder) {
-      const candidate = items.slice(start - 1, end);
-      const candidateBytes = jsonUtf8Bytes(candidate);
+      // Singleton arrays preserve JSON's array-element encoding; replacing one
+      // bracket with a comma gives the exact growth of this nonempty window.
+      const candidateBytes = bytes + jsonUtf8Bytes([items[start - 1]]) - 1;
       if (candidateBytes <= maxBytes) {
         start -= 1;
-        cappedItems = candidate;
         bytes = candidateBytes;
       } else {
         canGrowOlder = false;
@@ -357,11 +273,9 @@ function capSessionsHistoryAroundMessage(
     canGrowOlder &&= start > 0;
 
     if (canGrowNewer) {
-      const candidate = items.slice(start, end + 1);
-      const candidateBytes = jsonUtf8Bytes(candidate);
+      const candidateBytes = bytes + jsonUtf8Bytes([items[end]]) - 1;
       if (candidateBytes <= maxBytes) {
         end += 1;
-        cappedItems = candidate;
         bytes = candidateBytes;
       } else {
         canGrowNewer = false;
@@ -369,7 +283,7 @@ function capSessionsHistoryAroundMessage(
     }
     canGrowNewer &&= end < items.length;
   }
-  return { items: cappedItems, bytes };
+  return { items: items.slice(start, end), bytes };
 }
 
 function buildSessionsHistoryOmittedPlaceholder(source: unknown): Record<string, unknown> {
@@ -444,10 +358,11 @@ function resolveSessionsHistoryPaginationMetadata(params: {
 
 export function createSessionsHistoryTool(opts?: {
   agentSessionKey?: string;
+  sessionReadScopeKey?: string;
   requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
-  callGateway?: GatewayCaller;
+  callGateway?: AgentToolGatewayRequestCaller;
   sessionLinkBase?: string;
 }): AnyAgentTool {
   return {
@@ -464,7 +379,7 @@ export function createSessionsHistoryTool(opts?: {
         required: true,
       });
       const limit = readPositiveIntegerParam(params, "limit");
-      const offset = readOffsetParam(params);
+      const offset = readNonNegativeIntegerParam(params, "offset");
       const pendingBefore = readPositiveIntegerParam(params, "pendingBefore");
       const messageId = readToolStringParam(params, "messageId");
       const sessionId = readToolStringParam(params, "sessionId");
@@ -563,6 +478,7 @@ export function createSessionsHistoryTool(opts?: {
         action: "history",
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
+        sessionReadScopeKey: opts?.sessionReadScopeKey ? effectiveRequesterKey : undefined,
         mainSessionKey,
         authorizationTargetSessionKey: authorizationKey,
         targetAgentId,
@@ -588,14 +504,10 @@ export function createSessionsHistoryTool(opts?: {
         expectedSessionId: access.expectedSessionId,
         targetSessionKey: resolvedKey,
         run: async () =>
-          await gatewayCall<{
-            messages: Array<unknown>;
-            offset?: number;
-            nextOffset?: number;
-            hasMore?: boolean;
-            totalMessages?: number;
-            pendingInputs?: ChatPendingInputsPage;
-          }>({
+          await gatewayCall<
+            Pick<ChatHistoryDeltaResult, "messages" | "pendingInputs"> &
+              ChatHistoryPaginationMetadata
+          >({
             method: "chat.history",
             params: {
               sessionKey: resolvedKey,
@@ -641,6 +553,7 @@ export function createSessionsHistoryTool(opts?: {
         contentTruncated,
         contentRedacted,
         bytes: hardened.bytes + (pending?.bytes ?? 0),
+        ...(result?.windowReset ? { windowReset: true } : {}),
         ...(pending ? { pendingInputs: pending.pendingInputs } : {}),
         ...(opts?.sessionLinkBase
           ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }

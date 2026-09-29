@@ -6,7 +6,7 @@ import {
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 // Compiles plugin manifest schemas for validation without runtime loading.
 import { Format } from "typebox/format";
-import { Compile, type Validator as TypeBoxValidator } from "typebox/schema";
+import { Compile, Pointer, type Validator as TypeBoxValidator } from "typebox/schema";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -101,7 +101,7 @@ function applyValidatedSourceDefaults(
 }
 
 function compileSchema(schema: JsonSchemaValue): TypeBoxValidator {
-  return Compile(normalizeJsonSchemaForTypeBox(schema) as never);
+  return withPluginFormatSemantics(() => Compile(normalizeJsonSchemaForTypeBox(schema) as never));
 }
 
 function relaxConditionalRequiredKeywords(
@@ -133,7 +133,8 @@ function relaxConditionalRequiredKeywords(
 
 function withPluginFormatSemantics<T>(callback: () => T): T {
   const previousFormats = Format.Entries();
-  // TypeBox format checks are global; snapshot/restore keeps plugin schema semantics local.
+  // Compiled checks capture format functions; interpreted errors read the global registry.
+  // Scope both paths without changing other TypeBox consumers.
   Format.Set("uri", (value) => URL.canParse(value));
   for (const format of annotationOnlyFormats) {
     Format.Set(format, () => true);
@@ -161,6 +162,7 @@ function checkSchemaWithCurrentFormats(
 
 function isDefaultActivatedConditionalFailure(params: {
   schema: JsonSchemaValue;
+  validate: TypeBoxValidator;
   originalValue: unknown;
   defaultedValue: unknown;
 }): boolean {
@@ -170,8 +172,7 @@ function isDefaultActivatedConditionalFailure(params: {
   if (checkSchemaWithCurrentFormats(relaxedConditionalValidator, params.defaultedValue)) {
     return false;
   }
-  const originalValidator = compileSchema(params.schema);
-  return checkSchemaWithCurrentFormats(originalValidator, params.originalValue) === null;
+  return checkSchemaWithCurrentFormats(params.validate, params.originalValue) === null;
 }
 
 /**
@@ -197,7 +198,9 @@ export function parseJsonSchemaIssuePath(
 }
 
 function normalizeErrorPath(instancePath: string | undefined): string {
-  const path = instancePath?.replace(/^\//, "").replace(/\//g, ".");
+  const path = Pointer.Indices(instancePath ?? "")
+    .join(".")
+    .replace(/\//g, ".");
   return path && path.length > 0 ? path : "<root>";
 }
 
@@ -240,10 +243,12 @@ function resolveMissingProperties(error: TypeBoxValidationError): string[] {
   return properties.filter((property): property is string => typeof property === "string");
 }
 
-function extractAllowedValues(error: TypeBoxValidationError): unknown[] | null {
+function getAllowedValuesSummary(
+  error: TypeBoxValidationError,
+): ReturnType<typeof summarizeAllowedValues> {
   if (error.keyword === "enum") {
     const allowedValues = error.params?.allowedValues;
-    return Array.isArray(allowedValues) ? allowedValues : null;
+    return Array.isArray(allowedValues) ? summarizeAllowedValues(allowedValues) : null;
   }
 
   if (error.keyword === "const") {
@@ -251,20 +256,10 @@ function extractAllowedValues(error: TypeBoxValidationError): unknown[] | null {
     if (!params || !Object.hasOwn(params, "allowedValue")) {
       return null;
     }
-    return [params.allowedValue];
+    return summarizeAllowedValues([params.allowedValue]);
   }
 
   return null;
-}
-
-function getAllowedValuesSummary(
-  error: TypeBoxValidationError,
-): ReturnType<typeof summarizeAllowedValues> {
-  const allowedValues = extractAllowedValues(error);
-  if (!allowedValues) {
-    return null;
-  }
-  return summarizeAllowedValues(allowedValues);
 }
 
 function resolveAdditionalProperty(error: TypeBoxValidationError): string | undefined {
@@ -388,24 +383,26 @@ export function validatePluginSchemaValue(
 
 /**
  * Validate a plugin-owned value against a JSON Schema, optionally hydrating schema defaults.
- * The cache key is caller-owned so repeated plugin/schema validations can reuse compiled TypeBox validators.
+ * Callers can supply a stable cache key; otherwise the schema fingerprint owns cache identity.
  */
 export function validateJsonSchemaValue(params: {
   schema: JsonSchemaValue;
-  cacheKey: string;
+  cacheKey?: string;
   value: unknown;
   /** Persisted input paired with this runtime value, before secret resolution. */
   sourceValue?: unknown;
   applyDefaults?: boolean;
   cache?: boolean;
 }): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
-  const schemaError = findJsonSchemaShapeError(params.schema);
-  if (schemaError) {
-    throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
-  }
-
-  const cacheKey = params.applyDefaults ? `${params.cacheKey}::defaults` : params.cacheKey;
+  const schemaKey = params.cacheKey ?? fingerprintSchema(params.schema);
+  const cacheKey = params.applyDefaults ? `${schemaKey}::defaults` : schemaKey;
   let cached = params.cache === false ? undefined : schemaCache.get(cacheKey);
+  if (!cached || cached.schema !== params.schema) {
+    const schemaError = findJsonSchemaShapeError(params.schema);
+    if (schemaError) {
+      throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
+    }
+  }
   const schemaFingerprint =
     !cached || cached.schema !== params.schema ? fingerprintSchema(params.schema) : undefined;
   if (
@@ -441,6 +438,7 @@ export function validateJsonSchemaValue(params: {
         value !== originalValue &&
         isDefaultActivatedConditionalFailure({
           schema: params.schema,
+          validate: cached.validate,
           originalValue,
           defaultedValue: value,
         })

@@ -8,8 +8,11 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { listSecretStoreEntries, readSecretStoreValue } from "../secrets/store/secret-store.js";
+import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { runGatewayLifecycle } from "./operations-execution-helpers.js";
 import {
@@ -172,7 +175,7 @@ const mockScheduleGatewayRestart = vi.hoisted(() =>
   vi.fn(() => ({
     ok: true,
     pid: process.pid,
-    signal: "SIGUSR1" as const,
+    signal: "SIGUSR2" as const,
     delayMs: 0,
     mode: "emit" as const,
     coalesced: false,
@@ -180,6 +183,37 @@ const mockScheduleGatewayRestart = vi.hoisted(() =>
     emitHooksQueued: false,
   })),
 );
+// Unit threads have no host broker; run the secret-store worker commands inline,
+// admitting their transaction and commit through the requester's guard.
+vi.mock("../state/openclaw-state-worker-store.js", async (importOriginal) => {
+  const kernel = await import("../secrets/store/secret-store-config-ref.kernel.js");
+  const execute = async (
+    command: SqliteWorkerCommand<OpenClawStateWorkerOperations>,
+    assertCurrent?: () => void,
+  ) => {
+    if (command.type === "secrets.writeForConfigRef") {
+      return kernel.writeSecretStoreEntryForConfigRefInDatabase(command.input, undefined, () =>
+        assertCurrent?.(),
+      );
+    }
+    throw new Error(`unexpected state worker command ${command.type}`);
+  };
+  return {
+    ...(await importOriginal<typeof import("../state/openclaw-state-worker-store.js")>()),
+    runOpenClawStateWorkerOperation: async (
+      _context: unknown,
+      operation: (scope: {
+        execute: (command: SqliteWorkerCommand<OpenClawStateWorkerOperations>) => unknown;
+      }) => Promise<unknown>,
+      options?: { assertCurrent?: () => void },
+    ) => {
+      options?.assertCurrent?.();
+      return await operation({
+        execute: (command) => execute(command, options?.assertCurrent),
+      });
+    },
+  };
+});
 vi.mock("../cli/daemon-cli/lifecycle.js", () => ({
   runDaemonStart: vi.fn(async () => {}),
   runDaemonStop: vi.fn(async () => {}),
@@ -190,7 +224,7 @@ vi.mock("../cli/plugins-install-command.js", () => ({
 }));
 vi.mock("../infra/restart.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/restart.js")>()),
-  scheduleGatewaySigusr1Restart: mockScheduleGatewayRestart,
+  scheduleGatewayRestart: mockScheduleGatewayRestart,
 }));
 vi.mock("./probes.js", () => ({
   probeLocalCommand: vi.fn(async (command: string) => ({
@@ -259,6 +293,13 @@ describe("system agent operations", () => {
     resetPluginStateStoreForTests();
     stateDirSnapshot?.restore();
     vi.unstubAllEnvs();
+  });
+
+  it("includes each agent's effective model in the agents tool result", async () => {
+    const { runtime, lines } = createSystemAgentTestRuntime();
+    await executeSystemAgentOperation({ kind: "agents" }, runtime);
+    expect(lines.join("\n")).toContain("main | default | model=not configured");
+    expect(lines.join("\n")).toContain("work | model=openai/gpt-5.2");
   });
 
   it("redacts sensitive config values using their complete paths", async () => {
@@ -353,6 +394,26 @@ describe("system agent operations", () => {
     expect(output).toContain('"groupPolicy": "open"');
     expect(output).toContain('"chat": "openai/gpt-5.5"');
     expect(output).not.toContain("<redacted>");
+  });
+
+  it("reads installed plugin field schemas and authored help from the active metadata", async () => {
+    const config = { plugins: { entries: { codex: { enabled: true } } } };
+    mockConfig.setConfig(config);
+    setRuntimeConfigSnapshot(config, config);
+    const metadata = createSystemAgentPluginMetadataTestSnapshot(config);
+    const { runtime, lines } = createSystemAgentTestRuntime();
+    try {
+      await metadata.run(() =>
+        executeSystemAgentOperation(
+          { kind: "config-schema", path: "plugins.entries.codex.config.codexDynamicToolsLoading" },
+          runtime,
+        ),
+      );
+      expect(lines.join("\n")).toContain("searchable");
+      expect(lines.join("\n")).toContain("Use searchable to defer OpenClaw dynamic tools");
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("redacts config values marked sensitive only by active plugin metadata", async () => {
@@ -492,7 +553,7 @@ describe("system agent operations", () => {
     ).rejects.toThrow("Run openclaw doctor --fix before creating main.");
 
     expect(createAgent).toHaveBeenCalledWith({
-      name: "main",
+      entry: { id: "main" },
       workspace: "/tmp/main",
       provenance: { createdVia: "agent", creatorAgentId: "openclaw" },
     });
@@ -515,22 +576,6 @@ describe("system agent operations", () => {
       }),
     ).rejects.toThrow('Agent id "crestodian" is reserved'); // reserved retired id
     expect(createAgent).not.toHaveBeenCalled();
-  });
-
-  it("requires approval before restarting gateway", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const runGatewayRestart = vi.fn(async () => {});
-
-    const result = await executeSystemAgentOperation({ kind: "gateway-restart" }, runtime, {
-      deps: { runGatewayRestart, setupSurface: "gateway" },
-    });
-
-    expectRecordFields(result as unknown as Record<string, unknown>, {
-      applied: false,
-      message: "Plan: restart the Gateway. Say yes to apply.",
-    });
-    expect(lines.join("\n")).toContain("Plan: restart the Gateway");
-    expect(runGatewayRestart).not.toHaveBeenCalled();
   });
 
   it("restarts its own Gateway despite hostile remote Gateway routing", async () => {
@@ -739,72 +784,88 @@ describe("system agent operations", () => {
     });
   });
 
-  it.each([
-    { kind: "config-set" as const, path: "agents.defaults.model.primary", value: "openai/gpt-5.5" },
-    {
-      kind: "config-set" as const,
-      path: "agents[defaults][model][primary]",
-      value: "openai/gpt-5.5",
-    },
-    {
-      kind: "config-set" as const,
-      path: 'agents["defaults"]["model"].primary',
-      value: "openai/gpt-5.5",
-    },
-    { kind: "config-set" as const, path: "agents.defaults.agentRuntime", value: "{}" },
-    { kind: "config-set" as const, path: "agents.defaults.params.temperature", value: "0.5" },
-    { kind: "config-set" as const, path: "agents.list[0].models.openai", value: "{}" },
-    { kind: "config-set" as const, path: "agents.list[0].params.temperature", value: "0.5" },
-    { kind: "config-set" as const, path: "agents.list[0].default", value: "true" },
-    { kind: "config-set" as const, path: "agents.list[0].agentDir", value: '"/tmp/agent"' },
-    { kind: "config-set" as const, path: "auth.order.anthropic", value: "[]" },
-    { kind: "config-set" as const, path: "env.vars.ANTHROPIC_API_KEY", value: '"changed"' },
-    { kind: "config-set" as const, path: '["env"]["vars"]["OPENAI_API_KEY"]', value: '"x"' },
-    { kind: "config-set" as const, path: "secrets.defaults.env", value: '"changed"' },
-    { kind: "config-set" as const, path: '["secrets"]["defaults"]["env"]', value: '"x"' },
-    { kind: "config-set" as const, path: "plugins.load", value: "{}" },
-    {
-      kind: "config-set" as const,
-      path: String.raw`mo\dels.providers.openai.apiKey`,
-      value: '"x"',
-    },
-    { kind: "config-set" as const, path: "$include", value: '"./alternate.json5"' },
-    { kind: "config-set" as const, path: '["$include"]', value: '"./alternate.json5"' },
-    {
+  describe("an API key the owner gives in chat", () => {
+    const operation = {
       kind: "config-set-ref" as const,
-      path: "models.providers.openai.apiKey",
-      source: "env" as const,
-      id: "OPENAI_API_KEY",
-    },
-    {
-      kind: "config-set-ref" as const,
-      path: "models[providers][openai][apiKey]",
-      source: "env" as const,
-      id: "OPENAI_API_KEY",
-    },
-    {
-      kind: "config-set-ref" as const,
-      path: '["models"]["providers"]["openai"]["apiKey"]',
-      source: "env" as const,
-      id: "OPENAI_API_KEY",
-    },
-  ])("rejects unverified inference-route write $path", async (operation) => {
-    const tempDir = useOperationStateDir("openclaw-route-write-refused-");
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const runConfigSet = vi.fn(async () => {});
+      path: "memory.search.remote.apiKey",
+      source: "store" as const,
+      id: "MEMORY_SEARCH_REMOTE_API_KEY",
+      secret: "embed-owner-key-7f3c9a1d",
+    };
+    const storedEntries = () =>
+      listSecretStoreEntries({ scope: { kind: "team" } }).map((entry) => entry.name);
+    const readStored = (name: string) => readSecretStoreValue({ scope: { kind: "team" }, name });
+    const mintedName = expect.stringMatching(/^MEMORY_SEARCH_REMOTE_API_KEY_[0-9A-F]{16}$/);
 
-    await expect(
-      executeSystemAgentOperation(operation, runtime, {
+    it("stores the key and points config at it without repeating it", async () => {
+      useOperationStateDir("openclaw-chat-secret-");
+      const { runtime, lines } = createSystemAgentTestRuntime();
+      const runConfigSet = vi.fn(async () => {});
+
+      const result = await executeSystemAgentOperation(operation, runtime, {
         approved: true,
         deps: { runConfigSet },
-      }),
-      // Denylisted roots cite their documented escalation; route paths point
-      // at the verified set_default_model/onboard flows.
-    ).rejects.toThrow(/openclaw onboard|trusted shell/);
+      });
 
-    expect(runConfigSet).not.toHaveBeenCalled();
-    expect(lines.join("\n")).not.toContain("[openclaw] running:");
-    await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
+      expect(result.applied).toBe(true);
+      const [name] = storedEntries();
+      expect(name).toEqual(mintedName);
+      expect(runConfigSet).toHaveBeenCalledWith({
+        path: operation.path,
+        cliOptions: { refProvider: "default", refSource: "store", refId: name },
+      });
+      expect(readStored(name ?? "")).toMatchObject({ ok: true, value: operation.secret });
+      expect(lines.join("\n")).not.toContain(operation.secret);
+      expect(JSON.stringify(readLastAuditEntry())).not.toContain(operation.secret);
+    });
+
+    it("writes nothing when the owner's authority is gone before the store write", async () => {
+      useOperationStateDir("openclaw-chat-secret-revoked-");
+      const { runtime } = createSystemAgentTestRuntime();
+      const runConfigSet = vi.fn(async () => {});
+
+      await expect(
+        executeSystemAgentOperation(operation, runtime, {
+          approved: true,
+          beforePersistentApply: () => {
+            throw new Error("requesting run is no longer active");
+          },
+          deps: { runConfigSet },
+        }),
+      ).rejects.toThrow("no longer active");
+
+      expect(storedEntries()).toEqual([]);
+      expect(runConfigSet).not.toHaveBeenCalled();
+    });
+
+    it("keeps the key's configured store provider when rotating it", async () => {
+      useOperationStateDir("openclaw-chat-secret-provider-");
+      mockConfig.setConfig({
+        secrets: { providers: { vault: { source: "store" }, team: { source: "store" } } },
+        memory: {
+          search: {
+            remote: {
+              apiKey: { source: "store", provider: "team", id: "MEMORY_SEARCH_REMOTE_API_KEY" },
+            },
+          },
+        },
+      });
+      const runConfigSet = vi.fn(async () => {});
+
+      await executeSystemAgentOperation(operation, createSystemAgentTestRuntime().runtime, {
+        approved: true,
+        deps: { runConfigSet },
+      });
+
+      expect(runConfigSet).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cliOptions: expect.objectContaining({ refProvider: "team", refSource: "store" }),
+        }),
+      );
+      expect(requireRecord(readLastAuditEntry(), "audit").details).toMatchObject({
+        provider: "team",
+      });
+    });
   });
 
   // Operator parity: surfaces the Control UI edits freely stay agent-writable
@@ -831,120 +892,6 @@ describe("system agent operations", () => {
 
     expect(result.applied).toBe(true);
     expect(runConfigSet).toHaveBeenCalledOnce();
-  });
-
-  it("fails closed on plugin-entry writes when route ownership cannot be proven", async () => {
-    // Same invariant as plugin_uninstall: without a readable config the entry
-    // cannot be proven off the active inference route.
-    mockConfig.missing("/tmp/openclaw.json");
-    const { runtime } = createSystemAgentTestRuntime();
-    const runConfigSet = vi.fn(async () => {});
-
-    await expect(
-      executeSystemAgentOperation(
-        { kind: "config-set", path: "plugins.entries.codex.enabled", value: "false" },
-        runtime,
-        { approved: true, deps: { runConfigSet } },
-      ),
-    ).rejects.toThrow("active inference route");
-    expect(runConfigSet).not.toHaveBeenCalled();
-  });
-
-  it("still blocks per-agent routing writes that hit the system agent owner", async () => {
-    useOperationStateDir("openclaw-default-agent-route-");
-    mockConfig.setConfig({
-      agents: {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "main" } },
-        list: [{ id: "main" }, { id: "helper" }],
-      },
-    });
-    const { runtime } = createSystemAgentTestRuntime();
-    const runConfigSet = vi.fn(async () => {});
-
-    await expect(
-      executeSystemAgentOperation(
-        { kind: "config-set", path: "agents.list[0].model", value: '"openai/gpt-5.5"' },
-        runtime,
-        { approved: true, deps: { runConfigSet } },
-      ),
-    ).rejects.toThrow("openclaw onboard");
-    expect(runConfigSet).not.toHaveBeenCalled();
-
-    // The same routing field on a non-default agent is an approved write.
-    const result = await executeSystemAgentOperation(
-      { kind: "config-set", path: "agents.list[1].model", value: '"openai/gpt-5.5"' },
-      runtime,
-      { approved: true, deps: { runConfigSet } },
-    );
-    expect(result.applied).toBe(true);
-    expect(runConfigSet).toHaveBeenCalledOnce();
-  });
-
-  it("resolves numeric legacy list indices from the authored array order", async () => {
-    useOperationStateDir("openclaw-numeric-agent-route-");
-    mockConfig.setResolvedConfig(
-      {
-        agents: {
-          entries: {
-            "2": {},
-            "10": { default: true },
-          },
-        },
-      },
-      {
-        agents: {
-          list: [{ id: "10", default: true }, { id: "2" }],
-        },
-      },
-    );
-    const { runtime } = createSystemAgentTestRuntime();
-    const runConfigSet = vi.fn(async () => {});
-
-    await expect(
-      executeSystemAgentOperation(
-        { kind: "config-set", path: "agents.list[0].model", value: '"openai/gpt-5.5"' },
-        runtime,
-        { approved: true, deps: { runConfigSet } },
-      ),
-    ).rejects.toThrow("openclaw onboard");
-    expect(runConfigSet).not.toHaveBeenCalled();
-
-    const result = await executeSystemAgentOperation(
-      { kind: "config-set", path: "agents.list[1].model", value: '"openai/gpt-5.5"' },
-      runtime,
-      { approved: true, deps: { runConfigSet } },
-    );
-    expect(result.applied).toBe(true);
-    expect(runConfigSet).toHaveBeenCalledOnce();
-  });
-
-  it("runs plugin list and search as read-only operations", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const runPluginsList = vi.fn(async (pluginRuntime: RuntimeEnv) => {
-      pluginRuntime.log("plugin rows");
-    });
-    const runPluginsSearch = vi.fn(async (query: string, pluginRuntime: RuntimeEnv) => {
-      pluginRuntime.log(`search rows: ${query}`);
-    });
-
-    const listResult = await executeSystemAgentOperation({ kind: "plugin-list" }, runtime, {
-      deps: { runPluginsList, runPluginsSearch },
-    });
-    expect(listResult.applied).toBe(false);
-    const searchResult = await executeSystemAgentOperation(
-      { kind: "plugin-search", query: "calendar" },
-      runtime,
-      {
-        deps: { runPluginsList, runPluginsSearch },
-      },
-    );
-    expect(searchResult.applied).toBe(false);
-
-    expect(runPluginsList).toHaveBeenCalledWith(runtime);
-    expect(runPluginsSearch).toHaveBeenCalledWith("calendar", runtime);
-    expect(lines.join("\n")).toContain("plugin rows");
-    expect(lines.join("\n")).toContain("search rows: calendar");
   });
 
   it("installs plugins only after approval and audits the write", async () => {

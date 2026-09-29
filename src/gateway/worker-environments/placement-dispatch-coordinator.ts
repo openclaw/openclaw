@@ -7,10 +7,9 @@ import type {
 } from "./placement-dispatch-failure.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
-import {
-  WorkerPlacementAdmissionTargetError,
-  type WorkerPlacementDispatchAdmission,
-  type WorkerPlacementCancellationTarget,
+import type {
+  WorkerPlacementDispatchAdmission,
+  WorkerPlacementCancellationTarget,
 } from "./service-contract.js";
 
 function trackPlacementOperation<T extends WorkerDispatchPlacement | void>(
@@ -46,152 +45,88 @@ function trackPlacementOperation<T extends WorkerDispatchPlacement | void>(
   };
 }
 
-/** Serializes reconciliation sweeps against dispatches and deduplicates exact requests. */
+/** Orders placement work per session and deduplicates exact lifecycle requests. */
 export function coordinateWorkerPlacementDispatch(
   service: WorkerPlacementDispatchService,
   admitDispatch: WorkerPlacementDispatchAdmission,
   recoverInitialPlacement?: (placement: WorkerProvisioningDispatchPlacement) => Promise<void>,
+  reportReconciliation?: (operation: () => Promise<void>) => Promise<void>,
 ): WorkerPlacementDispatchService & {
   isPlacementOperationInFlight(sessionId: string): boolean;
+  hasPendingPlacementLifecycleOperation(sessionId: string): boolean;
+  getPendingDeviceDispatchCount(deviceId: string, excludeSessionId?: string): number;
   waitForInitialPlacement(
     this: void,
     placement: WorkerDispatchPlacement,
     signal?: AbortSignal,
   ): Promise<WorkerDispatchPlacement>;
 } {
-  type PlacementFence = { promise: Promise<void>; dispatchCohort: readonly symbol[] };
-  type ReconciliationSweep = PlacementFence & {
-    predecessor: PlacementFence | undefined;
-    full: boolean;
-    acceptingJoins: boolean;
-    joinedRecoveries: Set<Promise<void>>;
-  };
-  const activeDispatches = new Set<symbol>();
-  let placementFence: PlacementFence | undefined;
-  // A sweep can join an environment pass that began before the sweep. Keep its predecessor
-  // separate from the fence tail so recovery waits for older exclusive work, never the sweep
-  // it completes or exclusive work queued behind that sweep.
-  const reconciliationSweeps = new Set<ReconciliationSweep>();
-  const dispatchIdleWaiters = new Set<() => void>();
-  const waitForDispatchIdle = (): Promise<void> => {
-    if (activeDispatches.size === 0) {
-      return Promise.resolve();
+  const sessionTails = new Map<string, Promise<void>>();
+  const reserveSessions = (sessionIds: readonly string[]) => {
+    const keys = [...new Set(sessionIds)];
+    const ready = Promise.all(keys.map((key) => sessionTails.get(key) ?? Promise.resolve())).then(
+      () => undefined,
+    );
+    const settled = createDeferredCore();
+    // Register every key before yielding. Captured predecessors make multi-key admission
+    // acyclic, and cancellation cannot release a predecessor's still-running work.
+    const tail = ready.then(() => settled.promise);
+    for (const key of keys) {
+      sessionTails.set(key, tail);
     }
-    return new Promise<void>((resolve) => {
-      dispatchIdleWaiters.add(resolve);
+    void tail.then(() => {
+      for (const key of keys) {
+        if (sessionTails.get(key) === tail) {
+          sessionTails.delete(key);
+        }
+      }
     });
+    return {
+      ready,
+      hold<T>(operation: Promise<T>): Promise<T> {
+        void operation.then(
+          () => settled.resolve(),
+          () => settled.resolve(),
+        );
+        return operation;
+      },
+    };
   };
+  const recoveryAdmission =
+    (wait: boolean) =>
+    async (sessionIds: readonly string[], run: () => Promise<void>): Promise<boolean> => {
+      if (!wait && sessionIds.some((key) => sessionTails.has(key) || operationsInFlight.has(key))) {
+        return false;
+      }
+      const admission = reserveSessions(sessionIds);
+      // Only recovery units enter here. Environment reconciliation stays outside admission
+      // because its recovery guard can re-enter this session.
+      await admission.hold(
+        (async () => {
+          await admission.ready;
+          await run();
+        })(),
+      );
+      return true;
+    };
+  const tryRecovery = recoveryAdmission(false);
+  const waitRecovery = recoveryAdmission(true);
+  let fullSweep: Promise<void> | undefined;
   const runReconciliation = (operation: () => Promise<void>, full = true): Promise<void> => {
-    const existing = full && [...reconciliationSweeps].find((sweep) => sweep.full);
-    if (existing) {
-      return existing.promise;
+    if (full && fullSweep) {
+      return fullSweep;
     }
-    const predecessor = placementFence;
-    const sweep: ReconciliationSweep = {
-      predecessor,
-      dispatchCohort: predecessor?.dispatchCohort ?? [...activeDispatches],
-      full,
-      promise: Promise.resolve(),
-      acceptingJoins: true,
-      joinedRecoveries: new Set(),
-    };
-    const current = (async () => {
-      try {
-        if (predecessor) {
-          await predecessor.promise.catch(() => undefined);
+    const current = reportReconciliation ? reportReconciliation(operation) : operation();
+    if (full) {
+      fullSweep = current;
+      const release = () => {
+        if (fullSweep === current) {
+          fullSweep = undefined;
         }
-        await waitForDispatchIdle();
-        await operation();
-      } finally {
-        // Close admission before draining so late recoveries queue behind the existing fence.
-        sweep.acceptingJoins = false;
-        await Promise.allSettled(sweep.joinedRecoveries);
-        reconciliationSweeps.delete(sweep);
-        if (placementFence === sweep) {
-          placementFence = undefined;
-        }
-      }
-    })();
-    sweep.promise = current;
-    reconciliationSweeps.add(sweep);
-    placementFence = sweep;
+      };
+      void current.then(release, release);
+    }
     return current;
-  };
-  const runExclusivePlacementOperation = <T>(
-    operation: () => Promise<T>,
-    options: {
-      signal?: AbortSignal;
-      joinsActiveDispatch?: boolean;
-      waitForActiveDispatches?: boolean;
-    } = {},
-  ): Promise<T> => {
-    const { signal } = options;
-    const predecessor = placementFence;
-    const predecessorSettled = predecessor?.promise.catch(() => undefined);
-    const ready = (async () => {
-      if (predecessorSettled) {
-        await predecessorSettled;
-      }
-      await waitForDispatchIdle();
-    })();
-    const current = (async () => {
-      await racePromiseWithAbortSignal(
-        options.waitForActiveDispatches === false
-          ? (predecessorSettled ?? Promise.resolve())
-          : ready,
-        signal,
-      );
-      signal?.throwIfAborted();
-      return await operation();
-    })();
-    // Reclaim or cancellation can finish before older dispatches. Keep their idle
-    // wait in the fence so later requests still cannot overtake unfinished work.
-    const barrier = Promise.allSettled([ready, current]).then(() => undefined);
-    const exclusive: PlacementFence = {
-      promise: barrier,
-      dispatchCohort: options.joinsActiveDispatch
-        ? (predecessor?.dispatchCohort ?? [...activeDispatches])
-        : [],
-    };
-    placementFence = exclusive;
-    void barrier.then(() => {
-      if (placementFence === exclusive) {
-        placementFence = undefined;
-      }
-    });
-    return current;
-  };
-  const runPlacementOperation = async <T>(
-    operation: () => Promise<T>,
-    signal?: AbortSignal,
-  ): Promise<T> => {
-    for (;;) {
-      signal?.throwIfAborted();
-      const pendingFence = placementFence;
-      // Only the original dispatch cohort keeps maintenance admission open. Later joins
-      // cannot extend it indefinitely, and hard predecessors carry an empty cohort.
-      if (!pendingFence || pendingFence.dispatchCohort.some((id) => activeDispatches.has(id))) {
-        break;
-      }
-      await racePromiseWithAbortSignal(
-        pendingFence.promise.catch(() => undefined),
-        signal,
-      );
-    }
-    const operationId = Symbol("dispatch");
-    activeDispatches.add(operationId);
-    try {
-      return await operation();
-    } finally {
-      activeDispatches.delete(operationId);
-      if (activeDispatches.size === 0) {
-        const waiters = [...dispatchIdleWaiters];
-        dispatchIdleWaiters.clear();
-        for (const resolve of waiters) {
-          resolve();
-        }
-      }
-    }
   };
   type OperationServices = Pick<WorkerPlacementDispatchService, "dispatch" | "move" | "reclaim"> & {
     recovery: WorkerPlacementDispatchService["resumeProvisioning"];
@@ -239,6 +174,26 @@ export function coordinateWorkerPlacementDispatch(
   };
   return {
     isPlacementOperationInFlight: (sessionId) => operationsInFlight.has(sessionId),
+    hasPendingPlacementLifecycleOperation: (sessionId) =>
+      pendingOperations(sessionId).some((operation) => operation.kind !== "recovery"),
+    getPendingDeviceDispatchCount(deviceId, excludeSessionId) {
+      let count = 0;
+      for (const [sessionId, operations] of operationsInFlight) {
+        if (sessionId === excludeSessionId) {
+          continue;
+        }
+        for (const operation of operations) {
+          if (
+            operation.kind === "dispatch" &&
+            operation.request.executionMode === "worker-turn" &&
+            operation.request.deviceId === deviceId
+          ) {
+            count += 1;
+          }
+        }
+      }
+      return count;
+    },
     async waitForInitialPlacement(placement, signal) {
       signal?.throwIfAborted();
       const pending = pendingOperations(placement.sessionId);
@@ -333,8 +288,7 @@ export function coordinateWorkerPlacementDispatch(
           callerSignal,
         );
       }
-      // Capture predecessors before admission yields. A later Stop awaits this operation
-      // and must never become a predecessor of the dispatch it is cancelling.
+      // Capture only earlier Stops. A later Stop must drain this dispatch, not precede it.
       const predecessors = pendingOperations(request.sessionId).filter(
         (pending) => pending.kind === "reclaim",
       );
@@ -345,11 +299,17 @@ export function coordinateWorkerPlacementDispatch(
         );
         return await admitDispatch(
           request,
-          (signal) =>
-            runPlacementOperation(
-              () => service.dispatch(request, report, authorize, signal),
-              signal,
-            ),
+          (signal) => {
+            signal?.throwIfAborted();
+            const admission = reserveSessions([request.sessionId]);
+            return admission.hold(
+              (async () => {
+                await racePromiseWithAbortSignal(admission.ready, signal);
+                signal?.throwIfAborted();
+                return await service.dispatch(request, report, authorize, signal);
+              })(),
+            );
+          },
           authorize,
           callerSignal,
         );
@@ -358,10 +318,42 @@ export function coordinateWorkerPlacementDispatch(
       registerOperation({ kind: "dispatch", request, ...tracked });
       return await operation;
     },
-    forceDestroyEnvironment: (environmentId, onCleanupError) =>
-      runExclusivePlacementOperation(() =>
-        service.forceDestroyEnvironment(environmentId, onCleanupError),
-      ),
+    forceDestroyEnvironment: async (environmentId, onCleanupError) => {
+      const knownSessionIds = new Set(service.getEnvironmentAttachedSessionIds(environmentId));
+      for (const [sessionId, operations] of operationsInFlight) {
+        if (
+          [...operations].some(
+            (operation) => operation.currentPlacement()?.environmentId === environmentId,
+          )
+        ) {
+          knownSessionIds.add(sessionId);
+        }
+      }
+      const admission = reserveSessions([...knownSessionIds]);
+      return await admission.hold(
+        (async () => {
+          const sessionIds = await service.readEnvironmentSessionIds(environmentId);
+          // Durable-only owners had no attachment or live operation here at call time.
+          // Skip busy owners: intervening lifecycle writes are CAS-guarded and environment
+          // effects use environment/workspace locks; overlapping destroys are ordered by
+          // a shared phase-1 key. Waiting here while holding phase 1 can deadlock on growth.
+          const durableAdmission = reserveSessions(
+            sessionIds.filter(
+              (sessionId) =>
+                !knownSessionIds.has(sessionId) &&
+                !sessionTails.has(sessionId) &&
+                !operationsInFlight.has(sessionId),
+            ),
+          );
+          return await durableAdmission.hold(
+            (async () => {
+              await admission.ready;
+              return await service.forceDestroyEnvironment(environmentId, onCleanupError);
+            })(),
+          );
+        })(),
+      );
+    },
     move: async (request, onTransition, authorize) => {
       const inFlight = pendingOperations(request.sessionId).find(
         (pending) => pending.kind === "move",
@@ -379,10 +371,17 @@ export function coordinateWorkerPlacementDispatch(
         await Promise.allSettled(predecessors.map((pending) => pending.operation));
         return await admitDispatch(
           request,
-          (signal) =>
-            runExclusivePlacementOperation(() => service.move(request, report, authorize, signal), {
-              signal,
-            }),
+          (signal) => {
+            signal?.throwIfAborted();
+            const admission = reserveSessions([request.sessionId]);
+            return admission.hold(
+              (async () => {
+                await racePromiseWithAbortSignal(admission.ready, signal);
+                signal?.throwIfAborted();
+                return await service.move(request, report, authorize, signal);
+              })(),
+            );
+          },
           authorize,
         );
       }, onTransition);
@@ -391,9 +390,8 @@ export function coordinateWorkerPlacementDispatch(
       return await operation;
     },
     reclaim: async (request, authorize, beforeDrain) => {
-      // Cancellation may need coordinated recovery. Reserve exclusivity only after it drains.
-      // Retain only predecessors: later dispatches wait for these Stops and cannot become
-      // work a Stop awaits. Each caller still revalidates its own lifecycle and authority.
+      // Preparation can need targeted recovery to release a turn claim. Enqueue only
+      // entered cleanup; lifecycle tracking keeps later dispatches and Moves behind Stop.
       const operations = pendingOperations(request.sessionId).filter(
         (operation) =>
           operation.request.sessionKey === request.sessionKey &&
@@ -419,8 +417,15 @@ export function coordinateWorkerPlacementDispatch(
           request,
           authorize,
           beforeDrain,
-          // Preparation has settled this session's work; unrelated dispatches need not delay Stop.
-          (run) => runExclusivePlacementOperation(run, { waitForActiveDispatches: false }),
+          (run) => {
+            const admission = reserveSessions([request.sessionId]);
+            return admission.hold(
+              (async () => {
+                await admission.ready;
+                return await run();
+              })(),
+            );
+          },
           operations.length
             ? {
                 isCurrent: isPending,
@@ -437,11 +442,14 @@ export function coordinateWorkerPlacementDispatch(
       registerOperation({ kind: "reclaim", request, ...tracked });
       return await operation;
     },
-    reconcile: (mode) => runReconciliation(() => service.reconcile(mode)),
+    getEnvironmentAttachedSessionIds: (environmentId) =>
+      service.getEnvironmentAttachedSessionIds(environmentId),
+    readEnvironmentSessionIds: (environmentId) => service.readEnvironmentSessionIds(environmentId),
+    reconcile: (mode) => runReconciliation(() => service.reconcile(mode, tryRecovery)),
     reconcileActive: (environmentId) =>
       environmentId === undefined
-        ? runReconciliation(() => service.reconcileActive())
-        : runReconciliation(() => service.reconcileActive(environmentId), false),
+        ? runReconciliation(() => service.reconcileActive(undefined, tryRecovery))
+        : runReconciliation(() => service.reconcileActive(environmentId, waitRecovery), false),
     resumeProvisioning: (placement, reconcileEnvironmentCore) => {
       const inFlight = pendingOperations(placement.sessionId).find(
         (pending) => pending.kind === "recovery" && isDeepStrictEqual(pending.request, placement),
@@ -451,40 +459,15 @@ export function coordinateWorkerPlacementDispatch(
         // Reuse that pass until it settles; a later sweep can then resume the same owner.
         return inFlight.foreground;
       }
-      // Insertion order matters: a later queued sweep must not steal a provisioning join
-      // from the earlier sweep already awaiting that environment pass.
-      const sweep = [...reconciliationSweeps].find((candidate) => candidate.acceptingJoins);
-      const ready = createDeferredCore();
+      const admission = reserveSessions([placement.sessionId]);
       const foreground =
         createDeferredCore<
           Awaited<ReturnType<WorkerPlacementDispatchService["resumeProvisioning"]>>
         >();
       let providerSettlement = Promise.resolve();
       let providerPending = false;
-      // Reserve the queue in this stack, before admission can yield to a newer sweep.
-      // Only foreground recovery holds that fence; a timed-out provider retains admission.
-      const recover = async () => {
-        ready.resolve();
-        await foreground.promise;
-      };
-      let queued: Promise<void>;
-      if (sweep) {
-        queued = (async () => {
-          if (sweep.predecessor) {
-            await sweep.predecessor.promise.catch(() => undefined);
-          }
-          // Recovery waits for every admitted dispatch and older exclusive operation,
-          // including later dispatches admitted while the original cohort was active.
-          await waitForDispatchIdle();
-          await recover();
-        })();
-        sweep.joinedRecoveries.add(queued);
-      } else {
-        queued = runExclusivePlacementOperation(recover, { joinsActiveDispatch: true });
-      }
-      void queued.catch(ready.reject);
       const tracked = trackPlacementOperation(async (report) => {
-        // Recovery joins its captured sweep, never a later Stop which awaits that sweep.
+        await admission.ready;
         return await service.resumeProvisioning(
           placement,
           async (signal) => {
@@ -503,7 +486,6 @@ export function coordinateWorkerPlacementDispatch(
           (runRecovery) =>
             admitDispatch(placement, async (signal) => {
               try {
-                await racePromiseWithAbortSignal(ready.promise, signal);
                 signal?.throwIfAborted();
                 const recovered = await runRecovery(signal);
                 if (providerPending) {
@@ -516,19 +498,13 @@ export function coordinateWorkerPlacementDispatch(
                 }
                 throw error;
               } finally {
-                // Caller timeouts finish the sweep, not the real provider or its Stop owner.
+                // Foreground timeout does not release this session's provider ownership.
                 await providerSettlement;
               }
-            }).catch(async (error: unknown) => {
-              if (error instanceof WorkerPlacementAdmissionTargetError) {
-                // The failed reservation is released. Cleanup still follows its captured
-                // predecessor, never a later Stop or the sweep that this recovery joins.
-                await ready.promise;
-              }
-              throw error;
             }),
         );
       });
+      void admission.hold(tracked.operation);
       registerOperation({
         kind: "recovery",
         request: placement,

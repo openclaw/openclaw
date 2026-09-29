@@ -14,7 +14,7 @@ type Run = NonNullable<UpdateCommandOptions["run"]>;
 // inherited diagnostic row, or a recovered process identity cannot populate it.
 const admissions = new WeakMap<
   Run,
-  { record: UpdateRunRecord; env: NodeJS.ProcessEnv; dev: number; ino: number }
+  { record: UpdateRunRecord; env: NodeJS.ProcessEnv; dev: number; ino: number; active?: true }
 >();
 
 export function admitMutableUpdateSignalRun(run: Run, record: UpdateRunRecord): void {
@@ -26,16 +26,20 @@ export function admitMutableUpdateSignalRun(run: Run, record: UpdateRunRecord): 
   admissions.set(run, { record, env, dev: file.dev, ino: file.ino });
 }
 
+export function retireMutableUpdateSignalRun(run: Run): void {
+  admissions.delete(run);
+}
+
 export async function withMutableUpdateSignals<T>(
   opts: UpdateCommandOptions,
   operation: () => Promise<T>,
 ): Promise<T> {
   const run = opts.run;
   const admission = !opts.dryRun && run ? admissions.get(run) : undefined;
-  if (!run || !admission) {
+  if (!run || !admission || admission.active) {
     return await operation();
   }
-  admissions.delete(run);
+  admission.active = true;
   const { env } = admission;
   const pathname = resolveOpenClawStateSqlitePath(env);
   const assertCurrent = () => {
@@ -50,6 +54,7 @@ export async function withMutableUpdateSignals<T>(
   };
   const settle = () => {
     if (
+      admissions.get(run) !== admission ||
       process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" ||
       process.env.OPENCLAW_UPDATE_POST_CORE === "1" ||
       !run.executorFence
@@ -97,6 +102,7 @@ export async function withMutableUpdateSignals<T>(
   try {
     return await operation();
   } finally {
+    retireMutableUpdateSignalRun(run);
     await shutdown;
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);

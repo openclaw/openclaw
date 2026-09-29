@@ -55,20 +55,36 @@ Gateway startup and config, plugin, or auth publication build one prepared model
 
 Standalone embedded runtimes publish the same snapshot shape at their activation boundary. A failed or stale generation is never served alongside a newer partial generation. The lifecycle owner must publish a complete replacement first.
 
+Runtime selections resolve in the requesting agent's scope before becoming owner keys. Lease admission carries that prepared choice forward and reads the exact owner's snapshot. Retries must observe a changed owner or publication gate; unchanged publication state fails with a retryable error instead of blocking the Gateway event loop.
+
 ## Compute workers
 
-Code-mode execution and compaction planning use the reusable `WorkerTaskPool`.
+Code-mode execution, compaction planning, and file-tool planning use the reusable `WorkerTaskPool`.
 Their pools share a CPU admission limit of `max(1, availableParallelism() - 1)`
 within the calling isolate, reserving a CPU where possible for the Gateway. Ordered
 database and model-generation workers keep their existing independent limits.
+
+File-tool workers perform pure edit matching, Unicode normalization, and diff
+computation. One prepared patch supplies both display and unified-patch receipts,
+including previews. The file-tool caller keeps the mutation queue, filesystem
+access, persisted-byte verification, and authority checks; it revalidates authority
+and cancellation after planning before changing files. Write receipts retain their
+existing size and edit-distance limits.
+The shared runtime-process registry resolves the planning worker in both the
+installed package and the sealed portable-worker bundle.
 
 Admission includes queued, preparing, and running tasks. Each pool defaults to
 128 pending tasks and 256 MiB of producer-reported retained input; compute pools
 also share those pending limits. Producers supply known input sizes without an
 extra serialization pass. This bounds reported input retention, not total worker
 heap usage. Excess work fails with `WorkerTaskError.code = "overloaded"`.
-Cancellation retains the execution permit until the worker stops, and retains
-the input reservation until any asynchronous preparation settles.
+Cancellation retains the execution permit and input reservation until both the
+worker stops and asynchronous input preparation settles. If the initial stop
+succeeds, result rejection follows its execution receipt without waiting for
+preparation. A failed stop can reject earlier while retaining native custody and
+the pending receipt for retry. Successful pool closure joins the remaining
+preparation and input cleanup; graceful rotation can finish before canceled
+preparation settles.
 
 Waiting compute pools request checkpoints from code-mode host exchanges so that
 nested work can progress. Idle workers release CPU admission and retire after

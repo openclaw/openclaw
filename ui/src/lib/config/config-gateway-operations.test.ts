@@ -1,10 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
-  deferred,
   createGatewayHarness,
   createConfigServerMock,
   createConfigCapabilityHarness,
@@ -113,7 +113,7 @@ describe("config gateway operations", () => {
 
     // The Reload affordance discards the local draft and re-syncs from disk.
     rejectSet = false;
-    await runtimeConfig.refresh({ discardPendingChanges: true });
+    await runtimeConfig.discardDraft({ reloadOnly: true });
     expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
     expect(runtimeConfig.state.configFormDirty).toBe(false);
 
@@ -460,7 +460,7 @@ describe("config gateway operations", () => {
     expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-2");
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
     expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
-    runtimeConfig.resetDraft();
+    runtimeConfig.setWritesSuspended(true);
     runtimeConfig.dispose();
   });
 

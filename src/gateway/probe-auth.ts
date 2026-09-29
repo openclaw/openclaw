@@ -2,6 +2,11 @@
 // Adapts gateway credential precedence for local/remote reachability checks.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  describeSecretResolutionOperatorDiagnostic,
+  describeSecretResolutionOperatorRecovery,
+  isSecretResolutionError,
+} from "../secrets/resolve-errors.js";
 import { resolveGatewayProbeSurfaceAuth } from "./auth-surface-resolution.js";
 import { createGatewayCredentialPlan } from "./credential-planner.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
@@ -9,8 +14,10 @@ import {
   type ExplicitGatewayAuth,
   type GatewayCredentialPrecedence,
   isGatewaySecretRefUnavailableError,
+  resolveExplicitGatewayAuth,
   resolveGatewayProbeCredentialsFromConfig,
 } from "./credentials.js";
+import { getTrustedProxyPasswordRedactionWarning } from "./known-weak-gateway-secrets.js";
 export { resolveGatewayProbeTarget } from "./probe-target.js";
 export type { GatewayProbeTargetResolution } from "./probe-target.js";
 
@@ -80,15 +87,6 @@ export function resolveGatewayProbeCredentialConfig(params: {
   };
 }
 
-function resolveExplicitProbeAuth(explicitAuth?: ExplicitGatewayAuth): {
-  token?: string;
-  password?: string;
-} {
-  const token = normalizeOptionalString(explicitAuth?.token);
-  const password = normalizeOptionalString(explicitAuth?.password);
-  return { token, password };
-}
-
 function hasExplicitProbeAuth(auth: { token?: string; password?: string }): boolean {
   return Boolean(auth.token || auth.password);
 }
@@ -121,9 +119,10 @@ async function resolveGatewayProbeAuthResolutionWithSecretInputs(
 ): Promise<{
   auth: { token?: string; password?: string };
   warning?: string;
+  warningCode?: "SECRET_REF_REDACTED_VALUE";
 }> {
   const policy = buildGatewayProbeCredentialPolicy(params);
-  const explicitAuth = resolveExplicitProbeAuth(params.explicitAuth);
+  const explicitAuth = resolveExplicitGatewayAuth(params.explicitAuth);
   if (
     (params.mode === "remote" || policy.activeLocalRef) &&
     !hasExplicitProbeAuth(explicitAuth) &&
@@ -145,6 +144,7 @@ async function resolveGatewayProbeAuthResolutionWithSecretInputs(
             ? { token: resolved.token, password: resolved.password }
             : {},
         warning,
+        ...(resolved.warningCode ? { warningCode: resolved.warningCode } : {}),
       };
     }
     return {
@@ -177,8 +177,9 @@ export async function resolveGatewayProbeAuthSafeWithSecretInputs(
 ): Promise<{
   auth: { token?: string; password?: string };
   warning?: string;
+  warningCode?: "SECRET_REF_REDACTED_VALUE";
 }> {
-  const explicitAuth = resolveExplicitProbeAuth(params.explicitAuth);
+  const explicitAuth = resolveExplicitGatewayAuth(params.explicitAuth);
   if (hasExplicitProbeAuth(explicitAuth)) {
     return {
       auth: explicitAuth,
@@ -186,8 +187,30 @@ export async function resolveGatewayProbeAuthSafeWithSecretInputs(
   }
 
   try {
-    return await resolveGatewayProbeAuthResolutionWithSecretInputs(params);
+    const resolution = await resolveGatewayProbeAuthResolutionWithSecretInputs(params);
+    if (params.mode === "local" && params.cfg.gateway?.auth?.mode === "trusted-proxy") {
+      const warning = getTrustedProxyPasswordRedactionWarning({
+        mode: "trusted-proxy",
+        password: resolution.auth.password,
+      });
+      if (warning) {
+        return { auth: {}, warning, warningCode: "SECRET_REF_REDACTED_VALUE" };
+      }
+    }
+    return resolution;
   } catch (error) {
+    if (isSecretResolutionError(error) && error.code === "SECRET_REF_REDACTED_VALUE") {
+      return {
+        auth: {},
+        warning: [
+          describeSecretResolutionOperatorDiagnostic(error),
+          describeSecretResolutionOperatorRecovery(error),
+        ]
+          .filter(Boolean)
+          .join(". "),
+        warningCode: error.code,
+      };
+    }
     return {
       auth: {},
       warning: resolveGatewayProbeWarning(error),
@@ -207,7 +230,7 @@ export function resolveGatewayProbeAuthSafe(params: {
   auth: { token?: string; password?: string };
   warning?: string;
 } {
-  const explicitAuth = resolveExplicitProbeAuth(params.explicitAuth);
+  const explicitAuth = resolveExplicitGatewayAuth(params.explicitAuth);
   if (hasExplicitProbeAuth(explicitAuth)) {
     return {
       auth: explicitAuth,

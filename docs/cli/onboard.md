@@ -129,6 +129,12 @@ choice persists as `wizard.accessMode`. With discovery allowed, onboarding
 detects AI access already available through configured models, API-key
 environment variables, and supported local CLIs. Detection only presents choices;
 it does not run live inference, install plugins, choose a model, or persist credentials.
+A provider marked **Setup and utility**, such as Apple Foundation Models, is
+verified and saved as `utilityModel` without replacing the primary model. On a
+fresh installation, it powers the OpenClaw setup assistant; choose a separate
+primary model before opening regular agent chat. Existing primary models and
+credentials remain unchanged when you add a utility model.
+
 Choose a detected connection or any supported provider in the shared picker.
 The selected connection runs a real completion. If it fails, the error is shown
 and the picker waits for your next choice. Cancellation stops the attempt without
@@ -148,7 +154,13 @@ baseline setup resumes under its existing onboarding owner.
 In guided mode, `--workspace <dir>` supplies OpenClaw's proposed workspace
 and the isolated inference context. It is not persisted until you approve the
 OpenClaw setup proposal. Classic and noninteractive onboarding persist their
-workspace through their normal setup flow. On a rerun with an existing agent
+workspace through their normal setup flow. A workspace must be a directory or
+a new path beneath directories; a file, non-directory ancestor, dangling
+symbolic link, or symlink loop is rejected before setup or reset, with the
+failing path named. Other inspection failures, such as permission errors, are
+reported rather than treated as missing directories.
+Symbolic links to existing directories, including new paths beneath them, are
+allowed. On a rerun with an existing agent
 roster, onboarding preserves the configured fleet workspace: the classic
 wizard shows both paths and requires explicit confirmation before moving it,
 while non-interactive setup warns and keeps the current value.
@@ -182,7 +194,9 @@ loopback Gateway, and waits up to five minutes. A successful connection
 continues in the browser; an unreachable Gateway or a timeout falls back to the
 same terminal hatch as before. Pass `--tui` to skip the browser handoff and
 force that terminal hatch.
-If applying setup fails, onboarding falls back to the conversational OpenClaw
+If applying setup fails after inference succeeds, the status identifies workspace,
+Gateway, or general setup failure rather than an AI check failure. The detailed
+error keeps its recovery guidance, and onboarding falls back to the conversational OpenClaw
 chat to finish interactively. Channels, agents,
 plugins, and other optional features remain OpenClaw chat territory: run
 `openclaw` and use `open channel wizard for <channel>` to hand channel
@@ -252,6 +266,11 @@ Interactive classic setup performs reset before showing its risk
 acknowledgement, so invoking `--reset` can move state to Trash before you can
 decline that prompt. After reset, the command runs guided, classic, or
 non-interactive onboarding according to the other flags.
+
+Session reset permanently removes canonical SQLite history and its owned archive
+files through the same cleanup as [`openclaw reset`](/cli/reset). It preserves
+auth profiles and unrelated database state. Stop any running Gateway first;
+onboarding refuses session cleanup while another process owns the state directory.
 
 ## Locale
 
@@ -388,7 +407,7 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 
 - Unless you pass `--skip-health`, onboarding waits for a reachable local gateway before exiting successfully.
 - `--install-daemon` starts the managed gateway install path first. With no daemon flag, a local gateway must already be running (for example `openclaw gateway run`).
-- Explicit `--skip-daemon` or `--no-install-daemon` still probes for an existing gateway. If none is listening, setup reports that the gateway was not started and exits successfully; a reachable but unhealthy gateway still fails the health check.
+- Explicit `--skip-daemon` or `--no-install-daemon` performs one reachability probe without waiting for Gateway startup. If none is listening, setup reports that the gateway was not started and exits successfully; a reachable but unhealthy gateway still fails the health check.
 - `--skip-health` skips the wait if you only want config/workspace/bootstrap writes in automation.
 - `--skip-bootstrap` sets `agents.defaults.skipBootstrap: true` and skips creating `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, and `BOOTSTRAP.md`.
 - On native Windows, `--install-daemon` tries Scheduled Tasks first and falls back to a per-user Startup-folder login item if task creation is denied.

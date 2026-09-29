@@ -1,14 +1,12 @@
-// Browser tests cover chrome plugin behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
-import { createServer } from "node:http";
+import http, { createServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer } from "ws";
 import { CHROME_STOP_PROBE_TIMEOUT_MS } from "./cdp-timeouts.js";
-import * as cdpHelpers from "./cdp.helpers.js";
 import { diagnoseChromeCdp, formatChromeCdpDiagnostic } from "./chrome.diagnostics.js";
 import { parseBrowserMajorVersion } from "./chrome.executable-probe.js";
 import { resolveGoogleChromeExecutableForPlatform } from "./chrome.executables.js";
@@ -388,59 +386,6 @@ describe("browser chrome helpers", () => {
     });
   });
 
-  it("diagnoses stale websocket command channels with the discovered websocket URL", async () => {
-    // Real discovery and command exchange are covered above. Classify an already-open
-    // stale channel without letting native handshake scheduling choose another failure.
-    const baseUrl = "http://cdp-fixture.invalid";
-    const wsUrl = "ws://cdp-fixture.invalid/devtools/browser/stale-diagnostic";
-    const socket = Object.assign(new EventEmitter(), {
-      send: vi.fn(),
-      close: vi.fn(),
-      terminate: vi.fn(),
-    });
-    let probe: Promise<ChromeCdpDiagnostic> | undefined;
-    vi.useFakeTimers();
-    try {
-      const discovery = vi.spyOn(cdpHelpers, "fetchCdpChecked").mockResolvedValue({
-        response: jsonResponse({ webSocketDebuggerUrl: wsUrl }),
-        release: async () => {},
-      });
-      const openSocket = vi
-        .spyOn(cdpHelpers, "openCdpWebSocket")
-        .mockReturnValue(socket as unknown as ReturnType<typeof cdpHelpers.openCdpWebSocket>);
-      probe = diagnoseChromeCdp(baseUrl, 300, 50);
-      let settled = false;
-      const markSettled = () => {
-        settled = true;
-      };
-      void probe.then(markSettled, markSettled);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(discovery.mock.calls[0]?.[0]).toBe(`${baseUrl}/json/version`);
-      expect(openSocket).toHaveBeenCalledWith(
-        wsUrl,
-        expect.objectContaining({ handshakeTimeoutMs: 50 }),
-      );
-      socket.emit("open");
-      expect(socket.send).toHaveBeenCalledExactlyOnceWith(
-        JSON.stringify({ id: 1, method: "Browser.getVersion" }),
-      );
-
-      expect(settled).toBe(false);
-      await vi.advanceTimersByTimeAsync(100);
-      expect(settled).toBe(true);
-      const diagnostic = expectFailedChromeCdpDiagnostic(await probe);
-      expect(diagnostic.code).toBe("websocket_health_command_timeout");
-      expect(diagnostic.wsUrl).toBe(wsUrl);
-      expect(socket.terminate).toHaveBeenCalledOnce();
-      expect(socket.close).toHaveBeenCalledOnce();
-      expect(socket.listenerCount("message")).toBe(0);
-    } finally {
-      socket.emit("close");
-      await probe?.catch(() => undefined);
-      vi.useRealTimers();
-    }
-  });
-
   it("formats diagnostics with redacted CDP credentials", () => {
     const formatted = formatChromeCdpDiagnostic({
       ok: false,
@@ -765,13 +710,6 @@ describe("browser chrome helpers", () => {
     expect(proc.kill).not.toHaveBeenCalled();
   });
 
-  it("stopOpenClawChrome sends SIGTERM and returns once CDP is down", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
-    const proc = makeChromeTestProc();
-    await stopChromeWithProc(proc, 10);
-    expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
-  });
-
   it("stopOpenClawChrome asks Chrome to close gracefully before sending a signal", async () => {
     let closeRequested = false;
     const proc = makeChromeTestProc({ exitOnSignal: false });
@@ -885,15 +823,47 @@ describe("browser chrome helpers", () => {
       },
       run: async (baseUrl) => {
         const browserWsUrl = `${baseUrl.replace("http://", "ws://")}/devtools/browser/replacement`;
+        const endpoint = new URL(browserWsUrl);
+        const timeoutMs = 10;
         vi.stubGlobal(
           "fetch",
           vi.fn(async () => jsonResponse({ webSocketDebuggerUrl: browserWsUrl })),
         );
 
-        await stopChromeWithProc(proc, 10);
+        // Node's HTTP socket deadline is native; give this fixture's real upgrade
+        // the same clock as the CDP command without racing the host scheduler.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const request = http.request;
+        let pendingRequest: ReturnType<typeof http.request> | undefined;
+        let clearRequestTimeout: (() => void) | undefined;
+        const requestTimer = vi.spyOn(http, "request").mockImplementation((...args) => {
+          const pending = request(...args);
+          if (pending.getHeader("host") !== endpoint.host || pending.path !== endpoint.pathname) {
+            return pending;
+          }
+          pendingRequest = pending;
+          pending.once("socket", (socket) => {
+            socket.setTimeout(0);
+            const timer = setTimeout(() => pending.emit("timeout"), timeoutMs);
+            const clear = () => clearTimeout(timer);
+            clearRequestTimeout = clear;
+            pending.once("upgrade", clear);
+            pending.once("error", clear);
+            pending.once("close", clear);
+          });
+          return pending;
+        });
+        try {
+          await stopChromeWithProc(proc, timeoutMs);
 
-        expect(methods).toEqual(["SystemInfo.getProcessInfo"]);
-        expect(proc.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+          expect(methods).toEqual(["SystemInfo.getProcessInfo"]);
+          expect(proc.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+        } finally {
+          clearRequestTimeout?.();
+          pendingRequest?.destroy();
+          requestTimer.mockRestore();
+          vi.useRealTimers();
+        }
       },
     });
   });

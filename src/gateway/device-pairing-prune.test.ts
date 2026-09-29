@@ -12,7 +12,7 @@ import {
   requestDevicePairing,
 } from "../infra/device-pairing.js";
 import { loadApnsRegistration, registerApnsRegistration } from "../infra/push-apns.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "./device-pairing-prune.js";
@@ -140,7 +140,7 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
 
   afterAll(async () => {
     for (const stateDir of pairingStateDirs) {
-      closeOpenClawStateDatabaseByPath(
+      await closeOpenClawStateDatabaseByPathAsync(
         resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: stateDir }),
       );
     }

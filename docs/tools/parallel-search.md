@@ -17,7 +17,8 @@ built for AI agents:
 | Parallel Search        | `parallel`      | `PARALLEL_API_KEY` -- paid Search API, higher rate limits and objective tuning             |
 
 Set `tools.web.search.provider` to `parallel-free` or `parallel` to select
-one explicitly; neither is auto-detected.
+one explicitly. Paid Parallel can also be auto-detected from its API key;
+Parallel Search (Free) must be selected explicitly.
 
 <Note>
   Direct OpenAI Responses models (`api: "openai-responses"`, provider
@@ -32,8 +33,10 @@ one explicitly; neither is auto-detected.
 
 ```bash
 openclaw plugins install @openclaw/parallel-plugin
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## API key (paid provider)
 

@@ -11,6 +11,40 @@ function requireIssue<T extends { path: string }>(issues: T[], path: string): T 
 }
 
 describe("config validation allowed-values metadata", () => {
+  it.each([
+    { path: "talk.agentId", config: { talk: { agentId: 'expected one of "bogus"' } } },
+    {
+      path: "bindings.0.agentId",
+      config: {
+        agents: { entries: { main: {} } },
+        bindings: [{ agentId: 'expected one of "bogus"', match: { channel: "discord" } }],
+      },
+    },
+    {
+      path: "broadcast.discord:qa.0",
+      config: {
+        agents: { entries: { main: {} } },
+        broadcast: { "discord:qa": ['expected one of "bogus"'] },
+      },
+    },
+    {
+      path: "talk.provider",
+      config: { talk: { provider: 'expected one of "bogus"', providers: { qa: {} } } },
+    },
+  ])("does not infer allowed values from user text at $path", ({ path, config }) => {
+    const original = structuredClone(config);
+    const result = validateConfigObjectRaw(config);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = requireIssue(result.issues, path);
+      expect(issue.message).toContain('expected one of "bogus"');
+      expect(issue.allowedValues).toBeUndefined();
+      expect(issue.allowedValuesHiddenCount).toBeUndefined();
+    }
+    expect(config).toEqual(original);
+  });
+
   it("accepts extended-stable as an additive update channel", () => {
     expect(
       validateConfigObjectRaw({

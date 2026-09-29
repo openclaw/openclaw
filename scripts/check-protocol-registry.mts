@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
+using parser = createNativeTypeScriptParser({ cwd: repoRoot });
 const failures: string[] = [];
 const read = (relativePath: string) => fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
 const check = (condition: unknown, message: string) => {
@@ -10,8 +12,7 @@ const check = (condition: unknown, message: string) => {
     failures.push(message);
   }
 };
-const parse = (relativePath: string) =>
-  ts.createSourceFile(relativePath, read(relativePath), ts.ScriptTarget.Latest, true);
+const parse = (relativePath: string) => parser.parseSourceFile(relativePath, read(relativePath));
 const selectionPath = "packages/gateway-protocol/src/schema/protocol-schema-selection.ts";
 const selection = parse(selectionPath);
 const exclusionDeclaration = selection.statements
@@ -126,7 +127,8 @@ check(
   parse(typesPath).statements.every(
     (statement) =>
       ts.isTypeAliasDeclaration(statement) ||
-      (ts.isImportDeclaration(statement) && statement.importClause?.isTypeOnly),
+      (ts.isImportDeclaration(statement) &&
+        statement.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword),
   ),
   "registry type grouping must not add a runtime owner or import",
 );
@@ -153,8 +155,8 @@ const ownerModules = [
   ...schemaModulesSource.matchAll(/^export \* from "\.\/schema\/([^"]+)\.js";$/gmu),
 ].map(([, moduleName = ""]) => moduleName);
 check(
-  ownerModules.length === 64 && new Set(ownerModules).size === ownerModules.length,
-  "schema-modules.ts must contain one unique 64-module owner list",
+  ownerModules.length === 69 && new Set(ownerModules).size === ownerModules.length,
+  "schema-modules.ts must contain one unique 69-module owner list",
 );
 check(
   schemaModulesSource.split("\n").filter(Boolean).length === ownerModules.length,

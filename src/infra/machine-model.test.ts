@@ -1,11 +1,30 @@
+import type { SpawnSyncOptionsWithStringEncoding, SpawnSyncReturns } from "node:child_process";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const { spawn, read } = vi.hoisted(() => ({
+  spawn:
+    vi.fn<
+      (
+        command: string,
+        args: string[],
+        options: SpawnSyncOptionsWithStringEncoding,
+      ) => SpawnSyncReturns<string>
+    >(),
+  read: vi.fn<(file: string, encoding: "utf-8") => string>(),
+}));
+
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawnSync: spawn,
+}));
+
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+  readFileSync: read,
+}));
+
 let resolveMachineModelIdentifier: typeof import("./machine-model.js").resolveMachineModelIdentifier;
-type ModelDeps = NonNullable<Parameters<typeof resolveMachineModelIdentifier>[1]>;
-const spawn = vi.fn<NonNullable<ModelDeps["spawnSync"]>>();
-const read = vi.fn<NonNullable<ModelDeps["readFileSync"]>>();
-const deps = { spawnSync: spawn, readFileSync: read };
 
 describe("resolveMachineModelIdentifier", () => {
   beforeEach(async () => {
@@ -32,7 +51,7 @@ describe("resolveMachineModelIdentifier", () => {
       ...(name === "timeout" ? { error: new Error("spawnSync sysctl ETIMEDOUT") } : {}),
     });
 
-    expect(resolveMachineModelIdentifier("darwin", deps)).toBe(expected);
+    expect(resolveMachineModelIdentifier("darwin")).toBe(expected);
     expect(spawn).toHaveBeenCalledExactlyOnceWith("sysctl", ["-n", "hw.model"], {
       encoding: "utf-8",
       timeout: 5_000,
@@ -63,13 +82,13 @@ describe("resolveMachineModelIdentifier", () => {
       return value;
     });
 
-    expect(resolveMachineModelIdentifier("linux", deps)).toBe(expected);
+    expect(resolveMachineModelIdentifier("linux")).toBe(expected);
     expect(read).toHaveBeenNthCalledWith(1, "/sys/devices/virtual/dmi/id/product_name", "utf-8");
     expect(spawn).not.toHaveBeenCalled();
   });
 
   it.each(["win32", "freebsd"] as const)("leaves %s unknown without probing", (platform) => {
-    expect(resolveMachineModelIdentifier(platform, deps)).toBeUndefined();
+    expect(resolveMachineModelIdentifier(platform)).toBeUndefined();
     expect(spawn).not.toHaveBeenCalled();
     expect(read).not.toHaveBeenCalled();
   });
@@ -79,12 +98,12 @@ describe("resolveMachineModelIdentifier", () => {
     (value) => {
       vi.spyOn(os, "platform").mockReturnValue("linux");
       read.mockReturnValue(value);
-      const first = resolveMachineModelIdentifier(undefined, deps);
+      const first = resolveMachineModelIdentifier();
       const reads = read.mock.calls.length;
       read.mockReturnValue("Changed Laptop");
 
       expect(first).toBe(value || undefined);
-      expect(resolveMachineModelIdentifier("linux", deps)).toBe(first);
+      expect(resolveMachineModelIdentifier("linux")).toBe(first);
       expect(read).toHaveBeenCalledTimes(reads);
     },
   );

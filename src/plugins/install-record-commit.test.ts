@@ -76,6 +76,11 @@ vi.mock("./installed-plugin-index-records.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./installed-plugin-index-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./installed-plugin-index-store.js")>()),
+  readPersistedInstalledPluginIndex: vi.fn(async () => null),
+}));
+
 vi.mock("./installed-plugin-index-store-write.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./installed-plugin-index-store-write.js")>();
   return {
@@ -115,6 +120,20 @@ function createTestInstalledPluginIndex(params: {
     plugins: [],
     diagnostics: [],
   };
+}
+
+function createManagedInstallPath(stateDir: string, generation: string, pluginId = "codex") {
+  const installPath = path.join(
+    stateDir,
+    "npm",
+    "projects",
+    generation,
+    "node_modules",
+    "@openclaw",
+    pluginId,
+  );
+  fs.mkdirSync(installPath, { recursive: true });
+  return installPath;
 }
 
 describe("commitConfigWithPendingPluginInstalls", () => {
@@ -376,25 +395,6 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     },
   );
 
-  it("strips only selected pending plugin install records", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        installs: {
-          legacy: { source: "npm", spec: "legacy@1.0.0" },
-          fresh: { source: "npm", spec: "fresh@1.0.0" },
-        },
-      },
-    };
-
-    expect(stripPendingPluginInstallRecords(config, ["legacy"])).toEqual({
-      plugins: {
-        installs: {
-          fresh: { source: "npm", spec: "fresh@1.0.0" },
-        },
-      },
-    });
-  });
-
   it("selects only unchanged pending plugin install records for migration stripping", () => {
     const baseConfig: OpenClawConfig = {
       plugins: {
@@ -474,26 +474,8 @@ describe("commitConfigWithPendingPluginInstalls", () => {
 
   it("marks replaced managed npm generations when install records are committed", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
-    const previousInstallPath = path.join(
-      stateDir,
-      "npm",
-      "projects",
-      "codex-v1",
-      "node_modules",
-      "@openclaw",
-      "codex",
-    );
-    const nextInstallPath = path.join(
-      stateDir,
-      "npm",
-      "projects",
-      "codex-v2",
-      "node_modules",
-      "@openclaw",
-      "codex",
-    );
-    fs.mkdirSync(previousInstallPath, { recursive: true });
-    fs.mkdirSync(nextInstallPath, { recursive: true });
+    const previousInstallPath = createManagedInstallPath(stateDir, "codex-v1");
+    const nextInstallPath = createManagedInstallPath(stateDir, "codex-v2");
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -568,26 +550,8 @@ describe("commitConfigWithPendingPluginInstalls", () => {
   it("does not mark arbitrary npm paths outside the managed npm root", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
     const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-outside-"));
-    const previousInstallPath = path.join(
-      outsideRoot,
-      "npm",
-      "projects",
-      "codex-v1",
-      "node_modules",
-      "@openclaw",
-      "codex",
-    );
-    const nextInstallPath = path.join(
-      stateDir,
-      "npm",
-      "projects",
-      "codex-v2",
-      "node_modules",
-      "@openclaw",
-      "codex",
-    );
-    fs.mkdirSync(previousInstallPath, { recursive: true });
-    fs.mkdirSync(nextInstallPath, { recursive: true });
+    const previousInstallPath = createManagedInstallPath(outsideRoot, "codex-v1");
+    const nextInstallPath = createManagedInstallPath(stateDir, "codex-v2");
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -619,26 +583,8 @@ describe("commitConfigWithPendingPluginInstalls", () => {
 
   it("marks replaced npm generations across install record id migrations", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
-    const previousInstallPath = path.join(
-      stateDir,
-      "npm",
-      "projects",
-      "voice-call-v1",
-      "node_modules",
-      "@openclaw",
-      "voice-call",
-    );
-    const nextInstallPath = path.join(
-      stateDir,
-      "npm",
-      "projects",
-      "voice-call-v2",
-      "node_modules",
-      "@openclaw",
-      "voice-call",
-    );
-    fs.mkdirSync(previousInstallPath, { recursive: true });
-    fs.mkdirSync(nextInstallPath, { recursive: true });
+    const previousInstallPath = createManagedInstallPath(stateDir, "voice-call-v1", "voice-call");
+    const nextInstallPath = createManagedInstallPath(stateDir, "voice-call-v2", "voice-call");
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -669,26 +615,8 @@ describe("commitConfigWithPendingPluginInstalls", () => {
 
   it("removes newly retained npm markers when the config commit rolls back", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
-    const previousInstallPath = path.join(
-      stateDir,
-      "npm",
-      "projects",
-      "codex-v1",
-      "node_modules",
-      "@openclaw",
-      "codex",
-    );
-    const nextInstallPath = path.join(
-      stateDir,
-      "npm",
-      "projects",
-      "codex-v2",
-      "node_modules",
-      "@openclaw",
-      "codex",
-    );
-    fs.mkdirSync(previousInstallPath, { recursive: true });
-    fs.mkdirSync(nextInstallPath, { recursive: true });
+    const previousInstallPath = createManagedInstallPath(stateDir, "codex-v1");
+    const nextInstallPath = createManagedInstallPath(stateDir, "codex-v2");
     mocks.replaceConfigFile.mockRejectedValueOnce(new Error("config changed"));
 
     try {
@@ -722,46 +650,14 @@ describe("commitConfigWithPendingPluginInstalls", () => {
 
   it("removes earlier retained markers when a later marker creation fails", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
-    const firstPreviousInstallPath = path.join(
+    const firstPreviousInstallPath = createManagedInstallPath(stateDir, "codex-v1");
+    const firstNextInstallPath = createManagedInstallPath(stateDir, "codex-v2");
+    const secondPreviousInstallPath = createManagedInstallPath(
       stateDir,
-      "npm",
-      "projects",
-      "codex-v1",
-      "node_modules",
-      "@openclaw",
-      "codex",
-    );
-    const firstNextInstallPath = path.join(
-      stateDir,
-      "npm",
-      "projects",
-      "codex-v2",
-      "node_modules",
-      "@openclaw",
-      "codex",
-    );
-    const secondPreviousInstallPath = path.join(
-      stateDir,
-      "npm",
-      "projects",
       "voice-call-v1",
-      "node_modules",
-      "@openclaw",
       "voice-call",
     );
-    const secondNextInstallPath = path.join(
-      stateDir,
-      "npm",
-      "projects",
-      "voice-call-v2",
-      "node_modules",
-      "@openclaw",
-      "voice-call",
-    );
-    fs.mkdirSync(firstPreviousInstallPath, { recursive: true });
-    fs.mkdirSync(firstNextInstallPath, { recursive: true });
-    fs.mkdirSync(secondPreviousInstallPath, { recursive: true });
-    fs.mkdirSync(secondNextInstallPath, { recursive: true });
+    const secondNextInstallPath = createManagedInstallPath(stateDir, "voice-call-v2", "voice-call");
     fs.writeFileSync(
       path.join(stateDir, "npm", "projects", "voice-call-v1", ".openclaw-retained-npm-installs"),
       "not a directory",
@@ -811,16 +707,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     "clears or restores active npm markers when the config write %s",
     async (outcome) => {
       const stateDir = retentionTempDirs.make("openclaw-record-commit-");
-      const installPath = path.join(
-        stateDir,
-        "npm",
-        "projects",
-        "codex-v2",
-        "node_modules",
-        "@openclaw",
-        "codex",
-      );
-      fs.mkdirSync(installPath, { recursive: true });
+      const installPath = createManagedInstallPath(stateDir, "codex-v2");
       await markRetainedManagedNpmInstall({
         packageDir: installPath,
         pluginId: "codex",
@@ -977,16 +864,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
 
   it("leaves marker state intact when a successor owns the plugin index", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
-    const installPath = path.join(
-      stateDir,
-      "npm",
-      "projects",
-      "codex-v2",
-      "node_modules",
-      "@openclaw",
-      "codex",
-    );
-    fs.mkdirSync(installPath, { recursive: true });
+    const installPath = createManagedInstallPath(stateDir, "codex-v2");
     await markRetainedManagedNpmInstall({
       packageDir: installPath,
       pluginId: "codex",

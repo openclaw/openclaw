@@ -22,6 +22,7 @@ data class GatewayModelSummary(
   val supportsReasoning: Boolean,
   val contextTokens: Long?,
   val supportsFastMode: Boolean? = null,
+  val manualSelectionAllowed: Boolean? = null,
   val effectiveFastMode: ChatFastMode? = null,
   val thinkingLevels: List<ChatThinkingLevelOption>? = null,
   val thinkingDefault: String? = null,
@@ -84,6 +85,7 @@ internal fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
       supportsReasoning = row["reasoning"]?.jsonPrimitive?.booleanOrNull == true,
       contextTokens = row["contextTokens"]?.jsonPrimitive?.longOrNull ?: row["contextWindow"]?.jsonPrimitive?.longOrNull,
       supportsFastMode = row["supportsFastMode"]?.jsonPrimitive?.booleanOrNull,
+      manualSelectionAllowed = row["manualSelectionAllowed"]?.jsonPrimitive?.booleanOrNull,
       effectiveFastMode = ChatFastMode.fromWireValue(row["effectiveFastMode"]?.jsonPrimitive?.content),
       thinkingLevels =
         (row["thinkingLevels"] as? JsonArray)?.map {

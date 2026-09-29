@@ -56,22 +56,12 @@ function renderArmedIntentMessage(scope: IntentScope): string {
   return `Intent is armed ${scopeDescription}. ${STANDING_INTENT_AUTOMATION_GUIDANCE}`;
 }
 
-function positiveInteger(value: unknown, field: string, fallback: number): number {
+function integerOption(value: unknown, field: string, fallback: number, minimum: 0 | 1): number {
   if (value === undefined) {
     return fallback;
   }
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`${field} must be a positive integer`);
-  }
-  return value;
-}
-
-function nonNegativeInteger(value: unknown, field: string, fallback: number): number {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`${field} must be a non-negative integer`);
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
+    throw new Error(`${field} must be a ${minimum === 1 ? "positive" : "non-negative"} integer`);
   }
   return value;
 }
@@ -105,24 +95,17 @@ function parseExpiry(value: unknown, nowMs: number): number {
 }
 
 function parseStatus(value: unknown): StandingIntentStatus | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const statuses: StandingIntentStatus[] = [
-    "pending",
-    "armed",
-    "fired",
-    "done",
-    "cancelled",
-    "expired",
-  ];
-  if (typeof value !== "string" || !statuses.includes(value as StandingIntentStatus)) {
-    throw new Error(`status must be one of: ${statuses.join(", ")}`);
-  }
-  return value as StandingIntentStatus;
+  return value === undefined
+    ? undefined
+    : parseChoice<StandingIntentStatus>(
+        value,
+        "status",
+        ["pending", "armed", "fired", "done", "cancelled", "expired"],
+        "pending",
+      );
 }
 
-function parseScope<T extends string>(
+function parseChoice<T extends string>(
   value: unknown,
   field: string,
   allowed: readonly T[],
@@ -131,14 +114,16 @@ function parseScope<T extends string>(
   if (value === undefined) {
     return fallback;
   }
-  if (typeof value !== "string" || !allowed.includes(value as T)) {
+  const choice = allowed.find((candidate) => candidate === value);
+  if (choice === undefined) {
     throw new Error(`${field} must be one of: ${allowed.join(", ")}`);
   }
-  return value as T;
+  return choice;
 }
 
 export function createStandingIntentTool(options: {
   agentId: string;
+  assertCurrent?: () => void;
   sourceSessionId?: string;
   conversationId?: string;
   provider?: string;
@@ -198,13 +183,13 @@ export function createStandingIntentTool(options: {
           );
         }
         const nowMs = Date.now();
-        const scope = parseScope<IntentScope>(
+        const scope = parseChoice<IntentScope>(
           params.scope,
           "scope",
           ["conversation", "channel", "anywhere"],
           "channel",
         );
-        const senderScope = parseScope<IntentSenderScope>(
+        const senderScope = parseChoice<IntentSenderScope>(
           params.senderScope,
           "senderScope",
           ["sender", "anyone"],
@@ -212,6 +197,7 @@ export function createStandingIntentTool(options: {
         );
         const intent = await createStandingIntent({
           agentId: options.agentId,
+          assertCurrent: options.assertCurrent,
           description: trimRequiredString(
             params.description,
             "description",
@@ -237,11 +223,12 @@ export function createStandingIntentTool(options: {
                 }),
           creatorSender: senderId,
           expiresAt: parseExpiry(params.expiresAt, nowMs),
-          maxFires: positiveInteger(params.maxFires, "maxFires", DEFAULT_INTENT_MAX_FIRES),
-          cooldownSeconds: nonNegativeInteger(
+          maxFires: integerOption(params.maxFires, "maxFires", DEFAULT_INTENT_MAX_FIRES, 1),
+          cooldownSeconds: integerOption(
             params.cooldownSeconds,
             "cooldownSeconds",
             DEFAULT_INTENT_COOLDOWN_SECONDS,
+            0,
           ),
           sourceSessionId: options.sourceSessionId,
           nowMs,
@@ -252,13 +239,18 @@ export function createStandingIntentTool(options: {
         return jsonResult({
           intents: await listStandingIntents({
             agentId: options.agentId,
+            assertCurrent: options.assertCurrent,
             status: parseStatus(params.status),
           }),
         });
       }
       if (params.action === "cancel") {
         const id = trimRequiredString(params.id, "id", 200);
-        const intent = await cancelStandingIntent({ agentId: options.agentId, id });
+        const intent = await cancelStandingIntent({
+          agentId: options.agentId,
+          id,
+          assertCurrent: options.assertCurrent,
+        });
         return jsonResult({ cancelled: intent !== null, intent });
       }
       throw new Error("action must be create, list, or cancel");

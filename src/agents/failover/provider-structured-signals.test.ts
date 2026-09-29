@@ -10,8 +10,9 @@ import {
 import { classifyProviderRuntimeFailureKind } from "../embedded-agent-helpers/provider-runtime-failure.js";
 import { resolveFailoverReasonFromError } from "../failover-error.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
+import { PROVIDER_SCHEMA_REJECTION_USER_TEXT } from "./assistant-request-failure-copy.js";
 import { classifyFailoverSignal } from "./classify.js";
-import { formatBillingErrorMessage, PROVIDER_SCHEMA_REJECTION_USER_TEXT } from "./user-copy.js";
+import { formatBillingErrorMessage } from "./user-copy.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   classifyProviderFailoverSignalWithPlugin: vi.fn(),

@@ -34,7 +34,7 @@ function snapshot(path) {
 function trailers(body) {
   // Parse only: mutating interpret-trailers can execute configured commands.
   const parsed = spawnSync(
-    "git",
+    process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git",
     [
       "-c",
       "trailer.separators=:",
@@ -69,6 +69,7 @@ const MACHINE_CREDIT_EMAILS = new Set([
   "198982749+copilot@users.noreply.github.com",
   "223556219+copilot@users.noreply.github.com",
   "309084314+roboclaw-bot@users.noreply.github.com",
+  "services+roboclaw@openclaw.org",
 ]);
 const GITHUB_APP_BOT_EMAIL = /^(?:\d+\+)?[^@\s]*\[bot\]@users\.noreply\.github\.com$/;
 const LOCAL_CREDIT_EMAIL =
@@ -174,12 +175,51 @@ function prunePreview(lines, unsupported, machineIndexes) {
   return body;
 }
 
-function compose({ preview, source, authors, prAuthor, captured, queue }) {
+function squashPreview(preview, { title, message, commits }) {
+  if (
+    !(title === "PR_TITLE" && ["BLANK", "PR_BODY", "COMMIT_MESSAGES"].includes(message)) &&
+    !(title === "COMMIT_OR_PR_TITLE" && message === "COMMIT_MESSAGES")
+  ) {
+    throw new Error("Cannot preserve unsupported repository squash message defaults.");
+  }
+  if (message === "BLANK") {
+    return "";
+  }
+  if (message === "PR_BODY") {
+    return preview;
+  }
+  if (
+    !Array.isArray(commits) ||
+    commits.length === 0 ||
+    commits.some((item) => typeof item !== "string")
+  ) {
+    throw new Error("Cannot preserve squash commit messages without the published commits.");
+  }
+  if (title === "COMMIT_OR_PR_TITLE" && commits.length === 1) {
+    const newline = commits[0].indexOf("\n");
+    return newline === -1 ? "" : commits[0].slice(newline + 1).replace(/^\n+/, "");
+  }
+  return commits.map((commit) => `* ${commit.trimEnd()}`).join("\n\n");
+}
+
+function compose({
+  preview: initialPreview,
+  source,
+  authors,
+  prAuthor,
+  captured,
+  queue,
+  sourceCredit = false,
+  squashDefault = null,
+}) {
+  const preview =
+    squashDefault === null ? initialPreview : squashPreview(initialPreview, squashDefault);
   const explicit = captured !== "";
   const sourceTrailers = source.split("\n").filter(Boolean);
   const eligibleEmails = new Set();
   const unverifiedEmails = new Set();
-  for (const { name, email, user } of authors) {
+  const authorCredits = [];
+  for (const { name, email, user, changesTree } of authors) {
     const normalized = email.trim().toLowerCase();
     const linkedHuman = user?.type === "User" && Boolean(user.login);
     const prAuthorMatch =
@@ -188,7 +228,15 @@ function compose({ preview, source, authors, prAuthor, captured, queue }) {
       name.trim().toLowerCase() === prAuthor.login.toLowerCase() &&
       !NOREPLY_EMAIL.test(normalized);
     if (linkedHuman || prAuthorMatch) {
-      eligibleEmails.add(normalized);
+      if (changesTree || prAuthorMatch || user?.login === prAuthor?.login) {
+        eligibleEmails.add(normalized);
+        if (sourceCredit) {
+          if (/[<>\r\n]/.test(name) || /[<>\s]/.test(email)) {
+            throw new Error("Cannot preserve an invalid source author identity in squash credit.");
+          }
+          authorCredits.push(`Co-authored-by: ${name.trim()} <${email.trim()}>`);
+        }
+      }
     } else {
       unverifiedEmails.add(normalized);
     }
@@ -248,6 +296,7 @@ function compose({ preview, source, authors, prAuthor, captured, queue }) {
     ...original,
     ...(explicit ? retainedPreviewCredits : []),
     ...sourceTrailers,
+    ...authorCredits,
   ].filter((line) => !isExcludedCredit(line));
   const missing = [...new Set(required)].filter((line) => !original.includes(line));
   if (queue && missing.length > 0) {

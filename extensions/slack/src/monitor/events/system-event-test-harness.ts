@@ -1,5 +1,6 @@
 // Slack plugin module implements system event test harness behavior.
 import type { AllMiddlewareArgs } from "@slack/bolt";
+import { installSlackTestRuntime } from "../../test-runtime.test-support.js";
 import type { SlackMonitorContext } from "../context.js";
 
 export type SlackSystemEventHandler = (args: {
@@ -20,6 +21,7 @@ export type SlackSystemEventTestOverrides = {
 };
 
 export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTestOverrides) {
+  installSlackTestRuntime();
   const handlers: Record<string, SlackSystemEventHandler> = {};
   const channelType = overrides?.channelType ?? "im";
   const app = {

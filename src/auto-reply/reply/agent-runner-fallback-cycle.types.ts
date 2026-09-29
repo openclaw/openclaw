@@ -25,6 +25,7 @@ import type { DirectBlockDelivery } from "./reply-delivery.js";
 /** Inputs prepared once per fallback candidate and consumed by either runtime adapter. */
 export type AgentFallbackCandidateCommonParams = {
   preparedRunAdmission: PreparedAgentRunAdmission;
+  messageActionTurnCapability?: string;
   turn: AgentTurnParams;
   candidateRun: FollowupRun["run"];
   runtimeConfig: OpenClawConfig;
@@ -42,6 +43,7 @@ export type AgentFallbackCandidateCommonParams = {
   contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
   onContextEngineTurnCandidate: RunEmbeddedAgentParams["onContextEngineTurnCandidate"];
   assistantErrorTranscript: RunEmbeddedAgentParams["assistantErrorTranscript"];
+  authProfileFailurePolicy: RunEmbeddedAgentParams["authProfileFailurePolicy"];
   notifyUserMessagePersisted: () => void;
   fastModeStartedAtMs: number;
   fastModeAutoProgressState: FastModeAutoProgressState;
@@ -114,7 +116,6 @@ export type AgentFallbackCycleParams = {
   >;
   state: AgentFallbackCycleState;
   presentation: ReturnType<typeof createAgentTurnPresentation>;
-  directlySentBlockKeys: Set<string>;
   directBlockDeliveries: DirectBlockDelivery[];
   notifyAgentRunStart: () => void;
   signalExecutionPhaseForTyping: NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>;

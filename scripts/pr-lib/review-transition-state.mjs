@@ -7,7 +7,7 @@ const readBuffer = Buffer.alloc(128 * 1024);
 
 function git(...args) {
   const output = execFileSync(
-    "git",
+    process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git",
     ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", ...args],
     { maxBuffer: 64 * 1024 * 1024 },
   );
@@ -31,6 +31,53 @@ function tree(commit) {
       return [match[3], `${match[1]} ${match[2]}`];
     }),
   );
+}
+
+// Git retains resolved stages after the merge is committed. Admit only stages
+// bound to the source's latest first-parent merge, with committed stage-0 state.
+// Unknown, edited, or ambiguous conflict metadata still belongs to the operator.
+function committedResolveUndo(from, index) {
+  const undo = records("ls-files", "--resolve-undo", "-z");
+  if (undo.length === 0) {
+    return [];
+  }
+  const merge = git("rev-list", "--first-parent", "--merges", "-n", "1", source).trim();
+  const parents = merge
+    ? (git("cat-file", "-p", merge)
+        .split("\n\n", 1)[0]
+        .match(/^parent [a-f0-9]{40}$/gm) ?? [])
+    : [];
+  if (parents.length !== 2) {
+    throw new Error("Transition undo has no unambiguous committed merge");
+  }
+  const parentIds = parents.map((parent) => parent.slice(7));
+  const bases = git("merge-base", "--all", ...parentIds)
+    .trim()
+    .split("\n");
+  if (bases.length !== 1) {
+    throw new Error("Transition undo has ambiguous merge bases");
+  }
+  const stages = [bases[0], ...parentIds].map(tree);
+  const paths = new Map();
+  for (const record of undo) {
+    const match = /^([0-7]{6}) ([a-f0-9]{40}) ([123])\t([\s\S]+)$/.exec(record);
+    if (!match) {
+      throw new Error("Invalid transition resolve-undo entry");
+    }
+    const [, mode, oid, stage, pathname] = match;
+    const entries = paths.get(pathname) ?? new Map();
+    entries.set(Number(stage), `${mode} ${oid}`);
+    paths.set(pathname, entries);
+  }
+  for (const [pathname, entries] of paths) {
+    if (
+      index.get(pathname) !== from.get(pathname) ||
+      stages.some((stage, offset) => stage.get(pathname) !== entries.get(offset + 1))
+    ) {
+      throw new Error(`Unowned transition resolve-undo entry ${JSON.stringify(pathname)}`);
+    }
+  }
+  return paths.keys();
 }
 
 function stat(pathname) {
@@ -129,14 +176,14 @@ try {
   ];
   if (
     records("ls-files", "-v", "-z").some((record) => record[0] !== "H") ||
-    records("ls-files", "--resolve-undo", "-z").length > 0 ||
     git(...indexDiff, "--ita-visible-in-index", source) !==
       git(...indexDiff, "--ita-invisible-in-index", source)
   ) {
     throw new Error("Transition index contains hidden or unsupported entries");
   }
-  const inspect = new Set(
-    records(
+  const inspect = new Set([
+    ...committedResolveUndo(from, index),
+    ...records(
       "-c",
       "core.filemode=true",
       "-c",
@@ -148,7 +195,7 @@ try {
       "--name-only",
       "-z",
     ),
-  );
+  ]);
   for (const pathname of new Set([...from.keys(), ...to.keys(), ...index.keys()])) {
     const entry = index.get(pathname);
     if (entry !== from.get(pathname) && entry !== to.get(pathname)) {

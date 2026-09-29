@@ -1,20 +1,19 @@
-import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import {
   resolveAgentWorkspaceDir,
+  resolveStateDir,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
   listSessionTranscriptCorpusEntriesForAgent,
-  parseUsageCountedSessionIdFromFileName,
   resolveMemorySessionTargets,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   isFileMissingError,
-  listMemoryFiles,
   loadSqliteVecExtension,
+  readMemoryEntryOriginsInDatabase,
+  type MemoryEntryOrigin,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
@@ -22,13 +21,17 @@ import {
   borrowOpenClawAgentDatabase,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
-  openNodeSqliteDatabase,
+  resolveOpenClawAgentSqlitePath,
   runSqliteImmediateTransactionSync,
   tableExists,
-  withOpenClawAgentDatabaseReadOnly,
+  withOpenClawAgentDatabaseWrite,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { readMemoryPreimages } from "./dreaming-consolidation-artifacts.js";
 import { DREAMS_FILENAMES } from "./dreaming-dreams-file.js";
+import {
+  readSessionIngestionState,
+  writeSessionIngestionState,
+} from "./dreaming-ingestion-state.js";
 import {
   DREAMING_MEMORY_BACKUP_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
@@ -36,42 +39,30 @@ import {
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
 import {
-  deleteMemoryEntryOrigins,
+  deleteMemoryEntryOriginsInDatabase,
   listMemoryEntryOrigins,
-  recordMemorySessionTombstones,
+  recordMemorySessionTombstonesInDatabase,
 } from "./memory-entry-origins.js";
 import { collectTranscriptWrites } from "./memory-forget-curated-writes.js";
+import {
+  deleteMemoryIndexSources,
+  planMemoryIndex,
+  referencesSession,
+  type ForgetDatabase,
+} from "./memory-forget-index-sources.js";
 import { summarizeParticipantMatches, type MemoryForgetReport } from "./memory-forget-report.js";
+import { ensureMemorySessionTombstones } from "./memory-session-tombstones.js";
+import {
+  listWorkspaceDirectory,
+  listWorkspaceMemoryFiles,
+  readWorkspaceText,
+} from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { isMemorySessionIndexable } from "./memory/manager-session-sync-state.js";
-import {
-  readSessionIngestionState,
-  SESSION_CORPUS_RELATIVE_DIR,
-  writeSessionIngestionState,
-} from "./session-ingestion.js";
+import { SESSION_CORPUS_RELATIVE_DIR } from "./session-ingestion.js";
 import { commitMemoryContent, hashMemoryContent } from "./short-term-promotion-memory-write.js";
 import { readPhaseSignalStore, writePhaseSignalStore } from "./short-term-promotion-store.js";
 import type { ShortTermRecallEntry } from "./short-term-promotion-types.js";
-
-type ForgetDatabase = {
-  memory_index_chunks: {
-    id: string;
-    path: string;
-    source: string;
-    hash: string;
-    text: string;
-  };
-  memory_index_sources: { path: string; source: string };
-  memory_index_chunk_provenance: {
-    chunk_id: string;
-    origin_class: "owner" | "agent" | "untrusted" | "system";
-    session_kind: "interactive" | "cron" | "heartbeat" | "subagent" | "unknown";
-  };
-  memory_index_chunks_fts: { id: string; path: string; source: string };
-  memory_index_chunks_vec: { id: string };
-  memory_embedding_cache: { hash: string };
-  memory_index_state: { id: number; revision: number };
-};
 
 type MemoryRewrite = {
   absolutePath: string;
@@ -80,43 +71,8 @@ type MemoryRewrite = {
   remove: boolean;
   expectedContent: string;
 };
-type ForgetIndexPlan = {
-  chunks: Array<ForgetDatabase["memory_index_chunks"]>;
-  sources: Array<ForgetDatabase["memory_index_sources"]>;
-  ftsRows: number;
-  vectorRows: number;
-  embeddingCacheRows: number;
-  hasVectorTable: boolean;
-};
-
 const PROMOTION_MARKER = /^\s*<!--\s*openclaw-memory-promotion:([^\n]*?)\s*-->\s*$/u;
 const LINEAGE_MARKER = /^\s*<!--\s*openclaw-memory-lineage:[^\n]*?-->\s*$/u;
-
-function referencesSession(
-  value: string,
-  agentId: string,
-  sessionIds: ReadonlySet<string>,
-): boolean {
-  const agent = escapePattern(agentId);
-  const references = new RegExp(
-    `(?:^|[\\s[/:])(?:sessions/${agent}/|${agent}:(?!sessions/))([^\\s\\]#;:/]+)`,
-    "gu",
-  );
-  // Decode archive filenames with the session owner's grammar; a shared prefix
-  // or an arbitrary dotted suffix is not the selected session's identity.
-  return (
-    [...value.matchAll(references)].some(([, reference]) =>
-      sessionIds.has(parseUsageCountedSessionIdFromFileName(reference!) ?? reference!),
-    ) ||
-    [...value.matchAll(/\bSession ID:\s*([^;\s]+)/giu)].some(([, sessionId]) =>
-      sessionIds.has(sessionId!),
-    )
-  );
-}
-
-function escapePattern(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-}
 
 function scrubMemoryContent(params: {
   content: string;
@@ -179,141 +135,6 @@ function scrubMemoryContent(params: {
   return { content: lines.join("\n"), removedEntries, removedLines };
 }
 
-async function planMemoryIndex(params: {
-  agentId: string;
-  changedPaths: ReadonlySet<string>;
-  removedPaths: ReadonlySet<string>;
-  sessionIds: ReadonlySet<string>;
-  excludedSessionIds: ReadonlySet<string>;
-  matchesMemory: (content: string) => boolean;
-}): Promise<ForgetIndexPlan> {
-  const result = withOpenClawAgentDatabaseReadOnly(
-    ({ db, path: databasePath }) => {
-      const kysely = getNodeSqliteKysely<ForgetDatabase>(db);
-      const indexedChunks = executeSqliteQuerySync(
-        db,
-        kysely
-          .selectFrom("memory_index_chunks")
-          .leftJoin(
-            "memory_index_chunk_provenance",
-            "memory_index_chunk_provenance.chunk_id",
-            "memory_index_chunks.id",
-          )
-          .select([
-            "memory_index_chunks.id as id",
-            "memory_index_chunks.path as path",
-            "memory_index_chunks.source as source",
-            "memory_index_chunks.hash as hash",
-            "memory_index_chunks.text as text",
-            "memory_index_chunk_provenance.origin_class as originClass",
-            "memory_index_chunk_provenance.session_kind as sessionKind",
-          ]),
-      ).rows;
-      const changedPaths = new Set(params.changedPaths);
-      // Another workspace agent may already have scrubbed the shared file.
-      // Its remaining indexed snapshot still owns evidence for this agent's purge.
-      for (const chunk of indexedChunks) {
-        if (chunk.source === "memory" && params.matchesMemory(chunk.text)) {
-          changedPaths.add(chunk.path);
-        }
-      }
-      const chunks = indexedChunks.filter(
-        (chunk) =>
-          changedPaths.has(chunk.path) ||
-          referencesSession(chunk.path, params.agentId, params.sessionIds) ||
-          (params.sessionIds.size > 0 &&
-            chunk.source === "sessions" &&
-            (chunk.originClass === "system" ||
-              !isMemorySessionIndexable({ sessionKind: chunk.sessionKind ?? "unknown" }) ||
-              referencesSession(chunk.path, params.agentId, params.excludedSessionIds))),
-      );
-      const removedSessionPaths = new Set(
-        chunks.filter((chunk) => chunk.source === "sessions").map((chunk) => chunk.path),
-      );
-      const sources = executeSqliteQuerySync(
-        db,
-        kysely.selectFrom("memory_index_sources").select(["path", "source"]),
-      ).rows.filter(
-        (source) =>
-          params.removedPaths.has(source.path) ||
-          (source.source === "sessions" && removedSessionPaths.has(source.path)),
-      );
-      const chunkIds = chunks.map((chunk) => chunk.id);
-      const ftsRows =
-        chunkIds.length > 0 && tableExists(db, "memory_index_chunks_fts")
-          ? executeSqliteQuerySync(
-              db,
-              kysely
-                .selectFrom("memory_index_chunks_fts")
-                .select((eb) => eb.fn.countAll<number>().as("count"))
-                .where("id", "in", chunkIds),
-            ).rows[0]!.count
-          : 0;
-      const hasVectorTable = tableExists(db, "memory_index_chunks_vec");
-      let embeddingCacheRows = 0;
-      if (params.sessionIds.size > 0 && tableExists(db, "memory_embedding_cache")) {
-        const cacheCount = db
-          .prepare("SELECT COUNT(*) AS count FROM memory_embedding_cache")
-          // SAFETY: the aggregate query always returns one row with the declared count alias.
-          .get() as { count?: unknown };
-        embeddingCacheRows = Number(cacheCount.count ?? 0);
-      }
-      return { chunks, sources, ftsRows, embeddingCacheRows, hasVectorTable, databasePath };
-    },
-    { agentId: params.agentId },
-  );
-  if (!result.found) {
-    return {
-      chunks: [],
-      sources: [],
-      ftsRows: 0,
-      vectorRows: 0,
-      embeddingCacheRows: 0,
-      hasVectorTable: false,
-    };
-  }
-  let vectorRows = 0;
-  if (result.value.hasVectorTable && result.value.chunks.length > 0) {
-    const probe = openNodeSqliteDatabase(":memory:", { allowExtension: true });
-    let extensionPath: string;
-    try {
-      const loaded = await loadSqliteVecExtension({ db: probe });
-      if (!loaded.ok || !loaded.extensionPath) {
-        throw new Error(
-          `memory forget cannot inspect vector index: ${loaded.error ?? "load failed"}`,
-        );
-      }
-      extensionPath = loaded.extensionPath;
-    } finally {
-      probe.close();
-    }
-    // Preview must not create or migrate state; its owner-validated handle
-    // stays read-only while exposing vec0.
-    const vectorResult = withOpenClawAgentDatabaseReadOnly(
-      ({ db }) => {
-        db.enableLoadExtension(true);
-        db.loadExtension(extensionPath);
-        const vectorKysely = getNodeSqliteKysely<ForgetDatabase>(db);
-        return executeSqliteQuerySync(
-          db,
-          vectorKysely
-            .selectFrom("memory_index_chunks_vec")
-            .select((eb) => eb.fn.countAll<number>().as("count"))
-            .where(
-              "id",
-              "in",
-              result.value.chunks.map((chunk) => chunk.id),
-            ),
-        ).rows[0]!.count;
-      },
-      { agentId: params.agentId },
-      { allowExtension: true },
-    );
-    vectorRows = vectorResult.found ? vectorResult.value : 0;
-  }
-  return { ...result.value, vectorRows };
-}
-
 type MemoryForgetParams = {
   cfg: OpenClawConfig;
   agentId: string;
@@ -324,38 +145,86 @@ type MemoryForgetParams = {
   dryRun?: boolean;
 };
 
+type MemoryForgetContext = {
+  targets: ReturnType<typeof resolveMemorySessionTargets>;
+  databaseOptions: Parameters<typeof withOpenClawAgentDatabaseWrite>[0];
+  database?: ReturnType<typeof borrowOpenClawAgentDatabase>;
+  origins?: MemoryEntryOrigin[];
+  selectedEntryKeys: Set<string>;
+  tombstoned: boolean;
+};
+
+type MemoryForgetAttempt = { kind: "complete"; report: MemoryForgetReport } | { kind: "reprepare" };
+
+function selectedLineageIdentity(
+  origins: readonly MemoryEntryOrigin[],
+  sessionIds: ReadonlySet<string>,
+  entryKeys: ReadonlySet<string>,
+): string {
+  // Selected sessions and every contributor to their entries determine the purge.
+  return JSON.stringify(
+    origins
+      .filter((origin) => sessionIds.has(origin.sessionId) || entryKeys.has(origin.entryKey))
+      .map(({ entryKey, sessionId }) => [entryKey, sessionId]),
+  );
+}
+
 export async function forgetMemoryEntries(params: MemoryForgetParams): Promise<MemoryForgetReport> {
   if (!params.sessionIds?.length && !params.hookSources?.length && !params.participants?.length) {
     throw new Error("memory forget requires a session, hook source, or participant selector");
   }
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-  // Plan against the same locked state we remove; staging and promotion must
-  // not publish an earlier snapshot after a successful purge. Preview never writes a lock.
-  return params.dryRun
-    ? forgetWorkspaceMemory(params, workspaceDir)
-    : withMemoryWorkspaceLock(workspaceDir, () => forgetWorkspaceMemory(params, workspaceDir));
+  const run = async (): Promise<MemoryForgetReport> => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir(process.env) };
+    const databaseOptions = {
+      agentId: params.agentId,
+      env,
+      path: resolveOpenClawAgentSqlitePath({ agentId: params.agentId, env }),
+    };
+    const context: MemoryForgetContext = {
+      targets: resolveMemorySessionTargets({
+        agentId: params.agentId,
+        storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
+        sessionIds: params.sessionIds,
+        hookSources: params.hookSources,
+        participants: params.participants,
+        since: params.since,
+      }),
+      databaseOptions,
+      selectedEntryKeys: new Set(),
+      tombstoned: false,
+    };
+    try {
+      for (;;) {
+        const result = await forgetWorkspaceMemory(params, workspaceDir, context);
+        if (result.kind === "complete") {
+          return result.report;
+        }
+      }
+    } finally {
+      context.database?.release();
+    }
+  };
+  // Replanning retains this workspace owner and, once acquired, its exact database borrow.
+  return params.dryRun ? run() : withMemoryWorkspaceLock(workspaceDir, run);
 }
 
 async function forgetWorkspaceMemory(
   params: MemoryForgetParams,
   workspaceDir: string,
-): Promise<MemoryForgetReport> {
-  const targets = resolveMemorySessionTargets({
-    agentId: params.agentId,
-    storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
-    sessionIds: params.sessionIds,
-    hookSources: params.hookSources,
-    participants: params.participants,
-    since: params.since,
-  });
+  context: MemoryForgetContext,
+): Promise<MemoryForgetAttempt> {
+  const targets = context.targets;
   const sessionIds = new Set(targets.map((target) => target.sessionId));
-  const allOrigins = listMemoryEntryOrigins({ agentId: params.agentId });
-  const entryKeys = new Set(
-    allOrigins
-      .filter((origin) => sessionIds.has(origin.sessionId))
-      .map((origin) => origin.entryKey),
-  );
-  const allOriginKeys = new Set(allOrigins.map((origin) => origin.entryKey));
+  const allOrigins = context.origins ?? listMemoryEntryOrigins({ agentId: params.agentId });
+  for (const origin of allOrigins) {
+    if (sessionIds.has(origin.sessionId)) {
+      context.selectedEntryKeys.add(origin.entryKey);
+    }
+  }
+  const entryKeys = new Set(context.selectedEntryKeys);
+  const lineageIdentity = selectedLineageIdentity(allOrigins, sessionIds, entryKeys);
+  const allOriginKeys = new Set([...entryKeys, ...allOrigins.map((origin) => origin.entryKey)]);
   const mixedLineageEntryKeys = new Set(
     allOrigins
       .filter((origin) => entryKeys.has(origin.entryKey) && !sessionIds.has(origin.sessionId))
@@ -364,14 +233,14 @@ async function forgetWorkspaceMemory(
   const untargetableEntryKeys = new Set<string>();
   const refusals: string[] = [];
   const corpusDir = path.join(workspaceDir, SESSION_CORPUS_RELATIVE_DIR);
-  const corpusFiles = await fs
-    .readdir(corpusDir, { withFileTypes: true })
-    .catch((error: unknown) => {
+  const corpusFiles = await listWorkspaceDirectory(workspaceDir, corpusDir).catch(
+    (error: unknown) => {
       if (isFileMissingError(error)) {
         return [];
       }
       throw error;
-    });
+    },
+  );
   const corpusRewrites: MemoryRewrite[] = [];
   const corpusSnippets = new Set<string>();
   let removedCorpusLines = 0;
@@ -380,7 +249,7 @@ async function forgetWorkspaceMemory(
       continue;
     }
     const absolutePath = path.join(corpusDir, file.name);
-    const content = await fs.readFile(absolutePath, "utf8");
+    const content = await readWorkspaceText(workspaceDir, absolutePath);
     const lines = content.split("\n");
     const retained = lines.filter((line) => {
       if (!referencesSession(line, params.agentId, sessionIds)) {
@@ -412,7 +281,7 @@ async function forgetWorkspaceMemory(
     scrubMemoryContent({ content, entryKeys, sessionIds, corpusSnippets, agentId: params.agentId });
   let removedMemoryEntries = 0;
   let removedMemoryLines = 0;
-  const memoryFiles = await listMemoryFiles(
+  const memoryFiles = await listWorkspaceMemoryFiles(
     workspaceDir,
     DREAMS_FILENAMES.map((name) => path.join(workspaceDir, name)),
   );
@@ -421,7 +290,7 @@ async function forgetWorkspaceMemory(
     if (path.dirname(absolutePath) === corpusDir) {
       continue;
     }
-    const content = await fs.readFile(absolutePath, "utf8");
+    const content = await readWorkspaceText(workspaceDir, absolutePath);
     for (const line of content.split(/\r?\n/u)) {
       const key = PROMOTION_MARKER.exec(line)?.[1]?.trim();
       if (key && !allOriginKeys.has(key)) {
@@ -516,7 +385,7 @@ async function forgetWorkspaceMemory(
       value: {
         ...value,
         content: scrubbed.content,
-        contentHash: createHash("sha256").update(scrubbed.content).digest("hex"),
+        contentHash: hashMemoryContent(scrubbed.content),
       },
     };
   });
@@ -609,122 +478,151 @@ async function forgetWorkspaceMemory(
     refusals,
   };
   if (params.dryRun || sessionIds.size === 0) {
-    return report;
+    return { kind: "complete", report };
   }
 
-  const { db, release } = borrowOpenClawAgentDatabase({ agentId: params.agentId });
-  try {
-    const kysely = getNodeSqliteKysely<ForgetDatabase>(db);
-    const chunkIds = indexPlan.chunks.map((chunk) => chunk.id);
-    if (chunkIds.length > 0 && indexPlan.hasVectorTable) {
-      const loaded = await loadSqliteVecExtension({ db });
-      if (!loaded.ok) {
-        throw new Error(
-          `memory forget cannot purge vector index: ${loaded.error ?? "load failed"}`,
-        );
+  context.database ??= await withOpenClawAgentDatabaseWrite(context.databaseOptions, () =>
+    borrowOpenClawAgentDatabase(context.databaseOptions),
+  );
+  const { db } = context.database;
+  const lineageIsCurrent = () => {
+    const origins = tableExists(db, "memory_entry_origins")
+      ? readMemoryEntryOriginsInDatabase(db, { agentId: params.agentId })
+      : [];
+    if (selectedLineageIdentity(origins, sessionIds, entryKeys) === lineageIdentity) {
+      return true;
+    }
+    // Keep observed selected keys even if another workspace later removes their rows.
+    context.origins = origins;
+    for (const origin of origins) {
+      if (sessionIds.has(origin.sessionId)) {
+        context.selectedEntryKeys.add(origin.entryKey);
       }
     }
-
-    // Forget is durable admission policy: persist it before removing the
-    // checkpoints that would otherwise make this session look newly eligible.
-    const recorded = recordMemorySessionTombstones({
-      agentId: params.agentId,
-      sessionIds: [...sessionIds],
-    });
-    if (recorded === 0) {
-      // Every explicit purge invalidates in-flight cache work, including a
-      // repeated purge whose selected source was already scrubbed.
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .updateTable("memory_index_state")
-          .set((expression) => ({ revision: expression("revision", "+", 1) }))
-          .where("id", "=", 1),
-      );
+    return false;
+  };
+  const kysely = getNodeSqliteKysely<ForgetDatabase>(db);
+  const chunkIds = indexPlan.chunks.map((chunk) => chunk.id);
+  if (chunkIds.length > 0 && indexPlan.hasVectorTable) {
+    const loaded = await loadSqliteVecExtension({ db });
+    if (!loaded.ok) {
+      throw new Error(`memory forget cannot purge vector index: ${loaded.error ?? "load failed"}`);
     }
-
-    // Remove derived records before their matching evidence. On any failure,
-    // unchanged files/corpus/origins still identify the remaining work on retry.
-    // The workspace lock and index snapshot/revision checks fence stale publishers.
-    runSqliteImmediateTransactionSync(db, () => {
-      if (chunkIds.length > 0) {
-        if (indexPlan.ftsRows > 0) {
-          executeSqliteQuerySync(
-            db,
-            kysely.deleteFrom("memory_index_chunks_fts").where("id", "in", chunkIds),
-          );
-        }
-        if (indexPlan.hasVectorTable) {
-          executeSqliteQuerySync(
-            db,
-            kysely.deleteFrom("memory_index_chunks_vec").where("id", "in", chunkIds),
-          );
-        }
-        executeSqliteQuerySync(
-          db,
-          kysely.deleteFrom("memory_index_chunks").where("id", "in", chunkIds),
-        );
-      }
-      for (const source of indexPlan.sources) {
-        executeSqliteQuerySync(
-          db,
-          kysely
-            .deleteFrom("memory_index_sources")
-            .where("path", "=", source.path)
-            .where("source", "=", source.source),
-        );
-      }
-      if (tableExists(db, "memory_embedding_cache")) {
-        executeSqliteQuerySync(db, kysely.deleteFrom("memory_embedding_cache"));
-      }
-    });
-    if (removedPhaseSignalKeys.length > 0) {
-      for (const key of removedPhaseSignalKeys) {
-        delete phaseSignals.entries[key];
-      }
-      phaseSignals.updatedAt = nowIso;
-      // Phase signals are derived from recall rows. Remove them first so a
-      // later failure leaves the authoritative recall evidence for a retry.
-      await writePhaseSignalStore(workspaceDir, phaseSignals);
-    }
-    if (retainedShortTerm.length !== shortTermEntries.length) {
-      await writeMemoryCoreWorkspaceEntries({
-        namespace: SHORT_TERM_RECALL_NAMESPACE,
-        workspaceDir,
-        entries: retainedShortTerm,
-      });
-    }
-    if (
-      removedSeenScopes > 0 ||
-      Object.keys(retainedFileStates).length !== Object.keys(ingestionState.files).length
-    ) {
-      await writeSessionIngestionState(workspaceDir, {
-        ...ingestionState,
-        files: retainedFileStates,
-        seenMessages: Object.fromEntries(retainedSeenMessages),
-      });
-    }
-    if (rewrittenBackups > 0) {
-      await writeMemoryCoreWorkspaceEntries({
-        namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
-        workspaceDir,
-        entries: nextBackups,
-      });
-    }
-    for (const rewrite of [...memoryRewrites, ...corpusRewrites]) {
-      await commitMemoryContent({
-        filePath: rewrite.absolutePath,
-        tempPrefix: `${path.basename(rewrite.absolutePath)}.forget`,
-        expectedHash: hashMemoryContent(rewrite.expectedContent),
-        expectedContent: rewrite.expectedContent,
-        allowInPlaceFallback: true,
-        conflictMessage: `${path.basename(rewrite.absolutePath)} changed before the memory forget rewrite could commit`,
-        content: rewrite.remove ? null : rewrite.content,
-      });
-    }
-    deleteMemoryEntryOrigins({ agentId: params.agentId, entryKeys: [...entryKeys] });
-    return report;
-  } finally {
-    release();
   }
+
+  const purged = await withOpenClawAgentDatabaseWrite(
+    context.databaseOptions,
+    () => {
+      if (!context.tombstoned) {
+        // Prepare additive schema before the guarded transaction: its cache must
+        // not survive a rollback that also removes the newly created table.
+        ensureMemorySessionTombstones(db);
+        const marked = runSqliteImmediateTransactionSync(db, () => {
+          if (!lineageIsCurrent()) {
+            return false;
+          }
+          const recorded = recordMemorySessionTombstonesInDatabase(db, {
+            agentId: params.agentId,
+            sessionIds: [...sessionIds],
+          });
+          if (recorded === 0) {
+            executeSqliteQuerySync(
+              db,
+              kysely
+                .updateTable("memory_index_state")
+                .set((expression) => ({ revision: expression("revision", "+", 1) }))
+                .where("id", "=", 1),
+            );
+          }
+          return true;
+        });
+        if (!marked) {
+          return false;
+        }
+        context.tombstoned = true;
+      }
+      // The marker has committed. A purge failure must leave it durable for retry.
+      return runSqliteImmediateTransactionSync(db, () => {
+        if (!lineageIsCurrent()) {
+          return false;
+        }
+        if (chunkIds.length > 0) {
+          if (indexPlan.hasVectorTable) {
+            executeSqliteQuerySync(
+              db,
+              kysely.deleteFrom("memory_index_chunks_vec").where("id", "in", chunkIds),
+            );
+          }
+          executeSqliteQuerySync(
+            db,
+            kysely.deleteFrom("memory_index_chunks").where("id", "in", chunkIds),
+          );
+        }
+        deleteMemoryIndexSources(db, indexPlan.sources);
+        if (tableExists(db, "memory_embedding_cache")) {
+          executeSqliteQuerySync(db, kysely.deleteFrom("memory_embedding_cache"));
+        }
+        return true;
+      });
+    },
+    db,
+  );
+  if (!purged) {
+    return { kind: "reprepare" };
+  }
+  if (removedPhaseSignalKeys.length > 0) {
+    for (const key of removedPhaseSignalKeys) {
+      delete phaseSignals.entries[key];
+    }
+    phaseSignals.updatedAt = nowIso;
+    // Phase signals are derived from recall rows. Remove them first so a
+    // later failure leaves the authoritative recall evidence for a retry.
+    await writePhaseSignalStore(workspaceDir, phaseSignals);
+  }
+  if (retainedShortTerm.length !== shortTermEntries.length) {
+    await writeMemoryCoreWorkspaceEntries({
+      namespace: SHORT_TERM_RECALL_NAMESPACE,
+      workspaceDir,
+      entries: retainedShortTerm,
+    });
+  }
+  if (
+    removedSeenScopes > 0 ||
+    Object.keys(retainedFileStates).length !== Object.keys(ingestionState.files).length
+  ) {
+    await writeSessionIngestionState(workspaceDir, {
+      ...ingestionState,
+      files: retainedFileStates,
+      seenMessages: Object.fromEntries(retainedSeenMessages),
+    });
+  }
+  if (rewrittenBackups > 0) {
+    await writeMemoryCoreWorkspaceEntries({
+      namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
+      workspaceDir,
+      entries: nextBackups,
+    });
+  }
+  for (const rewrite of [...memoryRewrites, ...corpusRewrites]) {
+    await commitMemoryContent({
+      workspaceDir,
+      filePath: rewrite.absolutePath,
+      tempPrefix: `${path.basename(rewrite.absolutePath)}.forget`,
+      expectedHash: hashMemoryContent(rewrite.expectedContent),
+      expectedContent: rewrite.expectedContent,
+      allowInPlaceFallback: true,
+      conflictMessage: `${path.basename(rewrite.absolutePath)} changed before the memory forget rewrite could commit`,
+      content: rewrite.remove ? null : rewrite.content,
+    });
+  }
+  await withOpenClawAgentDatabaseWrite(
+    context.databaseOptions,
+    () =>
+      deleteMemoryEntryOriginsInDatabase(db, {
+        agentId: params.agentId,
+        entryKeys: [...entryKeys],
+      }),
+    db,
+  );
+  return { kind: "complete", report };
 }

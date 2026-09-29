@@ -8,19 +8,20 @@ import {
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent-runner/types.js";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
+import { resolveLoadedSessionThreadInfo } from "../channels/plugins/session-thread-info-loaded.js";
 import {
   buildSessionCreationStamp,
   inheritSessionCreationPolicy,
 } from "../config/sessions/session-entry-provenance.js";
-import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeLogger, PluginRuntimeCore } from "../plugins/runtime/types-core.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isModelSelectionLocked, ModelSelectionLockedError } from "../sessions/model-overrides.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import {
-  deliveryContextFromSession,
   hasDeliveryTargetFields,
   normalizeDeliveryContext,
   normalizeSessionDeliveryState,
@@ -97,7 +98,7 @@ export function assertRealtimeVoiceAgentConsultModelSelectionUnlocked(params: {
   if (requesterSessionKey && (!requesterAgentId || requesterAgentId === targetAgentId)) {
     const requesterAgent = requesterAgentId ?? params.agentId;
     remember(requesterSessionKey, requesterAgent);
-    const { baseSessionKey } = parseSessionThreadInfoFast(requesterSessionKey);
+    const { baseSessionKey } = resolveLoadedSessionThreadInfo(requesterSessionKey);
     if (baseSessionKey && baseSessionKey !== requesterSessionKey) {
       remember(baseSessionKey, requesterAgent);
     }
@@ -152,7 +153,7 @@ function resolveRealtimeVoiceAgentDeliveryContext(params: {
     // This preserves channel/account/thread routing when a voice bridge delegates back to agent.
     const candidates: Array<{ sessionKey: string; storePath?: string }> = [];
     if (requesterSessionKey) {
-      const { baseSessionKey } = parseSessionThreadInfoFast(requesterSessionKey);
+      const { baseSessionKey } = resolveLoadedSessionThreadInfo(requesterSessionKey);
       for (const key of [requesterSessionKey, baseSessionKey]) {
         if (key) {
           candidates.push({ sessionKey: key });
@@ -482,7 +483,7 @@ export async function consultRealtimeVoiceAgent(params: {
       const sessionId = sessionEntry.sessionId;
       assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
 
-      const runId = `${params.runIdPrefix}:${Date.now()}:${randomUUID()}`;
+      const runId = `${params.runIdPrefix}-${randomUUID()}`;
       const timeoutMs =
         params.timeoutMs ?? params.agentRuntime.resolveAgentTimeoutMs({ cfg: params.cfg });
       const runRegistration = params.onRunStarted?.({ runId, sessionId, timeoutMs });
@@ -530,6 +531,8 @@ export async function consultRealtimeVoiceAgent(params: {
         verboseLevel: "off",
         reasoningLevel: "off",
         toolResultFormat: "plain",
+        execSession: sessionEntry,
+        toolsAllow: params.toolsAllow,
         timeoutMs,
         runId,
         lane: params.lane,
@@ -560,7 +563,11 @@ export async function consultRealtimeVoiceAgent(params: {
           yielded: true,
         };
       }
-      const text = collectRealtimeVoiceAgentConsultVisibleText(result.payloads ?? []);
+      // Earlier input answers remain in history; this completion speaks for the current input.
+      const currentInputPayloads = (result.payloads ?? []).filter(
+        (payload) => getReplyPayloadMetadata(payload)?.precedingInputAnswer !== true,
+      );
+      const text = collectRealtimeVoiceAgentConsultVisibleText(currentInputPayloads);
       if (!text) {
         params.logger.warn(
           "[talk] agent consult produced no answer: agent returned no speakable text",

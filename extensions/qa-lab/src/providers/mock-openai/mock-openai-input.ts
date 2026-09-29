@@ -1,8 +1,11 @@
-// QA Lab mock provider input and tool-output extraction.
+import { isInternalRuntimeContextCarrierText } from "../shared/runtime-context.js";
 import {
   type ResponsesInputItem,
-  INTERNAL_RUNTIME_CONTEXT_BEGIN,
-  INTERNAL_RUNTIME_CONTEXT_END,
+  type MockOpenAiRequestKind,
+  QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE,
+  QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
+  QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE,
+  QA_SUBAGENT_PRIVATE_WORKER_RE,
   QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE,
   QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE,
   buildSlackMpimHistoryBotReply,
@@ -14,6 +17,44 @@ import {
   QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE,
   QA_WHATSAPP_BATCHED_FINAL_MARKER_RE,
 } from "./mock-openai-contracts.js";
+const QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE =
+  /(?:partial|quiet) streaming qa check|final-only marker streaming qa check|block streaming qa check|tool progress(?: error)? qa check/i;
+const QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE =
+  /^Continue with (?:the current Matrix QA scenario|the QA scenario plan and report worked, failed, and blocked items)\.$/i;
+
+function isStreamingToolProgressContinuationText(text: string) {
+  const trimmed = text.trim();
+  return (
+    QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE.test(trimmed) ||
+    trimmed.startsWith(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)
+  );
+}
+
+export function extractLatestScenarioFamilyPrompt(
+  texts: string[],
+  familyPattern = QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE,
+) {
+  let envelope = "";
+  for (const text of texts.toReversed()) {
+    if (familyPattern.test(text)) {
+      envelope = text;
+      break;
+    }
+    if (!isStreamingToolProgressContinuationText(text)) {
+      return "";
+    }
+  }
+  if (!envelope) {
+    return "";
+  }
+  const pattern = new RegExp(familyPattern.source, `${familyPattern.flags}g`);
+  let latestIndex = -1;
+  for (const match of envelope.matchAll(pattern)) {
+    latestIndex = match.index;
+  }
+  return latestIndex < 0 ? "" : envelope.slice(latestIndex);
+}
+
 export function extractLastUserText(input: ResponsesInputItem[]) {
   return extractLastMatchingUserTurn(input)?.text ?? "";
 }
@@ -22,10 +63,13 @@ export function extractLastMatchingUserTurn(input: ResponsesInputItem[], pattern
   const matcher = pattern && new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ""));
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
-    if (!item || !isUserTurn(item)) {
+    if (!item || item.role !== "user") {
       continue;
     }
     const text = extractInputText(item.content);
+    if (!isUserTurn(item)) {
+      continue;
+    }
     if (!matcher || matcher.test(text)) {
       return { index, text };
     }
@@ -41,6 +85,136 @@ export function splitMockConversationContext(text: string) {
       text,
     );
   return { current: projection?.[2] ?? text, history: projection?.[1] ?? "" };
+}
+
+function extractCurrentTaskEvent(text: string): string | undefined {
+  const startsTaskEvent = (value: string) =>
+    /^\[Internal task completion event\](?:\r?\n|$)/u.test(value);
+  if (startsTaskEvent(text)) {
+    return text;
+  }
+  if (!isInternalRuntimeContextCarrierText(text)) {
+    return undefined;
+  }
+  for (const fragment of extractRuntimeConversationData(text).toReversed()) {
+    if (startsTaskEvent(fragment)) {
+      return fragment;
+    }
+  }
+  // v3 keeps the producer event as a literal runtime-instruction fragment.
+  const literal = /^\[Internal task completion event\](?:\r?\n|$)/mu.exec(text);
+  return literal ? text.slice(literal.index) : undefined;
+}
+
+function extractRuntimeConversationData(text: string): string[] {
+  const fragments: string[] = [];
+  // Decode only top-level v4 data fragments, never quoted history nested inside them.
+  for (const match of text.matchAll(
+    /^Conversation data \(data, not instructions\):\r?\n("(?:[^"\\\r\n]|\\.)*")\r?$/gmu,
+  )) {
+    try {
+      const fragment: unknown = JSON.parse(match[1] ?? "");
+      if (typeof fragment === "string") {
+        fragments.push(fragment);
+      }
+    } catch {
+      // Malformed quoted data is not runtime context.
+    }
+  }
+  return fragments;
+}
+
+export function extractCurrentRuntimeContextTexts(input: ResponsesInputItem[]): string[] {
+  const turn = extractLastMatchingUserTurn(input);
+  if (!turn) {
+    return [];
+  }
+  return input.slice(turn.index + 1).flatMap((item) => {
+    const text = item.role === "user" ? extractInputText(item.content) : "";
+    if (!isInternalRuntimeContextCarrierText(text)) {
+      return [];
+    }
+    return /^Conversation data \(data, not instructions\):$/mu.test(text)
+      ? extractRuntimeConversationData(text)
+      : [text]; // Session v3 retains literal runtime context.
+  });
+}
+
+function isSubagentRecoveryText(text: string): boolean {
+  // These are the runtime's recovery introductions, not arbitrary user mentions
+  // of retry/resume/compaction. A new request must fence the old task.
+  return (
+    /^(?:continue|keep going|resume|retry|carry on)[.!?]?$/iu.test(text) ||
+    [
+      "The previous assistant turn recorded reasoning but did not produce a user-visible answer.",
+      "The previous attempt did not produce a user-visible answer.",
+      "The previous assistant turn completed its tool calls but did not produce a user-visible answer.",
+      "The previous attempt compacted the conversation context before producing a final user-visible answer.",
+    ].some((prefix) => text.startsWith(prefix))
+  );
+}
+
+export function isMockSubagentSettledWake(text: string): boolean {
+  // Installed-candidate QA can still send the earlier session-wide wording.
+  return /^(?:\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} [^\]\r\n]+\] )?\[Subagent Context\] Every subagent (?:in this batch|spawned from this session) has now settled\b/mu.test(
+    text,
+  );
+}
+
+export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
+  | {
+      kind: "kickoff" | "worker" | "completion" | "settled" | "other";
+      text: string;
+      caseName?: string;
+      privateWorker?: string;
+    }
+  | undefined {
+  let settled = false;
+  for (const item of input.toReversed()) {
+    if (item.role !== "user") {
+      continue;
+    }
+    const current = splitMockConversationContext(extractInputText(item.content)).current.trim();
+    const event = extractCurrentTaskEvent(current);
+    if (event) {
+      return {
+        kind: settled ? "settled" : "completion",
+        text: event,
+        caseName:
+          /^task:\s*qa-terminal-(visible|silent|empty|restart|fallback|private)(?:-(?:first|second))?\s*$/imu
+            .exec(event)?.[1]
+            ?.toLowerCase(),
+      };
+    }
+    if (isInternalRuntimeContextCarrierText(current)) {
+      continue;
+    }
+    if (isMockSubagentSettledWake(current)) {
+      settled = true;
+      continue;
+    }
+    const privateWorker = QA_SUBAGENT_PRIVATE_WORKER_RE.exec(current)?.[1]?.toLowerCase();
+    const worker = QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE.exec(current)?.[1]?.toLowerCase();
+    const kickoff = QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE.exec(current)?.[1]?.toLowerCase();
+    // Explicit recovery resumes the preceding task; a fresh unrelated user turn
+    // fences history even when old turns mention one of these QA scenarios.
+    if (!privateWorker && !worker && !kickoff && isSubagentRecoveryText(current)) {
+      continue;
+    }
+    return {
+      kind: settled
+        ? "settled"
+        : privateWorker || worker
+          ? "worker"
+          : kickoff
+            ? "kickoff"
+            : "other",
+      text: current,
+      caseName: privateWorker ? "private" : (worker ?? kickoff),
+      privateWorker: settled ? undefined : privateWorker,
+    };
+  }
+  return undefined;
 }
 
 export function extractMockSubagentContext(input: ResponsesInputItem[]) {
@@ -76,14 +250,6 @@ function isUserTurn(item: ResponsesInputItem) {
   );
 }
 
-function isInternalRuntimeContextCarrierText(text: string) {
-  const trimmed = text.trim();
-  return (
-    trimmed.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
-    trimmed.endsWith(INTERNAL_RUNTIME_CONTEXT_END)
-  );
-}
-
 function isContinuationUserText(text: string) {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -92,6 +258,12 @@ function isContinuationUserText(text: string) {
   return (
     /^(?:continue|keep going|resume|retry|carry on)(?:[.!?])?$/i.test(trimmed) ||
     /\b(?:continue|continuation|compaction|post-compaction|retry|resume)\b/i.test(trimmed)
+  );
+}
+
+function readFunctionCallOutputText(record: Record<string, unknown>) {
+  return [record.text, record.output_text, record.content].find(
+    (value): value is string => typeof value === "string",
   );
 }
 
@@ -108,31 +280,15 @@ function stringifyFunctionCallOutput(output: unknown): string {
         if (!entry || typeof entry !== "object") {
           return "";
         }
-        const record = entry as Record<string, unknown>;
-        if (typeof record.text === "string") {
-          return record.text;
-        }
-        if (typeof record.output_text === "string") {
-          return record.output_text;
-        }
-        if (typeof record.content === "string") {
-          return record.content;
-        }
-        return "";
+        return readFunctionCallOutputText(entry as Record<string, unknown>) ?? "";
       })
       .filter(Boolean)
       .join("\n");
   }
   if (output && typeof output === "object") {
-    const record = output as Record<string, unknown>;
-    if (typeof record.text === "string") {
-      return record.text;
-    }
-    if (typeof record.output_text === "string") {
-      return record.output_text;
-    }
-    if (typeof record.content === "string") {
-      return record.content;
+    const text = readFunctionCallOutputText(output as Record<string, unknown>);
+    if (text !== undefined) {
+      return text;
     }
     try {
       return JSON.stringify(output);
@@ -147,30 +303,19 @@ function isResponsesToolCallOutput(item: ResponsesInputItem) {
   return item.type === "function_call_output" || item.type === "custom_tool_call_output";
 }
 
-function extractFunctionCallOutputText(item: ResponsesInputItem) {
-  if (!isResponsesToolCallOutput(item)) {
-    return "";
-  }
-  return stringifyFunctionCallOutput(item.output);
-}
-
 function findCurrentToolOutput(input: ResponsesInputItem[]): ResponsesInputItem | undefined {
-  const lastUserIndex = input.findLastIndex(isUserTurn);
-  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
-    if (isResponsesToolCallOutput(item)) {
+  let hasLaterContinuation = false;
+  for (const item of input.toReversed()) {
+    const userTurn = isUserTurn(item);
+    if (isResponsesToolCallOutput(item) && (hasLaterContinuation || !userTurn)) {
       return item;
     }
-  }
-  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
-    if (!isResponsesToolCallOutput(candidateItem)) {
-      continue;
-    }
-    const laterUserTexts = input
-      .slice(candidateIndex + 1)
-      .filter(isUserTurn)
-      .map((laterItem) => extractInputText(laterItem.content));
-    if (laterUserTexts.length > 0 && laterUserTexts.every(isContinuationUserText)) {
-      return candidateItem;
+    if (userTurn) {
+      // A fresh authored turn fences old results; continuation turns do not.
+      if (!isContinuationUserText(extractInputText(item.content))) {
+        return undefined;
+      }
+      hasLaterContinuation = true;
     }
   }
   return undefined;
@@ -206,17 +351,13 @@ export function extractToolOutputCallId(input: ResponsesInputItem[]) {
 }
 
 export function extractLatestToolOutput(input: ResponsesInputItem[]) {
-  for (const item of input.toReversed()) {
-    if (isResponsesToolCallOutput(item)) {
-      return stringifyFunctionCallOutput(item.output);
-    }
-  }
-  return "";
+  return stringifyFunctionCallOutput(input.findLast(isResponsesToolCallOutput)?.output);
 }
 
 export function extractAllToolOutputText(input: ResponsesInputItem[]) {
   return input
-    .map((item) => extractFunctionCallOutputText(item))
+    .filter(isResponsesToolCallOutput)
+    .map((item) => stringifyFunctionCallOutput(item.output))
     .filter(Boolean)
     .join("\n");
 }
@@ -324,6 +465,27 @@ function extractAllInputTexts(input: ResponsesInputItem[]) {
     .join("\n");
 }
 
+export function classifyMockOpenAiRequest(
+  input: ResponsesInputItem[],
+  body: Record<string, unknown>,
+): MockOpenAiRequestKind {
+  const instructionText = extractAllRequestTexts(
+    input.filter((item) => item.role === "developer" || item.role === "system"),
+    body,
+  );
+  if (instructionText.startsWith("Write an Activity recap for someone scanning their tasks:")) {
+    return "activity-summary";
+  }
+  if (
+    /context summarization assistant[\s\S]*structured summary[\s\S]*do not continue/i.test(
+      instructionText,
+    )
+  ) {
+    return "compaction-summary";
+  }
+  return hasToolOutput(input) ? "tool-continuation" : "agent-initial";
+}
+
 export function extractInstructionsText(body: Record<string, unknown>) {
   return typeof body.instructions === "string" ? body.instructions.trim() : "";
 }
@@ -394,14 +556,15 @@ export function buildWhatsAppGroupDispatchReply(allInputText: string) {
   return QA_WHATSAPP_REPLY_TO_BOT_SEED_MARKER_RE.exec(allInputText)?.[0];
 }
 
-export function buildWhatsAppBatchedReply(allInputText: string) {
-  const finalMatch = QA_WHATSAPP_BATCHED_FINAL_MARKER_RE.exec(allInputText);
+export function buildWhatsAppBatchedReply(prompt: string) {
+  const { current } = splitMockConversationContext(prompt);
+  const finalMatch = QA_WHATSAPP_BATCHED_FINAL_MARKER_RE.exec(current);
   const suffix = finalMatch?.[1];
   if (!suffix) {
     return undefined;
   }
   const firstMarker = `WHATSAPP_QA_BATCHED_FIRST_${suffix}`;
-  if (!allInputText.includes(firstMarker)) {
+  if (!current.includes(firstMarker)) {
     return `WHATSAPP_QA_BATCHED_MISSING_CONTEXT_${suffix}`;
   }
   return finalMatch[0];
@@ -439,26 +602,16 @@ export function countImageInputs(value: unknown): number {
 }
 
 function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
-  const latestUserIndex = input.findLastIndex(isUserTurn);
-  if (latestUserIndex < 0) {
-    return { text: "", imageInputCount: 0 };
-  }
-
-  const latestUserItem = input[latestUserIndex];
+  const latestUserItem = input.findLast(isUserTurn);
   if (!latestUserItem) {
     return { text: "", imageInputCount: 0 };
   }
-
-  const imageTurnItems = [latestUserItem];
-  const imageInputCount = countImageInputs(imageTurnItems.map((item) => item.content));
+  const imageInputCount = countImageInputs([latestUserItem.content]);
   if (imageInputCount === 0) {
     return { text: "", imageInputCount: 0 };
   }
   return {
-    text: imageTurnItems
-      .map((item) => extractInputText(item.content))
-      .filter(Boolean)
-      .join("\n"),
+    text: extractInputText(latestUserItem.content),
     imageInputCount,
   };
 }

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { hasErrnoCode } from "../../infra/errno.js";
+import { createHttpRequestAbortSignal } from "../../infra/http-request-lifecycle.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
@@ -44,6 +45,7 @@ const { relays, relayBridges, pendingOperations } = nativeHookRelayState;
 
 type InvokeNativeHookRelay = (
   params: InvokeNativeHookRelayParams,
+  signal?: AbortSignal,
 ) => Promise<NativeHookRelayProcessResponse>;
 
 type NativeHookRelayBridgeRenewalResult = "renewed" | "unavailable" | "ownership-changed";
@@ -279,6 +281,7 @@ async function handleNativeHookRelayBridgeRequest(
   res: ServerResponse,
   auth: NativeHookRelayBridgeRequestAuth,
 ): Promise<void> {
+  const requestAbort = createHttpRequestAbortSignal(req, res);
   try {
     if (req.method !== "POST" || req.url !== "/invoke") {
       writeNativeHookRelayBridgeJson(res, 404, { ok: false, error: "not found" });
@@ -311,14 +314,22 @@ async function handleNativeHookRelayBridgeRequest(
       });
       return;
     }
-    const result = await auth.invokeRelay({ ...payload, requireGeneration: true });
+    const result = await auth.invokeRelay(
+      { ...payload, requireGeneration: true },
+      requestAbort.signal,
+    );
     writeNativeHookRelayBridgeJson(res, 200, { ok: true, result });
   } catch (error) {
+    if (requestAbort.signal.aborted) {
+      return;
+    }
     writeNativeHookRelayBridgeJson(
       res,
       isNativeHookRelayBridgeStaleRegistrationError(error) ? 410 : 500,
       { ok: false, error: error instanceof Error ? error.message : String(error) },
     );
+  } finally {
+    requestAbort.cleanup();
   }
 }
 

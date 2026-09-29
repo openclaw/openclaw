@@ -2,22 +2,31 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import chokidar from "chokidar";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../config/runtime-write-application.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
-import { getFreePort } from "../test-utils/ports.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
   clearInstanceBindingProbeCoordinators,
   installInstanceBindingProbeCoordinator,
   writeInstanceBindingProbePlugin,
 } from "./server-plugins.lifecycle.test-fixtures.js";
-import { installInstanceBindingConfigIo } from "./server-plugins.lifecycle.test-support.js";
+import {
+  installInstanceBindingConfigIo,
+  requireBoundRuntime,
+  requestSettledInstanceBindingProbe,
+} from "./server-plugins.lifecycle.test-support.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import {
   connectWebchatClient,
@@ -31,6 +40,25 @@ vi.doUnmock("../plugins/loader.js");
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 installInstanceBindingConfigIo();
+
+async function useGatewayGraphPluginRuntime(): Promise<void> {
+  // Keep the real lazy runtime on this server fixture's mocked Vitest graph.
+  const runtimeModule = await import("../plugins/runtime/index.js");
+  const nativeModule = await import("../plugins/native-module-require.js");
+  const nativeLoad = nativeModule.tryNativeRequireModule;
+  const runtimePaths = new Set([
+    path.resolve("src/plugins/runtime/index.ts"),
+    path.resolve("dist/plugins/runtime/index.js"),
+  ]);
+  const runtimeLoader = vi
+    .spyOn(nativeModule, "tryNativeRequireModule")
+    .mockImplementation((modulePath, options) =>
+      runtimePaths.has(modulePath)
+        ? { ok: true, moduleExport: runtimeModule }
+        : nativeLoad(modulePath, options),
+    );
+  onTestFinished(() => runtimeLoader.mockRestore());
+}
 
 // A real plugin registry replacement must own accounts before their first route exists.
 describe("Gateway plugin replacement channel ownership", () => {
@@ -69,7 +97,7 @@ describe("Gateway plugin replacement channel ownership", () => {
   });
 
   it(
-    "hot-applies first channel setup and pending installs while retaining a sibling channel",
+    "hot-applies pending installs without restarting a sibling whose package metadata keys were reordered",
     { timeout: 120_000 },
     async () => {
       const bundledRoot = tempDirs.make("openclaw-cold-channel-");
@@ -83,7 +111,7 @@ describe("Gateway plugin replacement channel ownership", () => {
             name: id,
             type: "commonjs",
             main: "index.js",
-            openclaw: { extensions: ["./index.js"] },
+            openclaw: { extensions: ["./index.js"], runtimeExtensions: ["./index.js"] },
             peerDependencies: { openclaw: ">=2026.1.1" },
           }),
         );
@@ -113,8 +141,8 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   const channel = ${JSON.stringify(channel)};
   const captured = api.config.channels?.[channel] ?? null;
   let starts = 0, stops = 0;
-  api.registerGatewayMethod(channel + ".probe", ({ respond }) => {
-    respond(true, { instance, captured, starts, stops, pid: process.pid });
+  api.registerGatewayMethod(channel + ".probe", ({ context, respond }) => {
+    respond(true, { instance, captured, starts, stops, pid: process.pid, reloadSettled: context.isConfigReloadSettled() });
   }, { scope: "operator.read" });
   if (!captured?.enabled) return;
   api.registerChannel({ id: channel,
@@ -157,18 +185,23 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       };
       config.channels = { "sibling-chat": { enabled: true, label: "retained" } };
       await fs.writeFile(configPath, JSON.stringify(config));
-      const port = await getFreePort();
       const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
-      const runtimeModule = await import("../plugins/runtime/index.js");
-      const loaderModule = await import("../plugins/loader-module-runtime.js");
-      const createLazyRuntime = loaderModule.createLazyPluginRuntime;
-      const runtimeLoader = vi
-        .spyOn(loaderModule, "createLazyPluginRuntime")
-        .mockImplementation((params) =>
-          createLazyRuntime({ ...params, loadPluginModule: () => runtimeModule }),
-        );
-      onTestFinished(() => runtimeLoader.mockRestore());
-      server = await startTestGatewayServer(port, {
+      await useGatewayGraphPluginRuntime();
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const port = portClaim.port;
+      const watch = chokidar.watch;
+      let configWatcher: ReturnType<typeof watch> | undefined;
+      const watchSpy = vi.spyOn(chokidar, "watch").mockImplementation((paths, options) => {
+        if (!(typeof paths === "string" ? [paths] : paths).includes(configPath)) {
+          return watch(paths, options);
+        }
+        // Explicit writes own reloads; inject the filesystem echo at its race boundary below.
+        configWatcher = new chokidar.FSWatcher(options);
+        queueMicrotask(() => configWatcher?.emit("ready"));
+        return configWatcher;
+      });
+      onTestFinished(() => watchSpy.mockRestore());
+      server = await startTestGatewayServer(portClaim, {
         auth: { mode: "none" },
         controlUiEnabled: false,
         sidecarStartup: "start",
@@ -183,16 +216,25 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         starts: number;
         stops: number;
         pid: number;
+        reloadSettled: boolean;
       };
       const probe = async (channel: string) => {
         const result = await rpcReq<Probe>(connected, `${channel}.probe`, {});
         expect(result.ok, result.error?.message).toBe(true);
         assert.ok(result.payload);
-        return result.payload;
+        // Registration is visible before the watcher releases its lifecycle lease.
+        // Wait for the owner's settlement signal, not a retry of a mutating RPC.
+        const { reloadSettled, ...binding } = result.payload;
+        return { binding, reloadSettled };
       };
-      await expect.poll(async () => (await probe("sibling-chat")).starts).toBe(1);
-      const sibling = await probe("sibling-chat");
-      const cold = await probe("cold-chat");
+      const settledProbe = async (channel: string) =>
+        await vi.waitUntil(async () => {
+          const result = await probe(channel);
+          return result.reloadSettled ? result.binding : false;
+        });
+      await expect.poll(async () => (await settledProbe("sibling-chat")).starts).toBe(1);
+      const sibling = await settledProbe("sibling-chat");
+      const cold = await settledProbe("cold-chat");
       expect(cold).toMatchObject({ captured: null, starts: 0, stops: 0, pid: process.pid });
       for (const label of ["first setup", "edited setup"]) {
         const current = await rpcReq<{ hash: string }>(connected, "config.get", {});
@@ -204,13 +246,32 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         expect(changed.payload).toMatchObject({
           sentinel: { payload: { stats: { requiresRestart: false } } },
         });
-        await expect.poll(async () => (await probe("cold-chat")).captured?.label).toBe(label);
-        expect(await probe("cold-chat")).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
-        expect((await probe("cold-chat")).instance).not.toBe(cold.instance);
-        expect(await probe("sibling-chat")).toEqual(sibling);
+        await expect
+          .poll(async () => (await settledProbe("cold-chat")).captured?.label)
+          .toBe(label);
+        expect(await settledProbe("cold-chat")).toMatchObject({
+          starts: 1,
+          stops: 0,
+          pid: cold.pid,
+        });
+        expect((await settledProbe("cold-chat")).instance).not.toBe(cold.instance);
+        expect(await settledProbe("sibling-chat")).toEqual(sibling);
       }
+      // Installing another plugin can rebuild metadata through a different producer.
+      // Reordering an unchanged sibling's package keys must not stop its live account.
+      const siblingPackagePath = path.join(bundledRoot, "sibling-chat-owner", "package.json");
+      const siblingPackage = JSON.parse(await fs.readFile(siblingPackagePath, "utf8"));
+      await fs.writeFile(
+        siblingPackagePath,
+        JSON.stringify({
+          ...siblingPackage,
+          openclaw: { runtimeExtensions: ["./index.js"], extensions: ["./index.js"] },
+        }),
+      );
       const persisted = JSON.parse(await fs.readFile(configPath, "utf8"));
+      const application = createRuntimeConfigWriteApplication();
       const committed = await commitConfigWithPendingPluginInstalls({
+        writeOptions: attachRuntimeConfigWriteApplication({}, application),
         nextConfig: {
           ...persisted,
           channels: {
@@ -230,11 +291,35 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         },
       });
       expect(committed.afterWrite.mode).toBe("auto");
-      await expect
-        .poll(async () => (await probe("cold-chat")).captured?.label)
-        .toBe("installed setup");
-      expect(await probe("cold-chat")).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
-      expect(await probe("sibling-chat")).toEqual(sibling);
+      expect(application.claimed).toBe(true);
+      // Persistence schedules application; await its owner before probing the replacement.
+      await expect(application.result).resolves.toBe("applied");
+      expect((await settledProbe("cold-chat")).captured?.label).toBe("installed setup");
+      expect(await settledProbe("cold-chat")).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
+      expect(await settledProbe("sibling-chat")).toEqual(sibling);
+      assert.ok(configWatcher);
+      const watcher = configWatcher;
+      const metadataModule = await import("../config/io.plugin-metadata.js");
+      const resolveMetadata = metadataModule.resolveConfigWidePluginMetadataSnapshotAsync;
+      let echoed = false;
+      const metadataSpy = vi
+        .spyOn(metadataModule, "resolveConfigWidePluginMetadataSnapshotAsync")
+        .mockImplementation(async (params) => {
+          const metadata = await resolveMetadata(params);
+          if (!echoed && params.allowCurrent === false) {
+            echoed = true;
+            // The config write can echo while explicit reload prepares its metadata.
+            watcher.emit("change", configPath);
+          }
+          return metadata;
+        });
+      onTestFinished(() => metadataSpy.mockRestore());
+      const explicit = await rpcReq(connected, "plugins.reload", {
+        plugins: [{ pluginId: "cold-chat-owner" }],
+      });
+      expect(echoed).toBe(true);
+      expect(explicit.ok, explicit.error?.message).toBe(true);
+      expect(await settledProbe("sibling-chat")).toEqual(sibling);
       expect(connected.readyState).toBe(connected.OPEN);
       expect(hotReloadRecovery).not.toHaveBeenCalled();
     },
@@ -242,11 +327,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
 
   it.each([
     {
-      name: "hands off live and pending webhook accounts while preserving a manual stop",
+      name: "hands off live and pending webhook accounts without requiring a restart while preserving a manual stop",
       teardownFails: false,
     },
     {
-      name: "replaces live and pending webhook accounts with a warning when service stop rejects",
+      name: "refuses webhook account replacement when service cleanup rejects",
       teardownFails: true,
     },
   ])("$name", { timeout: 120_000 }, async ({ teardownFails }) => {
@@ -333,21 +418,13 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       },
     };
     await fs.writeFile(configPath, JSON.stringify(config));
-    const port = await getFreePort();
     const hotReloadRecovery = vi.fn(() => ({
       status: "emitted" as const,
     }));
-    // Use the real runtime in Vitest's graph; native loading evaluates its mocked graph again.
-    const runtimeModule = await import("../plugins/runtime/index.js");
-    const loaderModule = await import("../plugins/loader-module-runtime.js");
-    const createLazyRuntime = loaderModule.createLazyPluginRuntime;
-    const runtimeLoader = vi
-      .spyOn(loaderModule, "createLazyPluginRuntime")
-      .mockImplementation((params) =>
-        createLazyRuntime({ ...params, loadPluginModule: () => runtimeModule }),
-      );
-    onTestFinished(() => runtimeLoader.mockRestore());
-    server = await startTestGatewayServer(port, {
+    await useGatewayGraphPluginRuntime();
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const port = portClaim.port;
+    server = await startTestGatewayServer(portClaim, {
       auth: { mode: "none" },
       controlUiEnabled: false,
       sidecarStartup: "start",
@@ -381,10 +458,35 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     expect(stopped.ok, stopped.error?.message).toBe(true);
     expect((await probe("parked")).status).toBe(404);
 
+    const { runtime } = await requireBoundRuntime(coordinator.runtimes, "webhook channel reload");
+    await requestSettledInstanceBindingProbe(runtime);
     const initialRegistry = getActivePluginRegistry();
     const reload = await rpcReq(socket, "plugins.reload", {
       plugins: [{ pluginId: "instance-binding-probe" }],
     });
+    if (teardownFails) {
+      expect(reload).toMatchObject({
+        ok: false,
+        error: { details: { runtime: { committed: false, phase: "drain" } } },
+      });
+      expect(reload.error?.message).toContain("instance-binding service cleanup rejected");
+      expect(coordinator.serviceStops).toBe(1);
+      expect(coordinator.serviceStarts).toBe(1);
+      expect(getActivePluginRegistry()).toBe(initialRegistry);
+      releasePending.resolve();
+      for (const accountId of ["active", "pending", "parked"]) {
+        expect((await probe(accountId)).status).toBe(accountId === "active" ? 503 : 404);
+        expect(starts.get(accountId)).toBe(1);
+      }
+      const retry = await rpcReq(socket, "plugins.reload", {
+        plugins: [{ pluginId: "instance-binding-probe" }],
+      });
+      expect(retry.ok).toBe(false);
+      expect(coordinator.serviceStarts).toBe(1);
+      expect((await rpcReq(socket, "config.get", {})).ok).toBe(true);
+      expect(hotReloadRecovery).not.toHaveBeenCalled();
+      return;
+    }
     expect(reload, reload.error?.message).toMatchObject({
       ok: true,
       payload: {
@@ -393,15 +495,6 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         runtime: { pluginIds: ["instance-binding-probe"] },
       },
     });
-    if (teardownFails) {
-      expect(reload.payload).toMatchObject({
-        warnings: expect.arrayContaining([
-          expect.stringContaining("instance-binding service cleanup rejected"),
-        ]),
-      });
-      expect(coordinator.serviceStops).toBe(1);
-      expect(coordinator.serviceStarts).toBe(2);
-    }
     await expect
       .poll(() => getActivePluginRegistry() !== initialRegistry, { timeout: 180_000 })
       .toBe(true);

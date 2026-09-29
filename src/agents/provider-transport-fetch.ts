@@ -1,9 +1,4 @@
 import { emitModelTransportDebug, formatModelTransportDebugUrl } from "@openclaw/ai/diagnostics";
-/**
- * Guarded provider fetch transport utilities.
- *
- * Applies request timeouts, proxy/TLS overrides, SSRF policy, local-service leases, retry hints, and SSE normalization.
- */
 import { parseRetryAfterHeadersSeconds as parseRetryAfterSeconds } from "@openclaw/ai/internal/retry-after";
 import {
   isCloudMetadataIpAddress,
@@ -13,7 +8,7 @@ import {
 } from "@openclaw/net-policy/ip";
 import {
   asFiniteNumberInRange,
-  clampTimerTimeoutMs,
+  clampPositiveTimerTimeoutMs,
   parseStrictFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -32,13 +27,12 @@ import {
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
+import { isRetryableProviderHttpStatus } from "./failover/retry-evidence.js";
 import {
-  containsSecretSentinel,
-  resolveSecretSentinel,
-  SECRET_SENTINEL_PATTERN,
-  swapSecretSentinelsInText,
-} from "../secrets/sentinel.js";
-import { ProviderHttpError, readResponseTextLimited } from "./provider-http-errors.js";
+  ProviderHttpError,
+  readResponseTextLimited,
+  summarizeProviderTransportError,
+} from "./provider-http-errors.js";
 import type { ProviderLocalServiceLease } from "./provider-local-service-target.js";
 import { ensureModelProviderLocalService } from "./provider-local-service.js";
 import {
@@ -49,8 +43,11 @@ import {
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
 import { getProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
+import { requestBodyHasStreamTrue } from "./provider-transport-request-body.js";
+import { swapSecretSentinelsForEgress } from "./provider-transport-secret-egress.js";
 
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
+const SLOW_MODEL_FETCH_MS = 1_000;
 const OPENAI_SDK_STREAM_CONTENT_SNIFF_BYTES = 2 * 1024;
 const log = createSubsystemLogger("provider-transport-fetch");
 
@@ -69,31 +66,19 @@ const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 
 function hasReadableSseData(block: string): boolean {
-  const dataLines = block
+  return block
     .split(/\r\n|\n|\r/)
-    .filter((line) => line === "data" || line.startsWith("data:"))
-    .map((line) => {
-      if (line === "data") {
-        return "";
-      }
-      const value = line.slice("data:".length);
-      return value.startsWith(" ") ? value.slice(1) : value;
-    });
-  return dataLines.length > 0 && dataLines.join("\n").trim().length > 0;
+    .some((line) => line.startsWith("data:") && line.slice("data:".length).trim().length > 0);
 }
 
-function findSseEventBoundary(buffer: string): { index: number; length: number } | undefined {
-  let best: { index: number; length: number } | undefined;
-  for (const delimiter of ["\r\n\r\n", "\n\n", "\r\r"]) {
-    const index = buffer.indexOf(delimiter);
-    if (index === -1) {
-      continue;
-    }
-    if (!best || index < best.index) {
-      best = { index, length: delimiter.length };
-    }
-  }
-  return best;
+function findSseEventBoundary(
+  buffer: string,
+  startIndex = 0,
+): { index: number; length: number } | undefined {
+  const delimiter = /\r\n\r\n|\n\n|\r\r/g;
+  delimiter.lastIndex = startIndex;
+  const match = delimiter.exec(buffer);
+  return match ? { index: match.index, length: match[0].length } : undefined;
 }
 
 async function cancelReaderBestEffort(
@@ -160,10 +145,7 @@ function sanitizeOpenAISdkSseResponse(
   if (!response.ok) {
     return capNonOkResponseBodyLazily(response, SSE_NONOK_BODY_MAX_BYTES);
   }
-  if (
-    options?.synthesizeJsonAsSse === true &&
-    (/\bapplication\/json\b/i.test(contentType) || /\+json\b/i.test(contentType))
-  ) {
+  if (options?.synthesizeJsonAsSse === true && isJsonContentType(contentType)) {
     const source = response.body;
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
@@ -223,32 +205,34 @@ function sanitizeOpenAISdkSseResponse(
   const encoder = new TextEncoder();
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let buffer = "";
+  let scanOffset = 0;
 
   const enqueueSanitized = (
     controller: ReadableStreamDefaultController<Uint8Array>,
     text: string,
-  ): number => {
-    let enqueued = 0;
+  ): boolean => {
     buffer += text;
     for (;;) {
-      const boundary = findSseEventBoundary(buffer);
+      const boundary = findSseEventBoundary(buffer, scanOffset);
       if (!boundary) {
+        // A delimiter can straddle chunks; only its last three characters need revisiting.
+        scanOffset = Math.max(0, buffer.length - 3);
         if (buffer.length > SSE_SANITIZE_BUFFER_MAX_CHARS) {
           throw new Error(
             `SSE response exceeded max buffer size (${SSE_SANITIZE_BUFFER_MAX_CHARS} chars) without event boundary`,
           );
         }
-        return enqueued;
+        return false;
       }
       const block = buffer.slice(0, boundary.index);
       const separator = buffer.slice(boundary.index, boundary.index + boundary.length);
       buffer = buffer.slice(boundary.index + boundary.length);
+      scanOffset = 0;
       // OpenAI's SDK currently tries to JSON.parse event-only or blank-data SSE
       // messages. Drop those malformed keepalive-style blocks before it parses.
       if (hasReadableSseData(block)) {
         controller.enqueue(encoder.encode(`${block}${separator}`));
-        enqueued += 1;
-        return enqueued;
+        return true;
       }
     }
   };
@@ -260,8 +244,7 @@ function sanitizeOpenAISdkSseResponse(
     async pull(controller) {
       try {
         for (;;) {
-          const pending = enqueueSanitized(controller, "");
-          if (pending > 0) {
+          if (enqueueSanitized(controller, "")) {
             return;
           }
           const chunk = await reader?.read();
@@ -277,11 +260,7 @@ function sanitizeOpenAISdkSseResponse(
             controller.close();
             return;
           }
-          const enqueued = enqueueSanitized(
-            controller,
-            decoder.decode(chunk.value, { stream: true }),
-          );
-          if (enqueued > 0) {
+          if (enqueueSanitized(controller, decoder.decode(chunk.value, { stream: true }))) {
             return;
           }
         }
@@ -295,22 +274,14 @@ function sanitizeOpenAISdkSseResponse(
     },
   });
 
-  return new Response(sanitizedBody, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
+  return new Response(sanitizedBody, response);
 }
 
 function shouldSanitizeOpenAISdkSseResponse(model: Model): boolean {
-  if (model.provider !== "openai") {
-    return true;
-  }
-  try {
-    return new URL(model.baseUrl).hostname.toLowerCase() !== "api.openai.com";
-  } catch {
-    return true;
-  }
+  return (
+    model.provider !== "openai" ||
+    URL.parse(model.baseUrl)?.hostname.toLowerCase() !== "api.openai.com"
+  );
 }
 
 function isJsonContentType(contentType: string): boolean {
@@ -397,22 +368,18 @@ async function normalizeOpenAISdkStreamContentType(params: {
   if (/\btext\/event-stream\b/i.test(contentType)) {
     return params.response;
   }
-  if (isJsonContentType(contentType)) {
+  const isJson = isJsonContentType(contentType);
+  if (isJson || !contentType.trim()) {
     // Some OpenAI-compatible gateways stream real SSE (`data: {...}`) but mislabel
     // the response as JSON. Without relabeling, the JSON-wrap fallback below would
     // re-prefix each frame as `data: data: {...}`, breaking JSON.parse in the SDK.
+    // Missing content types use the same clone sniff while preserving the original body.
     const kind = await classifyOpenAISdkStreamBody(params.response).catch(() => "unknown" as const);
     if (kind === "sse") {
       return withOpenAISdkStreamContentType(params.response, "text/event-stream; charset=utf-8");
     }
-    return params.response;
-  }
-  if (!contentType.trim()) {
-    // ChatGPT Codex can stream valid SSE with no content-type header. Sniff a
-    // clone so the SDK still receives the original body once we normalize it.
-    const kind = await classifyOpenAISdkStreamBody(params.response).catch(() => "unknown" as const);
-    if (kind === "sse") {
-      return withOpenAISdkStreamContentType(params.response, "text/event-stream; charset=utf-8");
+    if (isJson) {
+      return params.response;
     }
     if (kind === "json") {
       return withOpenAISdkStreamContentType(params.response, "application/json; charset=utf-8");
@@ -433,34 +400,6 @@ async function normalizeOpenAISdkStreamContentType(params: {
   });
 }
 
-function requestBodyHasStreamTrue(
-  request: Request | undefined,
-  init: RequestInit | undefined,
-): boolean {
-  const method = request?.method ?? init?.method;
-  if (method && method.toUpperCase() !== "POST") {
-    return false;
-  }
-  const headers = request?.headers ?? new Headers(init?.headers);
-  const contentType = headers.get("content-type") ?? "";
-  if (contentType && !/\bapplication\/json\b/i.test(contentType)) {
-    return false;
-  }
-
-  let text: string | undefined;
-  if (typeof init?.body === "string") {
-    text = init.body;
-  }
-  if (!text) {
-    return false;
-  }
-  try {
-    return (JSON.parse(text) as { stream?: unknown }).stream === true;
-  } catch {
-    return false;
-  }
-}
-
 function resolveMaxSdkRetryWaitSeconds(): number | undefined {
   const raw = process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS?.trim();
   if (!raw) {
@@ -475,16 +414,13 @@ function resolveMaxSdkRetryWaitSeconds(): number | undefined {
     return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
   }
 
-  const seconds = asFiniteNumberInRange(parseStrictFiniteNumber(raw), {
-    min: 0,
-    minExclusive: true,
-    max: Number.MAX_SAFE_INTEGER,
-  });
-  if (seconds !== undefined) {
-    return seconds;
-  }
-
-  return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
+  return (
+    asFiniteNumberInRange(parseStrictFiniteNumber(raw), {
+      min: 0,
+      minExclusive: true,
+      max: Number.MAX_SAFE_INTEGER,
+    }) ?? DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS
+  );
 }
 
 function shouldBypassLongSdkRetry(response: Response): boolean {
@@ -494,8 +430,7 @@ function shouldBypassLongSdkRetry(response: Response): boolean {
   }
 
   const status = response.status;
-  const stainlessRetryable = status === 408 || status === 409 || status === 429 || status >= 500;
-  if (!stainlessRetryable) {
+  if (!isRetryableProviderHttpStatus(status)) {
     return false;
   }
 
@@ -532,11 +467,7 @@ function buildManagedResponse(
     },
     refreshTimeout,
   });
-  return new Response(wrappedBody, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
+  return new Response(wrappedBody, response);
 }
 
 function resolveModelRequestPolicy(model: Model) {
@@ -575,15 +506,11 @@ export function resolveModelRequestTimeoutMs(
   model: Model,
   timeoutMs: number | undefined,
 ): number | undefined {
-  if (timeoutMs !== undefined) {
-    return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-      ? clampTimerTimeoutMs(timeoutMs)
-      : undefined;
-  }
-  const modelTimeoutMs = (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
-  return typeof modelTimeoutMs === "number" && Number.isFinite(modelTimeoutMs) && modelTimeoutMs > 0
-    ? clampTimerTimeoutMs(modelTimeoutMs)
-    : undefined;
+  return clampPositiveTimerTimeoutMs(
+    timeoutMs === undefined
+      ? (model as { requestTimeoutMs?: unknown }).requestTimeoutMs
+      : timeoutMs,
+  );
 }
 
 function buildModelRequestSignal(
@@ -604,32 +531,23 @@ function resolveHttpOrigin(value: unknown): string | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
   }
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
-    return parsed.origin.toLowerCase();
-  } catch {
+  const parsed = URL.parse(value);
+  if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
     return undefined;
   }
+  parsed.hostname = parsed.hostname.replace(/\.+$/, "");
+  return parsed.origin.toLowerCase();
 }
 
 function normalizeProviderOriginHostname(value: unknown): string | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
   }
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    const normalized = parsed.hostname.trim().toLowerCase().replace(/\.+$/, "");
-    return normalized || undefined;
-  } catch {
+  const parsed = URL.parse(value);
+  if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
     return undefined;
   }
+  return parsed.hostname.trim().toLowerCase().replace(/\.+$/, "") || undefined;
 }
 
 function canImplicitlyTrustConfiguredBaseUrlOrigin(value: unknown): value is string {
@@ -722,63 +640,6 @@ function withModelProviderNetworkRemediation(
   );
 }
 
-function headersContainSecretSentinel(headers: HeadersInit | undefined): boolean {
-  if (!headers) {
-    return false;
-  }
-  for (const value of new Headers(headers).values()) {
-    if (containsSecretSentinel(value)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function swapSecretSentinelsInUrl(url: string): { text: string; unknown: string[] } {
-  if (!containsSecretSentinel(url)) {
-    return { text: url, unknown: [] };
-  }
-  const unknown = new Set<string>();
-  const text = url.replace(new RegExp(SECRET_SENTINEL_PATTERN.source, "g"), (sentinel) => {
-    const value = resolveSecretSentinel(sentinel);
-    if (value === undefined) {
-      unknown.add(sentinel);
-      return sentinel;
-    }
-    // Sentinels are URL-safe placeholders. Encode the real bytes so query/path structure is stable.
-    return encodeURIComponent(value);
-  });
-  return { text, unknown: [...unknown] };
-}
-
-function swapSecretSentinelsForEgress(params: { url: string; headers?: HeadersInit }): {
-  url: string;
-  headers?: Headers;
-} {
-  if (!containsSecretSentinel(params.url) && !headersContainSecretSentinel(params.headers)) {
-    return { url: params.url };
-  }
-  const urlSwap = swapSecretSentinelsInUrl(params.url);
-  const headers = params.headers ? new Headers(params.headers) : undefined;
-  const unknown = new Set(urlSwap.unknown);
-  if (headers) {
-    for (const [name, value] of headers.entries()) {
-      const swapped = swapSecretSentinelsInText(value);
-      headers.set(name, swapped.text);
-      for (const sentinel of swapped.unknown) {
-        unknown.add(sentinel);
-      }
-    }
-  }
-  const unresolved = unknown.values().next().value;
-  if (unresolved) {
-    throw new Error(
-      `Secret sentinel ${unresolved} is not registered in this process; refusing to send request`,
-    );
-  }
-  return { url: urlSwap.text, ...(headers ? { headers } : {}) };
-}
-
 export function buildGuardedModelFetch(
   model: Model,
   timeoutMs?: number,
@@ -787,24 +648,6 @@ export function buildGuardedModelFetch(
   const requestConfig = resolveModelRequestPolicy(model);
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
   const requestTimeoutMs = resolveModelRequestTimeoutMs(model, timeoutMs);
-  const summarizeError = (error: unknown): string => {
-    if (!error || typeof error !== "object") {
-      return `type=${typeof error}`;
-    }
-    const record = error as Record<string, unknown>;
-    const cause =
-      record.cause && typeof record.cause === "object"
-        ? (record.cause as Record<string, unknown>)
-        : undefined;
-    const read = (value: unknown) => (typeof value === "string" ? value : typeof value);
-    return [
-      `name=${read(record.name)}`,
-      `code=${read(record.code)}`,
-      `causeName=${read(cause?.name)}`,
-      `causeCode=${read(cause?.code)}`,
-      `message=${error instanceof Error ? error.message : read(record.message)}`,
-    ].join(" ");
-  };
   return async (input, init) => {
     let localServiceLease: ProviderLocalServiceLease | undefined;
     const request = input instanceof Request ? new Request(input, init) : undefined;
@@ -895,19 +738,23 @@ export function buildGuardedModelFetch(
       });
       log.warn(
         `[model-fetch] error provider=${model.provider} api=${model.api} model=${model.id} ` +
-          `elapsedMs=${Date.now() - fetchStartedAt} ${summarizeError(remediatedError)}`,
+          `elapsedMs=${Date.now() - fetchStartedAt} ${summarizeProviderTransportError(remediatedError)}`,
       );
       localServiceLease?.release();
       throw remediatedError;
     }
     let response = result.response;
-    emitModelTransportDebug(
-      log,
+    const elapsedMs = Date.now() - fetchStartedAt;
+    const responseMessage =
       `[model-fetch] response provider=${model.provider} api=${model.api} model=${model.id} ` +
-        `status=${response.status} elapsedMs=${Date.now() - fetchStartedAt} ` +
-        `dispatcher=${result.dispatcherReused ? "reused" : "new"} ` +
-        `contentType=${response.headers.get("content-type") ?? ""}`,
-    );
+      `status=${response.status} elapsedMs=${elapsedMs} ` +
+      `dispatcher=${result.dispatcherReused ? "reused" : "new"} ` +
+      `contentType=${response.headers.get("content-type") ?? ""}`;
+    if (!response.ok || elapsedMs >= SLOW_MODEL_FETCH_MS) {
+      log.info(responseMessage);
+    } else {
+      emitModelTransportDebug(log, responseMessage);
+    }
     if (shouldBypassLongSdkRetry(response)) {
       const headers = new Headers(response.headers);
       headers.set("x-should-retry", "false");

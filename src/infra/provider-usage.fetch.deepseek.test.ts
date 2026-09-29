@@ -14,17 +14,21 @@ describe("fetchDeepSeekUsage", () => {
         is_available: true,
         balance_infos: [
           {
-            currency: "USD",
+            currency: " usd ",
             total_balance: "1.25",
             granted_balance: "0",
             topped_up_balance: "1.25",
           },
           {
-            currency: "CNY",
+            currency: " cny ",
             total_balance: "42.50",
             granted_balance: "12.00",
             topped_up_balance: "30.50",
           },
+          { currency: 42, total_balance: "invalid" },
+          { currency: " ", total_balance: -2, granted_balance: "1", topped_up_balance: "4" },
+          { total_balance: "-0" },
+          { currency: "rmb", total_balance: 2, granted_balance: "-1", topped_up_balance: "0" },
         ],
       });
     });
@@ -38,8 +42,11 @@ describe("fetchDeepSeekUsage", () => {
       billing: [
         { type: "balance", amount: 1.25, unit: "USD" },
         { type: "balance", amount: 42.5, unit: "CNY" },
+        { type: "balance", amount: -0, unit: "credits" },
+        { type: "balance", amount: 2, unit: "RMB" },
       ],
-      summary: "Balance $1.25 · Balance ¥42.50 · Granted ¥12.00 · Topped up ¥30.50",
+      summary:
+        "Balance $1.25 · Balance ¥42.50 · Granted ¥12.00 · Topped up ¥30.50 · Balance -2.00 · Granted 1.00 · Topped up 4.00 · Balance 0.00 · Balance ¥2.00",
     });
   });
 
@@ -74,9 +81,14 @@ describe("fetchDeepSeekUsage", () => {
     expect(result.summary).toBeUndefined();
   });
 
-  it("returns a stable error when balance data is absent", async () => {
+  it.each([
+    ["missing balances", []],
+    ["missing totals", [{}]],
+    ["null totals", [{ total_balance: null }]],
+    ["invalid totals", [{ total_balance: "invalid" }]],
+  ])("returns a stable error for %s", async (_name, balanceInfos) => {
     const mockFetch = createProviderUsageFetch(async () =>
-      makeResponse(200, { is_available: true, balance_infos: [] }),
+      makeResponse(200, { is_available: true, balance_infos: balanceInfos }),
     );
 
     const result = await fetchDeepSeekUsage("deepseek-key", 5000, mockFetch);

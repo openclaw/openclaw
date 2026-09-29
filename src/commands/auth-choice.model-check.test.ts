@@ -1,6 +1,10 @@
 // Auth-choice model check tests cover warnings for mismatched model and auth config.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -128,11 +132,7 @@ describe("warnIfModelConfigLooksOff", () => {
       pendingAuthProfiles: [
         {
           profileId: "openai:default",
-          credential: {
-            type: "api_key",
-            provider: "openai",
-            key: "test-openai-key",
-          },
+          credential: createApiKeyCredential("openai", "test-openai-key"),
         },
       ],
     });
@@ -146,18 +146,15 @@ describe("warnIfModelConfigLooksOff", () => {
   it("accepts Codex OAuth profiles for canonical OpenAI models using the Codex runtime", async () => {
     const note = vi.fn(async (_message: string) => {});
     const prompter = makePrompter({ note });
-    const store = {
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "oauth",
-          provider: "openai",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 60_000,
-        },
+    const store = createAuthProfileStoreFixture({
+      "openai:default": {
+        type: "oauth",
+        provider: "openai",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: Date.now() + 60_000,
       },
-    } satisfies AuthProfileStore;
+    }) satisfies AuthProfileStore;
     ensureAuthProfileStore.mockReturnValue(store);
     const config = {
       agents: {
@@ -177,18 +174,15 @@ describe("warnIfModelConfigLooksOff", () => {
   it("keeps custom OpenAI-compatible provider auth separate from Codex OAuth profiles", async () => {
     const note = vi.fn(async (_message: string, _title?: string) => {});
     const prompter = makePrompter({ note });
-    const store = {
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "oauth",
-          provider: "openai",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 60_000,
-        },
+    const store = createAuthProfileStoreFixture({
+      "openai:default": {
+        type: "oauth",
+        provider: "openai",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: Date.now() + 60_000,
       },
-    } satisfies AuthProfileStore;
+    }) satisfies AuthProfileStore;
     ensureAuthProfileStore.mockReturnValue(store);
     const config = {
       agents: {
@@ -236,35 +230,29 @@ describe("warnIfModelConfigLooksOff", () => {
     expect(warning).toContain("openclaw models auth login --provider openai");
     expect(warning).not.toContain("set an API key env var");
 
-    const store = {
-      version: 1,
-      profiles: {
-        "openai:subscription": {
-          type: "oauth",
-          provider: "openai",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 60_000,
-        },
+    const store = createAuthProfileStoreFixture({
+      "openai:subscription": {
+        type: "oauth",
+        provider: "openai",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: Date.now() + 60_000,
       },
-    } satisfies AuthProfileStore;
+    }) satisfies AuthProfileStore;
     ensureAuthProfileStore.mockReturnValue(store);
     expect(resolveDefaultModelAuthStatus(config)).toMatchObject({ status: "ready", hasAuth: true });
   });
 
   it("maps incompatible route facts to status and recovery wording", async () => {
-    const store = {
-      version: 1,
-      profiles: {
-        "openai:subscription": {
-          type: "oauth",
-          provider: "openai",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 60_000,
-        },
+    const store = createAuthProfileStoreFixture({
+      "openai:subscription": {
+        type: "oauth",
+        provider: "openai",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: Date.now() + 60_000,
       },
-    } satisfies AuthProfileStore;
+    }) satisfies AuthProfileStore;
     ensureAuthProfileStore.mockReturnValue(store);
     const config = {
       agents: { defaults: { model: "openai/gpt-5.6" } },
@@ -294,18 +282,15 @@ describe("warnIfModelConfigLooksOff", () => {
   });
 
   it("uses selected static ChatGPT catalog facts for auth checks", () => {
-    const store = {
-      version: 1,
-      profiles: {
-        "openai:subscription": {
-          type: "oauth",
-          provider: "openai",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 60_000,
-        },
+    const store = createAuthProfileStoreFixture({
+      "openai:subscription": {
+        type: "oauth",
+        provider: "openai",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: Date.now() + 60_000,
       },
-    } satisfies AuthProfileStore;
+    }) satisfies AuthProfileStore;
     ensureAuthProfileStore.mockReturnValue(store);
     const observedRoute = {
       api: "openai-chatgpt-responses",
@@ -380,9 +365,8 @@ describe("warnIfModelConfigLooksOff", () => {
       ...chatGPTRoute,
     } satisfies ModelCatalogEntry;
     const routeVariants = chatGPTFirst ? [chatGPT, platform] : [platform, chatGPT];
-    ensureAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {
+    ensureAuthProfileStore.mockReturnValue(
+      createAuthProfileStoreFixture({
         "openai:subscription": {
           type: "oauth",
           provider: "openai",
@@ -390,8 +374,8 @@ describe("warnIfModelConfigLooksOff", () => {
           refresh: "refresh-token",
           expires: Date.now() + 60_000,
         },
-      },
-    });
+      }),
+    );
     const config = {
       agents: { defaults: { model: "openai/gpt-5.4-nano" } },
     } as OpenClawConfig;

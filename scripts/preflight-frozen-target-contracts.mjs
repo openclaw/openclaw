@@ -15,9 +15,16 @@ const toolingClosure = [
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/official-external-provider-catalog.json",
+  "scripts/lib/record-shared.mjs",
+  "scripts/lib/update-compat-inventory.json",
+  "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
+  "scripts/lib/upgrade-survivor-scenarios.json",
   "scripts/lib/release-version.mjs",
   "scripts/lib/frozen-target-compat.sh",
+  "scripts/lib/trusted-native-typescript.mjs",
+  "scripts/lib/native-typescript.mts",
   "scripts/resolve-frozen-codex-live-suite.mjs",
   "scripts/resolve-fs-safe-native-contract.mjs",
   "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
@@ -42,6 +49,7 @@ const shellOwners = {
       `${prefix}ONBOARD_SESSION_MEMORY_HOOK_MODE`,
       `${prefix}TYPED_ONBOARDING_SCENARIO_PATH`,
       `${prefix}TYPED_ONBOARDING_ASSERTIONS_PATH`,
+      `${prefix}TYPED_ONBOARDING_ASSERTION_FILES_PATH`,
       `${prefix}TYPED_ONBOARDING_MOCK_CONFIG_PATH`,
     ],
   ],
@@ -77,7 +85,11 @@ const shellOwners = {
   ],
   "upgrade-survivor": [
     "upgrade_survivor_capabilities",
-    ["OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE"],
+    [
+      "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE",
+      "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE",
+      "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE",
+    ],
   ],
 };
 
@@ -147,6 +159,7 @@ const selectedMetadata = {
     "src/commands/onboard-hooks.ts",
     "scripts/e2e/lib/release-typed-onboarding/scenario.sh",
     "scripts/e2e/lib/release-scenarios/assertions.mjs",
+    "scripts/e2e/lib/release-assertion-files.mjs",
     "scripts/e2e/lib/fixtures/mock-openai-config.mjs",
   ],
   "session-runtime-context": [
@@ -185,6 +198,7 @@ const selectedMetadata = {
   "upgrade-survivor": [
     "package.json",
     "src/infra/clawhub-install-trust.ts",
+    "src/cli/update-cli/update-command-terminal-publication.ts",
     "src/plugins/clawhub.ts",
     "scripts/e2e/lib/upgrade-survivor",
     "scripts/lib/npm-publish-plan.mjs",
@@ -446,6 +460,7 @@ async function planWorkflowAdmission(input) {
     RELEASE_PACKAGE_ACCEPTANCE_LANES,
   } = await import("./plan-release-workflow-matrix.mjs");
   const { releasePathChunkLanes } = await import("./lib/docker-e2e-scenarios.mts");
+  const { isUpdateFirstHopCompatLane } = await import("./lib/update-first-hop-lanes.mjs");
   const { createPluginPrereleaseTestPlan } = await import("./lib/plugin-prerelease-test-plan.mts");
   const { parseUpgradeSurvivorScenarios } = await import("./lib/upgrade-survivor-policy.mjs");
   const baselineOptions = options.baselinesResolved
@@ -576,8 +591,11 @@ async function planWorkflowAdmission(input) {
         requested: requestedBaselines,
       });
     } else {
-      const { normalizeUpgradeSurvivorBaselineSpec, parseUpgradeSurvivorBaselineSpecs } =
-        await import("./lib/upgrade-survivor-policy.mjs");
+      const {
+        assertSupportedUpgradeSurvivorBaselineSpec,
+        normalizeUpgradeSurvivorBaselineSpec,
+        parseUpgradeSurvivorBaselineSpecs,
+      } = await import("./lib/upgrade-survivor-policy.mjs");
       const specs = [
         normalizeUpgradeSurvivorBaselineSpec(options.upgradeSurvivorBaseline),
         ...parseUpgradeSurvivorBaselineSpecs(options.upgradeSurvivorBaselines),
@@ -585,6 +603,7 @@ async function planWorkflowAdmission(input) {
       if (!specs[0] || specs.some((spec) => !/^openclaw@[0-9]/u.test(spec))) {
         throw new Error("unresolved upgrade baselines at the execution boundary");
       }
+      specs.forEach(assertSupportedUpgradeSurvivorBaselineSpec);
     }
   }
   const sourcePaths = new Set();
@@ -610,15 +629,16 @@ async function planWorkflowAdmission(input) {
   const fsSafeNative = selections.some((selection) => selection.fsSafeNative);
   if (fsSafeNative && allow) {
     sourcePaths.add("package.json");
+    // Older frozen contracts still inspect this retired shim; absent paths need no hydration.
     sourcePaths.add("src/infra/fs-safe-defaults.ts");
   }
-  for (const [lane, path] of [
-    ["update-first-hop-compat", "scripts/runtime-postbuild.mts"],
-    ["update-corrupt-plugin", "src/cli/update-cli/update-command-plugin-preflight.ts"],
-  ]) {
-    if (possibleLanes.includes(lane)) {
-      sourcePaths.add(path);
-    }
+  // The recorded inventory stays optional: targets predating it keep the postbuild check.
+  if (possibleLanes.some(isUpdateFirstHopCompatLane)) {
+    sourcePaths.add("scripts/lib/update-compat-inventory.json");
+    sourcePaths.add("scripts/runtime-postbuild.mts");
+  }
+  if (possibleLanes.includes("update-corrupt-plugin")) {
+    sourcePaths.add("src/cli/update-cli/update-command-plugin-preflight.ts");
   }
   if (mobilePairingSelected) {
     sourcePaths.add("src/gateway/node-command-policy.ts");
@@ -626,7 +646,10 @@ async function planWorkflowAdmission(input) {
   if (
     possibleLanes.some((lane) => /^(published-upgrade-survivor|update-migration)(-|$)/u.test(lane))
   ) {
+    sourcePaths.add("scripts/lib/upgrade-survivor-scenarios.json");
     sourcePaths.add("scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    // Legacy-operator planning stages the candidate's official providers for prepublish.
+    sourcePaths.add("scripts/lib/official-external-provider-catalog.json");
   }
   if (docker.length > 256) {
     throw new Error("too many selected Docker groups");
@@ -981,13 +1004,8 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
     tooling: source,
     selected: createFrozenTargetSource(roots.selected, input.selected.sha),
   };
-  const {
-    DEFAULT_LIVE_RETRIES,
-    parseLaneSelection,
-    parseLiveMode,
-    parseProfile,
-    resolveDockerE2ePlan,
-  } = await import("./lib/docker-e2e-plan.mts");
+  const { parseLaneSelection, parseLiveMode, parseProfile, resolveDockerE2ePlan } =
+    await import("./lib/docker-e2e-plan.mts");
   const { classifyReleaseTrain, parseReleaseVersion } = await import("./lib/release-version.mjs");
   const { resolveFrozenCodexCompatibility } = await import("./resolve-frozen-codex-live-suite.mjs");
   const { resolveFsSafeNativeContract } = await import("./resolve-fs-safe-native-contract.mjs");
@@ -1048,7 +1066,6 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
       frozenTarget: { mode: "inert", source: sources.selected },
       includeOpenWebUI: normalizedDocker.includeOpenWebUI,
       liveMode: normalizedDocker.liveMode,
-      liveRetries: DEFAULT_LIVE_RETRIES,
       orderLanes: (lanes) => lanes,
       planReleaseAll: normalizedDocker.planReleaseAll,
       profile: normalizedDocker.profile,
@@ -1163,14 +1180,10 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
     for (const path of supportFiles[consumer] ?? []) {
       required(sources.tooling, `scripts/e2e/lib/${path}`);
     }
-    if (
-      ["npm-onboard-channel-agent", "codex-on-demand", "update-corrupt-plugin"].includes(consumer)
-    ) {
-      required(sources.tooling, "scripts/lib/record-shared.mjs");
-    }
     if (consumer === "update-corrupt-plugin") {
       required(sources.tooling, "scripts/lib/update-compat-contract.mjs");
       required(sources.tooling, "scripts/lib/openclaw-e2e-instance.sh");
+      required(sources.tooling, "scripts/lib/docker-e2e-watchdog.mjs");
       required(sources.tooling, "scripts/lib/direct-run.mjs");
     }
     if (consumer === "upgrade-survivor" && allow) {

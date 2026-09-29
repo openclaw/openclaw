@@ -1,7 +1,7 @@
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type { RealtimeVoiceCloseDisposition } from "openclaw/plugin-sdk/realtime-voice";
 import type { RawData } from "ws";
-import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-sideband.js";
+import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-socket.shared.js";
 
 const REALTIME_CLEANUP_RETRY_DELAYS_MS = [1_000, 5_000];
 

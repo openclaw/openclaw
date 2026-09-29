@@ -16,34 +16,29 @@ export function isInternalFormattingArtifact(text: string | undefined): boolean 
   return HARMONY_CHANNEL_MARKER_RE.test(text) || BOX_DRAWING_HR_ONLY_RE.test(text);
 }
 
-const silentExactRegexByToken = new Map<string, RegExp>();
-const silentTrailingRegexByToken = new Map<string, RegExp>();
-const silentLeadingAttachedRegexByToken = new Map<string, RegExp>();
-
-function getSilentExactRegex(token: string): RegExp {
-  const cached = silentExactRegexByToken.get(token);
-  if (cached) {
-    return cached;
-  }
-  const escaped = escapeRegExp(token);
-  const regex = new RegExp(`^\\s*${escaped}(?:\\s+${escaped})*\\s*$`, "i");
-  silentExactRegexByToken.set(token, regex);
-  return regex;
+function createTokenRegex(createRegex: (escaped: string) => RegExp) {
+  const regexByToken = new Map<string, RegExp>();
+  return (token: string): RegExp => {
+    const cached = regexByToken.get(token);
+    if (cached) {
+      return cached;
+    }
+    const regex = createRegex(escapeRegExp(token));
+    regexByToken.set(token, regex);
+    return regex;
+  };
 }
 
-function getSilentTrailingRegex(token: string): RegExp {
-  const cached = silentTrailingRegexByToken.get(token);
-  if (cached) {
-    return cached;
-  }
-  const escaped = escapeRegExp(token);
-  // Keep main's whitespace/Markdown boundaries: punctuation-attached tokens
-  // can be visible text. Consume repeated tokens only after a real delimiter.
-  // Start at the end so ordinary replies never scan for an absent suffix.
-  const regex = new RegExp(`$(?<=((?:^|\\s+|\\*+)${escaped}(?:\\s+${escaped})*\\s*))`, "i");
-  silentTrailingRegexByToken.set(token, regex);
-  return regex;
-}
+const getSilentExactRegex = createTokenRegex(
+  (escaped) => new RegExp(`^\\s*${escaped}(?:\\s+${escaped})*\\s*$`, "i"),
+);
+
+// Keep main's whitespace/Markdown boundaries: punctuation-attached tokens
+// can be visible text. Consume repeated tokens only after a real delimiter.
+// Start at the end so ordinary replies never scan for an absent suffix.
+const getSilentTrailingRegex = createTokenRegex(
+  (escaped) => new RegExp(`$(?<=((?:^|\\s+|\\*+)${escaped}(?:\\s+${escaped})*\\s*))`, "i"),
+);
 
 function stripEdgePunctuation(text: string): string {
   const start = text.match(/^\p{P}+/u)?.[0].length ?? 0;
@@ -71,9 +66,7 @@ export function isSilentReplyText(
   );
 }
 
-type SilentReplyActionEnvelope = { action?: unknown };
-
-function isSilentReplyJsonStringText(
+function isSilentReplyJsonText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
 ): boolean {
@@ -81,30 +74,20 @@ function isSilentReplyJsonStringText(
     return false;
   }
   const trimmed = text.trim();
-  if (!trimmed.startsWith('"') || !trimmed.endsWith('"') || !trimmed.includes(token)) {
+  if (
+    !trimmed.includes(token) ||
+    !(
+      (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith("{") && trimmed.endsWith("}"))
+    )
+  ) {
     return false;
   }
   try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    return typeof parsed === "string" && parsed.trim() === token;
-  } catch {
-    return false;
-  }
-}
-
-function isSilentReplyEnvelopeText(
-  text: string | undefined,
-  token: string = SILENT_REPLY_TOKEN,
-): boolean {
-  if (!text) {
-    return false;
-  }
-  const trimmed = text.trim();
-  if (!trimmed || !trimmed.startsWith("{") || !trimmed.endsWith("}") || !trimmed.includes(token)) {
-    return false;
-  }
-  try {
-    const parsed = JSON.parse(trimmed) as SilentReplyActionEnvelope;
+    const parsed: unknown = JSON.parse(trimmed);
+    if (typeof parsed === "string") {
+      return parsed.trim() === token;
+    }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return false;
     }
@@ -112,6 +95,7 @@ function isSilentReplyEnvelopeText(
     return (
       keys.length === 1 &&
       keys[0] === "action" &&
+      "action" in parsed &&
       typeof parsed.action === "string" &&
       parsed.action.trim() === token
     );
@@ -203,20 +187,18 @@ function isReasoningPrefixedSilentReplyText(
     );
   }
 
-  if (openReasoningPrefixRe.test(trimmed)) {
-    const withoutOpenReasoningPrefix = trimmed.replace(openReasoningPrefixRe, "");
-    return (
-      isSilentReplyText(withoutOpenReasoningPrefix, token) ||
-      hasPlainReasoningFinalSilentToken(withoutOpenReasoningPrefix, token)
-    );
-  }
-  if (!plainReasoningPrefixRe.test(trimmed)) {
+  const reasoningPrefix = openReasoningPrefixRe.test(trimmed)
+    ? openReasoningPrefixRe
+    : plainReasoningPrefixRe.test(trimmed)
+      ? plainReasoningPrefixRe
+      : undefined;
+  if (!reasoningPrefix) {
     return false;
   }
-  const withoutPlainReasoningPrefix = trimmed.replace(plainReasoningPrefixRe, "");
+  const withoutReasoningPrefix = trimmed.replace(reasoningPrefix, "");
   return (
-    isSilentReplyText(withoutPlainReasoningPrefix, token) ||
-    hasPlainReasoningFinalSilentToken(withoutPlainReasoningPrefix, token)
+    isSilentReplyText(withoutReasoningPrefix, token) ||
+    hasPlainReasoningFinalSilentToken(withoutReasoningPrefix, token)
   );
 }
 
@@ -227,8 +209,7 @@ export function isSilentReplyPayloadText(
 ): boolean {
   return (
     isSilentReplyText(text, token) ||
-    isSilentReplyJsonStringText(text, token) ||
-    isSilentReplyEnvelopeText(text, token) ||
+    isSilentReplyJsonText(text, token) ||
     isReasoningPrefixedSilentReplyText(text, token)
   );
 }
@@ -243,35 +224,19 @@ export function stripSilentToken(text: string, token: string = SILENT_REPLY_TOKE
   return text.slice(0, text.length - tail).trim();
 }
 
-const silentLeadingRegexByToken = new Map<string, RegExp>();
+// Match one or more leading occurrences of the token where the final token
+// is glued directly to visible word-start content (for example
+// `NO_REPLYhello`), without treating punctuation-start text like
+// `NO_REPLY: explanation` as a silent prefix.
+const getSilentLeadingAttachedRegex = createTokenRegex(
+  (escaped) => new RegExp(`^\\s*(?:${escaped}\\s+)*${escaped}(?=[\\p{L}\\p{N}])`, "iu"),
+);
 
-function getSilentLeadingAttachedRegex(token: string): RegExp {
-  const cached = silentLeadingAttachedRegexByToken.get(token);
-  if (cached) {
-    return cached;
-  }
-  const escaped = escapeRegExp(token);
-  // Match one or more leading occurrences of the token where the final token
-  // is glued directly to visible word-start content (for example
-  // `NO_REPLYhello`), without treating punctuation-start text like
-  // `NO_REPLY: explanation` as a silent prefix.
-  const regex = new RegExp(`^\\s*(?:${escaped}\\s+)*${escaped}(?=[\\p{L}\\p{N}])`, "iu");
-  silentLeadingAttachedRegexByToken.set(token, regex);
-  return regex;
-}
-
-function getSilentLeadingRegex(token: string): RegExp {
-  const cached = silentLeadingRegexByToken.get(token);
-  if (cached) {
-    return cached;
-  }
-  const escaped = escapeRegExp(token);
-  // Keep the final separator distinct: earlier blank lines or spacing between
-  // repeated sentinels do not establish a boundary for the visible remainder.
-  const regex = new RegExp(`^\\s*${escaped}((?:\\s*${escaped})*)(\\s*)`, "i");
-  silentLeadingRegexByToken.set(token, regex);
-  return regex;
-}
+// Keep the final separator distinct: earlier blank lines or spacing between
+// repeated sentinels do not establish a boundary for the visible remainder.
+const getSilentLeadingRegex = createTokenRegex(
+  (escaped) => new RegExp(`^\\s*${escaped}((?:\\s*${escaped})*)(\\s*)`, "i"),
+);
 
 /**
  * Strip leading silent reply tokens from text.

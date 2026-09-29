@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { workspaceInventoryError } from "./workspace-inventory-error.js";
 import {
   createWorkspaceGitTransferList,
   runWorkspaceInventoryCommandToFile,
   settleWorkspaceInventoryCommands,
-  workspaceInventoryError,
 } from "./workspace-sync-inventory.js";
 
 async function readBoundedGitValue(filePath: string): Promise<string> {

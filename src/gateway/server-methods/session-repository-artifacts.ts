@@ -1,55 +1,34 @@
 import path from "node:path";
 import type {
-  SessionDiffFile,
   SessionFileBrowserEntry,
   SessionFileEntry,
   SessionsDiffParams,
   SessionsDiffResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { readSessionRepositoryCheckpoint } from "../worker-environments/session-repository-checkpoints.js";
+import { readSessionRepositoryArtifacts } from "../worker-environments/session-repository-checkpoints.js";
 import type { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
 import { populateSessionFilePreview } from "./workspace-files.js";
-import {
-  normalizeRelativePath,
-  sortWorkspaceEntries,
-  WORKSPACE_PREVIEW_MAX_BYTES,
-} from "./workspace-fs.js";
+import { normalizeRelativePath, sortWorkspaceEntries } from "./workspace-fs.js";
 
 type StoredRepository = Extract<
   ReturnType<typeof resolveRepositoryWorkspaceAccess>,
   { kind: "stored" }
 >;
 
-async function readArtifacts(access: StoredRepository) {
+async function readArtifacts(access: StoredRepository, previewPath?: string) {
   access.assertCurrent();
   if (!access.repository.checkpointRef) {
     return undefined;
   }
-  const snapshot = await readSessionRepositoryCheckpoint({
+  const snapshot = await readSessionRepositoryArtifacts({
     store: access.store,
     workspaceId: access.repository.workspaceId,
     checkpointRef: access.repository.checkpointRef,
+    previewPath,
+    assertCurrent: access.assertCurrent,
   });
   access.assertCurrent();
-  const currentPaths = new Set(snapshot.current.entries.map((entry) => entry.path));
-  const basePaths = new Set(snapshot.base.entries.map((entry) => entry.path));
-  const changes: SessionDiffFile[] = [
-    ...snapshot.changedEntries.map((entry) => ({
-      path: entry.path,
-      status: basePaths.has(entry.path) ? ("modified" as const) : ("added" as const),
-      additions: 0,
-      deletions: 0,
-    })),
-    ...snapshot.base.entries
-      .filter((entry) => !currentPaths.has(entry.path))
-      .map((entry) => ({
-        path: entry.path,
-        status: "deleted" as const,
-        additions: 0,
-        deletions: 0,
-      })),
-  ].toSorted((left, right) => left.path.localeCompare(right.path));
-  return { ...snapshot, changes };
+  return snapshot;
 }
 
 function fileEntry(filePath: string, size: number | undefined): SessionFileEntry {
@@ -141,7 +120,7 @@ export async function getRepositoryArtifact(
   requestedPath: string,
 ): Promise<{ file?: SessionFileEntry }> {
   const selected = artifactPath(requestedPath);
-  const snapshot = await readArtifacts(access);
+  const snapshot = await readArtifacts(access, selected);
   const entry = snapshot?.changedEntries.find((candidate) => candidate.path === selected);
   if (!snapshot || entry?.type !== "file") {
     throw new Error(
@@ -149,8 +128,12 @@ export async function getRepositoryArtifact(
     );
   }
   const file = fileEntry(entry.path, entry.size);
-  if (entry.size <= WORKSPACE_PREVIEW_MAX_BYTES) {
-    const content = await snapshot.readEntry(entry);
+  if (snapshot.preview !== undefined) {
+    const content = Buffer.from(
+      snapshot.preview.buffer,
+      snapshot.preview.byteOffset,
+      snapshot.preview.byteLength,
+    );
     access.assertCurrent();
     await populateSessionFilePreview(file, content);
     // Accepted artifacts are immutable; editing resumes with the live worker checkout.

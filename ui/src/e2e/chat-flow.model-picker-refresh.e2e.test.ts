@@ -3,7 +3,9 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
+  controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
   requireRecord,
@@ -26,6 +28,49 @@ async function screenshot(page: Page, name: string) {
 }
 
 suite.define(() => {
+  it("opens the chat picker from a partial snapshot while catalog revalidation is pending", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    const sessionKey = "agent:main:main";
+    const prepared = {
+      id: "prepared",
+      name: "Prepared model",
+      provider: "fixture",
+      available: true,
+    };
+    const added = { ...prepared, id: "added", name: "Added model" };
+    const gateway = await installMockGateway(page, {
+      sessionKey,
+      models: [],
+      heldMethods: ["models.list"],
+    });
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await gateway.waitForRequest("models.list");
+      await gateway.emitGatewayEvent("models.snapshot", {
+        target: { agentId: "main", sessionKey },
+        scope: { agentId: "main", sessionKey },
+        catalog: { models: [prepared], refreshFailed: true },
+      });
+      const picker = page.locator(
+        'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
+      );
+      await picker.locator("[data-chat-model-select]").click();
+      const preparedRow = picker.locator('[data-chat-model-option="fixture/prepared"]');
+      await revealChatModelOption(preparedRow);
+      await expect.poll(() => preparedRow.isVisible()).toBe(true);
+      expect(await preparedRow.isEnabled()).toBe(true);
+
+      await gateway.resolveDeferred("models.list", { models: [prepared, added] });
+      await expect
+        .poll(() => picker.locator('[data-chat-model-option="fixture/added"]').isVisible())
+        .toBe(true);
+      expect(await picker.getAttribute("open")).not.toBeNull();
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("preserves the Gateway-resolved target without exposing it in the picker", async () => {
     const context = await suite.newBrowserContext({
       hasTouch: true,
@@ -163,11 +208,13 @@ suite.define(() => {
       await expect.poll(() => configureModelsTooltip.count()).toBe(0);
       await screenshot(page, "09-configure-models-no-tooltip.png");
       await configureModels.tap();
-      await expect.poll(() => page.url()).toContain("model-setup");
-      await page.locator("openclaw-model-setup-page .model-setup").waitFor({ state: "visible" });
-      await screenshot(page, "10-model-setup-navigation.png");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
+      expect(new URL(page.url()).searchParams.get("provider")).toBe("openai");
+      expect(new URL(page.url()).searchParams.has("connect")).toBe(false);
+      await page.locator('[data-provider-id="openai"]').waitFor({ state: "visible" });
+      await screenshot(page, "10-provider-settings-navigation.png");
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -215,7 +262,7 @@ suite.define(() => {
         'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
       );
       await picker.locator('[data-chat-model-select="true"]').click();
-      await picker.locator('[data-chat-model-default="true"]').waitFor();
+      await revealChatModelOption(picker.locator('[data-chat-model-default="true"]'));
       await screenshot(page, "03-pin-matching-default.png");
       await picker.getByRole("option", { name: "Proof Model", exact: true }).click();
       const request = await gateway.waitForRequest("sessions.patch");
@@ -228,7 +275,7 @@ suite.define(() => {
       await picker.locator('[data-chat-model-select="true"]').click();
       await screenshot(page, "04-pin-cleared.png");
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -252,6 +299,8 @@ suite.define(() => {
 
       await gateway.deferNext("models.list", { view: "configured" });
       await picker.locator('[data-chat-model-select="true"]').click();
+      await revealChatModelOption(picker.locator('[data-chat-model-option="openai/gpt-5.6-luna"]'));
+      await revealChatModelOption(picker.locator('[data-chat-model-option="anthropic/fable-5"]'));
       await picker.getByRole("option", { name: "GPT-5.6 Luna", exact: true }).waitFor();
       expect(await gateway.getRequests("models.list")).toHaveLength(1);
 
@@ -286,7 +335,7 @@ suite.define(() => {
       expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       await screenshot(page, "02-picker-after-background-apply.png");
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -373,7 +422,7 @@ suite.define(() => {
       });
       await expect.poll(() => picker.getAttribute("open")).toBe(null);
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 });

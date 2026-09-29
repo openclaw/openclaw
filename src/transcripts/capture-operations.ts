@@ -1,19 +1,21 @@
 import path from "node:path";
+import { capturePolicyTransitions, revokeTranscriptStartRetries } from "./capture-startup.js";
 import { persistTranscriptSummary } from "./capture-summary.js";
 import {
   activeSessions,
+  startingSessions,
   finalizeTranscriptCapture,
   isTranscriptSelectionCurrent,
   isTranscriptSelectionOwned,
   isTranscriptSessionStarting,
-  revokeTranscriptStartRetries,
   stopTranscriptProviderCapture,
   type TranscriptCaptureSelection,
   type TranscriptsRuntimeContext,
 } from "./capture.js";
 import { resolveTranscriptsConfig } from "./config.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
-import { TranscriptsStore, TranscriptsSummaryChangedError } from "./store.js";
+import { TranscriptsSummaryChangedError } from "./store-errors.js";
+import { TranscriptsStore } from "./store.js";
 
 export function createTranscriptsStore(ctx: TranscriptsRuntimeContext): TranscriptsStore {
   return new TranscriptsStore(path.join(ctx.stateDir, "transcripts"), {
@@ -62,7 +64,7 @@ export async function stopTranscriptCapture(params: {
   if (selectedActive?.stopping) {
     return skip("stopping");
   }
-  revokeTranscriptStartRetries(params.ctx, session);
+  revokeTranscriptStartRetries(params.ctx.stateDir, session);
   if (selectedActive) {
     selectedActive.stopping = true;
   }
@@ -140,4 +142,34 @@ export async function stopTranscriptCapture(params: {
       }
     }
   }
+}
+
+export function prepareTranscriptCaptureDisable(stateDir: string) {
+  const transition = Symbol("capture-policy");
+  capturePolicyTransitions.set(stateDir, transition);
+  const entries = [...new Set([...startingSessions.values(), ...activeSessions.values()])].filter(
+    (entry) => entry.directCapture?.stateDir === stateDir,
+  );
+  for (const entry of entries) {
+    entry.cleanupPending = true;
+    entry.abortStartup?.();
+  }
+  return {
+    async drain() {
+      const results = await Promise.allSettled(
+        entries.map(async (entry) => entry.directCapture?.drain()),
+      );
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length) {
+        throw new AggregateError(failures, "Transcript capture policy drainage failed");
+      }
+    },
+    resume: () => {
+      if (capturePolicyTransitions.get(stateDir) === transition) {
+        capturePolicyTransitions.delete(stateDir);
+      }
+    },
+  };
 }

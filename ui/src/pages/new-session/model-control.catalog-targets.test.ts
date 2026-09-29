@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ModelCatalogEntry } from "../../api/types.ts";
-import { contextWith, deferred, renderControl } from "./model-control.test-support.ts";
+import { contextWith, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 const models: ModelCatalogEntry[] = [

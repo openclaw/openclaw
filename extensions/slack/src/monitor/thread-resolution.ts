@@ -1,4 +1,3 @@
-// Slack plugin module implements thread resolution behavior.
 import {
   type WebClient as SlackWebClient,
   WebAPIHTTPError,
@@ -22,7 +21,7 @@ import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString as normalizeThreadTs } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackError } from "../errors.js";
 import type { SlackMessageEvent } from "../types.js";
-import type { SlackIngressTurnLifecycle } from "./ingress.js";
+import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
 
 type ThreadTsCacheEntry = {
   threadTs: string | null;
@@ -75,13 +74,13 @@ async function resolveThreadTsFromHistory(params: {
   channelId: string;
   messageTs: string;
 }) {
-  const response = (await params.client.conversations.history({
+  const response = await params.client.conversations.history({
     channel: params.channelId,
     latest: params.messageTs,
     oldest: params.messageTs,
     inclusive: true,
     limit: 1,
-  })) as { messages?: Array<{ ts?: string; thread_ts?: string }> };
+  });
   const message =
     response.messages?.find((entry) => entry.ts === params.messageTs) ?? response.messages?.[0];
   return normalizeThreadTs(message?.thread_ts);

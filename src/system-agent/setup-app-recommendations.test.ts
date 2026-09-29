@@ -345,6 +345,34 @@ describe("setup app recommendation matcher", () => {
     }
   });
 
+  it("uses the first complete object when prose contains later JSON", async () => {
+    const result = await getSetupAppRecommendations({
+      inventorySource,
+      runtime: defaultRuntime,
+      deps: {
+        ...candidateDeps,
+        complete: async () => ({
+          ok: true,
+          text: `${JSON.stringify({
+            matches: [
+              {
+                appLabel: "Notes",
+                candidateId: "@demo-owner/notes-tools",
+                tier: "recommended",
+                reason: "Connects directly to your notes",
+              },
+            ],
+          })}\nDiagnostics: {"tokens":12}`,
+        }),
+      },
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.matches[0]?.candidateId).toBe("@demo-owner/notes-tools");
+    }
+  });
+
   it("skips garbage model output", async () => {
     await expect(
       getSetupAppRecommendations({

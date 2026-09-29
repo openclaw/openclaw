@@ -4,6 +4,7 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 import { getCliSessionBinding } from "./cli-session-binding.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
+import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import { resolveSessionStorePathCore as resolveSessionStorePath } from "./paths.js";
 import {
   evaluateSessionFreshness,
@@ -22,28 +23,22 @@ type ResolveSessionEntryResetFreshnessParams = SessionAccessScope & {
   sessionCfg?: SessionConfig;
 };
 
-type SessionEntryLifecycleTimestamps = {
-  sessionStartedAt?: number;
-  lastInteractionAt?: number;
-};
-
-type ResolvedSessionEntryResetFreshness =
+type ResolvedSessionEntryResetFreshness = {
+  lifecycleTimestamps: SessionLifecycleTimestamps;
+  resetPolicy: SessionResetPolicy;
+  resetType: SessionResetType;
+} & (
   | {
       state: "missing";
       entry: undefined;
       freshness: undefined;
-      lifecycleTimestamps: SessionEntryLifecycleTimestamps;
-      resetPolicy: SessionResetPolicy;
-      resetType: SessionResetType;
     }
   | {
       state: "fresh" | "stale";
       entry: SessionEntry;
       freshness: SessionFreshness;
-      lifecycleTimestamps: SessionEntryLifecycleTimestamps;
-      resetPolicy: SessionResetPolicy;
-      resetType: SessionResetType;
-    };
+    }
+);
 
 export function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
   const provider = normalizeOptionalString(entry?.providerOverride ?? entry?.modelProvider);

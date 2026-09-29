@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
@@ -17,19 +18,129 @@ async function writeSkill(workspace: string, name: string, content = markdown) {
   await fs.writeFile(path.join(directory, "SKILL.md"), content);
   return directory;
 }
-function loadSnapshot(workspace: string) {
+async function loadSnapshot(workspace: string) {
   const entries = loadWorkspaceSkills(workspace, { workspaceOnly: true });
-  return buildSkillSnapshot(workspace, { entries });
+  return await buildSkillSnapshot(workspace, { entries });
 }
 
 describe("prepared workspace skill resources", () => {
+  it("recreates stable session paths and prompt bytes independent of delivery order", async () => {
+    const workspace = await fs.realpath(temps.make("skill-stable-workspace-"));
+    const root = temps.make("skill-stable-inputs-");
+    const resolveRoot = vi
+      .spyOn(temporaryRoot, "resolvePreferredOpenClawTmpDir")
+      .mockReturnValue(root);
+    const scope = { sessionId: "stable-session", workspaceDir: workspace };
+    await writeSkill(workspace, "beta");
+    const alpha = await writeSkill(workspace, "alpha");
+    const support = path.join(alpha, "reference.md");
+    await fs.writeFile(support, "original reference");
+    const snapshot = await loadSnapshot(workspace);
+    const delivery = (await prepareSkillResourceDelivery(snapshot, () => {}))!;
+    try {
+      const first = await materializeSkillResources(delivery, () => {}, scope);
+      const previousPrompt = first.snapshot.prompt;
+      const previousReference = first.rewriteReferences(support);
+      expect(path.basename(first.directory)).toMatch(/^skill-resources-[a-f0-9]{16}$/);
+      expect(path.basename(path.dirname(previousReference))).toMatch(/^alpha-[a-f0-9]{12}$/);
+      await first.cleanup();
+      expect(existsSync(first.directory)).toBe(false);
+
+      const second = await materializeSkillResources(
+        { ...delivery, skills: delivery.skills.toReversed() },
+        () => {},
+        scope,
+      );
+      try {
+        expect(second.snapshot.prompt).toBe(previousPrompt);
+        expect(second.rewriteReferences(support)).toBe(previousReference);
+        expect(await fs.readFile(previousReference, "utf8")).toBe("original reference");
+        // A retained cleanup handle must never delete a later turn's files.
+        await first.cleanup();
+        expect(await fs.readFile(previousReference, "utf8")).toBe("original reference");
+      } finally {
+        await second.cleanup();
+      }
+
+      await fs.writeFile(support, "refreshed reference");
+      const refreshed = (await prepareSkillResourceDelivery(snapshot, () => {}))!;
+      const third = await materializeSkillResources(refreshed, () => {}, scope);
+      try {
+        expect(third.rewriteReferences(support)).not.toBe(previousReference);
+        expect(await fs.readFile(third.rewriteReferences(support), "utf8")).toBe(
+          "refreshed reference",
+        );
+        expect(existsSync(previousReference)).toBe(false);
+      } finally {
+        await third.cleanup();
+      }
+    } finally {
+      resolveRoot.mockRestore();
+    }
+  });
+
+  it("keeps readable bounded names distinct across sanitization and source collisions", async () => {
+    const workspace = temps.make("skill-names-");
+    await writeSkill(workspace, "guide");
+    const delivery = (await prepareSkillResourceDelivery(await loadSnapshot(workspace), () => {}))!;
+    const name = "Review / ".repeat(10);
+    const materialized = await materializeSkillResources(
+      {
+        ...delivery,
+        skills: [
+          { ...delivery.skills[0]!, name, sourcePath: "/first/SKILL.md" },
+          { ...delivery.skills[0]!, name, sourcePath: "/second/SKILL.md" },
+          { ...delivery.skills[0]!, name: name.toLowerCase(), sourcePath: "/first/SKILL.md" },
+        ],
+      },
+      () => {},
+    );
+    try {
+      const skills = materialized.snapshot.resolvedSkills!;
+      expect(new Set(skills.map((skill) => skill.baseDir)).size).toBe(3);
+      for (const skill of skills) {
+        expect(path.basename(skill.baseDir)).toMatch(/^[a-z0-9-]{40}-[a-f0-9]{12}$/);
+        expect(await fs.readFile(skill.filePath, "utf8")).toBe(markdown);
+      }
+    } finally {
+      await materialized.cleanup();
+    }
+  });
+
+  it("never replaces or cleans a live session's skill inputs and isolates other sessions", async () => {
+    const workspace = await fs.realpath(temps.make("skill-locked-workspace-"));
+    const root = temps.make("skill-locked-inputs-");
+    const resolveRoot = vi
+      .spyOn(temporaryRoot, "resolvePreferredOpenClawTmpDir")
+      .mockReturnValue(root);
+    await writeSkill(workspace, "guide");
+    const delivery = (await prepareSkillResourceDelivery(await loadSnapshot(workspace), () => {}))!;
+    const scope = { sessionId: "active-session", workspaceDir: workspace };
+    const first = await materializeSkillResources(delivery, () => {}, scope);
+    try {
+      await expect(materializeSkillResources(delivery, () => {}, scope)).rejects.toMatchObject({
+        code: "file_lock_timeout",
+      });
+      const other = await materializeSkillResources(delivery, () => {}, {
+        ...scope,
+        sessionId: "other-session",
+      });
+      expect(other.directory).not.toBe(first.directory);
+      await other.cleanup();
+      expect(await fs.readFile(first.snapshot.resolvedSkills![0]!.filePath, "utf8")).toBe(markdown);
+    } finally {
+      await first.cleanup();
+      resolveRoot.mockRestore();
+    }
+  });
+
   it.each(["AbortError", "TimeoutError"])(
     "preserves the exact frozen %s after partial materialization and failed cleanup",
     async (name) => {
       const workspace = temps.make("skill-rollback-");
       const directory = await writeSkill(workspace, "partial");
       await fs.writeFile(path.join(directory, "reference.md"), "supporting resource");
-      const delivery = await prepareSkillResourceDelivery(loadSnapshot(workspace), () => {});
+      const delivery = await prepareSkillResourceDelivery(await loadSnapshot(workspace), () => {});
       let artifactRoot: string | undefined;
       let retainedFile: string | undefined;
       const originalWriteFile = fs.writeFile;
@@ -98,7 +209,7 @@ describe("prepared workspace skill resources", () => {
       await fs.mkdir(path.dirname(scriptPath));
       await fs.writeFile(scriptPath, "#!/bin/sh\nprintf before\n");
       const snapshot = {
-        ...loadSnapshot(workspace),
+        ...(await loadSnapshot(workspace)),
         ...(reuse === "rehydrated" ? { version: 1 } : {}),
       };
       const first = await prepareSkillResourceDelivery(snapshot, () => {});
@@ -129,7 +240,10 @@ describe("prepared workspace skill resources", () => {
     async (rehydrated) => {
       const workspace = await fs.realpath(temps.make("skill-turns-"));
       await writeSkill(workspace, "independent");
-      const snapshot = { ...loadSnapshot(workspace), ...(rehydrated ? { version: 1 } : {}) };
+      const snapshot = {
+        ...(await loadSnapshot(workspace)),
+        ...(rehydrated ? { version: 1 } : {}),
+      };
       let closed = false;
       const cancelled = prepareSkillResourceDelivery(snapshot, () => {
         if (closed) {
@@ -160,7 +274,7 @@ describe("prepared workspace skill resources", () => {
       const workspace = await fs.realpath(temps.make("skill-stale-root-"));
       const healthyDir = await writeSkill(workspace, "healthy");
       const staleDir = await writeSkill(workspace, "stale");
-      const snapshot = loadSnapshot(workspace);
+      const snapshot = await loadSnapshot(workspace);
       expect((await prepareSkillResourceDelivery(snapshot, () => {}))?.skills).toHaveLength(2);
 
       await fs.rm(staleDir, { recursive: true });
@@ -192,7 +306,7 @@ describe("prepared workspace skill resources", () => {
     const missingPath = path.join(workspace, "skills", "missing", "SKILL.md");
 
     await expect(
-      prepareSkillResourceDelivery(loadSnapshot(workspace), () => {}, [
+      prepareSkillResourceDelivery(await loadSnapshot(workspace), () => {}, [
         { name: "missing", path: missingPath },
       ]),
     ).rejects.toMatchObject({
@@ -213,7 +327,7 @@ describe("prepared workspace skill resources", () => {
       await fs.writeFile(path.join(directory, "scripts/check.sh"), script, { mode: 0o700 });
       await fs.symlink("AGENTS.md", path.join(directory, "CLAUDE.md"));
       await fs.symlink("scripts/check.sh", path.join(directory, "check.sh"));
-      const delivery = await prepareSkillResourceDelivery(loadSnapshot(workspace), () => {});
+      const delivery = await prepareSkillResourceDelivery(await loadSnapshot(workspace), () => {});
       const materialized = await materializeSkillResources(delivery!, () => {});
       try {
         const skill = materialized.snapshot.resolvedSkills![0]!;
@@ -263,7 +377,7 @@ describe("prepared workspace skill resources", () => {
         await fs.symlink(target, alias);
       }
       await expect(
-        prepareSkillResourceDelivery(loadSnapshot(workspace), () => {}),
+        prepareSkillResourceDelivery(await loadSnapshot(workspace), () => {}),
       ).rejects.toMatchObject({
         code: "INVALID_BUNDLE",
         message: expect.stringMatching(/skill="linked".*root=.*linked/s),
@@ -281,7 +395,7 @@ describe("prepared workspace skill resources", () => {
       await fs.mkdir(path.dirname(excluded));
       await fs.writeFile(target, "supporting instructions");
       await fs.symlink("support.txt", path.join(directory, "alias.txt"));
-      const snapshot = loadSnapshot(workspace);
+      const snapshot = await loadSnapshot(workspace);
       const originalOpen = fs.open;
       let moved = false;
       const open = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
@@ -311,7 +425,7 @@ describe("prepared workspace skill resources", () => {
     const script = "#!/bin/sh\nprintf ready\n";
     await fs.mkdir(path.join(directory, "scripts"));
     await fs.writeFile(path.join(directory, "scripts/check.sh"), script, { mode: 0o700 });
-    const snapshot = loadSnapshot(workspace);
+    const snapshot = await loadSnapshot(workspace);
     expect(snapshot.resolvedSkills).toMatchObject([
       { name: "directory-name", description: "Workspace procedure" },
     ]);
@@ -351,7 +465,7 @@ describe("prepared workspace skill resources", () => {
     );
     await fs.mkdir(path.join(directory, "node_modules", "dependency"), { recursive: true });
     await fs.writeFile(path.join(directory, "node_modules", "dependency", "index.js"), "excluded");
-    const delivery = await prepareSkillResourceDelivery(loadSnapshot(workspace), () => {});
+    const delivery = await prepareSkillResourceDelivery(await loadSnapshot(workspace), () => {});
     expect(delivery?.skills[0]?.files.map((file) => file.path)).toEqual(["SKILL.md"]);
   });
 
@@ -361,7 +475,7 @@ describe("prepared workspace skill resources", () => {
       const name = `skill-${index}`;
       await writeSkill(workspace, name, `---\nname: ${name}\ndescription: Test\n---\n# Guide\n`);
     }
-    const snapshot = loadSnapshot(workspace);
+    const snapshot = await loadSnapshot(workspace);
     expect(snapshot.prompt.match(/<name>/g)).toHaveLength(65);
     const delivery = await prepareSkillResourceDelivery(snapshot, () => {});
     expect(delivery?.skills).toHaveLength(65);
@@ -393,7 +507,7 @@ describe("prepared workspace skill resources", () => {
       "---\nname: z-omitted\ndescription: Test\n---\n# Omitted\n",
     );
     const entries = loadWorkspaceSkills(workspace, { workspaceOnly: true });
-    const snapshot = buildSkillSnapshot(workspace, {
+    const snapshot = await buildSkillSnapshot(workspace, {
       entries,
       config: { skills: { limits: { maxSkillsInPrompt: 1 } } },
     });

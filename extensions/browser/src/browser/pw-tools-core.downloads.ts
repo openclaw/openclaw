@@ -4,10 +4,12 @@
  */
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  isPrivateNetworkAllowedByPolicy,
+  normalizeHostname,
+} from "openclaw/plugin-sdk/security-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { Frame, Page } from "playwright-core";
-import { isPrivateNetworkAllowedByPolicy } from "../infra/net/ssrf.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { normalizeHostname } from "../sdk-security-runtime.js";
 import { DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import {
@@ -34,9 +36,12 @@ import {
 } from "./pw-tools-core.interactions.js";
 import {
   awaitActionWithAbort,
+  assertInteractionCurrent,
+  BrowserInteractionAuthorityError,
   createAbortPromiseWithListener,
   hasInteractionNavigationPolicy,
   interactionNavigationPolicy,
+  type InteractionTargetOptions,
   type NavigationTargetOptions,
   runCancellablePageInteraction,
 } from "./pw-tools-core.interactions.navigation.js";
@@ -137,6 +142,10 @@ async function runFileUpload(opts: UploadOptions): Promise<void> {
   const completion = (async () => {
     const page = await awaitActionWithAbort(getPageForTargetId(opts), abortPromise);
     signal.throwIfAborted();
+    if (opts.assertCurrent) {
+      await assertInteractionCurrent(opts);
+      signal.throwIfAborted();
+    }
     const state = ensurePageState(page);
     // Page lookup may finish out of order. Only a newer request can replace
     // this page's owner; unrelated tabs share no chooser or cleanup queue.
@@ -150,13 +159,21 @@ async function runFileUpload(opts: UploadOptions): Promise<void> {
       // still join every older native action before installing a new waiter.
       await previous?.settled;
       signal.throwIfAborted();
+      if (opts.assertCurrent) {
+        await assertInteractionCurrent(opts);
+        signal.throwIfAborted();
+      }
       started = true;
       if (!atomic) {
         startDeadline();
       }
       const chooser = page.waitForEvent("filechooser", { timeout: 0, signal });
       void chooser.catch(() => {});
+      // Accepted passive arms own future completion after their requesting
+      // invocation ends; only atomic uploads retain its authority callback.
+      const completionOptions = atomic ? opts : { ...opts, assertCurrent: undefined };
       armed.resolve();
+      let chooserAcquired = false;
       try {
         if (atomic) {
           await clickViaPlaywright({
@@ -168,6 +185,7 @@ async function runFileUpload(opts: UploadOptions): Promise<void> {
           });
         }
         const fileChooser = await chooser;
+        chooserAcquired = true;
         signal.throwIfAborted();
         let paths = opts.paths ?? [];
         if (!atomic) {
@@ -183,7 +201,7 @@ async function runFileUpload(opts: UploadOptions): Promise<void> {
           paths = resolved.paths;
         }
         await setFileChooserFilesViaPlaywright({
-          ...opts,
+          ...completionOptions,
           page,
           fileChooser,
           paths,
@@ -193,6 +211,9 @@ async function runFileUpload(opts: UploadOptions): Promise<void> {
         signal.throwIfAborted();
       } catch (error) {
         controller.abort(error);
+        if (chooserAcquired && error instanceof BrowserInteractionAuthorityError) {
+          await dismissFileChooser(page);
+        }
         if (
           error instanceof Error &&
           error.name === "AbortError" &&
@@ -255,16 +276,19 @@ export async function uploadViaPlaywright(
 }
 
 /** Accepts or dismisses a pending dialog, or arms the next matching dialog response. */
-export async function armDialogViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  dialogId?: string;
-  accept: boolean;
-  promptText?: string;
-  timeoutMs?: number;
-}): Promise<void> {
+export async function armDialogViaPlaywright(
+  opts: InteractionTargetOptions & {
+    dialogId?: string;
+    accept: boolean;
+    promptText?: string;
+    timeoutMs?: number;
+  },
+): Promise<void> {
   const page = await getPageForTargetId(opts);
   const timeout = normalizeTimeoutMs(opts.timeoutMs, DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS);
+  if (opts.assertCurrent) {
+    await assertInteractionCurrent(opts);
+  }
   try {
     await respondToObservedDialogOnPage({
       page,
@@ -280,6 +304,9 @@ export async function armDialogViaPlaywright(opts: {
     }
   }
 
+  if (opts.assertCurrent) {
+    await assertInteractionCurrent(opts);
+  }
   armObservedDialogResponseOnPage({
     page,
     accept: opts.accept,
@@ -306,6 +333,9 @@ export async function waitForDownloadViaPlaywright(
     ? AbortSignal.any([opts.signal, policyDenial.signal])
     : policyDenial.signal;
   const waitForCapture = async () => {
+    if (opts.assertCurrent) {
+      await assertInteractionCurrent(opts);
+    }
     const capture = createExplicitDownloadCapture({
       page,
       state,
@@ -347,6 +377,9 @@ export async function downloadViaPlaywright(
   },
 ): Promise<BrowserDownloadResult> {
   const page = await getPageForTargetId(opts);
+  if (opts.assertCurrent) {
+    await assertInteractionCurrent(opts);
+  }
   const state = ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
@@ -447,6 +480,10 @@ export async function downloadCurrentDocumentViaPlaywright(
       abortPromise,
     );
     assertCurrentDocument();
+    if (opts.assertCurrent) {
+      await assertInteractionCurrent(opts);
+      assertCurrentDocument();
+    }
     const timeout = normalizeTimeoutMs(opts.timeoutMs, DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS);
     const capture = createExplicitDownloadCapture({
       page,

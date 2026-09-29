@@ -2,11 +2,34 @@
 import path from "node:path";
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import {
+  readTranscriptExportSnapshotReadOnlySync,
   readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
 } from "../../../../src/config/sessions/session-accessor.js";
 
 export { readTranscriptStatsBatchReadOnlySync };
+export { readAccessorTranscriptStatsSync as readTranscriptStatsSync };
+export { readTranscriptExportSnapshotReadOnlySync };
+export { readRestoredSessionTranscript } from "../../../../src/config/sessions/session-cold-storage-read.js";
+export { SessionTranscriptColdError } from "../../../../src/config/sessions/session-cold-storage-state.js";
+export {
+  listSessionEntriesCore,
+  listSessionEntriesReadOnly,
+} from "../../../../src/config/sessions/session-accessor.js";
+export { isIncognitoSessionKey } from "../../../../src/routing/session-key.js";
+export { isIncognitoOpenClawAgentSqlitePath } from "../../../../src/state/openclaw-agent-db.paths.js";
+export { cloneEnvWithPlatformSemantics } from "../../../../src/config/config-env-vars.js";
+
+/** Keep worker launch machinery behind the memory host's existing lazy runtime bridge. */
+export async function prepareSessionEntryInWorker(
+  ...args: Parameters<
+    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").prepareSessionEntryInWorker
+  >
+) {
+  const { prepareSessionEntryInWorker: prepare } =
+    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
+  return prepare(...args);
+}
 
 export { resolveSessionAgentId } from "../../../../src/agents/agent-scope.js";
 export { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
@@ -40,11 +63,7 @@ export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/ses
 export type { SessionEntry } from "../../../../src/config/sessions/types.js";
 export { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-filter.js";
 export {
-  loadTranscriptEventsSync,
-  listSessionEntries,
   parseSqliteSessionFileMarker,
-  readTranscriptStatsSync,
-  resolveTranscriptSessionKeyBySessionId,
   resolveStorePath,
 } from "../../../../src/plugin-sdk/session-store-runtime.js";
 export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
@@ -130,4 +149,14 @@ export function isDreamingNarrativeSessionStoreKey(sessionKey: string): boolean 
   const secondSeparator = trimmed.indexOf(":", firstSeparator + 1);
   const sessionSegment = secondSeparator < 0 ? trimmed : trimmed.slice(secondSeparator + 1);
   return sessionSegment.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
+}
+
+export async function readSessionResetRecallCutoffInWorker(
+  ...args: Parameters<
+    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").readSessionResetRecallCutoffInWorker
+  >
+) {
+  const { readSessionResetRecallCutoffInWorker: read } =
+    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
+  return read(...args);
 }

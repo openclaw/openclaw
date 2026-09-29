@@ -1,4 +1,3 @@
-// Discord plugin module implements interaction options behavior.
 import type {
   APIApplicationCommandInteractionDataBasicOption,
   APIApplicationCommandInteractionDataOption,
@@ -11,30 +10,15 @@ type OptionsClient = StructureClient & {
   fetchChannel(id: string): Promise<DiscordChannel>;
 };
 
-function readFocusedOption(
-  options: APIApplicationCommandInteractionDataOption[] | undefined,
-): APIApplicationCommandInteractionDataBasicOption | undefined {
-  for (const option of options ?? []) {
-    if ("focused" in option && option.focused) {
-      return option as APIApplicationCommandInteractionDataBasicOption;
-    }
-    const child = readFocusedOption(readChildOptions(option));
-    if (child) {
-      return child;
-    }
-  }
-  return undefined;
-}
-
 function findOption(
   options: APIApplicationCommandInteractionDataOption[] | undefined,
-  name: string,
+  matches: (option: APIApplicationCommandInteractionDataOption) => boolean,
 ): APIApplicationCommandInteractionDataOption | undefined {
   for (const option of options ?? []) {
-    if (option.name === name) {
+    if (matches(option)) {
       return option;
     }
-    const child = findOption(readChildOptions(option), name);
+    const child = findOption(readChildOptions(option), matches);
     if (child) {
       return child;
     }
@@ -59,25 +43,25 @@ export class OptionsHandler {
   ) {}
 
   getString(name: string): string | null {
-    const option = findOption(this.rawOptions, name);
+    const option = findOption(this.rawOptions, (entry) => entry.name === name);
     const value = option && "value" in option ? option.value : undefined;
     return typeof value === "string" ? value : null;
   }
 
   getNumber(name: string): number | null {
-    const option = findOption(this.rawOptions, name);
+    const option = findOption(this.rawOptions, (entry) => entry.name === name);
     const value = option && "value" in option ? option.value : undefined;
     return typeof value === "number" ? value : null;
   }
 
   getBoolean(name: string): boolean | null {
-    const option = findOption(this.rawOptions, name);
+    const option = findOption(this.rawOptions, (entry) => entry.name === name);
     const value = option && "value" in option ? option.value : undefined;
     return typeof value === "boolean" ? value : null;
   }
 
   async getChannel(name: string, required = false) {
-    const option = findOption(this.rawOptions, name);
+    const option = findOption(this.rawOptions, (entry) => entry.name === name);
     const value = option && "value" in option ? option.value : undefined;
     const id = typeof value === "string" ? value : undefined;
     const resolved = id ? this.resolvedChannels?.[id] : undefined;
@@ -94,6 +78,9 @@ export class OptionsHandler {
   }
 
   getFocused(): APIApplicationCommandInteractionDataBasicOption | undefined {
-    return readFocusedOption(this.rawOptions);
+    return findOption(
+      this.rawOptions,
+      (option) => "focused" in option && Boolean(option.focused),
+    ) as APIApplicationCommandInteractionDataBasicOption | undefined;
   }
 }

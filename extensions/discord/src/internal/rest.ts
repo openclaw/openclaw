@@ -1,14 +1,15 @@
-// Discord plugin module implements rest behavior.
 import { inspect } from "node:util";
 import { gunzipSync } from "node:zlib";
+import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   clampTimerTimeoutMs,
   resolveIntegerOption as normalizeIntegerOption,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { getDiscordEndpointRuntime } from "../endpoint-runtime.js";
-import { serializeRequestBody } from "./rest-body.js";
+import { getDiscordEndpointRuntime, type DiscordEndpointRuntime } from "../endpoint-runtime.js";
+import { captureDiscordRequestAuthority } from "./request-authority.js";
+import { serializeRequestBody, type RequestData } from "./rest-body.js";
 import {
   DiscordError,
   RateLimitError,
@@ -17,17 +18,11 @@ import {
   readRetryAfter,
 } from "./rest-errors.js";
 import { appendQuery, createRouteKey } from "./rest-routes.js";
-import {
-  RestScheduler,
-  type RequestPriority as RestRequestPriority,
-  type RequestQuery,
-} from "./rest-scheduler.js";
+import { RestScheduler, type RequestPriority, type RequestQuery } from "./rest-scheduler.js";
 import { isDiscordRateLimitBody } from "./schemas.js";
 
 export { DiscordError, isUnknownDiscordVoiceStateError, RateLimitError } from "./rest-errors.js";
 
-type RuntimeProfile = "serverless" | "persistent";
-type RequestPriority = RestRequestPriority;
 type RequestSchedulerOptions = {
   lanes?: Partial<
     Record<RequestPriority, { maxQueueSize?: number; staleAfterMs?: number; weight?: number }>
@@ -47,7 +42,6 @@ export type RequestClientOptions = {
   timeout?: number;
   queueRequests?: boolean;
   maxQueueSize?: number;
-  runtimeProfile?: RuntimeProfile;
   scheduler?: RequestSchedulerOptions;
   fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 };
@@ -59,21 +53,9 @@ type NormalizedRequestClientOptions = RequestClientOptions & {
   timeout: number;
 };
 
-export type RequestData = {
-  body?: unknown;
-  multipartStyle?: "message" | "form";
-  rawBody?: boolean;
-  headers?: Record<string, string>;
-};
-
-type QueuedRequest = {
-  method: string;
-  path: string;
+type RequestDispatchData = {
   data?: RequestData;
-  query?: RequestQuery;
-  resolve: (value?: unknown) => void;
-  reject: (reason?: unknown) => void;
-  routeKey: string;
+  assertCurrent?: () => void;
 };
 
 const defaultOptions = {
@@ -84,11 +66,10 @@ const defaultOptions = {
   timeout: 15_000,
   queueRequests: true,
   maxQueueSize: 1000,
-  runtimeProfile: "persistent" as RuntimeProfile,
 };
 
 const DEFAULT_MAX_CONCURRENT_WORKERS = 4;
-const defaultLaneOptions: Record<RestRequestPriority, { staleAfterMs?: number; weight: number }> = {
+const defaultLaneOptions: Record<RequestPriority, { staleAfterMs?: number; weight: number }> = {
   critical: { weight: 6 },
   standard: { weight: 3 },
   background: { staleAfterMs: 20_000, weight: 1 },
@@ -157,9 +138,9 @@ function isZlibMaxOutputLengthError(err: unknown): boolean {
 export class RequestClient {
   readonly options: NormalizedRequestClientOptions;
   protected token: string;
-  protected customFetch: RequestClientOptions["fetch"];
+  protected customFetch: DiscordEndpointRuntime["fetch"] | undefined;
   protected requestControllers = new Set<AbortController>();
-  private scheduler: RestScheduler<RequestData>;
+  private scheduler: RestScheduler<RequestDispatchData>;
 
   constructor(token: string, options?: RequestClientOptions) {
     const endpoint = getDiscordEndpointRuntime();
@@ -173,7 +154,7 @@ export class RequestClient {
     this.token = token.replace(/^Bot\s+/i, "");
     this.customFetch = resolvedOptions?.fetch;
     this.options = normalizeRequestClientOptions(resolvedOptions);
-    this.scheduler = new RestScheduler<RequestData>(
+    this.scheduler = new RestScheduler<RequestDispatchData>(
       {
         lanes: normalizeSchedulerLanes(this.options.maxQueueSize, this.options.scheduler?.lanes),
         maxConcurrency: normalizeIntegerOption(
@@ -194,54 +175,68 @@ export class RequestClient {
         await this.executeRequest(
           request.method,
           request.path,
-          { data: request.data, query: request.query },
+          { data: request.data?.data, query: request.query },
           request.routeKey,
+          request.data?.assertCurrent,
         ),
     );
   }
 
-  async get(path: string, query?: QueuedRequest["query"]): Promise<unknown> {
+  async get(path: string, query?: RequestQuery): Promise<unknown> {
     return await this.request("GET", path, { query });
   }
 
-  async post(path: string, data?: RequestData, query?: QueuedRequest["query"]): Promise<unknown> {
+  async post(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
     return await this.request("POST", path, { data, query });
   }
 
-  async patch(path: string, data?: RequestData, query?: QueuedRequest["query"]): Promise<unknown> {
+  async patch(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
     return await this.request("PATCH", path, { data, query });
   }
 
-  async put(path: string, data?: RequestData, query?: QueuedRequest["query"]): Promise<unknown> {
+  async put(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
     return await this.request("PUT", path, { data, query });
   }
 
-  async delete(path: string, data?: RequestData, query?: QueuedRequest["query"]): Promise<unknown> {
+  async delete(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
     return await this.request("DELETE", path, { data, query });
   }
 
   protected async request(
     method: string,
     path: string,
-    params: { data?: RequestData; query?: QueuedRequest["query"] },
+    params: { data?: RequestData; query?: RequestQuery },
   ): Promise<unknown> {
     const routeKey = createRouteKey(method, path);
+    // A shared scheduler can drain under another caller's async context. Capture
+    // both host action and read authority before queueing or rate-limit retries.
+    const assertActionAuthority = captureDiscordRequestAuthority();
+    const assertReadAuthority = captureChannelReadAuthority();
+    const assertCurrent = assertActionAuthority
+      ? () => {
+          assertActionAuthority();
+          assertReadAuthority?.();
+        }
+      : assertReadAuthority;
+    assertCurrent?.();
     if (!this.options.queueRequests) {
-      return await this.executeRequest(method, path, params, routeKey);
+      return await this.executeRequest(method, path, params, routeKey, assertCurrent);
     }
     return await this.scheduler.enqueue({
       method,
       path,
       priority: getRequestPriority(method, path),
-      ...params,
+      query: params.query,
+      data: { data: params.data, assertCurrent },
     });
   }
 
   protected async executeRequest(
     method: string,
     path: string,
-    params: { data?: RequestData; query?: QueuedRequest["query"] },
+    params: { data?: RequestData; query?: RequestQuery },
     routeKey = createRouteKey(method, path),
+    assertCurrent?: () => void,
   ): Promise<unknown> {
     const url = `${this.options.apiBaseUrl}${appendQuery(path, params.query)}`;
     const headers = new Headers({
@@ -259,12 +254,12 @@ export class RequestClient {
       : controller.signal;
     this.requestControllers.add(controller);
     try {
-      const response = await (this.customFetch ?? fetch)(url, {
-        method,
-        headers,
-        body,
-        signal,
-      });
+      assertCurrent?.();
+      const init = { method, headers, body, signal };
+      const response =
+        this.customFetch && assertCurrent
+          ? await this.customFetch(url, init, assertCurrent)
+          : await (this.customFetch ?? fetch)(url, init);
       const text = await readResponseBodyText(response, this.options.timeout ?? 15_000);
       const parsed = coerceResponseBody(text);
       this.scheduler.recordResponse(routeKey, path, response, parsed);
@@ -285,9 +280,6 @@ export class RequestClient {
       }
       return parsed;
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
-        throw error;
-      }
       if (error instanceof Error) {
         throw error;
       }
@@ -342,7 +334,7 @@ function normalizeRequestClientOptions(
 function normalizeSchedulerLanes(
   maxQueueSize: number,
   lanes?: RequestSchedulerOptions["lanes"],
-): Record<RestRequestPriority, { maxQueueSize: number; staleAfterMs?: number; weight: number }> {
+): Record<RequestPriority, { maxQueueSize: number; staleAfterMs?: number; weight: number }> {
   const fallbackMaxQueueSize = normalizeIntegerOption(maxQueueSize, defaultOptions.maxQueueSize, {
     min: 1,
   });
@@ -354,7 +346,7 @@ function normalizeSchedulerLanes(
 }
 
 function normalizeSchedulerLane(
-  lane: RestRequestPriority,
+  lane: RequestPriority,
   maxQueueSize: number,
   options?: { maxQueueSize?: number; staleAfterMs?: number; weight?: number },
 ): { maxQueueSize: number; staleAfterMs?: number; weight: number } {
@@ -376,7 +368,7 @@ function normalizeSchedulerLane(
   };
 }
 
-function getRequestPriority(method: string, path: string): RestRequestPriority {
+function getRequestPriority(method: string, path: string): RequestPriority {
   const normalizedMethod = method.toUpperCase();
   const normalizedPath = path.toLowerCase();
   if (/^\/interactions\/\d+\/[^/]+\/callback$/.test(normalizedPath)) {

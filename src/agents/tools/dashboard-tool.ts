@@ -5,6 +5,7 @@ import type {
   BoardCommand,
   BoardOp,
   BoardSnapshot,
+  SessionRow,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { BOARD_REPORT_GUIDANCE } from "../../boards/board-report.js";
 import { BOARD_WEBSITE_GUIDANCE } from "../../boards/board-website.js";
@@ -36,6 +37,7 @@ const DASHBOARD_ACTIONS = [
   "widget_remove",
   "focus_tab",
   "set_presentation",
+  "set_default_presentation",
 ] as const;
 const BOARD_TAB_ID_PATTERN = "^[a-z0-9-]{1,40}$";
 const BOARD_TAB_ID_REGEX = /^[a-z0-9-]{1,40}$/;
@@ -145,6 +147,14 @@ function readOptionalTabId(params: Record<string, unknown>): string | undefined 
   return tabId;
 }
 
+function readPresentation(params: Record<string, unknown>): "split" | "expanded" {
+  const presentation = readToolStringParam(params, "presentation", { required: true });
+  if (presentation !== "split" && presentation !== "expanded") {
+    throw new ToolInputError("presentation must be split or expanded");
+  }
+  return presentation;
+}
+
 function readPluginProps(params: Record<string, unknown>): Record<string, unknown> | undefined {
   const props = asOptionalRecord(params.props);
   if (params.props !== undefined && !props) {
@@ -241,7 +251,10 @@ const WIDGET_CONTENT_UPDATE_PATHS = {
   "mcp-app": "Update through the originating MCP app.",
 } as const;
 
-function snapshotResult(snapshot: BoardSnapshot) {
+function snapshotResult(
+  snapshot: BoardSnapshot,
+  defaultPresentation?: NonNullable<SessionRow["boardPresentation"]>,
+) {
   const contentUpdatePaths: Record<string, string> = {};
   for (const widget of snapshot.widgets) {
     if (!widget.contentOwner) {
@@ -251,6 +264,7 @@ function snapshotResult(snapshot: BoardSnapshot) {
   }
   const details = {
     ...snapshot,
+    ...(defaultPresentation ? { defaultPresentation } : {}),
     tabs: snapshot.tabs.map(({ tabId, title, position }) => ({ tabId, title, position })),
     ...(snapshot.widgets.length > 0 ? { contentUpdatePaths } : {}),
   };
@@ -277,7 +291,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
     label: "Dashboard",
     name: "dashboard",
     description:
-      "Keep one ad hoc visualization inline; use only for an explicit dashboard request or multiple non-code visualizations. Read layout; widget_put updates plugin widgets only. Read and arrange this session dashboard: read snapshot; tab_create/tab_update/tab_delete/tabs_reorder; widget_put/widget_move/widget_resize/widget_remove; focus_tab opens the dashboard side panel; set_presentation shows the dashboard alongside chat (split) or across the task area (expanded). focus_tab and set_presentation require a connected Control UI. Widgets use stable names. widget_put creates or updates trusted plugin widgets only; update other content through its owning authoring capability discovered in the tool catalog. Prefer session:report for data reports with text, metrics, tables, charts, and links; it renders directly without a document frame. Use session:progress props {sessionKey?} for live session progress (omit sessionKey for the current session). Use session:website props {url} for a live HTTPS website; size full and expanded presentation fill the task area. Other widget kinds are supplied by enabled plugins. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
+      "Read and arrange this session dashboard; widget_put updates plugin widgets only. Follow the widget authoring tool's current placement guidance. Actions: read snapshot; tab_create/tab_update/tab_delete/tabs_reorder; widget_put/widget_move/widget_resize/widget_remove; focus_tab opens the dashboard side panel; set_presentation shows the dashboard alongside chat (split) or across the task area (expanded). focus_tab and set_presentation require a connected Control UI and do not save a default. set_default_presentation saves split or expanded for subsequent opens without requiring a connected UI; read returns the effective defaultPresentation (split when unset). Personal viewer overrides still take precedence. Widgets use stable names. widget_put creates or updates trusted plugin widgets only; update other content through its owning authoring capability discovered in the tool catalog. Prefer session:report for data reports with text, metrics, tables, charts, and links; it renders directly without a document frame. Use session:progress props {sessionKey?} for live session progress (omit sessionKey for the current session). Use session:website props {url} for a live HTTPS website; size full and expanded presentation fill the task area. Other widget kinds are supplied by enabled plugins. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
     parameters: DashboardToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
@@ -290,45 +304,47 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
       const callGateway = <T>(method: string, gatewayParams: Record<string, unknown>) =>
         gatewayCall<T>(method, gatewayParams, gatewayOptions);
       if (action === "read") {
-        return snapshotResult(
-          await callGateway<BoardSnapshot>("board.get", {
+        const [snapshot, described] = await Promise.all([
+          callGateway<BoardSnapshot>("board.get", {
             sessionKey,
             agentId: opts.agentId,
           }),
+          callGateway<{ session: SessionRow | null }>("sessions.describe", {
+            key: sessionKey,
+            agentId: opts.agentId,
+          }),
+        ]);
+        return snapshotResult(snapshot, described.session?.boardPresentation ?? "split");
+      }
+      if (action === "set_default_presentation") {
+        const presentation = readPresentation(params);
+        const patched = await callGateway<{
+          key: string;
+          entry: Pick<SessionRow, "boardPresentation">;
+        }>("sessions.patch", {
+          key: sessionKey,
+          agentId: opts.agentId,
+          boardFace: "dashboard",
+          boardPresentation: presentation,
+        });
+        const defaultPresentation = patched.entry.boardPresentation ?? "split";
+        return textResult(
+          `Dashboard default presentation saved: ${defaultPresentation}. Applies on subsequent opens; personal viewer overrides take precedence.`,
+          { ok: true, sessionKey: patched.key, defaultPresentation },
         );
       }
-      if (action === "focus_tab") {
-        const delivered = emitCommand(
-          {
-            sessionKey,
-            agentId: opts.agentId,
-            command: {
-              kind: "focus_tab",
-              tabId: readTabId(params),
-            },
-          },
-          admittedResolver,
+      if (action === "focus_tab" || action === "set_presentation") {
+        // Keep the shipped BoardCommand wire format; the panel owns its dock position.
+        const command: BoardCommand =
+          action === "focus_tab"
+            ? { kind: "focus_tab", tabId: readTabId(params) }
+            : {
+                kind: "set_chat_dock",
+                dock: readPresentation(params) === "expanded" ? "hidden" : "right",
+              };
+        return commandResult(
+          emitCommand({ sessionKey, agentId: opts.agentId, command }, admittedResolver),
         );
-        return commandResult(delivered);
-      }
-      if (action === "set_presentation") {
-        const presentation = readToolStringParam(params, "presentation", { required: true });
-        if (presentation !== "split" && presentation !== "expanded") {
-          throw new ToolInputError("presentation must be split or expanded");
-        }
-        const delivered = emitCommand(
-          {
-            sessionKey,
-            agentId: opts.agentId,
-            // Keep the shipped BoardCommand wire format; the panel owns its dock position.
-            command: {
-              kind: "set_chat_dock",
-              dock: presentation === "expanded" ? "hidden" : "right",
-            },
-          },
-          admittedResolver,
-        );
-        return commandResult(delivered);
       }
       if (action === "widget_put") {
         const pluginKind = readToolStringParam(params, "pluginKind", { required: true });

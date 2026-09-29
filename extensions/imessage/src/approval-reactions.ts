@@ -1,4 +1,3 @@
-// Imessage plugin module implements approval reactions behavior.
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
@@ -223,7 +222,9 @@ export async function registerIMessageApprovalReactionTarget(params: {
     !accountId ||
     !messageId ||
     !approvalId ||
-    (params.approvalKind !== "exec" && params.approvalKind !== "plugin") ||
+    (params.approvalKind !== "exec" &&
+      params.approvalKind !== "plugin" &&
+      params.approvalKind !== "system-agent") ||
     allowedDecisions.length === 0
   ) {
     return null;

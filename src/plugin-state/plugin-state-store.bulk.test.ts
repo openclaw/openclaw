@@ -1,5 +1,5 @@
 import { ok } from "@openclaw/normalization-core/result";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   isOpenClawStateDatabaseOpen,
@@ -13,6 +13,7 @@ import {
 } from "./plugin-state-store.js";
 import { closePluginStateDatabase } from "./plugin-state-store.sqlite.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
+import { PluginStateStoreError } from "./plugin-state-store.types.js";
 
 afterEach(() => resetPluginStateStoreForTests());
 
@@ -52,10 +53,14 @@ describe("plugin state bulk reads", () => {
       for (let connection = 0; connection < 2; connection++) {
         expect(sync.lookupMany(request)).toEqual(expected.map(ok));
         await expect(asyncStore.lookupMany(request)).resolves.toEqual(expected.map(ok));
-        const duplicates = sync.lookupMany([keys[0], keys[0]]);
-        expect(duplicates[0]?.ok && duplicates[0].value).not.toBe(
-          duplicates[1]?.ok && duplicates[1].value,
-        );
+        for (const duplicates of [
+          sync.lookupMany([keys[0], keys[0]]),
+          await asyncStore.lookupMany([keys[0], keys[0]]),
+        ]) {
+          expect(duplicates[0]?.ok && duplicates[0].value).not.toBe(
+            duplicates[1]?.ok && duplicates[1].value,
+          );
+        }
         if (connection > 0) {
           expect(isOpenClawStateDatabaseOpen()).toBe(false);
         }
@@ -65,40 +70,48 @@ describe("plugin state bulk reads", () => {
     });
   });
 
-  it("bulk reads use fresh expiry and preserve corrupt JSON errors", async () => {
+  it("bulk reads use fresh expiry and restore positional corrupt JSON errors", async () => {
     await withOpenClawTestState({ label: "plugin-state-bulk-1" }, async () => {
       const options = { namespace: "bulk-errors", maxEntries: 10 };
       const sync = createPluginStateSyncKeyedStore<number>("discord", options);
       const asyncStore = createPluginStateKeyedStore<number>("discord", options);
-      const now = Date.now();
-      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-      try {
-        sync.register("short", 1, { ttlMs: 100 });
-        sync.register("long", 2);
-        expect(sync.lookupMany(["short", "long"])).toEqual([ok(1), ok(2)]);
-        clock.mockReturnValue(now + 100);
-        await expect(asyncStore.lookupMany(["short", "long"])).resolves.toEqual([
-          ok(undefined),
-          ok(2),
-        ]);
-        const { db } = openOpenClawStateDatabase();
-        db.prepare(
-          "UPDATE plugin_state_entries SET value_json = ? WHERE namespace = ? AND entry_key = ?",
-        ).run("invalid JSON", "bulk-errors", "long");
-        const corrupt = {
-          ok: false,
-          error: expect.objectContaining({ code: "PLUGIN_STATE_CORRUPT", operation: "lookup" }),
-        };
-        expect(sync.lookupMany(["short", "long", "short"])).toEqual([
-          ok(undefined),
-          corrupt,
-          ok(undefined),
-        ]);
-        await expect(asyncStore.lookupMany(["long"])).resolves.toEqual([corrupt]);
-        expect(() => sync.lookup("long")).toThrowError(corrupt.error);
-      } finally {
-        clock.mockRestore();
+      sync.register("short", 1, { ttlMs: 24 * 60 * 60_000 });
+      sync.register("long", 2);
+      sync.register("healthy", 3);
+      await expect(asyncStore.lookupMany(["short", "long"])).resolves.toEqual([ok(1), ok(2)]);
+      seedPluginStateEntriesForTests([
+        {
+          pluginId: "discord",
+          namespace: options.namespace,
+          key: "short",
+          value: 1,
+          expiresAt: Date.now() - 1,
+        },
+      ]);
+      await expect(asyncStore.lookupMany(["short", "long"])).resolves.toEqual([
+        ok(undefined),
+        ok(2),
+      ]);
+      const { db, path } = openOpenClawStateDatabase();
+      db.prepare(
+        "UPDATE plugin_state_entries SET value_json = ? WHERE namespace = ? AND entry_key = ?",
+      ).run("invalid JSON", "bulk-errors", "long");
+      const corrupt = {
+        ok: false,
+        error: expect.objectContaining({ code: "PLUGIN_STATE_CORRUPT", operation: "lookup", path }),
+      };
+      const request = ["healthy", "long", "short", "long", "missing"];
+      const expected = [ok(3), corrupt, ok(undefined), corrupt, ok(undefined)];
+      expect(sync.lookupMany(request)).toEqual(expected);
+      const results = await asyncStore.lookupMany(request);
+      expect(results).toEqual(expected);
+      for (const result of results) {
+        if (!result.ok) {
+          expect(result.error).toBeInstanceOf(PluginStateStoreError);
+          expect(result.error.cause).toBeInstanceOf(SyntaxError);
+        }
       }
+      expect(() => sync.lookup("long")).toThrowError(corrupt.error);
     });
   });
 

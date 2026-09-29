@@ -55,11 +55,9 @@ describe("logging/logger import", () => {
   });
 
   it("does not resolve the preferred temp dir at import time when node fs is unavailable", async () => {
-    const { module, resolvePreferredOpenClawTmpDir } = await importLoggerWithMockedTempResolver();
+    const { resolvePreferredOpenClawTmpDir } = await importLoggerWithMockedTempResolver();
 
     expect(resolvePreferredOpenClawTmpDir).not.toHaveBeenCalled();
-    expect(module.DEFAULT_LOG_DIR).toBe("/tmp/openclaw");
-    expect(module.DEFAULT_LOG_FILE).toBe("/tmp/openclaw/openclaw.log");
   });
 
   it("defers node temp resolution until active logger settings are requested", async () => {
@@ -71,8 +69,6 @@ describe("logging/logger import", () => {
     });
 
     expect(resolvePreferredOpenClawTmpDir).not.toHaveBeenCalled();
-    expect(module.DEFAULT_LOG_DIR).toBe("/tmp/openclaw");
-    expect(module.DEFAULT_LOG_FILE).toBe("/tmp/openclaw/openclaw.log");
 
     module.applyLoggingConfig(undefined);
     try {

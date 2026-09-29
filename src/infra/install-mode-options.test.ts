@@ -2,12 +2,32 @@
 import { describe, expect, it } from "vitest";
 import {
   resolveInstallModeOptions,
+  resolveInstallWorkTimeoutMs,
   resolveTimedInstallModeOptions,
 } from "./install-mode-options.js";
 
 type LoggerKey = "default" | "explicit";
 
 describe("install mode option helpers", () => {
+  it.each([
+    { mode: "install", timeoutMs: undefined, workTimeoutMs: undefined, expected: 300_000 },
+    { mode: "install", timeoutMs: 500, workTimeoutMs: undefined, expected: 300_000 },
+    { mode: "update", timeoutMs: undefined, workTimeoutMs: undefined, expected: undefined },
+    { mode: "update", timeoutMs: 500, workTimeoutMs: undefined, expected: 500 },
+    { mode: "update", timeoutMs: 500, workTimeoutMs: null, expected: undefined },
+    { mode: "update", timeoutMs: 500, workTimeoutMs: 37, expected: 37 },
+  ] as const)(
+    "keeps $mode work policy through a nested install target",
+    ({ mode, timeoutMs, workTimeoutMs, expected }) => {
+      const outer = resolveTimedInstallModeOptions({ mode, timeoutMs, workTimeoutMs }, {});
+      const nested = resolveTimedInstallModeOptions({ ...outer, mode: "install" }, {});
+      expect(
+        resolveInstallWorkTimeoutMs(nested.workTimeoutMs, Math.max(nested.timeoutMs, 300_000)),
+      ).toBe(expected);
+      expect(nested.timeoutMs).toBe(timeoutMs ?? 120_000);
+    },
+  );
+
   it.each([
     {
       name: "applies logger, mode, and dryRun defaults",

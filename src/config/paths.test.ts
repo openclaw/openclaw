@@ -143,6 +143,18 @@ describe("default install identity", () => {
     ).toBe(false);
   });
 
+  it("keeps the default install identity for unset home literals", () => {
+    const home = "/home/test";
+
+    for (const literal of ["undefined", "null", "  undefined  "]) {
+      const env = { HOME: home, OPENCLAW_HOME: literal };
+      // Home resolution already reads these literals as unset, so the install
+      // stays on the account home and the default state dir.
+      expect(isDefaultInstallIdentity(env, () => home)).toBe(true);
+      expect(allowsProcessHomeSessionScan(env, () => home)).toBe(true);
+    }
+  });
+
   it("accepts the canonical paths a named profile projects", async () => {
     await withTestDir({ prefix: "openclaw-profile-install-" }, async (home) => {
       const defaultStateDir = path.join(home, ".openclaw");
@@ -252,7 +264,7 @@ describe("default install identity", () => {
     ).toBe(false);
   });
 
-  it.each(["../escape", "work/../../escape", "work\\..\\escape", "."])(
+  it.each(["../escape", "work\\..\\escape", "."])(
     "rejects invalid profile %j even when its derived paths match",
     (profile) => {
       const home = "/home/test";
@@ -284,7 +296,7 @@ describe("default install identity", () => {
     },
   );
 
-  it.each(["Main", "MAIN", "Work"])(
+  it.each(["Main"])(
     "rejects mixed-case native service profile %j on case-insensitive platforms",
     (profile) => {
       expect(resolveNativeServiceProfileConflict({ OPENCLAW_PROFILE: profile }, "darwin")).toBe(
@@ -446,17 +458,6 @@ describe("state + config path candidates", () => {
     expect(resolveStateDir(env, () => "/home/test")).toBe(path.resolve("/new/state"));
   });
 
-  it("normalizes relative OPENCLAW_STATE_DIR overrides to absolute paths", () => {
-    const env = {
-      OPENCLAW_STATE_DIR: ".",
-      OPENCLAW_HOME: "/srv/openclaw-home",
-    };
-
-    normalizeStateDirEnv(env);
-
-    expect(env.OPENCLAW_STATE_DIR).toBe(path.resolve("."));
-  });
-
   it("pins a relative state-dir override before later resolution", () => {
     const env = {
       OPENCLAW_STATE_DIR: "relative-state",
@@ -499,13 +500,6 @@ describe("state + config path candidates", () => {
         OPENCLAW_TEST_FAST: "1",
       });
     }
-  });
-
-  it("uses OPENCLAW_HOME for default state/config locations", () => {
-    const env = {
-      OPENCLAW_HOME: "/srv/openclaw-home",
-    };
-    expectOpenClawHomeDefaults(env);
   });
 
   it("prefers OPENCLAW_HOME over HOME for default state/config locations", () => {

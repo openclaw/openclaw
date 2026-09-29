@@ -5,7 +5,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
 import { inlineAuthProfileCredentialSchema } from "../agents/auth-profiles/credential-schema.js";
 import { coerceProfileUsageStats } from "../agents/auth-profiles/profile-usage-stats.js";
-import type { AuthProfileCredential, ProfileUsageStats } from "../agents/auth-profiles/types.js";
+import type { AuthProfileCredential, UserModelAuthProfile } from "../agents/auth-profiles/types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -22,7 +22,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { isUserModelAuthProfileId, parseUserModelAuthProfileId } from "./user-model-account-id.js";
-import { selectResolvedUserProfileById } from "./user-profiles-internal.js";
+import { selectResolvedUserProfile, userProfilesDb } from "./user-profiles-internal.js";
 
 const credentialSchema = inlineAuthProfileCredentialSchema.refine(
   (credential) => credential.copyToAgents !== true,
@@ -42,11 +42,6 @@ const profileSchema = z.strictObject({
 });
 type UserModelLinks = z.infer<typeof linksSchema>;
 type AccountRecordName = "model-accounts" | `model-account:${string}`;
-
-export type UserModelAuthProfile = {
-  credential: AuthProfileCredential;
-  usageStats?: ProfileUsageStats;
-};
 
 export type UserProfileAuthLink = { provider: string; authProfileId: string; updatedAt: number };
 export type UserModelAccount = {
@@ -84,7 +79,11 @@ function resolveOwner(db: DatabaseSync, profileId: string): string | undefined {
   if (!tableExists(db, "user_profiles")) {
     return undefined;
   }
-  const profile = selectResolvedUserProfileById(db, profileId);
+  const profile = selectResolvedUserProfile(
+    db,
+    profileId,
+    userProfilesDb(db).selectFrom("user_profiles").select(["id", "merged_into"]),
+  );
   // Profile display reads may return a stranded tombstone; it cannot own secrets.
   return profile && !profile.merged_into ? profile.id : undefined;
 }
@@ -178,6 +177,12 @@ function readProfile(
     return undefined;
   }
   const { credential, usageStats } = parseRecord(raw, profileSchema);
+  registerUserModelAuthProfileSecrets(credential);
+  return { credential, usageStats };
+}
+
+// Redaction is process-local; both native reads and host message results register secrets.
+export function registerUserModelAuthProfileSecrets(credential: AuthProfileCredential): void {
   if (credential.type === "oauth") {
     registerSecretValueForRedaction(credential.access);
     registerSecretValueForRedaction(credential.refresh);
@@ -185,11 +190,12 @@ function readProfile(
       registerSecretValueForRedaction(credential.idToken);
     }
   } else if (credential.type === "token") {
-    registerSecretValueForRedaction(credential.token);
-  } else {
+    if (credential.token !== undefined) {
+      registerSecretValueForRedaction(credential.token);
+    }
+  } else if (credential.key !== undefined) {
     registerSecretValueForRedaction(credential.key);
   }
-  return { credential, usageStats };
 }
 
 function writeProfile(
@@ -250,13 +256,12 @@ function accountSummary(
   links: UserModelLinks,
 ): UserModelAccount {
   const { credential } = parseRecord(value, profileSchema);
+  const identity = [credential.email?.trim(), credential.displayName?.trim()].filter(Boolean);
   return {
     authProfileId,
     provider: credential.provider,
     label: truncateUtf16Safe(
-      toUSVString(
-        credential.displayName?.trim() || credential.email?.trim() || credential.provider,
-      ),
+      toUSVString([...new Set(identity)].join(" · ") || credential.provider),
       256,
     ),
     authType: credential.type,

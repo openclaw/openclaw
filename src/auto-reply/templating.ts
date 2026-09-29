@@ -2,6 +2,7 @@
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
+import type { GatewayUiCommandTarget } from "../gateway/ui-command-target.types.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -56,6 +57,8 @@ export type ChannelStructuredContextEntry = {
 export type SessionTranscriptContext = {
   chatWindow?: boolean;
   historyLimit: number;
+  /** A platform-selected recent window keeps its configured bound and does not merge transcript rows. */
+  historyKind?: "pending" | "recent";
   beforeTimestampMs?: number;
   minTimestampMs?: number;
   senderLabels?: { assistant: string; user: string };
@@ -310,7 +313,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
   /** Internal wake cause, independent of transport, transcript provenance, and execution authority. */
-  InternalTurnSource?: "heartbeat" | "cron" | "exec";
+  InternalTurnSource?: "heartbeat" | "cron" | "exec" | "progress-card-refresh";
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
@@ -379,6 +382,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   GatewayClientScopes?: string[];
   /** Gateway client capabilities when the message originates from the gateway. */
   GatewayClientCaps?: string[];
+  /** Server-bound requesting browser; never sourced from message text or rendered into prompts. */
+  GatewayUiCommandTarget?: GatewayUiCommandTarget;
   /** Run-scoped plugin tool bindings; never rendered into prompt text. */
   GatewayRunToolBindings?: Readonly<Record<string, unknown>>;
   /** Gateway device id allowed to review approvals initiated by this turn. */
@@ -539,9 +544,6 @@ function formatTemplateValue(value: unknown): string {
         return [];
       })
       .join(",");
-  }
-  if (typeof value === "object") {
-    return "";
   }
   return "";
 }

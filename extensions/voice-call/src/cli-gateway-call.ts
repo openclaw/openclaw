@@ -129,13 +129,6 @@ function resolveVoiceCallDeadlineMs(timeoutMs: number, nowMs = Date.now()): numb
   return nowMs + (clampTimerTimeoutMs(timeoutMs) ?? MAX_TIMER_TIMEOUT_MS);
 }
 
-function readGatewayOperationId(payload: unknown): string {
-  if (isRecord(payload) && typeof payload.operationId === "string" && payload.operationId) {
-    return payload.operationId;
-  }
-  throw new Error("voicecall gateway response missing operationId");
-}
-
 function readGatewayPollTimeoutMs(payload: unknown, fallbackTimeoutMs: number): number {
   if (isRecord(payload) && typeof payload.pollTimeoutMs === "number") {
     return clampTimerTimeoutMs(payload.pollTimeoutMs) ?? fallbackTimeoutMs;
@@ -174,8 +167,11 @@ export async function pollContinueGateway(
   if (!isRecord(payload) || typeof payload.operationId !== "string") {
     return payload;
   }
+  if (!payload.operationId) {
+    throw new Error("voicecall gateway response missing operationId");
+  }
   const params = {
-    operationId: readGatewayOperationId(payload),
+    operationId: payload.operationId,
     timeoutMs: readGatewayPollTimeoutMs(payload, fallbackTimeoutMs),
   };
   const deadlineMs = resolveVoiceCallDeadlineMs(params.timeoutMs);

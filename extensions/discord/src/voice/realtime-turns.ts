@@ -4,14 +4,16 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import {
+  isRealtimeVoiceAudioAudible,
   isRealtimeVoiceWakeNameRequired,
   matchRealtimeVoiceActivationName,
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceActivationNameTranscriptResult,
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceWakeNamePolicy,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { convertDiscordPcm48kStereoToRealtimePcm24kMono } from "./audio.js";
+import { createDiscordPcmToRealtimeConverter } from "./audio.js";
 import type { DiscordRealtimePlaybackPort } from "./realtime-playback.js";
 import { mergeRealtimePartialTranscript } from "./realtime-transcript.js";
 import type {
@@ -30,6 +32,9 @@ const DISCORD_REALTIME_TRAILING_SILENCE_MAX_MS = 3_000;
 export type DiscordRealtimeSpeakerContext = VoiceRealtimeSpeakerContext & { userId: string };
 
 type PendingSpeakerTurn = {
+  bridge: RealtimeVoiceBridgeSession | null;
+  converter: ReturnType<typeof createDiscordPcmToRealtimeConverter>;
+  providerEpoch: number;
   inputDiscordBytes: number;
   inputRealtimeBytes: number;
   inputChunks: number;
@@ -90,6 +95,9 @@ export class DiscordRealtimeTurns {
     this.source ??= Object.freeze({ userId, senderIsOwner: context.senderIsOwner });
     this.resetPartialWakeNameTracking();
     const turn: PendingSpeakerTurn = {
+      bridge: this.params.bridge(),
+      converter: createDiscordPcmToRealtimeConverter(),
+      providerEpoch: this.params.providerEpoch(),
       context: { ...context, ...this.source },
       startedAt: Date.now(),
       hasAudio: false,
@@ -103,8 +111,21 @@ export class DiscordRealtimeTurns {
       sendInputAudio: (discordPcm48kStereo) =>
         this.sendInputAudioForTurn(turn, discordPcm48kStereo),
       close: () => {
-        this.sendRealtimeTrailingSilenceForTurn(turn);
-        this.logSpeakerTurnClosed(turn);
+        if (turn.closed) {
+          return;
+        }
+        if (this.isTurnProviderCurrent(turn)) {
+          const tail = turn.converter.flush();
+          if (tail.length > 0) {
+            this.registerSpeakerTurnAudioStarted(turn);
+            turn.inputRealtimeBytes += tail.length;
+            if (this.params.recordInputAudio(tail) && this.isTurnProviderCurrent(turn)) {
+              turn.bridge?.sendAudio(tail);
+            }
+          }
+          this.sendRealtimeTrailingSilenceForTurn(turn);
+          this.logSpeakerTurnClosed(turn);
+        }
         turn.closed = true;
       },
     };
@@ -206,13 +227,21 @@ export class DiscordRealtimeTurns {
 
   private sendInputAudioForTurn(turn: PendingSpeakerTurn, discordPcm48kStereo: Buffer): void {
     const bridge = this.params.bridge();
-    if (!bridge || this.params.stopped()) {
+    if (!bridge || this.params.stopped() || turn.closed) {
       return;
     }
-    const realtimePcm = convertDiscordPcm48kStereoToRealtimePcm24kMono(discordPcm48kStereo);
+    const providerEpoch = this.params.providerEpoch();
+    if (turn.bridge !== bridge || turn.providerEpoch !== providerEpoch) {
+      turn.bridge = bridge;
+      turn.providerEpoch = providerEpoch;
+      turn.converter = createDiscordPcmToRealtimeConverter();
+      turn.hasAudio = false;
+      turn.interruptedPlayback = false;
+    }
+    turn.inputDiscordBytes += discordPcm48kStereo.length;
+    const realtimePcm = turn.converter.process(discordPcm48kStereo);
     if (realtimePcm.length > 0) {
       this.registerSpeakerTurnAudioStarted(turn);
-      turn.inputDiscordBytes += discordPcm48kStereo.length;
       turn.inputRealtimeBytes += realtimePcm.length;
       turn.inputChunks += 1;
       if (turn.inputChunks === 1) {
@@ -220,7 +249,14 @@ export class DiscordRealtimeTurns {
           `discord voice: realtime input audio started guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} user=${turn.context.userId} speaker=${turn.context.speakerLabel} discordBytes=${discordPcm48kStereo.length} realtimeBytes=${realtimePcm.length} outputAudioMs=${this.params.playback.outputAudioMs()} outputActive=${this.params.playback.isOutputAudioActive()}`,
         );
       }
-      if (!turn.interruptedPlayback && this.params.interruptRoomPlayback()) {
+      if (
+        !turn.interruptedPlayback &&
+        // PCM16 amplitude is independent of rate/channels; exclude current
+        // transport silence even when the resampler still emits earlier speech.
+        isRealtimeVoiceAudioAudible(discordPcm48kStereo, REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ) &&
+        isRealtimeVoiceAudioAudible(realtimePcm, REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ) &&
+        this.params.interruptRoomPlayback()
+      ) {
         turn.interruptedPlayback = true;
         logVoiceVerbose(
           `realtime barge-in from active speaker audio: guild ${this.params.entry.guildId} channel ${this.params.entry.channelId} user ${turn.context.userId}`,
@@ -229,10 +265,20 @@ export class DiscordRealtimeTurns {
           `discord voice: realtime barge-in detected source=active-speaker-audio guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} user=${turn.context.userId} speaker=${turn.context.speakerLabel} discordBytes=${discordPcm48kStereo.length} realtimeBytes=${realtimePcm.length}`,
         );
       }
-      if (this.params.recordInputAudio(realtimePcm)) {
+      if (this.params.recordInputAudio(realtimePcm) && this.isTurnProviderCurrent(turn)) {
         bridge.sendAudio(realtimePcm);
       }
     }
+  }
+
+  private isTurnProviderCurrent(turn: PendingSpeakerTurn): boolean {
+    return (
+      !turn.closed &&
+      !this.params.stopped() &&
+      turn.bridge !== null &&
+      turn.bridge === this.params.bridge() &&
+      turn.providerEpoch === this.params.providerEpoch()
+    );
   }
 
   private registerSpeakerTurnAudioStarted(turn: PendingSpeakerTurn): void {
@@ -260,12 +306,11 @@ export class DiscordRealtimeTurns {
   }
 
   private sendRealtimeTrailingSilenceForTurn(turn: PendingSpeakerTurn): void {
-    const bridge = this.params.bridge();
+    const bridge = turn.bridge;
     if (
       !bridge ||
+      !this.isTurnProviderCurrent(turn) ||
       bridge.bridge.pacesInputAudio ||
-      this.params.stopped() ||
-      turn.closed ||
       !turn.hasAudio
     ) {
       return;

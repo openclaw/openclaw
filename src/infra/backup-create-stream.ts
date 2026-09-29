@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import { compose, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 
 const BACKUP_ARCHIVE_IDLE_TIMEOUT_MS = 5 * 60_000;
 
@@ -15,14 +15,16 @@ export function appendBackupManifest(payload: AsyncIterable<Buffer>, createManif
     async function* (source: AsyncIterable<Buffer>) {
       // node-tar ends each uncompressed Pack with two 512-byte zero blocks.
       // Replace only that terminator; the payload headers and bytes stay intact.
-      let tail = Buffer.alloc(0);
+      let tail: Buffer = Buffer.alloc(0);
       for await (const chunk of source) {
-        const bytes = Buffer.concat([tail, chunk]);
-        const length = Math.max(0, bytes.length - 1024);
+        const length = Math.max(0, tail.length - Math.max(0, 1024 - chunk.length));
         if (length) {
-          yield bytes.subarray(0, length);
+          yield tail.subarray(0, length);
         }
-        tail = bytes.subarray(length);
+        tail = length < tail.length ? Buffer.concat([tail.subarray(length), chunk]) : chunk;
+      }
+      if (tail.length > 1024) {
+        yield tail.subarray(0, -1024);
       }
       yield createManifest();
     },
@@ -32,12 +34,6 @@ export function appendBackupManifest(payload: AsyncIterable<Buffer>, createManif
 
 type DestroyableArchiveStream = (NodeJS.ReadableStream | AsyncIterable<Uint8Array>) & {
   destroy(error?: Error): unknown;
-};
-
-type BackupTarEntryProgressStream = {
-  flowing: boolean;
-  on(event: "data", listener: (chunk: Buffer | string) => void): unknown;
-  pause(): unknown;
 };
 
 type BackupArchiveProgress = {
@@ -54,21 +50,6 @@ export type BackupArchiveCleanupReceipt = {
 export type PreparedBackupArchive = BackupArchiveCleanupReceipt & {
   identity: Stats;
 };
-
-export function observeBackupTarEntryProgress(
-  entry: BackupTarEntryProgressStream,
-  reportProgress: (bytes: number) => void,
-): void {
-  const wasFlowing = entry.flowing;
-  entry.on("data", (chunk) => {
-    reportProgress(typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length);
-  });
-  if (!wasFlowing) {
-    // node-tar calls onWriteEntry before emitting the header. Adding a Minipass
-    // data listener starts flow, so pause until Pack attaches its own consumer.
-    entry.pause();
-  }
-}
 
 // OpenClaw's one-user trust model treats hostile same-UID pathname rewrites as
 // trusted host mutation. Keep the check and unlink synchronous so cooperative

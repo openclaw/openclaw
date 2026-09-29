@@ -126,9 +126,13 @@ export const ResponsesEndpointUrlFetchShape = {
 };
 
 export const SkillEntrySchema = z.strictObject({
+  /** Disable a discovered skill without removing it from disk. */
   enabled: z.boolean().optional(),
+  /** Optional secret made available to the skill runtime through skill env handling. */
   apiKey: SecretInputSchema.optional().register(sensitive),
+  /** Plain environment overrides applied when the skill runs. */
   env: z.record(z.string(), z.string()).optional(),
+  /** Skill-specific structured config consumed by the skill runtime. */
   config: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -136,24 +140,49 @@ export const PluginEntrySchema = z.strictObject({
   enabled: z.boolean().optional(),
   hooks: z
     .strictObject({
+      /** Controls prompt mutation via before_prompt_build. */
       allowPromptInjection: z.boolean().optional(),
+      /**
+       * Controls access to raw conversation content from conversation hooks including
+       * before_agent_run, before_model_resolve, before_agent_reply, llm_input, llm_output,
+       * before_agent_finalize, and agent_end.
+       * Non-bundled plugins must opt in explicitly; bundled plugins stay allowed unless disabled.
+       */
       allowConversationAccess: z.boolean().optional(),
+      /** Default timeout in milliseconds for this plugin's typed hooks. */
       timeoutMs: z.number().int().positive().max(600_000).optional(),
+      /** Per typed-hook timeout overrides in milliseconds. */
       timeouts: z.record(z.string(), z.number().int().positive().max(600_000)).optional(),
     })
     .optional(),
   subagent: z
     .strictObject({
+      /** Explicitly allow this plugin to request per-run provider/model overrides for subagent runs. */
       allowModelOverride: z.boolean().optional(),
+      /**
+       * Allowed override targets as canonical provider/model refs.
+       * Use "*" to explicitly allow any model for this plugin.
+       */
       allowedModels: z.array(z.string()).optional(),
     })
     .optional(),
   llm: z
     .strictObject({
+      /** Explicitly allow this plugin to request a model override for api.runtime.llm.complete. */
       allowModelOverride: z.boolean().optional(),
+      /**
+       * Allowed override targets as canonical provider/model refs.
+       * Use "*" to explicitly allow any model for this plugin.
+       */
       allowedModels: z.array(z.string()).optional(),
+      /**
+       * Allowed models for every completion, including host-resolved defaults and overrides.
+       * Use "*" to explicitly allow any model for this plugin.
+       */
       allowedCompletionModels: z.array(z.string()).optional(),
+      /** Allow explicit auth-profile selection for isolated agent-runtime completions. */
       allowAuthProfileOverride: z.boolean().optional(),
+      /** Explicitly allow this plugin to run completions against a non-default agent id. */
       allowAgentIdOverride: z.boolean().optional(),
     })
     .optional(),
@@ -165,6 +194,29 @@ const TalkProviderEntrySchema = z
     apiKey: SecretInputSchema.optional().register(sensitive),
   })
   .catchall(z.unknown());
+
+function validateTalkProviderSelection(
+  value: { provider?: string; providers?: Record<string, unknown> },
+  ctx: z.RefinementCtx,
+  scope: "talk" | "talk.realtime",
+): void {
+  const provider = normalizeLowercaseStringOrEmpty(value.provider ?? "");
+  const providers = value.providers ? Object.keys(value.providers) : [];
+  if (provider && providers.length > 0 && !Object.hasOwn(value.providers!, provider)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["provider"],
+      message: `${scope}.provider must match a key in ${scope}.providers (missing "${provider}")`,
+    });
+  }
+  if (!provider && providers.length > 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["provider"],
+      message: `${scope}.provider is required when ${scope}.providers defines multiple providers`,
+    });
+  }
+}
 
 const TalkRealtimeSchema = z
   .strictObject({
@@ -183,27 +235,7 @@ const TalkRealtimeSchema = z
     brain: z.enum(["agent-consult", "direct-tools", "none"]).optional(),
     consultRouting: z.enum(["provider-direct", "force-agent-consult"]).optional(),
   })
-  .superRefine((realtime, ctx) => {
-    const provider = normalizeLowercaseStringOrEmpty(realtime.provider ?? "");
-    const providers = realtime.providers ? Object.keys(realtime.providers) : [];
-
-    if (provider && providers.length > 0 && !Object.hasOwn(realtime.providers!, provider)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["provider"],
-        message: `talk.realtime.provider must match a key in talk.realtime.providers (missing "${provider}")`,
-      });
-    }
-
-    if (!provider && providers.length > 1) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["provider"],
-        message:
-          "talk.realtime.provider is required when talk.realtime.providers defines multiple providers",
-      });
-    }
-  });
+  .superRefine((realtime, ctx) => validateTalkProviderSelection(realtime, ctx, "talk.realtime"));
 
 export const TalkSchema = z
   .strictObject({
@@ -219,26 +251,7 @@ export const TalkSchema = z
     interruptOnSpeech: z.boolean().optional(),
     silenceTimeoutMs: z.number().int().positive().optional(),
   })
-  .superRefine((talk, ctx) => {
-    const provider = normalizeLowercaseStringOrEmpty(talk.provider ?? "");
-    const providers = talk.providers ? Object.keys(talk.providers) : [];
-
-    if (provider && providers.length > 0 && !Object.hasOwn(talk.providers!, provider)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["provider"],
-        message: `talk.provider must match a key in talk.providers (missing "${provider}")`,
-      });
-    }
-
-    if (!provider && providers.length > 1) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["provider"],
-        message: "talk.provider is required when talk.providers defines multiple providers",
-      });
-    }
-  });
+  .superRefine((talk, ctx) => validateTalkProviderSelection(talk, ctx, "talk"));
 
 const RESERVED_MCP_SERVER_NAME = "__proto__";
 const RESERVED_MCP_SERVER_NAME_ERROR = 'MCP server name "__proto__" is reserved; rename the server';
@@ -315,6 +328,11 @@ export const McpConfigSchema = z
 
 export const NodeHostSchema = z
   .strictObject({
+    autoUpdate: z
+      .strictObject({
+        enabled: z.boolean().optional(),
+      })
+      .optional(),
     agentRuns: NodeHostAgentRunsSchema,
     workerRuns: NodeHostWorkerRunsSchema,
     browserProxy: z

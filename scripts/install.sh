@@ -21,6 +21,11 @@ fi
 
 set -euo pipefail
 
+# BEGIN GENERATED UPDATE NETWORK BUDGET
+# Source: src/infra/update-network-budget.ts; regenerate: node scripts/generate-update-network-budget.mjs
+UPDATE_NETWORK_TIMEOUT_SECONDS=300
+# END GENERATED UPDATE NETWORK BUDGET
+
 # The re-executed shell has the script open, so unlink its private copy now.
 if [[ -n "${OPENCLAW_INSTALLER_REEXEC_FILE:-}" && "${BASH_SOURCE[0]:-}" == "$OPENCLAW_INSTALLER_REEXEC_FILE" ]]; then
   rm -f -- "$OPENCLAW_INSTALLER_REEXEC_FILE"
@@ -153,23 +158,25 @@ download_file() {
     if [[ "$DOWNLOADER" == "curl" ]]; then
         if [[ "$redirect_mode" == "deny" ]]; then
             curl -fsSL --max-redirs 0 --proto '=https' --tlsv1.2 \
-                --speed-limit 1 --speed-time 30 \
+                --connect-timeout "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
+                --speed-limit 1 --speed-time "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
                 --retry 3 --retry-delay 1 --retry-connrefused \
                 -o "$output" "$url"
             return
         fi
-        # Bound post-connect stalls without imposing a total download duration.
+        # Bound connection and transfer stalls without a total download duration.
         curl -fsSL --proto '=https' --tlsv1.2 \
-            --speed-limit 1 --speed-time 30 \
+            --connect-timeout "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
+            --speed-limit 1 --speed-time "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
             --retry 3 --retry-delay 1 --retry-connrefused \
             -o "$output" "$url"
         return
     fi
     if [[ "$redirect_mode" == "deny" ]]; then
-        wget -q --max-redirect=0 --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout=20 -O "$output" "$url"
+        wget -q --max-redirect=0 --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout="$UPDATE_NETWORK_TIMEOUT_SECONDS" -O "$output" "$url"
         return
     fi
-    wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout=20 -O "$output" "$url"
+    wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout="$UPDATE_NETWORK_TIMEOUT_SECONDS" -O "$output" "$url"
 }
 
 # Managed setup endpoints must return a non-empty script with a raw shebang.
@@ -613,24 +620,6 @@ run_with_spinner() {
         else
             "$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?
         fi
-        if [[ "$gum_status" -eq 0 ]]; then
-            if is_gum_raw_mode_failure "$gum_out" || is_gum_raw_mode_failure "$gum_err"; then
-                GUM=""
-                GUM_STATUS="skipped"
-                GUM_REASON="gum raw mode unavailable"
-                ui_warn "Spinner unavailable in this terminal; continuing without spinner"
-                if needs_stdin_isolation; then
-                    "$@" < /dev/null
-                else
-                    "$@"
-                fi
-                return $?
-            fi
-            if [[ -s "$gum_out" ]]; then
-                cat "$gum_out"
-            fi
-            return 0
-        fi
         if is_gum_raw_mode_failure "$gum_err" || is_gum_raw_mode_failure "$gum_out"; then
             GUM=""
             GUM_STATUS="skipped"
@@ -642,6 +631,12 @@ run_with_spinner() {
                 "$@"
             fi
             return $?
+        fi
+        if [[ "$gum_status" -eq 0 ]]; then
+            if [[ -s "$gum_out" ]]; then
+                cat "$gum_out"
+            fi
+            return 0
         fi
         if [[ -s "$gum_err" ]]; then
             cat "$gum_err" >&2
@@ -667,8 +662,6 @@ run_quiet_step() {
 
     local log
     mktempfile log
-    local showed_progress=false
-
     local cmd_exit=0
 
     if [[ -n "$GUM" ]] && gum_is_tty && ! is_shell_function "${1:-}"; then
@@ -680,11 +673,9 @@ run_quiet_step() {
         if (( cmd_exit == 0 )); then
             return 0
         fi
-        showed_progress=true
     else
         # Keep users informed even when gum spinner cannot run (for example shell functions).
         ui_info "${title}"
-        showed_progress=true
         if needs_stdin_isolation; then
             "$@" < /dev/null >"$log" 2>&1 || cmd_exit=$?
         else
@@ -693,10 +684,6 @@ run_quiet_step() {
         if (( cmd_exit == 0 )); then
             return 0
         fi
-    fi
-
-    if [[ "$showed_progress" == "false" ]]; then
-        ui_info "${title}"
     fi
 
     ui_error "${title} failed — re-run with --verbose for details"
@@ -1520,20 +1507,19 @@ parse_args() {
                 HELP=1
                 shift
                 ;;
-            --install-method|--method)
+            --install-method|--method|--version|--git-dir|--dir)
                 if [[ $# -lt 2 || "${2:-}" == --* ]]; then
                     ui_error "Missing value for $1"
                     return 2
                 fi
-                INSTALL_METHOD="$2"
-                shift 2
-                ;;
-            --version)
-                if [[ $# -lt 2 || "${2:-}" == --* ]]; then
-                    ui_error "Missing value for $1"
-                    return 2
-                fi
-                OPENCLAW_VERSION="$2"
+                case "$1" in
+                    --install-method|--method) INSTALL_METHOD="$2" ;;
+                    --version) OPENCLAW_VERSION="$2" ;;
+                    --git-dir|--dir)
+                        GIT_DIR="$2"
+                        GIT_DIR_EXPLICIT=${2:+1}
+                        ;;
+                esac
                 shift 2
                 ;;
             --beta)
@@ -1547,15 +1533,6 @@ parse_args() {
             --git|--github)
                 INSTALL_METHOD="git"
                 shift
-                ;;
-            --git-dir|--dir)
-                if [[ $# -lt 2 || "${2:-}" == --* ]]; then
-                    ui_error "Missing value for $1"
-                    return 2
-                fi
-                GIT_DIR="$2"
-                GIT_DIR_EXPLICIT=${2:+1}
-                shift 2
                 ;;
             --no-git-update)
                 GIT_UPDATE=0
@@ -2520,37 +2497,26 @@ install_git() {
         run_quiet_step "Installing Git" brew install git
     elif [[ "$OS" == "linux" ]]; then
         require_sudo
+        local -a git_cmd=()
         if command -v apk &> /dev/null && is_alpine_linux; then
-            if is_root; then
-                run_quiet_step "Installing Git" apk add --no-cache git
-            else
-                run_quiet_step "Installing Git" sudo apk add --no-cache git
-            fi
+            git_cmd=(apk add --no-cache git)
         elif command -v apt-get &> /dev/null; then
             run_quiet_step "Updating package index" apt_get_update
-            run_quiet_step "Installing Git" apt_get_install git
+            git_cmd=(apt_get_install git)
         elif command -v pacman &> /dev/null && is_arch_linux; then
-            if is_root; then
-                run_quiet_step "Installing Git" pacman -Sy --noconfirm git
-            else
-                run_quiet_step "Installing Git" sudo pacman -Sy --noconfirm git
-            fi
+            git_cmd=(pacman -Sy --noconfirm git)
         elif command -v dnf &> /dev/null; then
-            if is_root; then
-                run_quiet_step "Installing Git" dnf install -y -q git
-            else
-                run_quiet_step "Installing Git" sudo dnf install -y -q git
-            fi
+            git_cmd=(dnf install -y -q git)
         elif command -v yum &> /dev/null; then
-            if is_root; then
-                run_quiet_step "Installing Git" yum install -y -q git
-            else
-                run_quiet_step "Installing Git" sudo yum install -y -q git
-            fi
+            git_cmd=(yum install -y -q git)
         else
             ui_error "Could not detect package manager for Git"
             exit 1
         fi
+        if [[ "${git_cmd[0]}" != "apt_get_install" ]] && ! is_root; then
+            git_cmd=(sudo "${git_cmd[@]}")
+        fi
+        run_quiet_step "Installing Git" "${git_cmd[@]}"
     fi
     ui_success "Git installed"
 }
@@ -2648,7 +2614,7 @@ ensure_pnpm() {
     local repo_dir="${1:-$PWD}"
     local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
     spec="$(repo_pnpm_spec "$repo_dir" || true)"
-    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.3.4"
+    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.5.1"
     version="${spec#pnpm@}"
     version="${version%%+*}"
     pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1
@@ -2707,30 +2673,15 @@ resolve_git_openclaw_ref() {
     local resolved_version=""
 
     case "$requested" in
-        ""|latest)
+        ""|latest|next|beta)
             resolved_version="$(npm view "openclaw" "dist-tags.${requested:-latest}" 2>/dev/null || true)"
             if [[ -n "$resolved_version" ]]; then
                 echo "v${resolved_version}"
-                return 0
+            elif [[ -z "$requested" || "$requested" == "latest" ]]; then
+                echo "main"
+            else
+                echo "$requested"
             fi
-            echo "main"
-            return 0
-            ;;
-        next|beta)
-            resolved_version="$(npm view "openclaw" "dist-tags.${requested:-latest}" 2>/dev/null || true)"
-            if [[ -n "$resolved_version" ]]; then
-                echo "v${resolved_version}"
-                return 0
-            fi
-            echo "$requested"
-            return 0
-            ;;
-        main)
-            echo "main"
-            return 0
-            ;;
-        v[0-9]*)
-            echo "$requested"
             return 0
             ;;
         [0-9]*.[0-9]*.[0-9]*)

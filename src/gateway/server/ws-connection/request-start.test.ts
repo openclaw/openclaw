@@ -3,15 +3,14 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { MAX_PAYLOAD_BYTES, MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
-import {
-  prepareGatewayReceiverHandoff,
-  raiseGatewayReceiverPayloadLimit,
-  scheduleGatewayRequestStart,
-} from "./request-start.js";
+import { prepareGatewayReceiverHandoff, raiseGatewayReceiverPayloadLimit } from "../ws-receiver.js";
+import { scheduleGatewayRequestStart } from "./request-start.js";
 
 const permissions: Promise<void>[] = [];
-function requestStart(bytes = 1): Promise<void> {
-  const permission = scheduleGatewayRequestStart(bytes);
+const workRequest = { method: "chat.send" };
+const subscribeRequest = { method: "sessions.messages.subscribe", params: { key: "session" } };
+function requestStart(bytes = 1, request = workRequest, connId = "connection"): Promise<void> {
+  const permission = scheduleGatewayRequestStart(bytes, request, connId);
   if (!permission) {
     throw new Error("expected start capacity");
   }
@@ -25,31 +24,6 @@ afterEach(async () => {
 });
 
 describe("Gateway request start fairness", () => {
-  it("releases cheap starts in FIFO order without waiting for their work to finish", async () => {
-    vi.spyOn(performance, "now").mockReturnValue(0);
-    const starts: number[] = [];
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const first = requestStart().then(async () => {
-      starts.push(0);
-      await held;
-    });
-    const rest = Array.from({ length: 32 }, (_, index) =>
-      requestStart().then(() => {
-        starts.push(index + 1);
-      }),
-    );
-    try {
-      await Promise.all(rest);
-      expect(starts).toEqual(Array.from({ length: 33 }, (_, index) => index));
-    } finally {
-      release();
-      await first;
-    }
-  });
-
   it.each([false, true])(
     "yields after actual caller work (ready continuation: %s)",
     async (continuation) => {
@@ -76,13 +50,13 @@ describe("Gateway request start fairness", () => {
     },
   );
 
-  it("bounds zero-cost starts per turn even when elapsed work stays zero", async () => {
+  it("shares the per-turn start limit across work and controls even when elapsed work stays zero", async () => {
     vi.spyOn(performance, "now").mockReturnValue(0);
     const starts: number[] = [];
     let seenAtYield: number | undefined;
     let sentinel: Promise<void> | undefined;
     const callers = Array.from({ length: 65 }, (_, index) =>
-      requestStart().then(() => {
+      requestStart(1, index % 2 ? subscribeRequest : workRequest, `client-${index}`).then(() => {
         starts.push(index);
         if (index === 0) {
           sentinel = nextTurn().then(() => {
@@ -100,7 +74,7 @@ describe("Gateway request start fairness", () => {
   it("rejects count overflow without starting it inline and releases waiting capacity", async () => {
     vi.spyOn(performance, "now").mockReturnValue(0);
     const accepted = Array.from({ length: 257 }, () => requestStart());
-    expect(scheduleGatewayRequestStart(1)).toBeNull();
+    expect(scheduleGatewayRequestStart(1, workRequest, "connection")).toBeNull();
     await Promise.all(accepted);
     await expect(requestStart()).resolves.toBeUndefined();
   });
@@ -110,9 +84,62 @@ describe("Gateway request start fairness", () => {
     const first = requestStart(25 * 1024 * 1024);
     const second = requestStart(25 * 1024 * 1024);
     const third = requestStart(25 * 1024 * 1024);
-    expect(scheduleGatewayRequestStart(1)).toBeNull();
+    expect(scheduleGatewayRequestStart(1, workRequest, "connection")).toBeNull();
     await Promise.all([first, second, third]);
     await expect(requestStart(25 * 1024 * 1024)).resolves.toBeUndefined();
+  });
+
+  it("reserves subscription capacity while preserving FIFO order and work limits", async () => {
+    vi.spyOn(performance, "now").mockReturnValue(0);
+    const starts: number[] = [];
+    const work = Array.from({ length: 257 }, (_, index) =>
+      requestStart().then(() => starts.push(index)),
+    );
+    const controls = Array.from({ length: 600 }, (_, index) =>
+      requestStart(180, subscribeRequest, `client-${Math.floor(index / 6)}`).then(() =>
+        starts.push(index + work.length),
+      ),
+    );
+    for (const [bytes, request] of [
+      [1, workRequest],
+      [1, { method: "sessions.subscribe" }],
+      [1, { ...subscribeRequest, params: { key: "session", includeApprovals: true } }],
+      [4097, subscribeRequest],
+    ] as const) {
+      expect(scheduleGatewayRequestStart(bytes, request, "another-client")).toBeNull();
+    }
+    await Promise.all([...work, ...controls]);
+    expect(starts).toEqual(Array.from({ length: 857 }, (_, index) => index));
+    await expect(requestStart()).resolves.toBeUndefined();
+  });
+
+  it.each([
+    { bytes: 1, count: 1024 },
+    { bytes: 4096, count: 256 },
+  ])(
+    "bounds subscription waiting capacity at $count frames of $bytes bytes",
+    async ({ bytes, count }) => {
+      vi.spyOn(performance, "now").mockReturnValue(0);
+      const active = requestStart();
+      const controls = Array.from({ length: count }, (_, index) =>
+        requestStart(bytes, subscribeRequest, `client-${index}`),
+      );
+      expect(scheduleGatewayRequestStart(bytes, subscribeRequest, "overflow")).toBeNull();
+      const work = requestStart();
+      await Promise.all([active, work, ...controls]);
+      await expect(requestStart(bytes, subscribeRequest, "overflow")).resolves.toBeUndefined();
+    },
+  );
+
+  it("bounds one connection's pending controls without consuming another connection's reserve", async () => {
+    vi.spyOn(performance, "now").mockReturnValue(0);
+    const active = requestStart();
+    const unsubscribe = { method: "sessions.messages.unsubscribe", params: { key: "session" } };
+    const controls = Array.from({ length: 16 }, () => requestStart(180, unsubscribe));
+    expect(scheduleGatewayRequestStart(180, subscribeRequest, "connection")).toBeNull();
+    const other = requestStart(180, subscribeRequest, "another-connection");
+    await Promise.all([active, other, ...controls]);
+    await expect(requestStart(180, subscribeRequest)).resolves.toBeUndefined();
   });
 });
 
@@ -140,9 +167,11 @@ describe("authenticated receiver payload limits", () => {
   it("raises the receiver limit only after connect", () => {
     const socket = receiverSocket();
     const handoff = prepareGatewayReceiverHandoff(socket, "operator");
-    expect(handoff).not.toBeNull();
+    expect(handoff.ok).toBe(true);
     expect(payloadLimit(socket)).toBe(MAX_PREAUTH_PAYLOAD_BYTES);
-    handoff?.();
+    if (handoff.ok) {
+      handoff.value();
+    }
     expect(payloadLimit(socket)).toBe(MAX_PAYLOAD_BYTES);
   });
 
@@ -154,7 +183,10 @@ describe("authenticated receiver payload limits", () => {
 
   it("refuses the handoff when the receiver limit cannot be raised", () => {
     const socket = receiverSocket(true);
-    expect(prepareGatewayReceiverHandoff(socket, "operator")).toBeNull();
+    expect(prepareGatewayReceiverHandoff(socket, "operator")).toMatchObject({
+      ok: false,
+      error: { cause: "unsupported-websocket-receiver" },
+    });
     expect(raiseGatewayReceiverPayloadLimit(socket, 1_024)).toBe(false);
     expect(payloadLimit(socket)).toBe(MAX_PREAUTH_PAYLOAD_BYTES);
   });

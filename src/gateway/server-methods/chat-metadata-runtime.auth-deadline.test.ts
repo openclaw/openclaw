@@ -1,5 +1,13 @@
 import { describe, expect, test, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  createPreparedRuntimeAuthProfileUsageReader,
+  getRuntimeAuthProfileStoreMetadataRevision,
+  setRuntimeAuthProfileStoreSnapshot,
+} from "../../agents/auth-profiles/runtime-snapshots.js";
+import { setPreparedModelFullCatalogAuth } from "../../agents/prepared-model-runtime-auth.js";
+import { materializePreparedModelCatalog } from "../../agents/prepared-model-runtime.full-catalog.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createChatMetadataHarness,
@@ -7,6 +15,87 @@ import {
 } from "./chat-metadata-runtime.test-support.js";
 
 describe("gateway chat metadata auth deadlines", () => {
+  test("retains metadata on bookkeeping and reads cleared and renewed cooldowns from a full catalog", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    const config: OpenClawConfig = {
+      auth: { order: { acme: ["acme:primary"] } },
+      agents: {
+        defaults: { model: { primary: "acme/model" }, models: { "acme/model": {} } },
+        list: [{ id: "main", default: true }],
+      },
+    };
+    const prepared = createChatMetadataOwner(
+      config,
+      "model",
+      { acme: { type: "api_key", key: "synthetic-key" } },
+      "acme",
+    );
+    const original: AuthProfileStore = {
+      version: 1,
+      profiles: { "acme:primary": { type: "api_key", provider: "acme", key: "synthetic-key" } },
+      usageStats: { "acme:primary": { cooldownUntil: 20_000 } },
+    };
+    setRuntimeAuthProfileStoreSnapshot(original, prepared.agentDir);
+    setPreparedModelFullCatalogAuth(
+      prepared.modelCatalog,
+      {
+        authStore: original,
+        authModes: prepared.authModes,
+        providerAuthLabels: new Map(),
+      },
+      createPreparedRuntimeAuthProfileUsageReader(prepared.agentDir, prepared.agentDir),
+    );
+    const fullCatalog = materializePreparedModelCatalog(prepared.modelCatalog, []);
+    const owner = { ...prepared, readFullModelCatalog: () => fullCatalog };
+    const onChanged = vi.fn();
+    const harness = createChatMetadataHarness(config, {
+      useDefaultProjection: true,
+      refreshOnRead: false,
+      onChanged,
+    });
+    harness.setOwner(owner);
+    harness.getAuthStoreRevision.mockImplementation(getRuntimeAuthProfileStoreMetadataRevision);
+    try {
+      await harness.runtime.refresh();
+      await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+        models: [{ id: "model", provider: "acme", available: false }],
+      });
+      setRuntimeAuthProfileStoreSnapshot(
+        {
+          ...original,
+          usageStats: {
+            "acme:primary": { cooldownUntil: 20_000, lastUsed: 10_000, errorCount: 2 },
+          },
+        },
+        prepared.agentDir,
+      );
+      await harness.runtime.read({ agentId: "main" });
+      expect(onChanged).toHaveBeenCalledOnce();
+      for (const cooldownUntil of [undefined, 30_000]) {
+        setRuntimeAuthProfileStoreSnapshot(
+          {
+            ...original,
+            usageStats: cooldownUntil === undefined ? {} : { "acme:primary": { cooldownUntil } },
+          },
+          prepared.agentDir,
+        );
+        expect(
+          await harness.runtime.readStartup({ agentId: "main", readPolicy: "ready" }),
+        ).toBeUndefined();
+        await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+          models: [{ id: "model", provider: "acme", available: cooldownUntil === undefined }],
+        });
+      }
+      expect(onChanged).toHaveBeenCalledTimes(3);
+      expect(harness.getPreparedAuthStore).not.toHaveBeenCalled();
+      expect(original.usageStats).toEqual({ "acme:primary": { cooldownUntil: 20_000 } });
+    } finally {
+      await harness.runtime.stop();
+      clearRuntimeAuthProfileStoreSnapshots();
+      clock.mockRestore();
+    }
+  });
+
   test.each([
     { at: 19_999, available: true },
     { at: 20_000, available: false },

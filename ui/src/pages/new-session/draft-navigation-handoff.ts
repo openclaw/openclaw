@@ -1,5 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { reviewPrivateComposerDraft } from "../chat/components/private-composer-recovery-dialog.ts";
 import * as catalog from "./catalog-target.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 
@@ -18,11 +19,13 @@ export function retainDraft(
   }
   const routeKey = openedFor ?? catalog.routeKeyFromSearch(window.location.search);
   context.chatAttachmentHandoff.prepare({
+    reviewPrivateDraft: reviewPrivateComposerDraft,
     owner,
     paneId: NEW_SESSION_DRAFT_PANE_ID,
     scopeKey: routeKey,
     message: messageOwnerKey === routeKey ? submission.message : "",
     mentions: messageOwnerKey === routeKey ? submission.mentions : undefined,
+    newSessionDraft: submission.draftPersistence.captureSubmission(),
     attachments: submission.attachmentDraft.take(),
     fallbacks: {},
   });
@@ -35,8 +38,15 @@ export function restoreDraft(
   ownedMessage: string,
   ownedMentions?: readonly HumanMention[],
 ) {
-  submission.draftPersistence.selectRoute(routeKey);
   const owner = context?.gateway.snapshot.client;
+  if (context && owner?.recoveryScopeReady) {
+    submission.draftPersistence.setOwner(
+      context.gateway.connection.gatewayUrl,
+      owner.recoveryScope,
+      true,
+    );
+  }
+  submission.draftPersistence.selectRoute(routeKey);
   const draft =
     context && owner
       ? context.chatAttachmentHandoff.consume({
@@ -50,8 +60,11 @@ export function restoreDraft(
       message: ownedMessage || draft.message || "",
       mentions: ownedMessage ? ownedMentions : draft.mentions,
       attachments: draft.attachments,
-      visibility: submission.visibility,
+      visibility: draft.newSessionDraft?.incognito ? "incognito" : submission.visibility,
     });
+    if (!ownedMessage && draft.newSessionDraft) {
+      submission.draftPersistence.adoptHandoff(draft.newSessionDraft);
+    }
   } else if (ownedMessage) {
     submission.restoreMessage(ownedMessage, ownedMentions);
   }

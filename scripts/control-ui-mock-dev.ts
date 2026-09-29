@@ -1,4 +1,3 @@
-// Control Ui Mock Dev script supports OpenClaw repository automation.
 import { createHash } from "node:crypto";
 import fs, { rmSync } from "node:fs";
 import { mkdir, mkdtemp } from "node:fs/promises";
@@ -7,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
 import type {
+  Question,
   SystemAgentChatHistoryResult,
   SystemChangesListResult,
   UserProfile,
@@ -16,9 +16,13 @@ import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-
 import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
-import { controlUiPluginAssetRoot } from "../src/gateway/control-ui-plugin-assets-contract.js";
+import {
+  controlUiPluginAssetPrefix,
+  controlUiPluginAssetRoot,
+} from "../src/gateway/control-ui-plugin-assets-contract.js";
 import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-sentinel-payload.js";
-import type { UpdateRunResult } from "../src/infra/update-runner.js";
+import type { UpdateRunResult } from "../src/infra/update-runner-types.js";
+import { buildPluginLoaderAliasMap } from "../src/plugins/sdk-alias.js";
 import { buildNewAgentWelcome } from "../src/system-agent/new-agent-welcome.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../ui/src/api/types.ts";
 import {
@@ -29,8 +33,13 @@ import {
   prepareControlUiMockGatewayScenario,
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
-import { createControlUiSessionRow } from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
+import {
+  createControlUiChatHistoryMessage as chatHistoryMessage,
+  createControlUiMockSessionRow as sessionRow,
+} from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
 import { workboardUi } from "../ui/src/test-helpers/control-ui-workboard-fixture.ts";
+import { buildWorkboardMocks } from "../ui/src/test-helpers/control-ui-workboard-fixtures.ts";
+import { installWorkboardBoardMock } from "../ui/src/test-helpers/control-ui-workboard-mocks.ts";
 import { createOfflineDeviceNode } from "../ui/src/test-helpers/devices-fixtures.ts";
 import {
   resolveExternalPackageAliasesForVite,
@@ -42,10 +51,6 @@ import {
   buildChatAttachmentHistory,
   createChatAttachmentFixturePlugin,
 } from "./control-ui-mock-attachments.ts";
-import {
-  backgroundTasksMockInitScript,
-  buildBackgroundTasksMock,
-} from "./control-ui-mock-background-tasks.ts";
 import {
   buildChannelsPairingMock,
   buildChannelsStatusMock,
@@ -66,35 +71,32 @@ import {
   buildSkillWorkshopMocks,
   skillWorkshopMockInitScript,
 } from "./control-ui-mock-skill-workshop.js";
+import { buildProfileUsageMocks } from "./control-ui-mock-usage.ts";
+
+const FIXTURES = [
+  "approval",
+  "attachments",
+  "avatars",
+  "board",
+  "code-fences",
+  "dashboards",
+  "goal",
+  "plugins-dense",
+  "sidebar-roster",
+  "swarm",
+  "update-available",
+  "update-blocked",
+  "update-failed",
+  "workboard",
+  "workboard-states",
+] as const;
 
 type CliOptions = {
   allowedHosts: string[];
-  fixture?:
-    | "approval"
-    | "attachments"
-    | "avatars"
-    | "board"
-    | "code-fences"
-    | "dashboards"
-    | "goal"
-    | "plugins-dense"
-    | "sidebar-roster"
-    | "swarm"
-    | "update-available"
-    | "update-blocked"
-    | "update-failed"
-    | "workboard";
+  fixture?: (typeof FIXTURES)[number];
   host: string;
   operatorScopes?: string[];
   port: number;
-};
-
-type SessionListOptions = {
-  owners?: readonly SessionActorFixture[];
-  hasMore: boolean;
-  nextOffset: number | null;
-  offset?: number;
-  totalCount: number;
 };
 
 type SessionActorFixture = { type: "human" | "agent"; id: string; label: string };
@@ -390,25 +392,11 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
   if (!value) {
     return undefined;
   }
-  if (
-    value !== "approval" &&
-    value !== "attachments" &&
-    value !== "avatars" &&
-    value !== "board" &&
-    value !== "code-fences" &&
-    value !== "dashboards" &&
-    value !== "goal" &&
-    value !== "plugins-dense" &&
-    value !== "sidebar-roster" &&
-    value !== "swarm" &&
-    value !== "update-available" &&
-    value !== "update-blocked" &&
-    value !== "update-failed" &&
-    value !== "workboard"
-  ) {
+  const fixture = FIXTURES.find((candidate) => candidate === value);
+  if (!fixture) {
     throw new Error(`Unknown Control UI mock fixture: ${value}`);
   }
-  return value;
+  return fixture;
 }
 
 function parsePort(value: string | undefined, fallback: number): number {
@@ -424,42 +412,6 @@ function parseOperatorScopes(value: string | undefined): string[] | undefined {
   return scopes.length > 0 ? scopes : undefined;
 }
 
-function sessionRow(
-  key: string,
-  label: string,
-  updatedAt: number,
-  options: { model?: string; modelProvider?: string } & Record<string, unknown> = {},
-) {
-  const { model, modelProvider, ...extra } = options;
-  return createControlUiSessionRow(key, label, updatedAt, {
-    contextTokens: 200_000,
-    model: model ?? "gpt-5-mini",
-    modelProvider: modelProvider ?? "openai",
-    ...extra,
-  });
-}
-
-function sessionsListResponse(sessions: Array<{ key: string }>, options: SessionListOptions) {
-  return {
-    count: sessions.length,
-    defaults: {
-      contextTokens: 200_000,
-      model: "gpt-5-mini",
-      modelProvider: "openai",
-    },
-    hasMore: options.hasMore,
-    limitApplied: 50,
-    nextOffset: options.nextOffset,
-    ...(options.owners ? { owners: options.owners } : {}),
-    offset: options.offset ?? 0,
-    path: "",
-    // Cases select membership; canonical metadata comes from the scenario's rows.
-    sessions: sessions.map(({ key }) => ({ key })),
-    totalCount: options.totalCount,
-    ts: Date.now(),
-  };
-}
-
 function pagedSessionsListResponse(
   sessions: Array<{ key: string }>,
   offset: number,
@@ -468,13 +420,24 @@ function pagedSessionsListResponse(
   const normalizedOffset = Math.max(0, Math.floor(offset));
   const page = sessions.slice(normalizedOffset, normalizedOffset + SESSION_PAGE_SIZE);
   const nextOffset = normalizedOffset + SESSION_PAGE_SIZE;
-  return sessionsListResponse(page, {
-    owners,
+  return {
+    count: page.length,
+    defaults: {
+      contextTokens: 200_000,
+      model: "gpt-5-mini",
+      modelProvider: "openai",
+    },
     hasMore: nextOffset < sessions.length,
+    limitApplied: 50,
     nextOffset: nextOffset < sessions.length ? nextOffset : null,
+    ...(owners ? { owners } : {}),
     offset: normalizedOffset,
+    path: "",
+    // Cases select membership; canonical metadata comes from the scenario's rows.
+    sessions: page.map(({ key }) => ({ key })),
     totalCount: sessions.length,
-  });
+    ts: Date.now(),
+  };
 }
 
 function buildSessionRows(params: {
@@ -577,22 +540,6 @@ function buildActivitySessionRows(baseTime: number) {
   );
 }
 
-function usageCostTotals(totalTokens: number, totalCost = 0) {
-  return {
-    input: Math.round(totalTokens * 0.2),
-    output: Math.round(totalTokens * 0.1),
-    cacheRead: Math.round(totalTokens * 0.6),
-    cacheWrite: Math.round(totalTokens * 0.1),
-    totalTokens,
-    totalCost,
-    inputCost: totalCost,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    missingCostEntries: 0,
-  };
-}
-
 // Model Providers settings fixtures: auth state plus live plan/quota/billing
 // snapshots so the /settings/model-providers page renders fully in the mock.
 function buildSessionDiffMock() {
@@ -655,6 +602,124 @@ function buildSessionDiffMock() {
     ],
     additions: 6,
     deletions: 2,
+  };
+}
+
+function buildSessionCatalogMocks(baseTime: number) {
+  const catalogs = [
+    {
+      id: "codex",
+      label: "Codex",
+      capabilities: { continueSession: true, archive: false, startTerminal: true },
+      sessions: [
+        {
+          threadId: "codex-thread-1",
+          name: "Release checklist sweep",
+          cwd: "/Users/demo/projects/openclaw",
+          updatedAt: baseTime - 10 * 60_000,
+          items: [
+            {
+              id: "release-checklist-answer",
+              type: "agentMessage",
+              text: "The release checklist is complete and ready for review.",
+            },
+            {
+              id: "release-checklist-request",
+              type: "userMessage",
+              text: "Please sweep the release checklist for anything we missed.",
+            },
+          ],
+        },
+        {
+          threadId: "codex-thread-2",
+          name: "Sidebar context-menu proof",
+          cwd: "/Users/demo/projects/openclaw",
+          updatedAt: baseTime - 45 * 60_000,
+          items: [
+            {
+              id: "sidebar-context-menu-answer",
+              type: "agentMessage",
+              text: "The sidebar context menu behaves as expected.",
+            },
+          ],
+        },
+      ],
+    },
+    {
+      id: "claude",
+      label: "Claude Code",
+      capabilities: { continueSession: true, archive: false },
+      sessions: [
+        {
+          threadId: "claude-thread-1",
+          name: "Docs refresh",
+          cwd: "/Users/demo/projects/peekaboo",
+          updatedAt: baseTime - 30 * 60_000,
+          items: [
+            {
+              id: "docs-refresh-answer",
+              type: "agentMessage",
+              text: "The documentation refresh is ready for review.",
+            },
+          ],
+        },
+      ],
+    },
+  ];
+  return {
+    "sessions.catalog.list": {
+      catalogs: catalogs.map(({ id, label, capabilities, sessions }) => ({
+        id,
+        label,
+        capabilities,
+        hosts: [
+          {
+            hostId: "gateway",
+            label: "This Mac",
+            kind: "gateway",
+            connected: true,
+            sessions: sessions.map(({ threadId, name, cwd, updatedAt }) => ({
+              threadId,
+              name,
+              cwd,
+              status: "idle",
+              updatedAt,
+              archived: false,
+              canContinue: true,
+              canArchive: false,
+            })),
+          },
+        ],
+      })),
+    },
+    "sessions.catalog.read": {
+      cases: catalogs.flatMap(({ id, sessions }) =>
+        sessions.map(({ threadId, items }) => ({
+          match: { catalogId: id, hostId: "gateway", threadId },
+          response: { hostId: "gateway", threadId, items },
+        })),
+      ),
+    },
+  };
+}
+
+function directoryListCase(
+  directory: string,
+  names: string[],
+  match: Record<string, unknown> = { path: directory },
+) {
+  return {
+    match,
+    response: {
+      path: directory,
+      parent: path.posix.dirname(directory),
+      home: "/Users/demo",
+      entries: names.map((name) => ({
+        name,
+        path: `${directory}/${name}`,
+        ...(name.startsWith(".") ? { hidden: true } : {}),
+      })),
+    },
   };
 }
 
@@ -867,109 +932,6 @@ function buildModelProviderMocks(baseTime: number) {
       { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google", available: false },
       { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter", available: true },
     ],
-  };
-}
-
-// Deterministic year of daily activity so the settings profile heatmap,
-// streaks, and stat strip render with a lively fixture in the mock harness.
-function buildProfileUsageMocks(baseTime: number) {
-  const daily: Array<Record<string, unknown>> = [];
-  let lifetimeTokens = 0;
-  for (let daysAgo = 364; daysAgo >= 0; daysAgo -= 1) {
-    const date = new Date(baseTime - daysAgo * 24 * 60 * 60 * 1000);
-    const iso = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-    const weekendDamper = date.getDay() === 0 || date.getDay() === 6 ? 0.3 : 1;
-    const quietDay = daysAgo % 19 === 4 ? 0 : 1;
-    const wave = (Math.sin(daysAgo / 6) + 1.4) * 1_400_000_000;
-    const spike = daysAgo % 47 === 0 ? 6_000_000_000 : 0;
-    const tokens = Math.round((wave + spike) * weekendDamper * quietDay);
-    lifetimeTokens += tokens;
-    daily.push({ date: iso, ...usageCostTotals(tokens, tokens / 1e9) });
-  }
-  return {
-    cost: {
-      updatedAt: baseTime,
-      days: daily.length,
-      daily,
-      totals: usageCostTotals(lifetimeTokens, lifetimeTokens / 1e9),
-    },
-    sessions: {
-      updatedAt: baseTime,
-      startDate: daily[0]?.date,
-      endDate: daily[daily.length - 1]?.date,
-      sessions: [
-        {
-          key: "agent:openclaw-mock:marathon",
-          label: "Release night marathon",
-          usage: { ...usageCostTotals(4_000_000_000), durationMs: (59 * 60 + 4) * 60 * 1000 },
-        },
-        {
-          key: "agent:openclaw-mock:daily",
-          label: "Daily driver",
-          usage: { ...usageCostTotals(900_000_000), durationMs: 3 * 60 * 60 * 1000 },
-        },
-      ],
-      totals: usageCostTotals(lifetimeTokens, lifetimeTokens / 1e9),
-      aggregates: {
-        sessionCount: 48_212,
-        longestSessionDurationMs: (59 * 60 + 4) * 60 * 1000,
-        messages: {
-          total: 2_787_815,
-          user: 1_400_000,
-          assistant: 1_387_815,
-          toolCalls: 42_380,
-          toolResults: 42_380,
-          errors: 128,
-        },
-        tools: {
-          totalCalls: 42_380,
-          uniqueTools: 205,
-          tools: [
-            { name: "exec", count: 6_418 },
-            { name: "browser", count: 5_256 },
-            { name: "message", count: 4_708 },
-            { name: "read", count: 4_489 },
-            { name: "sessions_list", count: 3_066 },
-          ],
-        },
-        byModel: [
-          {
-            provider: "anthropic",
-            model: "claude-sonnet-4-6",
-            count: 9_000,
-            totals: usageCostTotals(Math.round(lifetimeTokens * 0.7)),
-          },
-          {
-            provider: "openai",
-            model: "gpt-5-mini",
-            count: 4_000,
-            totals: usageCostTotals(Math.round(lifetimeTokens * 0.3)),
-          },
-        ],
-        byProvider: [
-          {
-            provider: "anthropic",
-            count: 9_000,
-            totals: usageCostTotals(Math.round(lifetimeTokens * 0.7), 184.2),
-          },
-          {
-            provider: "openai",
-            count: 4_000,
-            totals: usageCostTotals(Math.round(lifetimeTokens * 0.3), 96.4),
-          },
-        ],
-        byAgent: [
-          { agentId: "openclaw-mock", totals: usageCostTotals(Math.round(lifetimeTokens * 0.8)) },
-          { agentId: "alpha", totals: usageCostTotals(Math.round(lifetimeTokens * 0.2)) },
-        ],
-        byChannel: [
-          { channel: "whatsapp", totals: usageCostTotals(Math.round(lifetimeTokens * 0.5)) },
-          { channel: "telegram", totals: usageCostTotals(Math.round(lifetimeTokens * 0.3)) },
-          { channel: "discord", totals: usageCostTotals(Math.round(lifetimeTokens * 0.2)) },
-        ],
-        daily: [],
-      },
-    },
   };
 }
 
@@ -1234,119 +1196,6 @@ function buildConfigMocks(options: { swarmEnabled?: boolean; workboardEnabled?: 
       version: "mock-config-schema",
       generatedAt: new Date(0).toISOString(),
     },
-  };
-}
-
-function buildWorkboardMocks(baseTime: number) {
-  const boardId = "peter-tasks";
-  const card = (
-    id: string,
-    title: string,
-    status: string,
-    priority: string,
-    position: number,
-    labels: string[],
-  ) => ({
-    id,
-    title,
-    status,
-    priority,
-    labels,
-    position,
-    createdAt: baseTime - 86_400_000,
-    updatedAt: baseTime - position * 1_000,
-    metadata: { automation: { boardId } },
-  });
-  const cards = [
-    card("card-inbox", "Capture customer feedback themes", "todo", "normal", 1, ["research"]),
-    card("card-brief", "Draft weekly product brief", "todo", "low", 2, ["writing"]),
-    card("card-ready", "Prepare launch readiness checklist", "ready", "high", 1, ["launch"]),
-    card("card-running", "Validate onboarding flow", "running", "urgent", 1, ["quality"]),
-    card("card-review", "Review accessibility audit", "review", "high", 1, ["frontend"]),
-    card("card-blocked", "Confirm staging environment access", "blocked", "normal", 1, ["ops"]),
-    card("card-done", "Publish support handoff notes", "done", "low", 1, ["docs"]),
-  ];
-  const statuses = ["todo", "ready", "running", "review", "blocked", "done"];
-  const board = {
-    id: boardId,
-    name: "Product Operations",
-    description: "Shared product delivery queue",
-    icon: "✓",
-    color: "#2563eb",
-    automationJobId: "job-product-operations-daily",
-    total: cards.length,
-    active: cards.length - 1,
-    archived: 0,
-    byStatus: Object.fromEntries(
-      statuses.map((status) => [status, cards.filter((entry) => entry.status === status).length]),
-    ),
-    updatedAt: baseTime,
-  };
-  const sessionKey = "agent:main:workboard-proof";
-  return {
-    board,
-    cards,
-    sessionKey,
-    methodResponses: {
-      "board.get": {
-        sessionKey,
-        revision: 1,
-        tabs: [{ tabId: "main", title: "Workboard", position: 0, chatDock: "hidden" }],
-        widgets: [
-          {
-            name: "session-progress",
-            tabId: "main",
-            title: "Session progress",
-            contentKind: "plugin",
-            pluginKind: "session:progress",
-            sizeW: 6,
-            sizeH: 5,
-            position: 0,
-            grantState: "none",
-            revision: 1,
-          },
-          {
-            name: "workboard-product-operations",
-            tabId: "main",
-            title: "Product Operations",
-            contentKind: "plugin",
-            pluginKind: "workboard:board",
-            props: { boardId },
-            heightMode: "fixed",
-            sizeW: 12,
-            sizeH: 16,
-            position: 1,
-            grantState: "none",
-            revision: 1,
-          },
-        ],
-      },
-      "workboard.boards.list": { boards: [board] },
-      "workboard.cards.list": { boards: [board], cards, statuses },
-      "workboard.cards.stats": { ...board, byAgent: {} },
-      "workboard.cards.move": { card: cards[0] },
-      "progressCard.get": {
-        card: {
-          sessionKey,
-          revision: 2,
-          updatedAt: baseTime,
-          markdown: "**Product launch** is moving through final checks.",
-          steps: [
-            { step: "Confirm release scope", status: "completed" },
-            { step: "Validate onboarding flow", status: "in_progress" },
-            { step: "Publish support handoff", status: "pending" },
-          ],
-        },
-      },
-    },
-  };
-}
-
-function chatHistoryMessage(role: "assistant" | "user", text: string, timestamp: number) {
-  return {
-    content: [{ text, type: "text" }],
-    role,
-    timestamp,
   };
 }
 
@@ -1941,8 +1790,23 @@ async function createChatPickerScenario(
           }),
         ]
       : [];
-  const workboardMocks = buildWorkboardMocks(baseTime);
+  const workboardMocks = buildWorkboardMocks(
+    Date.now(),
+    MOCK_ACTOR_PETER,
+    fixture === "workboard-states",
+  );
   const activityTime = Date.now();
+  const activityDate = new Date(activityTime);
+  const activitySince = new Date(
+    activityDate.getFullYear(),
+    activityDate.getMonth(),
+    activityDate.getDate(),
+  ).getTime();
+  const activityUntil = new Date(
+    activityDate.getFullYear(),
+    activityDate.getMonth(),
+    activityDate.getDate() + 1,
+  ).getTime();
   const activitySessions = buildActivitySessionRows(activityTime);
   const dashboardGallerySessions =
     fixture === "dashboards"
@@ -2032,12 +1896,13 @@ async function createChatPickerScenario(
     ...rosterSessions.filter((row) => !row.key.startsWith("agent:main:")),
     ...activitySessions,
     ...dashboardGallerySessions,
-    ...(fixture === "workboard"
+    ...(fixture === "workboard" || fixture === "workboard-states"
       ? [
           sessionRow(workboardMocks.sessionKey, "Product operations dashboard", baseTime, {
             boardFace: "dashboard",
             pinned: true,
           }),
+          ...workboardMocks.cardSessions,
         ]
       : []),
     sessionRow("agent:main:main", "Molty", rosterTime - 1_000, {
@@ -2297,7 +2162,7 @@ async function createChatPickerScenario(
   const channelWizard = buildChannelWizardMocks();
   const configMocks = buildConfigMocks({
     swarmEnabled: fixture === "swarm",
-    workboardEnabled: fixture === "workboard",
+    workboardEnabled: fixture === "workboard" || fixture === "workboard-states",
   });
   const fixtureSessionKey =
     fixture === "approval"
@@ -2310,7 +2175,7 @@ async function createChatPickerScenario(
             ? "agent:main:model-budget"
             : fixture === "update-failed"
               ? "agent:main:cloud-refactor"
-              : fixture === "workboard"
+              : fixture === "workboard" || fixture === "workboard-states"
                 ? workboardMocks.sessionKey
                 : "agent:main:main";
   const summaryHistory = buildFixtureSummaryHistory(
@@ -2350,7 +2215,6 @@ async function createChatPickerScenario(
       ],
     },
   };
-  const backgroundTasks = buildBackgroundTasksMock(baseTime);
   const custodianHistory = {
     turns: [
       {
@@ -2423,6 +2287,7 @@ async function createChatPickerScenario(
       "cron.remove",
       "cron.run",
       "cron.runs",
+      "cron.history",
       "cron.status",
       "cron.update",
       "chat.metadata",
@@ -2465,9 +2330,6 @@ async function createChatPickerScenario(
       "skills.library.read",
       "skills.library.save",
       "skills.library.upload",
-      "tasks.cancel",
-      "tasks.get",
-      "tasks.list",
       "sessions.catalog.list",
       "sessions.catalog.read",
       "sessions.create",
@@ -2476,20 +2338,27 @@ async function createChatPickerScenario(
       "environments.list",
       "terminal.open",
       ...(updateFixture ? ["update.hold", "update.run", "update.status"] : []),
-      ...(fixture === "workboard"
+      ...(fixture === "workboard" || fixture === "workboard-states"
         ? [
             "board.get",
+            "cron.get",
             "workboard.boards.list",
+            "workboard.boards.upsert",
             "workboard.cards.list",
             "workboard.cards.move",
+            "workboard.cards.create",
+            "workboard.cards.update",
+            "workboard.cards.comment",
+            "workboard.cards.archive",
+            "workboard.cards.delete",
             "workboard.cards.stats",
           ]
         : []),
     ],
-    ...(fixture === "workboard" ? workboardUi : {}),
+    ...(fixture === "workboard" || fixture === "workboard-states" ? workboardUi : {}),
     controlUiWidgetKinds: [
       { pluginId: "session", kind: "session:progress", label: "Session progress" },
-      ...(fixture === "workboard"
+      ...(fixture === "workboard" || fixture === "workboard-states"
         ? [
             { pluginId: "workboard", kind: "workboard:board", label: "Workboard board" },
             { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },
@@ -2506,7 +2375,6 @@ async function createChatPickerScenario(
     historyMessages,
     sessionGroups: ["Research"],
     sessionTranscripts: {
-      ...backgroundTasks.sessionTranscripts,
       "agent:main:main": {
         messages:
           fixtureSessionKey === "agent:main:main"
@@ -2543,6 +2411,9 @@ async function createChatPickerScenario(
       "agent:main:home-server": { messages: summaryHistory },
       "agent:main:cloud-refactor": { messages: summaryHistory },
       [workboardMocks.sessionKey]: { messages: summaryHistory },
+      ...(fixture === "workboard" || fixture === "workboard-states"
+        ? workboardMocks.cardSessionHistories
+        : {}),
     },
     // Lights up the footer facepile and who's-online roster; the email-only
     // entry keeps the roster's no-display-name row exercised.
@@ -2669,125 +2540,7 @@ async function createChatPickerScenario(
       // right-click menu, hide/restore preference) are exercised in the mock.
       // Ids must match registered plugin catalogs (`claude`, `codex`) or the
       // sidebar cannot resolve bundled brand marks.
-      "sessions.catalog.list": {
-        catalogs: [
-          {
-            id: "codex",
-            label: "Codex",
-            capabilities: { continueSession: true, archive: false, startTerminal: true },
-            hosts: [
-              {
-                hostId: "gateway",
-                label: "This Mac",
-                kind: "gateway",
-                connected: true,
-                sessions: [
-                  {
-                    threadId: "codex-thread-1",
-                    name: "Release checklist sweep",
-                    cwd: "/Users/demo/projects/openclaw",
-                    status: "idle",
-                    updatedAt: baseTime - 10 * 60_000,
-                    archived: false,
-                    canContinue: true,
-                    canArchive: false,
-                  },
-                  {
-                    threadId: "codex-thread-2",
-                    name: "Sidebar context-menu proof",
-                    cwd: "/Users/demo/projects/openclaw",
-                    status: "idle",
-                    updatedAt: baseTime - 45 * 60_000,
-                    archived: false,
-                    canContinue: true,
-                    canArchive: false,
-                  },
-                ],
-              },
-            ],
-          },
-          {
-            id: "claude",
-            label: "Claude Code",
-            capabilities: { continueSession: true, archive: false },
-            hosts: [
-              {
-                hostId: "gateway",
-                label: "This Mac",
-                kind: "gateway",
-                connected: true,
-                sessions: [
-                  {
-                    threadId: "claude-thread-1",
-                    name: "Docs refresh",
-                    cwd: "/Users/demo/projects/peekaboo",
-                    status: "idle",
-                    updatedAt: baseTime - 30 * 60_000,
-                    archived: false,
-                    canContinue: true,
-                    canArchive: false,
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-      "sessions.catalog.read": {
-        cases: [
-          {
-            match: { catalogId: "codex", hostId: "gateway", threadId: "codex-thread-1" },
-            response: {
-              hostId: "gateway",
-              threadId: "codex-thread-1",
-              items: [
-                {
-                  id: "release-checklist-answer",
-                  type: "agentMessage",
-                  text: "The release checklist is complete and ready for review.",
-                },
-                {
-                  id: "release-checklist-request",
-                  type: "userMessage",
-                  text: "Please sweep the release checklist for anything we missed.",
-                },
-              ],
-            },
-          },
-          {
-            match: { catalogId: "codex", hostId: "gateway", threadId: "codex-thread-2" },
-            response: {
-              hostId: "gateway",
-              threadId: "codex-thread-2",
-              items: [
-                {
-                  id: "sidebar-context-menu-answer",
-                  type: "agentMessage",
-                  text: "The sidebar context menu behaves as expected.",
-                },
-              ],
-            },
-          },
-          {
-            match: {
-              catalogId: "claude",
-              hostId: "gateway",
-              threadId: "claude-thread-1",
-            },
-            response: {
-              hostId: "gateway",
-              threadId: "claude-thread-1",
-              items: [
-                {
-                  id: "docs-refresh-answer",
-                  type: "agentMessage",
-                  text: "The documentation refresh is ready for review.",
-                },
-              ],
-            },
-          },
-        ],
-      },
+      ...buildSessionCatalogMocks(baseTime),
       "system.info": {
         machineName: "Mock-Workstation",
         hostname: "mock-workstation.invalid",
@@ -2812,78 +2565,33 @@ async function createChatPickerScenario(
       },
       "fs.listDir": {
         cases: [
-          {
-            match: { path: "/Users/demo/Projects/openclaw" },
-            response: {
-              path: "/Users/demo/Projects/openclaw",
-              parent: "/Users/demo/Projects",
-              home: "/Users/demo",
-              entries: [
-                { name: "ui", path: "/Users/demo/Projects/openclaw/ui" },
-                { name: "src", path: "/Users/demo/Projects/openclaw/src" },
-                { name: "docs", path: "/Users/demo/Projects/openclaw/docs" },
-                { name: "packages", path: "/Users/demo/Projects/openclaw/packages" },
-              ],
-            },
-          },
-          {
-            match: { path: "/Users/demo/Projects" },
-            response: {
-              path: "/Users/demo/Projects",
-              parent: "/Users/demo",
-              home: "/Users/demo",
-              entries: [
-                { name: "openclaw", path: "/Users/demo/Projects/openclaw" },
-                { name: "clawdbot", path: "/Users/demo/Projects/clawdbot" },
-                { name: "sweetistics", path: "/Users/demo/Projects/sweetistics" },
-                { name: "Peekaboo", path: "/Users/demo/Projects/Peekaboo" },
-              ],
-            },
-          },
-          {
-            match: {},
-            response: {
-              path: "/Users/demo",
-              parent: "/Users",
-              home: "/Users/demo",
-              entries: [
-                { name: "Projects", path: "/Users/demo/Projects" },
-                { name: "Downloads", path: "/Users/demo/Downloads" },
-                { name: ".config", path: "/Users/demo/.config", hidden: true },
-              ],
-            },
-          },
+          directoryListCase("/Users/demo/Projects/openclaw", ["ui", "src", "docs", "packages"]),
+          directoryListCase("/Users/demo/Projects", [
+            "openclaw",
+            "clawdbot",
+            "sweetistics",
+            "Peekaboo",
+          ]),
+          directoryListCase("/Users/demo", ["Projects", "Downloads", ".config"], {}),
         ],
       },
       "worktrees.branches": {
         cases: [
-          {
-            match: { repoRoot: "/Users/demo/Projects/openclaw" },
-            response: {
-              repoRoot: "/Users/demo/Projects/openclaw",
-              branches: [
-                { kind: "local", name: "main" },
-                { kind: "local", name: "steipete/place-picker" },
-              ],
-              repositoryStatus: "git",
-              defaultBranch: "main",
-              headBranch: "main",
-            },
+          { repoRoot: "/Users/demo/Projects/openclaw", branch: "steipete/place-picker" },
+          { repoRoot: "/Users/demo/Projects/clawdbot", branch: "steipete/storage-selector-design" },
+        ].map(({ repoRoot: repositoryRoot, branch }) => ({
+          match: { repoRoot: repositoryRoot },
+          response: {
+            repoRoot: repositoryRoot,
+            branches: [
+              { kind: "local", name: "main" },
+              { kind: "local", name: branch },
+            ],
+            repositoryStatus: "git",
+            defaultBranch: "main",
+            headBranch: "main",
           },
-          {
-            match: { repoRoot: "/Users/demo/Projects/clawdbot" },
-            response: {
-              repoRoot: "/Users/demo/Projects/clawdbot",
-              branches: [
-                { kind: "local", name: "main" },
-                { kind: "local", name: "steipete/storage-selector-design" },
-              ],
-              repositoryStatus: "git",
-              defaultBranch: "main",
-              headBranch: "main",
-            },
-          },
-        ],
+        })),
       },
       "environments.list": {
         environments: [
@@ -2963,14 +2671,14 @@ async function createChatPickerScenario(
             sessionKey: "agent:main:tax-research",
             questions: [
               {
-                id: "filing_status",
+                questionId: "filing_status",
                 header: "Tax filing",
                 question: "Should I submit the draft return?",
                 options: [
                   { label: "Submit", description: "File the prepared return." },
                   { label: "Review", description: "Keep the draft open for review." },
                 ],
-              },
+              } satisfies Question,
             ],
             createdAtMs: baseTime - 60_000,
             expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
@@ -3470,6 +3178,8 @@ async function createChatPickerScenario(
             queuedCount: 5,
             activeCount: 8,
             maxConcurrent: 8,
+            concurrencyScope: "session",
+            saturatedLaneCount: 1,
             draining: false,
             generation: 4,
             blockedBy: "lane",
@@ -3509,6 +3219,29 @@ async function createChatPickerScenario(
             ...searchPrefixes("claude-sonnet-4-6"),
             ...searchPrefixes("anthropic"),
           ]),
+          {
+            match: { includePeople: true, sortBy: "activity" },
+            response: {
+              ...pagedSessionsListResponse(activitySessions, 0, MOCK_SESSION_OWNERS),
+              activityPulse: {
+                since: activitySince,
+                until: activityUntil,
+                hours: Array.from(
+                  { length: Math.ceil((activityUntil - activitySince) / 3_600_000) },
+                  (_, hour) =>
+                    hour === 10
+                      ? 12
+                      : hour === Math.floor((activityTime - activitySince) / 3_600_000)
+                        ? 4
+                        : 0,
+                ),
+                sessions: 38,
+                started: 12,
+                people: 6,
+                running: 3,
+              },
+            },
+          },
           ...buildSessionListCases(
             fixture === "sidebar-roster" ? sessions : [...sessions, ...archivedSessions],
             {},
@@ -3517,7 +3250,9 @@ async function createChatPickerScenario(
         ],
       },
       "sessions.search": { results: [] },
-      ...(fixture === "workboard" ? workboardMocks.methodResponses : {}),
+      ...(fixture === "workboard" || fixture === "workboard-states"
+        ? workboardMocks.methodResponses
+        : {}),
     },
     models: modelProviders.models,
     repeatingSessionEvents: {
@@ -3586,7 +3321,6 @@ async function createChatPickerScenario(
     sessionArchiveFiltering: true,
     sessions: [
       ...sessions,
-      ...backgroundTasks.sessions,
       ...archivedSessions,
       ...telegramSessions,
       ...claudeSessions,
@@ -3597,34 +3331,9 @@ async function createChatPickerScenario(
     workspaceGit: true,
   };
   if (fixture === "sidebar-roster") {
-    const teamTasks = backgroundTasks.tasks.slice(0, 2).map((task, index) => {
-      const agent = expectDefined(rosterAgents[index], "team task agent");
-      return Object.assign({}, task, {
-        agentId: agent.id,
-        title: agent.sessionLabels[0],
-        sessionKey: `agent:${agent.id}:main`,
-        ownerKey: `agent:${agent.id}:main`,
-        childSessionKey: `agent:${agent.id}:sample-1`,
-      });
-    });
     scenario.methodResponses = {
       ...scenario.methodResponses,
       "sessions.catalog.list": { catalogs: [] },
-      "tasks.list": {
-        cases: [
-          ...rosterAgents.map(({ id }) => ({
-            match: { agentId: id },
-            response: { tasks: teamTasks.filter((task) => task.agentId === id) },
-          })),
-          { response: { tasks: teamTasks } },
-        ],
-      },
-      "tasks.get": {
-        cases: teamTasks.map((task) => ({
-          match: { taskId: task.id },
-          response: { task },
-        })),
-      },
       "cron.list": {
         cases: [
           ...rosterAgents.flatMap(({ id }) =>
@@ -3655,7 +3364,30 @@ async function createMockGatewayPlugin(
   scenario: ControlUiMockGatewayScenario,
   fixture?: CliOptions["fixture"],
 ): Promise<Plugin> {
-  const prepared = await prepareControlUiMockGatewayScenario(scenario);
+  const prepared = await prepareControlUiMockGatewayScenario(
+    fixture === "workboard-states" ? { ...scenario, nativePlugins: [] } : scenario,
+  );
+  if (fixture === "workboard-states") {
+    const { assets, catalog } = await buildWorkboardStatesAssets();
+    for (const [url, asset] of assets) {
+      prepared.assets.set(url, asset);
+    }
+    prepared.scenario = {
+      ...prepared.scenario,
+      featureMethods: [
+        ...new Set([
+          ...(prepared.scenario.featureMethods ?? []),
+          "plugins.controlUi.list",
+          "plugins.controlUi.report",
+        ]),
+      ],
+      methodResponses: {
+        ...prepared.scenario.methodResponses,
+        "plugins.controlUi.list": catalog,
+        "plugins.controlUi.report": { ok: true },
+      },
+    };
+  }
   const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(prepared.scenario));
   const sameOriginGatewayScript = escapeScriptContent(createControlUiMockSameOriginGatewayScript());
   const newAgentWelcome = await buildNewAgentWelcome({
@@ -3666,8 +3398,10 @@ async function createMockGatewayPlugin(
       skillLibraryMockInitScript(prepared.scenario.models) +
       pluginLifecycleMockInitScript() +
       skillWorkshopMockInitScript(Date.now()) +
-      (fixture === "sidebar-roster" ? "" : backgroundTasksMockInitScript(Date.now())) +
-      approvalMockInitScript(fixture === "approval"),
+      approvalMockInitScript(fixture === "approval") +
+      (fixture === "workboard" || fixture === "workboard-states"
+        ? `(() => { const __name = (target) => target; (${installWorkboardBoardMock.toString()})(${JSON.stringify(buildWorkboardMocks(Date.now(), MOCK_ACTOR_PETER, fixture === "workboard-states"))}); })();`
+        : ""),
   );
   const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(prepared.scenario));
   const pluginIconIds = new Set(
@@ -3795,6 +3529,97 @@ async function createMockGatewayPlugin(
         "</head>",
         `${attachmentThemeToggle}    <script data-openclaw-control-ui-mock-storage>\n      try {\n        localStorage.setItem("openclaw.i18n.locale", "en");\n      } catch {}\n    </script>\n    <script data-openclaw-control-ui-mock-gateway>\n${sameOriginGatewayScript}\n${initScript}\n${statefulInitScript}\n    </script>\n${rosterPreferenceScript}\n  </head>`,
       );
+    },
+  };
+}
+
+async function buildWorkboardStatesAssets() {
+  const { build } = await import("esbuild");
+  const rootDir = path.join(repoRoot, "extensions/workboard");
+  const entry = path.join(rootDir, "browser/index.ts");
+  let transformed = false;
+  const result = await build({
+    absWorkingDir: rootDir,
+    entryPoints: { index: entry },
+    outdir: path.join(rootDir, "dist/control-ui/fixture"),
+    platform: "browser",
+    target: "es2022",
+    format: "esm",
+    bundle: true,
+    write: false,
+    minify: true,
+    legalComments: "none",
+    sourcemap: false,
+    tsconfigRaw: {
+      compilerOptions: { experimentalDecorators: true, useDefineForClassFields: false },
+    },
+    alias: buildPluginLoaderAliasMap(entry, process.argv[1], import.meta.url, "src"),
+    plugins: [
+      {
+        name: "workboard-state-projections",
+        setup(builder) {
+          builder.onLoad(
+            { filter: /[/\\]pages[/\\]workboard[/\\]view-card\.ts$/ },
+            async ({ path: sourcePath }) => {
+              const source = await fs.promises.readFile(sourcePath, "utf8");
+              const lifecycleImport =
+                /\bgetWorkboardLifecycle,(?=[\s\S]*?from "\.\.\/\.\.\/lib\/workboard\/index\.ts")/g;
+              const alertImport =
+                /\bgetCardAlerts,(?=[\s\S]*?from "\.\.\/\.\.\/lib\/workboard\/card-alerts\.ts")/g;
+              if (
+                [...source.matchAll(lifecycleImport)].length !== 1 ||
+                [...source.matchAll(alertImport)].length !== 1
+              ) {
+                throw new Error(
+                  "Workboard state fixture import seam changed; update its exact import transform.",
+                );
+              }
+              transformed = true;
+              return {
+                loader: "ts",
+                resolveDir: path.dirname(sourcePath),
+                contents:
+                  source.replace(lifecycleImport, "").replace(alertImport, "") +
+                  `\nimport { getFixtureLifecycle as getWorkboardLifecycle, getFixtureAlerts as getCardAlerts } from ${JSON.stringify(fileURLToPath(new URL("./control-ui-workboard-state-projections.ts", import.meta.url)))};\n`,
+              };
+            },
+          );
+        },
+      },
+    ],
+  });
+  if (!transformed) {
+    throw new Error("Workboard state fixture did not reach the real card renderer.");
+  }
+  const revision = createHash("sha256");
+  for (const file of result.outputFiles) {
+    revision.update(file.contents);
+  }
+  const hash = revision.digest("hex");
+  const prefix = `${controlUiPluginAssetPrefix("workboard")}${hash}/`;
+  const assets = new Map(
+    result.outputFiles.map((file) => [
+      `${prefix}${path.basename(file.path)}`,
+      {
+        body: Buffer.from(file.contents),
+        contentType: file.path.endsWith(".css") ? "text/css" : "text/javascript",
+      },
+    ]),
+  );
+  return {
+    assets,
+    catalog: {
+      revision: hash,
+      diagnostics: [],
+      plugins: [
+        {
+          pluginId: "workboard",
+          name: "workboard",
+          revision: hash,
+          entryUrl: `${prefix}index.js`,
+          styles: [`${prefix}index.css`],
+        },
+      ],
     },
   };
 }

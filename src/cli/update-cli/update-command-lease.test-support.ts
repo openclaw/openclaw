@@ -13,11 +13,16 @@ export type LeaseScenario = {
   preDoctorChannel?: string;
   invalidConfig?: boolean;
   failDoctor?: "pre" | "post";
+  doctorWarnings?: string[];
   readinessFailure?: "finding" | "execution";
   hostVersion?: string;
   writerConfig?: OpenClawConfig;
   writerRecords?: Record<string, PluginInstallRecord>;
   runtimeRoot?: string;
+  verifyRepairOwner?: boolean;
+  verifyServiceCustody?: boolean;
+  runDoctorConfigFlow?: boolean;
+  doctorWarningsByInvocation?: string[][];
 };
 
 // A narrow child substitutes for the CLI, not for its cross-process lease.
@@ -35,10 +40,10 @@ export async function runUpdateLeaseChild(): Promise<void> {
     );
   const publish = async () => {
     assert.ok(scenario.writerConfig && scenario.writerRecords);
-    const { writePersistedInstalledPluginIndexInstallRecords } =
-      await import("../../plugins/installed-plugin-index-records.js");
+    const { seedInstalledPluginIndex } =
+      await import("../../plugins/test-helpers/installed-plugin-index.js");
     await fs.writeFile(configPath, JSON.stringify(scenario.writerConfig));
-    await writePersistedInstalledPluginIndexInstallRecords(scenario.writerRecords, {
+    await seedInstalledPluginIndex(scenario.writerRecords, {
       config: scenario.writerConfig,
     });
     await record("writer-committed");
@@ -65,6 +70,13 @@ export async function runUpdateLeaseChild(): Promise<void> {
     assert.deepEqual(process.argv.slice(2), ["config", "validate", "--json"]);
     assert.equal(process.env.OPENCLAW_UPDATE_IN_PROGRESS, "0");
     await record("validate");
+    process.stdout.write(
+      JSON.stringify(
+        scenario.invalidConfig
+          ? { valid: false, issues: [{ path: "gateway.port", message: "Invalid port" }] }
+          : { valid: true },
+      ),
+    );
     process.exitCode = scenario.invalidConfig ? 1 : 0;
     return;
   }
@@ -103,6 +115,13 @@ export async function runUpdateLeaseChild(): Promise<void> {
     assert.equal(scenario.lane, "fresh-process");
     const resultPath = process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
     assert.ok(resultPath && scenario.pluginUpdate);
+    assert.deepEqual(
+      JSON.parse(await fs.readFile(path.join(path.dirname(resultPath), "handoff.json"), "utf8")),
+      {
+        completionOwner: "parent",
+        timeout: { version: 1, serialized: "15", operator: null },
+      },
+    );
     await withPluginLifecycleLease({ waitMs: 0 }, async () => record("packages-acquired"));
     await record("packages-released");
     const { readConfigFileSnapshot } = await import("../../config/config.js");
@@ -129,6 +148,43 @@ export async function runUpdateLeaseChild(): Promise<void> {
       assert.equal(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION, scenario.hostVersion);
     }
     await record(`${phase}-attempt`);
+    if (scenario.verifyServiceCustody) {
+      assert.equal(
+        await fs.readFile(path.join(stateDir, "managed-service-state"), "utf8"),
+        "stopped",
+        "The update parent must park the service before its Doctor child runs",
+      );
+    }
+    if (scenario.verifyRepairOwner) {
+      const runId = process.env.OPENCLAW_UPDATE_RUN_ID;
+      assert.ok(runId, "Doctor did not inherit its invoking repair run ID");
+      const { DatabaseSync } = await import("node:sqlite");
+      const { readUpdateRunRecord } = await import("../../infra/update-run-read.kernel.js");
+      const { resolveOpenClawStateSqlitePath } =
+        await import("../../state/openclaw-state-db.paths.js");
+      const { inspectUpdateRepairDriverAdmission } =
+        await import("../../infra/update-run-activity.js");
+      const database = new DatabaseSync(resolveOpenClawStateSqlitePath(), { readOnly: true });
+      const run = (() => {
+        try {
+          return readUpdateRunRecord(database, runId);
+        } finally {
+          database.close();
+        }
+      })();
+      assert.ok(run, "Doctor lost its invoking repair run");
+      const admission = inspectUpdateRepairDriverAdmission([run], runId);
+      assert.equal(
+        admission.kind,
+        "continuation",
+        admission.kind === "conflict" ? admission.message : "Doctor lost its invoking driver",
+      );
+      assert.ok(
+        admission.kind === "continuation" &&
+          admission.run.steps.some((step) => step.step === "finalize:repair-continuation"),
+        "Doctor must receive the explicit repair continuation",
+      );
+    }
     // One real acquisition attempt makes the regression fail promptly, without changing parent budgets.
     await withPluginLifecycleLease({ waitMs: 0 }, async () => {
       await record(`${phase}-acquired`);
@@ -143,7 +199,66 @@ export async function runUpdateLeaseChild(): Promise<void> {
     process.stdout.write("doctor fixture output\n");
     process.stderr.write("doctor fixture diagnostic\n");
     if (scenario.failDoctor === phase) {
-      throw new Error("doctor fixture failure");
+      process.stderr.write("doctor fixture failure\n");
+      process.exitCode = 1;
+      return;
+    }
+    if (scenario.runDoctorConfigFlow) {
+      const { loadAndMaybeMigrateDoctorConfig } =
+        await import("../../commands/doctor-config-flow.js");
+      const { createDoctorPrompter } = await import("../../commands/doctor-prompter.js");
+      const { runInitialConfigWriteHealth } =
+        await import("../../flows/doctor-health-contribution-runners.config.js");
+      const { defaultRuntime: runtime } = await import("../../runtime.js");
+      const options = { repair: true, nonInteractive: true, workspaceSuggestions: false };
+      const prompter = createDoctorPrompter({ runtime, options });
+      const configResult = await loadAndMaybeMigrateDoctorConfig({
+        options,
+        prompter,
+        runtime,
+        confirm: (params) => prompter.confirm(params),
+      });
+      await runInitialConfigWriteHealth({
+        runtime,
+        options,
+        prompter,
+        configResult,
+        cfg: configResult.cfg,
+        cfgForPersistence: structuredClone(configResult.cfg),
+        sourceConfigValid: configResult.sourceConfigValid ?? true,
+        configPath,
+        stateDirExistedAtStart: true,
+        runWithPluginMetadataSnapshot: configResult.runWithPluginMetadataSnapshot,
+        invalidatePluginMetadataSnapshot: configResult.invalidatePluginMetadataSnapshot,
+      });
+    }
+    if (scenario.doctorWarningsByInvocation) {
+      const attempts = (await fs.readFile(path.join(stateDir, "events.jsonl"), "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { event: string })
+        .filter(({ event }) => event === "pre-attempt" || event === "post-attempt");
+      const resultPath = process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+      assert.ok(resultPath);
+      const { writeUpdatePostInstallDoctorResult } =
+        await import("../../infra/update-doctor-result.js");
+      await writeUpdatePostInstallDoctorResult({
+        resultPath,
+        result: {
+          status: "ok",
+          warnings: scenario.doctorWarningsByInvocation[attempts.length - 1] ?? [],
+        },
+      });
+    }
+    if (scenario.doctorWarnings?.length) {
+      const { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, writeUpdatePostInstallDoctorResult } =
+        await import("../../infra/update-doctor-result.js");
+      const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+      assert.ok(resultPath);
+      await writeUpdatePostInstallDoctorResult({
+        resultPath,
+        result: { status: "ok", warnings: scenario.doctorWarnings },
+      });
     }
     return;
   }
@@ -155,7 +270,7 @@ export async function runUpdateLeaseChild(): Promise<void> {
       if (!(error instanceof Error) || !("code" in error)) {
         throw error;
       }
-      assert.equal(error.code, "OPENCLAW_STATE_LEASE_TIMEOUT");
+      assert.equal(error.code, "OPENCLAW_STATE_LEASE_HELD");
       process.stdout.write("excluded");
     }
     return;

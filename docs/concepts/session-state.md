@@ -22,6 +22,7 @@ OpenClaw appends a typed event to the shared state database (`session_state_even
 
 | Kind                   | Recorded when                                            | Notifies watchers |
 | ---------------------- | -------------------------------------------------------- | ----------------- |
+| `created`              | A new session has trusted creation attribution           | No (log only)     |
 | `human_direct_message` | A human sends a turn directly to a watched session       | Yes               |
 | `upstream_missing`     | An adopted session's upstream source disappears          | Yes               |
 | `goal_changed`         | The session's goal state is created, updated, or cleared | Yes               |
@@ -37,6 +38,12 @@ A session's **state version** is simply the highest sequence number in its log, 
 
 Log-only kinds exist for reconciliation history, not notification: ordinary child-run completion delivery stays owned by [sub-agent announcements](/tools/subagents), and the signal log never duplicates it.
 
+Session creation separately queues a one-time Home notice by default, controlled
+by `session.notifyOnCreate`. It does not register a watcher or wake Home. Unlike
+durable watcher notices, it uses only the bounded, in-memory system-event queue.
+See [new-session awareness](/concepts/main-session#what-flows-into-the-main-session)
+for visibility exclusions.
+
 ## Watchers
 
 A watcher is a session that holds a cursor (`session_watch_cursors`) on a target. Cursors come from three places:
@@ -47,7 +54,13 @@ A watcher is a session that holds a cursor (`session_watch_cursors`) on a target
 
 Watcher identity must be an agent-qualified session key. Under `session.scope="global"` the shared `global` key is ambiguous across agents, so such sessions get the durable log and `changesSince` but no proactive notices.
 
-Watches clean themselves up: cursor rows expire with signal-log retention, are removed when the watcher session resets, and are removed with either session. There is no unwatch verb in v1.
+A watch also records its watcher's physical store. Changing `session.store` does
+not transfer its queued notices to another conversation with the same key. Older
+watches with unknown store provenance retain history but need fresh registration
+before proactive notices resume. The next group turn registers its ambient watch
+against the current store.
+
+Watches clean themselves up: cursor rows expire with signal-log retention, are removed when the watcher session resets, and are removed with either session. A reset that has committed still clears its watches if a later cleanup step fails. There is no unwatch verb in v1.
 
 Watched Claude, Codex, OpenCode, and Pi sessions adopted from a session catalog are checked for direct upstream human activity on a fixed cadence. Pi monitoring starts after the session is in its append-only v3 format. Detected activity enters the same signal log and watcher flow as other direct human turns.
 
@@ -100,6 +113,8 @@ The notice tells the watcher exactly what to do. `session_status` with `changesS
 ## Storage and limits
 
 History lives in the shared state database, bounded to 30 days and 50,000 rows. Per-session heads stay monotonic after pruning. Recording is best-effort. A failed append is logged and never fails the originating turn. `stateVersion` is therefore a signal-log head, not a transactional change-data-capture version.
+
+Child-run outcomes are recorded asynchronously, so waiting for the shared database does not block Gateway event handling. Completion joins the recording work, and a replaced or provisional run owner cannot claim the run's first terminal event.
 
 Current limits:
 

@@ -18,8 +18,6 @@ import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-export { parseNameStatusZ, parseNumstatZ, splitPatchByFile } from "../../sessions/session-diff.js";
-
 export async function loadSessionDiff(
   params: SessionsDiffParams,
   context?: GatewayRequestContext,

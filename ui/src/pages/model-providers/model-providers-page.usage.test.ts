@@ -26,7 +26,7 @@ describe("ModelProvidersPage usage convergence", () => {
     snapshot.hello = {
       type: "hello-ok",
       protocol: 3,
-      features: { methods: ["codex.accountUsage"] },
+      features: { methods: ["config.get", "config.patch", "codex.accountUsage"] },
       auth: { role: "operator", scopes: ["operator.admin"] },
     };
     const original = request.getMockImplementation()!;
@@ -79,7 +79,7 @@ describe("ModelProvidersPage usage convergence", () => {
     runtimeConfig.state.configSaving = false;
     notifyRuntimeConfig();
     usedPercent = 90;
-    page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
+    page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.click();
     await vi.waitFor(() => expect(page.textContent).toContain("10% left"));
   });
 
@@ -91,19 +91,20 @@ describe("ModelProvidersPage usage convergence", () => {
     page.context = harness.context;
     document.body.append(page);
     await page.updateComplete;
-    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.request.mock.calls.filter(([method]) => method !== "config.get")).toEqual([]);
 
     harness.publishPhase("offline");
     harness.publishPhase("connected");
     await page.updateComplete;
-    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.request.mock.calls.filter(([method]) => method !== "config.get")).toEqual([]);
 
     page.routeData = {
       gateway: harness.context.gateway,
       gatewaySnapshot: harness.context.gateway.snapshot,
+      selectionIntentRevision: harness.context.settingsAgentSelection.intentRevision,
       client: harness.context.gateway.snapshot.client,
       agentId: "main",
-      data: { ...EMPTY_MODEL_PROVIDERS_DATA, config: {}, updatedAt: Date.now() },
+      data: { ...EMPTY_MODEL_PROVIDERS_DATA, updatedAt: Date.now() },
     };
     await vi.waitFor(() => expect(page.data?.costByProvider).toEqual([]));
     expect(requestCount(harness.request, "models.authStatus")).toBe(0);
@@ -148,8 +149,14 @@ describe("ModelProvidersPage usage convergence", () => {
     // not a failure and must not warn.
     expect(page.textContent ?? "").not.toContain("did not finish loading");
 
-    await advanceUsageRetries();
+    await vi.advanceTimersByTimeAsync(34_999);
     await page.updateComplete;
+    expect(requestCount(harness.request, "usage.status")).toBe(3);
+    expect(page.textContent ?? "").not.toContain("did not finish loading");
+
+    await vi.advanceTimersByTimeAsync(1);
+    await page.updateComplete;
+    expect(requestCount(harness.request, "usage.status")).toBe(4);
 
     // Budget spent and the payload is still incomplete. Rendering the ordinary
     // cards with no usage and no notice is indistinguishable from a provider
@@ -161,7 +168,7 @@ describe("ModelProvidersPage usage convergence", () => {
     const callsBeforeManual = harness.request.mock.calls.filter(
       ([method]) => method === "usage.status",
     ).length;
-    page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
+    page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.click();
     await page.updateComplete;
     await advanceUsageRetries();
     expect(
@@ -184,7 +191,7 @@ describe("ModelProvidersPage usage convergence", () => {
     // Treating it as complete would reset the budget and erase the notice,
     // leaving broken usage looking exactly like absent usage.
     harness.failUsageStatus();
-    page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
+    page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.click();
     await page.updateComplete;
     await advanceUsageRetries();
     await page.updateComplete;
@@ -234,6 +241,7 @@ describe("ModelProvidersPage usage convergence", () => {
     page.routeData = {
       gateway: harness.context.gateway,
       gatewaySnapshot: harness.context.gateway.snapshot,
+      selectionIntentRevision: harness.context.settingsAgentSelection.intentRevision,
       data: EMPTY_MODEL_PROVIDERS_DATA,
       client: null,
       agentId: "main",

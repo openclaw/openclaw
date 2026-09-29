@@ -67,6 +67,7 @@ const APP_ROUTE_DEFINITIONS = {
   automation: { path: "/settings/automation", aliases: ["/automation"] },
   mcp: { path: "/settings/mcp", aliases: ["/mcp"] },
   memory: { path: "/settings/memory" },
+  search: { path: "/settings/search" },
   talk: { path: "/settings/talk" },
   infrastructure: { path: "/settings/infrastructure", aliases: ["/infrastructure"] },
   labs: { path: "/settings/labs" },
@@ -81,6 +82,7 @@ const APP_ROUTE_DEFINITIONS = {
   workboard: { path: "/workboard" },
   worktrees: { path: "/worktrees", aliases: ["/settings/worktrees"] },
   sessions: { path: "/sessions", aliases: ["/settings/sessions"] },
+  systems: { path: "/systems" },
   usage: { path: "/usage" },
   debug: { path: "/debug" },
   logs: { path: "/logs" },
@@ -92,7 +94,6 @@ const APP_ROUTE_DEFINITIONS = {
   // Automations is the product name; /cron stays as a legacy alias for
   // pre-rename bookmarks and deep links.
   cron: { path: "/automations", aliases: ["/cron"] },
-  tasks: { path: "/tasks" },
   devices: { path: "/settings/devices", aliases: ["/nodes"] },
   "cloud-workers": { path: "/settings/cloud-workers" },
   plugin: { path: "/plugin" },
@@ -616,4 +617,15 @@ export function restoreBridgedRouteLocation(
     search: search ? `?${search}` : "",
     hash: location.hash,
   };
+}
+
+export function sameRouteLocation(
+  left: RouteLocation | undefined,
+  right: RouteLocation | undefined,
+): boolean {
+  return (
+    left?.pathname === right?.pathname &&
+    left?.search === right?.search &&
+    left?.hash === right?.hash
+  );
 }

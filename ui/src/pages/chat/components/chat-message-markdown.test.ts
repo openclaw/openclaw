@@ -6,11 +6,13 @@ import { html, nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { markdownBlocks } from "../../../components/markdown-blocks.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
+import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { extractText } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
+import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { prepareChatMessageRender, resolveMessageActionDetails } from "./chat-message-markdown.ts";
-import { renderMessageMarkdown, resolveMessageDisplayMarkdown } from "./chat-message-text.ts";
+import { renderMessageMarkdown } from "./chat-message-text.ts";
 
 const cappedMeta = { id: "msg-1", truncated: true, reason: "display-cap" };
 
@@ -76,22 +78,6 @@ describe("resolveMessageActionDetails full-message eligibility", () => {
     expect(details?.fullMessage).toBeUndefined();
   });
 
-  it("does not fetch an untruncated assistant message", () => {
-    const details = resolveMessageActionDetails(
-      prepareChatMessageRender({
-        role: "assistant",
-        content: "Complete.",
-        __openclaw: { id: "msg-2" },
-      }),
-      {
-        messageId: "msg-2",
-        canFetchFullMessage: true,
-        senderLabel: "assistant",
-      },
-    );
-    expect(details?.fullMessage).toBeUndefined();
-  });
-
   it("projects an oversized assistant marker to a notice without disabling recovery", () => {
     const message = {
       role: "assistant",
@@ -145,19 +131,111 @@ describe("resolveMessageActionDetails full-message eligibility", () => {
 });
 
 describe("user message disclosure", () => {
+  it("batches and retains overflow measurements while observing content, fonts and lifetime", async () => {
+    const fonts = Object.assign(new EventTarget(), { ready: Promise.resolve() });
+    const previousFonts = Object.getOwnPropertyDescriptor(document, "fonts");
+    Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const container = document.body.appendChild(document.createElement("div"));
+    const restoreStyles: Array<() => void> = [];
+    const markdown = "A long prompt with unchanged layout. ".repeat(50);
+    const draw = (text = markdown, expanded = false) =>
+      render(
+        html`${["first", "second"].map((key) =>
+          renderMessageMarkdown(
+            text,
+            key,
+            {
+              role: "user",
+              isStreaming: false,
+              isUserMessageExpanded: () => expanded,
+              onToggleUserMessageExpanded: vi.fn(),
+            },
+            {},
+          ),
+        )}`,
+        container,
+      );
+    const settle = async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+    try {
+      const part = draw();
+      const phases: string[] = [];
+      const measure = vi.fn(() => {
+        phases.push("read");
+        return 300;
+      });
+      for (const content of container.querySelectorAll<HTMLElement>(
+        ".chat-message-disclosure__content",
+      )) {
+        Object.defineProperties(content, {
+          scrollHeight: { get: measure },
+          clientHeight: { get: () => 100 },
+        });
+        const remove = content.style.removeProperty.bind(content.style);
+        const removal = vi.spyOn(content.style, "removeProperty").mockImplementation((property) => {
+          phases.push("write");
+          return remove(property);
+        });
+        restoreStyles.push(() => removal.mockRestore());
+      }
+      await settle();
+      expect(measure).toHaveBeenCalled();
+      expect(phases.slice(phases.indexOf("read"), phases.lastIndexOf("read") + 1)).not.toContain(
+        "write",
+      );
+      measure.mockClear();
+      for (let index = 0; index < 5; index += 1) {
+        draw();
+        await settle();
+      }
+      expect(measure).not.toHaveBeenCalled();
+
+      draw(`${markdown}Updated content.`);
+      await settle();
+      expect(measure).toHaveBeenCalled();
+      measure.mockClear();
+      draw(`${markdown}Updated content.`, true);
+      await settle();
+      expect(measure).toHaveBeenCalled();
+      expect(container.querySelector("button")?.getAttribute("aria-expanded")).toBe("true");
+      measure.mockClear();
+      fonts.dispatchEvent(new Event("loadingdone"));
+      await settle();
+      expect(measure).toHaveBeenCalled();
+
+      draw(`${markdown}Retired before measurement.`);
+      part.setConnected(false);
+      measure.mockClear();
+      await settle();
+      fonts.dispatchEvent(new Event("loadingdone"));
+      await settle();
+      expect(measure).not.toHaveBeenCalled();
+      part.setConnected(true);
+      await settle();
+      expect(measure).toHaveBeenCalled();
+    } finally {
+      render(nothing, container);
+      container.remove();
+      restoreStyles.forEach((restore) => restore());
+      vi.unstubAllGlobals();
+      if (previousFonts) {
+        Object.defineProperty(document, "fonts", previousFonts);
+      } else {
+        Reflect.deleteProperty(document, "fonts");
+      }
+    }
+  });
+
   it.each([
-    {
-      name: "seven short lines",
-      markdown: [
-        "please re-review these:",
-        "#127818",
-        "#127826",
-        "#127844",
-        "#127881",
-        "",
-        "rerun the same session we had for these",
-      ].join("\n"),
-    },
     { name: "exactly 1200 UTF-16 code units", markdown: "a".repeat(1_200) },
     { name: "forty short lines", markdown: Array(40).fill("a").join("\n") },
   ])("keeps $name fully visible", ({ markdown }) => {
@@ -359,5 +437,68 @@ describe("message Markdown source preservation", () => {
       senderLabel: "assistant",
     });
     expect(details?.markdown).toBe(source);
+  });
+});
+
+describe("persisted human mentions in message bubbles", () => {
+  const text = "@Ada Lovelace cc @Ada Lovelace";
+  const humanMentions = [{ profileId: "profile-ada", start: 0, end: 13 }];
+
+  it.each([{ content: text }, { content: [{ type: "text", text }] }])(
+    "renders only explicit spans while preserving copy text",
+    ({ content }) => {
+      const message = { role: "user", content, __openclaw: { humanMentions } };
+      const host = document.createElement("div");
+      render(
+        renderGroupedMessage(prepareChatMessageRender(message), "message", {
+          isStreaming: false,
+          showReasoning: false,
+        }),
+        host,
+      );
+      const references = host.querySelectorAll("openclaw-person-reference");
+      expect(references).toHaveLength(1);
+      expect(references[0]?.getAttribute("profile-id")).toBe("profile-ada");
+      expect(references[0]?.getAttribute("label")).toBe("@Ada Lovelace");
+      expect(host.querySelector(".chat-bubble")?.getAttribute("data-message-text")).toBe(text);
+    },
+  );
+
+  it.each([
+    { role: "assistant", content: text, __openclaw: { humanMentions } },
+    {
+      role: "user",
+      content: text,
+      __openclaw: { humanMentions, truncated: true, reason: "oversized" },
+    },
+    { role: "user", content: text },
+  ])("does not attach identities to assistant, capped or unselected text", (message) => {
+    const host = document.createElement("div");
+    render(
+      renderGroupedMessage(prepareChatMessageRender(message), "message", {
+        isStreaming: false,
+        showReasoning: false,
+      }),
+      host,
+    );
+    expect(host.querySelector("openclaw-person-reference")).toBeNull();
+  });
+
+  it("does not reuse selection offsets after the displayed message is replaced", () => {
+    const host = document.createElement("div");
+    render(
+      renderGroupedMessage(
+        prepareChatMessageRender({ role: "user", content: text, __openclaw: { humanMentions } }),
+        "message",
+        {
+          isStreaming: false,
+          showReasoning: false,
+          messageActions: { markdown: "@Different Person" },
+        },
+      ),
+      host,
+    );
+    expect(host.querySelector("openclaw-person-reference")).toBeNull();
+    expect(host.textContent).toContain("@Different Person");
   });
 });

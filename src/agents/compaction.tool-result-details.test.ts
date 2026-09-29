@@ -17,7 +17,7 @@ vi.mock("./sessions/index.js", async () => {
 });
 
 let estimateMessagesTokens: typeof import("./compaction.js").estimateMessagesTokens;
-let summarizeWithFallback: typeof import("./compaction.test-support.js").summarizeWithFallback;
+let summarizeInStages: typeof import("./compaction.js").summarizeInStages;
 
 function makeAssistantToolCall(timestamp: number): AssistantMessage {
   return makeAgentAssistantMessage({
@@ -44,8 +44,7 @@ function makeToolResultWithDetails(timestamp: number): ToolResultMessage<{ raw: 
 
 describe("compaction toolResult details stripping", () => {
   beforeAll(async () => {
-    ({ estimateMessagesTokens } = await import("./compaction.js"));
-    ({ summarizeWithFallback } = await import("./compaction.test-support.js"));
+    ({ estimateMessagesTokens, summarizeInStages } = await import("./compaction.js"));
   });
 
   beforeEach(() => {
@@ -54,9 +53,11 @@ describe("compaction toolResult details stripping", () => {
   });
 
   it("does not pass toolResult.details into generateSummary", async () => {
-    const messages: AgentMessage[] = [makeAssistantToolCall(1), makeToolResultWithDetails(2)];
+    const assistant = makeAssistantToolCall(1);
+    const messages: AgentMessage[] = [structuredClone(assistant), makeToolResultWithDetails(2)];
 
-    const summary = await summarizeWithFallback({
+    const summary = await summarizeInStages({
+      parts: 1,
       messages,
       // Minimal shape; compaction won't use these fields in our mocked generateSummary.
       model: { id: "mock", name: "mock", contextWindow: 10000, maxTokens: 1000 } as never,
@@ -76,31 +77,7 @@ describe("compaction toolResult details stripping", () => {
       agentSessionMocks.generateSummary.mock.calls as unknown as Array<[AgentMessage[]]>
     )[0]?.[0];
     expect(chunk).toStrictEqual([
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_1", name: "browser", arguments: { action: "tabs" } },
-        ],
-        api: "openai-responses",
-        model: "gpt-5.4",
-        provider: "openai",
-        stopReason: "toolUse",
-        timestamp: 1,
-        usage: {
-          cacheRead: 0,
-          cacheWrite: 0,
-          cost: {
-            cacheRead: 0,
-            cacheWrite: 0,
-            input: 0,
-            output: 0,
-            total: 0,
-          },
-          input: 0,
-          output: 0,
-          totalTokens: 0,
-        },
-      },
+      assistant,
       {
         role: "toolResult",
         toolCallId: "call_1",
@@ -133,7 +110,8 @@ describe("compaction toolResult details stripping", () => {
       assistant,
     ];
 
-    await summarizeWithFallback({
+    await summarizeInStages({
+      parts: 1,
       messages,
       model: { id: "mock", name: "mock", contextWindow: 10000, maxTokens: 1000 } as never,
       apiKey: "test", // pragma: allowlist secret

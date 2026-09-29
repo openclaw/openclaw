@@ -21,7 +21,17 @@ type MeetingBrowserFixtureState = {
   meetingEnded: boolean;
   meetingEndedOnce: boolean;
   tabListFailures: number;
+  audioCaptureId?: string;
+  audioCaptureEvents: { action: "start" | "pull" | "stop"; captureId: string }[];
 };
+
+function scriptStringConstant(script: string, name: string): string | undefined {
+  const literal = script.match(
+    new RegExp(`\\bconst\\s+${name}\\s*=\\s*("(?:\\\\.|[^"\\\\])*")`),
+  )?.[1];
+  const value: unknown = literal ? JSON.parse(literal) : undefined;
+  return typeof value === "string" ? value : undefined;
+}
 
 export function createMeetingBrowserFixture(options: MeetingBrowserFixtureOptions) {
   const state: MeetingBrowserFixtureState = {
@@ -33,6 +43,7 @@ export function createMeetingBrowserFixture(options: MeetingBrowserFixtureOption
     meetingEnded: false,
     meetingEndedOnce: false,
     tabListFailures: 0,
+    audioCaptureEvents: [],
   };
   const tab = () => ({ targetId: state.targetId, title: options.title, url: state.tabUrl });
   const result = (value: Record<string, unknown>) => ({ result: JSON.stringify(value) });
@@ -62,6 +73,35 @@ export function createMeetingBrowserFixture(options: MeetingBrowserFixtureOption
     if (params.path === "/act") {
       const scriptValue = (params.body as { fn?: unknown } | undefined)?.fn;
       const script = typeof scriptValue === "string" ? scriptValue : "";
+      const captureId = scriptStringConstant(script, "captureId");
+      if (captureId) {
+        const action = scriptStringConstant(script, "action");
+        if (action !== "start" && action !== "pull" && action !== "stop") {
+          throw new Error("Unexpected meeting audio capture action");
+        }
+        state.audioCaptureEvents.push({ action, captureId });
+        if (action === "stop") {
+          if (state.audioCaptureId === captureId) {
+            state.audioCaptureId = undefined;
+          }
+          return result({ captureId, closed: true });
+        }
+        if (!state.tabOpen || !state.inCall || state.sessionConflict) {
+          throw new Error("Meeting audio capture does not own an active browser session");
+        }
+        if (action === "start") {
+          if (state.audioCaptureId) {
+            throw new Error("Meeting browser audio capture is already active");
+          }
+          state.audioCaptureId = captureId;
+          return result({ captureId, isolated: true });
+        }
+        return result(
+          state.audioCaptureId === captureId
+            ? { captureId, isolated: true, base64: "" }
+            : { captureId, closed: true },
+        );
+      }
       if (script.includes("leaveAction")) {
         return result({
           departed: true,
@@ -89,6 +129,7 @@ export function createMeetingBrowserFixture(options: MeetingBrowserFixtureOption
     }
     if (params.method === "DELETE" && params.path === `/tabs/${state.targetId}`) {
       state.tabOpen = false;
+      state.audioCaptureId = undefined;
       return { ok: true };
     }
     throw new Error(`unexpected browser request ${String(params.method)} ${String(params.path)}`);

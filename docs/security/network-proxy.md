@@ -76,7 +76,7 @@ The proxy URL scheme describes the hop from OpenClaw to the proxy, not to the fi
 
 Destination TLS is independent of proxy-endpoint TLS: for an HTTPS destination, OpenClaw always asks the proxy for a `CONNECT` tunnel and starts destination TLS through that tunnel.
 
-While the proxy is active, OpenClaw clears `no_proxy`/`NO_PROXY`. Those bypass lists are destination-based; leaving `localhost` or `127.0.0.1` there would let SSRF targets skip the proxy entirely. On shutdown, OpenClaw restores the prior proxy environment and resets cached routing state.
+In the default `gateway-only` mode, loopback HTTP and WebSocket requests connect directly. This includes `localhost`, literal IPv4/IPv6 loopback addresses, and ephemeral listeners used by the native Codex inference relay. OpenClaw installs this rule in the shared routing owner and replaces `no_proxy`/`NO_PROXY` with loopback-only entries for native child processes. External destinations still use the proxy; inherited bypasses for other destinations do not apply. On shutdown, OpenClaw restores the prior proxy environment and resets cached routing state. The explicit `proxy` and `block` modes continue to clear `no_proxy`/`NO_PROXY`.
 
 Some plugins own a custom transport that needs its own proxy wiring even with process-level routing active. Telegram's Bot API client uses its own HTTP/1 undici dispatcher and separately honors process proxy env plus the `OPENCLAW_PROXY_URL` fallback.
 
@@ -94,13 +94,30 @@ A configured `proxyUrl` or `OPENCLAW_PROXY_URL` enables managed routing. Set
 `proxy.enabled: false` only as an advanced opt-out that keeps the URL stored
 without activating it.
 
-| Mode                     | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `gateway-only` (default) | OpenClaw registers the active Gateway loopback authority as a direct-connect exception, so local Gateway WebSocket traffic connects without the proxy. Custom loopback ports work because the exception targets the exact configured host/port. The bundled browser plugin registers the same kind of exception for the exact local CDP readiness and DevTools WebSocket URLs of OpenClaw-launched managed browsers; the bundled Ollama memory embedding provider has a narrower guarded direct path for its exact configured host-local loopback embedding origin. |
-| `proxy`                  | No loopback exceptions are registered; Gateway and Ollama loopback traffic goes through the proxy. A remote proxy must be able to route back to the OpenClaw host's loopback service (for example via a reachable hostname, IP, or tunnel) — a standard remote proxy resolves `127.0.0.1`/`localhost` against itself, not against the OpenClaw host.                                                                                                                                                                                                                |
-| `block`                  | OpenClaw denies Gateway loopback control-plane connections and guarded Ollama loopback embedding connections before opening a socket.                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Mode                     | Behavior                                                                                                                                                                                   |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `gateway-only` (default) | Loopback HTTP and WebSocket traffic connects directly, including Gateway, browser CDP, update readiness, and native Codex inference relay listeners. No endpoint registration is required. |
+| `proxy`                  | Loopback traffic goes through the proxy. A remote proxy resolves `127.0.0.1`/`localhost` against itself, so this mode can break local runtime listeners.                                   |
+| `block`                  | OpenClaw denies Gateway control-plane, browser CDP, and guarded local-provider loopback connections before opening a socket. Other requests use the proxy.                                 |
 
-Gateway control-plane bypass is limited to `localhost` and literal loopback IP URLs — use `ws://127.0.0.1:18789`, `ws://[::1]:18789`, or `ws://localhost:18789`. Other hostnames route like ordinary traffic.
+The implicit bypass covers `localhost` and literal loopback IP URLs. LAN, tailnet, private-network, and public hosts continue through the managed proxy. Application-level SSRF checks still apply to untrusted destinations.
+
+Update canary `/startupz` and `/readyz` probes use the same loopback routing policy. If a running canary never answers within the validation budget, the update records the observed failure as a warning, including the next troubleshooting step, and continues best effort.
+
+Environment-only HTTP proxy routing honors `no_proxy`/`NO_PROXY` (lowercase takes precedence). These environment bypass lists do not override managed proxy policy.
+
+### WebChat or Codex fails after upgrading
+
+The native Codex inference relay added in 2026.9.4 uses an ephemeral local listener. Older managed proxy routing could forward that hop to the external proxy, producing `502 Bad Gateway`, `Handshake not finished`, or `stream disconnected before completion` for a `127.0.0.1` Responses URL.
+
+Current default routing keeps these hops direct without changing config. Run `openclaw doctor` to test loopback connectivity under the active proxy. If the diagnostic fails, inspect `openclaw config get proxy`. For an explicit restrictive loopback mode, restore the default with:
+
+```bash
+openclaw config set proxy.loopbackMode gateway-only
+openclaw gateway restart
+```
+
+For an older installation, the temporary workaround is to set `proxy.enabled` to `false`, keep `HTTP_PROXY`/`HTTPS_PROXY` pointing to the operator proxy, set `NO_PROXY=127.0.0.1,localhost,::1`, and restart the Gateway. Persist those environment variables in the Gateway service environment if needed.
 
 ### Containers
 
@@ -207,14 +224,14 @@ Add any additional metadata hosts or reserved ranges your cloud provider or netw
 | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `fetch`, `node:http`, `node:https`, common WebSocket clients | Routed through managed proxy hooks when configured.                                                                                                      |
 | APNs direct HTTP/2                                           | Routed through the APNs managed `CONNECT` helper.                                                                                                        |
-| Gateway control-plane loopback                               | Direct only for the exact configured local loopback Gateway URL.                                                                                         |
+| Gateway control-plane loopback                               | Direct for loopback HTTP/WebSocket destinations in the default mode.                                                                                     |
 | Debug proxy upstream forwarding                              | Disabled while managed proxy mode is active unless explicitly enabled for local diagnostics.                                                             |
 | IRC                                                          | Raw TCP/TLS; not proxied by managed HTTP proxy mode. Set `channels.irc.enabled: false` if your deployment requires all egress through the forward proxy. |
 | Other raw `net`, `tls`, or `http2` client calls              | Must be classified by the raw socket guard before landing.                                                                                               |
 
 - This is process-level coverage for JavaScript HTTP/WebSocket clients, not an OS-level network sandbox.
 - Raw `net`, `tls`, `http2` sockets, native addons, and non-OpenClaw child processes may bypass Node-level routing unless they inherit and respect proxy environment variables. Forked OpenClaw child CLIs inherit the managed proxy URL and `proxy.loopbackMode` state.
-- User local WebUIs and local model servers are not covered by a general local-network bypass — allowlist them in the operator proxy policy if needed. The exception is the bundled Ollama memory embedding provider's guarded direct path, scoped to the exact host-local loopback origin from its configured `baseUrl`; LAN, tailnet, private-network, and public Ollama hosts still use the managed proxy.
+- Loopback routing is direct in the default mode; this is not a general local-network bypass. LAN, tailnet, private-network, and public model hosts still use the managed proxy. Guarded local providers retain their configured-origin and DNS checks.
 - The local debug proxy's direct upstream forwarding (for proxy requests and `CONNECT` tunnels) is disabled by default while managed proxy mode is active; enable it only for approved local diagnostics.
 - OpenClaw does not inspect, test, or certify your proxy policy. Treat proxy policy changes as security-sensitive operational changes.
 

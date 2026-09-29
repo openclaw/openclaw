@@ -84,6 +84,17 @@ afterEach(() => {
 });
 
 describe("installTestEnv", () => {
+  it("isolates native manager sockets and restores the caller runtime directory", () => {
+    const callerRuntime = path.join(createTempHome(), "runtime");
+    withEnv({ XDG_RUNTIME_DIR: callerRuntime }, () => {
+      const testEnv = installTestEnv({ mode: "hermetic" });
+      cleanupFns.push(testEnv.cleanup);
+      expect(process.env.XDG_RUNTIME_DIR).toBe(path.join(testEnv.tempHome, ".runtime"));
+      testEnv.cleanup();
+      expect(process.env.XDG_RUNTIME_DIR).toBe(callerRuntime);
+    });
+  });
+
   it.each([".openclaw", ".claude"])(
     "rolls back live staging failure at %s before another installation",
     (failedDirectory) => {

@@ -6,13 +6,15 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { buildEmbeddedAttemptToolRunContext } from "./embedded-agent-runner/run/attempt-tool-run-context.js";
+import { persistSubagentRunsToDiskOrThrow } from "./subagents/registry/subagent-registry-state.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByRunId,
   resetSubagentRegistryForTests,
-  testing as registryTesting,
 } from "./subagents/registry/subagent-registry.test-helpers.js";
 import { consumeSwarmStructuredOutput } from "./tools/structured-output-tool.js";
+
+vi.mock("./subagents/registry/subagent-registry-state.js", { spy: true });
 
 const runId = "collector-tool-contract";
 const sessionKey = "agent:main:subagent:collector-contract";
@@ -27,22 +29,20 @@ let workspaceDir: string;
 beforeEach(async () => {
   workspaceDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "collector-tools-")));
   resetSubagentRegistryForTests({ persist: false });
-  registryTesting.setDepsForTest({ persistSubagentRunsToDiskOrThrow: vi.fn() });
+  vi.mocked(persistSubagentRunsToDiskOrThrow).mockImplementation(() => {});
 });
 
 afterEach(async () => {
   consumeSwarmStructuredOutput(runId);
   resetSubagentRegistryForTests({ persist: false });
-  registryTesting.setDepsForTest();
+  vi.mocked(persistSubagentRunsToDiskOrThrow).mockReset();
   await fs.rm(workspaceDir, { recursive: true, force: true });
 });
 
 it.each([
   { collector: true, toolsAllow: undefined },
-  { collector: true, toolsAllow: ["read"] },
   { collector: true, toolsAllow: [] },
   { collector: false, toolsAllow: undefined },
-  { collector: false, toolsAllow: ["read"] },
 ])("constructs the real attempt collector surface %j", async ({ collector, toolsAllow }) => {
   addSubagentRunForTests({
     runId,

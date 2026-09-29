@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Construct a fresh target-native worker without pruning the installed package."""
+"""Construct a fresh target-native worker from the canonical installed package."""
 from contextlib import ExitStack
 import importlib.util
 import json
@@ -24,6 +24,16 @@ COFF_MAGICS = {value.to_bytes(2, "little") for value in (
     0x366, 0x466, 0x5032, 0x5064, 0x5128, 0x6232, 0x6264,
     0x8664, 0x9041, 0xa641, 0xa64e, 0xaa64, 0xebc,
 )} | {b"\x01\xdf", b"\x01\xf7"}
+
+# The private macOS worker runs only `openclaw node worker`. The Gateway process
+# comes from the separately managed CLI install and owns the HTTP Control UI.
+OMITTED_WORKER_SUBTREES = {
+    ("lib", "node_modules", "openclaw", "dist", "control-ui"),
+}
+
+
+def omitted_worker_asset(parts):
+    return any(parts[:len(prefix)] == prefix for prefix in OMITTED_WORKER_SUBTREES)
 
 
 def candidate(header):
@@ -175,7 +185,7 @@ def materialize(source, destination, parent, architecture):
         raise ValueError("Worker output must be disjoint from input and directly inside its staging parent")
 
     entries, directories, batch = {}, [], []
-    retained_files = omitted = 0
+    retained_files = omitted = omitted_assets = 0
 
     def copy(entry, stream):
         nonlocal retained_files
@@ -210,6 +220,9 @@ def materialize(source, destination, parent, architecture):
     try:
         with ExitStack() as handles, native.open_native_inventory_tree(source) as tree:
             for entry in tree.entries():
+                if omitted_worker_asset(entry.parts):
+                    omitted_assets += 1
+                    continue
                 entries[entry.parts] = entry
                 output = os.path.join(destination, *entry.parts)
                 if isinstance(entry, native.NativeInventoryDirectory):
@@ -250,7 +263,12 @@ def materialize(source, destination, parent, architecture):
             os.chmod(directory, 0o700)
         shutil.rmtree(destination)
         raise
-    print(f"Materialized {architecture} worker: retained {retained_files} files; omitted {omitted} native images (first 40 paths logged)", file=sys.stderr)
+    print(
+        f"Materialized {architecture} worker: retained {retained_files} files; "
+        f"omitted {omitted} native images and {omitted_assets} unused Control UI entries "
+        "(first 40 native paths logged)",
+        file=sys.stderr,
+    )
 
 
 if __name__ == "__main__":

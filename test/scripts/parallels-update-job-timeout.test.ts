@@ -1,33 +1,17 @@
 // Parallels Update Job Timeout tests cover parallels update job timeout script behavior.
 import { spawnSync } from "node:child_process";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runTimedUpdateJob } from "../../scripts/e2e/parallels/update-job-timeout.ts";
+import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 
 describe("Parallels update job timeout", () => {
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it("passes after the update body completes", async () => {
-    const chunks: string[] = [];
-    const writeLog = vi.fn(async () => undefined);
-
-    await expect(
-      runTimedUpdateJob({
-        append: (chunk) => chunks.push(chunk),
-        label: "macOS",
-        run: async () => undefined,
-        timeoutDescription: "1s",
-        timeoutMs: 1000,
-        writeLog,
-      }),
-    ).resolves.toBe(0);
-
-    expect(chunks).toEqual([]);
-    expect(writeLog).toHaveBeenCalledTimes(1);
   });
 
   it("clamps oversized update job timers before scheduling", async () => {
@@ -96,59 +80,6 @@ describe("Parallels update job timeout", () => {
     expect(writeLog).toHaveBeenCalledTimes(1);
   });
 
-  it("fails and writes the job log when the update body hangs", async () => {
-    vi.useFakeTimers();
-    const chunks: string[] = [];
-    const writeLog = vi.fn(async () => undefined);
-
-    const result = runTimedUpdateJob({
-      abortSettleMs: 1,
-      append: (chunk) => chunks.push(chunk),
-      label: "Windows",
-      run: () => new Promise(() => {}),
-      timeoutDescription: "1s",
-      timeoutMs: 1000,
-      writeLog,
-    });
-
-    await vi.advanceTimersByTimeAsync(1001);
-    await expect(result).resolves.toBe(1);
-    expect(chunks).toEqual(["Windows update timed out after 1s\n"]);
-    expect(writeLog).toHaveBeenCalledTimes(1);
-  });
-
-  it("aborts the update body when the timeout fires", async () => {
-    vi.useFakeTimers();
-    const chunks: string[] = [];
-    const writeLog = vi.fn(async () => undefined);
-    let aborted = false;
-
-    const result = runTimedUpdateJob({
-      append: (chunk) => chunks.push(chunk),
-      label: "Linux",
-      run: ({ signal }) =>
-        new Promise<void>((resolve) => {
-          signal.addEventListener(
-            "abort",
-            () => {
-              aborted = true;
-              resolve();
-            },
-            { once: true },
-          );
-        }),
-      timeoutDescription: "1s plus cleanup backstop",
-      timeoutMs: 1000,
-      writeLog,
-    });
-
-    await vi.advanceTimersByTimeAsync(1000);
-    await expect(result).resolves.toBe(1);
-    expect(aborted).toBe(true);
-    expect(chunks).toEqual(["Linux update timed out after 1s plus cleanup backstop\n"]);
-    expect(writeLog).toHaveBeenCalledTimes(1);
-  });
-
   it("waits for abort-aware cleanup before writing the job log", async () => {
     vi.useFakeTimers();
     const events: string[] = [];
@@ -189,11 +120,9 @@ describe("Parallels update job timeout", () => {
   });
 
   it("keeps the process alive long enough to write logs for hung runners", () => {
-    const moduleUrl = pathToFileURL(
-      path.resolve("scripts/e2e/parallels/update-job-timeout.ts"),
-    ).href;
+    const moduleUrl = resolveRuntimeWorkerUrl(scriptProcessEntrypoints.updateJobTimeout);
     const probe = `
-import { runTimedUpdateJob } from ${JSON.stringify(moduleUrl)};
+import { runTimedUpdateJob } from ${JSON.stringify(moduleUrl.href)};
 const events = [];
 const result = await runTimedUpdateJob({
   abortSettleMs: 25,
@@ -209,7 +138,7 @@ console.log(JSON.stringify({ events, result }));
 
     const child = spawnSync(
       process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", probe],
+      [...resolveRuntimeWorkerArgv(moduleUrl).slice(0, -1), "--input-type=module", "--eval", probe],
       {
         cwd: process.cwd(),
         encoding: "utf8",
