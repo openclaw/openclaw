@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
-import type { AgentIdentityResult } from "../api/types.ts";
+import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForAgentPanel } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
@@ -77,6 +77,24 @@ export function closeMenuAfterOwnDropdownHide(
   onClose(consumeDropdownKeyboardDismissal(event));
 }
 
+export function consumeSidebarMenuSelection(
+  event: CustomEvent<{ item: HTMLElement & { value?: string } }>,
+  onClose: (restoreFocus?: boolean) => void,
+): string | undefined {
+  event.preventDefault();
+  const item = event.detail.item;
+  if (item.dataset.nativeNavigation) {
+    delete item.dataset.nativeNavigation;
+    onClose(false);
+    return undefined;
+  }
+  const value = item.value;
+  if (value) {
+    onClose(false);
+  }
+  return value;
+}
+
 export function moveSidebarMenuFocus(event: KeyboardEvent): boolean {
   if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
     return false;
@@ -146,18 +164,12 @@ function typeaheadSidebarMenuFocus(event: KeyboardEvent): boolean {
   return true;
 }
 
-type AgentMenuAgent = {
-  id: string;
-  name?: string;
-  identity?: { name?: string; emoji?: string; avatar?: string; avatarUrl?: string };
-};
-
 type SidebarAgentMenuParams = {
   position: { x: number; top: number };
   basePath: string;
   activeId: string;
   activeName: string;
-  agents: readonly AgentMenuAgent[];
+  agents: readonly GatewayAgentRow[];
   identities: ReadonlyMap<string, AgentIdentityResult>;
   pinnedAgentIds: readonly string[];
   connected: boolean;
@@ -178,7 +190,7 @@ type SidebarAgentMenuParams = {
 };
 
 function sidebarAgentMenuRows(params: {
-  agents: readonly AgentMenuAgent[];
+  agents: readonly GatewayAgentRow[];
   pinnedAgentIds: readonly string[];
 }) {
   const { agents } = params;
@@ -190,7 +202,11 @@ function sidebarAgentMenuRows(params: {
   });
 }
 
-function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams, autofocus: boolean) {
+function renderAgentRow(
+  agent: GatewayAgentRow,
+  params: SidebarAgentMenuParams,
+  autofocus: boolean,
+) {
   const agentId = normalizeAgentId(agent.id);
   const identity = params.identities.get(agentId) ?? null;
   const label = normalizeAgentLabel(agent, identity);
@@ -300,18 +316,10 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
       @pointerenter=${params.onPointerEnter}
       @pointerleave=${params.onPointerLeave}
       @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
-        event.preventDefault();
-        const item = event.detail.item;
-        if (item.dataset.nativeNavigation) {
-          delete item.dataset.nativeNavigation;
-          params.onClose(false);
-          return;
-        }
-        const value = item.value;
+        const value = consumeSidebarMenuSelection(event, params.onClose);
         if (!value) {
           return;
         }
-        params.onClose(false);
         if (value.startsWith(LINK_VALUE_PREFIX)) {
           openExternalUrlSafe(decodeURIComponent(value.slice(LINK_VALUE_PREFIX.length)));
           return;

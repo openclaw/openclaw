@@ -239,12 +239,10 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   if (leafEntry && input.orphanRepair) {
     const orphanPromptMerge = mergeOrphanedTrailingUserPrompt({
       prompt: effectivePrompt,
-      trigger: attempt.trigger,
       leafMessage: leafEntry.message,
     });
     const transcriptPromptMerge = mergeOrphanedTrailingUserPrompt({
       prompt: effectiveTranscriptPrompt,
-      trigger: attempt.trigger,
       leafMessage: leafEntry.message,
     });
     effectivePrompt = orphanPromptMerge.prompt;

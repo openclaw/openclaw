@@ -241,20 +241,12 @@ export function registerPluginStateEntry(
   // Quotas and batch counts need existence, never the previous JSON payload.
   const existing =
     retention || params.overflowPolicy === "reject-new"
-      ? hasPluginStateEntry(store.db, {
-          pluginId: params.pluginId,
-          namespace: params.namespace,
-          key: params.key,
-          now,
-        })
+      ? hasPluginStateEntry(store.db, { ...params, now })
       : false;
   if (!existing) {
     assertCanInsertPluginStateEntry({
       store,
-      pluginId: params.pluginId,
-      namespace: params.namespace,
-      maxEntries: params.maxEntries,
-      overflowPolicy: params.overflowPolicy,
+      ...params,
       now,
       retention,
     });
@@ -262,10 +254,7 @@ export function registerPluginStateEntry(
   upsertPluginStateEntry(
     store.db,
     bindPluginStateEntry({
-      pluginId: params.pluginId,
-      namespace: params.namespace,
-      key: params.key,
-      valueJson: params.valueJson,
+      ...params,
       createdAt: params.createdAtMs ?? now,
       expiresAt,
     }),
@@ -279,10 +268,7 @@ export function registerPluginStateEntry(
   }
   enforcePostRegisterLimits({
     store,
-    pluginId: params.pluginId,
-    namespace: params.namespace,
-    maxEntries: params.maxEntries,
-    overflowPolicy: params.overflowPolicy,
+    ...params,
     now,
     protectedKey: params.key,
     retention,

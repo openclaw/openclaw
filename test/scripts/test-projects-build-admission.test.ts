@@ -59,6 +59,9 @@ const modelTarget = "src/agents/embedded-agent-runner/model-resolution-consisten
 const targets = [modelTarget, "extensions/qa-lab/src/suite-process-lifecycle.test.ts"];
 const lifecycle = targets[1]!;
 const ordinaryQa = "extensions/qa-lab/src/gateway-child.test.ts";
+const qaRuntimeConsumers = listVitestRuntimeConsumerFiles([
+  "test/vitest/vitest.extension-qa.config.ts",
+]);
 const patternFiles = createPatternFileHelper("plugin-build-selection-");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const e2eTarget = "test/openclaw-launcher-version.e2e.test.ts";
@@ -167,8 +170,11 @@ describe("CLI runtime admission", () => {
         lifecycle.replace("extensions/", ""),
       ],
     ],
-    ["scoped exclusion", ["--exclude", lifecycle.replace("extensions/", "")]],
-    ["absolute exclusion", ["--exclude", path.resolve(lifecycle)]],
+    [
+      "scoped exclusion",
+      qaRuntimeConsumers.flatMap((file) => ["--exclude", file.replace("extensions/", "")]),
+    ],
+    ["absolute exclusion", qaRuntimeConsumers.flatMap((file) => ["--exclude", path.resolve(file)])],
     ["alternate root", ["--root", "."]],
     ["alternate directory", ["--dir=extensions"]],
     ["project override", ["--project", "extension-qa"]],
@@ -192,7 +198,7 @@ describe("CLI runtime admission", () => {
 import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => spawn(process.execPath, ['-e',
-  args.includes('scripts/run-node.mjs') ? 'process.exit(91)' : ''], options);
+  args.includes('scripts/prepare-vitest-runtime.mjs') ? 'process.exit(91)' : ''], options);
 syncFixtureBuiltinExports();\n`,
         );
         const configArgs =
@@ -339,7 +345,7 @@ import fs from 'node:fs';
 import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => {
-  if (args.includes('scripts/run-node.mjs')) return spawn(process.execPath, [${JSON.stringify(builder)}], options);
+  if (args.includes('scripts/prepare-vitest-runtime.mjs')) return spawn(process.execPath, [${JSON.stringify(builder)}], options);
   if (args.some((arg) => arg === 'vitest' || arg.endsWith('/vitest.mjs'))) {
     fs.appendFileSync(${JSON.stringify(readersFile)}, 'reader\\n');
     return spawn(process.execPath, ['-e', ''], options);
@@ -1263,10 +1269,7 @@ describe("test-projects build admission", () => {
       expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual(
         mixed
           ? [["scripts/ui.js", "build"]]
-          : [
-              ["scripts/run-node.mjs", "--version"],
-              ["scripts/ui.js", "build"],
-            ],
+          : [["scripts/prepare-vitest-runtime.mjs"], ["scripts/ui.js", "build"]],
       );
       expect(commands.uiAssets).toHaveBeenCalledTimes(2);
       expect(process.exitCode).toBe(0);
@@ -1288,7 +1291,7 @@ describe("test-projects build admission", () => {
       await terminal.promise;
       expect(commands.reader).not.toHaveBeenCalled();
       expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual([
-        ["scripts/run-node.mjs", "--version"],
+        ["scripts/prepare-vitest-runtime.mjs"],
         ["scripts/ui.js", "build"],
       ]);
       expect(process.exitCode).toBe(outcome === "nonzero" ? 7 : 1);
@@ -1328,7 +1331,7 @@ describe("test-projects build admission", () => {
         await rejected;
       }
       expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual(
-        mixed ? [] : [["scripts/run-node.mjs", "--version"]],
+        mixed ? [] : [["scripts/prepare-vitest-runtime.mjs"]],
       );
       expect(commands.uiAssets).not.toHaveBeenCalled();
       expect(commands.reader).not.toHaveBeenCalled();
@@ -1525,7 +1528,7 @@ describe("test-projects build admission", () => {
         expect(commands.reader).not.toHaveBeenCalled();
         expect(commands.prepare).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
-            args: ["scripts/run-node.mjs", "--version"],
+            args: ["scripts/prepare-vitest-runtime.mjs"],
             env: expect.objectContaining({ OPENCLAW_BUILD_PRIVATE_QA: "1" }),
           }),
         );
@@ -1703,7 +1706,7 @@ describe("plugin batch build admission", () => {
         expect(reader).not.toHaveBeenCalled();
         expect(commands.prepare).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
-            args: ["scripts/run-node.mjs", "--version"],
+            args: ["scripts/prepare-vitest-runtime.mjs"],
             env: expect.objectContaining({ OPENCLAW_BUILD_PRIVATE_QA: "1" }),
           }),
         );
@@ -1767,32 +1770,41 @@ describe("plugin batch build admission", () => {
       configs: [combinedConfig],
     },
     {
-      name: "exact exclusion",
+      name: "selective runtime exclusion",
       args: ["--exclude", lifecycle],
+      build: true,
+      configs: [databaseConfig, qaConfig],
+    },
+    {
+      name: "exact exclusion",
+      args: qaRuntimeConsumers.flatMap((file) => ["--exclude", file]),
       build: false,
       configs: [databaseConfig, qaConfig],
     },
     {
       name: "equals exclusion",
-      args: [`--exclude=${lifecycle}`],
+      args: qaRuntimeConsumers.map((file) => `--exclude=${file}`),
       build: false,
       configs: [databaseConfig, qaConfig],
     },
     {
       name: "scoped exclusion",
-      args: ["--exclude", lifecycle.replace("extensions/", "")],
+      args: qaRuntimeConsumers.flatMap((file) => ["--exclude", file.replace("extensions/", "")]),
       build: false,
       configs: [databaseConfig, qaConfig],
     },
     {
       name: "absolute exclusion",
-      args: ["--exclude", path.resolve(lifecycle)],
+      args: qaRuntimeConsumers.flatMap((file) => ["--exclude", path.resolve(file)]),
       build: false,
       configs: [databaseConfig, qaConfig],
     },
     {
       name: "glob exclusion",
-      args: ["--exclude", "extensions/qa-lab/**/suite-process-*.test.ts"],
+      args: qaRuntimeConsumers.flatMap((file) => [
+        "--exclude",
+        `${path.posix.dirname(file)}/**/*.test.ts`,
+      ]),
       build: false,
       configs: [combinedConfig],
     },

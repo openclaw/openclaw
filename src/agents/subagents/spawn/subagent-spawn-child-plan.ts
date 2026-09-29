@@ -188,7 +188,7 @@ export async function resolveSubagentChildPlan(params: {
   }
   const { resolvedModel } = modelPlan;
   if (params.swarmEnabled && params.request.fastMode === undefined) {
-    modelPlan.initialSessionPatch.fastMode = await readRequesterFastMode({
+    const fastMode = await readRequesterFastMode({
       cfg: params.cfg,
       requesterInternalKey: params.requesterInternalKey,
       requesterAgentId: params.requesterAgentId,
@@ -197,6 +197,9 @@ export async function resolveSubagentChildPlan(params: {
       assertActive: params.ctx.assertActive,
     });
     params.ctx.assertActive?.();
+    if (fastMode !== undefined) {
+      modelPlan.initialSessionPatch.fastMode = fastMode;
+    }
   }
   const resolvedLaunchModel = splitModelRef(resolvedModel);
   const launchAuthorization: SubagentLaunchAuthorization | undefined =

@@ -127,15 +127,15 @@ function publishedUpgradeSurvivorLane(
     command: `OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/${name}" OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC='${baselineSpec}' ${
       scenario ? `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='${scenario}' ` : ""
     }${trustedUpgradeSurvivorCommand(
-      "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
-      'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
+      "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
+      'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-2280s}"',
     )}`,
     imageKind: "bare",
     live: false,
     name,
     resources: ["docker", "npm"],
     stateScenario: "upgrade-survivor",
-    timeoutMs: 1_500_000,
+    timeoutMs: 2_580_000,
     weight: 3,
   };
 }
@@ -1021,15 +1021,15 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       },
       {
         command: trustedUpgradeSurvivorCommand(
-          "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth",
-          'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
+          "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
+          'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-2280s}"',
         ),
         imageKind: "bare",
         live: false,
         name: "update-restart-auth",
         resources: ["docker", "npm"],
         stateScenario: "upgrade-survivor",
-        timeoutMs: 1_500_000,
+        timeoutMs: 2_580_000,
         weight: 3,
       },
     ]);
@@ -1094,15 +1094,15 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       },
       {
         command: trustedUpgradeSurvivorCommand(
-          "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
-          'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
+          "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
+          'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-2280s}"',
         ),
         imageKind: "bare",
         live: false,
         name: "published-upgrade-survivor",
         resources: ["docker", "npm"],
         stateScenario: "upgrade-survivor",
-        timeoutMs: 1_500_000,
+        timeoutMs: 2_580_000,
         weight: 3,
       },
       {
@@ -1122,7 +1122,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
         name: updateFirstHopCompatLaneName(version),
         resources: ["docker", "npm", "service"],
         stateScenario: "upgrade-survivor",
-        timeoutMs: 1_500_000,
+        timeoutMs: 3_500_000,
         weight: 1,
       })),
     ]);
@@ -1510,11 +1510,16 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       "published-upgrade-survivor-2026.9.4-legacy-operator-state",
       "published-upgrade-survivor-2026.9.6-legacy-operator-state",
     ]);
-    expect(plan.requiredPrepublishPluginPackages).toEqual([
-      "@openclaw/codex",
-      "@openclaw/discord",
-      "@openclaw/duckduckgo-plugin",
-    ]);
+    expect(plan.requiredPrepublishPluginPackages).toEqual(
+      expect.arrayContaining([
+        "@openclaw/codex",
+        "@openclaw/discord",
+        "@openclaw/duckduckgo-plugin",
+        "@openclaw/byteplus-provider",
+        "@openclaw/voyage-provider",
+      ]),
+    );
+    expect(plan.requiredPrepublishPluginPackages).not.toContain("@telnyx/openclaw-provider");
     expect(plan.lanes.every((lane) => lane.weight === 3)).toBe(true);
     for (const alias of ["reported-issues", "far-reaching"]) {
       expect(
@@ -1525,6 +1530,42 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
         }).lanes.map((lane) => lane.name),
       ).toContain("published-upgrade-survivor-2026.6.34-legacy-operator-state");
     }
+  });
+
+  it("stages legacy operator providers from the selected candidate catalog", () => {
+    const entry = (name: string, source = "official") => ({
+      name,
+      source,
+      openclaw: { install: { npmSpec: name } },
+    });
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.7.35 2026.6.34",
+      upgradeSurvivorScenarios: "legacy-operator-state",
+      frozenTarget: {
+        mode: "inert",
+        source: {
+          readText: (relativePath) =>
+            relativePath === "scripts/lib/official-external-provider-catalog.json"
+              ? JSON.stringify({
+                  entries: [
+                    entry("@openclaw/candidate-provider"),
+                    entry("@vendor/provider", "external"),
+                  ],
+                })
+              : existsSync(relativePath)
+                ? readFileSync(relativePath, "utf8")
+                : null,
+        },
+      },
+    });
+
+    expect(plan.requiredPrepublishPluginPackages).toEqual([
+      "@openclaw/candidate-provider",
+      "@openclaw/codex",
+      "@openclaw/discord",
+      "@openclaw/duckduckgo-plugin",
+    ]);
   });
 
   it.each([

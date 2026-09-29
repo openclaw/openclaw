@@ -8,9 +8,16 @@ import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 import type { UpdateRunLedgerOptions } from "./update-run-codec.js";
 import type { InterruptedUpdateSettlement } from "./update-run-interruption-contract.js";
 
-export async function readInterruptedUpdateCandidateAsync(options: UpdateRunLedgerOptions) {
+export async function readInterruptedUpdateCandidateAsync(
+  options: UpdateRunLedgerOptions,
+  context?: OpenClawStateWorkerContext,
+) {
   const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(options, { type: "updateRuns.interruptedCandidate" }),
+    executeExistingOpenClawStateRead(
+      options,
+      { type: "updateRuns.interruptedCandidate" },
+      { context, preferIndependentWarmRead: true },
+    ),
   );
   if (!reply) {
     return undefined;

@@ -11,7 +11,6 @@ import type {
   ResponseCreateParamsStreaming,
   ResponseInput,
 } from "openai/resources/responses/responses.js";
-import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
@@ -64,6 +63,7 @@ import {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { resolveOpenAICodexAccountId } from "../utils/oauth/openai-chatgpt-jwt.js";
+import { requireApiKey } from "../utils/required-api-key.js";
 import { WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE } from "../utils/retryable-network-errors.js";
 import {
   createFirstStreamEventAbortController,
@@ -261,10 +261,7 @@ export const streamOpenAICodexResponses: StreamFunction<
     const output = createResponsesAssistantOutput(model);
 
     try {
-      const unresolvedApiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-      if (!unresolvedApiKey) {
-        throw new Error(`No API key for provider: ${model.provider}`);
-      }
+      const unresolvedApiKey = requireApiKey(model.provider, options?.apiKey);
       // WebSocket auth has no fetch seam; unwrap immediately before request construction.
       const apiKey = getAiTransportHost().resolveSecretSentinel(unresolvedApiKey);
       const modelHeaders = resolveAiTransportHeaderSentinels(model.headers);
@@ -636,10 +633,7 @@ export const streamSimpleOpenAICodexResponses: StreamFunction<
   "openai-chatgpt-responses",
   SimpleStreamOptions
 > = (model: Model<"openai-chatgpt-responses">, context: Context, options?: SimpleStreamOptions) => {
-  const apiKey = options?.apiKey || getEnvApiKey(model.provider);
-  if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
-  }
+  const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const resolvedOptions = {
     ...buildBaseOptions(model, options, apiKey),

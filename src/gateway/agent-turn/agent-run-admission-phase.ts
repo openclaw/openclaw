@@ -354,25 +354,6 @@ export async function prepareAgentRunDispatch(
 
   const resolvedThreadId =
     params.delivery.explicitThreadId ?? params.delivery.deliveryPlan.resolvedThreadId;
-  const completionEvent = resolveExactSubagentCompletionEvent({
-    inputProvenance: params.inputProvenance,
-    internalEvents: params.request.internalEvents,
-  });
-  const trustedInternalHandoff =
-    params.providerOverride === undefined &&
-    params.modelOverride === undefined &&
-    params.restoredCronContinuation === undefined
-      ? consumeSubagentCompletionToolHandoff({
-          handoffId: params.client?.internal?.delegatedToolPolicyHandoffId,
-          sourceSessionKey: completionEvent?.childSessionKey,
-          sourceSessionId: completionEvent?.childSessionId,
-          targetSessionKey: params.resolvedSessionKey,
-          targetSessionId: params.getAdmittedSessionId(),
-          idempotencyKey: params.request.idempotencyKey,
-          provider: activeModel.provider,
-          model: activeModel.model,
-        })
-      : undefined;
   let subagentAdmission: Awaited<ReturnType<typeof prepareGatewaySubagentRun>>;
   try {
     subagentAdmission = await prepareGatewaySubagentRun({
@@ -529,6 +510,32 @@ export async function prepareAgentRunDispatch(
     return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.INVALID_REQUEST, failure));
   }
   try {
+    // Replay may retain another scheduling source from the same frozen cohort.
+    // Bind the one-use grant only after transcript admission selects that source.
+    const completionEvent = resolveExactSubagentCompletionEvent({
+      inputProvenance: userTurn.inputProvenance,
+      internalEvents: params.request.internalEvents,
+    });
+    const trustedInternalHandoff =
+      params.providerOverride === undefined &&
+      params.modelOverride === undefined &&
+      params.restoredCronContinuation === undefined
+        ? consumeSubagentCompletionToolHandoff({
+            handoffId: params.client?.internal?.delegatedToolPolicyHandoffId,
+            sourceTool: userTurn.inputProvenance?.sourceTool,
+            sourceSessionKey:
+              userTurn.inputProvenance?.kind === "inter_session" &&
+              userTurn.inputProvenance.sourceTool === "subagent_settle"
+                ? userTurn.inputProvenance.sourceSessionKey
+                : completionEvent?.childSessionKey,
+            sourceSessionId: completionEvent?.childSessionId,
+            targetSessionKey: params.resolvedSessionKey,
+            targetSessionId: params.getAdmittedSessionId(),
+            idempotencyKey: params.request.idempotencyKey,
+            provider: activeModel.provider,
+            model: activeModel.model,
+          })
+        : undefined;
     if (followupCompletion) {
       assertInputOwnerCurrent();
       params.assertGatewayWorkAdmissionAllowed();
@@ -590,11 +597,18 @@ export async function prepareAgentRunDispatch(
       isOneShotModelRun: params.isOneShotModelRun,
       isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
     });
+    const releaseOperatorAuthority = capturedOperator.release;
     return {
       activeGatewayWorkAdmission,
       activeRunAbort,
       ...(cronCreatorAuthority ? { cronCreatorAuthority } : {}),
-      releaseCallerAuthority: capturedOperator.release,
+      releaseCallerAuthority: () => {
+        try {
+          cronCreatorAuthority?.release?.();
+        } finally {
+          releaseOperatorAuthority();
+        }
+      },
       ...(capturedOperator.authority ? { operatorAuthority: capturedOperator.authority } : {}),
       operationalRunInstance,
       effectiveProviderOverride,

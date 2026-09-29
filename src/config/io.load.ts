@@ -19,6 +19,7 @@ import {
   snapshotEnv,
 } from "./io.read-helpers.js";
 import { maybeLoadDotEnvForConfig } from "./io.runtime-env.js";
+import { materializeConfigSnapshotDefaults } from "./io.snapshot-preparation.js";
 import { createConfigFileSnapshot } from "./io.snapshot-shared.js";
 import { loggedConfigWarningFingerprints, loggedInvalidConfigs } from "./io.state.js";
 import {
@@ -136,13 +137,7 @@ function* loadConfigWithEffects(
         env: deps.env,
       });
       const materialized = yield* resolveConfigLoadEffect({
-        sync: () =>
-          materializeRuntimeConfig(config, {
-            ...pathResolution,
-            ...(context.options.pluginValidation === "core-only"
-              ? { manifestRegistry: { plugins: [] } }
-              : { loadManifestRegistry: () => metadata.load(config).manifestRegistry }),
-          }),
+        sync: () => materializeConfigSnapshotDefaults(context, config, metadata),
         async: async () =>
           materializeRuntimeConfig(config, {
             ...pathResolution,

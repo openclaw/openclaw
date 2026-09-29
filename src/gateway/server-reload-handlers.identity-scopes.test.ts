@@ -33,7 +33,8 @@ import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { resolveGatewayAuthPolicyGeneration } from "./auth-policy.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
+import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createChannelManager } from "./server-channels.js";
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
@@ -53,6 +54,14 @@ import {
   createOperatorWsClient,
 } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { disconnectDisallowedGatewayPolicyClients } from "./server/ws-origin-policy.js";
+import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+
+function resolveGeneration(config: OpenClawConfig) {
+  return resolveSharedGatewaySessionGeneration(
+    resolveGatewayAuthForConfig({ config, tailscaleMode: config.gateway?.tailscale?.mode }),
+    config.gateway?.trustedProxies,
+  );
+}
 
 // A write that lands while the previous reload finishes its tail is re-armed from that reload's
 // finally, after a single zero-delay tick has run. Zero-delay ticks never move the fake clock.
@@ -86,7 +95,8 @@ afterEach(() => {
   resetGatewayWorkAdmission();
 });
 
-it("keeps unrelated identity reloads out of retained operator and delegated run authority", async () => {
+const revocations = ["scopes", "allowUsers", "origin"];
+it.each(revocations)("preserves proxy runs until %s ends", async (revocation) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const effectDir = tempDirs.make("openclaw-identity-scope-effects-");
@@ -98,12 +108,20 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
     const processes: ExecProcessHandle[] = [];
     const releaseEffects: Array<() => void> = [];
     const pendingEffects: Promise<unknown>[] = [];
+    const browserOrigin = {
+      origin: "https://retained.example.test",
+      requestHost: "gateway.example.test",
+      isLocalClient: false,
+    };
     const identity = "retained@example.test";
     const profile = ensureProfileForEmail(identity);
     const initialConfig: OpenClawConfig = {
       agents: { entries: { main: {} } },
       gateway: {
+        controlUi: { allowedOrigins: [browserOrigin.origin, "https://other.example.test"] },
         auth: {
+          mode: "trusted-proxy",
+          trustedProxy: { userHeader: "x-user", allowUsers: [identity, "other@example.test"] },
           identityScopes: {
             [identity]: ["operator.write", "operator.read"],
             "other@example.test": ["operator.read"],
@@ -114,9 +132,20 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
     setRuntimeConfigSnapshot(initialConfig);
     const fixture = createDirectConfigWriteFixture(initialConfig);
     const context = createGatewayTestContext();
-    const close = vi.fn();
+    const connection = new AbortController();
+    const close = vi.fn(() => {
+      connection.abort();
+      clients.delete(client);
+    });
     const client = {
-      ...createOperatorWsClient({ socket: { close }, scopes: ["operator.write", "operator.read"] }),
+      ...createOperatorWsClient({
+        socket: { close },
+        scopes: ["operator.write", "operator.read"],
+      }),
+      browserOrigin,
+      usesSharedGatewayAuth: true,
+      connectionSignal: connection.signal,
+      sharedGatewaySessionGeneration: resolveGeneration(initialConfig),
       authenticatedUserId: identity,
       authenticatedUserProfile: {
         profileId: profile.id,
@@ -125,10 +154,16 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
         avatarRevision: "1",
         updatedAt: 1,
       },
-      authPolicyGeneration: resolveGatewayAuthPolicyGeneration(initialConfig, identity),
+      authPolicy: captureGatewayAuthPolicy(initialConfig, {
+        role: "operator",
+        authMethod: "trusted-proxy",
+        verifiedIdentity: identity,
+        browserOrigin,
+      }),
     };
+    const clients = new Set([client]);
     const generation = new SharedGatewaySessionGenerationState({
-      current: undefined,
+      current: resolveGeneration(initialConfig),
       required: null,
     });
     let state = createDefaultGatewayReloadState();
@@ -172,12 +207,15 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
       logCron: log,
       logReload: log,
       cronReconciliation: { arm: () => ({ complete: async () => {} }), invalidate: vi.fn() },
-      resolveSharedGatewaySessionGenerationForConfig: () => undefined,
+      resolveSharedGatewaySessionGenerationForConfig: resolveGeneration,
       sharedGatewaySessionGenerationState: generation,
-      clients: [client],
+      clients,
       prepareTerminalConfig: vi.fn(),
-      reconcileRuntimePolicy: (config) =>
-        disconnectDisallowedGatewayPolicyClients([client], config),
+      reconcileRuntimePolicy: (config, phase) => {
+        if (phase === "committed") {
+          disconnectDisallowedGatewayPolicyClients(clients, config);
+        }
+      },
       commitRuntimePolicy: vi.fn(),
       acceptTerminalConfig: vi.fn(),
       readSnapshot: fixture.readSnapshot,
@@ -339,10 +377,51 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
       expect(original.authority.assertCurrent).not.toThrow();
       await capture(); // The original connection must also admit subsequent requests.
       expect(captures).toHaveLength(2);
+      const transportEffect = await prepareEffect("transport.txt", original.authority);
+      const oidc = structuredClone(reordered);
+      oidc.gateway!.auth!.trustedProxy!.cloudflareAccessOidc = {
+        issuer: "https://fixture.cloudflareaccess.com",
+        providerId: "fixture-provider",
+        githubAccountIdClaim: "github_id",
+      };
+      await write(oidc);
+      expect(connection.signal.aborted).toBe(true);
+      expect(original.authority.signal?.aborted).toBe(false);
+      expect(original.authority.assertCurrent).not.toThrow();
+      expect(clients.size).toBe(0);
+      expect([...dispatch.clients.authorityClients]).toHaveLength(0);
+      const otherOriginRemoved = structuredClone(oidc);
+      otherOriginRemoved.gateway!.controlUi!.allowedOrigins = [browserOrigin.origin];
+      await write(otherOriginRemoved);
+      expect(original.authority.signal?.aborted).toBe(false);
+      expect(original.authority.assertCurrent).not.toThrow();
+      const headers = structuredClone(otherOriginRemoved);
+      headers.gateway!.auth!.trustedProxy!.requiredHeaders = ["x-forwarded-proto"];
+      await write(headers);
+      expect(original.authority.signal?.aborted).toBe(false);
+      expect(delegated.authority.signal?.aborted).toBe(false);
+      expect(original.authority.assertCurrent).not.toThrow();
+      transportEffect.release();
+      await expect(transportEffect.outcome).resolves.toMatchObject({
+        value: { status: "completed", exitCode: 0 },
+      });
+      expect(await fs.readFile(transportEffect.marker, "utf8")).toBe("accepted effect");
+      if (revocation === "origin") {
+        console.info(
+          `[origin-grant] marker=<test-state>/${path.basename(transportEffect.marker)} outcome=accepted (exitCode=0, marker written)`,
+        );
+      }
       const revokedEffect = await prepareEffect("revoked.txt", delegated.authority);
-      const removed = structuredClone(reordered);
-      delete removed.gateway!.auth!.identityScopes![identity];
+      const removed = structuredClone(headers);
+      if (revocation === "scopes") {
+        delete removed.gateway!.auth!.identityScopes![identity];
+      } else if (revocation === "allowUsers") {
+        removed.gateway!.auth!.trustedProxy!.allowUsers = ["other@example.test"];
+      } else {
+        removed.gateway!.controlUi!.allowedOrigins = [];
+      }
       await write(removed);
+      expect(original.authority.signal?.aborted).toBe(true);
       // Restore before consuming either continuation: a committed revocation is irreversible.
       await write(initialConfig);
       revokedEffect.release();
@@ -353,6 +432,11 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
         expect(String(denied.error)).toMatch(/authority is no longer active/);
       }
       await expect(fs.readFile(revokedEffect.marker)).rejects.toMatchObject({ code: "ENOENT" });
+      if (revocation === "origin") {
+        console.info(
+          `[origin-grant] marker=<test-state>/${path.basename(revokedEffect.marker)} outcome=denied (authority revoked, marker absent)`,
+        );
+      }
       expect(original.authority.signal?.aborted).toBe(true);
       expect(delegated.authority.signal?.aborted).toBe(true);
       expect(original.authority.assertCurrent).toThrow(/authority is no longer active/);

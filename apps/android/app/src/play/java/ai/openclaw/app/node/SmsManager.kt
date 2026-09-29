@@ -13,8 +13,6 @@ class SmsManager(
 
   fun canSendSms(): Boolean = false
 
-  fun canSearchSms(): Boolean = false
-
   fun canReadSms(): Boolean = false
 
   fun hasTelephonyFeature(): Boolean = false

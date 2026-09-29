@@ -248,14 +248,21 @@ describe("ModelSetupPage first-run activation ownership", () => {
       const receipt = localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")!;
       expect(JSON.parse(receipt).modelRef).toBeNull();
       expect(receipt).not.toContain("test-only-provider-key");
-      expect(receipt).not.toContain("provider-login");
+      expect(JSON.parse(receipt).wizard?.authChoice).toBe(
+        entry === "provider sign-in" ? "provider-login" : undefined,
+      );
       publishGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
       await page.updateComplete;
+      if (entry === "provider sign-in") {
+        expect(page.textContent).toContain("Waiting for it to reconnect");
+      }
       publishGatewaySnapshot({ ...snapshot, hello: { ...snapshot.hello } });
       if (entry === "provider sign-in") {
+        // A restarted Gateway lost the wizard: recovery replaces the reconnect notice.
         await waitForFast(() =>
           expect(page.textContent).toContain("Gateway no longer has this setup session"),
         );
+        expect(page.textContent).not.toContain("Waiting for it to reconnect");
         [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
           .find((button) => button.textContent?.trim() === "Close")!
           .click();
@@ -567,6 +574,9 @@ describe("ModelSetupPage first-run activation ownership", () => {
       setVerifyState: () => undefined,
       setActivationState: () => undefined,
       setRefreshWarning: () => undefined,
+      resumeWizard: () => undefined,
+      closeWizard: () => undefined,
+      notify: () => undefined,
     });
     const notify = vi.fn();
     const unsubscribe = setup.subscribe(notify);
@@ -865,6 +875,13 @@ describe("ModelSetupPage first-run activation ownership", () => {
           return { sessionId: "auth", done: false, status: "running" };
         }
         if (method === "wizard.next") {
+          if (cancelStatus === "busy") {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "wizard not found",
+              details: { code: "WIZARD_NOT_FOUND" },
+            });
+          }
           if (serverStatus !== "running") {
             return { done: true, status: serverStatus };
           }

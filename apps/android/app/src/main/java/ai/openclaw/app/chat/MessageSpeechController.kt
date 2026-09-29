@@ -13,8 +13,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.util.concurrent.atomic.AtomicLong
 
 private const val TAG = "MessageSpeech"
@@ -41,17 +42,16 @@ internal fun interface MessageSpeechSynthesizing {
 
 /** Gateway tts.speak client using the general configured TTS provider chain. */
 internal class MessageSpeechClient(
-  private val session: GatewaySession? = null,
+  private val requestDetailed: suspend (String, String, Long) -> GatewaySession.RpcResult,
   private val json: Json = Json { ignoreUnknownKeys = true },
-  private val requestDetailed: (suspend (String, String, Long) -> GatewaySession.RpcResult)? = null,
 ) : MessageSpeechSynthesizing {
   override suspend fun synthesize(text: String): TalkSpeakAudio? {
     val response =
       try {
-        performRequest(
-          method = "tts.speak",
-          paramsJson = json.encodeToString(TtsSpeakRequest(text = text)),
-          timeoutMs = 60_000,
+        requestDetailed(
+          "tts.speak",
+          buildJsonObject { put("text", text) }.toString(),
+          60_000,
         )
       } catch (err: CancellationException) {
         throw err
@@ -88,22 +88,7 @@ internal class MessageSpeechClient(
       fileExtension = payload.fileExtension,
     )
   }
-
-  private suspend fun performRequest(
-    method: String,
-    paramsJson: String,
-    timeoutMs: Long,
-  ): GatewaySession.RpcResult {
-    requestDetailed?.let { return it(method, paramsJson, timeoutMs) }
-    val activeSession = session ?: throw IllegalStateException("session missing")
-    return activeSession.requestDetailed(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs)
-  }
 }
-
-@Serializable
-internal data class TtsSpeakRequest(
-  val text: String,
-)
 
 @Serializable
 private data class TtsSpeakResponse(

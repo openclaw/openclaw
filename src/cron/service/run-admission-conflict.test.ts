@@ -16,7 +16,7 @@ import {
 import { loadCronStore, saveCronJobsStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
   isCronRunReceiptOwnerStale,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
@@ -240,14 +240,14 @@ it("preserves a foreign claim committed before worker admission while reserving 
   } finally {
     reader.mockRestore();
     for (const reservation of reserved) {
-      finishCronRunReceipt({
+      await finishCronRunReceiptAsync({
         handle: reservation.runReceipt,
         status: "skipped",
         finishedAtMs: now + 3,
       });
     }
     if (receipt) {
-      finishCronRunReceipt({
+      await finishCronRunReceiptAsync({
         handle: receipt,
         status: "interrupted",
         finishedAtMs: now + 3,
@@ -320,6 +320,7 @@ it("terminalizes an owned reservation after another gateway deletes the job", as
   }
   const reservationIdentity = reserveQueuedCronRun(state, job.id, now, {
     runReceipt: reservation.runReceipt,
+    runReceiptContext: reservation.runReceiptContext,
   });
   await saveCronStore(store.storePath, { version: 1, jobs: [] });
 

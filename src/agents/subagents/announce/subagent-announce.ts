@@ -1,9 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-/**
- * Subagent completion announcement coordinator.
- *
- * Captures child output, applies wait outcomes, routes announcements, and performs cleanup decisions.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isSilentReplyText,
@@ -118,13 +113,6 @@ function buildAnnounceReplyInstruction(params: {
   return `A completed ${params.announceType} is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}${modelRouteInstruction} Otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
 }
 
-function buildAnnounceSteerMessage(events: AgentInternalEvent[]): string {
-  return (
-    formatAgentInternalEventsForPrompt(events) ||
-    "A background task finished. Process the completion update now."
-  );
-}
-
 export function hasUsableSessionEntry(entry: unknown): entry is Record<string, unknown> {
   if (!isRecord(entry)) {
     return false;
@@ -185,7 +173,9 @@ type SubagentAnnounceFlowParams = {
   wakeOnDescendantSettle?: boolean;
   /** Deliver only frozen terminal facts; never inspect or mutate the child session. */
   suppressChildSessionEffects?: boolean;
-  /** Live owner check for child-session effects after awaited phases. */
+  /** Refresh database currency before child-session reads or effects. */
+  prepareChildSessionEffects?: () => Promise<boolean>;
+  /** Synchronous host-owner check immediately before child-session effects. */
   isChildSessionEffectsAllowed?: () => boolean;
   /** Live owner check for requester delivery after awaited phases. */
   isCompletionDeliveryAllowed?: () => boolean;
@@ -217,6 +207,10 @@ async function runSubagentAnnounceFlowBound(
   const childSessionEffectsAllowed = () =>
     params.suppressChildSessionEffects !== true &&
     params.isChildSessionEffectsAllowed?.() !== false;
+  const prepareChildSessionEffects = async () =>
+    childSessionEffectsAllowed() &&
+    (await params.prepareChildSessionEffects?.()) !== false &&
+    childSessionEffectsAllowed();
   let isOwnResultCurrent = () => true;
   let isChildResultsCurrent = () => true;
   const completionDeliveryAllowed = () =>
@@ -229,9 +223,10 @@ async function runSubagentAnnounceFlowBound(
     let targetRequesterSessionKey = params.requesterSessionKey;
     let targetRequesterAgentId = params.requesterAgentId;
     let targetRequesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
-    const childSessionEntry = !childSessionEffectsAllowed()
-      ? undefined
-      : loadSessionEntryByKey(params.childSessionKey);
+    const childSessionEntry =
+      !(await prepareChildSessionEffects()) || !childSessionEffectsAllowed()
+        ? undefined
+        : await loadSessionEntryByKey(params.childSessionKey);
     childSessionId =
       typeof childSessionEntry?.sessionId === "string" && childSessionEntry.sessionId.trim()
         ? childSessionEntry.sessionId.trim()
@@ -245,7 +240,12 @@ async function runSubagentAnnounceFlowBound(
           ? SILENT_REPLY_TOKEN
           : params.roundOneReply;
     let outcome: SubagentRunOutcome | undefined = params.outcome;
-    if (childSessionId && isEmbeddedAgentRunActive(childSessionId)) {
+    if (
+      childSessionId &&
+      (await prepareChildSessionEffects()) &&
+      childSessionEffectsAllowed() &&
+      isEmbeddedAgentRunActive(childSessionId)
+    ) {
       const settled = await waitForEmbeddedAgentRunEnd(childSessionId, settleTimeoutMs);
       if (!settled && isEmbeddedAgentRunActive(childSessionId)) {
         shouldDeleteChildSession = false;
@@ -300,33 +300,42 @@ async function runSubagentAnnounceFlowBound(
         return "delivered";
       }
 
-      const pendingChildDescendantRuns = !childSessionEffectsAllowed()
-        ? 0
-        : Math.max(0, countPendingDescendantRuns(params.childSessionKey));
+      const childSessionCurrent = await prepareChildSessionEffects();
+      const pendingChildDescendantRuns =
+        !childSessionCurrent || !childSessionEffectsAllowed()
+          ? 0
+          : Math.max(0, countPendingDescendantRuns(params.childSessionKey));
       if (pendingChildDescendantRuns > 0 && announceType !== "cron job") {
         shouldDeleteChildSession = false;
         return "retryable";
       }
 
-      if (childSessionEffectsAllowed() && params.wakeOnDescendantSettle === true) {
+      if (
+        childSessionCurrent &&
+        childSessionEffectsAllowed() &&
+        params.wakeOnDescendantSettle === true
+      ) {
         const directChildren = listSubagentRunsForRequester(params.childSessionKey, {
           requesterRunId: params.childRunId,
         });
-        if (Array.isArray(directChildren) && directChildren.length > 0) {
-          const completionRows = dedupeLatestChildCompletionRows(
+        if (directChildren.length > 0) {
+          childCompletionRows = dedupeLatestChildCompletionRows(
             filterCurrentDirectChildCompletionRows(directChildren, {
               requesterSessionKey: params.childSessionKey,
               getLatestSubagentRunByChildSessionKey,
             }),
           );
-          childCompletionRows = completionRows;
         }
       }
     } catch {
       // Best-effort only.
     }
 
-    if (childCompletionRows) {
+    if (
+      childCompletionRows &&
+      (await prepareChildSessionEffects()) &&
+      childSessionEffectsAllowed()
+    ) {
       const prepared = await readChildCompletionFindings(childCompletionRows);
       childCompletionFindings = prepared.text;
       isChildResultsCurrent = prepared.isCurrent;
@@ -349,6 +358,7 @@ async function runSubagentAnnounceFlowBound(
         taskLabel: params.label || params.task || "task",
         findings: childCompletionFindings,
         announceId,
+        prepareCurrent: prepareChildSessionEffects,
         isChildSessionEffectsAllowed: () =>
           childSessionEffectsAllowed() && completionDeliveryAllowed(),
         hasUsableSessionEntry,
@@ -378,7 +388,11 @@ async function runSubagentAnnounceFlowBound(
       : undefined;
 
     const childRun = getLatestSubagentRunByChildSessionKey(params.childSessionKey);
-    if (childSessionEffectsAllowed() && childRun?.runId === params.childRunId) {
+    if (
+      childRun?.runId === params.childRunId &&
+      (await prepareChildSessionEffects()) &&
+      childSessionEffectsAllowed()
+    ) {
       const prepared = await readSubagentRunAnnounceResult(childRun);
       reply = prepared.text;
       isOwnResultCurrent = prepared.isCurrent;
@@ -390,7 +404,12 @@ async function runSubagentAnnounceFlowBound(
       }
       reply = cleanedFallbackReply;
     }
-    if (params.terminalReply?.disposition === "empty" && outcome.status === "timeout") {
+    if (
+      params.terminalReply?.disposition === "empty" &&
+      outcome.status === "timeout" &&
+      (await prepareChildSessionEffects()) &&
+      childSessionEffectsAllowed()
+    ) {
       const timeoutProgress = await readSubagentTimeoutProgress(
         params.childSessionKey,
         params.timeoutMs,
@@ -403,11 +422,21 @@ async function runSubagentAnnounceFlowBound(
       }
     }
     if (!params.terminalReply) {
-      if (childSessionEffectsAllowed() && !reply && allowFailedOutputCapture) {
+      if (
+        !reply &&
+        allowFailedOutputCapture &&
+        (await prepareChildSessionEffects()) &&
+        childSessionEffectsAllowed()
+      ) {
         reply = await readSubagentOutput(params.childSessionKey, outcome);
       }
 
-      if (childSessionEffectsAllowed() && !reply?.trim() && allowFailedOutputCapture) {
+      if (
+        !reply?.trim() &&
+        allowFailedOutputCapture &&
+        (await prepareChildSessionEffects()) &&
+        childSessionEffectsAllowed()
+      ) {
         reply = await readLatestSubagentOutputWithRetry({
           sessionKey: params.childSessionKey,
           maxWaitMs: params.timeoutMs,
@@ -475,7 +504,8 @@ async function runSubagentAnnounceFlowBound(
       outcome = { status: "unknown" };
     }
 
-    if (!childSessionEffectsAllowed()) {
+    const childSessionCurrent = await prepareChildSessionEffects();
+    if (!childSessionCurrent || !childSessionEffectsAllowed()) {
       reply = params.roundOneReply ?? params.fallbackReply;
       if (
         expectsCompletionMessage &&
@@ -487,7 +517,6 @@ async function runSubagentAnnounceFlowBound(
       outcome = params.outcome ?? { status: "unknown" };
     }
 
-    // Build status label
     const statusLabel =
       outcome.status === "ok"
         ? "completed; ready for parent review"
@@ -500,9 +529,8 @@ async function runSubagentAnnounceFlowBound(
             : "finished with unknown status";
 
     const taskLabel = params.label || params.task || "task";
-    const announceSessionId = childSessionEffectsAllowed()
-      ? childSessionId || "unknown"
-      : "unknown";
+    const announceSessionId =
+      childSessionCurrent && childSessionEffectsAllowed() ? childSessionId || "unknown" : "unknown";
     // Descendant findings are wake input; only this child's own answer travels onward.
     const childResultText = reply;
     const findings = childResultText || "(no output)";
@@ -516,7 +544,7 @@ async function runSubagentAnnounceFlowBound(
         ) {
           return "delivered";
         }
-        const parentSessionEntry = loadSessionEntryByKey(targetRequesterSessionKey);
+        const parentSessionEntry = await loadSessionEntryByKey(targetRequesterSessionKey);
         const parentSessionAlive = hasUsableSessionEntry(parentSessionEntry);
 
         if (!parentSessionAlive) {
@@ -543,14 +571,19 @@ async function runSubagentAnnounceFlowBound(
     }
 
     const candidateStatsLine =
-      params.completionTarget === "parent" || !childSessionEffectsAllowed()
+      params.completionTarget === "parent" ||
+      !(await prepareChildSessionEffects()) ||
+      !childSessionEffectsAllowed()
         ? undefined
         : await buildCompactAnnounceStatsLine({
             sessionKey: params.childSessionKey,
             startedAt: params.startedAt,
             endedAt: params.endedAt,
           });
-    const statsLine = childSessionEffectsAllowed() ? candidateStatsLine : undefined;
+    const statsLine =
+      (await prepareChildSessionEffects()) && childSessionEffectsAllowed()
+        ? candidateStatsLine
+        : undefined;
     // Send to the requester session. For nested subagents this is an internal
     // follow-up injection (deliver=false) so the orchestrator receives it.
     let directOrigin = targetRequesterOrigin;
@@ -563,7 +596,7 @@ async function runSubagentAnnounceFlowBound(
     }
     const candidateCompletionDirectOrigin =
       expectsCompletionMessage && !requesterIsSubagent && params.completionTarget !== "parent"
-        ? !childSessionEffectsAllowed()
+        ? !(await prepareChildSessionEffects()) || !childSessionEffectsAllowed()
           ? targetRequesterOrigin
           : await resolveSubagentCompletionOrigin({
               childSessionKey: params.childSessionKey,
@@ -574,9 +607,10 @@ async function runSubagentAnnounceFlowBound(
               expectsCompletionMessage,
             })
         : targetRequesterOrigin;
-    const completionDirectOrigin = childSessionEffectsAllowed()
-      ? candidateCompletionDirectOrigin
-      : targetRequesterOrigin;
+    const completionDirectOrigin =
+      (await prepareChildSessionEffects()) && childSessionEffectsAllowed()
+        ? candidateCompletionDirectOrigin
+        : targetRequesterOrigin;
     const completionChannel = normalizeMessageChannel(completionDirectOrigin?.channel);
     const modelRouteChange =
       params.terminalReply?.disposition === "visible"
@@ -612,7 +646,9 @@ async function runSubagentAnnounceFlowBound(
         replyInstruction,
       },
     ];
-    const triggerMessage = buildAnnounceSteerMessage(internalEvents);
+    const triggerMessage =
+      formatAgentInternalEventsForPrompt(internalEvents) ||
+      "A background task finished. Process the completion update now.";
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
     let deliveryResultReported = false;
     const reportDeliveryResult = async (delivery: SubagentAnnounceDeliveryResult) => {
@@ -657,15 +693,15 @@ async function runSubagentAnnounceFlowBound(
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
   } finally {
-    // The spawn label is persisted at run start (agent request `label` →
-    // buildAgentSessionPatch), so no post-run label patch is needed here.
     if (
       shouldDeleteChildSession &&
+      (await prepareChildSessionEffects()) &&
       childSessionEffectsAllowed() &&
       (params.onBeforeDeleteChildSession?.() ?? true)
     ) {
       await deleteSubagentSessionForCleanup({
         callGateway: callSubagentLifecycleGateway,
+        prepareCurrent: prepareChildSessionEffects,
         isCurrent: childSessionEffectsAllowed,
         childSessionKey: params.childSessionKey,
         spawnMode: params.spawnMode,

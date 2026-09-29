@@ -248,6 +248,7 @@ export type SessionsListResult = SessionsListResultBase<
 
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
+  label?: GatewaySessionRow["label"];
   category?: GatewaySessionRow["category"];
   updatedAt?: number;
   createdAt?: number;

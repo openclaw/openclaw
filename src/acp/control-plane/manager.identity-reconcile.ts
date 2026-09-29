@@ -10,7 +10,6 @@ import {
 import type { AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import { logVerbose } from "../../globals.js";
 import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
-import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
 import type {
   AcpSessionTarget,
@@ -18,7 +17,7 @@ import type {
   SessionAcpMeta,
   WriteManagerSessionMeta,
 } from "./manager.types.js";
-import { hasLegacyAcpIdentityProjection } from "./manager.utils.js";
+import { assertCurrentAcpActor, hasLegacyAcpIdentityProjection } from "./manager.utils.js";
 
 /** Reconciles runtime-reported session identifiers into persisted ACP session metadata. */
 export async function reconcileManagerRuntimeSessionIdentifiers(
@@ -30,9 +29,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(
   const isCurrentActor = params.isCurrentActor ?? (() => true);
   const assertCurrent = () => {
     params.assertCurrent?.();
-    if (!isCurrentActor()) {
-      throw createSupersededActorError(params.sessionKey);
-    }
+    assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
   };
   const beforeControl = params.revalidateControl?.();
   let acpControl = beforeControl ? (await beforeControl) || undefined : undefined;

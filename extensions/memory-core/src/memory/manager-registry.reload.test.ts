@@ -8,7 +8,8 @@ describe("memory manager adapter retirement", () => {
   it.each(["reject", "unavailable"])(
     "retires a fallback-backed manager when its %s primary adapter is replaced",
     async (failure) => {
-      const registry = new MemoryManagerRegistry();
+      const lifecycle: MemoryManagerLifecycle = {};
+      const registry = new MemoryManagerRegistry(lifecycle);
       const manager = { close: vi.fn(async () => {}) };
       const unaffected = { close: vi.fn(async () => {}) };
       registry.track(manager, "fallback-backed");
@@ -45,10 +46,10 @@ describe("memory manager adapter retirement", () => {
         );
       }
 
-      const retirement = registry.prepareReload({
-        retireRuntime: false,
-        retiringEmbeddingProviders: [primary],
-      });
+      const retirement = prepareMemoryManagerReload(
+        { retireRuntime: false, retiringEmbeddingProviders: [primary] },
+        lifecycle,
+      );
       try {
         await expect(retirement.drain()).resolves.toEqual({ errors: [] });
         expect(manager.close).toHaveBeenCalledOnce();
@@ -61,14 +62,21 @@ describe("memory manager adapter retirement", () => {
 });
 
 it("joins pending manager cleanup across overlapping reload drains", async () => {
-  const registry = new MemoryManagerRegistry();
+  const lifecycle: MemoryManagerLifecycle = {};
+  const registry = new MemoryManagerRegistry(lifecycle);
   const closing = createDeferred<void>();
   const manager = { close: () => closing.promise };
   const failure = new Error("manager cleanup failed");
   registry.track(manager, "shared-manager");
-  const first = registry.prepareReload({ retireRuntime: true, retiringEmbeddingProviders: [] });
+  const first = prepareMemoryManagerReload(
+    { retireRuntime: true, retiringEmbeddingProviders: [] },
+    lifecycle,
+  );
   const firstDrain = first.drain();
-  const second = registry.prepareReload({ retireRuntime: true, retiringEmbeddingProviders: [] });
+  const second = prepareMemoryManagerReload(
+    { retireRuntime: true, retiringEmbeddingProviders: [] },
+    lifecycle,
+  );
   const secondDrain = second.drain();
   try {
     closing.reject(failure);
@@ -85,7 +93,8 @@ it("joins pending manager cleanup across overlapping reload drains", async () =>
 });
 
 it("owns failed late creation cleanup until explicit close", async () => {
-  const registry = new MemoryManagerRegistry();
+  const lifecycle: MemoryManagerLifecycle = {};
+  const registry = new MemoryManagerRegistry(lifecycle);
   const entered = createDeferred<void>();
   const released = createDeferred<void>();
   const failure = new Error("late manager close failed");
@@ -108,10 +117,10 @@ it("owns failed late creation cleanup until explicit close", async () => {
   );
   const observed = expect(pending).rejects.toBe(failure);
   await entered.promise;
-  const retirement = registry.prepareReload({
-    retireRuntime: true,
-    retiringEmbeddingProviders: [],
-  });
+  const retirement = prepareMemoryManagerReload(
+    { retireRuntime: true, retiringEmbeddingProviders: [] },
+    lifecycle,
+  );
   const draining = retirement.drain();
   released.resolve();
   try {

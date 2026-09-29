@@ -181,11 +181,9 @@ enum GatewayLaunchAgentManager {
 
     static func set(
         enabled: Bool,
-        bundlePath: String,
         port: Int,
         allowUnconfigured: Bool = false) async -> String?
     {
-        _ = bundlePath
         if enabled, CommandResolver.connectionModeIsRemote(), !allowUnconfigured {
             self.logger.info("launchd change skipped (remote mode)")
             return nil

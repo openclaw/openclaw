@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
@@ -20,19 +20,16 @@ export function resolveWebchatPromptCacheKey(params: {
   provider: string;
   sessionKey: string;
 }): string {
-  const digest = createHash("sha256")
-    .update(
-      [
-        "v1",
-        params.provider.trim().toLowerCase(),
-        params.model.trim(),
-        normalizeAgentId(params.agentId),
-        params.sessionKey,
-      ].join("\0"),
-      "utf8",
-    )
-    .digest("hex")
-    .slice(0, 32);
+  const digest = sha256HexPrefixCore(
+    [
+      "v1",
+      params.provider.trim().toLowerCase(),
+      params.model.trim(),
+      normalizeAgentId(params.agentId),
+      params.sessionKey,
+    ].join("\0"),
+    32,
+  );
   return `openclaw-webchat-${digest}`;
 }
 

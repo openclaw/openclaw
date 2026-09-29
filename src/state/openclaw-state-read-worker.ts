@@ -2,7 +2,7 @@ import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-r
 import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -36,20 +36,18 @@ type ReadRuntime = { pool?: ReadPool; closing?: Promise<void> };
 function readPool(): ReadPool {
   const state = resolveGlobalSingleton<ReadRuntime>(Symbol.for("openclaw.stateReadWorkers"), () => {
     const owned: ReadRuntime = {};
+    const closeResources = (key?: string) =>
+      process.versions.bun ? owned.pool?.rotate() : owned.pool?.closeResources(key);
     registerOpenClawStateDatabaseAsyncResource({
       phase: "after-resources",
       async close(identity) {
-        if (!owned.pool) {
-          return;
-        }
-        const pool = owned.pool;
         if (identity) {
-          await pool.closeResources(identity.key);
+          await closeResources(identity.key);
           return;
         }
         await (owned.closing ??= Promise.resolve()
-          .then(() => pool.closeResources())
-          .then(() => pool.close())
+          .then(() => closeResources())
+          .then(() => owned.pool?.close())
           .then(() => {
             owned.pool = undefined;
           })
@@ -60,7 +58,7 @@ function readPool(): ReadPool {
     });
     registerOpenClawStateDatabaseLifecycleListener((event) => {
       if (event.kind !== "opened" && event.identity) {
-        void owned.pool?.closeResources(event.identity.key).catch((error: unknown) => {
+        void closeResources(event.identity.key)?.catch((error: unknown) => {
           // The worker retains failed cleanup; canonical path close retries it.
           process.emitWarning(`Shared-state reader invalidation failed: ${String(error)}`);
         });
@@ -124,9 +122,15 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
     return {
       ...command,
       scope:
-        command.scope.kind === "ids"
-          ? { kind: "ids", runIds: [...command.scope.runIds] }
-          : { ...command.scope },
+        command.scope.kind === "descendants"
+          ? {
+              kind: "descendants",
+              sessionKeys: [...command.scope.sessionKeys],
+              liveTopology: command.scope.liveTopology.map((link) => ({ ...link })),
+            }
+          : command.scope.kind === "ids"
+            ? { kind: "ids", runIds: [...command.scope.runIds] }
+            : { ...command.scope },
     };
   }
   if (command.type === "mcpOAuth.statuses") {
@@ -182,6 +186,15 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
   }
   if (command.type === "updateRuns.list") {
     return { ...command, input: { ...command.input } };
+  }
+  if (command.type === "updateRuns.reconciliationCandidates") {
+    return {
+      ...command,
+      input: {
+        ...command.input,
+        ...(command.input.runIds ? { runIds: [...command.input.runIds] } : {}),
+      },
+    };
   }
   if (
     command.type === "skills.library.descriptions" ||
@@ -271,12 +284,26 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "subagents.runs") {
     return (
       bytes +
-      (command.scope.kind === "session"
-        ? Buffer.byteLength(command.scope.sessionKey, "utf8")
-        : command.scope.runIds.reduce(
-            (total, runId) => total + Buffer.byteLength(runId, "utf8"),
+      (command.scope.kind === "descendants"
+        ? command.scope.sessionKeys.reduce(
+            (total, key) => total + Buffer.byteLength(key, "utf8"),
             0,
-          ))
+          ) +
+          command.scope.liveTopology.reduce(
+            (total, link) =>
+              total +
+              Buffer.byteLength(link.childSessionKey, "utf8") +
+              Buffer.byteLength(link.requesterSessionKey, "utf8"),
+            0,
+          )
+        : command.scope.kind === "session"
+          ? Buffer.byteLength(command.scope.sessionKey, "utf8")
+          : command.scope.kind === "ids"
+            ? command.scope.runIds.reduce(
+                (total, runId) => total + Buffer.byteLength(runId, "utf8"),
+                0,
+              )
+            : 0)
     );
   }
   if (command.type === "mcpOAuth.statuses") {
@@ -378,8 +405,14 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       Buffer.byteLength(command.scopeKey, "utf8")
     );
   }
-  if (command.type === "updateRuns.get") {
+  if (command.type === "updateRuns.get" || command.type === "updateRuns.reconciliationCandidate") {
     return bytes + Buffer.byteLength(command.runId, "utf8");
+  }
+  if (command.type === "updateRuns.reconciliationCandidates") {
+    return (command.input.runIds ?? []).reduce(
+      (total, runId) => total + Buffer.byteLength(runId, "utf8"),
+      bytes + 3 + (command.input.repairHistorySinceMs === undefined ? 0 : 8),
+    );
   }
   if (command.type === "updateRuns.list") {
     return (
@@ -521,14 +554,10 @@ export function createOpenClawStateReadTransport(command: OpenClawStateReadComma
     try {
       await task.close(cleanup?.retire ? { retire: true } : undefined);
     } catch (error) {
-      if (cleanup?.error) {
-        throw createSqliteLifecycleAggregateError(
-          [cleanup.error, error],
-          "Shared-state reader cleanup and worker retirement failed",
-          cleanup.error,
-        );
-      }
-      throw error;
+      throwSqliteLifecycleErrors(
+        cleanup?.error ? [cleanup.error, error] : [error],
+        "Shared-state reader cleanup and worker retirement failed",
+      );
     }
     tasks.delete(task);
   };
@@ -569,7 +598,7 @@ export function createOpenClawStateReadTransport(command: OpenClawStateReadComma
     try {
       const reply = await task.result;
       if (reply.nativeCleanupFailure) {
-        const error = new Error("Quarantine reader native cleanup was not confirmed");
+        const error = new Error("Shared-state reader native cleanup was not confirmed");
         retainOpenClawStateWorkerErrorPayload(error, reply.nativeCleanupFailure.error);
         cleanup.error = hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
       }
@@ -577,10 +606,8 @@ export function createOpenClawStateReadTransport(command: OpenClawStateReadComma
     } catch (error) {
       outcome = { error };
     }
-    // Best-effort quarantine failures can require retirement even when the domain read succeeds.
-    // Bun retains native statements after close; thread exit remains its disposal boundary.
-    cleanup.retire =
-      Boolean(process.versions.bun) || "error" in outcome || cleanup.error !== undefined;
+    // Native closes and quarantine cleanup can require exit even when the domain read succeeds.
+    cleanup.retire = "error" in outcome || cleanup.error !== undefined;
     return { task, outcome };
   };
   return {
@@ -620,12 +647,7 @@ export function createOpenClawStateReadTransport(command: OpenClawStateReadComma
           const errors = results.flatMap((result) =>
             result.status === "rejected" ? [result.reason] : [],
           );
-          if (errors.length === 1) {
-            throw errors[0];
-          }
-          if (errors.length > 1) {
-            throw new AggregateError(errors, "Shared-state reader task cleanup failed");
-          }
+          throwSqliteLifecycleErrors(errors, "Shared-state reader task cleanup failed");
         })
         .finally(() => {
           closing = undefined;

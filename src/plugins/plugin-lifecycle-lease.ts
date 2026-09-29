@@ -42,6 +42,8 @@ type PluginLifecycleLeaseOptions = Pick<
   signal?: AbortSignal;
   leaseMs?: number;
   waitMs?: number;
+  /** Opt in only when protected mutations cannot outlive this process. */
+  processBound?: boolean;
   /** Additional live caller authority; never replaces the plugin lease. */
   assertCurrent?: () => void;
 };
@@ -172,6 +174,7 @@ export async function withPluginLifecycleLease<T>(
       },
       leaseMs: options.leaseMs ?? DEFAULT_PLUGIN_LIFECYCLE_LEASE_MS,
       waitMs: options.waitMs ?? DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS,
+      processBound: options.processBound,
       ...(options.signal ? { signal: options.signal } : {}),
       leaseLabel: "plugin lifecycle lease",
       operationLabel: "plugins.lifecycle.lease",

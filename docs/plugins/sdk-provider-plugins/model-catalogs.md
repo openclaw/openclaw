@@ -13,6 +13,13 @@ Catalog reference for provider plugins: shared live model discovery, catalog
 helpers, pricing normalization, and the narrower single-provider entry point.
 Part of the [Building provider plugins](/plugins/sdk-provider-plugins) guide.
 
+For lightweight model-reference normalization, use
+`openclaw/plugin-sdk/model-ref-parse`. Its `normalizeGooglePreviewModelId`
+and `normalizeAntigravityPreviewModelId` exports share the catalog's alias
+rules without loading provider replay or transport helpers.
+Use `splitTrailingAuthProfile` to separate a trailing auth profile while preserving
+model-version and local quantization suffixes.
+
 ## Live model discovery
 
 If your provider exposes an OpenAI-compatible `/models` API, opt the
@@ -59,6 +66,10 @@ seed models as a successful refresh. HTTP 401/403 produces a catalog-scoped
 Neither a static catalog nor skipped discovery produces a live outcome.
 Each outcome carries the profile selected for the actual request, when one
 supplied its credential. Family providers report each sibling independently.
+An explicit `ready` outcome may include `modelOrder: string[]` to rank its
+already discovered models in the picker. This does not add models or grant
+access; absent models are ignored, and outcomes without `modelOrder` retain
+the manifest order.
 Provider-scoped refreshes preserve explicit outcomes reported under a registered
 alias of the selected provider; unrelated sibling outcomes remain excluded.
 With a positive cache lifetime, validated empty results use the same

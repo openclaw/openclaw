@@ -156,14 +156,6 @@ export function resolveBootstrapTotalMaxChars(
   );
 }
 
-function isAgentsBootstrapFile(fileName: string | undefined): boolean {
-  return fileName?.toLowerCase() === AGENTS_BOOTSTRAP_FILENAME.toLowerCase();
-}
-
-function isUserBootstrapFile(fileName: string | undefined): boolean {
-  return fileName?.toLowerCase() === USER_BOOTSTRAP_FILENAME.toLowerCase();
-}
-
 function isPolicyDigestCandidate(line: string): boolean {
   if (/^(?:#{1,6}|\s*[-*+]|\s*\d+[.)])\s+\S/u.test(line)) {
     return true;
@@ -297,7 +289,7 @@ function trimBootstrapContent(
       originalLength: trimmed.length,
     };
   }
-  if (isAgentsBootstrapFile(fileName)) {
+  if (fileName?.toLowerCase() === AGENTS_BOOTSTRAP_FILENAME.toLowerCase()) {
     return trimAgentsBootstrapContent(trimmed, maxChars);
   }
 
@@ -316,14 +308,12 @@ function trimBootstrapContent(
     [head, markerContent, tail]
       .filter((part) => part.length > 0)
       .join(markerContent.includes("\n") ? "\n" : "");
-  const resolveMarkerTemplate = () => {
-    const fullMarker = markerTemplate(0, 0);
-    const fullContentBudget = maxChars - fullMarker.length - separatorCharsFor(1, 1, fullMarker);
-    return fullContentBudget >= MIN_BOOTSTRAP_TRIMMED_CONTENT_CHARS
+  const fullMarker = markerTemplate(0, 0);
+  const fullContentBudget = maxChars - fullMarker.length - separatorCharsFor(1, 1, fullMarker);
+  const resolvedMarkerTemplate =
+    fullContentBudget >= MIN_BOOTSTRAP_TRIMMED_CONTENT_CHARS
       ? markerTemplate
       : compactMarkerTemplate;
-  };
-  const resolvedMarkerTemplate = resolveMarkerTemplate();
   let headChars = 0;
   let tailChars = 0;
   let marker = resolvedMarkerTemplate(headChars, tailChars);
@@ -439,9 +429,10 @@ export function buildBootstrapContextFiles(
       );
       break;
     }
-    const fileBudget = isUserBootstrapFile(file.name)
-      ? Math.min(maxChars, USER_BOOTSTRAP_MAX_CHARS)
-      : maxChars;
+    const fileBudget =
+      file.name?.toLowerCase() === USER_BOOTSTRAP_FILENAME.toLowerCase()
+        ? Math.min(maxChars, USER_BOOTSTRAP_MAX_CHARS)
+        : maxChars;
     const fileMaxChars = Math.max(1, Math.min(fileBudget, remainingTotalChars));
     // Personal instructions are indivisible: never turn a cut-off directive into new policy.
     if (file.personalUser && (file.content ?? "").trimEnd().length > fileMaxChars) {

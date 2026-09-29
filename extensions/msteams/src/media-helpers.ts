@@ -6,12 +6,10 @@ import {
   getFileExtension,
 } from "../runtime-api.js";
 
-/**
- * Detect MIME type from URL extension or data URL.
- * Uses shared MIME detection for consistency with core handling.
- */
+// Teams supports up to 100 MiB through file-consent and SharePoint uploads.
+export const MSTEAMS_MAX_MEDIA_BYTES = 100 * 1024 * 1024;
+
 export async function getMimeType(url: string): Promise<string> {
-  // Handle data URLs: data:image/png;base64,...
   if (url.startsWith("data:")) {
     const match = url.match(/^data:([^;,]+)/);
     if (match?.[1]) {
@@ -29,7 +27,6 @@ export async function getMimeType(url: string): Promise<string> {
  * Falls back to deriving the extension from MIME type when no extension present.
  */
 export async function extractFilename(url: string): Promise<string> {
-  // Handle data URLs: derive extension from MIME
   if (url.startsWith("data:")) {
     const mime = await getMimeType(url);
     const ext = extensionForMime(mime) ?? ".bin";
@@ -60,7 +57,6 @@ export async function extractFilename(url: string): Promise<string> {
     if (basename && existingExt) {
       return basename;
     }
-    // No extension in URL, derive from MIME
     const mime = await getMimeType(url);
     const ext = extensionForMime(mime) ?? ".bin";
     const prefix = mime.startsWith("image/") ? "image" : "file";
@@ -81,9 +77,6 @@ export function isLocalPath(url: string): boolean {
   );
 }
 
-/**
- * Extract the message ID from a Bot Framework response.
- */
 export function extractMessageId(response: unknown): string | null {
   if (!response || typeof response !== "object" || !("id" in response)) {
     return null;

@@ -43,6 +43,7 @@ import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sql
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreReadCandidate,
+  type SessionStoreReadCandidate,
 } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { withSessionStoreTarget } from "./session-store-target-runtime.js";
@@ -54,6 +55,7 @@ import {
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type {
   SessionExactEntriesWorkerResult,
+  SessionExactEntriesWorkerSelection,
   SessionHistoryWorkerDatabase,
 } from "./session-transcript-worker.types.js";
 import type { SessionEntry } from "./types.js";
@@ -89,6 +91,7 @@ export type SessionEntryReadWorkerOwner = {
   kind: "native" | "file" | "unresolved";
   assertCurrent: () => void;
   scope?: SessionEntryReadOnlyWorkerScope;
+  selectedStore?: Readonly<Pick<SessionStoreReadCandidate, "path" | "physicalPath">>;
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void;
   refreshBeforeDispatch?: (assertRetainedTarget: () => void) => Promise<void>;
   revalidateTarget?: () => Promise<void>;
@@ -130,6 +133,7 @@ export async function withSessionEntryReadOnlyInWorker<T>(
 type SessionEntryReadOnlyWorkerSource = {
   kind: "file";
   scope: SessionEntryReadOnlyWorkerScope;
+  selectedStore: NonNullable<SessionEntryReadWorkerOwner["selectedStore"]>;
   reader: SessionHistoryWorkerDatabase;
   continuation?: CanonicalSessionReaderContinuation;
   assertCurrent: () => void;
@@ -255,6 +259,10 @@ async function withSessionEntryReadOnlyWorkerSource<T>(
           const result = await consumeRead(
             ok({
               kind: "file",
+              selectedStore: Object.freeze({
+                path: target.sourcePath,
+                physicalPath: database.path,
+              }),
               scope: {
                 ...scope,
                 agentId: target.logicalAgentId,
@@ -404,14 +412,14 @@ type SessionStoreWorkerReadScope = {
   env?: NodeJS.ProcessEnv;
 };
 
-type SessionEntryWorkerRead = SessionStoreWorkerReadScope & {
-  sessionKeys: readonly string[];
-  lifecycleSessionKey?: string;
-  projection?: "full" | "backing" | "sharing" | "list";
-  includeMembers?: boolean;
-  includeParticipantRecords?: boolean;
-  includeAuthorization?: boolean;
-};
+type SessionEntryWorkerRead = SessionStoreWorkerReadScope &
+  SessionExactEntriesWorkerSelection & {
+    lifecycleSessionKey?: string;
+    projection?: "full" | "backing" | "sharing" | "list";
+    includeMembers?: boolean;
+    includeParticipantRecords?: boolean;
+    includeAuthorization?: boolean;
+  };
 
 export type PreparedSessionEntryWorkerRead = {
   result: SessionExactEntriesWorkerResult;
@@ -480,16 +488,18 @@ export function readSessionEntriesFromStoreInWorker(
   );
 }
 
-async function withSessionEntriesFromStoreInWorker<T>(
+export async function withSessionEntriesFromStoreInWorker<T>(
   input: SessionEntryWorkerRead,
   consume: (read: PreparedSessionEntryWorkerRead) => Promise<T>,
   dataOnly = false,
   prepareSource?: (database: PreparedSessionEntryWorkerRead["database"]) => void,
 ): Promise<T> {
+  const selection: SessionExactEntriesWorkerSelection = input.selection
+    ? { selection: input.selection, projection: input.projection }
+    : { sessionKeys: [...new Set(input.sessionKeys)], projection: input.projection };
   const request = {
-    sessionKeys: [...new Set(input.sessionKeys)],
+    ...selection,
     lifecycleSessionKey: input.lifecycleSessionKey,
-    projection: input.projection,
     includeMembers: input.includeMembers,
     includeParticipantRecords: input.includeParticipantRecords,
     includeAuthorization: input.includeAuthorization,

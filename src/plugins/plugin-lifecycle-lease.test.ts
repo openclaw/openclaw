@@ -348,6 +348,35 @@ describe("plugin lifecycle lease", () => {
     });
   });
 
+  it("reclaims process-bound lifecycle work after its process is killed", async () => {
+    await withOpenClawTestState({ label: "plugin-lifecycle-killed-owner" }, async (state) => {
+      await withLeaseChildren(async (children) => {
+        const leaseModuleUrl = pathToFileURL(
+          path.resolve("src/plugins/plugin-lifecycle-lease.ts"),
+        ).href;
+        const script = await state.writeText(
+          "killed-lease.mts",
+          `
+          import { withPluginLifecycleLease } from ${JSON.stringify(leaseModuleUrl)};
+          const env = { ...process.env, OPENCLAW_STATE_DIR: process.argv[2] };
+          await withPluginLifecycleLease({ env, processBound: true }, async () => {
+            process.stdout.write("ready\\n");
+            await new Promise(() => {});
+          });
+        `,
+        );
+        const holder = runLeaseChild(children, script, [state.stateDir]);
+        await holder.ready;
+        await terminateLeaseChild(holder.child);
+        // SIGKILL is the expected result, already joined above.
+        children.delete(holder);
+        await expect(
+          withPluginLifecycleLease({ env: state.env, waitMs: 0 }, async () => "recovered"),
+        ).resolves.toBe("recovered");
+      });
+    });
+  });
+
   it("serializes lifecycle work across processes", async () => {
     await withOpenClawTestState({ label: "plugin-lifecycle-processes" }, async (state) => {
       await withLeaseChildren(async (children) => {

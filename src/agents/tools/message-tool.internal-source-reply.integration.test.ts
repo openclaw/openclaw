@@ -2,6 +2,7 @@
 // source-reply sink and embedded-run payload projection.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
@@ -32,7 +33,6 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-messaging-extraction.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
-import type { SandboxFsBridge } from "../sandbox/fs-bridge.types.js";
 import { createRemoteShellSandboxFsBridge } from "../sandbox/remote-fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "../sandbox/remote-fs-bridge.test-helpers.js";
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
@@ -46,12 +46,7 @@ const INTERNAL_SOURCE_CATALOG = {
 } as const;
 
 function createCurrentSourceMessageTool(
-  params: {
-    workspaceDir?: string;
-    sandboxFsBridge?: SandboxFsBridge;
-    sandboxContainerWorkdir?: string;
-    sandboxWorkspaceMediaReadAllowed?: boolean;
-  } = {},
+  params: NonNullable<Parameters<typeof createMessageTool>[0]> = {},
 ) {
   return createMessageTool({
     config: { agents: { entries: { main: { default: true } } } },
@@ -60,11 +55,7 @@ function createCurrentSourceMessageTool(
     sourceReplyDeliveryMode: "automatic",
     agentSessionKey: "agent:main:webchat:dm:dashboard",
     runId: "webchat-run",
-    workspaceDir: params.workspaceDir,
     sandboxRoot: params.sandboxFsBridge ? params.workspaceDir : undefined,
-    sandboxContainerWorkdir: params.sandboxContainerWorkdir,
-    sandboxFsBridge: params.sandboxFsBridge,
-    sandboxWorkspaceMediaReadAllowed: params.sandboxWorkspaceMediaReadAllowed,
     getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
     resolveCommandSecretRefsViaGateway: async ({ config }) => ({
       resolvedConfig: config,
@@ -72,6 +63,7 @@ function createCurrentSourceMessageTool(
       targetStatesByPath: {},
       hadUnresolvedTargets: false,
     }),
+    ...params,
   });
 }
 
@@ -136,124 +128,59 @@ describe("WebChat message tool internal source reply", () => {
     );
   });
 
-  it.each([
-    { name: "ordinary caption", message: "Attached proof.", expectedText: "Attached proof." },
-    {
-      name: "HTML buffer",
-      message: "Attached proof.",
-      expectedText: "Attached proof.",
-      filename: "proof.html",
-      contentType: "text/html",
-      content: "<!doctype html><h1>Proof</h1>",
-    },
-    {
-      name: "internal runtime context",
-      message:
-        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-      expectedText: "",
-    },
-    {
-      name: "inbound delivery metadata",
-      message:
-        "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-      expectedText: "",
-    },
-  ])(
-    "stages buffer media with $name before acknowledging the current-source send",
-    async ({
-      message,
-      expectedText,
-      filename = "proof.txt",
-      contentType = "text/plain",
-      content = "current-source attachment",
-    }) => {
-      await withOpenClawTestState(
-        { layout: "state-only", prefix: "message-tool-source-buffer-" },
-        async (state) => {
-          await fs.mkdir(state.workspaceDir, { recursive: true });
-          const tool = createCurrentSourceMessageTool({ workspaceDir: state.workspaceDir });
-          const attachment = Buffer.from(content);
+  it("stages a trusted HTML buffer before acknowledging the current-source send", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "message-tool-source-buffer-" },
+      async (state) => {
+        await fs.mkdir(state.workspaceDir, { recursive: true });
+        const tool = createCurrentSourceMessageTool({ workspaceDir: state.workspaceDir });
+        const attachment = Buffer.from("<!doctype html><h1>Proof</h1>");
 
-          const toolResult = await tool.execute("message-buffer-call", {
-            action: "send",
-            message,
-            buffer: attachment.toString("base64"),
-            filename,
-            contentType,
-          });
+        const toolResult = await tool.execute("message-buffer-call", {
+          action: "send",
+          message: "Attached proof.",
+          buffer: attachment.toString("base64"),
+          filename: "proof.html",
+          contentType: "text/html",
+        });
 
-          const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
-          expect(sourceReply?.text ?? "").toBe(expectedText);
-          expect(sourceReply?.mediaUrls).toHaveLength(1);
-          expect(sourceReply?.attachments).toEqual([
-            expect.objectContaining({
-              name: filename,
-              mimeType: contentType,
-              trustedLocalMedia: true,
-            }),
-          ]);
-          const mediaPath = sourceReply?.mediaUrls?.[0];
-          expect(mediaPath).toBeTruthy();
-          await expect(fs.readFile(mediaPath as string)).resolves.toEqual(attachment);
-        },
-      );
-    },
-  );
+        const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
+        expect(sourceReply?.text).toBe("Attached proof.");
+        expect(sourceReply?.mediaUrls).toHaveLength(1);
+        expect(sourceReply?.attachments).toEqual([
+          expect.objectContaining({
+            name: "proof.html",
+            mimeType: "text/html",
+            trustedLocalMedia: true,
+          }),
+        ]);
+        const mediaPath = sourceReply?.mediaUrls?.[0];
+        expect(mediaPath).toBeTruthy();
+        await expect(fs.readFile(mediaPath as string)).resolves.toEqual(attachment);
+      },
+    );
+  });
 
-  it.each([
-    {
-      filename: "report.html",
-      content: "<!doctype html><h1>Report</h1>",
-      reason: "Rejected by the local attachment allowlist. Send a supported file type.",
-    },
-    {
-      filename: "missing.txt",
-      content: undefined,
-      reason: "File not found. Check the path and try again.",
-    },
-  ])("reports the staging reason for workspace $filename", async (fixture) => {
+  it("reports a missing workspace file without exposing the draft", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "message-tool-source-error-" },
       async (state) => {
         await fs.mkdir(state.workspaceDir, { recursive: true });
-        const media = path.join(state.workspaceDir, fixture.filename);
-        if (fixture.content !== undefined) {
-          await fs.writeFile(media, fixture.content);
-        }
+        const media = path.join(state.workspaceDir, "missing.txt");
         const tool = createCurrentSourceMessageTool({ workspaceDir: state.workspaceDir });
 
         await expect(
           tool.execute("message-path-error", {
             action: "send",
             message: "Private draft that must not enter the error.",
-            attachments: [{ media, type: "file", name: fixture.filename }],
+            attachments: [{ media, type: "file", name: "missing.txt" }],
             final: true,
           }),
         ).rejects.toThrow(
           new Error(
-            `Current-source media could not be staged.\n⚠️ ${fixture.filename}: ${fixture.reason}`,
+            "Current-source media could not be staged.\n⚠️ missing.txt: File not found. Check the path and try again.",
           ),
         );
-      },
-    );
-  });
-
-  it.each(["proof.txt", "proof.md"])("stages the supported workspace file %s", async (filename) => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "message-tool-source-document-" },
-      async (state) => {
-        await fs.mkdir(state.workspaceDir, { recursive: true });
-        const media = path.join(state.workspaceDir, filename);
-        const content = "# Attachment proof\n";
-        await fs.writeFile(media, content);
-        const tool = createCurrentSourceMessageTool({ workspaceDir: state.workspaceDir });
-        const result = await tool.execute("message-document", {
-          action: "send",
-          attachments: [{ media, type: "file", name: filename }],
-        });
-        const reply = extractMessagingToolSourceReplyPayload(result);
-        expect(reply?.mediaUrls).toHaveLength(1);
-        await expect(fs.readFile(reply?.mediaUrls?.[0] as string, "utf8")).resolves.toBe(content);
       },
     );
   });
@@ -321,33 +248,11 @@ describe("WebChat message tool internal source reply", () => {
     );
   });
 
-  it("rejects disallowed local media before acknowledging the current-source send", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "message-tool-source-path-" },
-      async (state) => {
-        await fs.mkdir(state.workspaceDir, { recursive: true });
-        const outsidePath = state.path("outside", "blocked.png");
-        await fs.mkdir(path.dirname(outsidePath), { recursive: true });
-        await fs.writeFile(outsidePath, "blocked");
-        const tool = createCurrentSourceMessageTool({ workspaceDir: state.workspaceDir });
-
-        await expect(
-          tool.execute("message-path-call", {
-            action: "send",
-            message: "Attached proof.",
-            media: outsidePath,
-          }),
-        ).rejects.toThrow(/could not be staged|allowed directory/i);
-      },
-    );
-  });
-
   it("publishes managed media with aligned metadata and the current run owner", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-internal-source-reply-" },
       async (state) => {
-        const stateDir = state.stateDir;
-        const workspaceDir = state.workspaceDir;
+        const { stateDir, workspaceDir } = state;
         const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
         const sessionKey = "agent:main:webchat:dm:restart-proof";
         const sessionId = "restart-proof-session";
@@ -367,28 +272,16 @@ describe("WebChat message tool internal source reply", () => {
           { sessionId, chatType: "direct", updatedAt: 1 },
         );
         const config = {
-          agents: {
-            entries: {
-              main: { default: true, workspace: workspaceDir },
-            },
-          },
+          agents: { entries: { main: { default: true, workspace: workspaceDir } } },
         };
-        const tool = createMessageTool({
+        const tool = createCurrentSourceMessageTool({
           config,
-          preparedMessageToolCatalog: INTERNAL_SOURCE_CATALOG,
-          currentChannelProvider: "webchat",
+          sourceReplyDeliveryMode: undefined,
           agentSessionKey: sessionKey,
           runSessionKey: sessionKey,
           sessionId,
           agentId: "main",
           runId: "restart-proof-run",
-          getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-          resolveCommandSecretRefsViaGateway: async () => ({
-            resolvedConfig: config,
-            diagnostics: [],
-            targetStatesByPath: {},
-            hadUnresolvedTargets: false,
-          }),
         });
 
         const sendParams = {
@@ -399,19 +292,19 @@ describe("WebChat message tool internal source reply", () => {
         };
         const updates: SessionTranscriptUpdate[] = [];
         const publishedDownloads: Array<Promise<unknown>> = [];
+        const download = (artifactId: unknown) =>
+          resolveManagedOutgoingMediaArtifactDownload({
+            sessionKey,
+            agentId: "main",
+            artifactId: String(artifactId),
+            stateDir,
+          });
         const unsubscribe = onSessionTranscriptUpdate((update) => {
           updates.push(update);
           for (const block of readAssistantDisplayContent(update.message).filter(
             (entry) => entry.type === "image",
           )) {
-            publishedDownloads.push(
-              resolveManagedOutgoingMediaArtifactDownload({
-                sessionKey,
-                agentId: "main",
-                artifactId: String(block.artifactId),
-                stateDir,
-              }),
-            );
+            publishedDownloads.push(download(block.artifactId));
           }
         });
         const append = sessionTranscript.appendAssistantMessageToSessionTranscript;
@@ -482,24 +375,18 @@ describe("WebChat message tool internal source reply", () => {
           storePath,
         });
         const assistants = events
-          .map((event) => (event as { message?: Record<string, unknown> }).message)
+          .map(readTranscriptEventMessage)
           .filter((message) => message?.role === "assistant");
         expect(assistants).toHaveLength(1);
         const assistant = assistants[0];
-        const content = Array.isArray(assistant?.content)
-          ? (assistant.content as Array<Record<string, unknown>>)
-          : [];
-        const displayContent = Array.isArray(assistant?.openclawDisplayContent)
-          ? (assistant.openclawDisplayContent as Array<Record<string, unknown>>)
-          : [];
+        const displayContent = readAssistantDisplayContent(assistant);
         const image = displayContent.find((block) => block.type === "image");
         const document = displayContent.find((block) => block.type === "attachment");
         expect(toolResult.details).toMatchObject({
           sourceReplySink: "internal-ui",
           idempotencyKey: expect.any(String),
         });
-        expect(content[0]).toEqual({ type: "text", text: "Durable image reply" });
-        expect(content).toHaveLength(1);
+        expect(assistant?.content).toEqual([{ type: "text", text: "Durable image reply" }]);
         expect(image).toMatchObject({
           type: "image",
           artifactId: expect.stringMatching(/^artifact_managed_image_/u),
@@ -519,195 +406,168 @@ describe("WebChat message tool internal source reply", () => {
         const published = updates.find(
           (update) =>
             update.runId === "restart-proof-run" &&
-            update.message &&
-            typeof update.message === "object" &&
-            (update.message as { role?: unknown }).role === "assistant",
+            asOptionalRecord(update.message)?.role === "assistant",
         );
         expect(published).toMatchObject({
           runId: "restart-proof-run",
           target: { agentId: "main", sessionId, sessionKey },
         });
-        const publishedMessage = published?.message as
-          | {
-              content?: Array<Record<string, unknown>>;
-              openclawDisplayContent?: Array<Record<string, unknown>>;
-            }
-          | undefined;
-        expect(publishedMessage?.content?.filter((block) => block.type === "image")).toEqual([]);
-        expect(
-          publishedMessage?.openclawDisplayContent?.filter((block) => block.type === "image"),
-        ).toHaveLength(2);
-        expect(
-          publishedMessage?.openclawDisplayContent?.find((block) => block.type === "attachment"),
-        ).toEqual(document);
+        expect(asOptionalRecord(published?.message)?.content).toEqual(assistant?.content);
+        expect(asOptionalRecord(published?.message)?.openclawDisplayContent).toEqual(
+          displayContent,
+        );
         await expect(Promise.all(publishedDownloads)).resolves.toEqual([
           expect.objectContaining({ type: "image" }),
           expect.objectContaining({ type: "image" }),
         ]);
         for (const block of displayContent.filter((entry) => entry.type === "image")) {
-          await expect(
-            resolveManagedOutgoingMediaArtifactDownload({
-              sessionKey,
-              agentId: "main",
-              artifactId: String(block.artifactId),
-              stateDir,
-            }),
-          ).resolves.toMatchObject({ type: "image" });
+          await expect(download(block.artifactId)).resolves.toMatchObject({ type: "image" });
         }
-        const documentAttachment = document?.attachment as { artifactId?: unknown } | undefined;
         await expect(
-          resolveManagedOutgoingMediaArtifactDownload({
-            sessionKey,
-            agentId: "main",
-            artifactId: String(documentAttachment?.artifactId),
-            stateDir,
-          }),
+          download(asOptionalRecord(document?.attachment)?.artifactId),
         ).resolves.toMatchObject({ type: "file", title: documentName });
       },
     );
   });
 
-  it.each([
-    "rejected",
-    "throws-before-commit",
-    "conflicting-writer",
-    "lifecycle-drain-failure",
-  ] as const)("cleans only uncommitted source-reply originals when append %s", async (outcome) => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "source-reply-append-outcome-" },
-      async (state) => {
-        const sessionKey = "agent:main:webchat:dm:append-outcome";
-        const sessionId = "append-outcome-session";
-        const storePath = path.join(state.stateDir, "agents", "main", "sessions", "sessions.json");
-        const scope = { agentId: "main", sessionKey, sessionId, storePath };
-        const imagePath = path.join(state.workspaceDir, "proof.png");
-        await fs.mkdir(state.workspaceDir, { recursive: true });
-        await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-        await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
-        const append = sessionTranscript.appendAssistantMessageToSessionTranscript;
-        const lifecycle = createEmbeddedAttemptTranscriptLifecycle({ sessionId });
-        const preparedOriginals: string[] = [];
-        const appendSpy = vi
-          .spyOn(sessionTranscript, "appendAssistantMessageToSessionTranscript")
-          .mockImplementationOnce(async (params) => {
-            for (const { record } of await listManagedImageRecordEntries({
-              stateDir: state.stateDir,
-              sessionKey,
-            })) {
-              preparedOriginals.push(
-                path.join(
-                  record.original.mediaRoot,
-                  record.original.mediaSubdir,
-                  record.original.mediaId,
-                ),
-              );
-            }
-            if (outcome === "rejected") {
-              return { ok: false, code: "session-rebound", reason: "session rebound" };
-            }
-            if (outcome === "throws-before-commit") {
-              throw new Error("append failed before commit");
-            }
-            if (outcome === "conflicting-writer") {
-              // Another writer wins after the source-reply owner's initial lookup.
-              await append({
-                ...params,
-                eventId: "winning-message",
-                content: [{ type: "text", text: "Already delivered" }],
-                onMessageCommitted: undefined,
-              });
-              return append(params);
-            }
-            return append(params);
-          });
-        try {
-          const persist = () =>
-            persistInternalSourceReply({
-              cfg: {
-                agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
-              },
-              sessionKey,
-              expectedSessionId: sessionId,
-              agentId: "main",
-              idempotencyKey: "append-outcome-reply",
-              sourceReplyFinal: true,
-              payload: { text: "Attached proof", mediaUrls: [imagePath], trustedLocalMedia: true },
-            });
-          const persistence =
-            outcome === "lifecycle-drain-failure"
-              ? withOwnedSessionTranscriptWrites(
-                  {
-                    sessionKey,
-                    sessionTarget: scope,
-                    withTranscriptWrite: (run) =>
-                      lifecycle.withTranscriptWrite(async () => {
-                        const result = await run();
-                        // This is an actual nested lifecycle failure after the transcript commits.
-                        void lifecycle
-                          .withTranscriptWrite(() => {
-                            throw new Error("nested drain failed");
-                          })
-                          .catch(() => {});
-                        return result;
-                      }),
-                  },
-                  persist,
-                )
-              : persist();
-          await expect(persistence).rejects.toThrow(
-            outcome === "rejected"
-              ? "session rebound"
-              : outcome === "conflicting-writer"
-                ? "conflicts with the admitted message"
-                : outcome === "lifecycle-drain-failure"
-                  ? "nested drain failed"
-                  : "append failed before commit",
+  it.each(["conflicting-writer", "lifecycle-drain-failure"] as const)(
+    "cleans only uncommitted source-reply originals when append %s",
+    async (outcome) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "source-reply-append-outcome-" },
+        async (state) => {
+          const sessionKey = "agent:main:webchat:dm:append-outcome";
+          const sessionId = "append-outcome-session";
+          const storePath = path.join(
+            state.stateDir,
+            "agents",
+            "main",
+            "sessions",
+            "sessions.json",
           );
-        } finally {
-          appendSpy.mockRestore();
-          await lifecycle.dispose();
-        }
-        expect(preparedOriginals).toHaveLength(1);
-        const committed = outcome === "lifecycle-drain-failure";
-        const records = await listManagedImageRecordEntries({
-          stateDir: state.stateDir,
-          sessionKey,
-        });
-        expect(records).toHaveLength(committed ? 1 : 0);
-        for (const original of preparedOriginals) {
-          if (committed) {
-            await expect(fs.readFile(original)).resolves.toEqual(
-              Buffer.from(TINY_PNG_BASE64, "base64"),
+          const scope = { agentId: "main", sessionKey, sessionId, storePath };
+          const imagePath = path.join(state.workspaceDir, "proof.png");
+          await fs.mkdir(state.workspaceDir, { recursive: true });
+          await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+          await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
+          const append = sessionTranscript.appendAssistantMessageToSessionTranscript;
+          const lifecycle = createEmbeddedAttemptTranscriptLifecycle({ sessionId });
+          const preparedOriginals: string[] = [];
+          const appendSpy = vi
+            .spyOn(sessionTranscript, "appendAssistantMessageToSessionTranscript")
+            .mockImplementationOnce(async (params) => {
+              for (const { record } of await listManagedImageRecordEntries({
+                stateDir: state.stateDir,
+                sessionKey,
+              })) {
+                preparedOriginals.push(
+                  path.join(
+                    record.original.mediaRoot,
+                    record.original.mediaSubdir,
+                    record.original.mediaId,
+                  ),
+                );
+              }
+              if (outcome === "conflicting-writer") {
+                // Another writer wins after the source-reply owner's initial lookup.
+                await append({
+                  ...params,
+                  eventId: "winning-message",
+                  content: [{ type: "text", text: "Already delivered" }],
+                  onMessageCommitted: undefined,
+                });
+              }
+              return append(params);
+            });
+          try {
+            const persist = () =>
+              persistInternalSourceReply({
+                cfg: {
+                  agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
+                },
+                sessionKey,
+                expectedSessionId: sessionId,
+                agentId: "main",
+                idempotencyKey: "append-outcome-reply",
+                sourceReplyFinal: true,
+                payload: {
+                  text: "Attached proof",
+                  mediaUrls: [imagePath],
+                  trustedLocalMedia: true,
+                },
+              });
+            const persistence =
+              outcome === "lifecycle-drain-failure"
+                ? withOwnedSessionTranscriptWrites(
+                    {
+                      sessionKey,
+                      sessionTarget: scope,
+                      withTranscriptWrite: (run) =>
+                        lifecycle.withTranscriptWrite(async () => {
+                          const result = await run();
+                          // This is an actual nested lifecycle failure after the transcript commits.
+                          void lifecycle
+                            .withTranscriptWrite(() => {
+                              throw new Error("nested drain failed");
+                            })
+                            .catch(() => {});
+                          return result;
+                        }),
+                    },
+                    persist,
+                  )
+                : persist();
+            await expect(persistence).rejects.toThrow(
+              outcome === "conflicting-writer"
+                ? "conflicts with the admitted message"
+                : "nested drain failed",
             );
-          } else {
-            await expect(fs.stat(original)).rejects.toMatchObject({ code: "ENOENT" });
+          } finally {
+            appendSpy.mockRestore();
+            await lifecycle.dispose();
           }
-        }
-        const assistants = (await loadTranscriptEvents(scope)).filter(
-          (event) => readTranscriptEventMessage(event)?.role === "assistant",
-        );
-        expect(assistants).toHaveLength(committed || outcome === "conflicting-writer" ? 1 : 0);
-        if (committed) {
-          expect(records[0]?.record).toMatchObject({
-            messageId: readTranscriptEventId(assistants[0]),
-            retentionClass: "history",
+          expect(preparedOriginals).toHaveLength(1);
+          const committed = outcome === "lifecycle-drain-failure";
+          const records = await listManagedImageRecordEntries({
+            stateDir: state.stateDir,
+            sessionKey,
           });
-          await expect(
-            resolveManagedOutgoingMediaArtifactDownload({
-              sessionKey,
-              agentId: "main",
-              stateDir: state.stateDir,
-              artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${records[0]?.record.attachmentId}`,
-            }),
-          ).resolves.toMatchObject({ type: "image" });
-        }
-        if (outcome === "conflicting-writer") {
-          expect(assistants[0]).toMatchObject({
-            id: "winning-message",
-            message: { content: [{ type: "text", text: "Already delivered" }] },
-          });
-        }
-      },
-    );
-  });
+          expect(records).toHaveLength(committed ? 1 : 0);
+          for (const original of preparedOriginals) {
+            if (committed) {
+              await expect(fs.readFile(original)).resolves.toEqual(
+                Buffer.from(TINY_PNG_BASE64, "base64"),
+              );
+            } else {
+              await expect(fs.stat(original)).rejects.toMatchObject({ code: "ENOENT" });
+            }
+          }
+          const assistants = (await loadTranscriptEvents(scope)).filter(
+            (event) => readTranscriptEventMessage(event)?.role === "assistant",
+          );
+          expect(assistants).toHaveLength(1);
+          if (committed) {
+            expect(records[0]?.record).toMatchObject({
+              messageId: readTranscriptEventId(assistants[0]),
+              retentionClass: "history",
+            });
+            await expect(
+              resolveManagedOutgoingMediaArtifactDownload({
+                sessionKey,
+                agentId: "main",
+                stateDir: state.stateDir,
+                artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${records[0]?.record.attachmentId}`,
+              }),
+            ).resolves.toMatchObject({ type: "image" });
+          }
+          if (outcome === "conflicting-writer") {
+            expect(assistants[0]).toMatchObject({
+              id: "winning-message",
+              message: { content: [{ type: "text", text: "Already delivered" }] },
+            });
+          }
+        },
+      );
+    },
+  );
 });

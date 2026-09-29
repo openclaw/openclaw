@@ -15,11 +15,9 @@ import {
   SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
 } from "./session-accessor.sqlite-maintenance-age.js";
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
-import {
-  createSessionMaintenancePlanningOperation,
-  runSqliteSessionReclamation,
-} from "./session-accessor.sqlite-reclamation.js";
+import { createSessionMaintenancePlanningOperation } from "./session-accessor.sqlite-reclamation.js";
 import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
@@ -157,7 +155,7 @@ async function runPendingMaintenance(
     return;
   }
   const generation = owner.generation;
-  const activeSessionKeys = [...owner.activeSessionKeys];
+  let activeSessionKeys = [...owner.activeSessionKeys];
   owner.activeSessionKeys.clear();
   let nextMaintenanceAt: number | undefined = Infinity;
   let planningChanged = false;
@@ -206,19 +204,22 @@ async function runPendingMaintenance(
       return;
     }
     let { ageCapture } = prepared;
+    let admitted = false;
     const assertInputsCurrent = () => {
       if (!isCurrent()) {
         throw new Error("SQLite automatic maintenance owner retired");
       }
       if (
-        [...owner.activeSessionKeys].some((key) => !activeSessionKeys.includes(key)) ||
+        (admitted &&
+          [...owner.activeSessionKeys].some((key) => !activeSessionKeys.includes(key))) ||
         !isDeepStrictEqual(
           maintenance,
           owner.maintenanceConfig
             ? normalizeResolvedMaintenanceConfigInput(owner.maintenanceConfig)
             : resolveMaintenanceConfig(),
         ) ||
-        (operation.input.preservation !== null &&
+        (admitted &&
+          operation.input.preservation !== null &&
           !isDeepStrictEqual(
             operation.input.preservation,
             captureSessionMaintenancePreservation(operation.input.storePath),
@@ -238,6 +239,20 @@ async function runPendingMaintenance(
       return runSqliteSessionReclamation({
         diagnostics: { kind: "maintenance-plan" },
         assertCommitAllowed: assertInputsCurrent,
+        refreshMaintenanceProtection: () => {
+          // Refresh only at writer admission; commit still checks this exact live capture.
+          admitted = false;
+          assertInputsCurrent();
+          activeSessionKeys = [...new Set([...activeSessionKeys, ...owner.activeSessionKeys])];
+          operation.input.activeSessionKeys = activeSessionKeys;
+          if (operation.input.preservation !== null) {
+            operation.input.preservation = captureSessionMaintenancePreservation(
+              operation.input.storePath,
+            );
+          }
+          admitted = true;
+          return { activeSessionKeys, preservation: operation.input.preservation };
+        },
         onWorkerResult: (result) => {
           if (result.kind === "maintenance-plan" && isCurrent()) {
             adoptSessionEntryMaintenanceAgeFact(owner.database.db, ageCapture, result.ageFact);

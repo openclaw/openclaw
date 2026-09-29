@@ -76,15 +76,9 @@ export function runWithSqliteCleanup<T>(
       throw new SqliteCoordinatorError(`${operationLabel} must remain synchronous`);
     }
   } catch (operationError) {
-    let releaseFailed = false;
-    let releaseError: unknown;
     try {
       resource.release();
-    } catch (error) {
-      releaseFailed = true;
-      releaseError = error;
-    }
-    if (releaseFailed) {
+    } catch (releaseError) {
       throw createSqliteLifecycleAggregateError(
         [operationError, releaseError],
         `${operationLabel} and resource release both failed`,

@@ -1,6 +1,9 @@
 // Ambient trusted caller context for model-mediated Gateway tool calls.
 import { AsyncLocalStorage } from "node:async_hooks";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import type { ReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
 import type {
   GatewayContextResolver,
@@ -25,14 +28,21 @@ import {
   type OperationalRunInstanceRef,
 } from "../admitted-run-context.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
-import type { EmbeddedRunToolAuthorityBinding } from "../embedded-agent-runner/run-state.js";
+import {
+  captureActiveEmbeddedRunPersonalToolParticipants,
+  type EmbeddedRunToolAuthorityBinding,
+} from "../embedded-agent-runner/run-state.js";
 import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
 } from "../runtime/internal-hooks.js";
-import type { AnyAgentTool } from "./common.js";
+import { readToolStringParam, type AnyAgentTool } from "./common.js";
 
 type GatewayToolCallerIdentity = {
+  personalToolParticipants?: ReplyTurnParticipants;
+  personalToolUser?: string;
+  personalToolIdentityScoped?: true;
+  personalToolSelection?: GatewayToolOperatorSelection;
   agentId: string;
   sessionKey: string;
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
@@ -95,6 +105,12 @@ type GatewayToolCallerSource = {
 };
 
 const gatewayToolCallerStorage = new AsyncLocalStorage<GatewayToolCallerIdentity>();
+
+export type GatewayToolOperatorSelection = Readonly<{
+  /** Raw host-issued source; custody transfers must not retain the turn-bound assertion. */
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  assertCurrent: () => void;
+}>;
 
 // Freeze the admitted instance: a later resolver result is a replacement,
 // which retires this caller's routing authority instead of transferring it.
@@ -206,6 +222,117 @@ export function getGatewayToolCallerIdentity(): GatewayToolCallerIdentity | unde
   return gatewayToolCallerStorage.getStore();
 }
 
+/** Selection is model input; only the turn's host-owned participants grant a target. */
+export async function withGatewayPersonalToolUser<T>(
+  user: string | undefined,
+  run: () => Promise<T> | T,
+): Promise<T> {
+  const caller = getGatewayToolCallerIdentity();
+  if (!caller) {
+    if (user !== undefined) {
+      throw new Error("Selecting user requires an active personal-tool turn.");
+    }
+    return await run();
+  }
+  return await gatewayToolCallerStorage.run(
+    {
+      ...caller,
+      personalToolUser: user,
+      personalToolIdentityScoped: true,
+      personalToolSelection: undefined,
+    },
+    run,
+  );
+}
+
+/** One prepared identity per tool call; execution, approvals and receipts stay turn-owned. */
+export function resolveGatewayToolOperatorSelection(): GatewayToolOperatorSelection {
+  const caller = getGatewayToolCallerIdentity();
+  if (caller?.personalToolSelection) {
+    return caller.personalToolSelection;
+  }
+  const participant = caller?.personalToolIdentityScoped
+    ? resolveGatewayPersonalToolParticipant()
+    : undefined;
+  const operatorAuthority =
+    participant && participant.profileId !== caller?.operatorAuthority?.profileId
+      ? participant.operatorAuthority
+      : caller?.operatorAuthority;
+  const selection = Object.freeze({
+    operatorAuthority,
+    assertCurrent: () => {
+      participant?.assertCurrent();
+      operatorAuthority?.assertCurrent();
+    },
+  });
+  if (caller?.personalToolIdentityScoped) {
+    caller.personalToolSelection = selection;
+  }
+  return selection;
+}
+
+/** The accepting collector already holds this source independently of the spawning turn. */
+export function withGatewayToolOperatorContinuation<T>(
+  operatorAuthority: AdmittedRunOperatorAuthority | undefined,
+  run: () => T,
+): T {
+  const caller = getGatewayToolCallerIdentity();
+  if (!caller) {
+    return run();
+  }
+  operatorAuthority?.assertCurrent();
+  return gatewayToolCallerStorage.run(
+    {
+      ...caller,
+      personalToolParticipants: undefined,
+      personalToolUser: undefined,
+      personalToolIdentityScoped: true,
+      personalToolSelection: Object.freeze({
+        operatorAuthority,
+        assertCurrent: () => operatorAuthority?.assertCurrent(),
+      }),
+    },
+    run,
+  );
+}
+
+export function resolveGatewayPersonalToolParticipant(
+  runtimeIdentity?: AgentRuntimeIdentity,
+  options?: {
+    requireSingleParticipant?: boolean;
+    allowTurnOwner?: () => boolean;
+    allowMissingRegistry?: boolean;
+  },
+) {
+  const caller = getGatewayToolCallerIdentity();
+  if (caller?.personalToolParticipants) {
+    return caller.personalToolParticipants.resolve(
+      options?.requireSingleParticipant ? undefined : caller.personalToolUser,
+      options,
+    );
+  }
+  if (caller?.personalToolUser !== undefined) {
+    throw new Error("Selecting user requires an active personal-tool turn.");
+  }
+  if (runtimeIdentity) {
+    const registered = captureActiveEmbeddedRunPersonalToolParticipants(runtimeIdentity, options);
+    if (!registered) {
+      return undefined;
+    }
+    const participant = registered.participants?.resolve(undefined, options);
+    return (
+      participant && {
+        ...participant,
+        assertCurrent: () => {
+          registered.assertCurrent();
+          participant.assertCurrent();
+        },
+      }
+    );
+  }
+  return undefined;
+}
+
 /** Capture the admitted run and worker owner, independently of optional audit collection. */
 export function captureGatewayToolCallerAssertion(): ((method?: string) => void) | undefined {
   const caller = getGatewayToolCallerIdentity();
@@ -214,7 +341,11 @@ export function captureGatewayToolCallerAssertion(): ((method?: string) => void)
   }
   const isCurrent = caller.receiptAuthority;
   const signals = caller.approvalSignals ?? [];
+  const selection = caller.personalToolIdentityScoped
+    ? resolveGatewayToolOperatorSelection()
+    : undefined;
   return (method) => {
+    selection?.assertCurrent();
     caller.operatorAuthority?.assertCurrent();
     if (!isCurrent || signals.some((signal) => signal.aborted) || isCurrent() === false) {
       throw new Error("agent tool caller authority is no longer active");
@@ -336,6 +467,13 @@ export async function withGatewayToolCallerIdentity<T>(
     {
       agentId: inheritedOwner?.agentId ?? identity.agentId.trim(),
       sessionKey: inheritedOwner?.sessionKey ?? identity.sessionKey.trim(),
+      personalToolParticipants:
+        inheritedOwner?.personalToolParticipants ?? identity.personalToolParticipants,
+      personalToolUser: inheritedOwner?.personalToolUser ?? identity.personalToolUser,
+      personalToolIdentityScoped:
+        inheritedOwner?.personalToolIdentityScoped ?? identity.personalToolIdentityScoped,
+      personalToolSelection:
+        inheritedOwner?.personalToolSelection ?? identity.personalToolSelection,
       ...(fullPermission !== undefined ? { fullPermission } : {}),
       ...(operationalRunInstance ? { operationalRunInstance } : {}),
       ...(embeddedRunToolAuthorityBinding ? { embeddedRunToolAuthorityBinding } : {}),
@@ -434,4 +572,25 @@ export function createGatewayToolCallerWrapper(
         }
       : undefined;
   return (tool) => wrapToolWithGatewayCallerIdentity(tool, identity);
+}
+
+/** Opt an identity-scoped tool into participant selection, including unnamed calls. */
+export function wrapGatewayPersonalToolExecution(
+  execute: AnyAgentTool["execute"],
+): AnyAgentTool["execute"] {
+  return async (...args) =>
+    await withGatewayPersonalToolUser(
+      readToolStringParam(asNonArrayRecord(args[1]) ?? {}, "user"),
+      async () => {
+        const caller = getGatewayToolCallerIdentity();
+        const selection = resolveGatewayToolOperatorSelection();
+        selection.assertCurrent();
+        const result = await execute(...args);
+        // Existing no-registry tools own their handled failure and cleanup receipts.
+        if (caller?.personalToolParticipants) {
+          selection.assertCurrent();
+        }
+        return result;
+      },
+    );
 }

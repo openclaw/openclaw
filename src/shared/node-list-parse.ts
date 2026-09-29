@@ -1,32 +1,6 @@
-import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NodeListNode, PairedNode, PairingList, PendingRequest } from "./node-list-types.js";
-
-export const NODE_WORKER_CAPACITY_MAX = 1_024;
-
-export function parseWorkerSlotSummary(
-  value: unknown,
-): NonNullable<NodeListNode["workerSlots"]> | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const keys = Object.keys(value);
-  const total = value.total;
-  const available = value.available;
-  return keys.length === 2 &&
-    keys.includes("total") &&
-    keys.includes("available") &&
-    typeof total === "number" &&
-    typeof available === "number" &&
-    Number.isSafeInteger(total) &&
-    Number.isSafeInteger(available) &&
-    total >= 1 &&
-    total <= NODE_WORKER_CAPACITY_MAX &&
-    available >= 0 &&
-    available <= total
-    ? { total, available }
-    : null;
-}
 
 // pending/paired rows are blind-cast from a permissive pairing file, so any scalar can be
 // non-string. CLI renderers call `.trim()`/`sanitizeTerminalText` on them (these rows bypass

@@ -31,7 +31,7 @@ import {
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
-import { renderWelcomeState } from "./chat-welcome.ts";
+import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
 const EMPTY_ENTRY_KEYS: ReadonlyMap<string, string> = new Map();
 
@@ -174,6 +174,7 @@ function renderTranscriptShell(
         ${renderChatPositionRail({
           positions: projection.positionIndex,
           transcript,
+          assistant: { ...resolveAssistantDisplayAvatar(props), name: props.assistantName },
           requestUpdate: props.onRequestUpdate ?? (() => {}),
         })}
         ${transcriptContents}

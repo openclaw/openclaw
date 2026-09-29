@@ -209,10 +209,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
             }
         }
         let data = try await self.connection.request(
-            method: request.method,
-            params: request.params,
-            timeoutMs: request.timeoutMs,
-            ifCurrentServerLease: route)
+            request, ifCurrentServerLease: route)
         return try OpenClawChatGatewayPayloadCodec.decodeProgressCard(
             data,
             agentID: OpenClawChatSessionKey.agentID(from: target.sessionKey) ?? target.agentID)
@@ -310,10 +307,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         }
         let request = OpenClawChatGatewayRequests.modelsList(agentID: agentID, sessionKey: sessionKey)
         let data = try await self.connection.request(
-            method: request.method,
-            params: request.params,
-            timeoutMs: request.timeoutMs,
-            ifCurrentServerLease: lease)
+            request, ifCurrentServerLease: lease)
         return try OpenClawChatGatewayPayloadCodec.decodeModelCatalog(data)
     }
 
@@ -342,10 +336,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
             fallbackAgentID: self.chatGatewayAgentID)
         let data: Data = if let serverLease {
             try await self.connection.request(
-                method: request.method,
-                params: request.params,
-                timeoutMs: request.timeoutMs,
-                ifCurrentServerLease: serverLease)
+                request, ifCurrentServerLease: serverLease)
         } else {
             try await self.connection.request(request)
         }
@@ -379,19 +370,16 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         let decoded = try OpenClawChatGatewayPayloadCodec.decodeSessionsList(
             data, agentID: request.params["agentId"]?.value as? String)
         let mainSessionKey = await connection.cachedMainSessionKey()
-        let defaults = decoded.defaults.map {
-            OpenClawChatSessionsDefaults(
-                modelProvider: $0.modelProvider,
-                model: $0.model,
-                contextTokens: $0.contextTokens,
-                thinkingLevels: $0.thinkingLevels,
-                thinkingOptions: $0.thinkingOptions,
-                thinkingDefault: $0.thinkingDefault,
-                mainSessionKey: mainSessionKey)
-        } ?? OpenClawChatSessionsDefaults(
-            model: nil,
-            contextTokens: nil,
-            mainSessionKey: mainSessionKey)
+        let defaults = OpenClawChatSessionsDefaults(
+            modelProvider: decoded.defaults?.modelProvider,
+            model: decoded.defaults?.model,
+            contextTokens: decoded.defaults?.contextTokens,
+            thinkingLevels: decoded.defaults?.thinkingLevels,
+            thinkingOptions: decoded.defaults?.thinkingOptions,
+            thinkingDefault: decoded.defaults?.thinkingDefault,
+            mainSessionKey: mainSessionKey,
+            modelSelectionTarget: decoded.defaults?.modelSelectionTarget,
+            agentRuntime: decoded.defaults?.agentRuntime)
         return OpenClawChatSessionsListResponse(
             ts: decoded.ts,
             path: decoded.path,
@@ -436,10 +424,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
                 configuredAgentsOnly: true)
             let data: Data = if let serverLease {
                 try await self.connection.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs,
-                    ifCurrentServerLease: serverLease)
+                    request, ifCurrentServerLease: serverLease)
             } else {
                 try await self.connection.request(request)
             }
@@ -506,10 +491,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
             patch: patch)
         let data: Data = if let serverLease {
             try await self.connection.request(
-                method: request.method,
-                params: request.params,
-                timeoutMs: request.timeoutMs,
-                ifCurrentServerLease: serverLease)
+                request, ifCurrentServerLease: serverLease)
         } else {
             try await self.connection.request(request)
         }
@@ -968,11 +950,9 @@ private struct MacChatSurface: View {
     private var talkControl: OpenClawChatTalkControl? {
         guard self.usesPrimaryAppRuntime else { return nil }
         return OpenClawChatTalkControl(
-            isEnabled: self.usesPrimaryAppRuntime && self.appState.talkEnabled,
-            isListening: self.usesPrimaryAppRuntime &&
-                !self.talkController.isPaused && self.talkController.phase == .listening,
-            isSpeaking: self.usesPrimaryAppRuntime &&
-                !self.talkController.isPaused && self.talkController.phase == .speaking,
+            isEnabled: self.appState.talkEnabled,
+            isListening: !self.talkController.isPaused && self.talkController.phase == .listening,
+            isSpeaking: !self.talkController.isPaused && self.talkController.phase == .speaking,
             isGatewayConnected: self.viewModel.healthOK,
             statusText: self.talkStatusText,
             // macOS exposes live phase but not the runtime's resolved TTS provider.
@@ -1072,7 +1052,6 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     private let conversationController: NativeConversationController?
     private let viewModel: OpenClawChatViewModel
     private let contentController: NSViewController
-    private let sessionKeyRelay: WebChatSessionKeyRelay
     private let speech: OpenClawChatSpeechController
     private let voiceNoteRecorder: OpenClawVoiceNoteRecorder
     private var routingIdentityTask: Task<Void, Never>?
@@ -1180,7 +1159,6 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         }
         self.speech = speech
         let sessionKeyRelay = WebChatSessionKeyRelay()
-        self.sessionKeyRelay = sessionKeyRelay
         let conversationOwner: OpenClawWebConversation? = gatewayTarget != nil &&
             !AppDefaults.standard.bool(forKey: nativeConversationForcedKey) ? OpenClawWebConversation() : nil
         let vm = OpenClawChatViewModel(

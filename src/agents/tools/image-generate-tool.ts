@@ -482,12 +482,7 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
               onFailure: (message: string, meta?: Record<string, unknown>) =>
                 log.warn(message, meta),
               detailExtras: {
-                ...buildMediaReferenceDetails({
-                  entries: loadedReferenceImages,
-                  singleKey: "image",
-                  pluralKey: "images",
-                  getResolvedInput: (entry) => entry.resolvedInput,
-                }),
+                ...buildMediaReferenceDetails(loadedReferenceImages, "image"),
                 ...(model ? { model } : {}),
                 ...(resolution ? { resolution } : {}),
                 ...(size ? { size } : {}),

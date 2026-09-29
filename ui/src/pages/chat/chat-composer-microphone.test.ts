@@ -151,7 +151,7 @@ describe("composer microphone picker", () => {
     ).toBe("false");
   });
 
-  it("gates unavailable voice capabilities before starting and routes to Talk Settings", async () => {
+  it("opens unavailable voice settings while history is pending", async () => {
     discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue: "none-found" });
     patchSettings({ realtimeTalkInputDeviceId: "studio-mic" });
     const request = vi.fn(async (method: string) => {
@@ -171,6 +171,7 @@ describe("composer microphone picker", () => {
     document.body.append(container);
     const composerProps = props({
       gatewayClient,
+      submitDisabledReason: t("chat.thread.loading"),
       realtimeTalkInputDeviceId: "studio-mic",
       onOpenTalkSettings,
       onOpenDictationSettings,
@@ -189,7 +190,9 @@ describe("composer microphone picker", () => {
       ".chat-talk-control > openclaw-tooltip",
     );
     expect(container.querySelector(".chat-talk-control__capability-alert")).toBeNull();
-    expect(voiceTooltip?.content).toBe(t("chat.composer.voiceGestureHint"));
+    expect(voiceTooltip?.content).toBe(
+      `${t("chat.thread.loading")} · ${t("chat.composer.voiceGestureHint")}`,
+    );
     const capabilityAlerts = [
       ...container.querySelectorAll<HTMLElement>(
         '.chat-talk-input-picker__capability[data-status="unavailable"] .chat-talk-input-picker__capability-alert',

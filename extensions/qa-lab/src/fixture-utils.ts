@@ -109,9 +109,9 @@ export function outputToolNames(response: unknown): string[] {
   if (!Array.isArray(output)) {
     return [];
   }
-  return output
-    .filter((item) => item.type === "function_call" && typeof item.name === "string")
-    .map((item) => item.name as string);
+  return output.flatMap((item) =>
+    item.type === "function_call" && typeof item.name === "string" ? [item.name] : [],
+  );
 }
 
 export function outputText(response: unknown): string {

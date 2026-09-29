@@ -1,12 +1,13 @@
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
-import { crabboxState } from "./crabbox-state.test-support.js";
+import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import {
   parseCrabboxProfile,
   resolveCrabboxProvisionProfile,
   resolveCrabboxWarmImageProfileKey,
 } from "./crabbox-worker-profile.js";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
 import {
   listCrabboxWarmImages,
@@ -18,10 +19,8 @@ import {
   PROFILE,
   NODE_RUNTIME_IDENTITY,
   checkpointResult,
-  commandResult,
   createProjectOptions,
   createWarmProvider,
-  openWarmImageStore,
   tempDirs,
 } from "./crabbox-worker-warm-image.test-support.js";
 

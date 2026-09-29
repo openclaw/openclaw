@@ -1,5 +1,4 @@
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
-import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/speech-provider";
 import {
   asOptionalRecord,
   normalizeTrimmedStringList,
@@ -218,5 +217,3 @@ export async function listFishAudioVoices(params: {
     return true;
   });
 }
-
-export const FISH_AUDIO_STREAM_MAX_BYTES = MAX_AUDIO_BYTES;

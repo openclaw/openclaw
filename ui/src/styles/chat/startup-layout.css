@@ -20,8 +20,7 @@
     z-index: 3;
     isolation: isolate;
     min-height: var(--chat-mobile-pane-header-height);
-    padding-inline: max(var(--chat-mobile-edge-inset), var(--safe-area-left, 0px))
-      max(var(--chat-mobile-edge-inset), var(--safe-area-right, 0px));
+    padding-inline: var(--chat-mobile-edge-inset);
     overflow: visible;
   }
   .chat-main__conversation {
@@ -108,6 +107,16 @@
   /* Allow shrinking for flex scroll behavior */
   border-radius: var(--radius-md);
   background: transparent;
+}
+
+/* Keep short-pane insets with their defaults: shared CSS chunks can load the
+   startup sheet after composer styles when navigating from New Session. */
+@container chat-conversation (max-height: 320px) {
+  .chat-thread-viewport,
+  .chat-thread {
+    --chat-thread-padding-top: 0px;
+    --chat-thread-padding-bottom: 0px;
+  }
 }
 
 /* Keep the route's initial skeleton in the full transcript region as the real composer mounts. */
@@ -516,13 +525,6 @@
      icon-only pill and read as punctuation with nothing on its left. */
   .chat-pane__project-row + .chat-pane__session-trail > .chat-pane__crumb-sep:first-child {
     display: none;
-  }
-}
-
-@media (display-mode: standalone) and (max-width: 768px),
-  (display-mode: standalone) and (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .sidebar-region__header > .chat-pane__header {
-    padding-inline: var(--chat-mobile-edge-inset);
   }
 }
 

@@ -327,7 +327,7 @@ it.each([
       });
     }
     expect(
-      markRequesterTurnYielded({
+      await markRequesterTurnYielded({
         requesterSessionKey: requesterKey,
         requesterAgentId: "main",
         requesterTurnRunId: "requester",
@@ -336,7 +336,7 @@ it.each([
     expect(markSubagentRunPausedAfterYield({ entry: subagentRuns.get("requester")! })).toBe(true);
     persistSubagentRunsToDiskOrThrow(subagentRuns, ["requester"]);
     expect(
-      settleRequesterAfterSessionSpawns({
+      await settleRequesterAfterSessionSpawns({
         requesterSessionKey: requesterKey,
         requesterAgentId: "main",
         requesterTurnRunId: "requester",
@@ -396,7 +396,7 @@ it.each([
     if (phase !== "pending") {
       // A terminal child is skipped by tree cancellation; its yielded requester
       // still owns the pending synthesis and must fence an already admitted wake.
-      expect(markSubagentRunTerminated({ runId: "nested", reason: "killed" })).toBe(1);
+      expect(await markSubagentRunTerminated({ runId: "nested", reason: "killed" })).toBe(1);
     }
     const completedNestedOutcome =
       phase === "pending"

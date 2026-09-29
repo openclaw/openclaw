@@ -41,7 +41,8 @@ vi.mock("./install.js", async (importOriginal) => ({
 vi.mock("./marketplace.js", () => ({
   installPluginFromMarketplace: (...args: unknown[]) => mocks.install(...args),
 }));
-vi.mock("./install-record-commit.js", () => ({
+vi.mock("./install-record-commit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./install-record-commit.js")>()),
   commitPluginInstallRecordsWithConfig: (...args: unknown[]) => mocks.commit(...args),
 }));
 vi.mock("./installed-plugin-index-records.js", async (importOriginal) => ({

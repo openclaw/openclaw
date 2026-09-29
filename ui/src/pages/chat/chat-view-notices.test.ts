@@ -3,11 +3,52 @@
 import { render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
-import { renderChatComposerNotices } from "./chat-view-notices.ts";
+import { renderChatComposerNotices, renderChatTopbarNotices } from "./chat-view-notices.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
 });
+
+it.each([
+  [
+    "transferring",
+    25 * 1_024 * 1_024,
+    "Updating worker runtime · 25 MB of 100 MB (25%)",
+    "Transferring the new worker runtime to this device: 25 MB of 100 MB (25%). The next turn starts when it finishes.",
+  ],
+  [
+    "installing",
+    100 * 1_024 * 1_024,
+    "Installing worker runtime",
+    "Installing the new worker runtime on this device.",
+  ],
+] as const)(
+  "renders worker runtime progress for %s at %s bytes",
+  (phase, transferredBytes, title, body) => {
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderChatTopbarNotices({
+        workerRuntimeInstall: {
+          phase,
+          transferredBytes,
+          totalBytes: 100 * 1_024 * 1_024,
+          startedAtMs: 1,
+          updatedAtMs: 2,
+        },
+      }),
+      container,
+    );
+
+    const notice = container.querySelector(".chat-worker-runtime-install-notice");
+    expect(notice?.getAttribute("role")).toBe("status");
+    expect(notice?.querySelector("strong")?.textContent).toBe(title);
+    expect(notice?.getAttribute("title")).toBe(body);
+    expect(notice?.textContent).toContain(body);
+
+    render(renderChatTopbarNotices({}), container);
+    expect(container.querySelector(".chat-worker-runtime-install-notice")).toBeNull();
+  },
+);
 
 it.each([true, false])("refreshes a failed conversation only while connected=%s", (connected) => {
   const onRefresh = vi.fn();

@@ -18,6 +18,7 @@ import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
@@ -90,9 +91,7 @@ function readRunwayOutputUrls(payload: RunwayTaskDetailResponse): string[] {
   if (!Array.isArray(payload.output)) {
     throw new Error("Runway video generation completed with malformed output URLs");
   }
-  const outputUrls = payload.output
-    .map((value) => normalizeOptionalString(value))
-    .filter((value): value is string => Boolean(value));
+  const outputUrls = normalizeTrimmedStringList(payload.output);
   if (!outputUrls.length) {
     throw new Error("Runway video generation completed without output URLs");
   }
@@ -174,34 +173,25 @@ function buildCreateBody(
   const duration = resolveDurationSeconds(req.durationSeconds);
   const ratio = resolveRunwayRatio(req);
   const model = normalizeOptionalString(req.model) ?? DEFAULT_RUNWAY_MODEL;
-  if (endpoint === "/v1/text_to_video") {
-    if (!TEXT_ONLY_MODELS.has(model)) {
+  if (endpoint !== "/v1/video_to_video") {
+    const imageToVideo = endpoint === "/v1/image_to_video";
+    const models = imageToVideo ? IMAGE_MODELS : TEXT_ONLY_MODELS;
+    const mode = imageToVideo ? "image-to-video" : "text-to-video";
+    if (!models.has(model)) {
       throw new Error(
-        `Runway text-to-video does not support model ${model}. Use one of: ${[...TEXT_ONLY_MODELS].join(", ")}.`,
+        `Runway ${mode} does not support model ${model}. Use one of: ${[...models].join(", ")}.`,
       );
     }
-    return {
-      model,
-      promptText: req.prompt,
-      ratio,
-      duration,
-    };
-  }
-
-  if (endpoint === "/v1/image_to_video") {
-    if (!IMAGE_MODELS.has(model)) {
-      throw new Error(
-        `Runway image-to-video does not support model ${model}. Use one of: ${[...IMAGE_MODELS].join(", ")}.`,
-      );
-    }
-    const promptImage = resolveSourceUri(req.inputImages?.[0], "image/png");
-    if (!promptImage) {
+    const promptImage = imageToVideo
+      ? resolveSourceUri(req.inputImages?.[0], "image/png")
+      : undefined;
+    if (imageToVideo && !promptImage) {
       throw new Error("Runway image-to-video input is missing image data.");
     }
     return {
       model,
       promptText: req.prompt,
-      promptImage,
+      ...(imageToVideo ? { promptImage } : {}),
       ratio,
       duration,
     };

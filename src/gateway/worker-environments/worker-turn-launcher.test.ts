@@ -292,7 +292,7 @@ describe("worker turn launcher local placement", () => {
       if (state === "local") {
         await provider.executeLocalTurn(claim, async () => {});
       }
-      const repository = getSessionRepositoryWorkspaceStore().create({
+      const repository = await getSessionRepositoryWorkspaceStore().create({
         agentId: "main",
         sessionKey: SESSION_KEY,
         url: "https://github.com/example/repository.git",
@@ -321,7 +321,7 @@ describe("worker turn launcher local placement", () => {
       expect(loadSessionEntry(sessionTarget)?.repositoryWorkspaceId).toBeUndefined();
       await provider.executeLocalTurn(claim, runLocal);
       expect(runLocal).toHaveBeenCalledOnce();
-      expect(getSessionRepositoryWorkspaceStore().get(repository.workspaceId)).toBeDefined();
+      expect(await getSessionRepositoryWorkspaceStore().get(repository.workspaceId)).toBeDefined();
     },
   );
 
@@ -794,6 +794,8 @@ describe("worker turn launcher local placement", () => {
             changed: false,
             verifyStable: vi.fn(async () => {}),
             verifyLocalStable: vi.fn(async () => {}),
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         },
       );

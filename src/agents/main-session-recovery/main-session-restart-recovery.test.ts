@@ -1515,8 +1515,7 @@ describe("main-session-restart-recovery", () => {
       maxRetries: 1,
       stateDir: tmpDir,
     });
-    await waitForFast(() => expect(callGateway).toHaveBeenCalledOnce());
-    await recovery.stop();
+    await mockRecoveryRuntime.expectAdmission(1, recovery, { sessionKey, storePath });
 
     expect(gatewayParams()).toMatchObject({
       expectedExistingSessionId: "main-session",
@@ -3349,11 +3348,10 @@ describe("main-session-restart-recovery", () => {
       stateDir: tmpDir,
     });
     try {
-      await mockRecoveryRuntime.expectAdmission(1, {
+      await mockRecoveryRuntime.expectAdmission(1, recovery, {
         sessionKey: "agent:main:control",
         storePath: path.join(sessionsDir, "sessions.json"),
       });
-      await recovery.stop();
 
       expect(callGateway).toHaveBeenCalledOnce();
       const activeEntry = loadSessionEntry({
@@ -3363,7 +3361,6 @@ describe("main-session-restart-recovery", () => {
       expect(activeEntry).toMatchObject({ status: "running" });
       expect(activeEntry?.abortedLastRun).toBeUndefined();
     } finally {
-      await recovery.stop();
       clearActiveEmbeddedRun(sessionId, currentHandle, sessionKey);
       clearActiveEmbeddedRun(sessionId, staleHandle, sessionKey);
     }
@@ -3477,15 +3474,10 @@ describe("main-session-restart-recovery", () => {
       delayMs: 0,
       stateDir: tmpDir,
     });
-    try {
-      await mockRecoveryRuntime.expectAdmission(1, {
-        sessionKey: "agent:main:main",
-        storePath: customStorePath,
-      });
-      await recovery.stop();
-    } finally {
-      await recovery.stop();
-    }
+    await mockRecoveryRuntime.expectAdmission(1, recovery, {
+      sessionKey: "agent:main:main",
+      storePath: customStorePath,
+    });
 
     expect(callGateway).toHaveBeenCalledOnce();
     const defaultStore = readStore(path.join(defaultSessionsDir, "sessions.json"));
@@ -3549,10 +3541,10 @@ describe("main-session-restart-recovery", () => {
       dispatchSettlement.resolve(); // The second store waits for the first recovery slot.
       await mockRecoveryRuntime.expectAdmission(
         2,
+        recovery,
         { storePath, sessionKey: "agent:main:main" },
         { storePath: lateStorePath, sessionKey: "agent:late:main" },
       );
-      await recovery.stop();
 
       expect(readStore(storePath)["agent:main:main"]?.abortedLastRun).toBe(false);
       expect(readStore(lateStorePath)["agent:late:main"]?.abortedLastRun).toBe(false);
@@ -3695,8 +3687,10 @@ describe("main-session-restart-recovery", () => {
     ]);
 
     releaseStartup.resolve();
-    await mockRecoveryRuntime.expectAdmission(1, { storePath, sessionKey: "agent:main:main" });
-    await recovery.stop();
+    await mockRecoveryRuntime.expectAdmission(1, recovery, {
+      storePath,
+      sessionKey: "agent:main:main",
+    });
 
     const store = readStore(storePath);
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
@@ -3732,8 +3726,10 @@ describe("main-session-restart-recovery", () => {
     } as OpenClawConfig;
     releaseStartup.resolve();
 
-    await mockRecoveryRuntime.expectAdmission(1, { storePath, sessionKey: "agent:work:main" });
-    await recovery.stop();
+    await mockRecoveryRuntime.expectAdmission(1, recovery, {
+      storePath,
+      sessionKey: "agent:work:main",
+    });
     expect(loadSessionEntry({ sessionKey: "agent:work:main", storePath })).toMatchObject({
       abortedLastRun: false,
     });

@@ -28,6 +28,7 @@ import {
   resolveLiveShardPreparation,
   selectLiveShardFiles,
   validateLiveShardReportPayload,
+  withoutReleaseWaivedLiveFiles,
 } from "../../scripts/test-live-shard.mts";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
@@ -36,6 +37,19 @@ import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support
 
 describe("scripts/test-live-shard", () => {
   const allFiles = collectAllLiveTestFiles();
+
+  it("drops release-waived single-case live files only for the waived candidate version", () => {
+    const files = [
+      "src/gateway/gateway-progress-refresh.live.test.ts",
+      "src/gateway/gateway-codex-harness.live.test.ts",
+      "test/gateway-subagent-restart.live.test.ts",
+    ];
+    expect(withoutReleaseWaivedLiveFiles(files, "2026.9.7")).toEqual([
+      "src/gateway/gateway-codex-harness.live.test.ts",
+    ]);
+    expect(withoutReleaseWaivedLiveFiles(files, "2026.9.8")).toEqual(files);
+    expect(withoutReleaseWaivedLiveFiles(files, undefined)).toEqual(files);
+  });
 
   it("discovers live tests without scanning source roots in-process", () => {
     expectNoReaddirSyncDuring(() => {
@@ -421,6 +435,38 @@ describe("scripts/test-live-shard", () => {
     ["src/skills/workshop/experience-review.live.test.ts", "OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"],
     ["src/agents/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
     ["src/agents/subagents/announce/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
+    [
+      "src/agents/subagents/announce/subagent-continuation.live.test.ts",
+      "OPENCLAW_LIVE_SUBAGENT_E2E",
+    ],
+    [
+      "src/agents/subagents/announce/subagent-late-reply.live.test.ts",
+      "OPENCLAW_LIVE_SUBAGENT_STRESS",
+    ],
+    [
+      "src/agents/subagents/announce/subagent-yield-resume.live.test.ts",
+      "OPENCLAW_LIVE_SUBAGENT_STRESS",
+    ],
+    ["src/agents/tools/sessions-send-peer.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_STRESS"],
+    ["extensions/anthropic/cli-output.compaction.live.test.ts", "OPENCLAW_LIVE_CLAUDE_COMPACTION"],
+    [
+      "extensions/codex/src/app-server/approval-requester.real-binary.live.test.ts",
+      "OPENCLAW_LIVE_CODEX_APPROVAL_REQUESTER",
+    ],
+    [
+      "extensions/codex/src/app-server/async-questions.real-binary.live.test.ts",
+      "OPENCLAW_LIVE_CODEX_ASYNC_QUESTIONS",
+    ],
+    [
+      "extensions/codex/src/app-server/thread-lifecycle.restricted-mcp.real-binary.live.test.ts",
+      "OPENCLAW_LIVE_CODEX_RESTRICTED_MCP",
+    ],
+    ["extensions/ollama/ollama.live.test.ts", "OPENCLAW_LIVE_OLLAMA"],
+    ["extensions/twitch/src/plugin.live.test.ts", "TWITCH_LIVE_TEST"],
+    [
+      "src/agents/cli-runner/execute.compaction-watchdog.claude.live.test.ts",
+      "OPENCLAW_LIVE_CLAUDE_COMPACTION",
+    ],
     [
       "src/agents/sessions/agent-session.openai-compaction.live.test.ts",
       "OPENCLAW_LIVE_OPENAI_COMPACTION",

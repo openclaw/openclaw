@@ -31,6 +31,7 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
       "cron.activateRun",
       "cron.releaseReservations",
       "cron.finishReceipt",
+      "cron.finalizeRuns",
       "cron.removeStaleFamily",
     ].includes(String(type)) &&
     !admission
@@ -67,6 +68,7 @@ export function isCronStateWorkerCommand(command: {
     case "cron.activateRun":
     case "cron.releaseReservations":
     case "cron.finishReceipt":
+    case "cron.finalizeRuns":
     case "cron.removeStaleFamily":
     case "cron.loadMutable":
     case "cron.initializeRunReceipts":
@@ -103,6 +105,7 @@ export function executeCronStateCommand(
     case "cron.activateRun":
     case "cron.releaseReservations":
     case "cron.finishReceipt":
+    case "cron.finalizeRuns":
     case "cron.removeStaleFamily":
       if (!admission) {
         throw new Error("Cron admission worker is not prepared");
@@ -116,6 +119,8 @@ export function executeCronStateCommand(
           return admission.releaseCronReservationsInWorker(database, command.input);
         case "cron.finishReceipt":
           return admission.finishCronReceiptInWorker(database, command.input);
+        case "cron.finalizeRuns":
+          return admission.finalizeCronRunsInWorker(database, command.input);
         case "cron.removeStaleFamily":
           return admission.removeStaleCronFamilyInWorker(database, command.input);
       }

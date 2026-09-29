@@ -400,14 +400,14 @@ export function registerYieldedRequesterSettlementCase(
           endedAt: undefined,
         });
         expect(
-          markRequesterTurnYielded({
+          await markRequesterTurnYielded({
             requesterSessionKey: childSessionKey,
             requesterAgentId: "main",
             requesterTurnRunId: previousRunId,
           }),
         ).toBe(1);
         expect(
-          settleRequesterAfterSessionSpawns({
+          await settleRequesterAfterSessionSpawns({
             requesterSessionKey: childSessionKey,
             requesterAgentId: "main",
             requesterTurnRunId: previousRunId,

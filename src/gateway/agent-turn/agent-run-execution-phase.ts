@@ -263,6 +263,7 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
             runId: params.runId,
             task: message,
             gatewayContextResolver: params.context.resolveGatewayContext,
+            assertCurrent: assertDispatchCurrent,
           });
         }
         if (
