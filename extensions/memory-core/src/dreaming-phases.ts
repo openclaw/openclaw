@@ -188,8 +188,6 @@ function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetCh
 
   const flushChunk = () => {
     if (chunkLines.length === 0) {
-      chunkStartLine = 0;
-      chunkEndLine = 0;
       return;
     }
 
@@ -208,10 +206,7 @@ function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetCh
   };
 
   for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (typeof line !== "string") {
-      continue;
-    }
+    const line = lines[index]!;
 
     const heading = normalizeDailyHeading(line);
     if (heading) {
@@ -248,10 +243,7 @@ function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetCh
       let hasNestedChild = false;
       let nestedChildIndex: number | undefined;
       for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
-        const nextLine = lines[cursor];
-        if (typeof nextLine !== "string") {
-          break;
-        }
+        const nextLine = lines[cursor]!;
         const nextTrimmed = nextLine.trim();
         if (!nextTrimmed) {
           let nextContentIndex = cursor + 1;
@@ -309,8 +301,7 @@ function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetCh
       flushChunk();
       continue;
     }
-    const nextChunkLines = chunkLines.length === 0 ? [snippet] : [...chunkLines, snippet];
-    const candidateSnippet = buildDailyChunkSnippet(activeHeading, nextChunkLines);
+    const candidateSnippet = buildDailyChunkSnippet(activeHeading, [...chunkLines, snippet]);
     const shouldSplit =
       chunkLines.length > 0 &&
       (chunkLines.length >= DAILY_INGESTION_MAX_CHUNK_LINES ||
@@ -468,9 +459,6 @@ function entryWithinLookback(entry: ShortTermRecallEntry, cutoffMs: number): boo
   return Number.isFinite(lastRecalledAtMs) && lastRecalledAtMs >= cutoffMs;
 }
 
-// Public lookback filter for recall entries. Kept in memory-core so gateway
-// doctor harness, CLI harness, and internal REM/light dreaming paths all
-// resolve `recallDays` vs `lastRecalledAt` the same way and cannot drift.
 export function filterRecallEntriesWithinLookback(params: {
   entries: readonly ShortTermRecallEntry[];
   nowMs: number;
@@ -687,16 +675,7 @@ async function ingestSessionTranscriptSignals(params: {
 }): Promise<void> {
   await withMemoryWorkspaceLock(params.workspaceDir, async () => {
     const state = await readSessionIngestionState(params.workspaceDir);
-    const collected = await collectSessionIngestionBatches({
-      workspaceDir: params.workspaceDir,
-      cfg: params.cfg,
-      primaryWorkspaceDir: params.primaryWorkspaceDir,
-      lookbackDays: params.lookbackDays,
-      nowMs: params.nowMs,
-      timezone: params.timezone,
-      state,
-      admissionPolicy: params.admissionPolicy,
-    });
+    const collected = await collectSessionIngestionBatches({ ...params, state });
     const ingestionDayBucket = formatMemoryDreamingDay(params.nowMs, params.timezone);
     for (const batch of collected.batches) {
       await recordShortTermRecalls({
@@ -1012,8 +991,6 @@ function entryAverageScore(entry: ShortTermRecallEntry): number {
   return signalCount > 0 ? Math.max(0, Math.min(1, entry.totalScore / signalCount)) : 0;
 }
 
-// Use the shared CJK-aware similarity helper so close-but-not-identical CJK
-// snippets do not slip past the dedupe threshold via the old ASCII-only path.
 function dedupeEntries(
   entries: ShortTermRecallEntry[],
   threshold: number,
@@ -1097,16 +1074,13 @@ function buildLightDreamingBody(entries: ShortTermRecallEntry[]): string[] {
   if (entries.length === 0) {
     return ["- No notable updates."];
   }
-  const lines: string[] = [];
-  for (const entry of entries) {
-    const snippet = entry.snippet || "(no snippet captured)";
-    lines.push(`- Candidate: ${snippet}`);
-    lines.push(`  - confidence: ${entryAverageScore(entry).toFixed(2)}`);
-    lines.push(`  - evidence: ${entry.path}:${entry.startLine}-${entry.endLine}`);
-    lines.push(`  - recalls: ${entry.recallCount}`);
-    lines.push(`  - status: staged`);
-  }
-  return lines;
+  return entries.flatMap((entry) => [
+    `- Candidate: ${entry.snippet || "(no snippet captured)"}`,
+    `  - confidence: ${entryAverageScore(entry).toFixed(2)}`,
+    `  - evidence: ${entry.path}:${entry.startLine}-${entry.endLine}`,
+    `  - recalls: ${entry.recallCount}`,
+    `  - status: staged`,
+  ]);
 }
 
 type RemTruthSelection = {
@@ -1197,14 +1171,12 @@ function buildRemReflections(
     return ["- No strong patterns surfaced."];
   }
 
-  const lines: string[] = [];
-  for (const entry of ranked) {
-    lines.push(`- Theme: \`${entry.tag}\` kept surfacing across ${entry.stat.count} memories.`);
-    lines.push(`  - confidence: ${entry.strength.toFixed(2)}`);
-    lines.push(`  - evidence: ${[...entry.stat.evidence].slice(0, 3).join(", ")}`);
-    lines.push(`  - note: reflection`);
-  }
-  return lines;
+  return ranked.flatMap((entry) => [
+    `- Theme: \`${entry.tag}\` kept surfacing across ${entry.stat.count} memories.`,
+    `  - confidence: ${entry.strength.toFixed(2)}`,
+    `  - evidence: ${[...entry.stat.evidence].slice(0, 3).join(", ")}`,
+    `  - note: reflection`,
+  ]);
 }
 
 export function previewRemDreaming(params: {
@@ -1332,7 +1304,6 @@ async function runLightDreaming(
     return { capped, recentDiaryEntries };
   });
   const { capped, recentDiaryEntries } = prepared;
-  // Generate dream diary narrative from the staged entries.
   if (params.subagent && capped.length > 0) {
     const themes = uniqueStrings(capped.flatMap((e) => e.conceptTags).filter(Boolean));
     const data: NarrativePhaseData = {
@@ -1417,7 +1388,6 @@ async function runRemDreaming(
     return { entries, preview };
   });
   const { entries, preview } = prepared;
-  // Generate dream diary narrative from REM reflections.
   if (params.subagent && entries.length > 0) {
     const snippets = preview.candidateTruths.map((t) => t.snippet).filter(Boolean);
     const themes = preview.reflections.filter(

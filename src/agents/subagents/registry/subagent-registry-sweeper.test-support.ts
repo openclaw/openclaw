@@ -47,7 +47,14 @@ export function createSubagentSweeperHarness(
     }) => 0,
   );
   const completeSubagentRunWithRecovery = vi.fn();
-  const completeCleanupBookkeeping = vi.fn();
+  const completeCleanupBookkeeping = vi.fn<
+    Parameters<typeof createSubagentRegistrySweeper>[0]["completeCleanupBookkeeping"]
+  >(async (params) => {
+    if (params.isCurrent && !params.isCurrent()) {
+      return;
+    }
+    params.discardDelivery?.();
+  });
   const discardTerminalDelivery =
     vi.fn<Parameters<typeof createSubagentRegistrySweeper>[0]["discardTerminalDelivery"]>();
   const emitSubagentEndedHookForRun = vi.fn();

@@ -76,6 +76,9 @@ process.exitCode = await runVitestBatch({
 
 const coreWorker = "src/infra/sqlite-worker-operation-attachment.test.ts";
 const infraConfig = "test/vitest/vitest.infra.config.ts";
+const packageContract = "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts";
+const contractsConfig = "test/vitest/vitest.contracts-plugin.config.ts";
+const channelsConfig = "test/vitest/vitest.channels.config.ts";
 
 it.for([
   { name: "worker", args: [coreWorker], prepare: true },
@@ -89,6 +92,14 @@ it.for([
   { name: "nonmatching include", args: [coreWorker], include: ["test/**"], prepare: false },
   { name: "root config", config: "vitest.config.ts", args: [coreWorker], prepare: true },
   { name: "custom config", config: "custom.config.ts", args: [coreWorker], prepare: false },
+  { name: "full channels", config: channelsConfig, args: [], prepare: true },
+  {
+    name: "focused channels",
+    config: channelsConfig,
+    args: ["src/channels/chat-type.test.ts"],
+    prepare: false,
+  },
+  { name: "empty channels", config: channelsConfig, args: [], include: [], prepare: false },
 ])(
   "selects eager worker preparation for $name",
   async ({ config = infraConfig, args, include, prepare }) => {
@@ -99,18 +110,21 @@ it.for([
 );
 
 it.runIf(process.platform !== "win32").for(
-  ["direct", "projects"].flatMap((route) =>
-    [
-      "ready",
-      "failure",
-      "cancel",
-      "excluded",
-      "watch",
-      "metadata",
-      "custom-root",
-      "custom-project",
-      ...(route === "direct" ? ["include-worker", "include-excluded"] : []),
-    ].map((mode) => ({
+  ["direct", "projects", "contracts-direct", "contracts-projects"].flatMap((route) =>
+    (route.startsWith("contracts-")
+      ? ["ready", "excluded"]
+      : [
+          "ready",
+          "failure",
+          "cancel",
+          "excluded",
+          "watch",
+          "metadata",
+          "custom-root",
+          "custom-project",
+          ...(route === "direct" ? ["include-worker", "include-excluded", "channels"] : []),
+        ]
+    ).map((mode) => ({
       route,
       mode,
     })),
@@ -119,6 +133,8 @@ it.runIf(process.platform !== "win32").for(
   "$route runner owns pre-spawn worker preparation through $mode",
   ({ route, mode }, { workerArtifacts }) =>
     workerArtifacts.fixtureLifetime.run(async () => {
+      const selectedFile = route.startsWith("contracts-") ? packageContract : coreWorker;
+      const selectedConfig = route.startsWith("contracts-") ? contractsConfig : infraConfig;
       const { node } = workerArtifacts.createFixtureCommands();
       const directory = workerArtifacts.fixtureDirectory();
       const compiled = path.join(directory, "compiled.jsonl");
@@ -187,7 +203,7 @@ syncFixtureBuiltinExports();
       );
       const controls =
         mode === "excluded"
-          ? ["--exclude", coreWorker]
+          ? ["--exclude", selectedFile]
           : mode === "watch"
             ? ["--watch"]
             : mode === "metadata"
@@ -202,13 +218,19 @@ syncFixtureBuiltinExports();
         fs.writeFileSync(leaf, "if(process.connected) process.disconnect();\n");
       }
       const args =
-        route === "direct"
-          ? ["scripts/run-vitest.mjs", "run", "--config", infraConfig, coreWorker, ...controls]
+        route === "direct" || route === "contracts-direct"
+          ? [
+              "scripts/run-vitest.mjs",
+              "run",
+              "--config",
+              ...(mode === "channels" ? [channelsConfig] : [selectedConfig, selectedFile]),
+              ...controls,
+            ]
           : [
               "--import",
               "./scripts/tsx.mjs",
               "scripts/test-projects.mts",
-              coreWorker,
+              selectedFile,
               "--",
               ...controls,
             ];
@@ -228,7 +250,7 @@ syncFixtureBuiltinExports();
       expect(result.code, result.stdout + result.stderr).toBe(
         mode === "cancel" ? 143 : mode === "failure" ? 1 : 0,
       );
-      const ready = mode === "ready" || mode === "include-worker";
+      const ready = mode === "ready" || mode === "include-worker" || mode === "channels";
       const prepared = ready || mode === "failure" || mode === "cancel";
       expect(fs.existsSync(compilerReceipt)).toBe(prepared);
       if (mode === "failure" || mode === "cancel") {

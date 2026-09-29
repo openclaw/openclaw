@@ -34,7 +34,9 @@ import {
   normalizeReleaseCoveragePolicy,
   normalizeReleaseTelegramWaiver,
   releaseCompositeJobsSha256,
+  releaseAdvisoryJobs,
   terminalPolicyPass,
+  validateReleaseManifestAdvisoryJobs,
   validateReleaseChildDispatchBinding,
   validateReleaseCoveragePolicyBinding,
   validateReleaseExecutionPlanArtifact,
@@ -1312,17 +1314,12 @@ export function validateParentManifest(value, expected) {
     );
   }
   const childEvidence = normalizeManifestChildEvidence(value.childEvidence);
-  if (
-    validationInputs?.laneWaiver ||
-    value.publishInputs?.stableSoakWaiver ||
-    (value.advisoryJobs !== undefined &&
-      (!Array.isArray(value.advisoryJobs) || value.advisoryJobs.length > 0))
-  ) {
+  if (validationInputs?.laneWaiver || value.publishInputs?.stableSoakWaiver) {
     throw new Error(
-      "Waived or advisory release evidence is no longer accepted; rerun Full Release Validation without waivers.",
+      "Waived release evidence is no longer accepted; rerun Full Release Validation without waivers.",
     );
   }
-  const advisoryJobs = [];
+  const advisoryJobs = validateReleaseManifestAdvisoryJobs(value);
   const childRuns = value.childRuns;
   if (!childRuns || typeof childRuns !== "object" || Array.isArray(childRuns)) {
     throw new Error("release validation manifest childRuns is invalid");
@@ -2618,7 +2615,7 @@ async function validateStrictChildRun({
   }
 
   return {
-    advisoryJobs: [],
+    advisoryJobs: releaseAdvisoryJobs([{ key: child.manifestKey, runId, jobs }]),
     conclusion: run.conclusion,
     dispatchNonce: `full-release-validation-${reused ? childReuse.sourceParentRunId : parentEvidence.manifest.runId}-${originAttempt}${child.suffix}`,
     displayTitle: run.display_title,

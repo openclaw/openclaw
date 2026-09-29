@@ -65,12 +65,7 @@ function keepLatestBufferedEventsForType(
 ): unknown[] {
   let keptForType = 0;
   return entries.filter((entry) => {
-    if (
-      !entry ||
-      typeof entry !== "object" ||
-      !("event" in entry) ||
-      (entry as { event?: unknown }).event !== event
-    ) {
+    if (!entry || typeof entry !== "object" || !("event" in entry) || entry.event !== event) {
       return true;
     }
     keptForType += 1;

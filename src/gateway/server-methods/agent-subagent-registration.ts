@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import {
@@ -74,7 +75,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
   requester?: PluginSubagentRequesterContext;
   pluginId?: string;
   gatewayContextResolver?: GatewayContextResolver;
-  assertCurrent: () => void;
+  assertCurrent: () => SessionEntry | undefined;
 }): Promise<void> {
   const childSessionKey = params.childSessionKey.trim();
   if (!childSessionKey) {
@@ -87,7 +88,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
   const requesterSessionKey = params.requester?.sessionKey ?? ownerSessionKey;
   const { adoptPausedSubagentRunForFollowUp, registerSubagentRun } =
     await import("../../agents/subagents/registry/subagent-registry.js");
-  params.assertCurrent();
+  const sessionEntry = params.assertCurrent();
   // Resume a yielded run with its original audience unless the follow-up names
   // a requester and therefore owns a separate delivery.
   if (
@@ -96,9 +97,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
       childSessionKey,
       runId: params.runId,
       task: params.task,
-      ...(params.gatewayContextResolver
-        ? { gatewayContextResolver: params.gatewayContextResolver }
-        : {}),
+      gatewayContextResolver: params.gatewayContextResolver,
     })
   ) {
     return;
@@ -107,6 +106,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
     {
       runId: params.runId,
       childSessionKey,
+      sessionEntry,
       controllerSessionKey: ownerSessionKey,
       requesterSessionKey,
       requesterOrigin: params.requester?.origin,
@@ -116,9 +116,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
       ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
       expectsCompletionMessage: params.requester !== undefined,
       spawnMode: "run",
-      ...(params.gatewayContextResolver
-        ? { gatewayContextResolver: params.gatewayContextResolver }
-        : {}),
+      gatewayContextResolver: params.gatewayContextResolver,
     },
     { assertCurrent: params.assertCurrent },
   );

@@ -229,6 +229,10 @@ it.each([
   { identity: "unrelated", removed: true },
   { identity: "openclaw", removed: false },
   { identity: "unclassified", removed: false },
+  { identity: "foreign-bun", removed: true },
+  { identity: "foreign-node", removed: true },
+  { identity: "capture-bun", removed: false },
+  { identity: "cwd-unavailable", removed: false },
 ])(
   "uses the real census before reclamation with an $identity entrypoint",
   async ({ identity, removed }) => {
@@ -238,14 +242,30 @@ it.each([
     write(
       app,
       "package.json",
-      identity === "unclassified" ? "{" : JSON.stringify({ name: identity }),
+      identity === "unclassified"
+        ? "{"
+        : JSON.stringify({ name: identity, scripts: { start: "node dist/index.js" } }),
     );
     const file = write(systemTmp, "openclaw-plugin-build-legacy/source.cjs", "capture");
     inspectAsLaterProcess();
     const peer = process.pid + 100;
+    const argv = identity.endsWith("bun")
+      ? ["bun", "run", "--silent", identity === "capture-bun" ? file : "start"]
+      : identity === "foreign-node"
+        ? ["node", "--foreign-runtime-option", script]
+        : ["node", identity === "cwd-unavailable" ? "dist/index.js" : script];
+    ps.mockReturnValue(
+      identity === "cwd-unavailable"
+        ? {
+            status: null,
+            error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }),
+            stdout: "",
+          }
+        : { status: 0, stdout: `p${peer}\0n${app}\0` },
+    );
     processMembers.mockReturnValue([
       { pid: process.pid, state: "S", command: { ppid: 0, argv: ["openclaw-doctor"] } },
-      { pid: peer, state: "S", command: { ppid: 0, argv: ["node", script] } },
+      { pid: peer, state: "S", command: { ppid: 0, argv } },
     ]);
     const actual = await vi.importActual<typeof import("../infra/openclaw-process-census.js")>(
       "../infra/openclaw-process-census.js",
@@ -256,9 +276,11 @@ it.each([
     expect(output).toContain(
       removed
         ? "Removed 1 legacy plugin capture root(s)"
-        : identity === "openclaw"
-          ? `PIDs: ${peer}`
-          : `Could not classify PID ${peer}:`,
+        : identity === "cwd-unavailable"
+          ? `Could not classify PID ${peer}: working directory is unavailable`
+          : identity === "unclassified"
+            ? "package identity"
+            : `PIDs: ${peer}`,
     );
     if (identity === "unclassified") {
       expect(output).not.toContain("Other OpenClaw processes are still running");

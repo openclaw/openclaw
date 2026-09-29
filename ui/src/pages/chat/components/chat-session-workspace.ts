@@ -369,21 +369,11 @@ export function openSessionWorkspaceFile(
   openFile(state, getSessionWorkspace(state), target.path, { line: target.line });
 }
 
-function toggleSessionWorkspace(state: SessionWorkspaceHost) {
-  const workspace = getSessionWorkspace(state);
-  workspace.collapsed = !workspace.collapsed;
-  if (!workspace.collapsed && workspace.list?.sessionKey !== state.sessionKey) {
-    loadSessionWorkspace(state, workspace);
-  }
-  state.requestUpdate?.();
-}
-
 export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: string) {
   const workspace = getSessionWorkspace(state);
   clearWorkspaceTimer(workspace);
   const normalizedPath = path.replaceAll("\\", "/");
   const separator = normalizedPath.lastIndexOf("/");
-  workspace.collapsed = false;
   workspace.browserPath = separator > 0 ? normalizedPath.slice(0, separator) : "";
   workspace.browserSearch = "";
   workspace.filter = "all";
@@ -491,7 +481,6 @@ export function createSessionWorkspaceProps(
   }
   const diffContent = resolveSessionDiffSidebarContent(state);
   return {
-    collapsed: options?.expanded === true ? false : workspace.collapsed,
     sessionKey: state.sessionKey,
     list: workspace.list?.sessionKey === state.sessionKey ? workspace.list : null,
     loading: workspace.loading,
@@ -504,7 +493,6 @@ export function createSessionWorkspaceProps(
       workspace.filter = filter;
       state.requestUpdate?.();
     },
-    onToggleCollapsed: () => toggleSessionWorkspace(state),
     onRefresh: () => loadSessionWorkspace(state, workspace, true),
     onBrowsePath: (path) => {
       clearWorkspaceTimer(workspace);

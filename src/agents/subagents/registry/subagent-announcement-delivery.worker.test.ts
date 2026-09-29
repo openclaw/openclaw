@@ -1,6 +1,7 @@
 // Preserve fixture setup before production consumers.
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
+import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
   emptySqliteCounts,
@@ -12,15 +13,25 @@ import { createGatewayMethodRegistry } from "../../../gateway/methods/registry.j
 import { createContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
+import * as hookRuntime from "../../../plugins/hook-runner-global.js";
+import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { createDeferredCore as createDeferred } from "../../../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
-import { withEnvAsync } from "../../../test-utils/env.js";
+import { setTestEnvValue, withEnvAsync } from "../../../test-utils/env.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import * as registryPersistence from "./subagent-registry-persistence.js";
 import * as registryReads from "./subagent-registry-read-cache.js";
 import * as registryRead from "./subagent-registry-read.js";
 import * as registryState from "./subagent-registry-state.js";
-import { registerSubagentRun, resumeSubagentRun } from "./subagent-registry.js";
+import {
+  prepareSubagentSessionCleanupRevocation,
+  registerSubagentRun,
+  resumeSubagentRun,
+} from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -28,6 +39,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 vi.mock("../../../state/openclaw-state-worker-store.js", { spy: true });
 vi.mock("./subagent-registry-read-cache.js", { spy: true });
 vi.mock("./subagent-registry-read.js", { spy: true });
+vi.mock("../../../plugins/hook-runner-global.js", { spy: true });
 type AgentTurnService = ReturnType<
   (typeof import("../../../gateway/agent-turn/agent-turn-service.js"))["createAgentTurnService"]
 >;
@@ -528,3 +540,144 @@ it("refuses an old registered wake after its descendant read outlives a successo
     }
   });
 });
+
+it.for(["current", "successor", "revoked", "source switched"] as const)(
+  "retains ended-hook authority through a registered requester-wake acknowledgement (%s)",
+  async (change, { signal }) => {
+    const run = await registerCompletion("hook-wake-ack");
+    const original = subagentRuns.get(run.runId)!;
+    const revoke = await prepareSubagentSessionCleanupRevocation(run.childSessionKey);
+    const source = captureOpenClawStateWorkerContext();
+    const originalDatabase = openOpenClawStateDatabase({ path: source.admission.databasePath });
+    const replacementDir = path.join(fixture.stateDir, "replacement-state");
+    if (change === "source switched") {
+      openOpenClawStateDatabase({
+        path: path.join(replacementDir, path.basename(source.admission.databasePath)),
+      });
+    }
+    fixture.announce.mockImplementation(nativeAnnounce.runSubagentAnnounceFlow);
+    const pluginEntered = createDeferred();
+    const mutationReady = createDeferred();
+    const stampWaiting = createDeferred();
+    const release = createDeferred();
+    fixture.wake.mockImplementation(async (params) => {
+      await pluginEntered.promise;
+      return nativeWake.maybeWakeRequesterAfterAllChildrenSettled(params);
+    });
+    const ended = vi.fn(async () => {
+      pluginEntered.resolve();
+      await mutationReady.promise;
+    });
+    const releaseCancelledTest = () => {
+      pluginEntered.resolve();
+      mutationReady.resolve();
+      release.resolve();
+      stampWaiting.reject(signal.reason);
+    };
+    signal.addEventListener("abort", releaseCancelledTest, { once: true });
+    const { registry, runner } = createHookRunnerWithRegistry([
+      { hookName: "subagent_ended", handler: ended },
+    ]);
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
+    vi.spyOn(hookRuntime, "getGlobalHookRunner").mockReturnValue(runner);
+    const waitForPending = registryPersistence.waitForPendingSubagentRegistryWrites;
+    const waiting = vi
+      .spyOn(registryPersistence, "waitForPendingSubagentRegistryWrites")
+      .mockImplementation((...args) => {
+        const pending = waitForPending(...args);
+        if (ended.mock.calls.length > 0 && args[0].includes(run.runId)) {
+          if (pending) {
+            stampWaiting.resolve();
+          } else {
+            stampWaiting.reject(new Error("Stamp found no pending wake at held acknowledgement"));
+          }
+        }
+        return pending;
+      });
+    let held = false;
+    const worker = vi
+      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+      .mockImplementation((context, operation, options) =>
+        nativeWorker.runOpenClawStateWorkerOperation(
+          context,
+          (scope) =>
+            operation({
+              async execute(command, executeOptions) {
+                const result = await scope.execute(command, executeOptions);
+                if (
+                  !held &&
+                  command.type === "sessionDelivery.mutateSubagentCompletion" &&
+                  original.cleanupCompletedAt !== undefined
+                ) {
+                  held = true;
+                  // The actual wake has committed; its pending-write owner retains the ACK.
+                  mutationReady.resolve();
+                  await release.promise;
+                }
+                return result;
+              },
+            }),
+          options,
+        ),
+      );
+    try {
+      completeRegistered(run);
+      await stampWaiting.promise;
+      expect(ended).toHaveBeenCalledOnce();
+      expect(original.endedHookEmittedAt).toBeUndefined();
+      const committed = loadSubagentRegistryFromSqlite(originalDatabase).get(run.runId);
+      expect(committed?.cleanupCompletedAt).toBeTypeOf("number");
+      expect(committed?.requesterSettleWake).toBeUndefined();
+      let successor: SubagentRunRecord | undefined;
+      if (change === "successor") {
+        await registerSubagentRun({
+          ...run,
+          requesterSessionKey: "agent:main:main",
+          requesterAgentId: "main",
+          requesterDisplayKey: "main",
+          task: "successor after observed hook",
+          cleanup: "keep",
+          expectsCompletionMessage: false,
+        });
+        successor = subagentRuns.get(run.runId)!;
+        expect(successor).not.toBe(original);
+      } else if (change === "revoked") {
+        revoke();
+        expect(original.execution.suppressSessionEffects).toBe(true);
+      } else if (change === "source switched") {
+        setTestEnvValue("OPENCLAW_STATE_DIR", replacementDir);
+      }
+      release.resolve();
+      await fixture.settle();
+      const stored = loadSubagentRegistryFromSqlite(originalDatabase).get(run.runId);
+      expect(ended).toHaveBeenCalledOnce();
+      expect(fixture.announce).toHaveBeenCalledOnce();
+      expect(turns.start).toHaveBeenCalledOnce();
+      if (change === "current") {
+        expect(stored?.endedHookEmittedAt).toBeTypeOf("number");
+        expect(stored?.requesterSettleWake).toBeUndefined();
+        resumeSubagentRun(run.runId);
+        await fixture.settle();
+        expect(ended).toHaveBeenCalledOnce();
+      } else {
+        expect(original.endedHookEmittedAt).toBeUndefined();
+        expect(stored?.endedHookEmittedAt).toBeUndefined();
+        if (successor) {
+          expect(subagentRuns.get(run.runId)).toBe(successor);
+          expect(stored).toMatchObject({
+            task: "successor after observed hook",
+            generation: successor.generation,
+            execution: { status: "running" },
+          });
+        }
+      }
+    } finally {
+      release.resolve();
+      await fixture.settle();
+      setTestEnvValue("OPENCLAW_STATE_DIR", fixture.stateDir);
+      worker.mockRestore();
+      waiting.mockRestore();
+      signal.removeEventListener("abort", releaseCancelledTest);
+    }
+  },
+);

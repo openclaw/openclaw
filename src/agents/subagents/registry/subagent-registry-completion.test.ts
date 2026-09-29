@@ -42,7 +42,9 @@ describe("emitSubagentEndedHookOnce", () => {
       sendFarewell: true,
       accountId: "acct-1",
       inFlightRunIds: new Set<string>(),
-      persist: vi.fn(),
+      recordEmitted: vi.fn(() => {
+        entry.endedHookEmittedAt = Date.now();
+      }),
       ...overrides,
     };
   };
@@ -68,7 +70,7 @@ describe("emitSubagentEndedHookOnce", () => {
     expect(emitted).toBe(true);
     expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
     expect(typeof params.entry.endedHookEmittedAt).toBe("number");
-    expect(params.persist).toHaveBeenCalledTimes(1);
+    expect(params.recordEmitted).toHaveBeenCalledTimes(1);
   });
 
   it("runs subagent_ended hooks when available", async () => {
@@ -83,7 +85,7 @@ describe("emitSubagentEndedHookOnce", () => {
     expect(emitted).toBe(true);
     expect(lifecycleMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
     expect(typeof params.entry.endedHookEmittedAt).toBe("number");
-    expect(params.persist).toHaveBeenCalledTimes(1);
+    expect(params.recordEmitted).toHaveBeenCalledTimes(1);
   });
 
   it("returns false when the global hook runner is not initialized yet", async () => {
@@ -94,7 +96,7 @@ describe("emitSubagentEndedHookOnce", () => {
 
     expect(emitted).toBe(false);
     expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
-    expect(params.persist).not.toHaveBeenCalled();
+    expect(params.recordEmitted).not.toHaveBeenCalled();
     expect(params.entry.endedHookEmittedAt).toBeUndefined();
   });
 
@@ -104,7 +106,7 @@ describe("emitSubagentEndedHookOnce", () => {
     });
     const emitted = await mod.emitSubagentEndedHookOnce(params);
     expect(emitted).toBe(false);
-    expect(params.persist).not.toHaveBeenCalled();
+    expect(params.recordEmitted).not.toHaveBeenCalled();
     expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
   });
 
@@ -114,7 +116,7 @@ describe("emitSubagentEndedHookOnce", () => {
     });
     const emitted = await mod.emitSubagentEndedHookOnce(params);
     expect(emitted).toBe(false);
-    expect(params.persist).not.toHaveBeenCalled();
+    expect(params.recordEmitted).not.toHaveBeenCalled();
     expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
   });
 
@@ -124,7 +126,7 @@ describe("emitSubagentEndedHookOnce", () => {
     const params = createEmitParams({ entry, inFlightRunIds });
     const emitted = await mod.emitSubagentEndedHookOnce(params);
     expect(emitted).toBe(false);
-    expect(params.persist).not.toHaveBeenCalled();
+    expect(params.recordEmitted).not.toHaveBeenCalled();
     expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
   });
 
@@ -141,7 +143,7 @@ describe("emitSubagentEndedHookOnce", () => {
     const emitted = await mod.emitSubagentEndedHookOnce(params);
 
     expect(emitted).toBe(false);
-    expect(params.persist).not.toHaveBeenCalled();
+    expect(params.recordEmitted).not.toHaveBeenCalled();
     expect(inFlightRunIds.has(entry.runId)).toBe(false);
     expect(entry.endedHookEmittedAt).toBeUndefined();
   });
@@ -160,7 +162,8 @@ describe("emitSubagentEndedHookOnce", () => {
           ? new SqliteWorkerError("Hook stamp acknowledgement lost", "outcome-unknown")
           : new Error("Hook stamp refused before commit");
       const params = createEmitParams({
-        persist: vi.fn(() => {
+        recordEmitted: vi.fn(() => {
+          params.entry.endedHookEmittedAt = Date.now();
           entered.resolve();
           return write.promise;
         }),
@@ -185,7 +188,7 @@ describe("emitSubagentEndedHookOnce", () => {
       expect(params.entry.endedHookEmittedAt).toEqual(expect.any(Number));
       await expect(mod.emitSubagentEndedHookOnce(params)).resolves.toBe(false);
       expect(lifecycleMocks.runSubagentEnded).toHaveBeenCalledOnce();
-      expect(params.persist).toHaveBeenCalledOnce();
+      expect(params.recordEmitted).toHaveBeenCalledOnce();
     },
   );
 });

@@ -1,8 +1,132 @@
 import { expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "../../infra/startup-maintenance-required.js";
-import { createRuntimeWithExitSignal, withIsolatedSignals } from "./run-loop.test-support.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  createCloseMock,
+  createGatewayServer,
+  createRuntimeWithExitSignal,
+  withIsolatedSignals,
+} from "./run-loop.test-support.js";
 
 export function registerGatewayStartupFailureTests(): void {
+  it.each(["clean", "failed", "maintenance", "unrepaired", "unavailable"] as const)(
+    "fences replacement after deferred startup with %s cleanup",
+    async (cleanup) => {
+      vi.clearAllMocks();
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { runGatewayLoop } = await import("./run-loop.js");
+        const firstStartup = createDeferredCore();
+        const firstStarted = createDeferredCore();
+        const triageStarted = createDeferredCore();
+        const thirdStarted = createDeferredCore();
+        const { SessionStoreMigrationRequiredError } =
+          await import("../../config/sessions/migration-required.js");
+        const startupError =
+          cleanup === "maintenance"
+            ? new SessionStoreMigrationRequiredError("legacy session store requires migration")
+            : new Error("replacement deferred startup failed");
+        const cleanupError = new Error("replacement cleanup failed");
+        const retryError = new Error("repaired configuration still refused");
+        const closeFirst = createCloseMock();
+        const closeSecond = createCloseMock();
+        if (cleanup === "failed") {
+          closeSecond.mockRejectedValueOnce(cleanupError);
+        }
+        const closeThird = createCloseMock();
+        const start = vi
+          .fn<Parameters<typeof runGatewayLoop>[0]["start"]>()
+          .mockImplementationOnce(async () => {
+            firstStarted.resolve();
+            return createGatewayServer(closeFirst, firstStartup.promise);
+          })
+          .mockImplementationOnce(async () =>
+            createGatewayServer(closeSecond, Promise.reject(startupError)),
+          )
+          .mockImplementationOnce(async () => {
+            thirdStarted.resolve();
+            if (cleanup === "unrepaired") {
+              throw retryError;
+            }
+            return createGatewayServer(closeThird);
+          });
+        const { runtime, exited } = createRuntimeWithExitSignal();
+        const onRestartStartupFailure = vi.fn(async (error: unknown) => {
+          triageStarted.resolve();
+          expect(error).toBe(startupError);
+          expect(closeSecond).toHaveBeenCalledExactlyOnceWith({ reason: "gateway startup failed" });
+          return cleanup === "unavailable" ? undefined : ("completed" as const);
+        });
+        const completeBoot = vi.fn();
+        const loop = runGatewayLoop({ start, runtime, completeBoot, onRestartStartupFailure });
+        const loopRejected = vi.fn<(error: unknown) => void>();
+        const loopSettled = loop.catch(loopRejected);
+        let stop: (() => void) | undefined;
+        try {
+          await Promise.race([firstStarted.promise, loopSettled]);
+          expect(start).toHaveBeenCalledOnce();
+          const restart = captureSignal("SIGUSR2");
+          stop = captureSignal("SIGTERM");
+          restart();
+          await Promise.race([loopSettled, triageStarted.promise]);
+          expect(closeSecond).toHaveBeenCalledExactlyOnceWith({
+            reason: "gateway startup failed",
+          });
+          if (cleanup === "clean") {
+            expect(onRestartStartupFailure).toHaveBeenCalledOnce();
+            expect(loopRejected).not.toHaveBeenCalled();
+            await withTestTimeout(
+              thirdStarted.promise,
+              1_000,
+              "expected settled triage to restart the Gateway without another signal",
+            );
+            expect(start).toHaveBeenCalledTimes(3);
+            stop();
+            await expect(exited).resolves.toBe(0);
+          } else if (cleanup === "unrepaired" || cleanup === "unavailable") {
+            await withTestTimeout(loopSettled, 1_000, "expected terminal startup refusal");
+            const error = cleanup === "unrepaired" ? retryError : startupError;
+            expect(loopRejected).toHaveBeenCalledExactlyOnceWith(error);
+            expect(onRestartStartupFailure).toHaveBeenCalledOnce();
+            expect(start).toHaveBeenCalledTimes(cleanup === "unrepaired" ? 3 : 2);
+            expect(completeBoot).toHaveBeenLastCalledWith({
+              outcome: "startup_failed",
+              reason: error.message,
+            });
+          } else if (cleanup === "maintenance") {
+            expect(onRestartStartupFailure).not.toHaveBeenCalled();
+            expect(loopRejected).toHaveBeenCalledExactlyOnceWith(startupError);
+            expect(start).toHaveBeenCalledTimes(2);
+          } else {
+            expect(onRestartStartupFailure).not.toHaveBeenCalled();
+            expect(loopRejected).toHaveBeenCalledOnce();
+            await expect(loop).rejects.toBeInstanceOf(AggregateError);
+            await expect(loop).rejects.toMatchObject({
+              cause: startupError,
+              errors: expect.arrayContaining([startupError, cleanupError]),
+            });
+            expect(start).toHaveBeenCalledTimes(2);
+            expect(runtime.exit).not.toHaveBeenCalled();
+          }
+        } finally {
+          firstStartup.resolve();
+          await firstStartup.promise;
+          if (
+            loopRejected.mock.calls.length === 0 &&
+            runtime.exit.mock.calls.length === 0 &&
+            stop
+          ) {
+            stop();
+            await exited;
+          }
+          if (loopRejected.mock.calls.length > 0) {
+            await loopSettled;
+          }
+        }
+      });
+    },
+  );
+
   it("keeps truncated startup failure reasons free of lone surrogates", async () => {
     await withIsolatedSignals(async () => {
       const failure = `${"a".repeat(499)}😀tail`;

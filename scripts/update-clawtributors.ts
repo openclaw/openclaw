@@ -338,7 +338,11 @@ for (let i = 0; i < visibleEntries.length; i += PER_LINE) {
 
 const block = `${CLAWTRIBUTORS_START}\n${markdownLines.join("\n")}\n${CLAWTRIBUTORS_END}`;
 const hiddenBlock = buildHiddenReadmeBlock(entries, visibleEntries);
-const hiddenRange = findHiddenReadmeRange(currentReadme);
+const hiddenRange = findMarkerRange(
+  currentReadme,
+  CLAWTRIBUTORS_HIDDEN_START,
+  CLAWTRIBUTORS_HIDDEN_END,
+);
 const readmeWithoutMeta = hiddenRange
   ? `${currentReadme.slice(0, hiddenRange.start)}${currentReadme.slice(hiddenRange.end)}`
   : currentReadme;
@@ -421,16 +425,12 @@ function parseCount(value: string): number {
 }
 
 function isValidLogin(login: string): boolean {
-  if (!/^[A-Za-z0-9-]{1,39}$/.test(login)) {
-    return false;
-  }
-  if (login.startsWith("-") || login.endsWith("-")) {
-    return false;
-  }
-  if (login.includes("--")) {
-    return false;
-  }
-  return true;
+  return (
+    /^[A-Za-z0-9-]{1,39}$/.test(login) &&
+    !login.startsWith("-") &&
+    !login.endsWith("-") &&
+    !login.includes("--")
+  );
 }
 
 function normalizeLogin(login: string | null): string | null {
@@ -808,7 +808,7 @@ function parseReadmeEntries(
 }
 
 function parseHiddenReadmeLogins(content: string): string[] {
-  const rangeLocal = findHiddenReadmeRange(content);
+  const rangeLocal = findMarkerRange(content, CLAWTRIBUTORS_HIDDEN_START, CLAWTRIBUTORS_HIDDEN_END);
   if (!rangeLocal) {
     return [];
   }
@@ -838,35 +838,25 @@ function buildHiddenReadmeBlock(entriesLocal: Entry[], visibleEntriesLocal: Entr
 }
 
 function findClawtributorsRange(content: string): { start: number; end: number } | null {
-  const markerStart = content.indexOf(CLAWTRIBUTORS_START);
-  const markerEnd = content.indexOf(CLAWTRIBUTORS_END, markerStart);
-  if (markerStart !== -1 && markerEnd !== -1) {
-    return {
-      start: markerStart,
-      end: markerEnd + CLAWTRIBUTORS_END.length,
-    };
-  }
-
-  const legacyStart = content.indexOf('<p align="left">');
-  const legacyEnd = content.indexOf("</p>", legacyStart);
-  if (legacyStart === -1 || legacyEnd === -1) {
-    return null;
-  }
-  return {
-    start: legacyStart,
-    end: legacyEnd + "</p>".length,
-  };
+  return (
+    findMarkerRange(content, CLAWTRIBUTORS_START, CLAWTRIBUTORS_END) ??
+    findMarkerRange(content, '<p align="left">', "</p>")
+  );
 }
 
-function findHiddenReadmeRange(content: string): { start: number; end: number } | null {
-  const markerStart = content.indexOf(CLAWTRIBUTORS_HIDDEN_START);
-  const markerEnd = content.indexOf(CLAWTRIBUTORS_HIDDEN_END, markerStart);
+function findMarkerRange(
+  content: string,
+  start: string,
+  end: string,
+): { start: number; end: number } | null {
+  const markerStart = content.indexOf(start);
+  const markerEnd = content.indexOf(end, markerStart);
   if (markerStart === -1 || markerEnd === -1) {
     return null;
   }
   return {
     start: markerStart,
-    end: markerEnd + CLAWTRIBUTORS_HIDDEN_END.length,
+    end: markerEnd + end.length,
   };
 }
 
@@ -887,15 +877,5 @@ function pickDisplay(
   login: string,
   existing?: string,
 ): string {
-  const key = login.toLowerCase();
-  if (displayName[key]) {
-    return displayName[key];
-  }
-  if (existing) {
-    return existing;
-  }
-  if (baseName) {
-    return baseName;
-  }
-  return login;
+  return displayName[login.toLowerCase()] || existing || baseName || login;
 }

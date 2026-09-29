@@ -27,6 +27,10 @@ import { resolveCronJobsStorePath } from "../cron/store/paths.js";
 import { readActiveCronRunReceiptOwnersInDatabase } from "../cron/store/run-receipt-read.js";
 import { observeCronRunRecoveryInDatabase } from "../cron/store/run-recovery.read.js";
 import {
+  readSharedGitHubPublicationRequestInDatabase,
+  readSharedRepositoryGitHubPublicationInDatabase,
+} from "../gateway/github-publication-shared-read.kernel.js";
+import {
   readGitHubPublicationRequest,
   readKnownGitHubPublicationPullRequestUrlsInDatabase,
 } from "../gateway/github-publication-store.js";
@@ -103,7 +107,7 @@ import type {
 } from "./openclaw-state-read.types.js";
 import { isReadRequest } from "./openclaw-state-read.validation.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
-import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.js";
+import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 import {
   listUserChannelIdentitiesInDatabase,
   resolveUserChannelIdentityInDatabase,
@@ -509,6 +513,16 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 lifecycle: readGitHubPublicationSessionLifecycle(command, db),
+              };
+            }
+            if (command.type === "githubPublication.sharedObservation") {
+              const { kind, session, selector, entry } = command.input;
+              return {
+                type: command.type,
+                row:
+                  kind === "repository"
+                    ? readSharedRepositoryGitHubPublicationInDatabase(db, session, selector, entry)
+                    : readSharedGitHubPublicationRequestInDatabase(db, session, selector, entry),
               };
             }
             if (command.type === "githubPublication.request") {

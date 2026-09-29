@@ -178,9 +178,6 @@ export async function refreshWorkboard(params: {
   if (state.dispatching || workboardHasActiveWrites(state)) {
     return false;
   }
-  const startedAt = Date.now();
-  state.lastRefreshStartedAt = startedAt;
-  state.lastRefreshSource = params.source;
   state.lastRefreshError = null;
   params.requestUpdate?.();
   if (!params.client) {
@@ -196,7 +193,6 @@ export async function refreshWorkboard(params: {
     refreshDiagnostics: params.refreshDiagnostics,
     preserveError: passive,
   });
-  state.lastRefreshSource = params.source;
   if (!passive && state.error) {
     state.lastRefreshError = state.error;
   } else if (refreshed) {

@@ -108,14 +108,14 @@ describe("createQaScenarioRuntimeApi", () => {
       senderId: "qa-operator",
       text: "hello",
     });
-    const outbound = api.injectOutboundMessage({
+    const outbound = await api.injectOutboundMessage({
       accountId: "qa-channel",
       to: "dm:qa-operator",
       text: "hi",
     });
     expect(inbound.id.trim()).not.toBe("");
     expect(outbound.id.trim()).not.toBe("");
-    api.readTransportMessage({ accountId: "qa-channel", messageId: outbound.id });
+    await api.readTransportMessage({ accountId: "qa-channel", messageId: outbound.id });
     await api.reset();
     await api.resetBus();
     await api.resetTransport();

@@ -4,7 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { observeChatCache, type ChatMessageCache } from "./session-message-cache.ts";
-import { installSessionPrefetch } from "./session-prefetch.ts";
+import { SessionPrefetchController } from "./session-prefetch.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
@@ -104,7 +104,7 @@ export function createSessionPrefetchFixture() {
   const shell = document.createElement("openclaw-app-shell");
   shell.append(host);
   document.body.append(shell);
-  const controller = installSessionPrefetch(host, cache, store, () => context);
+  const controller = new SessionPrefetchController(host, cache, store, () => context);
   controller.hostConnected?.();
 
   function updatePrefetch(update: SessionPrefetchUpdate): void {

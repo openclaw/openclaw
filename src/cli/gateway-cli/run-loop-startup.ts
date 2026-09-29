@@ -17,6 +17,50 @@ export type GatewayRunLoopStartOptions = Pick<
   | "gatewayStateOwner"
 > & { requestHotReloadRecovery?: GatewayRestartEmitter };
 
+export type GatewayRestartStartupFailureHandler = (
+  error: unknown,
+  signal: AbortSignal,
+) => Promise<"completed" | void>;
+
+export function createGatewayRestartRecovery(
+  onFailure: GatewayRestartStartupFailureHandler | undefined,
+  logger: Pick<SubsystemLogger, "info">,
+) {
+  let work: { controller: AbortController; settled: Promise<"completed" | void> } | undefined;
+  return {
+    abort() {
+      work?.controller.abort();
+    },
+    async waitForCleanup() {
+      await work?.settled;
+    },
+    async attempt(error: unknown): Promise<boolean> {
+      if (!onFailure) {
+        return false;
+      }
+      const controller = new AbortController();
+      work = {
+        controller,
+        settled: Promise.resolve().then(() => onFailure(error, controller.signal)),
+      };
+      try {
+        const completion = await work.settled;
+        if (controller.signal.aborted) {
+          return false;
+        }
+        if (completion !== "completed") {
+          throw error;
+        }
+        // Completion proves triage cleanup, not Gateway health. Startup owns that proof.
+        logger.info("Automatic triage completed; retrying Gateway startup once.");
+        return true;
+      } finally {
+        work = undefined;
+      }
+    },
+  };
+}
+
 export function createGatewayStartupOperations(): {
   run: GatewayStartupOperation;
   close(): void;

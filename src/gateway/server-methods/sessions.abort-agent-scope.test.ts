@@ -514,6 +514,7 @@ describe("sessions.abort agent scope", () => {
           agentId: "main",
           dropIfSlow: true,
           sessionKeys: ["agent:main:openclaw-weixin:direct:wechat-user"],
+          prepareSessionProjection: expect.any(Function),
         },
       );
     } finally {

@@ -13,6 +13,7 @@ import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-work
 import type { CronRunReceipt } from "../store/run-receipt.types.js";
 import type { CronRuntimeMutationContracts } from "../store/runtime-mutation.types.js";
 import type {
+  CronReceiptRevisionRefusal,
   CronRuntimeMutationType,
   CronRuntimeWorkerOperations,
 } from "../store/runtime-worker.types.js";
@@ -30,6 +31,7 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
   publish: (outcome: CronRuntimeMutationContracts[Type]["outcome"]) => void;
   onSettled?: (outcome: "committed" | "not-committed" | "unknown") => void;
   onRolledBackConflict?: (receipt: CronRunReceipt) => void;
+  onRolledBackReceiptRevision?: (refusal: CronReceiptRevisionRefusal) => never;
 }): Promise<void> {
   const nonce = randomUUID();
   let settlement: Promise<SqliteWorkerOperationSettlement> | undefined;
@@ -37,6 +39,7 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
   let bytes: Uint8Array | undefined;
   let published = false;
   let conflict: CronRunReceipt | undefined;
+  let receiptRevision: CronReceiptRevisionRefusal | undefined;
   const assertCurrent = () => {
     params.context.admission.assertCurrent();
     params.assertCurrent();
@@ -74,6 +77,12 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
               throw new Error("Cron mutation returned an unexpected reservation conflict");
             }
             conflict = result.conflict;
+          }
+          if ("receiptRevision" in result) {
+            if (params.type !== "cron.finalizeRuns" || !params.onRolledBackReceiptRevision) {
+              throw new Error("Cron mutation returned an unexpected receipt revision refusal");
+            }
+            receiptRevision = result.receiptRevision;
           }
         } finally {
           await settlement;
@@ -137,6 +146,16 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
         throw new Error("Cron reservation conflict has no confirmed native rollback");
       }
       params.onRolledBackConflict!(conflict);
+    } else if (receiptRevision) {
+      const settled = await settlement;
+      if (
+        native?.committed ||
+        native?.settlement?.kind !== "completed" ||
+        settled?.kind !== "completed"
+      ) {
+        throw new Error("Cron receipt revision refusal has no confirmed native rollback");
+      }
+      params.onRolledBackReceiptRevision!(receiptRevision);
     } else if (!published) {
       throw new Error("Cron mutation did not publish a committed outcome");
     }

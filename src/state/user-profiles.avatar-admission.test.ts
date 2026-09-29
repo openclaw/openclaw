@@ -2,12 +2,14 @@ import { copyFileSync, existsSync, readFileSync, renameSync, unlinkSync } from "
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { createRetainedOperation } from "../infra/retained-operation.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import type { OpenClawStateReadOutcome } from "./openclaw-state-read.types.js";
 import { readUserProfileVersion } from "./user-profile-events.js";
 import {
   getUserProfileDisplay,
@@ -114,17 +116,23 @@ vi.mock("./openclaw-state-read-worker.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./openclaw-state-read-worker.js")>();
   return {
     ...actual,
-    createOpenClawStateReadTransport: (
-      ...args: Parameters<typeof actual.createOpenClawStateReadTransport>
-    ) => {
-      const owned = actual.createOpenClawStateReadTransport(...args);
+    captureOpenClawStateReadSource: () => {
+      const source = actual.captureOpenClawStateReadSource();
       return {
-        ...owned,
-        read: async (...readArgs: Parameters<typeof owned.read>) => {
-          if (boundary.readFailure) {
-            throw boundary.readFailure;
-          }
-          return owned.read(...readArgs);
+        ...source,
+        createTransport: (...args: Parameters<typeof source.createTransport>) => {
+          const owned = source.createTransport(...args);
+          return {
+            ...owned,
+            startRead: (...readArgs: Parameters<typeof owned.startRead>) => {
+              if (boundary.readFailure) {
+                const completion = createRetainedOperation<OpenClawStateReadOutcome>(() => {});
+                completion.reject(boundary.readFailure);
+                return completion.operation;
+              }
+              return owned.startRead(...readArgs);
+            },
+          };
         },
       };
     },

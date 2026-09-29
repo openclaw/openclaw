@@ -302,8 +302,6 @@ src/agents/model-fallback.test.ts
 src/agents/model-selection-shared.ts
 src/agents/model-selection.test.ts
 src/agents/models.profiles.live.test.ts
-src/agents/openai-transport-stream.base.test.ts
-src/agents/openai-transport-stream.replay-and-tools.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts
 src/agents/provider-attribution.test.ts
