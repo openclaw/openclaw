@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { tryReadDiskSpace } from "./disk-space.js";
 import { hasErrnoCode } from "./errno.js";
 import { openLocalFileSafely, type OpenResult } from "./fs-safe.js";
@@ -311,6 +312,9 @@ export async function prepareGitCandidateTransfer(params: {
           await fs.unlink(keepPath);
         }
       } catch (error) {
+        if (hasCommandProcessCleanupError(error)) {
+          throw error;
+        }
         const warning: UpdateStepResult = {
           name: "git-update-pack-cleanup",
           command: "release retained Git update pack",
