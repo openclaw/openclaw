@@ -117,14 +117,9 @@ type ResolveApiKeyForProfileResult = {
   credential?: AuthProfileCredential;
 };
 
-function buildApiKeyProfileResult(params: {
-  apiKey: string;
-  provider: string;
-  email?: string;
-  profileId: string;
-  profileType: AuthProfileCredential["type"];
-  credential?: AuthProfileCredential;
-}): ResolveApiKeyForProfileResult {
+function buildApiKeyProfileResult(
+  params: ResolveApiKeyForProfileResult,
+): ResolveApiKeyForProfileResult {
   const result = {
     apiKey: params.apiKey,
     provider: params.provider,
@@ -242,16 +237,37 @@ const oauthManager = createOAuthManager({
     }),
 });
 
-/** Clear in-process OAuth refresh queues between isolated tests. */
-function resetOAuthRefreshQueuesForTest(): void {
-  oauthManager.resetRefreshQueuesForTest();
-}
-
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.oauthTestApi")] = {
     isRefreshTokenReusedError,
-    resetOAuthRefreshQueuesForTest,
+    resetOAuthRefreshQueuesForTest: oauthManager.resetRefreshQueuesForTest,
   };
+}
+
+async function resolveOAuthProfileAccess(
+  params: ResolveApiKeyForProfileParams,
+  credential: OAuthCredential,
+): Promise<ResolveApiKeyForProfileResult | null> {
+  const resolved = await oauthManager.resolveOAuthAccess({
+    store: params.store,
+    profileId: params.profileId,
+    credential,
+    agentDir: params.agentDir,
+    cfg: params.cfg,
+    forceRefresh: params.forceRefresh,
+    validateCredential: params.validateOAuthCredential,
+    signal: params.signal,
+  });
+  return resolved
+    ? buildApiKeyProfileResult({
+        apiKey: resolved.apiKey,
+        provider: resolved.credential.provider,
+        email: resolved.credential.email ?? credential.email,
+        profileId: params.profileId,
+        profileType: credential.type,
+        credential: resolved.credential,
+      })
+    : null;
 }
 
 async function tryResolveOAuthProfile(
@@ -280,28 +296,9 @@ async function tryResolveOAuthProfile(
     return null;
   }
 
-  const resolved = await oauthManager.resolveOAuthAccess({
-    store,
-    profileId,
-    credential: cred,
-    agentDir: params.agentDir,
-    cfg,
-    forceRefresh: params.forceRefresh,
-    validateCredential: params.validateOAuthCredential,
-    signal: params.signal,
-  });
+  const resolved = await resolveOAuthProfileAccess(params, cred);
   params.signal?.throwIfAborted();
-  if (!resolved) {
-    return null;
-  }
-  return buildApiKeyProfileResult({
-    apiKey: resolved.apiKey,
-    provider: resolved.credential.provider,
-    email: resolved.credential.email ?? cred.email,
-    profileId,
-    profileType: cred.type,
-    credential: resolved.credential,
-  });
+  return resolved;
 }
 
 function isRetiredOAuthProfileId(profileId: string): boolean {
@@ -482,28 +479,9 @@ export async function resolveApiKeyForProfile(
   }
 
   try {
-    const resolved = await oauthManager.resolveOAuthAccess({
-      store,
-      agentDir: params.agentDir,
-      profileId,
-      credential: cred,
-      cfg,
-      forceRefresh: params.forceRefresh,
-      validateCredential: params.validateOAuthCredential,
-      signal: params.signal,
-    });
+    const resolved = await resolveOAuthProfileAccess(params, cred);
     params.signal?.throwIfAborted();
-    if (!resolved) {
-      return null;
-    }
-    return buildApiKeyProfileResult({
-      apiKey: resolved.apiKey,
-      provider: resolved.credential.provider,
-      email: resolved.credential.email ?? cred.email,
-      profileId,
-      profileType: cred.type,
-      credential: resolved.credential,
-    });
+    return resolved;
   } catch (error) {
     params.signal?.throwIfAborted();
     let settlementComplete = isSettledOAuthRefreshFailure(error);
@@ -571,6 +549,7 @@ export async function resolveApiKeyForProfile(
           validateOAuthCredential: params.validateOAuthCredential,
           signal: params.signal,
         });
+        params.signal?.throwIfAborted();
         if (fallbackResolved) {
           return fallbackResolved;
         }

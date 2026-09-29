@@ -357,7 +357,6 @@ export function renderRecentSession(params: {
   const { subtitle, narration } = host.sessionProjection.resolveSubtitle({
     session,
     hasDisplay: display !== undefined,
-    displaySubtitle: display?.subtitle,
     sidebarLiveActivity: host.sidebarLiveActivity,
     showPreview: host.sessionsShowPreview,
     narrationLine: host.sidebarNarrationLines.get(session.key),

@@ -337,14 +337,7 @@ export function parseWebSearchTimeFilters<Provider extends WebSearchFreshnessPro
     };
   }
 
-  const parsedDateRange = parseIsoDateRange({
-    rawDateAfter: params.rawDateAfter,
-    rawDateBefore: params.rawDateBefore,
-    invalidDateAfterMessage: params.invalidDateAfterMessage,
-    invalidDateBeforeMessage: params.invalidDateBeforeMessage,
-    invalidDateRangeMessage: params.invalidDateRangeMessage,
-    docs,
-  });
+  const parsedDateRange = parseIsoDateRange(params);
   if ("error" in parsedDateRange) {
     return parsedDateRange;
   }

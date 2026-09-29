@@ -443,7 +443,6 @@ extensions/groq/index.ts	2
 extensions/huggingface/index.ts	1
 extensions/huggingface/models.ts	2
 extensions/imessage/src/accounts.ts	4
-extensions/imessage/src/actions-chat-guid.ts	1
 extensions/imessage/src/actions-contract.ts	1
 extensions/imessage/src/actions.runtime.ts	2
 extensions/imessage/src/actions.ts	1
@@ -455,7 +454,6 @@ extensions/imessage/src/approval-target-keys.ts	1
 extensions/imessage/src/channel.runtime.ts	1
 extensions/imessage/src/channel.ts	2
 extensions/imessage/src/chat.ts	1
-extensions/imessage/src/cli-output.ts	1
 extensions/imessage/src/client.ts	3
 extensions/imessage/src/monitor/catchup-bridge.ts	1
 extensions/imessage/src/monitor/catchup.ts	2
@@ -478,9 +476,9 @@ extensions/kimi-coding/provider-policy-api.ts	2
 extensions/line/src/accounts.ts	3
 extensions/line/src/actions.ts	4
 extensions/line/src/auto-reply-delivery.ts	1
-extensions/line/src/flex-templates/basic-cards.ts	14
-extensions/line/src/flex-templates/media-control-cards.ts	18
-extensions/line/src/flex-templates/schedule-cards.ts	28
+extensions/line/src/flex-templates/basic-cards.ts	12
+extensions/line/src/flex-templates/media-control-cards.ts	15
+extensions/line/src/flex-templates/schedule-cards.ts	27
 extensions/line/src/gateway.ts	1
 extensions/line/src/markdown-to-line.ts	7
 extensions/line/src/monitor-durable.ts	1
@@ -587,7 +585,7 @@ extensions/mattermost/src/mattermost/monitor-slash.ts	1
 extensions/mattermost/src/mattermost/monitor-websocket.ts	1
 extensions/mattermost/src/mattermost/monitor.ts	1
 extensions/mattermost/src/mattermost/slash-commands.ts	1
-extensions/mattermost/src/mattermost/slash-state.ts	5
+extensions/mattermost/src/mattermost/slash-state.ts	3
 extensions/mattermost/src/session-route.ts	1
 extensions/mattermost/src/setup-core.ts	2
 extensions/memory-core/index.ts	4
@@ -660,7 +658,7 @@ extensions/moonshot/provider-policy-api.ts	1
 extensions/moonshot/src/kimi-web-search-provider.runtime.ts	3
 extensions/msteams/doctor-contract-api.ts	1
 extensions/msteams/src/attachments/graph.ts	1
-extensions/msteams/src/attachments/shared.ts	2
+extensions/msteams/src/attachments/shared.ts	1
 extensions/msteams/src/channel.ts	4
 extensions/msteams/src/delegated-state.ts	1
 extensions/msteams/src/errors.ts	2
@@ -673,7 +671,6 @@ extensions/msteams/src/monitor-handler/inbound-dispatch.ts	1
 extensions/msteams/src/monitor-handler/inbound-facts.ts	1
 extensions/msteams/src/monitor.ts	5
 extensions/msteams/src/msteams-ingress.ts	1
-extensions/msteams/src/outbound.ts	1
 extensions/msteams/src/polls.ts	1
 extensions/msteams/src/probe.ts	1
 extensions/msteams/src/qa/adapter.runtime.ts	1
@@ -1086,7 +1083,7 @@ extensions/whatsapp/src/agent-tools-login.ts	6
 extensions/whatsapp/src/approval-handler.runtime.ts	1
 extensions/whatsapp/src/auth-store.ts	3
 extensions/whatsapp/src/auto-reply/monitor.ts	2
-extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts	4
+extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts	3
 extensions/whatsapp/src/channel-outbound.ts	1
 extensions/whatsapp/src/connection-controller-runtime-context.ts	1
 extensions/whatsapp/src/connection-controller.ts	2
@@ -1409,8 +1406,8 @@ src/agents/custom-api-registry.ts	2
 src/agents/delegation-capability.ts	1
 src/agents/embedded-agent-helpers/bootstrap.ts	2
 src/agents/embedded-agent-helpers/images.ts	8
-src/agents/embedded-agent-helpers/openai.ts	19
-src/agents/embedded-agent-helpers/turns.ts	23
+src/agents/embedded-agent-helpers/openai.ts	17
+src/agents/embedded-agent-helpers/turns.ts	15
 src/agents/embedded-agent-live-edit-diff.ts	3
 src/agents/embedded-agent-messaging-extraction.ts	1
 src/agents/embedded-agent-messaging.ts	1
@@ -1575,7 +1572,6 @@ src/agents/runtime/proxy.ts	7
 src/agents/sandbox-paths.ts	1
 src/agents/sandbox-tool-policy.ts	1
 src/agents/sandbox/backend.ts	1
-src/agents/sandbox/config.ts	1
 src/agents/sandbox/container-engine.ts	1
 src/agents/sandbox/podman-runtime.ts	1
 src/agents/sandbox/test-args.ts	1
@@ -1693,11 +1689,9 @@ src/agents/tools/terminal-tool.ts	1
 src/agents/tools/tts-tool.ts	1
 src/agents/tools/video-generate-tool.ts	2
 src/agents/tools/web-fetch.ts	2
-src/agents/tools/web-guarded-fetch.ts	2
 src/agents/tools/web-search-output.ts	3
 src/agents/tools/web-search-provider-common.ts	1
 src/agents/tools/web-search-provider-config.ts	1
-src/agents/tools/web-shared.ts	4
 src/agents/transcript-policy.ts	1
 src/agents/transcript-redact-replay.ts	1
 src/agents/transcript-redact.ts	2
@@ -3115,7 +3109,7 @@ ui/src/lib/chat/outbox-store-codec.ts	1
 ui/src/lib/chat/outbox-store.ts	1
 ui/src/lib/chat/tool-call-patch.ts	1
 ui/src/lib/chat/tool-cards.ts	2
-ui/src/lib/config-form-utils.ts	7
+ui/src/lib/config-form-utils.ts	3
 ui/src/lib/config/config-draft-model.ts	3
 ui/src/lib/cron/index.ts	2
 ui/src/lib/gateway-errors.ts	1

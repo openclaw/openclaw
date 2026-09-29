@@ -1,5 +1,6 @@
 import { expect } from "vitest";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { deliverQueuedSessionDelivery } from "./server-restart-sentinel.js";
 
 export async function appendRestartSentinelTranscriptReceipt(
@@ -128,4 +129,22 @@ export function expectContinuationDispatchFields(
     expectRecordFields(params.ctxPayload, expectedCtx);
   }
   return params;
+}
+
+export function expectRestartSentinelTranscriptBroadcast(
+  broadcastToConnIds: GatewayBroadcastToConnIdsFn,
+  params: { sessionKey: string; report: string; subscribers: ReadonlySet<string> },
+): void {
+  expect(broadcastToConnIds).toHaveBeenCalledWith(
+    "session.message",
+    expect.objectContaining({
+      sessionKey: params.sessionKey,
+      message: expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: params.report }],
+      }),
+    }),
+    params.subscribers,
+    { prepareSessionProjection: expect.any(Function) },
+  );
 }

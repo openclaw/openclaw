@@ -537,7 +537,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       containerPath: params.containerPath,
       writable: params.mount.writable,
       mountRootPath: params.mount.containerRoot,
-      source: params.mount.source,
     };
   }
 

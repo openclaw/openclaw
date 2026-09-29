@@ -469,7 +469,7 @@ it.each(["success", "failed-write"])(
         "sessions.changed",
         expect.objectContaining({ runId, status: "killed", hasActiveRun: false, runtimeMs: 1_000 }),
         new Set(["session-observer"]),
-        { dropIfSlow: true },
+        { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
       );
       closeOpenClawAgentDatabasesForTest();
       const restored = loadSessionEntry({ ...target, readConsistency: "latest" });
