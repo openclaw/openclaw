@@ -5,8 +5,8 @@ import {
   finalizeCapturedOutput,
 } from "../process/exec-output.js";
 import {
-  parseWorkerProcessResult,
-  type WorkerProcessResult,
+  parseWorkerProcessMessage,
+  type WorkerProcessMessage,
 } from "../worker/worker-process-protocol.js";
 import type { NodeWorkerTerminalState } from "./node-worker-launch-store.js";
 import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
@@ -40,7 +40,7 @@ type NodeWorkerChildCompletion = Readonly<{
 /** Report cleanup facts without releasing supervisor ownership or capacity. */
 export async function observeNodeWorkerChild(
   active: NodeWorkerChildObservation,
-  onResult: (frame: WorkerProcessResult) => Promise<void>,
+  onResult: (frame: WorkerProcessMessage) => Promise<void>,
   currentTurnId: () => string | undefined,
   cleanupContainer?: () => Promise<void>,
 ): Promise<NodeWorkerChildCompletion> {
@@ -79,7 +79,7 @@ export async function observeNodeWorkerChild(
 /** Turn results settle independently; the supervisor retains physical cleanup ownership. */
 async function observeNodeWorkerChildOutput(
   active: NodeWorkerChildObservation,
-  onResult: (frame: WorkerProcessResult) => Promise<void>,
+  onResult: (frame: WorkerProcessMessage) => Promise<void>,
   currentTurnId: () => string | undefined,
 ): Promise<NodeWorkerTerminalOutcome> {
   let stdout = "";
@@ -120,7 +120,7 @@ async function observeNodeWorkerChildOutput(
             if (outputError || observationEnded) {
               break;
             }
-            const frame = parseWorkerProcessResult(
+            const frame = parseWorkerProcessMessage(
               JSON.parse(parseNodeWorkerOutputJson(line.toString("utf8"), active.scrubber.scrub)),
             );
             if (!frame) {
@@ -130,7 +130,9 @@ async function observeNodeWorkerChildOutput(
             if (outputError || observationEnded) {
               break;
             }
-            lastResult = JSON.stringify(frame.result);
+            if (frame.type === "result") {
+              lastResult = JSON.stringify(frame.result);
+            }
           }
         }
       } catch (error) {

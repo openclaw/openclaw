@@ -222,7 +222,7 @@ describe("private worker computer runtime", () => {
       gate.resolve();
       const host = await starting;
       expect(await host.invoke({ operation: "capabilities" })).toMatchObject({ ok: true });
-      host.runtime.cancelAll();
+      await host.runtime.cancelAll();
       await host.invoke({ operation: "capabilities" });
       expect(prepare).toHaveBeenCalledOnce();
     } finally {
@@ -292,8 +292,8 @@ describe("private worker computer runtime", () => {
         providerGeneration: descriptor.provider.generation,
         params: { executionId: otherExecutionId },
       });
-      host.runtime.cancelAll();
-      await vi.waitFor(() => expect(host.close).toHaveBeenLastCalledWith("gateway-disconnect"));
+      await host.runtime.cancelAll();
+      expect(host.close).toHaveBeenLastCalledWith("gateway-disconnect");
       await host.runtime.close();
       expect(host.close.mock.calls).toEqual([["completion"], ["gateway-disconnect"]]);
     } finally {

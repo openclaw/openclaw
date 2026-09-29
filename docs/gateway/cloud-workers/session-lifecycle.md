@@ -40,6 +40,17 @@ Disconnected workers have no cleanup deadline. Nodes also reclaim copies when th
 
 Completed cloud turns preserve eligible, size-bounded workspace files before the turn claim is released. Repository-only sessions accept a cumulative immutable checkpoint in the Gateway's bare artifact repository. Gateway-source sessions apply those changes to their managed worktree. Worker-turn uses its terminal worker event to create the durable pending-result fence. Remote-exec waits for workspace quiescence and enters the same reconciliation flow after the local Codex attempt. Before applying the result, the Gateway stages complete authenticated base/current manifests plus each changed resulting blob as a Git ref under `refs/openclaw/worker-results/`; deletions are represented by the manifests and need no blob. This keeps the cloud delta recoverable even if the Gateway stops during the apply without duplicating unchanged baseline content. Workspace results use Git file semantics: regular files, executable bits, symlinks, additions, changes, and deletions are retained, while empty directories and other directory modes are not. Gateway-source changes remain in the managed worktree for normal review and commit; repository-only changes remain on the node and in the accepted checkpoint.
 
+OpenClaw worker-turn sessions may keep a settled worker process idle for up to
+two minutes, with at most two idle workers per node. Follow-up turns reuse the
+loaded runtime with fresh turn authority; placement activation does not start a
+worker. Idle workers inherit the existing background-retention reconciliation
+contract: the process stays alive in both process and container mode, and the
+capture/verify/renew/verify manifest fences detect concurrent workspace changes.
+Turn connections and temporary profiles are disposed before idle readiness.
+Idle workers are evictable for capacity, updates, and disconnect cleanup;
+background commands are not. See [node session hosting](/nodes/session-hosting)
+for compatibility and memory costs.
+
 Workspace quiescence retries slow process probes within one 30-second budget. The recovery watchdog keeps unfinished processes across at most four passes, with up to seven seconds of backoff between them, so recovery has a total probe and backoff budget of 127 seconds. Slow probes cannot repeatedly resume the same workers and starve the rest. Each probe starts with a two-second allowance and gets more time after a timeout. Exhaustion retains the unfinished PID/start references and reason in the lease for the Gateway's next recovery attempt; check host load and `ps` availability, then retry workspace recovery. Failed reconciliation retains the recoverable workspace result and reports the reason through the normal recovery flow.
 
 Result staging and rollback preserve exact supported filenames and file bytes, independently of Git attributes and checkout encodings.
