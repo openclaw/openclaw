@@ -4,6 +4,7 @@ import {
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readResolvedDeferredPluginMigrationWarnings } from "../../infra/deferred-plugin-migration-warnings.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   DEFAULT_PACKAGE_CHANNEL,
@@ -306,10 +307,16 @@ async function updateFinalizeCommandInternal(
   } = prepared;
   let { configSnapshot } = prepared;
   let doctorWarnings: string[] = [];
+  const doctorWarningTimes = new Map<string, number>();
   const onDoctorWarnings = (warnings: string[]) => {
     doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([
       ...new Set([...doctorWarnings, ...warnings]),
     ]);
+    for (const warning of doctorWarnings) {
+      if (!doctorWarningTimes.has(warning)) {
+        doctorWarningTimes.set(warning, Date.now());
+      }
+    }
     lifecycle.recordWarnings(doctorWarnings);
   };
 
@@ -419,6 +426,15 @@ async function updateFinalizeCommandInternal(
           json: opts.json === true,
           timeoutMs: lifecycle.budget("targetConfigConvergence"),
           onWarnings: onDoctorWarnings,
+        });
+        const resolvedWarnings = await readResolvedDeferredPluginMigrationWarnings(doctorWarnings);
+        phase.assertCurrent();
+        doctorWarnings = doctorWarnings.filter((warning) => {
+          const completedAtMs = resolvedWarnings.get(warning);
+          return (
+            completedAtMs === undefined ||
+            completedAtMs < (doctorWarningTimes.get(warning) ?? Infinity)
+          );
         });
         await persistValidatedDowngradeConfig(result.configSnapshot, phase.assertCurrent);
         return result;
