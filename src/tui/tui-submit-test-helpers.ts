@@ -15,7 +15,6 @@ type SubmitHarness = {
   handleCommand: MockFn;
   sendMessage: MockFn;
   handleBangLine: MockFn;
-  admitMessage: MockFn;
   onBlockedMessageSubmit: MockFn;
   onSubmitError: MockFn;
   onSubmit: (text: string) => void;
@@ -50,7 +49,6 @@ export function createSubmitHarness(params?: {
     handleCommand,
     sendMessage,
     handleBangLine,
-    admitMessage,
     onBlockedMessageSubmit,
     onSubmitError,
     onSubmit,
