@@ -23,7 +23,7 @@ function supportsRoute(baseUrl: string): boolean {
     provider: "anthropic",
     modelId: catalogModel.id,
     catalogModel: catalogModel as never,
-    manifestAlias: {},
+    manifestAlias: { provider: "anthropic" },
     route: { api: "anthropic-messages", baseUrl },
     providerMetadataOwners: providerMetadataOwners as never,
   });
