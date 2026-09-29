@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getSpawnBroker } from "../../process/spawn-broker/context.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
@@ -35,8 +36,8 @@ describe.skipIf(process.platform === "win32")("native MCP discovery ownership", 
         `import { appendFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import readline from "node:readline";
-const relay = Number(execFileSync("ps", ["-o", "ppid=", "-p", String(process.ppid)], { encoding: "utf8" }).trim());
-appendFileSync(process.argv[2], JSON.stringify({ server: process.argv[3], pids: [process.pid, process.ppid, relay] }) + "\\n");
+const grandparent = Number(execFileSync("ps", ["-o", "ppid=", "-p", String(process.ppid)], { encoding: "utf8" }).trim());
+appendFileSync(process.argv[2], JSON.stringify({ server: process.argv[3], pids: [process.pid, process.ppid, grandparent] }) + "\\n");
 const send = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n");
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
@@ -46,11 +47,18 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 });
 `,
       );
-      const children = async (): Promise<Array<{ server: string; pids: number[] }>> =>
-        (await fs.readFile(pidPath, "utf8"))
+      const children = async (): Promise<Array<{ server: string; pids: number[] }>> => {
+        // A native owner replaces the two-process relay/anchor pair. Its parent
+        // is our shared host or broker, not another process owned by this server.
+        const hosts = new Set([process.pid, getSpawnBroker()?.pid]);
+        return (await fs.readFile(pidPath, "utf8"))
           .split("\n")
           .filter(Boolean)
-          .map((line) => JSON.parse(line) as { server: string; pids: number[] });
+          .map((line) => {
+            const child = JSON.parse(line) as { server: string; pids: number[] };
+            return { ...child, pids: child.pids.filter((pid) => !hosts.has(pid)) };
+          });
+      };
       const sessions: string[] = [];
       const authStorage = AuthStorage.inMemory();
       await withEnvAsync({ OPENCLAW_STATE_DIR: workspaceDir }, async () => {
