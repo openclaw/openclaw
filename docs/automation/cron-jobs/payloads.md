@@ -246,10 +246,11 @@ judgment and move the repeatable parts into code:
   `toolsAllow` names it (`<server>__<tool>` or `<server>__*`). Triggers and script
   payloads are unavailable when `cron.triggers.enabled` is `false`.
 - Let a one-off transient failure, such as one source timing out once, pass
-  silently. When the same failure repeats, make the run fail (an error result or a
-  non-zero exit) instead of posting the error yourself: only failed runs count
-  toward [failure notifications](/automation/cron-jobs/delivery#failure-notifications),
-  and a run that records the failure and succeeds never reaches them.
+  silently. When the same failure repeats, make the run fail instead of posting the
+  error yourself: throw from trigger or script payload JavaScript, or exit non-zero
+  from a command payload. A script that returns an error field still succeeds. Only
+  failed runs count toward
+  [failure notifications](/automation/cron-jobs/delivery#failure-notifications).
 
 ## Execution styles
 
