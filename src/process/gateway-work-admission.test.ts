@@ -110,6 +110,26 @@ it("preserves the shutdown reason for rejected roots and cancellation until rese
   );
 });
 
+it("updates new refusals when a stop supersedes restart without repeating cancellation", async () => {
+  const signal = getGatewayRestartDrainSignal();
+  const aborted = vi.fn();
+  signal.addEventListener("abort", aborted);
+  markGatewayRestartDraining("restart (SIGUSR2)");
+  const originalReason = signal.reason;
+  expect(originalReason.message).toBe("Gateway is restarting. Please try again shortly.");
+
+  markGatewayRestartDraining("stop (SIGINT)");
+  markGatewayRestartDraining("restart");
+  expect(isGatewayWorkAdmissionClosed()).toBe(true);
+  expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+  expect(getGatewayRestartDrainSignal()).toBe(signal);
+  expect(signal.reason).toBe(originalReason);
+  expect(aborted).toHaveBeenCalledOnce();
+  await expect(runWithGatewayIndependentRootWorkAdmission(async () => {})).rejects.toThrow(
+    "Gateway is shutting down. Please try again once it is back online.",
+  );
+});
+
 it("classifies draining errors only while an authoritative restart signal or drain is active", () => {
   const error = new GatewayDrainingError();
   const firstDrainSignal = getGatewayRestartDrainSignal();

@@ -291,6 +291,11 @@ export function isGatewayRestartDrainError(error: unknown): error is GatewayDrai
 /** Restart drain is one-way until the in-process restart resets runtime state. */
 export function markGatewayRestartDraining(reason: GatewayDrainReason = "restart"): void {
   if (GATEWAY_WORK_ADMISSION_STATE.restartDrainReason !== undefined) {
+    // An accepted stop can supersede a queued restart. Keep admission closed
+    // and the original abort receipt intact; only new refusals use the stop reason.
+    if (reason.startsWith("stop (")) {
+      GATEWAY_WORK_ADMISSION_STATE.restartDrainReason = reason;
+    }
     return;
   }
   // Drain supersedes the reversible signal fence; do not reopen before the
