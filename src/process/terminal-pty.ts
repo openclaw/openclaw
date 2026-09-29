@@ -6,11 +6,7 @@ import {
   resolveWindowsSpawnProgram,
 } from "../plugin-sdk/windows-spawn.js";
 import { signalPtySessionTree } from "./kill-tree.js";
-import {
-  readPtyTerminalName,
-  resolvePtyTerminalName,
-  setPtyTerminalName,
-} from "./pty-terminal-name.js";
+import { resolvePtyTerminalName, setPtyTerminalName } from "./pty-terminal-name.js";
 import {
   buildWindowsCmdExeCommandLine,
   isWindowsBatchCommand,
@@ -121,7 +117,7 @@ export async function spawnTerminalPty(
   // Ambient TERM=dumb describes the gateway/node host, not this real PTY.
   // Passing it through makes interactive CLIs refuse to start in the web terminal.
   const terminalName = resolvePtyTerminalName(
-    params.name ?? readPtyTerminalName(env ?? process.env, process.platform),
+    params.name ?? resolveEnvironmentValue(env ?? process.env, "TERM", process.platform),
   );
   if (env) {
     setPtyTerminalName({ env, name: terminalName, platform: process.platform });

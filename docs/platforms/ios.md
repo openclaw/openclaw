@@ -635,6 +635,7 @@ The app keeps a registry of every Gateway it has paired with, so you can switch 
 - Credentials, TLS trust decisions, per-gateway preferences, and cached chat history are stored per Gateway. Switching never mixes state between Gateways, and push registration follows the active Gateway.
 - Swipe a paired Gateway (or use its context menu) to **Forget** it, which removes its credentials, device tokens, TLS pin, and cached chats.
 - Discovered Gateways must be visible on the network to switch to them; manual Gateways reconnect by saved host and port.
+- Demo and screenshot mode hide saved Gateways: the sidebar picker and **Settings → Gateway** show only the fixture connection, without the **Paired Gateways** list or the manual Gateway, credential, and custom header settings. Scan a QR code or paste a setup code to connect a real Gateway.
 
 ## Computer Use relationship
 
@@ -674,6 +675,7 @@ same iOS limits as Talk started inside the app.
 - `NODE_BACKGROUND_UNAVAILABLE`: bring the iOS app to the foreground (camera/screen commands require it).
 - Pairing prompt never appears: run `openclaw devices list` and approve manually.
 - `Gateway setup incomplete`: the Gateway did not provide both node and operator credentials. Generate a new iPhone setup code from **Devices -> Pair device** in the Control UI or `openclaw qr`, then scan it in **Settings -> Gateway**. Automatic reconnect stays paused until you retry setup; this is not a device-storage error.
+- If setup cannot safely replace the Gateway's offline data, it stops before applying the replacement credentials. The setup code and manual endpoint stay available. Resolve the device-storage problem, then retry.
 - Watch shows no iPhone state: confirm the iPhone reports `watchPaired: true`
   and `watchAppInstalled: true` in `watch.status`. If pairing is false, pair the
   Watch in Apple's Watch app. If installation is false, install the companion

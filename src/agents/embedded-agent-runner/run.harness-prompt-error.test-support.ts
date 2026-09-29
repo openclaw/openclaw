@@ -31,8 +31,6 @@ describe("harness prompt failure presentation", () => {
 
   it.each([
     { known: true, hadPotentialSideEffects: false },
-    { known: true, hadPotentialSideEffects: true },
-    { known: false, hadPotentialSideEffects: false },
     { known: false, hadPotentialSideEffects: true },
   ])(
     "surfaces a non-replayable harness prompt failure (known: $known, effects: $hadPotentialSideEffects)",

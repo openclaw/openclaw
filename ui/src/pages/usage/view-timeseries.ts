@@ -101,7 +101,6 @@ export function renderTimeSeriesCompact(
   const rangeStartTs = hasSelection ? Math.min(cursorStart, cursorEnd) : 0;
   const rangeEndTs = hasSelection ? Math.max(cursorStart, cursorEnd) : Infinity;
 
-  // Find start/end indices for dimming
   let rangeStartIdx = 0;
   let rangeEndIdx = points.length;
   if (hasSelection) {
@@ -146,16 +145,13 @@ export function renderTimeSeriesCompact(
         : p.totalTokens,
   );
   const maxValue = Math.max(...barTotals, 1);
-  // Ensure bars + gaps fit exactly within chartWidth
   const slotWidth = chartWidth / points.length; // space per bar including gap
   const barWidth = Math.min(CHART_MAX_BAR_WIDTH, Math.max(1, slotWidth * CHART_BAR_WIDTH_RATIO));
   const barGap = slotWidth - barWidth;
 
   const leftHandleX = padding.left + rangeStartIdx * (barWidth + barGap);
   const rightHandleX =
-    rangeEndIdx >= points.length
-      ? padding.left + (points.length - 1) * (barWidth + barGap) + barWidth // right edge of last bar
-      : padding.left + (rangeEndIdx - 1) * (barWidth + barGap) + barWidth; // right edge of last selected bar
+    padding.left + (Math.min(rangeEndIdx, points.length) - 1) * (barWidth + barGap) + barWidth;
   const firstTimestamp = expectDefined(points[0], "time series first point").timestamp;
   const lastTimestamp = expectDefined(points.at(-1), "time series last point").timestamp;
   const cursorLeft = Math.max(firstTimestamp, Math.min(lastTimestamp, rangeStartTs));
@@ -264,12 +260,10 @@ export function renderTimeSeriesCompact(
             ({ y, text }) =>
               svg`<text x="${padding.left - 4}" y="${y}" text-anchor="end" class="ts-axis-label">${text}</text>`,
           )}
-          <!-- X axis labels (first and last) -->
           ${svg`
-            <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${formatTimeMs(expectDefined(points[0], "time series first point").timestamp, { hour: "2-digit", minute: "2-digit", ...timeZoneOptions }, "")}</text>
-            <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${formatTimeMs(expectDefined(points.at(-1), "time series last point").timestamp, { hour: "2-digit", minute: "2-digit", ...timeZoneOptions }, "")}</text>
+            <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${formatTimeMs(firstTimestamp, { hour: "2-digit", minute: "2-digit", ...timeZoneOptions }, "")}</text>
+            <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${formatTimeMs(lastTimestamp, { hour: "2-digit", minute: "2-digit", ...timeZoneOptions }, "")}</text>
           `}
-          <!-- Bars -->
           ${points.map((p, i) => {
             const val = expectDefined(barTotals[i], "time series bar total");
             const x = padding.left + i * (barWidth + barGap);

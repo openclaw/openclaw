@@ -1,4 +1,3 @@
-/** Applies directive-only command state changes without running the agent. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { renderExecTargetLabel } from "../../agents/bash-tools.exec-runtime.js";
 import { resolveExecDefaults } from "../../agents/exec-defaults.js";
@@ -43,11 +42,7 @@ import {
   canPersistSessionDirectiveDefaults,
   DIRECTIVE_ACK_MESSAGES,
   type IgnoredSessionDirectiveFlag,
-  formatElevatedRuntimeHint,
   formatElevatedUnavailableText,
-  formatInternalExecPersistenceDeniedText,
-  formatInternalVerboseCurrentReplyOnlyText,
-  formatInternalVerbosePersistenceDeniedText,
   formatModelSelectionScopeAck,
   enqueueModeSwitchEvents,
   persistSessionDirectiveSnapshot,
@@ -63,7 +58,8 @@ import {
 } from "./model-runtime-normalization.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
 
-/** Handles inline directives that can be acknowledged without a model turn. */
+const ELEVATED_RUNTIME_HINT = prefixSystemMessage("Runtime is direct; sandboxing does not apply.");
+
 export async function handleDirectiveOnly(
   params: HandleDirectiveOnlyParams,
 ): Promise<ReplyPayload | undefined> {
@@ -346,7 +342,7 @@ export async function handleDirectiveOnly(
         {
           text: [
             withOptions(`Current elevated level: ${level}.`, "on, off, ask, full"),
-            shouldHintDirectRuntime ? formatElevatedRuntimeHint() : null,
+            shouldHintDirectRuntime ? ELEVATED_RUNTIME_HINT : null,
           ]
             .filter(Boolean)
             .join("\n"),
@@ -618,14 +614,18 @@ export async function handleDirectiveOnly(
   if (directives.hasVerboseDirective && directives.verboseLevel) {
     const message = allowPrivilegedPersistence
       ? DIRECTIVE_ACK_MESSAGES.verbose[directives.verboseLevel]
-      : formatInternalVerboseCurrentReplyOnlyText();
+      : "Verbose logging set for the current reply only.";
     parts.push(prefixSystemMessage(message));
   }
   if (directives.hasTraceDirective && directives.traceLevel) {
     parts.push(prefixSystemMessage(DIRECTIVE_ACK_MESSAGES.trace[directives.traceLevel]));
   }
   if (directives.hasVerboseDirective && directives.verboseLevel && !allowPrivilegedPersistence) {
-    parts.push(prefixSystemMessage(formatInternalVerbosePersistenceDeniedText()));
+    parts.push(
+      prefixSystemMessage(
+        "Verbose defaults require operator.admin for gateway callers; skipped persistence.",
+      ),
+    );
   }
   if (directives.hasReasoningDirective && directives.reasoningLevel) {
     parts.push(prefixSystemMessage(DIRECTIVE_ACK_MESSAGES.reasoning[directives.reasoningLevel]));
@@ -633,7 +633,7 @@ export async function handleDirectiveOnly(
   if (directives.hasElevatedDirective && directives.elevatedLevel) {
     parts.push(prefixSystemMessage(DIRECTIVE_ACK_MESSAGES.elevated[directives.elevatedLevel]));
     if (shouldHintDirectRuntime) {
-      parts.push(formatElevatedRuntimeHint());
+      parts.push(ELEVATED_RUNTIME_HINT);
     }
   }
   if (directives.hasExecDirective && directives.hasExecOptions) {
@@ -653,7 +653,7 @@ export async function handleDirectiveOnly(
       if (execParts.length > 0) {
         const message = label
           ? `${label} (${execParts.join(", ")}).`
-          : formatInternalExecPersistenceDeniedText();
+          : "Exec defaults require operator.admin for gateway callers; skipped persistence.";
         parts.push(prefixSystemMessage(message));
       }
     }

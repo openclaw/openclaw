@@ -345,16 +345,25 @@ export async function handleDiscordGuildAction(
       const status = presence?.status ?? undefined;
       return jsonResult({ ok: true, member, ...(presence ? { status, activities } : {}) });
     }
-    case "roleInfo": {
-      if (!isActionEnabled("roleInfo")) {
-        throw new Error("Discord role info is disabled.");
+    case "roleInfo":
+    case "eventList": {
+      const roleInfo = action === "roleInfo";
+      if (!isActionEnabled(roleInfo ? "roleInfo" : "events")) {
+        throw new Error(
+          roleInfo ? "Discord role info is disabled." : "Discord events are disabled.",
+        );
       }
       const guildId = readStringParam(params, "guildId", {
         required: true,
       });
       await assertGuildMetadataReadAllowed(guildId);
-      const roles = await discordGuildActionRuntime.fetchRoleInfoDiscord(guildId, withOpts());
-      return jsonResult({ ok: true, roles });
+      const read = roleInfo
+        ? discordGuildActionRuntime.fetchRoleInfoDiscord
+        : discordGuildActionRuntime.listScheduledEventsDiscord;
+      return jsonResult({
+        ok: true,
+        [roleInfo ? "roles" : "events"]: await read(guildId, withOpts()),
+      });
     }
     case "emojiList": {
       if (!isActionEnabled("reactions")) {
@@ -387,44 +396,26 @@ export async function handleDiscordGuildAction(
       return jsonResult({ ok: true, emojis: emojis.slice(0, limit) });
     }
     case "emojiUpload": {
-      const guildId = readStringParam(params, "guildId", {
-        required: true,
-      });
-      const name = readStringParam(params, "name", { required: true });
-      const mediaUrl = readStringParam(params, "mediaUrl", {
-        required: true,
-      });
-      const roleIds = readStringArrayParam(params, "roleIds");
+      const upload = {
+        guildId: readStringParam(params, "guildId", { required: true }),
+        name: readStringParam(params, "name", { required: true }),
+        mediaUrl: readStringParam(params, "mediaUrl", { required: true }),
+        roleIds: readStringArrayParam(params, "roleIds"),
+      };
       const emoji = await discordGuildActionRuntime.uploadEmojiDiscord(
-        {
-          guildId,
-          name,
-          mediaUrl,
-          roleIds: roleIds?.length ? roleIds : undefined,
-        },
+        { ...upload, roleIds: upload.roleIds?.length ? upload.roleIds : undefined },
         createDiscordActionOptions({ cfg, accountId, extra: mediaPolicyOptions }),
       );
       return jsonResult({ ok: true, emoji });
     }
     case "stickerUpload": {
-      const guildId = readStringParam(params, "guildId", {
-        required: true,
-      });
-      const name = readStringParam(params, "name", { required: true });
-      const description = readStringParam(params, "description", {
-        required: true,
-      });
-      const tags = readStringParam(params, "tags", { required: true });
-      const mediaUrl = readStringParam(params, "mediaUrl", {
-        required: true,
-      });
       const sticker = await discordGuildActionRuntime.uploadStickerDiscord(
         {
-          guildId,
-          name,
-          description,
-          tags,
-          mediaUrl,
+          guildId: readStringParam(params, "guildId", { required: true }),
+          name: readStringParam(params, "name", { required: true }),
+          description: readStringParam(params, "description", { required: true }),
+          tags: readStringParam(params, "tags", { required: true }),
+          mediaUrl: readStringParam(params, "mediaUrl", { required: true }),
         },
         createDiscordActionOptions({ cfg, accountId, extra: mediaPolicyOptions }),
       );
@@ -488,20 +479,6 @@ export async function handleDiscordGuildAction(
         withOpts(),
       );
       return jsonResult({ ok: true, voice });
-    }
-    case "eventList": {
-      if (!isActionEnabled("events")) {
-        throw new Error("Discord events are disabled.");
-      }
-      const guildId = readStringParam(params, "guildId", {
-        required: true,
-      });
-      await assertGuildMetadataReadAllowed(guildId);
-      const events = await discordGuildActionRuntime.listScheduledEventsDiscord(
-        guildId,
-        withOpts(),
-      );
-      return jsonResult({ ok: true, events });
     }
     case "eventCreate": {
       const guildId = readStringParam(params, "guildId", {

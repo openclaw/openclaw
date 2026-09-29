@@ -1,5 +1,4 @@
 // Reconciles adapter progress results with hook-bearing final delivery results.
-import { expectDefined } from "@openclaw/normalization-core";
 import { hasDeliveryResultIdentity } from "./deliver-payload.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 
@@ -8,7 +7,7 @@ export function createDeliveryResultRecorder(params: {
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
 }) {
   const results = params.results;
-  let reportedResults: Array<{ identityKey: string; resultIndex: number }> = [];
+  const reportedResults = new Map<number, string>();
   let suppressionReason: "adapter_returned_no_send" | "adapter_returned_no_identity" | undefined;
   const observeDeliveryResult = (delivery: OutboundDeliveryResult): boolean => {
     if (hasDeliveryResultIdentity(delivery)) {
@@ -62,7 +61,7 @@ export function createDeliveryResultRecorder(params: {
     }
     const resultIndex = results.length;
     results.push(delivery);
-    reportedResults.push({ identityKey: resultIdentityKey(delivery), resultIndex });
+    reportedResults.set(resultIndex, resultIdentityKey(delivery));
     // Persist concrete platform evidence before pinning, hooks, mirroring, or
     // another send can fail or the process can stop.
     await params.onDeliveryResult?.(delivery);
@@ -74,19 +73,23 @@ export function createDeliveryResultRecorder(params: {
     if (deliveries.length === 0) {
       suppressionReason = "adapter_returned_no_identity";
     }
-    const reportedByIdentity = new Map<string, number[]>();
-    for (const reported of reportedResults) {
-      const matches = reportedByIdentity.get(reported.identityKey) ?? [];
-      matches.push(reported.resultIndex);
-      reportedByIdentity.set(reported.identityKey, matches);
-    }
     try {
       const recorded: boolean[] = [];
-      const availableReportedIndices = new Set(
-        reportedResults.map((reported) => reported.resultIndex),
-      );
-      const replacements = new Map<number, OutboundDeliveryResult>();
-      const removals = new Set<number>();
+      const availableReported = options?.finalResultIsLastReported
+        ? new Map([...reportedResults].toReversed())
+        : reportedResults;
+      const takeReported = (
+        matches: (resultIndex: number, identityKey: string) => boolean,
+      ): number | undefined => {
+        for (const [resultIndex, identityKey] of availableReported) {
+          if (matches(resultIndex, identityKey)) {
+            availableReported.delete(resultIndex);
+            return resultIndex;
+          }
+        }
+        return undefined;
+      };
+      const replacements = new Map<number, OutboundDeliveryResult | null>();
       const appendResults: OutboundDeliveryResult[] = [];
       for (const delivery of deliveries) {
         if (!observeDeliveryResult(delivery)) {
@@ -100,51 +103,23 @@ export function createDeliveryResultRecorder(params: {
           receiptPartIds.length > 0
             ? receiptPartIds
             : [...resultPlatformIds(delivery, { receiptOnly: true })];
-        const coveredIndices: number[] = [];
+        let reportedIndex: number | undefined;
         for (const receiptId of receiptIds) {
-          const matchingIndices = reportedResults
-            .filter(
-              (reported) =>
-                availableReportedIndices.has(reported.resultIndex) &&
-                !coveredIndices.includes(reported.resultIndex) &&
-                results[reported.resultIndex]?.channel === delivery.channel &&
-                resultPlatformIds(
-                  expectDefined(
-                    results[reported.resultIndex],
-                    "results entry at reported.result index",
-                  ),
-                ).has(receiptId),
-            )
-            .map((reported) => reported.resultIndex);
           // One receipt part covers one progress result. Repeated parts preserve
           // aggregate multiplicity, while one constant platform ID cannot erase
           // other successful sends that the final receipt does not aggregate.
-          const matchingIndex = options?.finalResultIsLastReported
-            ? matchingIndices.at(-1)
-            : matchingIndices[0];
-          if (matchingIndex !== undefined && !coveredIndices.includes(matchingIndex)) {
-            coveredIndices.push(matchingIndex);
+          const matchingIndex = takeReported((index) => {
+            const result = results[index];
+            return result?.channel === delivery.channel && resultPlatformIds(result).has(receiptId);
+          });
+          if (matchingIndex !== undefined) {
+            replacements.set(matchingIndex, null);
+            reportedIndex = Math.min(reportedIndex ?? matchingIndex, matchingIndex);
           }
         }
-        let reportedIndex: number | undefined;
-        if (coveredIndices.length > 0) {
-          reportedIndex = Math.min(...coveredIndices);
-          for (const coveredIndex of coveredIndices) {
-            availableReportedIndices.delete(coveredIndex);
-            if (coveredIndex !== reportedIndex) {
-              removals.add(coveredIndex);
-            }
-          }
-        } else {
-          const reportedMatches = (
-            reportedByIdentity.get(resultIdentityKey(delivery)) ?? []
-          ).filter((index) => availableReportedIndices.has(index));
-          reportedIndex = options?.finalResultIsLastReported
-            ? reportedMatches.at(-1)
-            : reportedMatches[0];
-          if (reportedIndex !== undefined) {
-            availableReportedIndices.delete(reportedIndex);
-          }
+        if (reportedIndex === undefined) {
+          const identityKey = resultIdentityKey(delivery);
+          reportedIndex = takeReported((_index, reportedKey) => reportedKey === identityKey);
         }
         if (reportedIndex !== undefined) {
           // Replace all progress covered by an aggregate receipt with the final
@@ -155,12 +130,10 @@ export function createDeliveryResultRecorder(params: {
         }
         recorded.push(true);
       }
-      if (replacements.size > 0 || removals.size > 0) {
+      if (replacements.size > 0) {
         const reconciled = results.flatMap((result, index) => {
-          if (removals.has(index)) {
-            return [];
-          }
-          return [replacements.get(index) ?? result];
+          const replacement = replacements.get(index);
+          return replacement === null ? [] : [replacement ?? result];
         });
         results.splice(0, results.length, ...reconciled);
       }
@@ -172,7 +145,7 @@ export function createDeliveryResultRecorder(params: {
     } finally {
       // Progress matching is scoped to exactly one adapter invocation. IDs such
       // as LINE's constant "push" value can legitimately repeat later.
-      reportedResults = [];
+      reportedResults.clear();
     }
   };
   const recordIdentifiedDeliveryResult = async (
@@ -189,7 +162,7 @@ export function createDeliveryResultRecorder(params: {
     reportIdentifiedDeliveryResult,
     getSuppressionReason: () => suppressionReason,
     resetPayloadResults: () => {
-      reportedResults = [];
+      reportedResults.clear();
       suppressionReason = undefined;
     },
   };

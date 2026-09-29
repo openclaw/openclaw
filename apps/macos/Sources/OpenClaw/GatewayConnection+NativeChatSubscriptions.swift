@@ -38,9 +38,7 @@ extension GatewayConnection {
                         uniquingKeysWith: { _, new in new }),
                     timeoutMs: 10000)
                 _ = try await self.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs,
+                    request,
                     ifCurrentServerLease: lease)
                 self.nativeChatSubscribedScopes.remove(scope)
             }
@@ -49,9 +47,7 @@ extension GatewayConnection {
                     sessionKey: scope.sessionKey,
                     agentID: scope.agentID)
                 _ = try await self.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs,
+                    request,
                     ifCurrentServerLease: lease)
                 self.nativeChatSubscribedScopes.insert(scope)
             }

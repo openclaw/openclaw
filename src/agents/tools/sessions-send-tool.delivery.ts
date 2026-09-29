@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewaySessionStoreTarget } from "../../gateway/session-utils-store.types.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -11,6 +12,7 @@ import {
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveActiveEmbeddedRunSessionId } from "../embedded-agent-runner/active-run-projections.js";
 import {
   type EmbeddedAgentQueueMessageOptions,
@@ -19,7 +21,11 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../embedded-agent-runner/runs.js";
 import { jsonResult } from "./common.js";
-import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
+import {
+  callInProcessGatewayToolWithCreation,
+  hasInProcessGatewayToolContext,
+  type AgentToolGatewayRequestCaller,
+} from "./in-process-gateway.js";
 
 function isRunScopedAgentSessionKey(sessionKey: string): boolean {
   const parsed = parseAgentSessionKey(normalizeOptionalString(sessionKey));
@@ -32,20 +38,8 @@ function resolveCronRunScopedFallbackSessionKey(sessionKey: string): string | un
     return undefined;
   }
   const parsed = parseAgentSessionKey(normalizedSessionKey);
-  if (!parsed) {
-    return undefined;
-  }
-  const runMarker = ":run:";
-  const runMarkerIndex = parsed.rest.lastIndexOf(runMarker);
-  if (runMarkerIndex <= 0) {
-    return undefined;
-  }
-  const runId = parsed.rest.slice(runMarkerIndex + runMarker.length);
-  if (!runId || runId.includes(":")) {
-    return undefined;
-  }
-  const fallbackRest = parsed.rest.slice(0, runMarkerIndex);
-  return `agent:${parsed.agentId}:${fallbackRest}`;
+  const fallbackRest = parsed?.rest.match(/^([\s\S]+):run:[^:]+$/)?.[1];
+  return parsed && fallbackRest ? `agent:${parsed.agentId}:${fallbackRest}` : undefined;
 }
 
 function shouldFallbackCronRunScopedActiveDelivery(
@@ -59,7 +53,7 @@ function shouldFallbackCronRunScopedActiveDelivery(
   );
 }
 
-export async function startSessionsSendAgentRun(params: {
+type SessionsSendDeliveryParams = {
   cfg: OpenClawConfig;
   callGateway: AgentToolGatewayRequestCaller;
   runId: string;
@@ -73,26 +67,32 @@ export async function startSessionsSendAgentRun(params: {
   sessionStoreTarget: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath">;
   deliveryTimeoutMs?: number;
   allowActiveRunQueueDelivery?: boolean;
-  allowActiveRunQueueFallback?: boolean;
   expectedSessionId?: string;
   sourceOrigin?: DeliveryContext;
   mode?: "steer" | "followup";
-}): Promise<
+};
+
+type SessionsSendStart =
   | {
       ok: true;
       runId: string;
       targetDisposition: "queued" | "steered";
       a2aSessionKey?: string;
     }
-  | { ok: false; result: ReturnType<typeof jsonResult> }
-> {
+  | { ok: false; result: ReturnType<typeof jsonResult> };
+
+/** Decide steering before preparing custody for a new turn. */
+export async function trySessionsSendActiveRunDelivery(
+  params: SessionsSendDeliveryParams,
+  ownChild: boolean,
+): Promise<SessionsSendStart | { fallbackSessionKey?: string }> {
   try {
     let fallbackSessionKey: string | undefined;
     const activeRunSessionId =
       params.mode === "steer" ||
       (params.mode !== "followup" &&
         params.allowActiveRunQueueDelivery &&
-        isRunScopedAgentSessionKey(params.sessionKey))
+        (ownChild || isRunScopedAgentSessionKey(params.sessionKey)))
         ? resolveActiveEmbeddedRunSessionId(params.sessionKey)
         : undefined;
     if (params.mode === "steer" && !activeRunSessionId) {
@@ -113,10 +113,11 @@ export async function startSessionsSendAgentRun(params: {
         steeringMode: "all",
         debounceMs: 0,
         deliveryTimeoutMs: params.deliveryTimeoutMs,
-        waitForTranscriptCommit: true,
-        ...(params.mode === "steer" ? {} : { sourceReplyDeliveryMode }),
-        // Carry the same input facts as a new run; transcript ownership stays
-        // with the receiving runtime and its exact session incarnation.
+        // Waiting for a busy run's transcript would withdraw accepted guidance at the deadline.
+        ...(params.mode === "steer" || ownChild
+          ? { waitForTranscriptCommit: false }
+          : { waitForTranscriptCommit: true, sourceReplyDeliveryMode }),
+        // The receiving runtime owns transcript writes to this exact incarnation.
         userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
           input: {
             text: messageText,
@@ -152,21 +153,31 @@ export async function startSessionsSendAgentRun(params: {
       if (queueOutcome.queued) {
         return { ok: true, runId: params.runId, targetDisposition: "steered" };
       }
-      fallbackSessionKey = resolveCronRunScopedFallbackSessionKey(params.sessionKey);
+      fallbackSessionKey = ownChild
+        ? undefined
+        : resolveCronRunScopedFallbackSessionKey(params.sessionKey);
       if (
-        params.allowActiveRunQueueFallback === false ||
         params.mode === "steer" ||
-        !fallbackSessionKey ||
-        !shouldFallbackCronRunScopedActiveDelivery(queueOutcome)
+        (!ownChild && (params.expectedSessionId || !fallbackSessionKey)) ||
+        (!ownChild && !shouldFallbackCronRunScopedActiveDelivery(queueOutcome))
       ) {
         throw new Error(
           formatEmbeddedAgentQueueFailureSummary(queueOutcome) ?? "active run queue rejected",
         );
       }
     }
-    // Preserve a self-send's source conversation without parsing its session key
-    // or consulting a route that another inbound turn can replace. A Cron parent
-    // fallback is a distinct session and keeps its own delivery context.
+    return { fallbackSessionKey };
+  } catch (error) {
+    return deliveryFailure(params, error);
+  }
+}
+
+export async function startSessionsSendAgentRun(
+  params: SessionsSendDeliveryParams & { fallbackSessionKey?: string },
+): Promise<SessionsSendStart> {
+  const { fallbackSessionKey } = params;
+  try {
+    // Self-sends retain the captured conversation; a distinct Cron parent uses its own route.
     const sourceOrigin = fallbackSessionKey ? undefined : params.sourceOrigin;
     const sendParams = sourceOrigin
       ? {
@@ -209,16 +220,57 @@ export async function startSessionsSendAgentRun(params: {
       ...(fallbackSessionKey ? { a2aSessionKey: fallbackSessionKey } : {}),
     };
   } catch (err) {
-    const messageText =
-      err instanceof Error ? err.message : typeof err === "string" ? err : "error";
-    return {
-      ok: false,
-      result: jsonResult({
-        runId: params.runId,
-        status: "error",
-        error: messageText,
-        sessionKey: params.sessionKey,
-      }),
+    return deliveryFailure(params, err);
+  }
+}
+
+function deliveryFailure(params: SessionsSendDeliveryParams, error: unknown) {
+  return {
+    ok: false as const,
+    result: jsonResult({
+      runId: params.runId,
+      status: "error",
+      error: error instanceof Error ? error.message : typeof error === "string" ? error : "error",
+      sessionKey: params.sessionKey,
+    }),
+  };
+}
+
+export async function createConfiguredAgentMainSession(params: {
+  cfg: OpenClawConfig;
+  callGateway: AgentToolGatewayRequestCaller;
+  agentId?: string;
+  sessionKey: string;
+  requesterSessionKey?: string;
+  useTrustedInProcessCreation: boolean;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const targetAgentId =
+    params.agentId ?? resolveSessionAgentId({ config: params.cfg, sessionKey: params.sessionKey });
+  try {
+    const createParams = {
+      key: params.sessionKey,
+      agentId: targetAgentId,
     };
+    if (
+      params.useTrustedInProcessCreation &&
+      params.requesterSessionKey &&
+      hasInProcessGatewayToolContext()
+    ) {
+      // sessions.create serializes keyed creation and adopts an existing row,
+      // so concurrent first sends can safely race after the missing resolution.
+      await callInProcessGatewayToolWithCreation("sessions.create", createParams, {
+        via: "internal",
+        actor: { type: "agent", id: params.requesterSessionKey },
+      });
+    } else {
+      await params.callGateway({
+        method: "sessions.create",
+        params: createParams,
+        timeoutMs: 10_000,
+      });
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: formatErrorMessage(err) };
   }
 }

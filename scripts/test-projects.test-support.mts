@@ -1501,6 +1501,21 @@ function resolveExplicitSourceTestTargets(
   ].toSorted((left, right) => left.localeCompare(right));
 }
 
+function listPackageDirectoryTestTargets(directory: string, cwd: string): string[] {
+  if (isSharedVitestExcludedPath(directory) || isSharedVitestExcludedPath(`${directory}/`)) {
+    return [];
+  }
+  return fs.readdirSync(path.join(cwd, directory), { withFileTypes: true }).flatMap((entry) => {
+    const relative = path.posix.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      return listPackageDirectoryTestTargets(relative, cwd);
+    }
+    return entry.isFile() && relative.endsWith(".test.ts") && !isSharedVitestExcludedPath(relative)
+      ? [relative]
+      : [];
+  });
+}
+
 function expandExplicitSourceTestTargets(targetArgs: string[], cwd: string, watchMode: boolean) {
   const sourceTargetCount = targetArgs.filter((targetArg) => {
     const relative = toRepoRelativeTarget(targetArg, cwd);
@@ -1515,6 +1530,12 @@ function expandExplicitSourceTestTargets(targetArgs: string[], cwd: string, watc
     }
     const glob = isGlobTarget(relative);
     const directory = isExistingDirectoryTarget(targetArg, cwd);
+    if (!watchMode && !glob && directory && isPathAtOrUnder(relative, "packages")) {
+      const targets = listPackageDirectoryTestTargets(relative, cwd).toSorted((left, right) =>
+        left.localeCompare(right),
+      );
+      return targets.length > 0 ? targets : [targetArg];
+    }
     // Target shape is invariant across the worker inventory; literal files need no expansion.
     const databaseWorkerTargets =
       glob || directory
@@ -2051,22 +2072,22 @@ function readImportGraphEdges(
   const requests = files
     .map((file) => ({ file, parseImports: !cachedImportGraphEdges.has(cacheKey(file)) }))
     .filter(({ parseImports }) => parseImports || terms.length > 0);
-  return readTestSelectorSourceFacts(cwd, requests, terms, GIT_LS_FILES_MAX_BUFFER_BYTES).map(
-    ({ file, imports, typeOnlyImports, matches, references }) => {
-      const edges = cachedImportGraphEdges.get(cacheKey(file)) ?? {
-        file,
-        specifiers: imports,
-        typeOnlySpecifiers: new Set(typeOnlyImports),
-        imports: resolve(file, imports),
-        references: new Set<string>(),
-      };
-      for (const reference of references) {
-        edges.references.add(reference);
-      }
-      cachedImportGraphEdges.set(cacheKey(file), edges);
-      return { edges, matches };
-    },
-  );
+  return readTestSelectorSourceFacts(cwd, requests, terms, GIT_LS_FILES_MAX_BUFFER_BYTES, {
+    matchingOnly: terms.length > 0,
+  }).map(({ file, imports, typeOnlyImports, matches, references }) => {
+    const edges = cachedImportGraphEdges.get(cacheKey(file)) ?? {
+      file,
+      specifiers: imports,
+      typeOnlySpecifiers: new Set(typeOnlyImports),
+      imports: resolve(file, imports),
+      references: new Set<string>(),
+    };
+    for (const reference of references) {
+      edges.references.add(reference);
+    }
+    cachedImportGraphEdges.set(cacheKey(file), edges);
+    return { edges, matches };
+  });
 }
 
 function listImportGraphGrepMatches(
@@ -2123,8 +2144,9 @@ function listImportGraphGrepMatches(
         ? result.stdout.split("\0").filter((file) => trackedFiles.has(file))
         : [...trackedFiles].filter((file) => !testFilesOnly || isTestFileTarget(file))
     ).toSorted((left, right) => left.localeCompare(right));
-    // Per-term membership preserves the helper first-success rule.
-    // Cached edges need only term facts; full-graph acquisition reuses their parsing.
+    // Per-term membership preserves the helper first-success rule. One native pass
+    // matches every candidate, parses only uncached matches, and leaves nonmatches
+    // uncached so later full-graph queries still read them.
     for (const { edges, matches: fileTerms } of readImportGraphEdges(
       cwd,
       candidates,
@@ -4982,11 +5004,12 @@ export function buildVitestRunPlans(
       groupedTargets.set("toolingDocker", current);
     }
   }
+  const activeIncludePatterns = activeTargetArgs.map((target) =>
+    toScopedIncludePattern(target, cwd),
+  );
   const impliedToolingIsolatedTargets = !watchMode
     ? toolingIsolatedTestFiles.filter((file) =>
-        classifiedTargets.some(({ targetArg }) =>
-          includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
-        ),
+        activeIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
       )
     : [];
   if (impliedToolingIsolatedTargets.length > 0) {
@@ -4999,10 +5022,9 @@ export function buildVitestRunPlans(
     groupedTargets.set("toolingIsolated", current);
   }
   const uiTargets = groupedTargets.get("ui") ?? [];
+  const uiIncludePatterns = uiTargets.map((target) => toScopedIncludePattern(target, cwd));
   const impliedUiTimingTargets = uiTimingTestFiles.filter((file) =>
-    uiTargets.some((targetArg) =>
-      includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
-    ),
+    uiIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
   );
   if (impliedUiTimingTargets.length > 0) {
     groupedTargets.set("uiTiming", [
@@ -5029,9 +5051,7 @@ export function buildVitestRunPlans(
     }
   }
   const impliedUiIsolatedTargets = uiIsolatedTestFiles.filter((file) =>
-    uiTargets.some((targetArg) =>
-      includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
-    ),
+    uiIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
   );
   if (impliedUiIsolatedTargets.length > 0) {
     const current = groupedTargets.get("uiIsolated") ?? [];
@@ -5045,9 +5065,7 @@ export function buildVitestRunPlans(
   // Source-child ownership can cross shared suites (for example state tests).
   // Match every active target so broad selections cannot silently omit excluded children.
   const impliedCliProcessTargets = cliProcessTestFiles.filter((file) =>
-    activeTargetArgs.some((targetArg) =>
-      includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
-    ),
+    activeIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
   );
   if (impliedCliProcessTargets.length > 0) {
     const current = groupedTargets.get("cliProcess") ?? [];

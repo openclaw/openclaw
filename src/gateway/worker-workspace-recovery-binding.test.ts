@@ -297,6 +297,8 @@ async function createRecoveryFixture(workspacePath: string, options: { archived?
         changed: false,
         verifyStable: async () => {},
         verifyLocalStable: async () => {},
+        publishStagedResult: async () => {},
+        discardPreparedStagedResult: async () => {},
       };
     },
     stop: async () => {},

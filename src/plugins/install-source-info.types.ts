@@ -14,7 +14,7 @@ export type PluginInstallSourceWarning =
   | "npm-spec-package-name-mismatch";
 
 /** Pinning state for npm plugin install metadata. */
-export type PluginInstallNpmPinState =
+type PluginInstallNpmPinState =
   | "exact-with-integrity"
   | "exact-without-integrity"
   | "floating-with-integrity"
@@ -32,11 +32,6 @@ export type PluginInstallNpmSourceInfo = {
   pinState: PluginInstallNpmPinState;
 };
 
-/** Parsed local install source metadata for a plugin package. */
-type PluginInstallLocalSourceInfo = {
-  path: string;
-};
-
 /** Parsed ClawHub install source metadata for a plugin package. */
 export type PluginInstallClawHubSourceInfo = {
   spec: string;
@@ -50,6 +45,6 @@ export type PluginInstallSourceInfo = {
   defaultChoice?: PluginPackageInstall["defaultChoice"];
   clawhub?: PluginInstallClawHubSourceInfo;
   npm?: PluginInstallNpmSourceInfo;
-  local?: PluginInstallLocalSourceInfo;
+  local?: { path: string };
   warnings: readonly PluginInstallSourceWarning[];
 };

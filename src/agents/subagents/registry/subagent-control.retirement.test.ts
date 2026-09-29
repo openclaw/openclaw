@@ -118,7 +118,9 @@ it.each([
     }
     const ancestor = subagentRuns.get("ancestor")!;
     const child = subagentRuns.get("child")!;
-    expect(markSubagentRunTerminated({ runId: "ancestor", suppressTaskDelivery: true })).toBe(1);
+    expect(await markSubagentRunTerminated({ runId: "ancestor", suppressTaskDelivery: true })).toBe(
+      1,
+    );
     expect(ancestor.killReconciliation).toMatchObject({
       killedAt: now,
       suppressTaskDelivery: true,
@@ -367,9 +369,9 @@ it.each(
     await entered.promise;
     // Independent canonical termination during the drain, followed by modeled
     // reconciliation ageing. A fresh provisional kill must still retain its row.
-    expect(markSubagentRunTerminated({ runId: ancestor.runId, suppressTaskDelivery: true })).toBe(
-      1,
-    );
+    expect(
+      await markSubagentRunTerminated({ runId: ancestor.runId, suppressTaskDelivery: true }),
+    ).toBe(1);
     expect(subagentRuns.get(ancestor.runId)).toBe(ancestor);
     expect(ancestor.killReconciliation?.killedAt).toBe(now);
     clock.mockReturnValue(now + PROVISIONAL_KILL_RECONCILIATION_MS);

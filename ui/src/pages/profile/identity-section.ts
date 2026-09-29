@@ -24,6 +24,7 @@ registerProfileEnglish();
 type IdentitySectionProps = {
   config?: ApplicationConfigCapability;
   profile: UserProfile;
+  canWrite?: boolean;
   avatarUrl: string | null;
   displayName: string;
   gitCoauthorEnabled: boolean;
@@ -46,6 +47,7 @@ function avatarViewer(profile: UserProfile, avatarUrl: string | null): PresenceV
 }
 
 export function renderIdentitySection(props: IdentitySectionProps) {
+  const canWrite = props.canWrite !== false;
   const savedName = props.profile.displayName ?? "";
   const nameChanged = props.displayName.trim() !== savedName;
   const emails = props.profile.emails.join(", ");
@@ -58,6 +60,7 @@ export function renderIdentitySection(props: IdentitySectionProps) {
         description: t("profilePage.identity.description"),
       },
       html`
+        ${!canWrite ? renderSettingsRow({ title: t("profilePage.identity.writeRequired") }) : nothing}
         ${renderSettingsRow({
           title: t("profilePage.identity.avatar"),
           description: t("profilePage.identity.avatarDescription"),
@@ -68,16 +71,20 @@ export function renderIdentitySection(props: IdentitySectionProps) {
                 variant="profile"
               ></openclaw-viewer-avatar>
               ${
-                uploadsEnabled(props.config)
+                canWrite && uploadsEnabled(props.config)
                   ? html`<button
                         type="button"
                         class="btn btn--sm"
-                        ?disabled=${props.busy !== null}
+                        ?disabled=${!canWrite || props.busy !== null}
                         @click=${(event: Event) => {
                           const button = event.currentTarget;
                           const input =
                             button instanceof HTMLButtonElement ? button.nextElementSibling : null;
-                          if (uploadsEnabled(props.config) && input instanceof HTMLInputElement) {
+                          if (
+                            canWrite &&
+                            uploadsEnabled(props.config) &&
+                            input instanceof HTMLInputElement
+                          ) {
                             input.click();
                           }
                         }}
@@ -92,12 +99,12 @@ export function renderIdentitySection(props: IdentitySectionProps) {
                         type="file"
                         accept="image/png,image/jpeg,image/webp"
                         hidden
-                        ?disabled=${props.busy !== null}
+                        ?disabled=${!canWrite || props.busy !== null}
                         @change=${(event: Event) => {
                           const input = event.currentTarget as HTMLInputElement;
                           const file = input.files?.[0];
                           input.value = "";
-                          if (file && uploadsEnabled(props.config)) {
+                          if (file && canWrite && uploadsEnabled(props.config)) {
                             props.onAvatarSelect(file);
                           }
                         }}
@@ -124,14 +131,14 @@ export function renderIdentitySection(props: IdentitySectionProps) {
                 maxlength="256"
                 aria-label=${t("profilePage.identity.displayName")}
                 .value=${props.displayName}
-                ?disabled=${props.busy !== null}
+                ?disabled=${!canWrite || props.busy !== null}
                 @input=${(event: Event) =>
                   props.onDisplayNameInput((event.currentTarget as HTMLInputElement).value)}
               />
               <button
                 type="submit"
                 class="btn btn--sm"
-                ?disabled=${props.busy !== null || !nameChanged}
+                ?disabled=${!canWrite || props.busy !== null || !nameChanged}
               >
                 ${props.busy === "display-name" ? t("common.saving") : t("common.save")}
               </button>
@@ -185,7 +192,7 @@ export function renderIdentitySection(props: IdentitySectionProps) {
               ? t("profilePage.identity.gitCoauthorDescription")
               : t("profilePage.identity.gitCoauthorUnavailable"),
           checked: Boolean(githubIdentity && props.gitCoauthorEnabled),
-          disabled: props.busy !== null || !githubIdentity,
+          disabled: !canWrite || props.busy !== null || !githubIdentity,
           onChange: props.onGitCoauthorChange,
         })}
         ${

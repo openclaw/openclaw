@@ -260,25 +260,6 @@ function correlateBatchItems(
   return correlated;
 }
 
-async function resolveOwnerQualifiedFallback(params: {
-  target: ClawHubExactSkillSecurityTarget & { ownerHandle: string };
-  baseUrl?: string;
-  token?: string;
-  skipAuth?: boolean;
-  timeoutMs?: number;
-}): Promise<ClawHubSkillSecurityVerdictItem> {
-  const verification = await fetchClawHubSkillVerification({
-    slug: params.target.slug,
-    ownerHandle: params.target.ownerHandle,
-    version: params.target.version,
-    baseUrl: params.baseUrl,
-    token: params.token,
-    ...(params.skipAuth !== undefined ? { skipAuth: params.skipAuth } : {}),
-    timeoutMs: params.timeoutMs,
-  });
-  return mapVerificationToVerdict({ verification, target: params.target });
-}
-
 export async function fetchExactClawHubSkillSecurityVerdicts(
   params: FetchExactSkillSecurityParams,
 ): Promise<ClawHubSkillSecurityVerdictItem[]> {
@@ -313,13 +294,18 @@ export async function fetchExactClawHubSkillSecurityVerdicts(
         const ownerHandle = target.ownerHandle;
         const fallbackItem =
           ownerHandle && item.error?.code === "skill_not_found"
-            ? await fallbackLimit(() =>
-                resolveOwnerQualifiedFallback({
+            ? await fallbackLimit(async () =>
+                mapVerificationToVerdict({
+                  verification: await fetchClawHubSkillVerification({
+                    slug: target.slug,
+                    ownerHandle,
+                    version: target.version,
+                    baseUrl: params.baseUrl,
+                    token: params.token,
+                    ...(params.skipAuth !== undefined ? { skipAuth: params.skipAuth } : {}),
+                    timeoutMs: params.timeoutMs,
+                  }),
                   target: { ...target, ownerHandle },
-                  baseUrl: params.baseUrl,
-                  token: params.token,
-                  ...(params.skipAuth !== undefined ? { skipAuth: params.skipAuth } : {}),
-                  timeoutMs: params.timeoutMs,
                 }),
               )
             : item;

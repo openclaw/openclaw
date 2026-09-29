@@ -37,13 +37,6 @@ function indexClawHubPlugins(
   return index;
 }
 
-function findLocalPlugin(
-  plugin: ClawHubPluginCatalogEntry,
-  index: ReadonlyMap<string, PluginCatalogEntry>,
-): PluginCatalogEntry | undefined {
-  return index.get(normalizedAlias(plugin.packageName) ?? "");
-}
-
 function projectLocalFacts(
   plugin: PluginCatalogEntry | undefined,
   mutationAllowed: boolean,
@@ -132,7 +125,11 @@ export function joinClawHubPluginCatalog(params: {
 }): PluginDiscoveryEntry[] {
   const localIndex = indexClawHubPlugins(params.local.plugins);
   const remote = params.remote.map((plugin) => {
-    const localPlugin = findLocalPlugin(plugin, localIndex);
+    const localPlugin = localIndex.get(normalizedAlias(plugin.packageName) ?? "");
+    // Keep the registry purpose first; later pages must retain known local capabilities.
+    const categories = [
+      ...new Set([...plugin.categories, ...(localPlugin?.capabilityCategories ?? [])]),
+    ];
     return {
       id: encodePluginDiscoveryId(plugin.packageName),
       catalog: {
@@ -142,8 +139,8 @@ export function joinClawHubPluginCatalog(params: {
         family: plugin.family,
         ...(plugin.ownerHandle ? { author: plugin.ownerHandle } : {}),
         official: plugin.isOfficial,
-        categories: plugin.categories,
-        ...categoryPriorityFacts(plugin.packageName, plugin.categories, params.categories),
+        categories,
+        ...categoryPriorityFacts(plugin.packageName, categories, params.categories),
         ...(plugin.iconUrl ? { imageUrl: plugin.iconUrl } : {}),
         ...(plugin.latestVersion ? { latestVersion: plugin.latestVersion } : {}),
         ...(plugin.downloads !== undefined ? { downloads: plugin.downloads } : {}),
@@ -171,7 +168,11 @@ export function joinClawHubPluginCatalog(params: {
         !publishedPackages.has(normalizedAlias(localClawHubIdentity(plugin))) &&
         ((params.intent === "all" &&
           plugin.installed &&
-          (!params.categories || params.query?.trim())) ||
+          (!params.categories ||
+            params.query?.trim() ||
+            plugin.capabilityCategories?.some(
+              (category) => !params.category || category === params.category,
+            ))) ||
           (params.includeBundledOnly &&
             plugin.origin === "bundled" &&
             (params.intent !== "bundled" || !localClawHubIdentity(plugin)))),
@@ -204,7 +205,12 @@ export function joinClawHubPluginCatalog(params: {
 }
 
 function localDiscoveryCategories(plugin: PluginCatalogEntry): string[] {
-  return plugin.categories ?? (plugin.category ? [plugin.category] : []);
+  return [
+    ...new Set([
+      ...(plugin.categories ?? (plugin.category ? [plugin.category] : [])),
+      ...(plugin.capabilityCategories ?? []),
+    ]),
+  ];
 }
 
 function localClawHubIdentity(plugin: PluginCatalogEntry): string | undefined {

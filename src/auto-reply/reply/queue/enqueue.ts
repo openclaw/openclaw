@@ -1,4 +1,3 @@
-// Enqueues follow-up reply runs and schedules queue drains.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
@@ -154,38 +153,20 @@ export function enqueueFollowupRun(
 
   const dedupe = dedupeMode === "none" ? undefined : isRunAlreadyQueued;
 
-  // Deduplicate: skip if the same message is already queued.
   if (shouldSkipQueueItem({ item: run, items: queue.items, dedupe })) {
     return false;
   }
   // Preserve later prompts while an older steer decides between same-turn
   // delivery and fallback; overflow resumes when the gate resolves.
-  if (options.steerCandidate || queue.items.some((item) => item.steerPending)) {
-    if (!markFollowupRunEnqueued(run)) {
-      return false;
-    }
-    if (options.steerCandidate) {
-      const { promise: acceptance, resolve: settle } = createDeferredCore<boolean>();
-      run.steerPending = { phase: "waiting", predecessor: queue.steerAcceptanceTail, settle };
-      // A canceled waiter can settle before its predecessor. Its successors
-      // must still wait for every earlier attempt to settle.
-      queue.steerAcceptanceTail = queue.steerAcceptanceTail.then(() => acceptance);
-    }
-    appendQueueItem({
-      key,
-      queue,
-      run,
-      recentMessageIdKey,
-      runFollowup,
-      restartIfIdle,
-      front: options.steerCandidate === true && options.position === "front",
-    });
-    return true;
-  }
+  const deferOverflow = options.steerCandidate || queue.items.some((item) => item.steerPending);
   // drop:new rejects this source without mutating the existing queue. Do not
   // publish an external queued identity for work that will never be admitted.
-  const pendingCount = countPendingQueueItems(queue.items, queue.inFlight);
-  if (queue.dropPolicy === "new" && queue.cap > 0 && pendingCount >= queue.cap) {
+  if (
+    !deferOverflow &&
+    queue.dropPolicy === "new" &&
+    queue.cap > 0 &&
+    countPendingQueueItems(queue.items, queue.inFlight) >= queue.cap
+  ) {
     run.onQueueDisposition?.("queue-cap-new");
     completeFollowupRunLifecycle(run);
     return false;
@@ -193,7 +174,15 @@ export function enqueueFollowupRun(
   if (!markFollowupRunEnqueued(run)) {
     return false;
   }
-  if (!applyFollowupQueueOverflow(queue, run)) {
+  if (deferOverflow) {
+    if (options.steerCandidate) {
+      const { promise: acceptance, resolve: settle } = createDeferredCore<boolean>();
+      run.steerPending = { phase: "waiting", predecessor: queue.steerAcceptanceTail, settle };
+      // A canceled waiter can settle before its predecessor. Its successors
+      // must still wait for every earlier attempt to settle.
+      queue.steerAcceptanceTail = queue.steerAcceptanceTail.then(() => acceptance);
+    }
+  } else if (!applyFollowupQueueOverflow(queue, run)) {
     return false;
   }
   appendQueueItem({
@@ -203,7 +192,7 @@ export function enqueueFollowupRun(
     recentMessageIdKey,
     runFollowup,
     restartIfIdle,
-    front: options.position === "front",
+    front: options.position === "front" && (!deferOverflow || options.steerCandidate === true),
   });
   return true;
 }
@@ -252,14 +241,12 @@ function applyFollowupQueueOverflow(
         const lastElision = queue.summaryElisions.at(-1);
         const compactSource = createOverflowSummaryRetrySource(item);
         if (lastElision?.contextKey === contextKey) {
-          lastElision.count += 1;
           lastElision.sources.push(compactSource);
           lastElision.summaryLines.push(summaryLine);
           lastElision.sourceRefs.set(item, compactSource);
         } else {
           queue.summaryElisions.push({
             contextKey,
-            count: 1,
             sources: [compactSource],
             summaryLines: [summaryLine],
             sourceRefs: new WeakMap([[item, compactSource]]),

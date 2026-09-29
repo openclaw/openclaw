@@ -42,14 +42,22 @@ private struct OpenClawPickerTransferUnavailable: LocalizedError {
     }
 }
 #endif
+#endif
 
 @MainActor
-private struct OpenClawChatAttachmentCaptureOwner {
+struct OpenClawChatAttachmentCaptureOwner {
     let viewModel: OpenClawChatViewModel
     let session: OpenClawChatViewModel.SessionSnapshot
-}
 
-#endif
+    init(viewModel: OpenClawChatViewModel) {
+        self.viewModel = viewModel
+        self.session = viewModel.currentSessionSnapshot()
+    }
+
+    func addAttachments(urls: [URL]) {
+        self.viewModel.addAttachments(urls: urls, for: self.session)
+    }
+}
 
 private struct SlashPanelHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
@@ -447,13 +455,11 @@ struct OpenClawChatComposer: View {
         OpenClawChatComposerPresentationOwner(viewModel: self.viewModel)
     }
 
-    #if !os(macOS)
     private func attachmentCaptureOwner() -> OpenClawChatAttachmentCaptureOwner {
-        OpenClawChatAttachmentCaptureOwner(
-            viewModel: self.viewModel,
-            session: self.viewModel.currentSessionSnapshot())
+        OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel)
     }
 
+    #if !os(macOS)
     var photoPickerPresentation: Binding<Bool> {
         Binding(
             get: { self.showsPhotoPicker },
@@ -1422,9 +1428,10 @@ extension OpenClawChatComposer {
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.allowedContentTypes = OpenClawChatPickerAttachmentMetadata.allowedFileContentTypes
+        let owner = self.attachmentCaptureOwner()
         panel.begin { resp in
             guard resp == .OK else { return }
-            self.viewModel.addAttachments(urls: panel.urls)
+            owner.addAttachments(urls: panel.urls)
         }
     }
 
@@ -1432,13 +1439,14 @@ extension OpenClawChatComposer {
         guard self.isAttachmentInputEnabled else { return false }
         let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
         guard !fileProviders.isEmpty else { return false }
+        let owner = self.attachmentCaptureOwner()
         for item in fileProviders {
             item.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
                 guard let data = item as? Data,
                       let url = URL(dataRepresentation: data, relativeTo: nil)
                 else { return }
                 Task { @MainActor in
-                    self.viewModel.addAttachments(urls: [url])
+                    owner.addAttachments(urls: [url])
                 }
             }
         }
@@ -1456,7 +1464,7 @@ extension OpenClawChatComposer {
         else { return }
         switch result {
         case let .success(urls):
-            owner.viewModel.addAttachments(urls: urls, for: owner.session)
+            owner.addAttachments(urls: urls)
         case let .failure(error):
             if !(error is CancellationError) {
                 owner.viewModel.errorText = error.localizedDescription

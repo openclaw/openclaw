@@ -7,6 +7,7 @@ import {
   type SessionTranscriptWriteScope,
 } from "../config/sessions/session-accessor.js";
 import { appendSessionTranscriptReportNative } from "../config/sessions/session-accessor.sqlite-transcript-reports.js";
+import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { STATE_CONTENTION_SUMMARY } from "./session-run-error-presentation.js";
@@ -20,14 +21,18 @@ function sanitizeSessionRunError(error: unknown): string {
 }
 
 /** Shared failure receipt; optional settlement joins the receipt's synchronous transaction. */
-export async function recordGatewaySessionRunFailure(params: {
-  target: SessionTranscriptWriteScope & { sessionId: string };
-  runId: string;
-  error: unknown;
-  errorKind?: "state_contention";
-  assertCommitAllowed?: () => void;
-  settleStartupSession?: () => undefined;
-}): Promise<void> {
+export async function recordGatewaySessionRunFailure(
+  params: {
+    target: SessionTranscriptWriteScope & { sessionId: string };
+    runId: string;
+    error: unknown;
+    errorKind?: "state_contention";
+    assertCommitAllowed?: () => void;
+  } & (
+    | { settleStartupSession: () => undefined; sessionEntryCurrent?: never }
+    | { settleStartupSession?: undefined; sessionEntryCurrent?: SessionEntryCurrentCheck }
+  ),
+): Promise<void> {
   const { runId } = params;
   const error = truncateUtf16Safe(sanitizeSessionRunError(params.error), 512) || "unknown error";
   const append = params.settleStartupSession
@@ -37,28 +42,36 @@ export async function recordGatewaySessionRunFailure(params: {
     params.target,
     () => params.assertCommitAllowed?.(),
     () =>
-      append(params.target, {
-        kind: "custom",
-        customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
-        suppressWhenAssistantRun: runId,
-        selectReport: (latest) => {
-          params.assertCommitAllowed?.();
-          params.settleStartupSession?.();
-          params.assertCommitAllowed?.();
-          if (isRecord(latest?.details) && latest.details.runId === runId) {
-            return undefined;
-          }
-          return {
-            customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
-            content:
-              params.errorKind === "state_contention"
-                ? STATE_CONTENTION_SUMMARY
-                : `This turn ended before a reply: ${error}`,
-            display: true,
-            details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },
-          };
+      append(
+        params.target,
+        {
+          kind: "custom",
+          customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
+          suppressWhenAssistantRun: runId,
+          selectReport: (latest) => {
+            params.assertCommitAllowed?.();
+            params.settleStartupSession?.();
+            params.assertCommitAllowed?.();
+            if (isRecord(latest?.details) && latest.details.runId === runId) {
+              return undefined;
+            }
+            return {
+              customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
+              content:
+                params.errorKind === "state_contention"
+                  ? STATE_CONTENTION_SUMMARY
+                  : `This turn ended before a reply: ${error}`,
+              display: true,
+              details: {
+                runId,
+                error,
+                ...(params.errorKind ? { errorKind: params.errorKind } : {}),
+              },
+            };
+          },
         },
-      }),
+        { sessionEntryCurrent: params.sessionEntryCurrent },
+      ),
   );
   if (!result.ok) {
     throw new Error(`Failed run notice could not be appended: ${result.error.code}`);

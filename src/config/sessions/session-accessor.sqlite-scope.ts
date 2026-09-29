@@ -48,7 +48,7 @@ import {
   type ResolvedSqliteStoreTarget,
 } from "./session-sqlite-target.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import type { InternalSessionEntry, SessionEntry } from "./types.js";
+import type { InternalSessionEntry } from "./types.js";
 
 type SessionSqliteDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -203,29 +203,6 @@ export async function runExclusiveSqliteSessionWrite<T>(
 ): Promise<T> {
   const databaseOptions = toDatabaseOptions(scope);
   const timing: StoreWriterTiming = {};
-  return observeSqliteSessionWrite(
-    scope,
-    () =>
-      writer === "worker"
-        ? runOpenClawAgentWorkerWrite(databaseOptions, fn, timing, signal)
-        : runOpenClawAgentWriteAdmission(databaseOptions, fn, false, timing, signal),
-    operation,
-    diagnostics,
-    writer,
-    timing,
-  );
-}
-
-/** Observe multi-unit maintenance without retaining foreground admission between units. */
-async function observeSqliteSessionWrite<T>(
-  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
-  fn: () => Promise<T>,
-  operation: SqliteSessionWriteOperation,
-  diagnostics?: SqliteSessionWriteDiagnostics,
-  writer: "foreground" | "worker" = "foreground",
-  timing: StoreWriterTiming = {},
-): Promise<T> {
-  const databaseOptions = toDatabaseOptions(scope);
   const storePath = resolveOpenClawAgentSqlitePath(databaseOptions);
   const startedAt = performance.now();
   const timingFields = (completedAt: number) => ({
@@ -265,7 +242,10 @@ async function observeSqliteSessionWrite<T>(
   const owned = () =>
     withSqliteReaderOwner(
       { operation, ownerKind: isMainThread ? "main" : "worker", actorId: threadId },
-      fn,
+      () =>
+        writer === "worker"
+          ? runOpenClawAgentWorkerWrite(databaseOptions, fn, timing, signal)
+          : runOpenClawAgentWriteAdmission(databaseOptions, fn, false, timing, signal),
     );
   try {
     const result = await owned();
@@ -366,7 +346,7 @@ export function resolveSqliteScope(
 
 /** Logical qualification is independent of the thread that resolves the physical store. */
 export function resolveSqliteSessionKey(sessionKey: string, agentId: string): string {
-  const normalizedSessionKey = normalizeSqliteSessionKey(sessionKey);
+  const normalizedSessionKey = normalizeStoreSessionKey(sessionKey);
   return !normalizedSessionKey ||
     normalizedSessionKey === "global" ||
     normalizedSessionKey === "unknown" ||
@@ -380,7 +360,7 @@ export function resolveSqliteReadScope(
   targetCache?: SessionSqliteTargetResolutionCache,
   preparedStoreTarget?: ResolvedSqliteStoreTarget,
 ): ResolvedSqliteReadScope {
-  const sessionKey = scope.sessionKey ? normalizeSqliteSessionKey(scope.sessionKey) : undefined;
+  const sessionKey = scope.sessionKey ? normalizeStoreSessionKey(scope.sessionKey) : undefined;
   const { agentId, ...database } = resolveSqliteDatabaseScope(
     { ...scope, sessionKey },
     targetCache,
@@ -474,9 +454,9 @@ export function resolveSqliteTranscriptArchiveDirectory(
 }
 
 /** Validate prepared write identity without resolving or reopening its physical target. */
-export function assertSqliteTranscriptWriteIdentity(
-  scope: Pick<SessionTranscriptWriteScope, "sessionId" | "sessionKey">,
-): asserts scope is { sessionId: string; sessionKey: string } {
+export function assertSqliteTranscriptWriteIdentity<
+  T extends Pick<SessionTranscriptWriteScope, "sessionId" | "sessionKey">,
+>(scope: T): asserts scope is T & { sessionId: string; sessionKey: string } {
   if (typeof scope.sessionId !== "string" || !scope.sessionId) {
     throw new Error(
       `Cannot resolve SQLite transcript scope without a session id: ${scope.sessionKey}`,
@@ -522,7 +502,7 @@ export async function prepareSqliteTranscriptReadScope(
 ): Promise<ResolvedTranscriptReadScope> {
   const readScope = {
     ...scope,
-    sessionKey: scope.sessionKey ? normalizeSqliteSessionKey(scope.sessionKey) : undefined,
+    sessionKey: scope.sessionKey ? normalizeStoreSessionKey(scope.sessionKey) : undefined,
   };
   if (isIncognitoSessionKey(readScope.sessionKey)) {
     return resolveSqliteTranscriptReadScope(readScope);
@@ -602,18 +582,6 @@ export function toDatabaseOptions(
     ...(scope.env ? { env: scope.env } : {}),
     ...(scope.path ? { path: scope.path } : {}),
   };
-}
-
-export function normalizeSqliteSessionKey(sessionKey: string): string {
-  return normalizeStoreSessionKey(sessionKey);
-}
-
-export function cloneSessionEntry(entry: SessionEntry): SessionEntry {
-  return structuredClone(entry);
-}
-
-export function formatSqliteSessionReferenceForScope(scope: ResolvedTranscriptScope): string {
-  return scope.sessionKey;
 }
 
 /** Legacy identity string retained only for transcript artifact metadata and plugin contracts. */

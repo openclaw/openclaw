@@ -1,4 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
+import type { SessionEntryCurrentSource } from "../config/sessions/session-entry-current.types.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type {
   PluginStateComparisonLimits,
@@ -73,7 +74,11 @@ export type PluginStateWorkerRequests = {
 
 export type PluginStateWorkerOperations = {
   [Request in keyof PluginStateWorkerRequests]: {
-    input: PluginStateWorkerRequests[Request]["input"];
+    input: PluginStateWorkerRequests[Request]["input"] extends undefined
+      ? undefined
+      : PluginStateWorkerRequests[Request]["input"] & {
+          sessionEntryCurrentSource?: SessionEntryCurrentSource;
+        };
     output: Result<PluginStateWorkerRequests[Request]["output"], PluginStateWorkerFailure>;
   };
 };

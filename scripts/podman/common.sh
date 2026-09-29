@@ -121,18 +121,18 @@ resolve_user_home() {
 generate_token_hex_32() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -hex 32
-    return 0
+    return $?
   fi
   if command -v python3 >/dev/null 2>&1; then
     python3 - <<'PY'
 import secrets
 print(secrets.token_hex(32))
 PY
-    return 0
+    return $?
   fi
   if command -v od >/dev/null 2>&1; then
     od -An -N32 -tx1 /dev/urandom | tr -d " \n"
-    return 0
+    return $?
   fi
   echo "Missing dependency: need openssl or python3 (or od) to generate OPENCLAW_GATEWAY_TOKEN." >&2
   exit 1

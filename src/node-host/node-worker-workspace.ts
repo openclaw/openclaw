@@ -32,7 +32,12 @@ import {
   runNodeWorkerWorkspaceTransfer,
   serializeNodeWorkerWorkspace,
 } from "./node-worker-transfer-client.js";
-import { workspaceCommandEnv } from "./node-worker-workspace-commands.js";
+import { createNodeWorkerTempWorkspace } from "./node-worker-workspace-admission.js";
+import {
+  nodeWorkspaceManifestCapture,
+  runNodeWorkspaceManifestCapture,
+  workspaceCommandEnv,
+} from "./node-worker-workspace-commands.js";
 import {
   assertWorkspaceArgv,
   removeNodeWorkerWorkspaceEntry,
@@ -118,6 +123,14 @@ export class NodeWorkerWorkspaceRuntime {
       options.ephemeral === true,
     );
     this.env = snapshotNodeWorkerEnv(env);
+  }
+
+  async checkAdmission(): Promise<void> {
+    const probe = await createNodeWorkerTempWorkspace({
+      rootDir: this.root,
+      prefix: ".hosting-admission-",
+    });
+    await probe.cleanup();
   }
 
   /** Only the fresh provisioning owner may register, before Gateway readiness is committed. */
@@ -656,6 +669,22 @@ export class NodeWorkerWorkspaceRuntime {
           ? workspacePath
           : ensureContainedDirectory(sessionRoot, workspaceName);
         assertWorkspaceArgv(workspaceDir, input.argv);
+        const capture = input.process
+          ? undefined
+          : nodeWorkspaceManifestCapture(input.argv, workspaceDir);
+        if (capture) {
+          const stdout = await runNodeWorkspaceManifestCapture({
+            ...capture,
+            home: homeDir,
+            memo: input.input,
+            env: this.env,
+            signal: AbortSignal.any([
+              ...(signal ? [signal] : []),
+              AbortSignal.timeout(input.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+            ]),
+          });
+          return projectWorkspaceOperationResult(workspaceDir, stdout, input.argv);
+        }
         const commandEnv = workspaceCommandEnv(homeDir, this.env);
         if (input.process) {
           return await this.processes.execute({

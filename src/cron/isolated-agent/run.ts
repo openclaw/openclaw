@@ -104,6 +104,11 @@ export async function runCronIsolatedAgentTurn(
   if (!prepared.ok) {
     return { ...prepared.result, admissionDisposition: "rejected" };
   }
+  await using _ = {
+    [Symbol.asyncDispose]: async () => {
+      await prepared.context.workspaceLease?.release();
+    },
+  };
   await using preparedRuntimeLease = prepared.context.preparedModelRuntimeLease;
   let leaseActive = true;
   // Accounting, delivery, and teardown use the same metadata as inference. Keep

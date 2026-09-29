@@ -23,8 +23,7 @@ import {
   MAX_PRESERVED_PENDING_LINE_BYTES,
   resolveMaxOutputBytes,
   resolveOutputCapture,
-  shouldTerminateOnOutputError,
-  shouldTerminateOnOutputLimit,
+  shouldTerminateOnOutput,
   type CapturedOutputBuffers,
   type CommandOutputCaptureMode,
   type CommandOutputCaptureOption,
@@ -431,10 +430,7 @@ async function runCommandWithOutputEncoding(
     const streamLimitExceeded = outputBytesByStream[stream] > maxBytes;
     if (maxCombinedOutputBytes === undefined) {
       appendCapturedOutput(capture, buffer, maxBytes, captureMode);
-      if (
-        streamLimitExceeded &&
-        shouldTerminateOnOutputLimit(options.terminateOnOutputLimit, stream)
-      ) {
+      if (streamLimitExceeded && shouldTerminateOnOutput(options.terminateOnOutputLimit, stream)) {
         cancel("output-limit");
       }
       return;
@@ -480,8 +476,8 @@ async function runCommandWithOutputEncoding(
     }
     if (
       (combinedLimitExceeded &&
-        shouldTerminateOnOutputLimit(options.terminateOnOutputLimit, "combined")) ||
-      (streamLimitExceeded && shouldTerminateOnOutputLimit(options.terminateOnOutputLimit, stream))
+        shouldTerminateOnOutput(options.terminateOnOutputLimit, "combined")) ||
+      (streamLimitExceeded && shouldTerminateOnOutput(options.terminateOnOutputLimit, stream))
     ) {
       cancel("output-limit");
     }
@@ -508,7 +504,7 @@ async function runCommandWithOutputEncoding(
     if (
       termination ||
       options.tolerateOutputError?.[stream] === true ||
-      !shouldTerminateOnOutputError(options.terminateOnOutputError, stream)
+      !shouldTerminateOnOutput(options.terminateOnOutputError, stream)
     ) {
       return;
     }

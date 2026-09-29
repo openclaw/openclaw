@@ -3,23 +3,9 @@ import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbou
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFeishuSendTargetMock = vi.hoisted(() => vi.fn());
-const resolveMarkdownTableModeMock = vi.hoisted(() => vi.fn(() => "preserve"));
-const convertMarkdownTablesMock = vi.hoisted(() => vi.fn((text: string) => text));
 
 vi.mock("./send-target.js", () => ({
   resolveFeishuSendTarget: resolveFeishuSendTargetMock,
-}));
-
-vi.mock("./runtime.js", () => ({
-  setFeishuRuntime: vi.fn(),
-  getFeishuRuntime: () => ({
-    channel: {
-      text: {
-        resolveMarkdownTableMode: resolveMarkdownTableModeMock,
-        convertMarkdownTables: convertMarkdownTablesMock,
-      },
-    },
-  }),
 }));
 
 let sendCardFeishu: typeof import("./send.js").sendCardFeishu;
@@ -46,7 +32,6 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
 
   afterAll(() => {
     vi.doUnmock("./send-target.js");
-    vi.doUnmock("./runtime.js");
     vi.resetModules();
   });
 

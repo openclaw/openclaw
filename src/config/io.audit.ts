@@ -376,26 +376,19 @@ export function finalizeConfigWriteAuditRecord(params: {
     typeof params.err.message === "string"
       ? params.err.message
       : undefined;
-  const nextMetadata = params.nextMetadata ?? {
-    dev: null,
-    ino: null,
-    mode: null,
-    nlink: null,
-    uid: null,
-    gid: null,
-  };
   const success = params.result !== "failed" && params.result !== "rejected";
+  const nextMetadata = success ? params.nextMetadata : undefined;
   return {
     ...params.base,
     result: params.result,
     nextHash: success ? params.base.nextHash : null,
     nextBytes: success ? params.base.nextBytes : null,
-    nextDev: success ? nextMetadata.dev : null,
-    nextIno: success ? nextMetadata.ino : null,
-    nextMode: success ? nextMetadata.mode : null,
-    nextNlink: success ? nextMetadata.nlink : null,
-    nextUid: success ? nextMetadata.uid : null,
-    nextGid: success ? nextMetadata.gid : null,
+    nextDev: nextMetadata == null ? null : nextMetadata.dev,
+    nextIno: nextMetadata == null ? null : nextMetadata.ino,
+    nextMode: nextMetadata == null ? null : nextMetadata.mode,
+    nextNlink: nextMetadata == null ? null : nextMetadata.nlink,
+    nextUid: nextMetadata == null ? null : nextMetadata.uid,
+    nextGid: nextMetadata == null ? null : nextMetadata.gid,
     ...(errorCode !== undefined ? { errorCode } : {}),
     ...(errorMessage !== undefined ? { errorMessage } : {}),
   };

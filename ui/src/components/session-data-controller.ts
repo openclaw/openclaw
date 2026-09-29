@@ -429,12 +429,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     const available = isGatewayAvailable(gateway.snapshot);
     const becameAvailable = available && !this.gatewayAvailable;
     this.gatewayAvailable = available;
-    if (!sourceOrClientChanged && !connectionChanged) {
-      this.synchronizeOwnerSessionCounts();
-    }
     // Presence and auth snapshots must not retire this client's in-flight
     // native or catalog pages unless its connection phase actually changes.
     if (!sourceOrClientChanged && !connectionChanged) {
+      this.synchronizeOwnerSessionCounts();
       const { awaitingGateway, error } = this.sessionCatalogRefreshStatus;
       const requesting = this.sessionCatalogLive.requestGeneration !== null;
       if (becameAvailable && (awaitingGateway || error !== null || requesting)) {

@@ -20,7 +20,7 @@ runs:
         archive="$bun_dir/bun-linux-x64.gz"
         curl --fail --location --no-progress-meter --show-error \
           --connect-timeout 10 --max-time 300 \
-          --retry 3 --retry-max-time 300 \
+          --retry 3 --retry-all-errors --retry-max-time 300 \
           --output "$archive" \
           "https://github.com/steipete/bun/releases/download/openclaw-ci-6b9148b1-webkit-4429d113/bun-linux-x64.gz" \
           2> >(sed 's/^Warning: /::warning::/' >&2)

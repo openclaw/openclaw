@@ -87,7 +87,7 @@ describe("Crabbox allocation through Gateway ownership", () => {
         .mockImplementation(async (argv) => {
           const value = (flag: string) => argv[argv.indexOf(flag) + 1]!;
           if (argv[1] === "--version") {
-            return result("crabbox 0.56.0\n");
+            return result("crabbox 999.0.0\n");
           }
           if (argv[1] === "config") {
             return result(JSON.stringify({ aws: { instanceProfile: "" } }));

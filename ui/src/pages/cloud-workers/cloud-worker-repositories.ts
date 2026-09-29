@@ -301,9 +301,3 @@ class CloudWorkerRepositories extends OpenClawLightDomContentsElement {
 if (!customElements.get("openclaw-cloud-worker-repositories")) {
   customElements.define("openclaw-cloud-worker-repositories", CloudWorkerRepositories);
 }
-
-export function renderCloudWorkerRepositories(canManage: boolean) {
-  return html`<openclaw-cloud-worker-repositories
-    .canManage=${canManage}
-  ></openclaw-cloud-worker-repositories>`;
-}

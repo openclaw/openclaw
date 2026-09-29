@@ -1,6 +1,9 @@
-// Subagent control tests cover listing, killing, and admin cleanup of
-// child runs recorded in the subagent registry and session store.
-import "./subagent-control.leaf-mocks.test-support.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  mockSessionReplacementForStore,
+  replaceCanonicalSessionEntries,
+} from "./subagent-control.leaf-mocks.test-support.js";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -12,15 +15,14 @@ import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import {
   loadSessionEntry,
-  patchSessionEntryCore,
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
+import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { ensureContextEnginesInitialized } from "../../../context-engine/init.js";
 import { resolveContextEngine } from "../../../context-engine/registry.js";
-import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   beginSessionWorkAdmission,
   consumeSessionWorkAdmissionHandoff,
@@ -30,11 +32,7 @@ import {
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import {
-  enqueueSwarmRun,
-  releaseSwarmRun,
-  removeQueuedSwarmRun,
-} from "../swarm/swarm-scheduler.js";
+import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import {
   buildControlledSubagentRunsReadContext,
@@ -42,17 +40,15 @@ import {
   killSubagentRunAdmin,
 } from "./subagent-control.js";
 import { registerLateDescendantControlTests } from "./subagent-control.late-registration.test-support.js";
+import { registerQueuedReservationFailureTests } from "./subagent-control.queued-failure.test-support.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./subagent-control.types.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
 import * as registryState from "./subagent-registry-state.js";
-import {
-  markSubagentRunTerminated,
-  replaceSubagentRunAfterSteerCore,
-  startQueuedSubagentRun,
-} from "./subagent-registry.js";
+import { replaceSubagentRunAfterSteerCore, startQueuedSubagentRun } from "./subagent-registry.js";
 import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
@@ -74,16 +70,6 @@ const controlRuntimeMocks = vi.hoisted(() => ({
 
 vi.mock("./subagent-control.runtime.js", () => controlRuntimeMocks);
 
-vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>();
-  return { ...actual, patchSessionEntryCore: vi.fn(actual.patchSessionEntryCore) };
-});
-
-const { patchSessionEntryCore: patchCanonicalSessionEntry } = await vi.importActual<
-  typeof import("../../../config/sessions/session-accessor.js")
->("../../../config/sessions/session-accessor.js");
-
 vi.mock("../../../gateway/call.js", () => ({
   // Active fixture runs stay pending until the test drives their terminal transition.
   callGateway: vi.fn(async (request: { method: string }) =>
@@ -96,7 +82,7 @@ function setSubagentControlDepsForTest(overrides: Partial<ControlRuntime> = {}) 
   controlRuntimeMocks.isEmbeddedAgentRunActive.mockReset();
   controlRuntimeMocks.clearSessionQueues.mockReset();
   // Default to the canonical store; individual race tests replace only their fault boundary.
-  vi.mocked(patchSessionEntryCore).mockReset();
+  vi.mocked(applySessionEntryExactReplacements).mockReset();
   if (overrides.abortEmbeddedAgentRun) {
     controlRuntimeMocks.abortEmbeddedAgentRun.mockImplementation(overrides.abortEmbeddedAgentRun);
   }
@@ -108,15 +94,6 @@ function setSubagentControlDepsForTest(overrides: Partial<ControlRuntime> = {}) 
   if (overrides.clearSessionQueues) {
     controlRuntimeMocks.clearSessionQueues.mockImplementation(overrides.clearSessionQueues);
   }
-}
-
-function mockSessionPatchForStore(storePath: string, implementation: typeof patchSessionEntryCore) {
-  // Registry timing writes use a different store; a fault must not fabricate entries there.
-  vi.mocked(patchSessionEntryCore).mockImplementation((scope, patcher, options) =>
-    scope.storePath === storePath
-      ? implementation(scope, patcher, options)
-      : patchCanonicalSessionEntry(scope, patcher, options),
-  );
 }
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -170,6 +147,21 @@ function resetRegistryLeafMocks() {
   vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
   vi.mocked(registryState.persistSubagentRunsToDisk).mockReset();
   vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockReset();
+  vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow)
+    .mockReset()
+    .mockImplementation(async (runs, ids, options) => {
+      const snapshot = structuredClone(runs);
+      await Promise.resolve();
+      let committed = false;
+      try {
+        options.assertCurrent?.();
+        registryState.persistSubagentRunsToDiskOrThrow(snapshot, ids);
+        committed = true;
+        options.onCommitted?.();
+      } catch (error) {
+        throw new SubagentRegistryWriteError(committed ? "committed" : "not-committed", error);
+      }
+    });
   vi.mocked(registryState.restoreSubagentRunsFromDisk).mockReset();
   vi.mocked(resolveContextEngine).mockReset();
 }
@@ -518,11 +510,18 @@ describe("killSubagentRunAdmin", () => {
         return true;
       },
     });
-    mockSessionPatchForStore(storePath, async (_scope, patcher) => {
-      const current = { sessionId: "sess-abort-lifecycle-race", updatedAt: Date.now() };
-      const patch = await patcher(current, { existingEntry: { ...current } });
-      abortedLastRunWrites.push(patch?.abortedLastRun === true);
-      return patch ? { ...current, ...patch } : current;
+    mockSessionReplacementForStore(storePath, async (params) => {
+      const current: SessionEntry = {
+        sessionId: "sess-abort-lifecycle-race",
+        updatedAt: Date.now(),
+      };
+      const operation = await params.update([{ sessionKey: childSessionKey, entry: current }]);
+      params.assertCommitAllowed?.();
+      const replacement = [...(operation.replacements ?? [])][0]?.entry;
+      if (replacement && replacement.abortedLastRun !== current.abortedLastRun) {
+        abortedLastRunWrites.push(replacement.abortedLastRun === true);
+      }
+      return operation.result;
     });
 
     const result = await killSubagentRunAdmin({
@@ -577,11 +576,15 @@ describe("killSubagentRunAdmin", () => {
         return true;
       },
     });
-    mockSessionPatchForStore(storePath, async (_scope, patcher) => {
-      const current = { sessionId: "sess-completion-race", updatedAt: Date.now() };
-      const patch = await patcher(current, { existingEntry: { ...current } });
-      abortedLastRunWrites.push(patch?.abortedLastRun === true);
-      return patch ? { ...current, ...patch } : current;
+    mockSessionReplacementForStore(storePath, async (params) => {
+      const current: SessionEntry = { sessionId: "sess-completion-race", updatedAt: Date.now() };
+      const operation = await params.update([{ sessionKey: childSessionKey, entry: current }]);
+      params.assertCommitAllowed?.();
+      const replacement = [...(operation.replacements ?? [])][0]?.entry;
+      if (replacement && replacement.abortedLastRun !== current.abortedLastRun) {
+        abortedLastRunWrites.push(replacement.abortedLastRun === true);
+      }
+      return operation.result;
     });
 
     const result = await killSubagentRunAdmin({
@@ -589,7 +592,7 @@ describe("killSubagentRunAdmin", () => {
       sessionKey: childSessionKey,
     });
 
-    expect(result).toMatchObject({
+    expect(result, JSON.stringify(result)).toMatchObject({
       found: true,
       killed: false,
       targetState: {
@@ -647,23 +650,20 @@ describe("killSubagentRunAdmin", () => {
       isEmbeddedAgentRunActive: () => true,
       abortEmbeddedAgentRun: () => true,
     });
-    mockSessionPatchForStore(storePath, async (scope, patcher) => {
-      if (!scope.storePath) {
-        return null;
+    mockSessionReplacementForStore(storePath, async (params) => {
+      const sessionKey = params.activeSessionKey!;
+      const current = loadSessionEntry({ storePath: params.storePath, sessionKey, clone: false });
+      const operation = await params.update(current ? [{ sessionKey, entry: current }] : []);
+      params.assertCommitAllowed?.();
+      const replacement = [...(operation.replacements ?? [])][0]?.entry;
+      if (
+        sessionKey === childSessionKey &&
+        replacement &&
+        replacement.abortedLastRun !== current?.abortedLastRun
+      ) {
+        abortedLastRunWrites.push(replacement.abortedLastRun === true);
       }
-      const current = loadSessionEntry({
-        storePath: scope.storePath,
-        sessionKey: scope.sessionKey,
-        clone: false,
-      });
-      if (!current) {
-        return null;
-      }
-      const patch = await patcher(current, { existingEntry: { ...current } });
-      if (scope.sessionKey === childSessionKey) {
-        abortedLastRunWrites.push(patch?.abortedLastRun === true);
-      }
-      if (scope.sessionKey === descendantSessionKey) {
+      if (sessionKey === descendantSessionKey) {
         const endedAt = Date.now();
         Object.assign(run, {
           endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
@@ -675,7 +675,7 @@ describe("killSubagentRunAdmin", () => {
           outcome: { status: "ok" as const },
         });
       }
-      return patch ? { ...current, ...patch } : current;
+      return operation.result;
     });
 
     const result = await killSubagentRunAdmin({
@@ -724,7 +724,6 @@ describe("killSubagentRunAdmin", () => {
         return true;
       },
     });
-    mockSessionPatchForStore(storePath, async () => null);
 
     const result = await killSubagentRunAdmin({
       cfg: cfgWithSessionStore(storePath),
@@ -1130,12 +1129,10 @@ describe("controlled subagent cancellation races", () => {
       abortEmbeddedAgentRun: abort,
       clearSessionQueues: clearQueues,
     });
-    mockSessionPatchForStore(storePath, async (_scope, patcher) => {
+    mockSessionReplacementForStore(storePath, async (params) => {
       markPersistenceStarted();
       await persistenceRelease;
-      const current = { sessionId: "sess-persist-generation-race", updatedAt: Date.now() };
-      const patch = await patcher(current, { existingEntry: { ...current } });
-      return patch ? { ...current, ...patch } : current;
+      return replaceCanonicalSessionEntries(params);
     });
 
     const pendingKill = killAllControlledSubagentRuns({
@@ -1265,15 +1262,16 @@ describe("controlled subagent cancellation races", () => {
     });
     addSubagentRunForTests(entry);
     const patches: Array<Partial<SessionEntry> | null> = [];
-    mockSessionPatchForStore(storePath, async (_scope, patcher) => {
+    mockSessionReplacementForStore(storePath, async (params) => {
       const replacement: SessionEntry = {
         sessionId: "sess-kill-session-patch-reset",
         lifecycleRevision: "revision-after-reset",
         updatedAt: Date.now(),
       };
-      const patch = await patcher(replacement, { existingEntry: { ...replacement } });
-      patches.push(patch);
-      return patch ? { ...replacement, ...patch } : replacement;
+      const operation = await params.update([{ sessionKey: childSessionKey, entry: replacement }]);
+      params.assertCommitAllowed?.();
+      patches.push([...(operation.replacements ?? [])][0]?.entry ?? null);
+      return operation.result;
     });
 
     await expect(
@@ -1284,7 +1282,7 @@ describe("controlled subagent cancellation races", () => {
       }),
     ).resolves.toMatchObject({ status: "ok", killed: 1 });
 
-    expect(patches).toEqual([null]);
+    expect(patches).toEqual([null, null]);
     expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
       endedReason: SUBAGENT_ENDED_REASON_KILLED,
       execution: { status: "terminal" },
@@ -1598,13 +1596,13 @@ describe("controlled subagent cancellation races", () => {
     });
     const abortedLastRunWrites: boolean[] = [];
     let persistenceWrites = 0;
-    mockSessionPatchForStore(storePath, async (_scope, patcher) => {
+    mockSessionReplacementForStore(storePath, async (params) => {
       const current = { sessionId, updatedAt: 1, abortedLastRun: true };
-      const patch = await patcher(current, { existingEntry: { ...current } });
-      if (patch) {
-        abortedLastRunWrites.push(patch.abortedLastRun === true);
+      const operation = await params.update([{ sessionKey: childSessionKey, entry: current }]);
+      for (const { entry: replacement } of operation.replacements ?? []) {
+        abortedLastRunWrites.push(replacement.abortedLastRun === true);
       }
-      return patch ? { ...current, ...patch } : current;
+      return operation.result;
     });
     resetRegistryLeafMocks();
     vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
@@ -1792,146 +1790,11 @@ describe("killAllControlledSubagentRuns", () => {
     },
   );
 
-  it.each([
-    "intent write",
-    "tombstone write",
-    "claim release",
-    "session replacement at intent",
-    "session replacement release",
-    "abort refusal",
-    "session replacement",
-    "row replacement",
-    "lifecycle rotation",
-    "parent persistence",
-  ])("releases or withdraws the exact queued reservation after %s failure", async (failure) => {
-    const controllerSessionKey = "agent:main:main";
-    const entry = createSubagentRunRecord({
-      runId: "failure-queued",
-      childSessionKey: "agent:main:subagent:failure-queued",
-      controllerSessionKey,
-      requesterSessionKey: controllerSessionKey,
-      task: "queued failure",
-      createdAt: 1,
-      generation: 1,
-      collect: true,
-      swarmLaunchPending: true,
-      execution: { status: "queued" },
-    });
-    addSubagentRunForTests(entry);
-    const storePath = await writeSessionStoreFixture("queue-failure", {
-      [entry.childSessionKey]: { sessionId: "queued-session", updatedAt: 1 },
-    });
-    const dispatch = vi.fn(async () => {});
-    const reserve = () =>
-      enqueueSwarmRun({
-        groupId: "failure-lane",
-        runId: entry.runId,
-        maxConcurrent: 1,
-        activeRunIds: [],
-        start: dispatch,
-        onStartFailure: () => true,
-      });
-    reserve();
-    let writes = 0;
-    resetRegistryLeafMocks();
-    vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
-      writes += 1;
-      if (
-        ["session replacement at intent", "session replacement release"].includes(failure) &&
-        writes === 1
-      ) {
-        replaceSessionEntrySync(
-          { storePath, sessionKey: entry.childSessionKey },
-          { sessionId: "new-session", updatedAt: 2 },
-        );
-      }
-      if (
-        (failure === "intent write" && writes === 1) ||
-        (["tombstone write", "claim release", "session replacement release"].includes(failure) &&
-          writes === 2)
-      ) {
-        throw new Error("sqlite busy");
-      }
-    });
-    setSubagentControlDepsForTest({
-      isEmbeddedAgentRunActive: () => {
-        if (failure === "session replacement") {
-          replaceSessionEntrySync(
-            { storePath, sessionKey: entry.childSessionKey },
-            { sessionId: "new-session", updatedAt: 2 },
-          );
-        }
-        return ["abort refusal", "claim release"].includes(failure);
-      },
-      abortEmbeddedAgentRun: () => !["abort refusal", "claim release"].includes(failure),
-      clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
-    });
-    try {
-      const pending = killAllControlledSubagentRuns({
-        cfg: cfgWithSessionStore(storePath),
-        controller: {
-          controllerSessionKey,
-          controllerAgentId: "main",
-          callerSessionKey: controllerSessionKey,
-          callerIsSubagent: false,
-          controlScope: "children",
-        },
-        runs: [entry],
-        beforeKill: async () => {
-          await Promise.resolve();
-          expect(
-            dispatch,
-            "scheduled pump cannot dispatch while cancellation owns the reservation",
-          ).not.toHaveBeenCalled();
-          if (failure === "row replacement") {
-            expect(removeQueuedSwarmRun(entry.runId)).toBe(true);
-            addSubagentRunForTests({ ...entry, generation: 2, createdAt: 2 });
-            reserve();
-          }
-          if (failure === "lifecycle rotation") {
-            rotateAgentEventLifecycleGeneration();
-          }
-          if (failure === "parent persistence") {
-            throw new Error("partial persistence failed");
-          }
-          return true;
-        },
-      });
-      if (failure === "parent persistence") {
-        await expect(pending).rejects.toThrow("partial persistence failed");
-      } else {
-        const result = await pending;
-        expect(result.killed).toBe(0);
-        expect(result.status).toBe(
-          ["row replacement", "lifecycle rotation"].includes(failure) ? "ok" : "error",
-        );
-      }
-      if (["tombstone write", "claim release", "session replacement release"].includes(failure)) {
-        expect(entry.killIntent).toMatchObject({ reason: "killed" });
-        const survivor = vi.fn(async () => {});
-        enqueueSwarmRun({
-          groupId: "failure-lane",
-          runId: "survivor",
-          maxConcurrent: 1,
-          activeRunIds: [],
-          start: survivor,
-          onStartFailure: () => true,
-        });
-        await vi.waitFor(() => expect(survivor).toHaveBeenCalledOnce());
-        expect(dispatch).not.toHaveBeenCalled();
-        expect(markSubagentRunTerminated({ runId: entry.runId })).toBe(1);
-        expect(entry.collectorCompletion).toMatchObject({ status: "killed" });
-        expect(dispatch).not.toHaveBeenCalled();
-      } else {
-        expect(entry.killIntent).toBeUndefined();
-        await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
-        expect(
-          getSubagentRunByChildSessionKey(entry.childSessionKey)?.execution.endedAt,
-        ).toBeUndefined();
-      }
-    } finally {
-      swarmSchedulerTesting.reset();
-    }
+  registerQueuedReservationFailureTests({
+    cfgWithSessionStore,
+    setSubagentControlDepsForTest,
+    writeSessionStoreFixture,
+    resetRegistryLeafMocks,
   });
 
   it.each([false, true])(

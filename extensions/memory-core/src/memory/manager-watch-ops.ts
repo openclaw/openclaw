@@ -13,7 +13,7 @@ function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "
 
 export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
   private fileWatcher: MemoryFileWatcher | undefined;
-  private memoryWatcherReady: Promise<void> = Promise.resolve();
+  protected memoryWatcherReady: Promise<void> = Promise.resolve();
   protected get memoryWatchCapacityDegraded(): boolean {
     return this.fileWatcher?.capacityDegraded ?? false;
   }
@@ -85,10 +85,6 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
         log.warn(`memory workspace watcher unavailable: ${String(error)}`);
       }
     });
-  }
-
-  protected async awaitMemoryWatcherReady(): Promise<void> {
-    await this.memoryWatcherReady;
   }
 
   protected async closeWatchResources(): Promise<void> {
