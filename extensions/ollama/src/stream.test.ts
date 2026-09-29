@@ -902,3 +902,95 @@ describe("createOllamaStreamFn thinking events", () => {
     expect(done?.message?.usage).toMatchObject({ input: 11, output: 3 });
   });
 });
+
+// Regression for #133922: a non-reasoning model served by the native Ollama
+// provider narrates before it calls a tool. The native stream attaches no phase
+// to that visible text, so OpenClaw classifies it as the final answer and ships
+// it to the channel as its own message. Text carried inside a tool-use message
+// is pre-tool narration and must be tagged commentary so the default channel
+// keeps it out of the reply lane.
+describe("createOllamaStreamFn pre-tool narration phase (#133922)", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    fetchWithSsrFGuardMock.mockReset();
+    vi.useRealTimers();
+  });
+
+  function makeNdjsonBody(chunks: Array<Record<string, unknown>>): ReadableStream<Uint8Array> {
+    const encoder = new TextEncoder();
+    const lines = chunks.map((c) => JSON.stringify(c) + "\n").join("");
+    return new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(lines));
+        controller.close();
+      },
+    });
+  }
+
+  const TOOL_CONTEXT = {
+    messages: [{ role: "user", content: "test" }],
+    tools: [{ name: "read", description: "Read files", parameters: { type: "object" } }],
+  };
+
+  async function streamOllamaEvents(
+    chunks: Array<Record<string, unknown>>,
+    context: unknown = TOOL_CONTEXT,
+  ): Promise<Array<{ type: string; [key: string]: unknown }>> {
+    const body = makeNdjsonBody(chunks);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(body, { status: 200 }),
+      release: vi.fn(async () => undefined),
+    });
+
+    const streamFn = createOllamaStreamFn("http://localhost:11434");
+    const stream = streamFn(STREAM_MODEL as never, context as never, {});
+
+    const events: Array<{ type: string; [key: string]: unknown }> = [];
+    for await (const event of stream as AsyncIterable<{ type: string; [key: string]: unknown }>) {
+      events.push(event);
+    }
+    return events;
+  }
+
+  it("tags native pre-tool narration as commentary so it never reaches channel delivery", async () => {
+    const events = await streamOllamaEvents([
+      makeOllamaResponse({
+        content: "Let me read the file before answering.",
+        tool_calls: [{ function: { name: "read", arguments: { path: "README.md" } } }],
+      }),
+    ]);
+
+    const done = events.find((event) => event.type === "done") as {
+      reason?: string;
+      message?: { content?: Array<Record<string, unknown>>; stopReason?: string };
+    };
+    expect(done.reason).toBe("toolUse");
+    expect(done.message?.stopReason).toBe("toolUse");
+
+    const textBlock = done.message?.content?.find((block) => block.type === "text");
+    expect(textBlock?.text).toBe("Let me read the file before answering.");
+    // The phase tag is the only signal that keeps this narration out of the
+    // reply lane; untagged text is delivered to the channel as a visible answer.
+    expect(
+      JSON.parse(String(textBlock?.textSignature)) as { v?: unknown; phase?: unknown },
+    ).toMatchObject({ v: 1, phase: "commentary" });
+  });
+
+  it("keeps a tool-free native answer untagged so it still reaches the channel as the final reply", async () => {
+    const events = await streamOllamaEvents([
+      makeOllamaResponse({ content: "All done: nothing to change." }),
+    ]);
+
+    const done = events.find((event) => event.type === "done") as {
+      reason?: string;
+      message?: { content?: Array<Record<string, unknown>>; stopReason?: string };
+    };
+    expect(done.reason).toBe("stop");
+    const textBlock = done.message?.content?.find((block) => block.type === "text");
+    expect(textBlock?.text).toBe("All done: nothing to change.");
+    expect(textBlock?.textSignature).toBeUndefined();
+  });
+});

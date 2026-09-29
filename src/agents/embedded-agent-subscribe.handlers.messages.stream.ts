@@ -71,6 +71,15 @@ export function isOpenAiCompletionsAssistantMessage(message: AgentMessage | unde
   return api === "openai-completions" || api === "openclaw-openai-completions-transport";
 }
 
+export function isOllamaAssistantMessage(message: AgentMessage | undefined): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  // SAFETY: AgentMessage omits the provider api id; assistant messages carry it structurally.
+  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
+  return api === "ollama";
+}
+
 export function extractStandaloneMessageToolText(
   text: string,
   params: { allowCurrentSourceReply?: boolean; allowRoutedReply?: boolean } = {},

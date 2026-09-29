@@ -263,6 +263,13 @@ sidebarTitle: "Advanced"
     Ollama uses the **native API** (`/api/chat`) by default, which supports
     streaming and tool calling together — no special config needed.
 
+    Durable channel reply blocks wait until the assistant message finishes,
+    even with `blockStreamingBreak: "text_end"`. This prevents pre-tool narration
+    from becoming a separate reply, but also delays durable chunks during long
+    tool-free answers. Ordinary final answers and length-limited partial answers
+    remain deliverable; independent live previews can still update when enabled.
+    See [Native Ollama block timing](/concepts/streaming#native-ollama-block-timing).
+
     For native requests, thinking control is forwarded directly: `/think off`
     and `openclaw agent --thinking off` send top-level `think: false` unless
     an explicit `params.think`/`params.thinking` is configured; `/think
