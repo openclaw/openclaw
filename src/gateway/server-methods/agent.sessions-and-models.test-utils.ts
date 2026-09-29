@@ -16,6 +16,7 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -35,6 +36,7 @@ import {
   createPluginSubagentTestLifetime,
   mockSpawnedChildSessionEntry,
   nativeSubagentClient,
+  observeAgentSubagentCleanup,
   seedPersistedSubagentRunForAgentTest,
   withPluginSubagentTestState,
 } from "./agent.spawned-child.test-support.js";
@@ -355,7 +357,7 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it.each(
+  it.for(
     [
       { parent: "normal", requesterSessionKey: "agent:main:main" },
       { parent: "cron", requesterSessionKey: "agent:main:cron:orchestration:run:scheduled-run" },
@@ -382,7 +384,7 @@ describe("gateway agent handler", () => {
     ),
   )(
     "handles $sourceTool followups (resume=$resume, inputFailure=$inputFailure) to a yielded orchestrator for its $parent parent",
-    async ({ requesterSessionKey, sourceTool, continuesRun, resume, inputFailure }) => {
+    async ({ requesterSessionKey, sourceTool, continuesRun, resume, inputFailure }, { signal }) => {
       await withPluginSubagentTestState(
         "openclaw-gateway-yield-completion-",
         async ({ stateDir: root }) => {
@@ -391,6 +393,7 @@ describe("gateway agent handler", () => {
           const workerSessionKey = "agent:main:subagent:worker";
           const previousRunId = "orchestrator-before-yield";
           const runId = "orchestrator-completion-followup";
+          using cleanup = observeAgentSubagentCleanup({ runId, childSessionKey });
           const result = "All worker results are ready.";
           const completion = createDeferred<AgentWaitResult>();
           const announce = mocks.registryAnnounce.mockResolvedValue("delivered");
@@ -450,7 +453,14 @@ describe("gateway agent handler", () => {
             );
           }
           const respond = vi.fn();
-          await invokeAgent(request, { context, reqId: runId, client, respond });
+          // Fake dispatch timers also fire registry maintenance while worker IO is pending.
+          await invokeAgent(request, {
+            context,
+            reqId: runId,
+            client,
+            respond,
+            flushDispatch: false,
+          });
           if (inputFailure) {
             expectRespondError(respond, { message: "resume input admission failed" });
             expect(mocks.agentCommand).not.toHaveBeenCalled();
@@ -493,11 +503,10 @@ describe("gateway agent handler", () => {
             requesterSessionKey,
             pauseReason: undefined,
           });
-          await waitForAssertion(() => {
-            expect(announce).toHaveBeenCalledTimes(1);
-            expectRecordFields(continued, { cleanupCompletedAt: expect.any(Number) });
-            expectRecordFields(continued.delivery, { status: "delivered" });
-          });
+          await racePromiseWithAbortSignal(cleanup.cleanupCompleted, signal);
+          expect(announce).toHaveBeenCalledTimes(1);
+          expectRecordFields(continued, { cleanupCompletedAt: expect.any(Number) });
+          expectRecordFields(continued.delivery, { status: "delivered" });
           expect(announce).toHaveBeenCalledWith(
             expect.objectContaining({
               childSessionKey,
