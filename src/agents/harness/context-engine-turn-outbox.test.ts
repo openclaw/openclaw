@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptMessage,
@@ -12,10 +13,14 @@ import type {
 } from "../../config/sessions/transcript-entry-anchor.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-attempt.js";
+import { openContextEngineTurnOutboxWorkerStore } from "./context-engine-turn-outbox-store.js";
 import {
   acceptContextEngineTurnIntent,
   drainContextEngineTurnOutbox,
@@ -24,6 +29,7 @@ import {
   isRetryableContextEngineTurnReadFailure,
   recoverContextEngineTurnOutbox,
 } from "./context-engine-turn-outbox.js";
+import { bindSqliteWorkerBackend } from "./context-engine-turn-outbox.worker.js";
 
 const tempDirs: string[] = [];
 type ContextEngineTurnOutboxPayload = Parameters<
@@ -109,7 +115,11 @@ describe("context-engine turn outbox", () => {
     } satisfies ContextEngine;
     const warn = vi.fn();
 
-    await drainContextEngineTurnOutbox({ database, engine, engineId: "test", warn });
+    const store = openContextEngineTurnOutboxWorkerStore({
+      agentId: database.agentId,
+      path: database.path,
+    });
+    await drainContextEngineTurnOutbox({ store, engine, engineId: "test", warn });
 
     expect(
       database.db
@@ -129,7 +139,7 @@ describe("context-engine turn outbox", () => {
     const onCommitted = vi.fn(() => {
       throw new Error("maintenance handoff failed");
     });
-    await drainContextEngineTurnOutbox({ database, engine, engineId: "test", onCommitted, warn });
+    await drainContextEngineTurnOutbox({ store, engine, engineId: "test", onCommitted, warn });
 
     expect(onCommitted).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ advancementKey: payload.boundary.admission.logicalTurnId }),
@@ -172,8 +182,12 @@ describe("context-engine turn outbox", () => {
       commitTurn,
     } satisfies ContextEngine;
 
+    const store = openContextEngineTurnOutboxWorkerStore({
+      agentId: database.agentId,
+      path: database.path,
+    });
     const result = await drainContextEngineTurnOutbox({
-      database,
+      store,
       engine,
       engineId: "test",
       warn: vi.fn(),
@@ -323,6 +337,10 @@ describe("context-engine turn outbox", () => {
     expect(commitTurn.mock.calls[0]?.[0]).not.toHaveProperty("prePromptMessageCount");
 
     recorder.markRuntimePersisted(currentMessage, currentAdmission);
+    // The admission write runs in the agent database worker; the pre-dispatch
+    // runtime-persistence wait settles it.
+    expect(recorder.hasRuntimePersistencePending()).toBe(true);
+    await recorder.waitForRuntimePersistence();
     const queued = database.db
       .prepare("SELECT advancement_key, payload_json FROM context_engine_turn_outbox")
       .all() as Array<{ advancement_key: string; payload_json: string }>;
@@ -604,12 +622,11 @@ describe("context-engine turn outbox", () => {
     } satisfies ContextEngine;
     const warn = vi.fn();
 
-    await drainContextEngineTurnOutbox({
-      database,
-      engine,
-      engineId: "test",
-      warn,
+    const store = openContextEngineTurnOutboxWorkerStore({
+      agentId: database.agentId,
+      path: database.path,
     });
+    await drainContextEngineTurnOutbox({ store, engine, engineId: "test", warn });
 
     expect(commitTurn.mock.calls.map(([call]) => call.advancementKey)).toEqual([
       "session-a:z-first",
@@ -618,7 +635,7 @@ describe("context-engine turn outbox", () => {
     failFirstTurn = false;
 
     await drainContextEngineTurnOutbox({
-      database,
+      store,
       engine,
       engineId: "test",
       limit: 2,
@@ -633,7 +650,7 @@ describe("context-engine turn outbox", () => {
     ]);
 
     await drainContextEngineTurnOutbox({
-      database,
+      store,
       engine,
       engineId: "test",
       limit: 1,
@@ -709,7 +726,11 @@ describe("context-engine turn outbox", () => {
     } satisfies ContextEngineLogicalTurnLease;
     const warn = vi.fn();
 
-    await drainContextEngineTurnOutbox({ database, engine, engineId: "test", warn });
+    const store = openContextEngineTurnOutboxWorkerStore({
+      agentId: database.agentId,
+      path: database.path,
+    });
+    await drainContextEngineTurnOutbox({ store, engine, engineId: "test", warn });
     blocked = false;
     await drainPendingContextEngineTurnsBeforeRun({
       admission: payload.boundary.admission,
@@ -745,5 +766,191 @@ describe("context-engine turn outbox", () => {
     expect(degradeBeforeStart).toHaveBeenCalledWith(
       "pending durable turn advancement could not be completed before the next turn",
     );
+  });
+
+  it("queues a runtime admission reported inside a session write lane behind that lane", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-outbox-lane-"));
+    tempDirs.push(stateDir);
+    const target = {
+      agentId: "main",
+      sessionId: "lane-turn",
+      sessionKey: "agent:main:lane-turn",
+      storePath: path.join(stateDir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const current = await appendTranscriptMessage(target, {
+      message: { role: "user", content: "current" },
+      now: 1_000,
+    });
+    if (!current?.anchor) {
+      throw new Error("expected current transcript entry");
+    }
+    const admission = {
+      ...current.anchor,
+      logicalTurnId: "lane-logical-turn",
+      role: "user" as const,
+    } satisfies TranscriptTurnAdmission;
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: admission.storePath });
+    const currentMessage = { role: "user" as const, content: "current", timestamp: 1_000 };
+    const recorder = createUserTurnTranscriptRecorder({
+      message: currentMessage,
+      target: async () => undefined,
+    });
+    const engine = {
+      info: {
+        id: "test",
+        name: "Test",
+        transcriptSemantics: {
+          currentTurnFence: "before-current-turn-entry-v1",
+          turnAdvancementIdempotency: "atomic-idempotent-v1",
+        },
+      },
+      ingest: async () => ({ ingested: true }),
+      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+      compact: async () => ({ ok: true, compacted: false }),
+      commitTurn: async () => ({ status: "committed" }),
+    } satisfies ContextEngine;
+    const lease = {
+      engine,
+      effectiveEngine: engine,
+      effectiveEngineId: "test",
+      effectiveEnginePluginId: undefined,
+      degraded: false,
+      degradedReason: undefined,
+      selectForHost: vi.fn(),
+      degradeBeforeStart: vi.fn(),
+      begin: vi.fn(),
+      deferDisposalUntil: vi.fn(),
+      dispose: vi.fn(async () => undefined),
+    } satisfies ContextEngineLogicalTurnLease;
+    await drainPendingContextEngineTurnsBeforeRun({
+      admission: undefined,
+      lease,
+      recorder,
+      sessionTarget: target,
+    });
+
+    // An unrelated store may have queued work when runtime persistence is reported.
+    const otherDatabase = openOpenClawAgentDatabase({
+      agentId: "other",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const releaseOther = createDeferredCore();
+    const otherEntered = createDeferredCore();
+    const otherWrite = runOpenClawAgentWriteAdmission(
+      { agentId: otherDatabase.agentId, path: otherDatabase.path },
+      async () => {
+        otherEntered.resolve();
+        await releaseOther.promise;
+      },
+    );
+    await otherEntered.promise;
+    const otherQueuedWrite = runOpenClawAgentWriteAdmission(
+      { agentId: otherDatabase.agentId, path: otherDatabase.path },
+      () => undefined,
+    );
+    const databaseAccess = vi.spyOn(agentDatabase, "withOpenClawAgentDatabaseAsync");
+    const accessesToTarget = () =>
+      databaseAccess.mock.calls.filter(([options]) => options.path === database.path);
+    try {
+      // Observe the real database entry: worker I/O alone can delay even a reentrant write.
+      const accessesInsideLane = await runOpenClawAgentWriteAdmission(
+        { agentId: database.agentId, path: database.path },
+        () => {
+          recorder.markRuntimePersisted(currentMessage, admission);
+          return accessesToTarget().length;
+        },
+      );
+      await recorder.waitForRuntimePersistence();
+
+      expect(accessesInsideLane).toBe(0);
+      expect(accessesToTarget()).toHaveLength(1);
+      expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
+      const queued = database.db
+        .prepare("SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?")
+        .get(admission.logicalTurnId) as { payload_json: string } | undefined;
+      expect(JSON.parse(queued?.payload_json ?? "{}")).toMatchObject({ state: "admitted" });
+    } finally {
+      databaseAccess.mockRestore();
+      releaseOther.resolve();
+      await Promise.all([otherWrite, otherQueuedWrite]);
+    }
+  });
+
+  it("rejects the pre-dispatch runtime wait when the admission write fails", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-outbox-admission-"));
+    tempDirs.push(stateDir);
+    const target = {
+      agentId: "main",
+      sessionId: "failed-admission-turn",
+      sessionKey: "agent:main:failed-admission-turn",
+      storePath: path.join(stateDir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const current = await appendTranscriptMessage(target, {
+      message: { role: "user", content: "current" },
+      now: 1_000,
+    });
+    if (!current?.anchor) {
+      throw new Error("expected current transcript entry");
+    }
+    const currentMessage = { role: "user" as const, content: "current", timestamp: 1_000 };
+    const recorder = createUserTurnTranscriptRecorder({
+      message: currentMessage,
+      target: async () => undefined,
+    });
+    recorder.setAdmissionHandler?.(async () => {
+      throw new Error("admission write failed");
+    });
+
+    recorder.markRuntimePersisted(currentMessage, current.anchor);
+
+    expect(recorder.hasRuntimePersistencePending()).toBe(true);
+    await expect(recorder.waitForRuntimePersistence()).rejects.toThrow("admission write failed");
+  });
+
+  it("installs the outbox schema once per worker connection, not per command", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-outbox-schema-"));
+    tempDirs.push(stateDir);
+    const target = {
+      agentId: "main",
+      sessionId: "schema-turn",
+      sessionKey: "agent:main:schema-turn",
+      storePath: path.join(stateDir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const current = await appendTranscriptMessage(target, {
+      message: { role: "user", content: "current" },
+      now: 1_000,
+    });
+    if (!current?.anchor) {
+      throw new Error("expected current transcript entry");
+    }
+    const databasePath = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: current.anchor.storePath,
+    }).path;
+    // A fresh connection has not ensured the lazy outbox DDL yet, as in a new worker.
+    const connection = new DatabaseSync(databasePath);
+    try {
+      const exec = vi.spyOn(connection, "exec");
+      const backend = bindSqliteWorkerBackend(undefined, {
+        databasePath,
+        database: connection,
+        admit: () => undefined,
+      });
+      const command = {
+        type: "hasPending" as const,
+        input: { engineId: "test", sessionId: target.sessionId },
+      };
+      expect(backend.execute(command)).toBe(false);
+      expect(backend.execute(command)).toBe(false);
+      const outboxDdl = exec.mock.calls.filter(([sql]) =>
+        sql.includes("CREATE TABLE IF NOT EXISTS context_engine_turn_outbox"),
+      );
+      expect(outboxDdl).toHaveLength(1);
+    } finally {
+      connection.close();
+    }
   });
 });

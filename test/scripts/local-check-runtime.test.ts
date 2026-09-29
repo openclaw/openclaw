@@ -26,6 +26,21 @@ const ROOMY_HOST = {
   logicalCpuCount: 16,
 };
 
+const localTsgoDefaults = [
+  "--declaration",
+  "false",
+  "--incremental",
+  "--tsBuildInfoFile",
+  ".artifacts/tsgo-cache/root.tsbuildinfo",
+];
+const localOxlintDefaults = [
+  "--type-aware",
+  "--tsconfig",
+  "config/tsconfig/oxlint.json",
+  "--report-unused-disable-directives-severity",
+  "error",
+];
+
 function makeEnv(overrides: Record<string, string | undefined> = {}) {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -39,6 +54,19 @@ function makeEnv(overrides: Record<string, string | undefined> = {}) {
     delete env.GITHUB_ACTIONS;
   }
   return env;
+}
+
+function makeBoundedOxlintEnv(args: string[], overrides: NodeJS.ProcessEnv = {}) {
+  return makeEnv({
+    CI: "true",
+    OPENCLAW_LOCAL_CHECK: "0",
+    OPENCLAW_OXLINT_BATCH_CONCURRENCY: "1",
+    OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS: JSON.stringify(args),
+    GOMAXPROCS: undefined,
+    GOGC: undefined,
+    GOMEMLIMIT: undefined,
+    ...overrides,
+  });
 }
 
 describe("local-check-runtime", () => {
@@ -139,16 +167,7 @@ describe("local-check-runtime", () => {
   it("tightens local tsgo runs on constrained hosts", () => {
     const { args, env } = applyLocalTsgoPolicy([], makeEnv(), CONSTRAINED_HOST);
 
-    expect(args).toEqual([
-      "--declaration",
-      "false",
-      "--incremental",
-      "--tsBuildInfoFile",
-      ".artifacts/tsgo-cache/root.tsbuildinfo",
-      "--singleThreaded",
-      "--checkers",
-      "1",
-    ]);
+    expect(args).toEqual([...localTsgoDefaults, "--singleThreaded", "--checkers", "1"]);
     expect(env.GOMAXPROCS).toBe("2");
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
@@ -219,13 +238,7 @@ describe("local-check-runtime", () => {
   it("defaults local tsgo to full-speed mode on roomy hosts", () => {
     const { args, env } = applyLocalTsgoPolicy([], makeEnv(), ROOMY_HOST);
 
-    expect(args).toEqual([
-      "--declaration",
-      "false",
-      "--incremental",
-      "--tsBuildInfoFile",
-      ".artifacts/tsgo-cache/root.tsbuildinfo",
-    ]);
+    expect(args).toEqual(localTsgoDefaults);
     expect(env.GOMAXPROCS).toBeUndefined();
     expect(env.GOGC).toBeUndefined();
     expect(env.GOMEMLIMIT).toBeUndefined();
@@ -269,16 +282,7 @@ describe("local-check-runtime", () => {
       ROOMY_HOST,
     );
 
-    expect(args).toEqual([
-      "--declaration",
-      "false",
-      "--incremental",
-      "--tsBuildInfoFile",
-      ".artifacts/tsgo-cache/root.tsbuildinfo",
-      "--singleThreaded",
-      "--checkers",
-      "1",
-    ]);
+    expect(args).toEqual([...localTsgoDefaults, "--singleThreaded", "--checkers", "1"]);
     expect(env.GOMAXPROCS).toBe("2");
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
@@ -293,54 +297,10 @@ describe("local-check-runtime", () => {
     expect(env.GOMAXPROCS).toBe("1");
   });
 
-  it("allows forcing full-speed tsgo runs on roomy hosts", () => {
-    const { args, env } = applyLocalTsgoPolicy(
-      [],
-      makeEnv({
-        OPENCLAW_LOCAL_CHECK_MODE: "full",
-      }),
-      ROOMY_HOST,
-    );
-
-    expect(args).toEqual([
-      "--declaration",
-      "false",
-      "--incremental",
-      "--tsBuildInfoFile",
-      ".artifacts/tsgo-cache/root.tsbuildinfo",
-    ]);
-    expect(env.GOMAXPROCS).toBeUndefined();
-    expect(env.GOGC).toBeUndefined();
-    expect(env.GOMEMLIMIT).toBeUndefined();
-  });
-
-  it("serializes local oxlint runs onto one thread on constrained hosts", () => {
-    const { args, env } = applyLocalOxlintPolicy([], makeEnv(), CONSTRAINED_HOST);
-
-    expect(args).toEqual([
-      "--type-aware",
-      "--tsconfig",
-      "config/tsconfig/oxlint.json",
-      "--report-unused-disable-directives-severity",
-      "error",
-      "--threads=1",
-    ]);
-    expect(env.GOMAXPROCS).toBe("2");
-    expect(env.GOGC).toBe("30");
-    expect(env.GOMEMLIMIT).toBe("3GiB");
-  });
-
   it("defaults local oxlint to one thread on roomy hosts", () => {
     const { args, env } = applyLocalOxlintPolicy([], makeEnv(), ROOMY_HOST);
 
-    expect(args).toEqual([
-      "--type-aware",
-      "--tsconfig",
-      "config/tsconfig/oxlint.json",
-      "--report-unused-disable-directives-severity",
-      "error",
-      "--threads=1",
-    ]);
+    expect(args).toEqual([...localOxlintDefaults, "--threads=1"]);
     expect(env.GOMAXPROCS).toBe("2");
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
@@ -353,25 +313,16 @@ describe("local-check-runtime", () => {
       ROOMY_HOST,
     );
 
-    expect(args).toEqual([
-      "--threads=8",
-      "--type-aware",
-      "--tsconfig",
-      "config/tsconfig/oxlint.json",
-      "--report-unused-disable-directives-severity",
-      "error",
-    ]);
+    expect(args).toEqual(["--threads=8", ...localOxlintDefaults]);
     expect(env.GOMAXPROCS).toBe("3");
     expect(env.GOGC).toBe("80");
     expect(env.GOMEMLIMIT).toBe("5GiB");
   });
 
   it.each([
-    { name: "small CI runner", ci: "true", cpus: 4, gib: 16, throttled: true },
     { name: "memory-constrained CI runner", ci: "true", cpus: 16, gib: 16, throttled: true },
     { name: "CPU-constrained CI runner", ci: "true", cpus: 4, gib: 32, throttled: true },
     { name: "parallel CI boundary", ci: "true", cpus: 8, gib: 24, throttled: false },
-    { name: "large CI runner", ci: "true", cpus: 16, gib: 32, throttled: false },
     { name: "disabled local policy", ci: undefined, cpus: 4, gib: 16, throttled: false },
   ])("applies compiler memory policy for $name", ({ ci, cpus, gib, throttled }) => {
     const inputEnv = makeEnv({
@@ -413,6 +364,141 @@ describe("local-check-runtime", () => {
     expect(env.GOMEMLIMIT).toBe("5GiB");
     expect(args.filter((arg) => arg.startsWith("--threads"))).toEqual(["--threads=3"]);
   });
+
+  it.each([
+    { name: "ancestor ceiling", total: 64, capacity: 7, throttled: true },
+    { name: "unresolved capacity", total: 64, capacity: null, throttled: true },
+    { name: "physical-only caller", total: 64, capacity: undefined, throttled: false },
+    { name: "roomy capacity", total: 64, capacity: 48, throttled: false },
+    { name: "smaller physical host", total: 16, capacity: 64, throttled: true },
+  ])("sizes compiler workers from $name instead of remaining memory", (row) => {
+    for (const ci of [undefined, "true"]) {
+      const host = {
+        logicalCpuCount: 16,
+        totalMemoryBytes: row.total * GIB,
+        memoryCapacityBytes: row.capacity == null ? row.capacity : row.capacity * GIB,
+        memoryLimitBytes: GIB,
+      };
+      const inputEnv = makeEnv({
+        CI: ci,
+        OPENCLAW_LOCAL_CHECK: ci ? "0" : "1",
+        GOMAXPROCS: undefined,
+        GOGC: undefined,
+        GOMEMLIMIT: undefined,
+      });
+      const tsgo = applyLocalTsgoPolicy(["--noEmit"], inputEnv, host);
+      const oxlint = applyLocalOxlintPolicy([], inputEnv, host);
+      for (const [result, flag, throttled] of [
+        [tsgo, "--singleThreaded", row.throttled],
+        // Local Oxlint remains throttled by default, including on roomy machines.
+        [oxlint, "--threads=1", ci ? row.throttled : true],
+      ] as const) {
+        expect(result.args.includes(flag)).toBe(throttled);
+        expect(result.env.GOMEMLIMIT).toBe(throttled ? "3GiB" : undefined);
+        expect(result.env.GOMAXPROCS).toBe(throttled ? "2" : undefined);
+      }
+    }
+  });
+
+  it.each(["config/tsconfig/oxlint.core.json", "extensions/tsconfig.json"])(
+    "uses the measured serial shard budget for %s on admitted Linux CI hosts",
+    (config) => {
+      const inputArgs = ["--tsconfig", config];
+      const inputEnv = makeBoundedOxlintEnv(inputArgs);
+      const { args, env } = applyLocalOxlintPolicy(inputArgs, inputEnv, {
+        logicalCpuCount: 4,
+        totalMemoryBytes: 16 * GIB,
+        memoryCapacityBytes: 15 * GIB,
+        memoryLimitBytes: 14 * GIB,
+        platform: "linux",
+      });
+      expect(args).toContain("--threads=2");
+      expect(args).toContain("--type-aware");
+      expect(env).toMatchObject({ GOMAXPROCS: "4", GOGC: "100", GOMEMLIMIT: "8GiB" });
+      expect(inputEnv.GOMEMLIMIT).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { cpus: 2, capacity: 16 * GIB, platform: "linux" as const, concurrency: "1" },
+    { cpus: 4, capacity: 8 * GIB, platform: "linux" as const, concurrency: "1" },
+    { cpus: 4, capacity: null, platform: "linux" as const, concurrency: "1" },
+    { cpus: 4, capacity: 16 * GIB, platform: "win32" as const, concurrency: "1" },
+    { cpus: 4, capacity: 16 * GIB, platform: "linux" as const, concurrency: "2" },
+  ])(
+    "retains the small-host budget for $cpus CPUs/$capacity bytes/$platform/$concurrency Programs",
+    (host) => {
+      const { args, env } = applyLocalOxlintPolicy(
+        ["--tsconfig=extensions/tsconfig.json"],
+        makeBoundedOxlintEnv(["--tsconfig=extensions/tsconfig.json"], {
+          OPENCLAW_OXLINT_BATCH_CONCURRENCY: host.concurrency,
+        }),
+        {
+          logicalCpuCount: host.cpus,
+          totalMemoryBytes: 16 * GIB,
+          memoryCapacityBytes: host.capacity,
+          memoryLimitBytes: 16 * GIB,
+          platform: host.platform,
+        },
+      );
+      expect(args).toContain("--threads=1");
+      expect(env).toMatchObject({ GOMAXPROCS: "2", GOGC: "30", GOMEMLIMIT: "3GiB" });
+    },
+  );
+
+  it("preserves explicit limits and leaves unmeasured configurations on their existing policy", () => {
+    const host = {
+      logicalCpuCount: 4,
+      totalMemoryBytes: 16 * GIB,
+      memoryCapacityBytes: 16 * GIB,
+      memoryLimitBytes: 16 * GIB,
+      platform: "linux" as const,
+    };
+    const explicit = { GOMAXPROCS: "1", GOGC: "20", GOMEMLIMIT: "2GiB" };
+    const { args, env } = applyLocalOxlintPolicy(
+      ["--tsconfig", "extensions/tsconfig.json", "--threads=1"],
+      makeBoundedOxlintEnv(["--tsconfig", "extensions/tsconfig.json", "--threads=1"], explicit),
+      host,
+    );
+    expect(args).toContain("--threads=1");
+    expect(env).toMatchObject(explicit);
+    for (const unmeasured of [
+      ["--tsconfig", "test/tsconfig/tsconfig.test.root.json"],
+      ["--tsconfig", "extensions/tsconfig.json", "--threads=4"],
+      ["--tsconfig", "extensions/tsconfig.json", "--", "--threads=4"],
+    ]) {
+      const result = applyLocalOxlintPolicy(unmeasured, makeBoundedOxlintEnv(unmeasured), host);
+      expect(result.env).toMatchObject({ GOMAXPROCS: "2", GOGC: "30", GOMEMLIMIT: "3GiB" });
+    }
+  });
+
+  it.each([
+    { config: "config/tsconfig/oxlint.core.json", available: 13 * GIB, admission: "bound" },
+    { config: "extensions/tsconfig.json", available: 9 * GIB, admission: "bound" },
+    { config: "extensions/tsconfig.json", available: null, admission: "bound" },
+    { config: "extensions/tsconfig.json", available: 16 * GIB, admission: "missing" },
+    { config: "extensions/tsconfig.json", available: 16 * GIB, admission: "changed" },
+  ])(
+    "refuses the larger budget with $available available bytes and $admission admission",
+    (row) => {
+      const args = ["--tsconfig", row.config, "extensions/example"];
+      const env = makeBoundedOxlintEnv(args);
+      if (row.admission === "missing") {
+        delete env.OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS;
+      } else if (row.admission === "changed") {
+        args.push("scripts/unmeasured.mts");
+      }
+      const result = applyLocalOxlintPolicy(args, env, {
+        logicalCpuCount: 4,
+        totalMemoryBytes: 16 * GIB,
+        memoryCapacityBytes: 16 * GIB,
+        memoryLimitBytes: row.available,
+        platform: "linux",
+      });
+      expect(result.args).toContain("--threads=1");
+      expect(result.env).toMatchObject({ GOMAXPROCS: "2", GOGC: "30", GOMEMLIMIT: "3GiB" });
+    },
+  );
 
   it.each([
     {
@@ -501,13 +587,7 @@ fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify({ step, goEnv, args: 
       ROOMY_HOST,
     );
 
-    expect(args).toEqual([
-      "--type-aware",
-      "--tsconfig",
-      "config/tsconfig/oxlint.json",
-      "--report-unused-disable-directives-severity",
-      "error",
-    ]);
+    expect(args).toEqual(localOxlintDefaults);
     expect(env.GOGC).toBeUndefined();
     expect(env.GOMEMLIMIT).toBeUndefined();
   });

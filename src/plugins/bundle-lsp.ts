@@ -2,9 +2,8 @@
 import path from "node:path";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isRecord } from "../utils.js";
 import {
-  inspectBundleServerRuntimeSupport,
+  extractBundleServerMap,
   loadEnabledBundleConfig,
   readBundleJsonObject,
   resolveBundleJsonOpenFailure,
@@ -33,28 +32,6 @@ type BundleLspRuntimeSupport = {
   unsupportedServerNames: string[];
   diagnostics: string[];
 };
-
-const MANIFEST_PATH_BY_FORMAT: Partial<Record<PluginBundleFormat, string>> = {
-  claude: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
-};
-
-function extractLspServerMap(raw: unknown): Record<string, BundleLspServerConfig> {
-  if (!isRecord(raw)) {
-    return {};
-  }
-  const nested = isRecord(raw.lspServers) ? raw.lspServers : raw;
-  if (!isRecord(nested)) {
-    return {};
-  }
-  const result: Record<string, BundleLspServerConfig> = {};
-  for (const [serverName, serverRaw] of Object.entries(nested)) {
-    if (!isRecord(serverRaw)) {
-      continue;
-    }
-    result[serverName] = { ...serverRaw };
-  }
-  return result;
-}
 
 function resolveBundleLspConfigPaths(params: {
   raw: Record<string, unknown>;
@@ -91,7 +68,10 @@ function loadBundleLspConfigFile(params: { rootDir: string; relativePath: string
       ],
     };
   }
-  return { config: { lspServers: extractLspServerMap(result.raw) }, diagnostics: [] };
+  return {
+    config: { lspServers: extractBundleServerMap(result.raw, ["lspServers"]) },
+    diagnostics: [],
+  };
 }
 
 function loadBundleLspConfig(params: {
@@ -99,14 +79,13 @@ function loadBundleLspConfig(params: {
   rootDir: string;
   bundleFormat: PluginBundleFormat;
 }): { config: BundleLspConfig; diagnostics: string[] } {
-  const manifestRelativePath = MANIFEST_PATH_BY_FORMAT[params.bundleFormat];
-  if (!manifestRelativePath) {
+  if (params.bundleFormat !== "claude") {
     return { config: { lspServers: {} }, diagnostics: [] };
   }
 
   const manifestLoaded = readBundleJsonObject({
     rootDir: params.rootDir,
-    relativePath: manifestRelativePath,
+    relativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
   });
   if (!manifestLoaded.ok) {
     return { config: { lspServers: {} }, diagnostics: [manifestLoaded.error] };
@@ -136,15 +115,18 @@ export function inspectBundleLspRuntimeSupport(params: {
   rootDir: string;
   bundleFormat: PluginBundleFormat;
 }): BundleLspRuntimeSupport {
-  const support = inspectBundleServerRuntimeSupport({
-    loaded: loadBundleLspConfig(params),
-    resolveServers: (config) => config.lspServers,
-  });
+  const { config, diagnostics } = loadBundleLspConfig(params);
+  const supportedServerNames: string[] = [];
+  const unsupportedServerNames: string[] = [];
+  for (const [name, server] of Object.entries(config.lspServers)) {
+    const supported = typeof server.command === "string" && server.command.trim().length > 0;
+    (supported ? supportedServerNames : unsupportedServerNames).push(name);
+  }
   return {
-    hasStdioServer: support.hasSupportedServer,
-    supportedServerNames: support.supportedServerNames,
-    unsupportedServerNames: support.unsupportedServerNames,
-    diagnostics: support.diagnostics,
+    hasStdioServer: supportedServerNames.length > 0,
+    supportedServerNames,
+    unsupportedServerNames,
+    diagnostics,
   };
 }
 

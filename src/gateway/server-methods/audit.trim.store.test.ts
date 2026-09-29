@@ -16,6 +16,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { auditHandlers } from "./audit.js";
 
 const tempDirs: string[] = [];
@@ -67,15 +68,8 @@ describe("audit methods against a real audit store", () => {
       if (warmActor) {
         await listAuditEvents({ database, limit: 1 });
       }
-      const native = requireNodeSqlite();
-      const counters = [
-        vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-        vi.spyOn(native.DatabaseSync.prototype, "exec"),
-        vi.spyOn(native.DatabaseSync.prototype, "close"),
-        ...(["get", "all", "run", "iterate"] as const).map((operation) =>
-          vi.spyOn(native.StatementSync.prototype, operation),
-        ),
-      ];
+      requireNodeSqlite();
+      const counters = observeMainThreadSql({ includeClose: true });
       const respond = vi.fn();
       await expectDefined(
         auditHandlers["audit.run.inspect"],
@@ -95,7 +89,7 @@ describe("audit methods against a real audit store", () => {
         }),
       );
       expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("decisions");
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0, 0]);
+      counters.expectIdle();
     },
   );
 
@@ -168,14 +162,8 @@ describe("audit methods against a real audit store", () => {
       ).toEqual([]);
 
       await closeOpenClawStateDatabaseAsync();
-      const native = requireNodeSqlite();
-      const counters = [
-        vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-        vi.spyOn(native.DatabaseSync.prototype, "exec"),
-        ...(["get", "all", "run", "iterate"] as const).map((operation) =>
-          vi.spyOn(native.StatementSync.prototype, operation),
-        ),
-      ];
+      requireNodeSqlite();
+      const counters = observeMainThreadSql();
       const respond = vi.fn();
       await expectDefined(
         auditHandlers[method],
@@ -190,7 +178,7 @@ describe("audit methods against a real audit store", () => {
         respond,
       } as never);
 
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      counters.expectIdle();
       expect(respond).toHaveBeenCalledWith(
         true,
         expect.objectContaining({
@@ -215,7 +203,7 @@ describe("audit methods against a real audit store", () => {
       expect(respond).toHaveBeenCalledWith(true, {
         events: [expect.objectContaining({ action: "agent.run.started" })],
       });
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      counters.expectIdle();
     },
   );
 });

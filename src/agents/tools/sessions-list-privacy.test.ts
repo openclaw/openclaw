@@ -18,6 +18,7 @@ import {
   requestContext,
 } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
+import { withReadySessionRows } from "../../gateway/session-row-prepared-read.js";
 import { getSessionRowProjection } from "../../gateway/session-row-projection-access.js";
 import * as titleReader from "../../gateway/session-transcript-title-reader.js";
 import {
@@ -128,7 +129,7 @@ async function withInventory(
         statePath: (name) => state.statePath(name),
       });
     } finally {
-      disposeSessionReadContexts();
+      await disposeSessionReadContexts();
     }
   });
 }
@@ -257,7 +258,7 @@ test.each([
         } else if (key === second.sessionKey) {
           await firstRead.promise;
           if (change === "role") {
-            setUserProfileRole(viewerId, "self");
+            expect(setUserProfileRole(viewerId, "self").role).toBe("self");
           } else {
             await patchSessionEntryCore(first, () =>
               change === "draft"
@@ -293,17 +294,36 @@ test.each([
           if (!isRecord(params)) {
             throw new Error("Inventory requests require object parameters");
           }
+          if (change === "role" && params.sessionKey === first.sessionKey) {
+            expect(JSON.stringify(response)).toContain(bufferedText);
+          }
           await afterRead(params.sessionKey);
         }
         return response;
       };
-      const result = await asReader(() =>
+      const pending = asReader(() =>
         createSessionsListTool({ config: cfg, callGateway }).execute("buffered-inventory", {
           includeDerivedTitles: true,
           includeLastMessage: true,
           ...(stage === "chat.history" ? { messageLimit: 1 } : {}),
         }),
       );
+      if (change === "role") {
+        await expect(pending).rejects.toThrow(
+          "Your operator role changed; reconnect before continuing.",
+        );
+        expect(changed).toBe(true);
+      }
+      const result =
+        change === "role"
+          ? await asReader(() =>
+              createSessionsListTool({ config: cfg }).execute("fresh-inventory", {
+                includeDerivedTitles: true,
+                includeLastMessage: true,
+                messageLimit: 1,
+              }),
+            )
+          : await pending;
       expect(changed).toBe(true);
       expect(result.details).toMatchObject({
         count: change === "metadata" ? 2 : 1,
@@ -430,13 +450,22 @@ test("does not authorize a buffered global transcript with another physical stor
         await patchSessionEntryCore(original, () => ({ visibility: "draft" }));
         setConfig({ ...originalConfig, session: { scope: "global", store: newPath } });
         const projection = expectDefined(getSessionRowProjection(context), "physical stores");
-        expect(projection.describe({ agentId: "main", key: "global" })?.entry.sessionId).toBe(
-          "new-global",
+        await withReadySessionRows(
+          projection,
+          () => [
+            { agentId: "main", key: "global" },
+            { agentId: "main", key: "global", storePath: oldPath },
+          ],
+          (read) => {
+            expect(read.describe({ agentId: "main", key: "global" })?.entry.sessionId).toBe(
+              "new-global",
+            );
+            expect(
+              read.describe({ agentId: "main", key: "global", storePath: oldPath })?.entry
+                .visibility,
+            ).toBe("draft");
+          },
         );
-        expect(
-          projection.describe({ agentId: "main", key: "global", storePath: oldPath })?.entry
-            .visibility,
-        ).toBe("draft");
         changed = true;
       }
       return response;

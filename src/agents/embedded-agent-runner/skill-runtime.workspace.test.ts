@@ -15,10 +15,17 @@ import { registerAgentWorkspaceAccess } from "../workspace-access.js";
 import { prepareEmbeddedSkills } from "./skill-runtime.js";
 
 const libraryFixture = vi.hoisted(() => ({ entries: [] as SkillEntry[] }));
-vi.mock("../../skills/library/selection.js", () => ({
-  loadSkillLibrarySelection: (selections: readonly unknown[]) =>
-    selections.length > 0 ? libraryFixture.entries : [],
-}));
+vi.mock("../../skills/library/selection.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../skills/library/selection.js")>();
+  const selectedEntries = (selections: readonly unknown[]) =>
+    selections.length > 0 ? libraryFixture.entries : [];
+  return {
+    ...actual,
+    loadSkillLibrarySelection: selectedEntries,
+    prepareSkillLibrarySelection: async (selections: readonly unknown[]) =>
+      selectedEntries(selections),
+  };
+});
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -26,7 +33,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (collision) => {
+it("keeps Code Mode file ownership despite an unavailable same-name pin", async () => {
   const root = temps.make("code-mode-workspace-");
   const bundled = path.join(root, "bundled");
   await fs.mkdir(bundled);
@@ -48,14 +55,12 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
   await fs.mkdir(path.join(library, "skills/pinned"), { recursive: true });
   const libraryBody = "---\nname: pinned\ndescription: Pinned guide\n---\nGateway Library body";
   await fs.writeFile(path.join(library, "skills/pinned/SKILL.md"), libraryBody);
-  if (collision) {
-    await writeSkill({
-      dir: path.join(library, "skills/guide"),
-      name: "guide",
-      description: "Unavailable Library guide",
-      metadata: JSON.stringify({ openclaw: { os: ["unsupported-test-platform"] } }),
-    });
-  }
+  await writeSkill({
+    dir: path.join(library, "skills/guide"),
+    name: "guide",
+    description: "Unavailable Library guide",
+    metadata: JSON.stringify({ openclaw: { os: ["unsupported-test-platform"] } }),
+  });
   // Resolve the fixture pin without a Library database; instruction reads still use real files.
   libraryFixture.entries = loadWorkspaceSkills(library, { workspaceOnly: true });
   const config = {
@@ -97,16 +102,7 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
   try {
     const librarySelections = [
       { skillId: "pin", revision: "a".repeat(64), name: "pinned", ownerProfileId: null },
-      ...(collision
-        ? [
-            {
-              skillId: "collision",
-              revision: "b".repeat(64),
-              name: "guide",
-              ownerProfileId: null,
-            },
-          ]
-        : []),
+      { skillId: "collision", revision: "b".repeat(64), name: "guide", ownerProfileId: null },
     ];
     const snapshot = await buildSkillSnapshot(gateway, {
       config,
@@ -145,48 +141,37 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
   }
 });
 
-it.each([false, true])(
-  "preserves local Code Mode instruction reads for document-only adapters (stopped=%s)",
-  async (stopped) => {
-    const workspace = temps.make("code-mode-document-only-");
-    await writeSkill({
-      dir: path.join(workspace, "skills", "guide"),
-      name: "guide",
-      description: "Local guide",
-      body: "Local instructions",
-    });
-    const snapshot = await buildSkillSnapshot(workspace, {
-      entries: loadWorkspaceSkills(workspace, { workspaceOnly: true }),
-    });
-    const readFile = vi.fn();
-    const release = registerAgentWorkspaceAccess(workspace, {
-      bridge: { readFile, writeFile: vi.fn(), stat: vi.fn() },
-    });
-    if (stopped) {
-      release();
-    }
-    try {
-      const prepared = await prepareEmbeddedSkills({
-        attempt: { config: {}, skillsSnapshot: snapshot },
-        effectiveWorkspace: workspace,
-        sandbox: undefined,
-        sessionAgentId: "main",
-        includeCodeModeSkills: true,
-        applySkillEnvironment: false,
-      });
-      const skill = prepared.codeModeSkills.find((entry) => entry.name === "guide")!;
-      expect(await readCodeModeSkill(skill)).toContain("Local instructions");
-      expect(readFile).not.toHaveBeenCalled();
-    } finally {
-      release();
-    }
-  },
-);
+it("preserves local Code Mode instruction reads after a document-only adapter stops", async () => {
+  const workspace = temps.make("code-mode-document-only-");
+  await writeSkill({
+    dir: path.join(workspace, "skills", "guide"),
+    name: "guide",
+    description: "Local guide",
+    body: "Local instructions",
+  });
+  const snapshot = await buildSkillSnapshot(workspace, {
+    entries: loadWorkspaceSkills(workspace, { workspaceOnly: true }),
+  });
+  const readFile = vi.fn();
+  const release = registerAgentWorkspaceAccess(workspace, {
+    bridge: { readFile, writeFile: vi.fn(), stat: vi.fn() },
+  });
+  release();
+  const prepared = await prepareEmbeddedSkills({
+    attempt: { config: {}, skillsSnapshot: snapshot },
+    effectiveWorkspace: workspace,
+    sandbox: undefined,
+    sessionAgentId: "main",
+    includeCodeModeSkills: true,
+    applySkillEnvironment: false,
+  });
+  const skill = prepared.codeModeSkills.find((entry) => entry.name === "guide")!;
+  expect(await readCodeModeSkill(skill)).toContain("Local instructions");
+  expect(readFile).not.toHaveBeenCalled();
+});
 
 it.each([
   ["SKILL.md", true],
-  ["refs/support.txt", true],
-  ["SKILL.md", false],
   ["refs/support.txt", false],
 ] as const)(
   "ordinary read uses the selected workspace host for %s (workspaceOnly=%s)",

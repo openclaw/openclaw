@@ -42,9 +42,6 @@ export async function probeCodexNativeAuth(params: {
     const start = await resolveManagedCodexAppServerStartOptions(options.start, {
       pluginRoot: params.pluginRoot,
     });
-    if (start.transport !== "stdio") {
-      return undefined;
-    }
     const env = resolveCodexAppServerSpawnEnv(start, params.env ?? process.env);
     const invocation = materializeWindowsSpawnProgram(
       resolveWindowsSpawnProgram({

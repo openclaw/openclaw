@@ -13,8 +13,8 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime } from "../runtime-api.js";
 import type { ZaloFetch } from "./api.js";
 import { setZaloRuntime } from "./runtime.js";
 import {

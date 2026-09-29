@@ -292,15 +292,11 @@ export async function dispatchInboundMessage(params: {
   return settledReceipt ? { ...result, settledReceipt } : result;
 }
 
-type BufferedInboundDispatcherParams = {
-  ctx: MsgContext | FinalizedMsgContext;
-  cfg: OpenClawConfig;
+type BufferedInboundDispatcherParams = Omit<
+  Parameters<typeof dispatchInboundMessage>[0],
+  "dispatcher" | "replyPayloadRunState" | "outboundHooks" | "onSettled"
+> & {
   dispatcherOptions: ReplyDispatcherWithTypingOptions;
-  toolsAllow?: string[];
-  replyOptions?: InternalDispatchReplyOptions;
-  replyResolver?: InternalGetReplyFromConfig;
-  dispatchReplyFromConfig?: DispatchReplyFromConfig;
-  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
 };
 
 async function dispatchInboundMessageWithBufferedDispatcherCore(
@@ -429,14 +425,11 @@ export async function dispatchInboundMessageWithRoutedChannelDispatcher(
   });
 }
 
-type PlainInboundDispatcherParams = {
-  ctx: MsgContext | FinalizedMsgContext;
-  cfg: OpenClawConfig;
+type PlainInboundDispatcherParams = Omit<
+  BufferedInboundDispatcherParams,
+  "dispatcherOptions" | "dispatchReplyFromConfig"
+> & {
   dispatcherOptions: ReplyDispatcherOptions;
-  toolsAllow?: string[];
-  replyOptions?: InternalDispatchReplyOptions;
-  replyResolver?: InternalGetReplyFromConfig;
-  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
 };
 
 async function dispatchInboundMessageWithPlainDispatcherCore(
@@ -487,28 +480,19 @@ async function dispatchInboundMessageWithPlainDispatcherCore(
 }
 
 /** Creates a plain dispatcher, installs global send hooks, and dispatches the inbound message. */
-export async function dispatchInboundMessageWithDispatcher(params: {
-  ctx: MsgContext | FinalizedMsgContext;
-  cfg: OpenClawConfig;
-  dispatcherOptions: ReplyDispatcherOptions;
-  toolsAllow?: string[];
-  replyOptions?: InternalDispatchReplyOptions;
-  replyResolver?: InternalGetReplyFromConfig;
-}): Promise<DispatchInboundResult> {
+export async function dispatchInboundMessageWithDispatcher(
+  params: Omit<PlainInboundDispatcherParams, "onSessionMetadataChanges">,
+): Promise<DispatchInboundResult> {
   return await dispatchInboundMessageWithPlainDispatcherCore(params, "legacy");
 }
 
 type ProjectedOptions = Omit<ReplyDispatcherOptions, "beforeDeliver" | "beforeDeliverOptions">;
 
 /** Creates a core-owned dispatcher whose modifiers fence projected output capture. */
-export async function dispatchInboundMessageWithProjectedDispatcher(params: {
-  ctx: MsgContext | FinalizedMsgContext;
-  cfg: OpenClawConfig;
-  dispatcherOptions: ProjectedOptions;
-  toolsAllow?: string[];
-  replyOptions?: InternalDispatchReplyOptions;
-  replyResolver?: InternalGetReplyFromConfig;
-  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
-}): Promise<DispatchInboundResult> {
+export async function dispatchInboundMessageWithProjectedDispatcher(
+  params: Omit<PlainInboundDispatcherParams, "dispatcherOptions"> & {
+    dispatcherOptions: ProjectedOptions;
+  },
+): Promise<DispatchInboundResult> {
   return await dispatchInboundMessageWithPlainDispatcherCore(params, "projected");
 }

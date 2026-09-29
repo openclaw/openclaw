@@ -1,14 +1,4 @@
 import { EventEmitter } from "node:events";
-import { vi } from "vitest";
-
-vi.mock("./audio-worker-thread.js", async () => {
-  const { InProcessDiscordAudioWorker } = await import("./audio-worker.test-support.js");
-  return {
-    createDiscordAudioWorkerThread: (
-      options: import("./audio-worker-protocol.js").DiscordAudioWorkerOptions,
-    ) => new InProcessDiscordAudioWorker(undefined, { workerData: options }),
-  };
-});
 import fs from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
@@ -19,6 +9,8 @@ import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sd
 import { discordPlugin } from "../../channel-plugin-api.js";
 import { registerDiscordTranscriptSourceProvider } from "../../transcripts-source-api.js";
 import type { Client } from "../internal/discord.js";
+import * as audioWorkerThread from "./audio-worker-thread.js";
+import { InProcessDiscordAudioWorker } from "./audio-worker.test-support.js";
 import * as audio from "./audio.js";
 import * as sdkRuntime from "./sdk-runtime.js";
 import type { VoiceSessionEntry } from "./session.js";
@@ -48,7 +40,6 @@ export function createDiscordGatewayCaptureFixture(params: {
     pluginId: "discord",
     errorMessage: "Discord runtime not initialized",
   });
-  const previousRuntime = runtimeStore.tryGetRuntime();
   const sdk = sdkRuntime.loadDiscordVoiceSdk();
   const createTransport = () => {
     const speaking = Object.assign(new EventEmitter(), {
@@ -88,6 +79,12 @@ export function createDiscordGatewayCaptureFixture(params: {
     createAudioPlayer: testVi.fn(() => transport.player),
     entersState: testVi.fn(async (target) => target),
   } as unknown as ReturnType<typeof sdkRuntime.loadDiscordVoiceSdk>);
+  // The native plugin loader does not apply Vitest's hoisted module mocks.
+  const workerSpy = testVi
+    .spyOn(audioWorkerThread, "createDiscordAudioWorkerThread")
+    .mockImplementation(
+      (options) => new InProcessDiscordAudioWorker(undefined, { workerData: options }),
+    );
   const writeWav = audio.writeVoiceWavFile;
   const wavCleanups: Promise<void>[] = [];
   const wavSpy = testVi.spyOn(audio, "writeVoiceWavFile").mockImplementation(async (pcm) => {
@@ -106,7 +103,9 @@ export function createDiscordGatewayCaptureFixture(params: {
     };
   });
   const decoding = new Set<Promise<void>>();
-  const codecSpy = vi
+  const receiving = new Set<Promise<void>>();
+  const receiveSpies: Array<{ mockRestore(): void }> = [];
+  const codecSpy = testVi
     .spyOn(audio, "decodeOpusStreamChunks")
     .mockImplementation((input, options) => {
       const work = (async () => {
@@ -126,8 +125,7 @@ export function createDiscordGatewayCaptureFixture(params: {
     });
   const lateStt = createDeferred<void>();
   const wavPaths: string[] = [];
-  let installedRuntime: PluginRuntime | undefined;
-  let sttSpy: { mockRestore(): void } | undefined;
+  const sttSpies = new Map<PluginRuntime["mediaUnderstanding"], { mockRestore(): void }>();
   const stt = testVi.fn<PluginRuntime["mediaUnderstanding"]["transcribeAudioFile"]>(
     async ({ filePath, mime }) => {
       const wav = await fs.readFile(filePath);
@@ -175,22 +173,17 @@ export function createDiscordGatewayCaptureFixture(params: {
             }
           : undefined,
   } as unknown as Client;
-  function restoreRuntime() {
-    // A different owner installed during teardown must never be overwritten or cleared.
-    const currentRuntime = runtimeStore.tryGetRuntime();
-    if (installedRuntime !== undefined && currentRuntime === installedRuntime) {
-      if (previousRuntime) {
-        runtimeStore.setRuntime(previousRuntime);
-      } else {
-        runtimeStore.clearRuntime();
-      }
-    }
-  }
   function restore() {
-    sttSpy?.mockRestore();
+    for (const spy of sttSpies.values()) {
+      spy.mockRestore();
+    }
     codecSpy.mockRestore();
     wavSpy.mockRestore();
     sdkSpy.mockRestore();
+    workerSpy.mockRestore();
+    for (const spy of receiveSpies) {
+      spy.mockRestore();
+    }
   }
   const createManager = (cfg: OpenClawConfig) => {
     const createdManager = new DiscordVoiceManager({
@@ -207,6 +200,19 @@ export function createDiscordGatewayCaptureFixture(params: {
         },
       },
     });
+    const receive = createdManager["receive"];
+    const handleSpeakingStart = receive.handleSpeakingStart.bind(receive);
+    receiveSpies.push(
+      testVi.spyOn(receive, "handleSpeakingStart").mockImplementation((...args) => {
+        const pending = handleSpeakingStart(...args);
+        receiving.add(pending);
+        void pending.then(
+          () => receiving.delete(pending),
+          () => receiving.delete(pending),
+        );
+        return pending;
+      }),
+    );
     setDiscordTranscriptsVoiceManager({
       accountId: captureTarget.accountId,
       manager: createdManager,
@@ -225,7 +231,8 @@ export function createDiscordGatewayCaptureFixture(params: {
 
   async function drain() {
     await Promise.all(decoding);
-    // The receiver removes packet listeners only after scheduling its final WAV/STT work.
+    // Worker EOF precedes parent-side recording; join receive before sampling its queues.
+    await Promise.all(receiving);
     await expect
       .poll(() =>
         transports.every((ownedTransport) =>
@@ -290,11 +297,11 @@ export function createDiscordGatewayCaptureFixture(params: {
       registerDiscordTranscriptSourceProvider(api);
     },
     bindPublishedRuntime() {
-      expect(sttSpy).toBeUndefined();
       // Registration owns the runtime slot. Intercept only its external STT edge.
-      installedRuntime = runtimeStore.getRuntime();
-      const media = installedRuntime.mediaUnderstanding;
-      sttSpy = testVi.spyOn(media, "transcribeAudioFile").mockImplementation(stt);
+      const media = runtimeStore.getRuntime().mediaUnderstanding;
+      if (!sttSpies.has(media)) {
+        sttSpies.set(media, testVi.spyOn(media, "transcribeAudioFile").mockImplementation(stt));
+      }
     },
     async rotateManager(cfg: OpenClawConfig) {
       await closeCurrentManager();
@@ -303,8 +310,10 @@ export function createDiscordGatewayCaptureFixture(params: {
       manager = createManager(cfg);
     },
     async expectReady() {
-      expect(sttSpy).toBeDefined();
-      expect(runtimeStore.getRuntime().mediaUnderstanding.transcribeAudioFile).toBe(sttSpy);
+      const media = runtimeStore.getRuntime().mediaUnderstanding;
+      expect(sttSpies.get(media)).toBeDefined();
+      expect(workerSpy).toHaveBeenCalledTimes(1);
+      expect(media.transcribeAudioFile).toBe(sttSpies.get(media));
       await expect.poll(() => firstTransport.streams.length).toBe(1);
       // Observe the actual typed session; never construct or mutate a session substitute.
       entry = manager["sessions"].get(captureTarget.guildId);
@@ -330,7 +339,8 @@ export function createDiscordGatewayCaptureFixture(params: {
       await expect(fs.stat(wavPaths[0]!)).rejects.toMatchObject({ code: "ENOENT" });
     },
     async beginLateDelivery() {
-      expect(runtimeStore.getRuntime().mediaUnderstanding.transcribeAudioFile).toBe(sttSpy);
+      const media = runtimeStore.getRuntime().mediaUnderstanding;
+      expect(media.transcribeAudioFile).toBe(sttSpies.get(media));
       firstTransport.speaking.emit("start", speakerId);
       await expect.poll(() => firstTransport.streams.length).toBe(2);
       firstTransport.streams[1]!.end(Buffer.from([2]));
@@ -354,6 +364,5 @@ export function createDiscordGatewayCaptureFixture(params: {
     },
     close: closeCurrentManager,
     restore,
-    restoreRuntime,
   };
 }

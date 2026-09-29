@@ -21,7 +21,6 @@ import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js
 import {
   resolveEmbeddingProviderIndexIdentity,
   type EmbeddingProvider,
-  type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { MemoryManagerDatabaseContext } from "./manager-database-context.js";
@@ -51,10 +50,17 @@ export type MemorySyncProgressState = {
   report: (update: MemorySyncProgressUpdate) => void;
 };
 
+export type MemoryEmbeddingBatchConfig = {
+  enabled: boolean;
+  wait: boolean;
+  concurrency: number;
+  pollIntervalMs: number;
+  timeoutMs: number;
+};
+
 export type MemoryIndexWorkItem = {
   entry: MemoryIndexEntry;
   source: MemorySource;
-  afterIndex?: () => void;
 };
 
 export type MemorySourceSyncPlan = {
@@ -90,17 +96,11 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected abstract readonly workspaceDir: string;
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
-  protected fallbackFrom?: EmbeddingProviderId;
+  protected fallbackFrom?: string;
   protected abstract providerUnavailableReason?: string;
   protected abstract providerLifecycle: MemoryProviderLifecycleState;
   protected providerRuntime?: EmbeddingProviderRuntime;
-  protected abstract batch: {
-    enabled: boolean;
-    wait: boolean;
-    concurrency: number;
-    pollIntervalMs: number;
-    timeoutMs: number;
-  };
+  protected abstract batch: MemoryEmbeddingBatchConfig;
   protected readonly sources: Set<MemorySource> = new Set();
   protected readonly sourceInspections = new Map<
     MemorySource,
@@ -112,6 +112,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected fallbackReason?: string;
   protected intervalTimer: NodeJS.Timeout | null = null;
   protected dirty = false;
+  protected memoryWatchGeneration = 0;
   // A success clears only the failure visible when it started. This keeps a
   // concurrent failure visible even when older or no-op work settles later.
   protected readonly syncOutcomes = new MemorySyncOutcomeLedger();
@@ -160,6 +161,11 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     prefixIndexItems?: MemoryIndexWorkItem[];
   }): Promise<MemorySourceSyncPlan>;
 
+  protected markMemoryWatchDirty(): void {
+    this.memoryWatchGeneration += 1;
+    this.dirty = true;
+  }
+
   protected async withManagerOperation<T>(run: () => Promise<T>): Promise<T> {
     this.memoryFiles?.assertCurrent();
     if (this.closing || this.closed) {
@@ -182,11 +188,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     }
   }
 
-  protected async indexFiles(items: MemoryIndexWorkItem[]): Promise<void> {
-    for (const item of items) {
-      await this.indexFile(item.entry, { source: item.source });
-    }
-  }
+  protected abstract indexFiles(items: MemoryIndexWorkItem[]): Promise<void>;
 
   protected emptySourceSyncPlan(): MemorySourceSyncPlan {
     return { indexItems: [], finalize: () => {} };
@@ -260,14 +262,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       this.sessionsDirtyFiles.size > 0;
   }
 
-  protected shouldDeferSourceWideBatch(): boolean {
-    return Boolean(
-      this.batch.enabled &&
-      this.provider &&
-      this.providerRuntime?.batchEmbed &&
-      this.providerRuntime.sourceWideBatchEmbed === true,
-    );
-  }
+  protected abstract shouldDeferSourceWideBatch(): boolean;
 
   protected advanceSyncProgress(progress: MemorySyncProgressState | undefined, count = 1): void {
     if (!progress) {
@@ -293,29 +288,10 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       });
     }
     await this.indexFiles(items);
-    for (const item of items) {
-      item.afterIndex?.();
-    }
     this.advanceSyncProgress(progress, items.length);
   }
 
-  protected async executeSourceSyncPlans(
-    plans: MemorySourceSyncPlan[],
-    progress?: MemorySyncProgressState,
-  ): Promise<void> {
-    const indexItems = plans.flatMap((plan) => plan.indexItems);
-    const sources = new Set(indexItems.map((item) => item.source));
-    await this.indexQueuedFiles(
-      indexItems,
-      progress,
-      sources.size > 1 ? "Indexing memory sources (batch)..." : undefined,
-    );
-    for (const plan of plans) {
-      await plan.finalize();
-    }
-  }
-
-  protected async executeSourceWideSync(params: {
+  protected async executeSourceSync(params: {
     shouldSyncMemory: boolean;
     shouldSyncSessions: boolean;
     needsFullReindex: boolean;
@@ -323,11 +299,12 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     targetArchiveFiles?: string[];
     progress?: MemorySyncProgressState;
   }): Promise<void> {
+    const deferIndex = this.shouldDeferSourceWideBatch();
     const memoryPlan = params.shouldSyncMemory
       ? await this.syncMemoryFiles({
           needsFullReindex: params.needsFullReindex,
           progress: params.progress,
-          deferIndex: true,
+          ...(deferIndex ? { deferIndex: true } : {}),
         })
       : this.emptySourceSyncPlan();
     if (params.shouldSyncSessions) {
@@ -335,13 +312,19 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
         needsFullReindex: params.needsFullSessionReindex ?? params.needsFullReindex,
         targetArchiveFiles: params.targetArchiveFiles,
         progress: params.progress,
-        deferIndex: true,
-        prefixIndexItems: memoryPlan.indexItems,
+        ...(deferIndex ? { deferIndex: true, prefixIndexItems: memoryPlan.indexItems } : {}),
       });
-      await memoryPlan.finalize();
-      return;
+    } else if (deferIndex) {
+      await this.indexQueuedFiles(memoryPlan.indexItems, params.progress);
     }
-    await this.executeSourceSyncPlans([memoryPlan], params.progress);
+    if (deferIndex) {
+      await memoryPlan.finalize();
+    }
+    if (params.shouldSyncSessions) {
+      this.clearSessionRetryState();
+    } else {
+      this.refreshSessionDirtyFlag();
+    }
   }
 
   protected hasIndexedChunks(): boolean {
@@ -432,11 +415,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       configuredScopeHash: resolveConfiguredScopeHash({
         workspaceDir: this.workspaceDir,
         extraPaths: this.settings.extraPaths,
-        multimodal: {
-          enabled: this.settings.multimodal.enabled,
-          modalities: this.settings.multimodal.modalities,
-          maxFileBytes: this.settings.multimodal.maxFileBytes,
-        },
+        multimodal: this.settings.multimodal,
       }),
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,

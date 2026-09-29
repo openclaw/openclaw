@@ -6,16 +6,10 @@ import {
   hasOwnProperty,
   pushAssignment,
   pushInactiveSurfaceWarning,
-  resolveChannelAccountSurface,
   type ResolverContext,
   type SecretDefaults,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
-
-type GoogleChatAccountLike = {
-  serviceAccount?: unknown;
-  accounts?: Record<string, unknown>;
-};
 
 function accountSecretOwner(accountId: string) {
   return {
@@ -47,22 +41,15 @@ export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntr
   ],
 });
 
-function resolveSecretInputRef(params: { value: unknown; defaults?: SecretDefaults }) {
-  return coerceSecretRef(params.value, params.defaults);
-}
-
 function collectGoogleChatAccountAssignment(params: {
-  target: GoogleChatAccountLike;
+  target: Record<string, unknown>;
   path: string;
   defaults?: SecretDefaults;
   context: ResolverContext;
   ownerAccountIds: string[];
   inactiveReason?: string;
 }): void {
-  const ref = resolveSecretInputRef({
-    value: params.target.serviceAccount,
-    defaults: params.defaults,
-  });
+  const ref = coerceSecretRef(params.target.serviceAccount, params.defaults);
   if (!ref) {
     return;
   }
@@ -96,8 +83,7 @@ export function collectRuntimeConfigAssignments(params: {
   if (!resolved) {
     return;
   }
-  const googleChat = resolved.channel as GoogleChatAccountLike;
-  const surface = resolveChannelAccountSurface(googleChat as Record<string, unknown>);
+  const { channel: googleChat, surface } = resolved;
   const topLevelServiceAccountOwners = !surface.channelEnabled
     ? []
     : !surface.hasExplicitAccounts
@@ -121,7 +107,7 @@ export function collectRuntimeConfigAssignments(params: {
       continue;
     }
     collectGoogleChatAccountAssignment({
-      target: account as GoogleChatAccountLike,
+      target: account,
       path: `channels.googlechat.accounts.${accountId}`,
       defaults: params.defaults,
       context: params.context,

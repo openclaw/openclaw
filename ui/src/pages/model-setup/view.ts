@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { cache } from "lit/directives/cache.js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { icons } from "../../components/icons.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
@@ -46,7 +47,6 @@ type ModelSetupViewProps = {
   credentialChoices?: readonly string[];
   onClose?: () => void;
   onDiscoveryShown?: () => void;
-  onConnectChoice?: (authChoice?: string) => void;
   detecting?: boolean;
   detectionError?: string | null;
   page: ModelSetupPageState;
@@ -255,6 +255,7 @@ function renderManual(props: ModelSetupViewProps, detected: SystemAgentSetupDete
   }
   const provider = result.manualProviders.find((entry) => entry.id === props.manualProviderId);
   const targetId = `manual:${props.manualProviderId}`;
+  const manualId = props.embedded ? "model-discovery-manual" : "model-setup-manual";
   const testing = props.activation.phase === "testing" && props.activation.targetId === targetId;
   return html`
     <section class="settings-section">
@@ -278,6 +279,9 @@ function renderManual(props: ModelSetupViewProps, detected: SystemAgentSetupDete
             class="input"
             type="password"
             autocomplete="off"
+            required
+            aria-invalid=${props.manualError ? "true" : nothing}
+            aria-describedby=${`${manualId}-help${props.manualError ? ` ${manualId}-error` : ""}`}
             .value=${props.manualApiKey}
             ?disabled=${props.actionsDisabled}
             placeholder=${t("modelSetup.manual.accessValuePlaceholder")}
@@ -285,13 +289,15 @@ function renderManual(props: ModelSetupViewProps, detected: SystemAgentSetupDete
               props.onManualApiKeyChange((event.currentTarget as HTMLInputElement).value)}
           />
         </label>
-        <div class="model-setup__manual-help">
+        <div id=${`${manualId}-help`} class="model-setup__manual-help">
           ${icons.shieldCheck}
           <span>${t("modelSetup.manual.verifyHint")}</span>
         </div>
         ${
           props.manualError
-            ? html`<div class="callout danger" role="alert">${props.manualError}</div>`
+            ? html`<div id=${`${manualId}-error`} class="callout danger" role="alert">
+                ${props.manualError}
+              </div>`
             : nothing
         }
         <button
@@ -555,7 +561,7 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
     `;
   }
   return html`
-    <section class="content-header">
+    <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
       <div>
         <div class="page-title">${titleForRoute("model-setup")}</div>
         <div class="page-subtitle">

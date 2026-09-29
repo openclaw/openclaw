@@ -7,12 +7,13 @@ import path from "node:path";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { closeSkillsWatchers } from "../../skills/runtime/refresh.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -43,8 +44,8 @@ vi.mock("../../plugins/install-security-scan.js", () => ({
   evaluateSkillInstallPolicy: installSecurityScanState.evaluateSkillInstallPolicy,
 }));
 
-vi.mock("../../infra/replace-file.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/replace-file.js")>();
+vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/atomic")>();
   return {
     ...actual,
     movePathWithCopyFallback: async (
@@ -265,6 +266,8 @@ describe("skill upload gateway handlers", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
+    // Close real skills.status watchers before retiring their workspace and state roots.
+    await closeSkillsWatchers(true);
     await Promise.all([
       ...tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
       ...testStates.splice(0).map((state) => state.cleanup()),

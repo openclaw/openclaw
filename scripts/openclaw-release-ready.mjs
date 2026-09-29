@@ -45,7 +45,6 @@ const INPUTS = new Set([
   "plugin_sdk_api_acknowledgement",
   "full_release_validation_run_id",
   "full_release_validation_run_attempt",
-  "stable_soak_waiver",
   "windows_node_tag",
   "windows_node_installer_digests",
   "npm_telegram_run_id",
@@ -127,10 +126,13 @@ export function validateReleaseButtonInputs(value) {
     version !== null && inputs.tag === `v${version.version}`,
     "Prepared release requires an exact version tag.",
   );
+  if (version.channel === "alpha" || inputs.npm_dist_tag === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   requireValue(
     ["beta", "stable"].includes(classifyReleaseTrain(version)) &&
       inputs.npm_dist_tag !== "extended-stable",
-    "Alpha and extended-stable releases retain their existing owner workflows.",
+    "Extended-stable releases retain their existing owner workflow.",
   );
   const expectedChannel = version.channel === "stable" ? ["beta", "latest"] : [version.channel];
   requireValue(

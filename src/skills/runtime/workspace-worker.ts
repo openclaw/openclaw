@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
+import { createFileWatchNotifier } from "../../infra/file-watch-notifier.js";
 import type { applyExtractedSkillRoot } from "../lifecycle/archive-install.js";
 import type * as Status from "../lifecycle/clawhub-status.js";
 import type * as Store from "../lifecycle/clawhub-store.js";
 import type * as Uninstall from "../lifecycle/clawhub-uninstall.js";
+import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
 import type { WorkspaceSkillSourceRequest } from "../loading/workspace-skill-sources.js";
 import {
   decodeSkillWorkerRequest,
@@ -119,18 +121,43 @@ export async function serveWorkspaceSkills(options: {
     return;
   }
   if (operation === "watch") {
-    const { ensureSkillsWatcher, closeSkillsWatchers, registerSkillsChangeListener } =
-      await import("./refresh.js");
+    const {
+      ensureSkillsWatcher,
+      reconcileSkillsWatcherCoverage,
+      closeSkillsWatchers,
+      registerSkillsChangeListener,
+    } = await import("./refresh.js");
     const lines = skillWorkerLines(input);
     let stopped = false;
     let queued = false;
     let unavailable = false;
     let unsubscribe: (() => void) | undefined;
+    let retiring: Promise<void> | undefined;
+    let outputClosing: Promise<void> | undefined;
+    let notifier: ReturnType<typeof createFileWatchNotifier> | undefined;
+    const retire = () => {
+      stopped = true;
+      unsubscribe?.();
+      retiring ??= closeSkillsWatchers();
+      outputClosing ??= notifier?.close();
+      void retiring.catch(() => {});
+      void outputClosing?.catch(() => {});
+      lines.close();
+    };
+    notifier = createFileWatchNotifier(output, retire);
+    const errors: unknown[] = [];
     try {
       // SAFETY: The same-version watch adapter sends this contract; workspace identity is checked next.
       const request = (await lines.read()) as WatchRequest;
+      if (stopped) {
+        throw new Error("Skills watch transport closed before admission");
+      }
       assertWorkspace(request, workspace);
-      const params = { ...request, workspaceDir: workspace };
+      const { executionWorkspaceDir } = normalizeWorkspaceSkillRoots({
+        agentWorkspaceDir: workspace,
+        executionWorkspaceDir: request.executionWorkspaceDir,
+      });
+      const params = { ...request, workspaceDir: workspace, executionWorkspaceDir };
       unsubscribe = registerSkillsChangeListener((event) => {
         if (stopped || event.workspaceDir !== workspace) {
           return;
@@ -138,8 +165,21 @@ export async function serveWorkspaceSkills(options: {
         if (event.reason === "watch-unavailable") {
           unavailable = true;
         }
-        output.write(
-          `${JSON.stringify(event.reason === "watch-unavailable" ? "unavailable" : "change")}\n`,
+        const recovered = event.reason === "watch-available";
+        if (recovered) {
+          if (event.sourceScope?.executionWorkspaceDir !== params.executionWorkspaceDir) {
+            return;
+          }
+          // Fresh scans can reveal a symlink or nested root while normal watch
+          // discovery is suppressed. Verify those new targets before clearing
+          // the host's fallback, and let their ready event retry this check.
+          if (!reconcileSkillsWatcherCoverage(params)) {
+            return;
+          }
+          unavailable = false;
+        }
+        notifier?.send(
+          recovered ? "available" : event.reason === "watch-unavailable" ? "unavailable" : "change",
         );
         // Native events also invalidate discovery targets (for example a new symlink).
         if (event.reason === "watch" && !queued && !unavailable) {
@@ -161,11 +201,18 @@ export async function serveWorkspaceSkills(options: {
           throw error;
         }
       }
+    } catch (error) {
+      errors.push(error);
     } finally {
-      stopped = true;
-      unsubscribe?.();
-      lines.close();
-      await closeSkillsWatchers();
+      retire();
+      const results = await Promise.allSettled([retiring, outputClosing]);
+      errors.push(
+        ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+      );
+      notifier = undefined;
+    }
+    if (errors.length) {
+      throw new AggregateError(errors, "Skills watch retirement failed");
     }
     return;
   }
@@ -173,9 +220,7 @@ export async function serveWorkspaceSkills(options: {
   const chunks: Buffer[] = [];
   const inputChunks: AsyncIterable<unknown> = input;
   for await (const raw of inputChunks) {
-    if (typeof raw === "string") {
-      chunks.push(Buffer.from(raw));
-    } else if (raw instanceof Uint8Array) {
+    if (typeof raw === "string" || raw instanceof Uint8Array) {
       chunks.push(Buffer.from(raw));
     } else {
       throw new Error("Skill worker input must be bytes");

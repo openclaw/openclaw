@@ -50,59 +50,62 @@ describe("WhatsApp question reactions", () => {
     });
   });
 
-  it("matches receipt identities through reaction-target JID aliases", async () => {
-    const payload = buildPayload();
-    expect(payload).not.toBeNull();
-    expect(
-      registerWhatsAppQuestionReactionTargetForDeliveredPayload({
-        cfg: {},
-        target: { channel: "whatsapp", accountId: "default" },
-        payload: payload!,
-        results: [
-          {
-            channel: "whatsapp",
-            messageId: "summary",
-            toJid: "group@g.us",
-            receipt: {
-              platformMessageIds: ["wa-1"],
-              sentAt: 1,
-              parts: [
-                {
-                  platformMessageId: "wa-1",
-                  kind: "text",
-                  index: 0,
-                  raw: { messageId: "wa-1", toJid: "1555@s.whatsapp.net" },
-                },
-              ],
+  it.each([undefined, "whatsapp", "other-channel"])(
+    "matches receipt identities through JID aliases with raw channel %s",
+    async (channel) => {
+      const payload = buildPayload();
+      expect(payload).not.toBeNull();
+      expect(
+        registerWhatsAppQuestionReactionTargetForDeliveredPayload({
+          cfg: {},
+          target: { channel: "whatsapp", accountId: "default" },
+          payload: payload!,
+          results: [
+            {
+              channel: "whatsapp",
+              messageId: "summary",
+              toJid: "group@g.us",
+              receipt: {
+                platformMessageIds: ["wa-1"],
+                sentAt: 1,
+                parts: [
+                  {
+                    platformMessageId: "wa-1",
+                    kind: "text",
+                    index: 0,
+                    raw: { channel, messageId: "wa-1", toJid: "1555@s.whatsapp.net" },
+                  },
+                ],
+              },
             },
+          ],
+        }),
+      ).toBe(true);
+      const msg = {
+        key: { remoteJid: "group@g.us", participant: "1555@s.whatsapp.net" },
+        message: {
+          reactionMessage: {
+            text: "2️⃣",
+            key: { id: "wa-1", remoteJid: "group@g.us" },
           },
-        ],
-      }),
-    ).toBe(true);
-    const msg = {
-      key: { remoteJid: "group@g.us", participant: "1555@s.whatsapp.net" },
-      message: {
-        reactionMessage: {
-          text: "2️⃣",
-          key: { id: "wa-1", remoteJid: "group@g.us" },
         },
-      },
-    };
-    const debug = vi.fn();
+      };
+      const debug = vi.fn();
 
-    await expect(
-      maybeResolveWhatsAppQuestionReaction({
-        cfg: {},
-        accountId: "default",
-        msg,
-        senderId: "+1555",
-        resolveReactionTargetJids: async () => ["1555@s.whatsapp.net"],
-        logDebug: debug,
-      }),
-    ).resolves.toBe(true);
-    expect(hoisted.resolve).toHaveBeenCalledWith(
-      expect.objectContaining({ questionId, optionValue: "Two", senderId: "+1555" }),
-    );
-    expect(hoisted.resolve).toHaveBeenCalledOnce();
-  });
+      await expect(
+        maybeResolveWhatsAppQuestionReaction({
+          cfg: {},
+          accountId: "default",
+          msg,
+          senderId: "+1555",
+          resolveReactionTargetJids: async () => ["1555@s.whatsapp.net"],
+          logDebug: debug,
+        }),
+      ).resolves.toBe(true);
+      expect(hoisted.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ questionId, optionValue: "Two", senderId: "+1555" }),
+      );
+      expect(hoisted.resolve).toHaveBeenCalledOnce();
+    },
+  );
 });

@@ -1,14 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chatContextFromIMessageTarget } from "./chat-context.js";
-import { checkIMessageResourceBinding } from "./message-resource-db.js";
+import { IMessageRpcClient } from "./client.js";
 import { loadFreshIMessageReplyCacheForTest } from "./test-support/runtime.js";
 
 type MessageResourceModule = typeof import("./message-resource.js");
 type ReplyCacheModule = typeof import("./monitor-reply-cache.js");
+let checkIMessageResourceBinding: (typeof import("./message-resource-db.js"))["checkIMessageResourceBinding"];
 let authorizeIMessageResourceReference: MessageResourceModule["authorizeIMessageResourceReference"];
 let rememberIMessageReplyCache: ReplyCacheModule["rememberIMessageReplyCache"];
 let resolveIMessageCachedResourceBinding: ReplyCacheModule["resolveIMessageCachedResourceBinding"];
@@ -21,6 +23,7 @@ beforeEach(async () => {
   ({ rememberIMessageReplyCache, resolveIMessageCachedResourceBinding } =
     await loadFreshIMessageReplyCacheForTest());
   ({ authorizeIMessageResourceReference } = await import("./message-resource.js"));
+  ({ checkIMessageResourceBinding } = await import("./message-resource-db.js"));
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imessage-resource-"));
   dbPath = path.join(tempDir, "chat.db");
   const binDir = path.join(tempDir, "bin");
@@ -57,10 +60,125 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
 describe("iMessage provider resource binding", () => {
+  it.each(["action", "reply"] as const)(
+    "authorizes an uncached %s through real SQLite without caller-thread native queries",
+    async (entrypoint) => {
+      const { imessageMessageActions } = await import("./actions.js");
+      const { sendMessageIMessage } = await import("./send.js");
+      const { setCachedIMessagePrivateApiStatus } = await import("./private-api-status.js");
+      const cli = await import("./cli-output.js");
+      setCachedIMessagePrivateApiStatus(cliPath, {
+        available: true,
+        v2Ready: true,
+        selectors: {},
+        rpcMethods: [],
+      });
+      const nativeSend = vi.spyOn(cli, "runIMessageCliJsonCommand").mockResolvedValue({});
+      const client = new IMessageRpcClient({ dbPath });
+      const request = vi.spyOn(client, "request").mockResolvedValue({ guid: "sent-guid" });
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+      const all = vi.spyOn(StatementSync.prototype, "all");
+      const close = vi.spyOn(DatabaseSync.prototype, "close");
+      const calibration = new DatabaseSync(dbPath, { readOnly: true });
+      calibration.prepare("SELECT guid FROM message").all();
+      calibration.close();
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(all).toHaveBeenCalledOnce();
+      expect(close).toHaveBeenCalledOnce();
+      vi.clearAllMocks();
+
+      const config = { channels: { imessage: { cliPath, dbPath } } };
+      const invoke = (chatGuid: string) =>
+        entrypoint === "action"
+          ? imessageMessageActions.handleAction!({
+              channel: "imessage",
+              action: "react",
+              cfg: config,
+              params: { chatGuid, messageId: "message-guid", emoji: "❤️" },
+              conversationReadOrigin: "delegated",
+            })
+          : sendMessageIMessage(`chat_guid:${chatGuid}`, "synthetic reply", {
+              config,
+              client,
+              replyToId: "message-guid",
+              conversationReadOrigin: "delegated",
+            });
+      await invoke("iMessage;-;+15550001111");
+      expect(entrypoint === "action" ? nativeSend : request).toHaveBeenCalledOnce();
+      await expect(invoke("iMessage;+;other")).rejects.toThrow(
+        "does not belong to the selected conversation",
+      );
+      expect(entrypoint === "action" ? nativeSend : request).toHaveBeenCalledOnce();
+      expect(prepare.mock.calls.filter(([sql]) => /\bFROM\s+"?message"?\b/iu.test(sql))).toEqual(
+        [],
+      );
+      expect(all).not.toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+    },
+  );
+
+  it("joins reader cleanup before reply dispatch and rechecks the caller's live authority", async () => {
+    // Hydrate the independent reply cache before retaining the Messages reader below.
+    await resolveIMessageCachedResourceBinding("message-guid", { accountId: "default", chatId: 1 });
+    const { sendMessageIMessage } = await import("./send.js");
+    const sqlite = await import("openclaw/plugin-sdk/sqlite-runtime");
+    const open = sqlite.openSqliteWorkerStore;
+    const closing = createDeferred<void>();
+    const release = createDeferred<void>();
+    vi.spyOn(sqlite, "openSqliteWorkerStore").mockImplementation(async (options) => {
+      const store = await open(options);
+      if (!store) {
+        throw new Error("synthetic Messages database unavailable");
+      }
+      return {
+        execute: (command, executeOptions) => store.execute(command, executeOptions),
+        close: async () => {
+          closing.resolve();
+          await release.promise;
+          await store.close();
+        },
+      };
+    });
+    const client = new IMessageRpcClient({ dbPath });
+    const request = vi.spyOn(client, "request").mockResolvedValue({ guid: "should-not-send" });
+    let active = true;
+    let settled = false;
+    const sending = sendMessageIMessage("chat_id:1", "synthetic reply", {
+      config: { channels: { imessage: { cliPath, dbPath } } },
+      client,
+      replyToId: "message-guid",
+      conversationReadOrigin: "delegated",
+      assertDirectAdapterHandoff: () => {
+        if (!active) {
+          throw new Error("synthetic caller revoked");
+        }
+      },
+    });
+    void sending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    try {
+      await Promise.race([closing.promise, sending]);
+      expect(settled).toBe(false);
+      expect(request).not.toHaveBeenCalled();
+      active = false;
+    } finally {
+      release.resolve();
+    }
+    await expect(sending).rejects.toThrow("synthetic caller revoked");
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("only treats canonical handles as authoritative chat identifiers", () => {
     expect(
       chatContextFromIMessageTarget({ kind: "handle", to: "Jane Appleseed", service: "auto" }),
@@ -163,9 +281,9 @@ describe("iMessage provider resource binding", () => {
     ).toBe("unknown");
   });
 
-  it("matches part-prefixed message ids only in their database chat", () => {
+  it("matches part-prefixed message ids only in their database chat", async () => {
     expect(
-      checkIMessageResourceBinding({
+      await checkIMessageResourceBinding({
         chatContext: { chatId: 1 },
         cliPath,
         dbPath,
@@ -173,7 +291,7 @@ describe("iMessage provider resource binding", () => {
       }),
     ).toBe("match");
     expect(
-      checkIMessageResourceBinding({
+      await checkIMessageResourceBinding({
         chatContext: { chatGuid: "imessage;-;+15550001111" },
         cliPath,
         dbPath,
@@ -181,7 +299,7 @@ describe("iMessage provider resource binding", () => {
       }),
     ).toBe("match");
     expect(
-      checkIMessageResourceBinding({
+      await checkIMessageResourceBinding({
         chatContext: { chatGuid: "sms;-;+15550002222" },
         cliPath,
         dbPath,
@@ -189,7 +307,7 @@ describe("iMessage provider resource binding", () => {
       }),
     ).toBe("match");
     expect(
-      checkIMessageResourceBinding({
+      await checkIMessageResourceBinding({
         chatContext: { chatIdentifier: "iMessage;-;üser@example.com" },
         cliPath,
         dbPath,
@@ -197,7 +315,7 @@ describe("iMessage provider resource binding", () => {
       }),
     ).toBe("match");
     expect(
-      checkIMessageResourceBinding({
+      await checkIMessageResourceBinding({
         chatContext: { chatGuid: "iMessage;-;üser@example.com" },
         cliPath,
         dbPath,
@@ -205,7 +323,7 @@ describe("iMessage provider resource binding", () => {
       }),
     ).toBe("match");
     expect(
-      checkIMessageResourceBinding({
+      await checkIMessageResourceBinding({
         chatContext: { chatIdentifier: "iMessage;-;other@example.com" },
         cliPath,
         dbPath,
@@ -213,7 +331,7 @@ describe("iMessage provider resource binding", () => {
       }),
     ).toBe("mismatch");
     expect(
-      checkIMessageResourceBinding({
+      await checkIMessageResourceBinding({
         chatContext: { chatId: 2 },
         cliPath,
         dbPath,
@@ -221,7 +339,7 @@ describe("iMessage provider resource binding", () => {
       }),
     ).toBe("mismatch");
     expect(
-      checkIMessageResourceBinding({
+      await checkIMessageResourceBinding({
         chatContext: { chatGuid: "iMessage;+;+15550001111" },
         cliPath,
         dbPath,
@@ -229,7 +347,7 @@ describe("iMessage provider resource binding", () => {
       }),
     ).toBe("mismatch");
     expect(
-      checkIMessageResourceBinding({
+      await checkIMessageResourceBinding({
         chatContext: { chatGuid: "iMessage;+;Some@example.com" },
         cliPath,
         dbPath,
@@ -237,7 +355,7 @@ describe("iMessage provider resource binding", () => {
       }),
     ).toBe("match");
     expect(
-      checkIMessageResourceBinding({
+      await checkIMessageResourceBinding({
         chatContext: { chatGuid: "iMessage;+;some@example.com" },
         cliPath,
         dbPath,
@@ -245,7 +363,7 @@ describe("iMessage provider resource binding", () => {
       }),
     ).toBe("mismatch");
     expect(
-      checkIMessageResourceBinding({
+      await checkIMessageResourceBinding({
         chatContext: { chatIdentifier: "SMS;-;+15550001111" },
         cliPath,
         dbPath,
@@ -253,7 +371,7 @@ describe("iMessage provider resource binding", () => {
       }),
     ).toBe("mismatch");
     expect(
-      checkIMessageResourceBinding({
+      await checkIMessageResourceBinding({
         chatContext: {
           chatId: 1,
           chatGuid: "any;-;+15550001111",
@@ -265,7 +383,7 @@ describe("iMessage provider resource binding", () => {
       }),
     ).toBe("match");
     expect(
-      checkIMessageResourceBinding({
+      await checkIMessageResourceBinding({
         chatContext: {
           chatGuid: "iMessage;+;other",
           chatIdentifier: "iMessage;-;+15550001111",
@@ -276,7 +394,7 @@ describe("iMessage provider resource binding", () => {
       }),
     ).toBe("mismatch");
     expect(
-      checkIMessageResourceBinding({
+      await checkIMessageResourceBinding({
         chatContext: { chatId: 1, chatGuid: "iMessage;+;other" },
         cliPath,
         dbPath,
@@ -284,7 +402,7 @@ describe("iMessage provider resource binding", () => {
       }),
     ).toBe("mismatch");
     expect(
-      checkIMessageResourceBinding({
+      await checkIMessageResourceBinding({
         chatContext: { chatIdentifier: "unknown;-;+15550001111" },
         cliPath,
         dbPath,
@@ -454,9 +572,39 @@ describe("iMessage provider resource binding", () => {
     ).resolves.toBeUndefined();
   });
 
+  it.each(["missing", "malformed"] as const)(
+    "preserves delegated refusal when the Messages database is %s",
+    async (databaseState) => {
+      fs.rmSync(dbPath);
+      if (databaseState === "malformed") {
+        fs.writeFileSync(dbPath, "synthetic invalid database");
+      }
+      const params = {
+        accountId: "default",
+        chatContext: { chatId: 1 },
+        cliPath,
+        dbPath,
+        hasExclusiveLocalDatabase: true,
+        messageId: "message-guid",
+      };
+      await expect(authorizeIMessageResourceReference(params)).rejects.toThrow(
+        "require a current same-account conversation binding",
+      );
+      await expect(
+        authorizeIMessageResourceReference({
+          ...params,
+          conversationReadOrigin: "direct-operator",
+        }),
+      ).resolves.toBeUndefined();
+      if (databaseState === "missing") {
+        expect(fs.existsSync(dbPath)).toBe(false);
+      }
+    },
+  );
+
   it("treats provider-resolved handle aliases as unavailable binding evidence", async () => {
     expect(
-      checkIMessageResourceBinding({
+      await checkIMessageResourceBinding({
         chatContext: {},
         cliPath,
         dbPath,
@@ -487,14 +635,14 @@ describe("iMessage provider resource binding", () => {
     ).rejects.toThrow("require a current same-account conversation binding");
   });
 
-  it("does not treat a configured database as local for an SSH imsg wrapper", () => {
+  it("does not treat a configured database as local for an SSH imsg wrapper", async () => {
     const wrapperDir = path.join(tempDir, "wrapper");
     const wrapperPath = path.join(wrapperDir, "imsg");
     fs.mkdirSync(wrapperDir);
     fs.writeFileSync(wrapperPath, '#!/bin/sh\nexec ssh qa.example.invalid imsg "$@"\n');
 
     expect(
-      checkIMessageResourceBinding({
+      await checkIMessageResourceBinding({
         chatContext: { chatId: 1 },
         cliPath: wrapperPath,
         dbPath,
@@ -503,7 +651,7 @@ describe("iMessage provider resource binding", () => {
     ).toBe("unavailable");
   });
 
-  it("does not trust a PATH wrapper whose remote command is hidden behind variables", () => {
+  it("does not trust a PATH wrapper whose remote command is hidden behind variables", async () => {
     const wrapperDir = path.join(tempDir, "path-wrapper");
     const wrapperPath = path.join(wrapperDir, "imsg");
     fs.mkdirSync(wrapperDir);
@@ -515,7 +663,7 @@ describe("iMessage provider resource binding", () => {
     vi.stubEnv("PATH", wrapperDir);
 
     expect(
-      checkIMessageResourceBinding({
+      await checkIMessageResourceBinding({
         chatContext: { chatId: 1 },
         cliPath: "imsg",
         dbPath,

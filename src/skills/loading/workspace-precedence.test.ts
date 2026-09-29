@@ -65,6 +65,13 @@ function captureJsonWarningLogger() {
   return warn;
 }
 
+function captureInfoLogger(consoleStyle: "json" | "compact" = "json") {
+  setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle });
+  const log = vi.fn();
+  loggingState.rawConsole = { log, info: log, warn: vi.fn(), error: vi.fn() };
+  return log;
+}
+
 function createSkillEntry(params: {
   name: string;
   description?: string;
@@ -87,6 +94,82 @@ function createSkillEntry(params: {
 }
 
 describe("buildWorkspaceSkillsPrompt", () => {
+  it("aggregates 30 differing skills per root pair and stays silent on unchanged refresh", async () => {
+    const root = await fixtureSuite.createCaseDir("aggregate-collisions");
+    const info = captureInfoLogger();
+    const warn = vi.mocked(loggingState.rawConsole!.warn);
+    const cases = [];
+    for (let pair = 0; pair < 4; pair++) {
+      const workspaceDir = path.join(root, "worktrees", `repo-${pair}`, "branch");
+      const executionWorkspaceDir = path.join(root, "projects", `repo-${pair}`, "checkout");
+      for (const [workspace, body] of [
+        [workspaceDir, "Branch instructions"],
+        [executionWorkspaceDir, "Project instructions"],
+      ] as const) {
+        for (let index = 0; index < 30; index++) {
+          const name = `pair-${pair}-skill-${String(index).padStart(2, "0")}`;
+          await writeSkill({
+            dir: path.join(workspace, ".agents", "skills", "group", name),
+            name,
+            description: name,
+            body,
+          });
+        }
+      }
+      cases.push({
+        workspaceDir,
+        options: {
+          executionWorkspaceDir,
+          bundledSkillsDir: "",
+          managedSkillsDir: path.join(root, "managed"),
+          pluginSkillsDir: path.join(root, "plugins"),
+          config: { worktreeRoot: path.join(root, "worktrees") },
+        },
+      });
+    }
+    for (const { workspaceDir, options } of cases) {
+      expect(loadWorkspaceSkills(workspaceDir, options)).toHaveLength(30);
+    }
+    const initialLines = info.mock.calls.length + warn.mock.calls.length;
+    const reports = warn.mock.calls.map(([line]) => JSON.parse(String(line)));
+    expect(info).not.toHaveBeenCalled();
+    info.mockClear();
+    warn.mockClear();
+    for (const { workspaceDir, options } of cases) {
+      bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+      loadWorkspaceSkills(workspaceDir, options);
+    }
+    const refreshLines = info.mock.calls.length + warn.mock.calls.length;
+    console.log(
+      `4 root pairs x 30 differing skills: initial=${initialLines}, refresh=${refreshLines}`,
+    );
+    expect(initialLines).toBe(4);
+    expect(refreshLines).toBe(0);
+    expect(reports).toHaveLength(4);
+    for (const [pair, { workspaceDir, options }] of cases.entries()) {
+      expect(reports[pair]).toMatchObject({
+        level: "warn",
+        winnerRoot: path.join(workspaceDir, ".agents", "skills"),
+        loserRoot: path.join(options.executionWorkspaceDir, ".agents", "skills"),
+        skillCount: 30,
+        skills: [
+          `pair-${pair}-skill-00`,
+          `pair-${pair}-skill-01`,
+          `pair-${pair}-skill-02`,
+          "+27 more",
+        ],
+      });
+    }
+    for (const { workspaceDir, options } of cases) {
+      loadWorkspaceSkills(options.executionWorkspaceDir, {
+        ...options,
+        executionWorkspaceDir: workspaceDir,
+      });
+    }
+    expect(warn).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledTimes(4);
+  });
+
   it("prefers workspace skills over managed skills", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     const managedDir = path.join(workspaceDir, ".managed");
@@ -164,41 +247,52 @@ describe("buildWorkspaceSkillsPrompt", () => {
     });
   });
 
-  it("keeps extraDirs below bundled precedence and reports the collision", async () => {
-    const workspaceDir = await fixtureSuite.createCaseDir("extra-bundled-collision");
-    const extraDir = path.join(workspaceDir, ".extra");
-    const bundledDir = path.join(workspaceDir, ".bundled");
-    const extraSkillDir = path.join(extraDir, "demo-skill");
-    const bundledSkillDir = path.join(bundledDir, "demo-skill");
-    await writeSkill({
-      dir: extraSkillDir,
-      name: "demo-skill",
-      description: "Extra version",
-    });
-    await writeSkill({
-      dir: bundledSkillDir,
-      name: "demo-skill",
-      description: "Bundled version",
-    });
-    const warn = captureWarningLogger();
+  it.each(["extra", "execution"] as const)(
+    "keeps %s skills below bundled precedence and reports at info",
+    async (source) => {
+      const workspaceDir = await fixtureSuite.createCaseDir(`${source}-bundled-collision`);
+      const extraDir = path.join(workspaceDir, ".extra");
+      const bundledDir = path.join(workspaceDir, ".bundled");
+      const extraSkillDir = path.join(
+        extraDir,
+        ...(source === "execution" ? ["skills"] : []),
+        "demo-skill",
+      );
+      const bundledSkillDir = path.join(bundledDir, "demo-skill");
+      await writeSkill({
+        dir: extraSkillDir,
+        name: "demo-skill",
+        description: "Extra version",
+      });
+      await writeSkill({
+        dir: bundledSkillDir,
+        name: "demo-skill",
+        description: "Bundled version",
+      });
+      const info = captureInfoLogger("compact");
 
-    const prompt = await withEnvAsync(
-      { HOME: workspaceDir, PATH: "" },
-      async () =>
-        await buildWorkspaceSkillsPrompt(workspaceDir, {
-          bundledSkillsDir: bundledDir,
-          managedSkillsDir: path.join(workspaceDir, ".managed"),
-          config: { skills: { load: { extraDirs: [extraDir] } } },
-        }),
-    );
-    const warningText = warn.mock.calls.flat().map(String).join("\n");
+      const prompt = await withEnvAsync(
+        { HOME: workspaceDir, PATH: "" },
+        async () =>
+          await buildWorkspaceSkillsPrompt(workspaceDir, {
+            bundledSkillsDir: bundledDir,
+            managedSkillsDir: path.join(workspaceDir, ".managed"),
+            ...(source === "extra"
+              ? { config: { skills: { load: { extraDirs: [extraDir] } } } }
+              : { executionWorkspaceDir: extraDir }),
+          }),
+      );
+      const warningText = info.mock.calls.flat().map(String).join("\n");
 
-    expect(prompt).toContain("Bundled version");
-    expect(prompt).not.toContain("Extra version");
-    expect(warningText).toContain('skill="demo-skill"');
-    expect(warningText).toContain("winner=openclaw-bundled:~/.bundled/demo-skill/SKILL.md");
-    expect(warningText).toContain("loser=openclaw-extra:~/.extra/demo-skill/SKILL.md");
-  });
+      expect(prompt).toContain("Bundled version");
+      expect(prompt).not.toContain("Extra version");
+      expect(info).toHaveBeenCalledOnce();
+      expect(loggingState.rawConsole!.warn).not.toHaveBeenCalled();
+      expect(warningText).toContain(
+        `~/.bundled shadows 1 skills from ~/.extra${source === "execution" ? "/skills" : ""} (demo-skill)`,
+      );
+    },
+  );
 
   it("reports execution-directory collisions while keeping workspace precedence", async () => {
     const agentWorkspaceDir = await fixtureSuite.createCaseDir("agent-workspace-collision");
@@ -215,7 +309,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
       name: "demo-skill",
       description: "Execution version",
     });
-    const warn = captureJsonWarningLogger();
+    const info = captureInfoLogger();
 
     const loadOptions = {
       agentWorkspaceDir,
@@ -225,24 +319,26 @@ describe("buildWorkspaceSkillsPrompt", () => {
       pluginSkillsDir: path.join(agentWorkspaceDir, ".plugin-skills"),
     };
     const entries = loadWorkspaceSkills(agentWorkspaceDir, loadOptions);
-    const warning = JSON.parse(String(warn.mock.calls[0]?.[0])) as Record<string, unknown>;
+    const report = JSON.parse(String(info.mock.calls[0]?.[0])) as Record<string, unknown>;
 
     expect(entries.find((entry) => entry.skill.name === "demo-skill")?.skill.description).toBe(
       "Workspace version",
     );
-    expect(warning).toMatchObject({
-      message: "Skill precedence collision resolved.",
-      skill: "demo-skill",
-      winnerPath: workspaceSkillFile,
-      loserPath: executionSkillFile,
+    expect(report).toMatchObject({
+      message: "Skill precedence collisions resolved.",
+      level: "info",
+      skillCount: 1,
+      skills: ["demo-skill"],
+      winnerRoot: path.join(agentWorkspaceDir, "skills"),
+      loserRoot: path.join(executionWorkspaceDir, "skills"),
     });
 
     loadWorkspaceSkills(agentWorkspaceDir, loadOptions);
-    expect(warn).toHaveBeenCalledOnce();
+    expect(info).toHaveBeenCalledOnce();
 
     bumpSkillsSnapshotVersion({ workspaceDir: agentWorkspaceDir, reason: "watch" });
     loadWorkspaceSkills(agentWorkspaceDir, loadOptions);
-    expect(warn).toHaveBeenCalledOnce();
+    expect(info).toHaveBeenCalledOnce();
   });
 
   it("does not report execution-directory collisions for the same canonical skill file", async () => {
@@ -319,7 +415,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
     }
   });
 
-  it("reports different collision content once across workspaces and reports changed content again", async () => {
+  it("reports each root pair once and reports changed aggregate content and membership again", async () => {
     const root = await fixtureSuite.createCaseDir("different-content");
     const bundledSkillsDir = path.join(root, "bundled");
     const name = "different-collision";
@@ -338,22 +434,22 @@ describe("buildWorkspaceSkillsPrompt", () => {
       loadWorkspaceSkills(workspaceDir, options);
       bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
       loadWorkspaceSkills(workspaceDir, options);
-      expect(warn).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledTimes(id === "first" ? 1 : 2);
     }
     const workspaceDir = path.join(root, "second");
     const dir = path.join(workspaceDir, "skills", name);
     const options = { bundledSkillsDir, managedSkillsDir: path.join(root, "managed") };
     for (const [description, body, count] of [
-      ["Shared metadata", "Changed instructions", 2],
-      ["Changed metadata", "Changed instructions", 3],
-      ["Shared metadata", "Override", 3],
+      ["Shared metadata", "Changed instructions", 3],
+      ["Changed metadata", "Changed instructions", 4],
+      ["Shared metadata", "Override", 5],
     ] as const) {
       await writeSkill({ dir, name, description, body });
       bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
       loadWorkspaceSkills(workspaceDir, options);
       expect(warn).toHaveBeenCalledTimes(count);
     }
-    // A new collision must not replay the existing pair.
+    // Membership changes update the same root-pair aggregate.
     for (const [base, description] of [
       [bundledSkillsDir, "Bundled"],
       [path.join(workspaceDir, "skills"), "Workspace"],
@@ -366,12 +462,68 @@ describe("buildWorkspaceSkillsPrompt", () => {
     }
     bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
     loadWorkspaceSkills(workspaceDir, options);
-    expect(warn).toHaveBeenCalledTimes(4);
+    expect(warn).toHaveBeenCalledTimes(6);
     expect(JSON.parse(String(warn.mock.calls[0]?.[0]))).toMatchObject({
-      message: "Skill precedence collision resolved.",
-      skill: name,
-      winnerPath: path.join(root, "first", "skills", name, "SKILL.md"),
-      loserPath: path.join(bundledSkillsDir, name, "SKILL.md"),
+      message: "Skill precedence collisions resolved.",
+      level: "warn",
+      skillCount: 1,
+      skills: [name],
+      winnerRoot: path.join(root, "first", "skills"),
+      loserRoot: bundledSkillsDir,
+    });
+    expect(JSON.parse(String(warn.mock.calls[5]?.[0]))).toMatchObject({ skillCount: 2 });
+    await fs.rm(path.join(dir, "SKILL.md"));
+    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+    loadWorkspaceSkills(workspaceDir, options);
+    expect(warn).toHaveBeenCalledTimes(7);
+    expect(JSON.parse(String(warn.mock.calls[6]?.[0]))).toMatchObject({
+      skillCount: 1,
+      skills: ["another-collision"],
+    });
+    const remainingDir = path.join(workspaceDir, "skills", "another-collision");
+    await fs.rm(path.join(remainingDir, "SKILL.md"));
+    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+    loadWorkspaceSkills(workspaceDir, options);
+    expect(warn).toHaveBeenCalledTimes(7);
+    // Retiring this pair must not replay the other workspace's unchanged collision.
+    loadWorkspaceSkills(path.join(root, "first"), options);
+    expect(warn).toHaveBeenCalledTimes(7);
+    await writeSkill({ dir: remainingDir, name: "another-collision", description: "Workspace" });
+    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+    loadWorkspaceSkills(workspaceDir, options);
+    expect(warn).toHaveBeenCalledTimes(8);
+  });
+
+  it("reports distinct same-source root pairs at info without changing the final winner", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("grouped-collisions");
+    const name = "same-tier-collision";
+    const extraDirs = Array.from({ length: 3 }, (_, index) =>
+      path.join(workspaceDir, `root-${index}`),
+    );
+    for (const [index, dir] of extraDirs.entries()) {
+      await writeSkill({
+        dir: path.join(dir, name),
+        name,
+        description: name,
+        body: `Variant ${index}`,
+      });
+    }
+    const info = captureInfoLogger();
+    const entries = loadWorkspaceSkills(workspaceDir, {
+      bundledSkillsDir: "",
+      managedSkillsDir: path.join(workspaceDir, "managed"),
+      config: { skills: { load: { extraDirs } } },
+    });
+    expect(entries.find((entry) => entry.skill.name === name)?.skill.filePath).toBe(
+      path.join(extraDirs[2]!, name, "SKILL.md"),
+    );
+    expect(info).toHaveBeenCalledTimes(2);
+    expect(loggingState.rawConsole!.warn).not.toHaveBeenCalled();
+    expect(JSON.parse(String(info.mock.calls[0]?.[0]))).toMatchObject({
+      skills: [name],
+      skillCount: 1,
+      winnerRoot: extraDirs[1],
+      loserRoot: extraDirs[0],
     });
   });
   it("gates by bins, config, and always", async () => {

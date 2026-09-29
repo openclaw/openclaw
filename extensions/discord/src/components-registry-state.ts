@@ -1,21 +1,16 @@
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 
-type PersistedDiscordRegistryEntry<T extends { id: string }> = {
+export type PersistedDiscordRegistryEntry<T extends { id: string }> = {
   version: 1;
   entry: T;
 };
 
-type DiscordPersistentStore<T> = {
-  register(key: string, value: T, opts?: { ttlMs?: number }): Promise<void>;
-  lookup(key: string): Promise<T | undefined>;
-  consume(key: string): Promise<T | undefined>;
-  delete(key: string): Promise<boolean>;
-};
-
-export type DiscordRegistryStore<T extends { id: string }> = DiscordPersistentStore<
-  PersistedDiscordRegistryEntry<T>
+export type DiscordRegistryStore<T extends { id: string }> = Pick<
+  PluginStateKeyedStore<PersistedDiscordRegistryEntry<T>>,
+  "register" | "lookup" | "consume" | "delete"
 >;
 
 export const discordComponentRegistryState = resolveGlobalSingleton(

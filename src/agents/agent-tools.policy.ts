@@ -24,10 +24,18 @@ import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
+import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { hasAgentRosterProperty } from "./agent-scope-config.js";
-import { listAgentEntries, resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
-import { resolveProviderToolPolicy } from "./provider-tool-policy.js";
+import {
+  listAgentEntriesWithSource,
+  resolveAgentConfig,
+  resolveSessionAgentIds,
+} from "./agent-scope.js";
+import {
+  resolveProviderToolPolicy,
+  resolveProviderToolPolicyEntry,
+} from "./provider-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
@@ -40,6 +48,7 @@ import {
   type SubagentSessionRole,
 } from "./subagents/spawn/subagent-capabilities.js";
 import { createToolPolicyMatcher } from "./tool-policy-match.js";
+import type { ConfiguredToolPolicySources } from "./tool-policy-pipeline.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
@@ -82,13 +91,6 @@ function resolveSubagentDenyListForRole(role: SubagentSessionRole): string[] {
   return [...SUBAGENT_TOOL_DENY_ALWAYS];
 }
 
-function mergeConfiguredSubagentAllow(
-  allow: string[] | undefined,
-  alsoAllow: string[] | undefined,
-): string[] | undefined {
-  return allow && alsoAllow ? uniqueStrings([...allow, ...alsoAllow]) : allow;
-}
-
 /** Resolve sub-agent tool policy from stored session capabilities. */
 export function resolveSubagentToolPolicyForSession(
   cfg: OpenClawConfig | undefined,
@@ -112,7 +114,7 @@ export function resolveSubagentToolPolicyForSession(
     ...resolveSubagentDenyListForRole(capabilities.role),
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
-  const mergedAllow = mergeConfiguredSubagentAllow(allow, alsoAllow);
+  const mergedAllow = allow && alsoAllow ? uniqueStrings([...allow, ...alsoAllow]) : allow;
   return { allow: mergedAllow, deny };
 }
 
@@ -149,41 +151,23 @@ export function resolveConfiguredToolPolicies(params: {
   agentId?: string | null;
   extraPolicies?: readonly (SandboxToolPolicy | undefined)[];
 }): SandboxToolPolicy[] {
-  const policies: SandboxToolPolicy[] = [];
   const profile = params.agentTools?.profile ?? params.cfg.tools?.profile;
   const profileAlsoAllow =
     resolveExplicitProfileAlsoAllow(params.agentTools) ??
     resolveExplicitProfileAlsoAllow(params.cfg.tools);
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow);
-  if (profilePolicy) {
-    policies.push(profilePolicy);
-  }
-
-  const globalPolicy = pickSandboxToolPolicy(params.cfg.tools ?? undefined);
-  if (globalPolicy) {
-    policies.push(globalPolicy);
-  }
-
-  const agentPolicy = pickSandboxToolPolicy(params.agentTools);
-  if (agentPolicy) {
-    policies.push(agentPolicy);
-  }
-
-  for (const policy of params.extraPolicies ?? []) {
-    if (policy) {
-      policies.push(policy);
-    }
-  }
+  const policies = [
+    profilePolicy,
+    pickSandboxToolPolicy(params.cfg.tools ?? undefined),
+    pickSandboxToolPolicy(params.agentTools),
+    ...(params.extraPolicies ?? []),
+  ].filter((policy): policy is SandboxToolPolicy => Boolean(policy));
 
   if (params.sandboxMode === "all") {
     policies.push(resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined));
   }
 
   return policies;
-}
-
-function collectUniqueStrings(values: Array<string | null | undefined>): string[] {
-  return normalizeUniqueSingleOrTrimmedStringList(values);
 }
 
 function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
@@ -195,17 +179,17 @@ function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
   if (topicSenderMatch) {
     const [, chatId, topicId] = topicSenderMatch;
     // Sender-scoped sessions still inherit topic/base group tool policies.
-    return collectUniqueStrings([raw, `${chatId}:topic:${topicId}`, chatId]);
+    return normalizeUniqueSingleOrTrimmedStringList([raw, `${chatId}:topic:${topicId}`, chatId]);
   }
   const topicMatch = raw.match(/^(.+):topic:([^:]+)$/i);
   if (topicMatch) {
     const [, chatId, topicId] = topicMatch;
-    return collectUniqueStrings([`${chatId}:topic:${topicId}`, chatId]);
+    return normalizeUniqueSingleOrTrimmedStringList([`${chatId}:topic:${topicId}`, chatId]);
   }
   const senderMatch = raw.match(/^(.+):sender:([^:]+)$/i);
   if (senderMatch) {
     const [, chatId] = senderMatch;
-    return collectUniqueStrings([raw, chatId]);
+    return normalizeUniqueSingleOrTrimmedStringList([raw, chatId]);
   }
   return [raw];
 }
@@ -229,7 +213,7 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
     });
     return {
       channel: conversation.channel,
-      groupIds: collectUniqueStrings([
+      groupIds: normalizeUniqueSingleOrTrimmedStringList([
         ...buildScopedGroupIdCandidates(conversation.rawId),
         resolvedConversation?.id,
         resolvedConversation?.baseConversationId,
@@ -237,8 +221,7 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
       ]),
     };
   }
-  const base = conversationKey ?? raw;
-  const parts = base.split(":").filter(Boolean);
+  const parts = (conversationKey ?? raw).split(":").filter(Boolean);
   let body = parts[0] === "agent" ? parts.slice(2) : parts;
   if (body[0] === "subagent") {
     body = body.slice(1);
@@ -274,16 +257,13 @@ function resolveTrustedGroupIdFromContexts(params: {
   if (!callerGroupId) {
     return { groupId: params.groupId, dropped: false };
   }
-  const trustedGroupIds = collectUniqueStrings([
+  const trustedGroupIds = normalizeUniqueSingleOrTrimmedStringList([
     ...(params.sessionContext.groupIds ?? []),
     ...(params.spawnedContext.groupIds ?? []),
   ]);
   // Fail closed when no server-derived session/spawn context can vouch for the
   // caller group id. Non-group sessions must not opt into group-scoped tool
   // policy by supplying an arbitrary groupId.
-  if (trustedGroupIds.length === 0) {
-    return { groupId: null, dropped: true };
-  }
   if (trustedGroupIds.includes(callerGroupId)) {
     return { groupId: params.groupId, dropped: false };
   }
@@ -363,9 +343,9 @@ export function resolveEffectiveToolPolicy(params: {
     typeof params.agentId === "string" && params.agentId.trim()
       ? normalizeAgentId(params.agentId)
       : undefined;
+  const agentEntries = params.config ? listAgentEntriesWithSource(params.config) : [];
   const canResolveConfiguredAgent =
-    params.config &&
-    (!hasAgentRosterProperty(params.config) || listAgentEntries(params.config).length > 0);
+    params.config && (!hasAgentRosterProperty(params.config) || agentEntries.length > 0);
   const agentId = canResolveConfiguredAgent
     ? resolveSessionAgentIds({
         config: params.config,
@@ -387,16 +367,92 @@ export function resolveEffectiveToolPolicy(params: {
 
   const profile = agentTools?.profile ?? globalTools?.profile;
   const profileSource = agentTools?.profile ? "agent" : globalTools?.profile ? "global" : undefined;
-  const providerPolicy = resolveProviderToolPolicy({
+  const providerEntry = resolveProviderToolPolicyEntry({
     byProvider: globalTools?.byProvider,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
-  const agentProviderPolicy = resolveProviderToolPolicy({
+  const agentProviderEntry = resolveProviderToolPolicyEntry({
     byProvider: agentTools?.byProvider,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
+  const providerPolicy = providerEntry?.policy;
+  const agentProviderPolicy = agentProviderEntry?.policy;
+  const agentSource = agentEntries.find(
+    ({ entry }) => normalizeAgentId(entry.id) === agentId,
+  )?.source;
+  const agentToolsPath = agentSource
+    ? formatConcreteConfigPath([
+        "agents",
+        agentSource.kind,
+        agentSource.kind === "entries" ? agentSource.key : agentSource.index,
+        "tools",
+      ])
+    : params.config &&
+        !hasAgentRosterProperty(params.config) &&
+        !agentConfig?.tools &&
+        implicitDefaultTools
+      ? "agents.defaults.tools"
+      : `agents.entries.${agentId}.tools`;
+  const providerPath = providerEntry
+    ? `tools.byProvider[${JSON.stringify(providerEntry.key)}]`
+    : undefined;
+  const agentProviderPath = agentProviderEntry
+    ? `${agentToolsPath}.byProvider[${JSON.stringify(agentProviderEntry.key)}]`
+    : undefined;
+  const providerProfilePath = agentProviderPolicy?.profile ? agentProviderPath : providerPath;
+  // A new agent list shadows the inherited list. Omit the append recipe when
+  // it would silently discard inherited grants, or conflict with tools.allow.
+  const profileAlsoAllowPath =
+    !agentTools?.allow && (agentTools?.alsoAllow || !globalTools?.alsoAllow?.length)
+      ? `${agentToolsPath}.alsoAllow`
+      : undefined;
+  const sources: ConfiguredToolPolicySources = {
+    profile: {
+      kind: "profile",
+      path: profileSource === "agent" ? `${agentToolsPath}.profile` : "tools.profile",
+      profile,
+      alsoAllowPath: profileAlsoAllowPath,
+    },
+    providerProfile: {
+      kind: "profile",
+      path: providerProfilePath ? `${providerProfilePath}.profile` : undefined,
+      profile: agentProviderPolicy?.profile ?? providerPolicy?.profile,
+      // Provider-specific repairs need to preserve both inherited provider
+      // settings and the base profile; leave those to the detailed sources.
+    },
+    global: { kind: "config", path: "tools" },
+    globalProvider: { kind: "config", path: providerPath },
+    agent: { kind: "config", path: agentToolsPath },
+    agentProvider: { kind: "config", path: agentProviderPath },
+  };
+  const profiles = [
+    ...(globalTools?.profile
+      ? [{ profile: globalTools.profile, source: "tools.profile", active: !agentTools?.profile }]
+      : []),
+    ...(agentTools?.profile
+      ? [{ profile: agentTools.profile, source: `${agentToolsPath}.profile`, active: true }]
+      : []),
+    ...(providerPolicy?.profile && providerPath
+      ? [
+          {
+            profile: providerPolicy.profile,
+            source: `${providerPath}.profile`,
+            active: !agentProviderPolicy?.profile,
+          },
+        ]
+      : []),
+    ...(agentProviderPolicy?.profile && agentProviderPath
+      ? [
+          {
+            profile: agentProviderPolicy.profile,
+            source: `${agentProviderPath}.profile`,
+            active: true,
+          },
+        ]
+      : []),
+  ];
   const explicitProfileAlsoAllow =
     resolveExplicitProfileAlsoAllow(agentTools) ?? resolveExplicitProfileAlsoAllow(globalTools);
   const agentPolicy = pickSandboxToolPolicy(agentTools);
@@ -413,6 +469,8 @@ export function resolveEffectiveToolPolicy(params: {
 
   const effectivePolicy = {
     agentId,
+    sources,
+    profiles,
     globalPolicy: pickSandboxToolPolicy(globalTools),
     globalProviderPolicy: pickSandboxToolPolicy(providerPolicy),
     agentPolicy,
@@ -528,7 +586,7 @@ export function resolveGroupToolPolicyOutcome(params: {
   });
   // Keep server-derived ids first so a caller cannot use a trusted parent
   // candidate to skip a more-specific session group policy.
-  const groupIds = collectUniqueStrings([
+  const groupIds = normalizeUniqueSingleOrTrimmedStringList([
     ...(sessionContext.groupIds ?? []),
     ...(spawnedContext.groupIds ?? []),
     ...buildScopedGroupIdCandidates(trustedGroup.groupId),

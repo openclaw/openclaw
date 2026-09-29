@@ -1,3 +1,4 @@
+import type { PluginUiCapability } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import type { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type {
   PluginManifestCatalog,
@@ -110,6 +111,7 @@ export type OfficialExternalPluginCatalogManifest = {
   webSearchProviders?: readonly OfficialExternalWebSearchProvider[];
   install?: PluginPackageInstall & { sourceRef?: string };
   contracts?: PluginManifestContracts;
+  uiCapabilities?: PluginUiCapability[];
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
 };
 

@@ -15,7 +15,7 @@ import {
   shouldFilterLegacySessionRecordsByTarget,
 } from "../config/sessions/legacy-store-inspection.js";
 import { collectSessionStateIdsForEntry } from "../config/sessions/session-accessor.sqlite-references.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import {
   resolveAllAgentSessionStoreCandidateTargetsSync,
   type SessionStoreTarget,
@@ -24,39 +24,39 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRealpathOrAbsolute as canonicalFilePath } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { normalizeLegacySessionEntryDelivery as normalizeSessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
-import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
 import {
   readMigrationArtifactIdentity,
   sameMigrationArtifact,
   type MigrationArtifactIdentity,
-} from "./doctor-session-sqlite-artifact.js";
+} from "../infra/session-sqlite-migration-artifact.js";
+import {
+  isSessionSqliteMigrationWarning,
+  type DoctorSessionSqliteIssue,
+} from "../infra/session-sqlite-migration-issues.js";
 import {
   HISTORICAL_IMPORT_REASON,
   canonicalMigrationFilePath,
   assertSafeSessionSqliteMigrationDirectory,
   type SessionSqliteMigrationMove,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
 import {
   readLegacyPrimaryTranscriptIdentity,
   readTranscriptFingerprint,
   type ReadOnlySqliteValidationSnapshot,
-} from "./doctor-session-sqlite-readers.js";
+} from "../infra/session-sqlite-migration-readers.js";
+import { normalizeLegacySessionEntryDelivery as normalizeSessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
 import {
   collectRecoveryInventory,
   type RecoveryArtifactReference,
 } from "./doctor-session-sqlite-recovery-inventory.js";
-import {
-  isSessionSqliteMigrationWarning,
-  type DoctorSessionSqliteIssue,
-} from "./doctor-session-sqlite-types.js";
 
 export type LegacySessionRecord = {
   entry: SessionEntry;
   sessionKey: string;
   transcriptPath?: string;
   transcriptDependencies: string[];
-  recovery?: { complete: boolean; repaired: boolean; events: number };
+  recovery?: { complete: boolean; repaired: boolean; events: number; sqliteEvents?: number };
   sourceFingerprint?: ReturnType<typeof readTranscriptFingerprint>;
   historical?: {
     originalPath: string;
@@ -170,12 +170,8 @@ export function readArchivedSessionOwnership(
     }
     const ownershipIssues: DoctorSessionSqliteIssue[] = [];
     try {
-      if (
-        !sameMigrationArtifact(
-          readMigrationArtifactIdentity(move.archivePath),
-          move.artifact!.identity,
-        )
-      ) {
+      const identity = readMigrationArtifactIdentity(move.archivePath);
+      if (!sameMigrationArtifact(identity, move.artifact!.identity, { ignoreDevice: true })) {
         throw new Error(
           "Archived session registry no longer matches its migration receipt (file metadata or contents changed).",
         );
@@ -185,10 +181,7 @@ export function readArchivedSessionOwnership(
       );
       if (
         ownershipIssues.length ||
-        !sameMigrationArtifact(
-          readMigrationArtifactIdentity(move.archivePath),
-          move.artifact!.identity,
-        )
+        !sameMigrationArtifact(readMigrationArtifactIdentity(move.archivePath), identity)
       ) {
         throw new Error(
           "Archived session registry changed during verification or contains invalid entries.",
@@ -285,7 +278,9 @@ export async function discoverLegacyHistoricalTranscripts(params: {
       const identity = readMigrationArtifactIdentity(source.path);
       if (
         source.archiveMove &&
-        !sameMigrationArtifact(identity, source.archiveMove.artifact!.identity)
+        !sameMigrationArtifact(identity, source.archiveMove.artifact!.identity, {
+          ignoreDevice: true,
+        })
       ) {
         throw new Error("Archived original changed since migration; retained without importing");
       }
@@ -473,6 +468,7 @@ export function gatherLegacyArchiveCoverage(
     }
   }
   return {
+    knownTargets,
     selectedStorePaths,
     referencedPaths,
     retainedPaths,

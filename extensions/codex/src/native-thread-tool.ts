@@ -12,11 +12,13 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
-import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
 import { readCodexPluginConfig } from "./app-server/config-parsing.js";
 import {
   CODEX_INTERACTIVE_THREAD_SOURCE_KINDS,
   isJsonObject,
+  type CodexAppServerRequestMethod,
+  type CodexAppServerRequestParams,
   type JsonValue,
 } from "./app-server/protocol.js";
 import {
@@ -110,39 +112,27 @@ function readThreadId(params: Record<string, unknown>): string {
   return readStringParam(params, "thread_id", { required: true, label: "thread_id" });
 }
 
-function readThreadStatusType(value: unknown): string | undefined {
-  if (!isJsonObject(value) || !isJsonObject(value.thread) || !isJsonObject(value.thread.status)) {
-    return undefined;
-  }
-  return typeof value.thread.status.type === "string" ? value.thread.status.type : undefined;
-}
-
-function assertThreadMayBeArchived(value: unknown, expectedThreadId: string): void {
+function assertThreadIdle(
+  value: unknown,
+  expectedThreadId: string,
+  action: "archive" | "fork",
+): void {
   if (!isJsonObject(value) || !isJsonObject(value.thread)) {
     throw new Error("Codex app-server returned an invalid thread/read response");
   }
   if (value.thread.id !== expectedThreadId) {
     throw new Error("Codex app-server returned a different thread than requested");
   }
-  const status = readThreadStatusType(value);
-  if (status === "active") {
+  const status = isJsonObject(value.thread.status) ? value.thread.status.type : undefined;
+  if (action === "archive" && status === "active") {
     throw new Error("cannot archive an active Codex thread; wait for its turn to finish");
   }
   if (status !== "idle" && status !== "notLoaded") {
-    throw new Error("cannot verify that the Codex thread is idle; refusing to archive");
-  }
-}
-
-function assertThreadMayBeForked(value: unknown, expectedThreadId: string): void {
-  if (!isJsonObject(value) || !isJsonObject(value.thread)) {
-    throw new Error("Codex app-server returned an invalid thread/read response");
-  }
-  if (value.thread.id !== expectedThreadId) {
-    throw new Error("Codex app-server returned a different thread than requested");
-  }
-  const status = readThreadStatusType(value);
-  if (status !== "idle" && status !== "notLoaded") {
-    throw new Error("cannot fork a Codex thread unless it is idle or not loaded");
+    throw new Error(
+      action === "archive"
+        ? "cannot verify that the Codex thread is idle; refusing to archive"
+        : "cannot fork a Codex thread unless it is idle or not loaded",
+    );
   }
 }
 
@@ -255,9 +245,8 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           await import("./app-server/binding-connection.js");
         const { resolveCodexSupervisionAppServerRuntimeOptions } =
           await import("./app-server/config-runtime.js");
-        const requestOptions = async (
-          pluginConfig: unknown,
-        ): Promise<CodexControlRequestOptions> => {
+        const requestOptions = async (): Promise<CodexControlRequestOptions> => {
+          const pluginConfig = admissionConfig;
           const plugin = readCodexPluginConfig(pluginConfig);
           const base = baseRequestOptions();
           const session = currentSession();
@@ -309,6 +298,10 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             assertCurrent,
           };
         };
+        const scopedRequest = async <M extends CodexControlMethod & CodexAppServerRequestMethod>(
+          method: M,
+          requestParams: CodexAppServerRequestParams<M>,
+        ) => request(admissionConfig, method, requestParams, await requestOptions());
         if (action === "list") {
           const cursor = readStringParam(params, "cursor");
           const searchTerm = readStringParam(params, "search");
@@ -317,21 +310,16 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
               "Codex native thread search is disabled while raw transcript access is disabled.",
             );
           }
-          const response = await request(
-            admissionConfig,
-            CODEX_CONTROL_METHODS.listThreads,
-            {
-              archived: asBoolean(params.archived) ?? false,
-              limit: asSafeIntegerInRange(params.limit, { min: 1, max: 100 }) ?? 20,
-              modelProviders: [],
-              sortKey: "recency_at",
-              sortDirection: "desc",
-              sourceKinds: [...CODEX_INTERACTIVE_THREAD_SOURCE_KINDS],
-              ...(cursor ? { cursor } : {}),
-              ...(searchTerm ? { searchTerm } : {}),
-            },
-            await requestOptions(admissionConfig),
-          );
+          const response = await scopedRequest(CODEX_CONTROL_METHODS.listThreads, {
+            archived: asBoolean(params.archived) ?? false,
+            limit: asSafeIntegerInRange(params.limit, { min: 1, max: 100 }) ?? 20,
+            modelProviders: [],
+            sortKey: "recency_at",
+            sortDirection: "desc",
+            sourceKinds: [...CODEX_INTERACTIVE_THREAD_SOURCE_KINDS],
+            ...(cursor ? { cursor } : {}),
+            ...(searchTerm ? { searchTerm } : {}),
+          });
           return jsonResult(
             mayReadRawTranscripts ? response : redactNativeThreadResponse(response),
           );
@@ -345,33 +333,21 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
               "Codex raw transcript reads are disabled for this codex plugin supervision config.",
             );
           }
-          const response = await request(
-            admissionConfig,
-            CODEX_CONTROL_METHODS.readThread,
-            { threadId, includeTurns },
-            await requestOptions(admissionConfig),
-          );
+          const response = await scopedRequest(CODEX_CONTROL_METHODS.readThread, {
+            threadId,
+            includeTurns,
+          });
           return jsonResult(
             mayReadRawTranscripts ? response : redactNativeThreadResponse(response),
           );
         }
         if (action === "rename") {
           const name = readStringParam(params, "name", { required: true, label: "name" });
-          await request(
-            admissionConfig,
-            CODEX_CONTROL_METHODS.renameThread,
-            { threadId, name },
-            await requestOptions(admissionConfig),
-          );
+          await scopedRequest(CODEX_CONTROL_METHODS.renameThread, { threadId, name });
           return jsonResult({ action, threadId, name });
         }
         if (action === "unarchive") {
-          const response = await request(
-            admissionConfig,
-            CODEX_CONTROL_METHODS.unarchiveThread,
-            { threadId },
-            await requestOptions(admissionConfig),
-          );
+          const response = await scopedRequest(CODEX_CONTROL_METHODS.unarchiveThread, { threadId });
           return jsonResult(
             mayReadRawTranscripts ? response : redactNativeThreadResponse(response),
           );
@@ -392,13 +368,11 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           }
           // App Server status is process-local, and archive is a separate RPC. This read blocks
           // known active/invalid state; `confirm` owns the remaining cross-client race.
-          const current = await request(
-            admissionConfig,
-            CODEX_CONTROL_METHODS.readThread,
-            { threadId, includeTurns: false },
-            await requestOptions(admissionConfig),
-          );
-          assertThreadMayBeArchived(current, threadId);
+          const current = await scopedRequest(CODEX_CONTROL_METHODS.readThread, {
+            threadId,
+            includeTurns: false,
+          });
+          assertThreadIdle(current, threadId, "archive");
           if (await options.bindingStore.hasOtherThreadOwner(threadId, identity)) {
             throw new Error(
               "cannot archive a native Codex thread owned by another OpenClaw session",
@@ -408,28 +382,16 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             bindingStore: options.bindingStore,
             threadId,
             listPage: async (listParams) =>
-              await request(
-                admissionConfig,
-                CODEX_CONTROL_METHODS.listThreads,
-                listParams,
-                await requestOptions(admissionConfig),
-              ),
+              await scopedRequest(CODEX_CONTROL_METHODS.listThreads, listParams),
             assertDescendantIdle: async (descendantThreadId) => {
-              const descendant = await request(
-                admissionConfig,
-                CODEX_CONTROL_METHODS.readThread,
-                { threadId: descendantThreadId, includeTurns: false },
-                await requestOptions(admissionConfig),
-              );
-              assertThreadMayBeArchived(descendant, descendantThreadId);
+              const descendant = await scopedRequest(CODEX_CONTROL_METHODS.readThread, {
+                threadId: descendantThreadId,
+                includeTurns: false,
+              });
+              assertThreadIdle(descendant, descendantThreadId, "archive");
             },
           });
-          await request(
-            admissionConfig,
-            CODEX_CONTROL_METHODS.archiveThread,
-            { threadId },
-            await requestOptions(admissionConfig),
-          );
+          await scopedRequest(CODEX_CONTROL_METHODS.archiveThread, { threadId });
           if (archivedBinding?.threadId === threadId) {
             await options.bindingStore.mutate(
               identity,
@@ -459,7 +421,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         if (attach && usesSupervisionConnection) {
           throw new Error("Supervised Codex forks must stay detached; set attach=false.");
         }
-        const forkOptions = await requestOptions(admissionConfig);
+        const forkOptions = await requestOptions();
         const {
           retainCodexAppServerBindingSubscription,
           rollbackCodexAppServerBindingSubscription,
@@ -476,7 +438,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             { threadId, includeTurns: false },
             forkOptions,
           );
-          assertThreadMayBeForked(current, threadId);
+          assertThreadIdle(current, threadId, "fork");
         }
         const response = await request(
           admissionConfig,

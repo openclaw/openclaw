@@ -22,6 +22,7 @@ import { preserveCreationStamp } from "../config/sessions/session-entry-provenan
 import { serializeJsonlLines } from "../config/sessions/transcript-jsonl.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveTargetSqliteOptions } from "../infra/session-sqlite-migration-readers.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
@@ -33,7 +34,6 @@ import {
   type CanonicalSessionCandidate,
   type CanonicalSessionCandidateFact,
 } from "./doctor-session-canonical-candidates.js";
-import { resolveTargetSqliteOptions } from "./doctor-session-sqlite-readers.js";
 
 function createCanonicalRepairRemoval(
   candidate: CanonicalSessionCandidate,
@@ -53,7 +53,10 @@ function createCanonicalRepairRemoval(
   } satisfies SessionEntryLifecycleRemoval;
   return candidate.rawEntryJson === undefined
     ? removal
-    : Object.assign(removal, { expectedRawEntryJson: candidate.rawEntryJson });
+    : Object.assign(removal, {
+        expectedRawEntryJson: candidate.rawEntryJson,
+        expectedSnapshotRevision: candidate.rawSnapshotRevision,
+      });
 }
 
 export type CanonicalSessionKeyRepairReport = {
@@ -93,17 +96,23 @@ function hydrateCanonicalSessionCandidate(
     const { sessionKey: _invalidSessionKey, ...forkProvenance } = entry.forkSource;
     entry.forkSource = forkProvenance as typeof entry.forkSource;
   }
-  return {
+  const candidate = {
     agentId: fact.agentId,
     canonicalKey: fact.canonicalKey,
     entry,
     expectedEntry: loaded.entry,
     ownerEvidenceOnly: fact.ownerEvidenceOnly,
-    ...(loaded.rawEntryJson !== undefined ? { rawEntryJson: loaded.rawEntryJson } : {}),
     sessionKey: fact.sessionKey,
     sqlitePath: fact.sqlitePath,
     storePath: fact.storePath,
   };
+  return loaded.rawEntryJson !== undefined
+    ? {
+        ...candidate,
+        rawEntryJson: loaded.rawEntryJson,
+        rawSnapshotRevision: loaded.rawSnapshotRevision,
+      }
+    : candidate;
 }
 
 function hydrateCanonicalSessionCandidates(

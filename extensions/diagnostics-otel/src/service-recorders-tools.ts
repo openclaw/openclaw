@@ -3,9 +3,12 @@ import {
   isInternalDiagnosticEventMetadata,
   normalizeDiagnosticValue,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { redactSensitiveText } from "../api.js";
-import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
-import { positiveFiniteNumber } from "./service-genai-attributes.js";
+import type {
+  DiagnosticEventMetadata,
+  DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import {
   assignOtelToolContentAttributes,
   assignOtelToolIdentityAttributes,
@@ -34,6 +37,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     telemetryExporterCounter,
     spanWithDuration,
     activeTrustedParentContext,
+    internalOrTrustedExplicitParentContext,
     exportedInternalOrTrustedContext,
     trackTrustedSpan,
     getTrackedInternalOrTrustedSpan,
@@ -199,7 +203,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       "openclaw.reason": normalizeDiagnosticValue(evt.reason, "none"),
     };
     payloadLargeCounter.add(1, attrs);
-    const bytes = positiveFiniteNumber(evt.bytes);
+    const bytes = asPositiveFiniteNumber(evt.bytes);
     if (bytes !== undefined) {
       payloadLargeBytesHistogram.record(bytes, attrs);
     }
@@ -342,6 +346,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
 
   const recordDiagnosticPhaseCompleted = (
     evt: Extract<DiagnosticEventPayload, { type: "diagnostic.phase.completed" }>,
+    metadata: DiagnosticEventMetadata,
   ) => {
     if (!tracesEnabled) {
       return;
@@ -361,6 +366,9 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     }
     const span = spanWithDuration("openclaw.diagnostic.phase", spanAttrs, evt.durationMs, {
       endTimeMs: evt.ts,
+      ...(metadata.trusted
+        ? { parentContext: internalOrTrustedExplicitParentContext(evt, metadata) ?? ROOT_CONTEXT }
+        : {}),
     });
     span.end(evt.ts);
   };

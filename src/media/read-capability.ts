@@ -62,10 +62,7 @@ function isAgentScopedMediaReadAllowedByToolPolicy(
     senderUsername: params.requesterSenderUsername,
     senderE164: params.requesterSenderE164,
   });
-  if (!isToolAllowedByPolicies("read", [groupPolicy, senderPolicy])) {
-    return false;
-  }
-  return true;
+  return isToolAllowedByPolicies("read", [groupPolicy, senderPolicy]);
 }
 
 /** Creates a host reader bound to the agent workspace and configured local-file safety checks. */
@@ -139,18 +136,17 @@ function createWorkspaceAwareMediaReadFile(params: {
   }
   return createBoundedOutboundMediaReadFile(async (filePath, options) => {
     const resolvedPath = path.resolve(filePath);
-    if (workspaceLocalRoots.some((root) => isPathInside(path.resolve(root), resolvedPath))) {
-      return await readOutboundMediaFile(workspaceReadFile, filePath, {
-        maxBytes: options?.maxBytes ?? Number.MAX_SAFE_INTEGER,
-      });
-    }
-    if (params.hostReadFile) {
-      return await readOutboundMediaFile(params.hostReadFile, filePath, {
-        maxBytes: options?.maxBytes ?? Number.MAX_SAFE_INTEGER,
-      });
+    const readFile = workspaceLocalRoots.some((root) =>
+      isPathInside(path.resolve(root), resolvedPath),
+    )
+      ? workspaceReadFile
+      : params.hostReadFile;
+    const maxBytes = options?.maxBytes ?? Number.MAX_SAFE_INTEGER;
+    if (readFile) {
+      return await readOutboundMediaFile(readFile, filePath, { maxBytes });
     }
     return await readLocalMediaFile(filePath, params.localRoots, {
-      maxBytes: options?.maxBytes ?? Number.MAX_SAFE_INTEGER,
+      maxBytes,
       excludedRoots: params.excludedLocalRoots,
     });
   });

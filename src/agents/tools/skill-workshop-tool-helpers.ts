@@ -18,7 +18,7 @@ import type {
   SkillProposalStatus,
   SkillProposalSupportFileInput,
 } from "../../skills/workshop/types.js";
-import { readPositiveIntegerParam, readToolStringParam, ToolInputError } from "./common.js";
+import { readToolStringParam, ToolInputError } from "./common.js";
 import { textResult } from "./tool-results.js";
 
 export function assertAutonomousSkillSize(
@@ -42,18 +42,11 @@ export function assertAutonomousSkillSize(
     date: new Date().toISOString(),
     maxSkillBytes,
   });
-  if (!draft.ok) {
-    throw draft.error.cause;
-  }
-  const resultChars = stripProposalFrontmatterForSkill(draft.value.content).length;
+  const resultChars = stripProposalFrontmatterForSkill(draft.content).length;
   const sizeError = autonomousSkillSizeError(name, currentContent?.length ?? 0, resultChars);
   if (sizeError) {
     throw new ToolInputError(sizeError);
   }
-}
-
-export function skillWorkshopAgentEventActor(agentId?: string) {
-  return { type: "agent" as const, ...(agentId ? { id: agentId } : {}) };
 }
 
 export function proposalMutationText(action: string, record: SkillProposalRecord): string {
@@ -110,13 +103,6 @@ export function proposalResult(
   };
 }
 
-export function readLifecycleProposalIdParam(params: Record<string, unknown>): string {
-  return readToolStringParam(params, "proposal_id", {
-    required: true,
-    label: "proposal_id",
-  });
-}
-
 export async function readProposalForInspect(
   params: Record<string, unknown>,
   workspaceDir: string,
@@ -149,14 +135,11 @@ export function readProposalStatusParam(
   if (!status) {
     return undefined;
   }
-  if (!(statuses as readonly string[]).includes(status)) {
+  const matchedStatus = statuses.find((candidate) => candidate === status);
+  if (!matchedStatus) {
     throw new ToolInputError(`status must be one of ${statuses.join(", ")}`);
   }
-  return status as SkillProposalStatus;
-}
-
-export function readListLimitParam(params: Record<string, unknown>): number {
-  return readPositiveIntegerParam(params, "limit") ?? 20;
+  return matchedStatus;
 }
 
 export function readSupportFilesParam(

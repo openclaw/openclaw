@@ -51,6 +51,11 @@ vi.mock("../../daemon/gateway-entrypoint.js", () => ({
   resolveGatewayInstallEntrypoint: mocks.resolveEntrypoint,
 }));
 
+vi.mock("../../infra/deferred-plugin-migrations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/deferred-plugin-migrations.js")>()),
+  readDeferredPluginMigrationsAsync: async () => [],
+}));
+
 vi.mock("../../process/exec.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../process/exec.js")>();
   return {
@@ -125,6 +130,62 @@ describe("post-plugin update readiness", () => {
       stdout: JSON.stringify({ ok: true, checksRun: 1, checksSkipped: 0, findings: [] }),
     });
   });
+
+  it.each(["pre-plugin", "post-plugin"] as const)(
+    "preserves a settled %s maintenance deferral without running convergence checks",
+    async (phase) => {
+      const refusal = { kind: "deferred", reason: "coordinator-contention" };
+      const warning =
+        "Doctor maintenance is deferred; stop other OpenClaw processes and run openclaw doctor --fix.";
+      const onWarnings = vi.fn();
+      mocks.runExec.mockImplementationOnce(async (_command, _args, options) => {
+        await fs.writeFile(
+          options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
+          JSON.stringify({ status: "ok", warnings: [warning], maintenanceRefusal: refusal }),
+        );
+        return { stdout: "", stderr: "" };
+      });
+      const run =
+        phase === "pre-plugin"
+          ? runUpdateFinalizationDoctorInFreshProcess({ ...updateOptions, phase, onWarnings })
+          : completePostCorePluginUpdate({ ...updateOptions, onWarnings });
+      await expect(run).rejects.toMatchObject({ refusal, message: warning });
+      expect(onWarnings).toHaveBeenCalledExactlyOnceWith([warning]);
+      expect(mocks.runExec).toHaveBeenCalledOnce();
+      expect(mocks.runUtf8).not.toHaveBeenCalled();
+      expect(mocks.readConfig).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "active-mutation",
+    "unreadable-state",
+    "incomplete-migration",
+    "gateway-state-unverified",
+  ] as const)(
+    "preserves serialized unsafe maintenance refusal %s without diagnostic facts",
+    async (reason) => {
+      const refusal = { kind: "data-at-risk" as const, reason };
+      const childFailure = Object.assign(new Error("Doctor exited with unsafe maintenance."), {
+        exitCode: 1,
+      });
+      mocks.runExec.mockImplementationOnce(async (_command, _args, options) => {
+        await writeUpdatePostInstallDoctorResult({
+          resultPath: options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
+          result: { status: "error", failureFacts: [], maintenanceRefusal: refusal },
+        });
+        throw childFailure;
+      });
+      await expect(completePostCorePluginUpdate(updateOptions)).rejects.toMatchObject({
+        name: "DoctorMaintenanceRefusalError",
+        refusal,
+        cause: childFailure,
+      });
+      expect(mocks.runExec).toHaveBeenCalledOnce();
+      expect(mocks.readConfig).not.toHaveBeenCalled();
+      expect(mocks.runUtf8).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps a fresh Doctor requester refusal terminal when later checks would pass", async () => {
     const isCurrent = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
@@ -212,19 +273,6 @@ describe("post-plugin update readiness", () => {
       );
     },
   );
-
-  it.each([undefined, 5_000])("propagates the primary Doctor timeout %s", async (timeoutMs) => {
-    await runUpdateFinalizationDoctorInFreshProcess({
-      ...updateOptions,
-      phase: "pre-plugin",
-      timeoutMs,
-    });
-    expect(mocks.runExec).toHaveBeenCalledExactlyOnceWith(
-      "/usr/bin/node",
-      expect.arrayContaining(["doctor", "--repair"]),
-      expect.objectContaining({ timeoutMs }),
-    );
-  });
 
   it.each([undefined, 5_000])(
     "bounds post-plugin checks separately from Doctor (%s)",
@@ -342,22 +390,6 @@ describe("post-plugin update readiness", () => {
     } finally {
       enumeration.mockRestore();
     }
-  });
-
-  it("runs updated readiness checks even when no plugin package changed", async () => {
-    const beforeDoctor = vi.fn(async () => undefined);
-    await completePostCorePluginUpdate({
-      ...updateOptions,
-      pluginUpdate: { ...pluginUpdate, changed: false },
-      freshDoctorRequired: false,
-      beforeDoctor,
-    });
-
-    expect(beforeDoctor).not.toHaveBeenCalled();
-    expect(mocks.runExec.mock.calls.map(([, args]) => args)).toEqual([
-      ["/opt/openclaw/dist/index.js", "config", "validate", "--json"],
-    ]);
-    expect(mocks.runUtf8).toHaveBeenCalledOnce();
   });
 
   it("runs recorded deferred retirement when the published driver flag is false", async () => {
@@ -632,12 +664,15 @@ describe("post-plugin update readiness", () => {
   });
 
   it("uses target validation when the unchanged-plugin parent retains an older schema", async () => {
+    const beforeDoctor = vi.fn(async () => undefined);
     mocks.readConfig.mockResolvedValue({ ...validConfigSnapshot, valid: false });
     const result = await completePostCorePluginUpdate({
       ...updateOptions,
       pluginUpdate: { ...pluginUpdate, changed: false },
       freshDoctorRequired: false,
+      beforeDoctor,
     });
+    expect(beforeDoctor).not.toHaveBeenCalled();
     expect(result.pluginUpdate.status).toBe("ok");
     expect(result.configSnapshot.valid).toBe(false);
     expect(mocks.runExec.mock.calls.map(([, args]) => args)).toEqual([

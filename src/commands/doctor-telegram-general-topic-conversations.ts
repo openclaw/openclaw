@@ -13,34 +13,18 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targe
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import { projectExistingAgentDatabaseTargets } from "../infra/session-sqlite-migration-readers.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+import type { Conversations } from "../state/openclaw-agent-db.generated.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
-import { projectExistingAgentDatabaseTargets } from "./doctor-session-sqlite-readers.js";
 
 const GENERAL_TOPIC_ID = "1";
 const LEGACY_GENERAL_TARGET = /^telegram:(-?\d+):topic:1$/u;
-
-type ConversationRow = {
-  account_id: string;
-  channel: string;
-  conversation_id: string;
-  created_at: number;
-  delivery_target: string;
-  kind: string;
-  label: string | null;
-  metadata_json: string | null;
-  native_channel_id: string | null;
-  native_direct_user_id: string | null;
-  parent_conversation_id: string | null;
-  peer_id: string;
-  thread_id: string | null;
-  updated_at: number;
-};
 
 type TelegramGeneralTopicConversationRepair = {
   agentId: string;
@@ -49,7 +33,7 @@ type TelegramGeneralTopicConversationRepair = {
   storePath: string;
 };
 
-function canonicalIdentity(row: ConversationRow) {
+function canonicalIdentity(row: Conversations) {
   const targetMatch = LEGACY_GENERAL_TARGET.exec(row.delivery_target);
   if (
     row.channel !== "telegram" ||
@@ -75,7 +59,7 @@ function canonicalIdentity(row: ConversationRow) {
   };
 }
 
-function listLegacyRows(database: import("node:sqlite").DatabaseSync): ConversationRow[] {
+function listLegacyRows(database: import("node:sqlite").DatabaseSync): Conversations[] {
   const db = getSessionKysely(database);
   return executeSqliteQuerySync(
     database,

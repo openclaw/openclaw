@@ -1,21 +1,23 @@
-// Control UI view renders agents screen content.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import type { AgentIdentityResult, AgentsListResult, ModelCatalogEntry } from "../../api/types.ts";
+import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { handleCopyButton } from "../../components/copy-button.ts";
-import type { DecisionModelEntry } from "../../components/decision-model-picker.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import {
+  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsNavRow,
   renderSettingsSection,
 } from "../../components/settings-ui.ts";
 import type { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
-import { t } from "../../i18n/index.ts";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
 import "./memory/memory-panel.ts";
+import { t } from "../../i18n/index.ts";
 import { buildAgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel, AgentsState } from "../../lib/agents/index.ts";
 import type { ChannelsState } from "../../lib/channels/index.ts";
@@ -24,13 +26,17 @@ import {
   type RuntimeConfigState,
 } from "../../lib/config/config-state-model.ts";
 import type { CronState } from "../../lib/cron/types.ts";
+import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
 import type { AgentFilesViewState } from "./files.ts";
 import { renderAgentFiles } from "./panels-files.ts";
 import type { AgentIdentityDraft, IdentityAvatarLoader } from "./panels-overview.ts";
 import { renderAgentOverview } from "./panels-overview.ts";
+import { renderAgentSkills } from "./panels-skills.ts";
 import { renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
-import { renderAgentTools, renderAgentSkills } from "./panels-tools-skills.ts";
+import { renderAgentTools } from "./panels-tools-skills.ts";
 import type { AgentSkillsState } from "./skills.ts";
+
+const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
 
 type AgentsProps = {
   access: {
@@ -77,6 +83,7 @@ type AgentsProps = {
   agentIdentityLoading: boolean;
   agentIdentityError: string | null;
   agentIdentityById: Record<string, AgentIdentityResult>;
+  applicationConfig?: ApplicationConfigCapability;
   identityDraft: AgentIdentityDraft;
   identityAvatarLoader: IdentityAvatarLoader;
   identitySaving: boolean;
@@ -98,8 +105,7 @@ type AgentsProps = {
   onOpenGitHubConnections: () => void;
   runtimeSessionKey: string;
   runtimeSessionMatchesSelectedAgent: boolean;
-  modelCatalog: ModelCatalogEntry[];
-  decisionModels: DecisionModelEntry[];
+  modelCatalog: ModelCatalogPresentation;
   modelCatalogStatus: PanelRefreshStatus;
   pinnedAgentIds: readonly string[];
   onTogglePinnedAgent: (agentId: string) => void;
@@ -138,6 +144,19 @@ type AgentsProps = {
   onAgentSkillsDisableAll: (agentId: string) => void;
   onSetDefault: (agentId: string) => void;
 };
+
+export function renderAgentsPageHeader() {
+  return html`
+    <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
+      <div>
+        <div class="page-title">${titleForRoute("agents")}</div>
+        <div class="page-subtitle">
+          ${subtitleForRoute("agents")} ${renderLearnMoreLink(AGENTS_DOCS_URL)}
+        </div>
+      </div>
+    </section>
+  `;
+}
 
 export function renderAgents(props: AgentsProps) {
   const config = currentConfigObject(props.config);
@@ -281,6 +300,7 @@ export function renderAgents(props: AgentsProps) {
                       ? keyed(
                           selectedAgent.id,
                           renderAgentOverview({
+                            applicationConfig: props.applicationConfig,
                             agent: selectedAgent,
                             basePath: props.basePath,
                             defaultId,
@@ -298,8 +318,10 @@ export function renderAgents(props: AgentsProps) {
                             configLoading: props.config.configLoading,
                             configSaving: props.config.configSaving,
                             configDirty: props.config.configFormDirty,
-                            modelCatalog: props.modelCatalog,
-                            decisionModels: props.decisionModels,
+                            modelCatalog: props.modelCatalog.models,
+                            decisionModels: props.modelCatalog.decisionModels ?? [],
+                            modelSelectionPolicy: props.modelCatalog.modelSelectionPolicy,
+                            modelCatalogRetired: props.modelCatalog.retired,
                             modelCatalogStatus: props.modelCatalogStatus,
                             onConfigReload: props.onConfigReload,
                             onConfigSave: props.onConfigSave,

@@ -137,7 +137,7 @@ struct WatchApprovalTransportSourceGuardTests {
         let parser = try Self.extract(
             receiverSource,
             from: "private static func parseExecApprovalSnapshotPayload(",
-            to: "private static func parseAppSnapshotPayload(")
+            to: "private static func parseChatCompletionPayload(")
 
         #expect(parser.contains("guard let rawApprovals = payload[\"approvals\"] as? [Any]"))
         #expect(parser.contains("guard let approval = Self.parseExecApprovalItem(item) else { return nil }"))
@@ -153,8 +153,7 @@ struct WatchApprovalTransportSourceGuardTests {
             to: "private static func parseExecApprovalExpiredPayload(")
 
         #expect(parser.contains(
-            "WatchExecApprovalResolvedMessage.parseTransportOutcome(payload[\"outcome\"])"))
-        #expect(parser.contains("outcome: outcome"))
+            "outcome: WatchExecApprovalResolvedMessage.parseTransportOutcome(payload[\"outcome\"])"))
     }
 
     @Test func `watch reuses exact compound identifier policy`() throws {

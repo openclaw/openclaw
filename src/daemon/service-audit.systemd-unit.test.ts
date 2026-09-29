@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import "./test-helpers/service-audit-mocks.js";
 import { auditGatewayServiceConfig, SERVICE_AUDIT_CODES } from "./service-audit.js";
 import {
@@ -39,9 +39,25 @@ async function writeSystemdUnitForAudit(
 }
 
 describe("auditGatewayServiceConfig systemd unit content", () => {
-  beforeEach(() => {
+  let home: string;
+  beforeEach(async () => {
     resetServiceAuditMocks();
+    home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-"));
   });
+  afterEach(async () => {
+    await fs.rm(home, { recursive: true, force: true });
+  });
+
+  function auditUnit() {
+    return auditGatewayServiceConfig({
+      env: { HOME: home },
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+  }
 
   it.each([
     {
@@ -126,43 +142,38 @@ describe("auditGatewayServiceConfig systemd unit content", () => {
       expected: true,
     },
   ])("respects systemd manager authority: $name", async ({ unit, manager, code, expected }) => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-manager-"));
-    try {
-      const unitName = "openclaw-audit.service";
-      const env = { HOME: home, OPENCLAW_SYSTEMD_UNIT: unitName };
-      await writeSystemdUnitForAudit(home, unit, unitName);
-      execSystemctlUserMock.mockResolvedValueOnce({
-        stdout: manager.join("\n"),
-        stderr: "",
-        code: 0,
-        termination: "exit",
-      });
+    const unitName = "openclaw-audit.service";
+    const env = { HOME: home, OPENCLAW_SYSTEMD_UNIT: unitName };
+    await writeSystemdUnitForAudit(home, unit, unitName);
+    execSystemctlUserMock.mockResolvedValueOnce({
+      stdout: manager.join("\n"),
+      stderr: "",
+      code: 0,
+      termination: "exit",
+    });
 
-      const audit = await auditGatewayServiceConfig({
-        env,
-        platform: "linux",
-        timeoutMs: 321,
-        command: {
-          programArguments: ["/usr/bin/node", "gateway"],
-          environment: { PATH: "/usr/bin:/bin" },
-        },
-      });
+    const audit = await auditGatewayServiceConfig({
+      env,
+      platform: "linux",
+      timeoutMs: 321,
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
 
-      expect(hasIssue(audit, code)).toBe(expected);
-      expect(execSystemctlUserMock).toHaveBeenCalledExactlyOnceWith(
-        env,
-        [
-          "show",
-          unitName,
-          "--no-page",
-          "--property",
-          "After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec",
-        ],
-        321,
-      );
-    } finally {
-      await fs.rm(home, { recursive: true, force: true });
-    }
+    expect(hasIssue(audit, code)).toBe(expected);
+    expect(execSystemctlUserMock).toHaveBeenCalledExactlyOnceWith(
+      env,
+      [
+        "show",
+        unitName,
+        "--no-page",
+        "--property",
+        "After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec",
+      ],
+      321,
+    );
   });
 
   it.each([
@@ -194,86 +205,69 @@ describe("auditGatewayServiceConfig systemd unit content", () => {
   ])(
     "does not recommend systemd content repairs when manager LoadState is $name",
     async ({ manager }) => {
-      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-unloaded-"));
-      try {
-        const unitName = "openclaw-audit.service";
-        const env = { HOME: home, OPENCLAW_SYSTEMD_UNIT: unitName };
-        await writeSystemdUnitForAudit(
-          home,
-          // Keep the on-disk unit incomplete so a file fallback would still
-          // emit content repairs. Masked/not-found manager defaults must not.
-          ["KillMode=control-group"],
+      const unitName = "openclaw-audit.service";
+      const env = { HOME: home, OPENCLAW_SYSTEMD_UNIT: unitName };
+      await writeSystemdUnitForAudit(
+        home,
+        // Keep the on-disk unit incomplete so a file fallback would still
+        // emit content repairs. Masked/not-found manager defaults must not.
+        ["KillMode=control-group"],
+        unitName,
+      );
+      execSystemctlUserMock.mockResolvedValueOnce({
+        stdout: manager.join("\n"),
+        stderr: "",
+        code: 0,
+        termination: "exit",
+      });
+
+      const audit = await auditGatewayServiceConfig({
+        env,
+        platform: "linux",
+        timeoutMs: 321,
+        command: {
+          programArguments: ["/usr/bin/node", "gateway"],
+          environment: { PATH: "/usr/bin:/bin" },
+        },
+      });
+
+      expect(audit.issues.filter((issue) => issue.code.startsWith("systemd-"))).toEqual([]);
+      expect(execSystemctlUserMock).toHaveBeenCalledExactlyOnceWith(
+        env,
+        [
+          "show",
           unitName,
-        );
-        execSystemctlUserMock.mockResolvedValueOnce({
-          stdout: manager.join("\n"),
-          stderr: "",
-          code: 0,
-          termination: "exit",
-        });
-
-        const audit = await auditGatewayServiceConfig({
-          env,
-          platform: "linux",
-          timeoutMs: 321,
-          command: {
-            programArguments: ["/usr/bin/node", "gateway"],
-            environment: { PATH: "/usr/bin:/bin" },
-          },
-        });
-
-        expect(audit.issues.filter((issue) => issue.code.startsWith("systemd-"))).toEqual([]);
-        expect(execSystemctlUserMock).toHaveBeenCalledExactlyOnceWith(
-          env,
-          [
-            "show",
-            unitName,
-            "--no-page",
-            "--property",
-            "After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec",
-          ],
-          321,
-        );
-      } finally {
-        await fs.rm(home, { recursive: true, force: true });
-      }
+          "--no-page",
+          "--property",
+          "After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec",
+        ],
+        321,
+      );
     },
   );
 
   it.each(["process", "none", "control-group", ""])(
     `warns when KillMode is %s in explicit unit file`,
     async (killMode) => {
-      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
-      try {
-        for (const continuation of SYSTEMD_CONTINUATIONS) {
-          await writeSystemdUnitForAudit(home, [
-            "After=network-online.target",
-            "Wants=network-online.target",
-            "RestartSec=5",
-            `KillMode=${continuation}${killMode}`,
-          ]);
+      for (const continuation of SYSTEMD_CONTINUATIONS) {
+        await writeSystemdUnitForAudit(home, [
+          "After=network-online.target",
+          "Wants=network-online.target",
+          "RestartSec=5",
+          `KillMode=${continuation}${killMode}`,
+        ]);
 
-          const audit = await auditGatewayServiceConfig({
-            env: { HOME: home },
-            platform: "linux",
-            command: {
-              programArguments: ["/usr/bin/node", "gateway"],
-              environment: { PATH: "/usr/bin:/bin" },
-            },
-          });
-          const code =
-            killMode === "process" || killMode === "none"
-              ? SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone
-              : SERVICE_AUDIT_CODES.systemdKillModeControlGroup;
-          expect(hasIssue(audit, code)).toBe(true);
-          expect(execSystemctlUserMock).toHaveBeenCalledWith(
-            { HOME: home },
-            expect.any(Array),
-            10_000,
-          );
-        }
-      } finally {
-        await fs.rm(home, { recursive: true, force: true });
+        const audit = await auditUnit();
+        const code =
+          killMode === "process" || killMode === "none"
+            ? SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone
+            : SERVICE_AUDIT_CODES.systemdKillModeControlGroup;
+        expect(hasIssue(audit, code)).toBe(true);
+        expect(execSystemctlUserMock).toHaveBeenCalledWith(
+          { HOME: home },
+          expect.any(Array),
+          10_000,
+        );
       }
     },
   );
@@ -281,27 +275,15 @@ describe("auditGatewayServiceConfig systemd unit content", () => {
   it.each(SYSTEMD_CONTINUATIONS)(
     "accepts resilient unit settings with continuation %j when the manager is unavailable",
     async (continuation) => {
-      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-settings-"));
-      try {
-        await writeSystemdUnitForAudit(home, [
-          `After=basic.target ${continuation}network-online.target`,
-          `Wants=basic.target ${continuation}network-online.target`,
-          `RestartSec=${continuation}5s`,
-          `KillMode=${continuation}mixed`,
-          `TimeoutStopSec=${continuation}330`,
-        ]);
-        const audit = await auditGatewayServiceConfig({
-          env: { HOME: home },
-          platform: "linux",
-          command: {
-            programArguments: ["/usr/bin/node", "gateway"],
-            environment: { PATH: "/usr/bin:/bin" },
-          },
-        });
-        expect(audit.issues.filter((issue) => issue.code.startsWith("systemd-"))).toEqual([]);
-      } finally {
-        await fs.rm(home, { recursive: true, force: true });
-      }
+      await writeSystemdUnitForAudit(home, [
+        `After=basic.target ${continuation}network-online.target`,
+        `Wants=basic.target ${continuation}network-online.target`,
+        `RestartSec=${continuation}5s`,
+        `KillMode=${continuation}mixed`,
+        `TimeoutStopSec=${continuation}330`,
+      ]);
+      const audit = await auditUnit();
+      expect(audit.issues.filter((issue) => issue.code.startsWith("systemd-"))).toEqual([]);
     },
   );
 
@@ -320,71 +302,54 @@ describe("auditGatewayServiceConfig systemd unit content", () => {
       expectedDetail: "mode: 644",
     },
   ])("flags systemd unit backups with $name without revealing values", async (fixture) => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-backup-"));
-    try {
-      await writeSystemdUnitForAudit(home, [
-        "After=network-online.target",
-        "Wants=network-online.target",
-        "RestartSec=5",
-        "KillMode=control-group",
-      ]);
-      const backupPath = path.join(
-        home,
-        ".config",
-        "systemd",
-        "user",
-        "openclaw-gateway.service.bak",
-      );
-      await fs.writeFile(backupPath, fixture.content, { mode: fixture.mode });
-      await fs.chmod(backupPath, fixture.mode);
+    await writeSystemdUnitForAudit(home, [
+      "After=network-online.target",
+      "Wants=network-online.target",
+      "RestartSec=5",
+      "KillMode=control-group",
+    ]);
+    const backupPath = path.join(
+      home,
+      ".config",
+      "systemd",
+      "user",
+      "openclaw-gateway.service.bak",
+    );
+    await fs.writeFile(backupPath, fixture.content, { mode: fixture.mode });
+    await fs.chmod(backupPath, fixture.mode);
 
-      const audit = await auditGatewayServiceConfig({
-        env: { HOME: home },
-        platform: "linux",
-        command: {
-          programArguments: ["/usr/bin/node", "gateway"],
-          environment: { PATH: "/usr/bin:/bin" },
-        },
-      });
-      const issue = audit.issues.find(
-        (entry) => entry.code === SERVICE_AUDIT_CODES.systemdUnitBackupUnsafe,
-      );
-      expect(issue).toMatchObject({
-        level: "recommended",
-        detail: expect.stringContaining(fixture.expectedDetail),
-      });
-      expect(JSON.stringify(issue)).not.toContain("audit-token");
-      expect(JSON.stringify(issue)).not.toContain("audit-password");
-    } finally {
-      await fs.rm(home, { recursive: true, force: true });
-    }
+    const audit = await auditUnit();
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.systemdUnitBackupUnsafe,
+    );
+    expect(issue).toMatchObject({
+      level: "recommended",
+      detail: expect.stringContaining(fixture.expectedDetail),
+    });
+    expect(JSON.stringify(issue)).not.toContain("audit-token");
+    expect(JSON.stringify(issue)).not.toContain("audit-password");
   });
 
   it("audits an orphaned systemd backup without an active command", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-orphan-"));
-    try {
-      const backupPath = path.join(
-        home,
-        ".config",
-        "systemd",
-        "user",
-        "openclaw-gateway.service.bak",
-      );
-      await fs.mkdir(path.dirname(backupPath), { recursive: true });
-      await fs.writeFile(backupPath, "Environment=OPENCLAW_GATEWAY_TOKEN=orphan-token\n", {
-        mode: 0o600,
-      });
+    const backupPath = path.join(
+      home,
+      ".config",
+      "systemd",
+      "user",
+      "openclaw-gateway.service.bak",
+    );
+    await fs.mkdir(path.dirname(backupPath), { recursive: true });
+    await fs.writeFile(backupPath, "Environment=OPENCLAW_GATEWAY_TOKEN=orphan-token\n", {
+      mode: 0o600,
+    });
 
-      const audit = await auditGatewayServiceConfig({
-        env: { HOME: home },
-        platform: "linux",
-        command: null,
-      });
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: home },
+      platform: "linux",
+      command: null,
+    });
 
-      expect(hasIssue(audit, SERVICE_AUDIT_CODES.systemdUnitBackupUnsafe)).toBe(true);
-      expect(JSON.stringify(audit.issues)).not.toContain("orphan-token");
-    } finally {
-      await fs.rm(home, { recursive: true, force: true });
-    }
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.systemdUnitBackupUnsafe)).toBe(true);
+    expect(JSON.stringify(audit.issues)).not.toContain("orphan-token");
   });
 });

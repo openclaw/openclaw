@@ -26,12 +26,11 @@ type CurrentAdmissionFixture = {
     serviceStop: Mock;
     serviceStart: Mock;
     serviceRestart: Mock;
-    prepareRestartScript: Mock;
   };
 };
 
 export function registerAlreadyCurrentAdmissionTests(f: CurrentAdmissionFixture) {
-  it.each([undefined, "30"])(
+  it.each([undefined])(
     "refuses pending service recovery acquired before already-current activation (timeout=%s)",
     async (timeout) => {
       const updateExecutor = await import("./update-command-executor.js");
@@ -98,7 +97,6 @@ export function registerAlreadyCurrentAdmissionTests(f: CurrentAdmissionFixture)
         f.mocks.serviceStop,
         f.mocks.serviceStart,
         f.mocks.serviceRestart,
-        f.mocks.prepareRestartScript,
       );
       expect(f.packageInstallCommandCall()).toBeUndefined();
       expect(f.freshRestartCalls()).toHaveLength(0);

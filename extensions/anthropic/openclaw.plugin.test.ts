@@ -1,48 +1,7 @@
 // Anthropic tests cover provider manifest model catalog behavior.
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-type AnthropicCatalogModel = {
-  id?: string;
-  name?: string;
-  reasoning?: boolean;
-  input?: string[];
-  mediaInput?: {
-    image?: {
-      maxSidePx?: number;
-      preferredSidePx?: number;
-      tokenMode?: string;
-    };
-  };
-  contextWindow?: number;
-  contextWindows?: Array<{ id: string; label: string; contextWindow: number }>;
-  contextWindowDefault?: string;
-  maxTokens?: number;
-  cost?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-  };
-  thinkingLevelMap?: Record<string, string | null>;
-  status?: string;
-  replacedBy?: string;
-  compat?: { codeMode?: string };
-};
-
-type AnthropicManifest = {
-  modelCatalog?: {
-    providers?: {
-      anthropic?: { models?: AnthropicCatalogModel[] };
-      "claude-cli"?: { models?: AnthropicCatalogModel[] };
-    };
-    discovery?: Record<string, string>;
-  };
-};
-
-const manifest = JSON.parse(
-  readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
-) as AnthropicManifest;
 const selectableContextWindowMetadata = {
   contextWindows: [
     { id: "200k", label: "200K", contextWindow: 200_000 },
@@ -64,10 +23,22 @@ describe("Anthropic plugin manifest", () => {
 
   it.each([
     {
+      id: "claude-opus-5-5",
+      name: "Claude Opus 5.5",
+      cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
+      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+    },
+    {
       id: "claude-opus-5",
       name: "Claude Opus 5",
       cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
       thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    },
+    {
+      id: "claude-sonnet-5-5",
+      name: "Claude Sonnet 5.5",
+      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
     },
     {
       id: "claude-sonnet-5",

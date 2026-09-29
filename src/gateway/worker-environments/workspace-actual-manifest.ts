@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { sha256File } from "../../infra/directory-durability.js";
-import { readFileWindowFully } from "../../infra/file-read.js";
 import {
   FsSafeError,
   isPathInside,
@@ -276,13 +276,7 @@ export async function readActualWorkspaceManifestImpl(params: {
       scanSignal,
     );
     if (snapshot.type === "file") {
-      addEntry({
-        path: relative,
-        type: "file",
-        mode: snapshot.mode,
-        size: snapshot.size,
-        sha256: snapshot.sha256,
-      });
+      addEntry({ path: relative, ...snapshot });
       return;
     }
     throw new Error("Gateway workspace manifest exceeds its eligible byte limit");

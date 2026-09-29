@@ -2,6 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import {
   sendInvalidRequest,
   sendJson,
@@ -18,7 +19,7 @@ import {
   resolveAgentIdFromModel,
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
-import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { READ_SCOPE } from "./operator-scopes.js";
 
 type OpenAiModelObject = {
   id: string;
@@ -51,17 +52,13 @@ function loadAgentModelIds(): string[] {
   return Array.from(ids);
 }
 
-function resolveRequestPath(req: IncomingMessage): string {
-  return new URL(req.url ?? "/", "http://localhost").pathname;
-}
-
 /** Handle OpenAI-compatible model list/detail requests, returning false for unrelated paths. */
 export async function handleOpenAiModelsHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts: GatewayHttpRequestAuthOptions,
 ): Promise<boolean> {
-  const requestPath = resolveRequestPath(req);
+  const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
   if (requestPath !== "/v1/models" && !requestPath.startsWith("/v1/models/")) {
     return false;
   }
@@ -81,9 +78,9 @@ export async function handleOpenAiModelsHttpRequest(
   }
 
   const requestedScopes = resolveSharedSecretHttpOperatorScopes(req, requestAuth);
-  const scopeAuth = authorizeOperatorScopesForMethod("models.list", requestedScopes);
-  if (!scopeAuth.allowed) {
-    sendMissingScopeForbidden(res, scopeAuth.missingScope);
+  // The compatibility catalog exposes global agent targets and keeps its general read floor.
+  if (!operatorScopeSatisfied(READ_SCOPE, requestedScopes)) {
+    sendMissingScopeForbidden(res, READ_SCOPE);
     return true;
   }
 
@@ -116,21 +113,14 @@ export async function handleOpenAiModelsHttpRequest(
   }
 
   const normalizedModelId = decodedId.trim().toLowerCase();
+  let configured = true;
   if (normalizedModelId !== OPENCLAW_MODEL_ID && normalizedModelId !== OPENCLAW_DEFAULT_MODEL_ID) {
     const cfg = getRuntimeConfig();
     const agentId = resolveAgentIdFromModel(decodedId, cfg);
-    if (!agentId || !listAgentIds(cfg).includes(agentId)) {
-      sendJson(res, 404, {
-        error: {
-          message: `Model '${decodedId}' not found.`,
-          type: "invalid_request_error",
-        },
-      });
-      return true;
-    }
+    configured = Boolean(agentId && listAgentIds(cfg).includes(agentId));
   }
 
-  if (!ids.includes(decodedId)) {
+  if (!configured || !ids.includes(decodedId)) {
     sendJson(res, 404, {
       error: {
         message: `Model '${decodedId}' not found.`,

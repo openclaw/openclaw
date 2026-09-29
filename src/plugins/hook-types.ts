@@ -1,4 +1,5 @@
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import type { NormalizedUsage } from "../agents/usage.js";
 import type {
   GetReplyOptions,
   SourceReplyDeliveryMode,
@@ -55,6 +56,7 @@ import type {
   PluginHeartbeatPromptContributionEvent,
   PluginHeartbeatPromptContributionResult,
 } from "./host-hook-turn-types.js";
+import type { SkillInstallSpecMetadata } from "./install-security-scan.types.js";
 
 export type {
   PluginHookBeforeModelResolveAttachment,
@@ -102,50 +104,6 @@ export type {
   PluginHookSkillProposalKind,
 } from "./hook-skill.types.js";
 
-export type PluginHookName =
-  | "before_model_resolve"
-  | "agent_turn_prepare"
-  | "before_prompt_build"
-  | "before_agent_reply"
-  | "model_call_started"
-  | "model_call_ended"
-  | "llm_input"
-  | "llm_output"
-  | "before_agent_finalize"
-  | "agent_end"
-  | "before_compaction"
-  | "after_compaction"
-  | "before_reset"
-  | "inbound_claim"
-  | "channel_pairing_requested"
-  | "message_received"
-  | "message_sending"
-  | "reply_payload_sending"
-  | "message_sent"
-  | "before_tool_call"
-  | "after_tool_call"
-  | "tool_result_persist"
-  | "before_message_write"
-  | "session_start"
-  | "session_end"
-  | "subagent_delivery_target"
-  | "subagent_spawned"
-  | "subagent_progress"
-  | "subagent_ended"
-  | "gateway_start"
-  | "gateway_stop"
-  | "heartbeat_prompt_contribution"
-  | "cron_reconciled"
-  | "cron_changed"
-  | "skill_proposal_evaluate"
-  | "skill_proposal_changed"
-  | "skill_changed"
-  | "before_dispatch"
-  | "reply_dispatch"
-  | "before_install"
-  | "before_agent_run"
-  | "resolve_exec_env";
-
 const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
   "agent_turn_prepare",
@@ -189,12 +147,9 @@ const PLUGIN_HOOK_NAMES = [
   "before_install",
   "before_agent_run",
   "resolve_exec_env",
-] as const satisfies readonly PluginHookName[];
+] as const;
 
-type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
-type AssertAllPluginHookNamesListed = MissingPluginHookNames extends never ? true : never;
-const assertAllPluginHookNamesListed: AssertAllPluginHookNamesListed = true;
-void assertAllPluginHookNamesListed;
+export type PluginHookName = (typeof PLUGIN_HOOK_NAMES)[number];
 
 type PluginHookChannelPairingRequestedEvent = {
   /** Channel that created the pending pairing request. */
@@ -302,7 +257,21 @@ export type PluginHookToolAuthority = {
   assertActive(): void;
 };
 
-export type PluginHookAgentContext = {
+type PluginHookContextWindow = {
+  /** Resolved effective context-token budget after model/config/agent caps. */
+  contextTokenBudget?: number;
+  /** Source that supplied the resolved context-token budget. */
+  contextWindowSource?: PluginHookContextWindowSource;
+  /** Native/configured reference window when a lower cap wins. */
+  contextWindowReferenceTokens?: number;
+};
+
+type PluginHookUsage = Pick<
+  NormalizedUsage,
+  "input" | "output" | "cacheRead" | "cacheWrite" | "total"
+>;
+
+export type PluginHookAgentContext = PluginHookContextWindow & {
   runId?: string;
   jobId?: string;
   trace?: DiagnosticTraceContext;
@@ -330,12 +299,6 @@ export type PluginHookAgentContext = {
    * supply a classification; absence does not establish human origin.
    */
   inputProvenance?: InputProvenance;
-  /** Resolved effective context-token budget after model/config/agent caps. */
-  contextTokenBudget?: number;
-  /** Source that supplied the resolved context-token budget. */
-  contextWindowSource?: PluginHookContextWindowSource;
-  /** Native/configured reference window when a lower cap wins. */
-  contextWindowReferenceTokens?: number;
   /**
    * @deprecated Core does not populate cross-app sender ids. Channel plugins
    * should expose channel-specific identities by augmenting `channelContext.sender`.
@@ -380,7 +343,7 @@ export type PluginHookLlmInputEvent = {
   tools?: unknown[];
 };
 
-type PluginHookModelCallBaseEvent = {
+type PluginHookModelCallBaseEvent = PluginHookContextWindow & {
   runId: string;
   callId: string;
   sessionKey?: string;
@@ -389,12 +352,6 @@ type PluginHookModelCallBaseEvent = {
   model: string;
   api?: string;
   transport?: string;
-  /** Resolved effective context-token budget after model/config/agent caps. */
-  contextTokenBudget?: number;
-  /** Source that supplied the resolved context-token budget. */
-  contextWindowSource?: PluginHookContextWindowSource;
-  /** Native/configured reference window when a lower cap wins. */
-  contextWindowReferenceTokens?: number;
 };
 
 export type PluginHookModelCallStartedEvent = PluginHookModelCallBaseEvent;
@@ -410,17 +367,11 @@ export type PluginHookModelCallEndedEvent = PluginHookModelCallBaseEvent & {
   upstreamRequestIdHash?: string;
 };
 
-export type PluginHookLlmOutputEvent = {
+export type PluginHookLlmOutputEvent = PluginHookContextWindow & {
   runId: string;
   sessionId: string;
   provider: string;
   model: string;
-  /** Resolved effective context-token budget after model/config/agent caps. */
-  contextTokenBudget?: number;
-  /** Source that supplied the resolved context-token budget. */
-  contextWindowSource?: PluginHookContextWindowSource;
-  /** Native/configured reference window when a lower cap wins. */
-  contextWindowReferenceTokens?: number;
   /**
    * Fully resolved provider/model ref used for the call.
    *
@@ -438,13 +389,7 @@ export type PluginHookLlmOutputEvent = {
   prompt?: string;
   assistantTexts: string[];
   lastAssistant?: unknown;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
+  usage?: PluginHookUsage;
   /**
    * Requested reasoning/think effort for this call (provider think level, e.g.
    * "off" | "low" | "medium" | "high"). Lets a passive footer show the mode the
@@ -651,26 +596,14 @@ export type PluginHookReplyUsageState = {
    * back to the aggregate prompt total, which is correct for single-call turns).
    */
   contextUsedTokens?: number;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
+  usage?: PluginHookUsage;
   /**
    * Usage from the FINAL model call of the turn only — vs `usage`, which is the
    * turn aggregate summed across every tool-loop call. Lets a footer render the
    * last exchange's i/o + cache instead of the whole turn. Absent on harnesses
    * that don't report per-call usage.
    */
-  lastUsage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
+  lastUsage?: PluginHookUsage;
 };
 
 export type PluginHookReplyPayloadSendingEvent = {
@@ -959,26 +892,9 @@ export type PluginHookBeforeInstallBuiltinScan = {
   error?: string;
 };
 
-type PluginHookBeforeInstallSkillInstallSpec = {
-  id?: string;
-  kind: "brew" | "node" | "go" | "uv" | "download";
-  label?: string;
-  bins?: string[];
-  os?: string[];
-  formula?: string;
-  package?: string;
-  module?: string;
-  url?: string;
-  sha256?: string;
-  archive?: string;
-  extract?: boolean;
-  stripComponents?: number;
-  targetDir?: string;
-};
-
 export type PluginHookBeforeInstallSkill = {
   installId: string;
-  installSpec?: PluginHookBeforeInstallSkillInstallSpec;
+  installSpec?: SkillInstallSpecMetadata;
 };
 
 export type PluginHookBeforeInstallPlugin = {
@@ -1047,102 +963,82 @@ export type PluginHookResolveExecEnvEvent = {
 
 export type PluginHookResolveExecEnvContext = PluginHookAgentContext;
 
+type AsyncPluginHook<Event, Context, Result = void> = (
+  event: Event,
+  ctx: Context,
+) => Promise<Result | void> | Result | void;
+
 export type PluginHookHandlerMap = {
-  agent_turn_prepare: (
-    event: PluginAgentTurnPrepareEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<PluginAgentTurnPrepareResult | void> | PluginAgentTurnPrepareResult | void;
-  before_model_resolve: (
-    event: PluginHookBeforeModelResolveEvent,
-    ctx: PluginHookAgentContext,
-  ) =>
-    | Promise<PluginHookBeforeModelResolveResult | void>
-    | PluginHookBeforeModelResolveResult
-    | void;
-  before_prompt_build: (
-    event: PluginHookBeforePromptBuildEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<PluginHookBeforePromptBuildResult | void> | PluginHookBeforePromptBuildResult | void;
-  before_agent_reply: (
-    event: PluginHookBeforeAgentReplyEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<PluginHookBeforeAgentReplyResult | void> | PluginHookBeforeAgentReplyResult | void;
-  model_call_started: (
-    event: PluginHookModelCallStartedEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<void> | void;
-  model_call_ended: (
-    event: PluginHookModelCallEndedEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<void> | void;
-  llm_input: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
-  llm_output: (
-    event: PluginHookLlmOutputEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<void> | void;
-  before_agent_finalize: (
-    event: PluginHookBeforeAgentFinalizeEvent,
-    ctx: PluginHookAgentContext,
-  ) =>
-    | Promise<PluginHookBeforeAgentFinalizeResult | void>
-    | PluginHookBeforeAgentFinalizeResult
-    | void;
-  agent_end: (event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
-  before_compaction: (
-    event: PluginHookBeforeCompactionEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<void> | void;
-  after_compaction: (
-    event: PluginHookAfterCompactionEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<void> | void;
-  before_reset: (
-    event: PluginHookBeforeResetEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<void> | void;
-  inbound_claim: (
-    event: PluginHookInboundClaimEvent,
-    ctx: PluginHookInboundClaimContext,
-  ) => Promise<PluginHookInboundClaimResult | void> | PluginHookInboundClaimResult | void;
-  channel_pairing_requested: (
-    event: PluginHookChannelPairingRequestedEvent,
-    ctx: PluginHookChannelPairingContext,
-  ) => Promise<void> | void;
-  before_dispatch: (
-    event: PluginHookBeforeDispatchEvent,
-    ctx: PluginHookBeforeDispatchContext,
-  ) => Promise<PluginHookBeforeDispatchResult | void> | PluginHookBeforeDispatchResult | void;
-  reply_dispatch: (
-    event: PluginHookReplyDispatchEvent,
-    ctx: PluginHookReplyDispatchContext,
-  ) => Promise<PluginHookReplyDispatchResult | void> | PluginHookReplyDispatchResult | void;
-  reply_payload_sending: (
-    event: PluginHookReplyPayloadSendingEvent,
-    ctx: PluginHookReplyPayloadSendingContext,
-  ) =>
-    | Promise<PluginHookReplyPayloadSendingResult | void>
-    | PluginHookReplyPayloadSendingResult
-    | void;
-  message_received: (
-    event: PluginHookMessageReceivedEvent,
-    ctx: PluginHookMessageContext,
-  ) => Promise<void> | void;
-  message_sending: (
-    event: PluginHookMessageSendingEvent,
-    ctx: PluginHookMessageContext,
-  ) => Promise<PluginHookMessageSendingResult | void> | PluginHookMessageSendingResult | void;
-  message_sent: (
-    event: PluginHookMessageSentEvent,
-    ctx: PluginHookMessageContext,
-  ) => Promise<void> | void;
-  before_tool_call: (
-    event: PluginHookBeforeToolCallEvent,
-    ctx: PluginHookToolContext,
-  ) => Promise<PluginHookBeforeToolCallResult | void> | PluginHookBeforeToolCallResult | void;
-  after_tool_call: (
-    event: PluginHookAfterToolCallEvent,
-    ctx: PluginHookToolContext,
-  ) => Promise<void> | void;
+  agent_turn_prepare: AsyncPluginHook<
+    PluginAgentTurnPrepareEvent,
+    PluginHookAgentContext,
+    PluginAgentTurnPrepareResult
+  >;
+  before_model_resolve: AsyncPluginHook<
+    PluginHookBeforeModelResolveEvent,
+    PluginHookAgentContext,
+    PluginHookBeforeModelResolveResult
+  >;
+  before_prompt_build: AsyncPluginHook<
+    PluginHookBeforePromptBuildEvent,
+    PluginHookAgentContext,
+    PluginHookBeforePromptBuildResult
+  >;
+  before_agent_reply: AsyncPluginHook<
+    PluginHookBeforeAgentReplyEvent,
+    PluginHookAgentContext,
+    PluginHookBeforeAgentReplyResult
+  >;
+  model_call_started: AsyncPluginHook<PluginHookModelCallStartedEvent, PluginHookAgentContext>;
+  model_call_ended: AsyncPluginHook<PluginHookModelCallEndedEvent, PluginHookAgentContext>;
+  llm_input: AsyncPluginHook<PluginHookLlmInputEvent, PluginHookAgentContext>;
+  llm_output: AsyncPluginHook<PluginHookLlmOutputEvent, PluginHookAgentContext>;
+  before_agent_finalize: AsyncPluginHook<
+    PluginHookBeforeAgentFinalizeEvent,
+    PluginHookAgentContext,
+    PluginHookBeforeAgentFinalizeResult
+  >;
+  agent_end: AsyncPluginHook<PluginHookAgentEndEvent, PluginHookAgentContext>;
+  before_compaction: AsyncPluginHook<PluginHookBeforeCompactionEvent, PluginHookAgentContext>;
+  after_compaction: AsyncPluginHook<PluginHookAfterCompactionEvent, PluginHookAgentContext>;
+  before_reset: AsyncPluginHook<PluginHookBeforeResetEvent, PluginHookAgentContext>;
+  inbound_claim: AsyncPluginHook<
+    PluginHookInboundClaimEvent,
+    PluginHookInboundClaimContext,
+    PluginHookInboundClaimResult
+  >;
+  channel_pairing_requested: AsyncPluginHook<
+    PluginHookChannelPairingRequestedEvent,
+    PluginHookChannelPairingContext
+  >;
+  before_dispatch: AsyncPluginHook<
+    PluginHookBeforeDispatchEvent,
+    PluginHookBeforeDispatchContext,
+    PluginHookBeforeDispatchResult
+  >;
+  reply_dispatch: AsyncPluginHook<
+    PluginHookReplyDispatchEvent,
+    PluginHookReplyDispatchContext,
+    PluginHookReplyDispatchResult
+  >;
+  reply_payload_sending: AsyncPluginHook<
+    PluginHookReplyPayloadSendingEvent,
+    PluginHookReplyPayloadSendingContext,
+    PluginHookReplyPayloadSendingResult
+  >;
+  message_received: AsyncPluginHook<PluginHookMessageReceivedEvent, PluginHookMessageContext>;
+  message_sending: AsyncPluginHook<
+    PluginHookMessageSendingEvent,
+    PluginHookMessageContext,
+    PluginHookMessageSendingResult
+  >;
+  message_sent: AsyncPluginHook<PluginHookMessageSentEvent, PluginHookMessageContext>;
+  before_tool_call: AsyncPluginHook<
+    PluginHookBeforeToolCallEvent,
+    PluginHookToolContext,
+    PluginHookBeforeToolCallResult
+  >;
+  after_tool_call: AsyncPluginHook<PluginHookAfterToolCallEvent, PluginHookToolContext>;
   tool_result_persist: (
     event: PluginHookToolResultPersistEvent,
     ctx: PluginHookToolResultPersistContext,
@@ -1151,83 +1047,49 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeMessageWriteEvent,
     ctx: { agentId?: string; sessionKey?: string },
   ) => PluginHookBeforeMessageWriteResult | void;
-  session_start: (
-    event: PluginHookSessionStartEvent,
-    ctx: PluginHookSessionContext,
-  ) => Promise<void> | void;
-  session_end: (
-    event: PluginHookSessionEndEvent,
-    ctx: PluginHookSessionContext,
-  ) => Promise<void> | void;
-  subagent_delivery_target: (
-    event: PluginHookSubagentDeliveryTargetEvent,
-    ctx: PluginHookSubagentContext,
-  ) =>
-    | Promise<PluginHookSubagentDeliveryTargetResult | void>
-    | PluginHookSubagentDeliveryTargetResult
-    | void;
-  subagent_spawned: (
-    event: PluginHookSubagentSpawnedEvent,
-    ctx: PluginHookSubagentContext,
-  ) => Promise<void> | void;
-  subagent_progress: (
-    event: PluginHookSubagentProgressEvent,
-    ctx: PluginHookSubagentContext,
-  ) => Promise<void> | void;
-  subagent_ended: (
-    event: PluginHookSubagentEndedEvent,
-    ctx: PluginHookSubagentContext,
-  ) => Promise<void> | void;
-  gateway_start: (
-    event: PluginHookGatewayStartEvent,
-    ctx: PluginHookGatewayContext,
-  ) => Promise<void> | void;
-  gateway_stop: (
-    event: PluginHookGatewayStopEvent,
-    ctx: PluginHookGatewayContext,
-  ) => Promise<void> | void;
-  heartbeat_prompt_contribution: (
-    event: PluginHeartbeatPromptContributionEvent,
-    ctx: PluginHookAgentContext,
-  ) =>
-    | Promise<PluginHeartbeatPromptContributionResult | void>
-    | PluginHeartbeatPromptContributionResult
-    | void;
-  cron_reconciled: (
-    event: PluginHookCronReconciledEvent,
-    ctx: PluginHookCronReconciledContext,
-  ) => Promise<void> | void;
-  cron_changed: (
-    event: PluginHookCronChangedEvent,
-    ctx: PluginHookGatewayContext,
-  ) => Promise<void> | void;
-  skill_proposal_evaluate: (
-    event: PluginHookSkillProposalEvaluateEvent,
-    ctx: PluginHookSkillContext,
-  ) =>
-    | Promise<PluginHookSkillProposalEvaluateResult | void>
-    | PluginHookSkillProposalEvaluateResult
-    | void;
-  skill_proposal_changed: (
-    event: PluginHookSkillProposalChangedEvent,
-    ctx: PluginHookSkillContext,
-  ) => Promise<void> | void;
-  skill_changed: (
-    event: PluginHookSkillChangedEvent,
-    ctx: PluginHookSkillContext,
-  ) => Promise<void> | void;
-  before_install: (
-    event: PluginHookBeforeInstallEvent,
-    ctx: PluginHookBeforeInstallContext,
-  ) => Promise<PluginHookBeforeInstallResult | void> | PluginHookBeforeInstallResult | void;
+  session_start: AsyncPluginHook<PluginHookSessionStartEvent, PluginHookSessionContext>;
+  session_end: AsyncPluginHook<PluginHookSessionEndEvent, PluginHookSessionContext>;
+  subagent_delivery_target: AsyncPluginHook<
+    PluginHookSubagentDeliveryTargetEvent,
+    PluginHookSubagentContext,
+    PluginHookSubagentDeliveryTargetResult
+  >;
+  subagent_spawned: AsyncPluginHook<PluginHookSubagentSpawnedEvent, PluginHookSubagentContext>;
+  subagent_progress: AsyncPluginHook<PluginHookSubagentProgressEvent, PluginHookSubagentContext>;
+  subagent_ended: AsyncPluginHook<PluginHookSubagentEndedEvent, PluginHookSubagentContext>;
+  gateway_start: AsyncPluginHook<PluginHookGatewayStartEvent, PluginHookGatewayContext>;
+  gateway_stop: AsyncPluginHook<PluginHookGatewayStopEvent, PluginHookGatewayContext>;
+  heartbeat_prompt_contribution: AsyncPluginHook<
+    PluginHeartbeatPromptContributionEvent,
+    PluginHookAgentContext,
+    PluginHeartbeatPromptContributionResult
+  >;
+  cron_reconciled: AsyncPluginHook<PluginHookCronReconciledEvent, PluginHookCronReconciledContext>;
+  cron_changed: AsyncPluginHook<PluginHookCronChangedEvent, PluginHookGatewayContext>;
+  skill_proposal_evaluate: AsyncPluginHook<
+    PluginHookSkillProposalEvaluateEvent,
+    PluginHookSkillContext,
+    PluginHookSkillProposalEvaluateResult
+  >;
+  skill_proposal_changed: AsyncPluginHook<
+    PluginHookSkillProposalChangedEvent,
+    PluginHookSkillContext
+  >;
+  skill_changed: AsyncPluginHook<PluginHookSkillChangedEvent, PluginHookSkillContext>;
+  before_install: AsyncPluginHook<
+    PluginHookBeforeInstallEvent,
+    PluginHookBeforeInstallContext,
+    PluginHookBeforeInstallResult
+  >;
   before_agent_run: (
     event: PluginHookBeforeAgentRunEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentRunResult> | PluginHookBeforeAgentRunResult;
-  resolve_exec_env: (
-    event: PluginHookResolveExecEnvEvent,
-    ctx: PluginHookResolveExecEnvContext,
-  ) => Promise<Record<string, string> | void> | Record<string, string> | void;
+  resolve_exec_env: AsyncPluginHook<
+    PluginHookResolveExecEnvEvent,
+    PluginHookResolveExecEnvContext,
+    Record<string, string>
+  >;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {

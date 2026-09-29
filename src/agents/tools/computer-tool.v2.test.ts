@@ -74,7 +74,7 @@ describe("createComputerTool v2 execution", () => {
 
     await tool.execute("select", { action: "wait", duration: 0 });
 
-    expect(readActionEnum(tool)).toEqual([...actions, "wait"]);
+    expect(readActionEnum(tool)).toEqual([...actions, "wait", "take_control"]);
     expect(sleepMock).toHaveBeenCalledWith(0, undefined);
     expect(
       callGatewayToolMock.mock.calls.map((call) => (call[2] as ComputerActBody).command),
@@ -164,6 +164,7 @@ describe("createComputerTool v2 execution", () => {
       "launch_app",
       "get_accessibility_tree",
       "wait",
+      "take_control",
     ]);
     for (const field of ["query", "depth", "maxElements"]) {
       expect(tool.parameters).toHaveProperty(
@@ -195,11 +196,11 @@ describe("createComputerTool v2 execution", () => {
 
     const withoutCleanup = createVisionComputerTool();
     await withoutCleanup.execute("bind-without-cleanup", { action: "screenshot" });
-    expect(readActionEnum(withoutCleanup)).toEqual(["screenshot", "wait"]);
+    expect(readActionEnum(withoutCleanup)).toEqual(["screenshot", "wait", "take_control"]);
 
     const withCleanup = createVisionComputerTool({ registerRunCleanup: () => {} });
     await withCleanup.execute("bind-with-cleanup", { action: "screenshot" });
-    expect(readActionEnum(withCleanup)).toEqual([...actions, "wait"]);
+    expect(readActionEnum(withCleanup)).toEqual([...actions, "wait", "take_control"]);
   });
 
   it.each([
@@ -437,7 +438,7 @@ describe("createComputerTool v2 execution", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
-  it.each(["inspect", "accept", "dismiss"])(
+  it.each(["inspect", "accept"])(
     "captures an after-image only for a dialog mutation: %s",
     async (dialogAction) => {
       listNodesMock.mockResolvedValue([

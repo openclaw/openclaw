@@ -5,15 +5,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   readMigrationArtifactIdentity,
   statMigrationPath,
-} from "./doctor-session-sqlite-artifact.js";
+} from "../infra/session-sqlite-migration-artifact.js";
 import {
   readLegacyPrimaryTranscriptIdentity,
   readOnlySqliteDbStats,
   readOnlySqliteValidationSnapshot,
-} from "./doctor-session-sqlite-readers.js";
+} from "../infra/session-sqlite-migration-readers.js";
+import { verifyCanonicalSessionTranscriptSources } from "../infra/session-sqlite-transcript-verification.js";
 import { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-inventory.js";
 import type { DoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
-import { verifyCanonicalSessionTranscriptSources } from "./doctor-session-sqlite-verification.js";
 
 /** Missing index receipts describe history; only unimported transcript content requires action. */
 export function createMissingSessionIndexVerifier(params: {

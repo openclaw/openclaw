@@ -619,7 +619,7 @@ it.each(
       if (selection === "inherited") {
         config.session = { ...config.session, scope: "global" };
         await upsertSessionEntryCore(
-          { agentId: "work", sessionKey: "global" },
+          { agentId: "work", sessionKey: "agent:work:main" },
           {
             sessionId: "work-parent",
             providerOverride: "selected-provider",

@@ -1,5 +1,4 @@
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
-import { EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS } from "./exec-approval-lifecycle.js";
 import type {
   ExecApprovalForceDenyResult,
   ExecApprovalManagerOptions,
@@ -7,7 +6,7 @@ import type {
   ExecApprovalResolutionSource,
   ExecApprovalResolveResult,
 } from "./exec-approval-manager.types.js";
-import type { OperatorApprovalRecord } from "./operator-approval-store.js";
+import type { OperatorApprovalKind, OperatorApprovalRecord } from "./operator-approval-store.js";
 
 export function prepareExecApprovalStandingGrant<TPayload>(params: {
   decision: ExecApprovalDecision;
@@ -35,24 +34,6 @@ export function prepareExecApprovalStandingGrant<TPayload>(params: {
       }
     : undefined;
   return { standingGrantSpec, standingGrant };
-}
-
-export function prepareExecApprovalRedemptionWindow(
-  record: ExecApprovalRecord<unknown>,
-  graceAnchorMs: number | null,
-  nowMs: number,
-): number | null {
-  const resolvedAtMs = record.resolvedAtMs;
-  if (
-    resolvedAtMs === undefined ||
-    graceAnchorMs === null ||
-    nowMs - graceAnchorMs >= EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS ||
-    record.decision !== "allow-once" ||
-    record.consumedDecision
-  ) {
-    return null;
-  }
-  return EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS + Math.max(0, graceAnchorMs - resolvedAtMs);
 }
 
 export function prepareExecApprovalStorageFailure(recordId: string, nowMs: number) {
@@ -110,22 +91,31 @@ export function projectRepairedApprovalResolution<TPayload>(
 
 export function prepareExecApprovalSettlement(params: {
   record: OperatorApprovalRecord;
-  resolvedAtMs: number;
+  expectedKind: OperatorApprovalKind;
+  runtimeEpoch: string;
   localDecision: ExecApprovalDecision | null | undefined;
   localResolvedBy: string | null;
   localResolutionSource: ExecApprovalResolutionSource;
 }) {
   const { record } = params;
+  if (
+    record.kind !== params.expectedKind ||
+    record.runtimeEpoch !== params.runtimeEpoch ||
+    record.status === "pending" ||
+    record.resolvedAtMs === null
+  ) {
+    return null;
+  }
+  // No delivery route is unanswered, even though storage records a fail-closed deny.
+  const answered =
+    record.status === "allowed" ||
+    (record.status === "denied" && record.terminalReason !== "no-route");
   const decision =
-    params.localDecision === undefined
-      ? record.status === "allowed" || record.status === "denied"
-        ? record.decision
-        : null
-      : params.localDecision;
+    params.localDecision === undefined ? (answered ? record.decision : null) : params.localDecision;
   return {
     recordId: record.id,
     decision,
-    resolvedAtMs: params.resolvedAtMs,
+    resolvedAtMs: record.resolvedAtMs,
     resolvedBy: params.localResolvedBy,
     resolverKind: record.resolver?.kind ?? null,
     status: record.status,

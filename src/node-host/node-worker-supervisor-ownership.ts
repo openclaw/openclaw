@@ -1,5 +1,10 @@
 import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type {
+  NodeWorkerEnvironmentStopInput,
+  NodeWorkerLaunchInput,
+  NodeWorkerSupervisorIdentity,
+} from "../worker/node-supervisor-protocol.js";
 import type { NodeWorkerContainerEngine } from "./node-worker-container-engine.js";
 import type { NodeWorkerTerminalOutcome } from "./node-worker-launch-observation.js";
 import type {
@@ -11,10 +16,6 @@ import type {
 import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
 import type { NodeWorkerCredentialScrubber } from "./node-worker-output.js";
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
-import type {
-  NodeWorkerLaunchInput,
-  NodeWorkerSupervisorIdentity,
-} from "./node-worker-supervisor-contract.js";
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 export type NodeWorkerStopState = Extract<NodeWorkerTerminalState, "cancelled" | "interrupted">;
@@ -23,8 +24,6 @@ export type NodeWorkerEnvironmentBinding = ReturnType<typeof nodeWorkerEnvironme
 
 export type NodeWorkerPendingAdmission = {
   binding: NodeWorkerEnvironmentBinding;
-  launchId: string;
-  planHash: string;
   identity: NodeWorkerSupervisorIdentity;
   abort: AbortController;
   signal: AbortSignal;
@@ -55,14 +54,8 @@ export function nodeWorkerEnvironmentKey(
 }
 
 export function nodeWorkerEnvironmentMatches(
-  binding: Pick<
-    NodeWorkerEnvironmentBinding,
-    "gatewayNamespace" | "environmentId" | "sessionId" | "ownerEpoch"
-  >,
-  expected: Pick<
-    NodeWorkerEnvironmentBinding,
-    "gatewayNamespace" | "environmentId" | "sessionId" | "ownerEpoch"
-  >,
+  binding: NodeWorkerEnvironmentStopInput,
+  expected: NodeWorkerEnvironmentStopInput,
 ): boolean {
   return (
     binding.gatewayNamespace === expected.gatewayNamespace &&
@@ -104,10 +97,21 @@ export type NodeWorkerRunningChild = NodeWorkerActiveBase & {
   connectionFailure: { errorText?: string };
   turn?: NodeWorkerActiveTurn;
   retiring: boolean;
+  idleGeneration?: number;
+  retention?:
+    | { reason: "background"; turnId: string }
+    | { reason: "idle"; turnId: string; since: number; timer: NodeJS.Timeout };
   stopState?: NodeWorkerStopState;
   containerCleanup?: Promise<void>;
   deferredOutcome?: NodeWorkerTerminalOutcome;
 };
+
+export function clearNodeWorkerRetention(active: NodeWorkerRunningChild): void {
+  if (active.retention?.reason === "idle") {
+    clearTimeout(active.retention.timer);
+  }
+  active.retention = undefined;
+}
 
 export type NodeWorkerObservedTerminal = NodeWorkerActiveBase & {
   state: "observed";

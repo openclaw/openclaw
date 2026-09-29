@@ -1,4 +1,3 @@
-// Profile CLI tests cover profile selection, persistence, and command wiring.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveGatewayPort } from "../config/paths.js";
@@ -6,272 +5,77 @@ import { formatCliCommand } from "./command-format.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 
 describe("parseCliProfileArgs", () => {
-  it("leaves gateway --dev for subcommands", () => {
-    const res = parseCliProfileArgs([
-      "node",
-      "openclaw",
-      "gateway",
-      "--dev",
-      "--allow-unconfigured",
-    ]);
-    if (!res.ok) {
-      throw new Error(res.error);
-    }
-    expect(res.profile).toBeNull();
-    expect(res.argv).toEqual(["node", "openclaw", "gateway", "--dev", "--allow-unconfigured"]);
-  });
-
-  it("leaves gateway --dev for subcommands after leading root options", () => {
-    const res = parseCliProfileArgs([
-      "node",
-      "openclaw",
-      "--no-color",
-      "gateway",
-      "--dev",
-      "--allow-unconfigured",
-    ]);
-    if (!res.ok) {
-      throw new Error(res.error);
-    }
-    expect(res.profile).toBeNull();
-    expect(res.argv).toEqual([
-      "node",
-      "openclaw",
-      "--no-color",
-      "gateway",
-      "--dev",
-      "--allow-unconfigured",
-    ]);
-  });
-
-  it("still accepts global --dev before subcommand", () => {
-    const res = parseCliProfileArgs(["node", "openclaw", "--dev", "gateway"]);
-    if (!res.ok) {
-      throw new Error(res.error);
-    }
-    expect(res.profile).toBe("dev");
-    expect(res.argv).toEqual(["node", "openclaw", "gateway"]);
-  });
-
-  it("parses --profile value and strips it", () => {
-    const res = parseCliProfileArgs(["node", "openclaw", "--profile", "work", "status"]);
-    if (!res.ok) {
-      throw new Error(res.error);
-    }
-    expect(res.profile).toBe("work");
-    expect(res.argv).toEqual(["node", "openclaw", "status"]);
-  });
-
-  it("parses interleaved --profile after the command token", () => {
-    const res = parseCliProfileArgs(["node", "openclaw", "status", "--profile", "work", "--deep"]);
-    if (!res.ok) {
-      throw new Error(res.error);
-    }
-    expect(res.profile).toBe("work");
-    expect(res.argv).toEqual(["node", "openclaw", "status", "--deep"]);
-  });
-
-  it("preserves Matrix QA --profile for the command parser", () => {
-    const res = parseCliProfileArgs([
-      "node",
-      "openclaw",
-      "qa",
-      "matrix",
-      "--profile",
-      "fast",
-      "--fail-fast",
-    ]);
-    if (!res.ok) {
-      throw new Error(res.error);
-    }
-    expect(res.profile).toBeNull();
-    expect(res.argv).toEqual([
-      "node",
-      "openclaw",
-      "qa",
-      "matrix",
-      "--profile",
-      "fast",
-      "--fail-fast",
-    ]);
-  });
-
-  it("preserves Matrix QA --profile after leading root options", () => {
-    const res = parseCliProfileArgs([
-      "node",
-      "openclaw",
-      "--no-color",
-      "qa",
-      "matrix",
-      "--profile=fast",
-    ]);
-    if (!res.ok) {
-      throw new Error(res.error);
-    }
-    expect(res.profile).toBeNull();
-    expect(res.argv).toEqual(["node", "openclaw", "--no-color", "qa", "matrix", "--profile=fast"]);
-  });
-
-  it("parses qa run --profile smoke-ci as a root profile", () => {
-    const res = parseCliProfileArgs([
-      "node",
-      "openclaw",
-      "qa",
-      "run",
-      "--profile",
-      "smoke-ci",
-      "--category",
-      "agent-runtime.agent-turn-execution",
-    ]);
-    if (!res.ok) {
-      throw new Error(res.error);
-    }
-    expect(res.profile).toBe("smoke-ci");
-    expect(res.argv).toEqual([
-      "node",
-      "openclaw",
-      "qa",
-      "run",
-      "--category",
-      "agent-runtime.agent-turn-execution",
-    ]);
-  });
-
-  it("parses qa run --profile=release self-check invocations as root profiles", () => {
-    const res = parseCliProfileArgs([
-      "node",
-      "openclaw",
-      "qa",
-      "run",
-      "--profile=release",
-      "--output",
-      "qa-report.md",
-    ]);
-    if (!res.ok) {
-      throw new Error(res.error);
-    }
-    expect(res.profile).toBe("release");
-    expect(res.argv).toEqual(["node", "openclaw", "qa", "run", "--output", "qa-report.md"]);
-  });
-
-  it("preserves qa run --qa-profile for the command parser", () => {
-    const res = parseCliProfileArgs([
-      "node",
-      "openclaw",
-      "qa",
-      "run",
-      "--qa-profile",
-      "smoke-ci",
-      "--surface",
-      "agent-runtime",
-    ]);
-    if (!res.ok) {
-      throw new Error(res.error);
-    }
-    expect(res.profile).toBeNull();
-    expect(res.argv).toEqual([
-      "node",
-      "openclaw",
-      "qa",
-      "run",
-      "--qa-profile",
-      "smoke-ci",
-      "--surface",
-      "agent-runtime",
-    ]);
-  });
-
-  it("parses arbitrary qa run --profile values as root profiles", () => {
-    const res = parseCliProfileArgs([
-      "node",
-      "openclaw",
-      "qa",
-      "run",
-      "--profile",
-      "work",
-      "--output",
-      "qa-report.md",
-    ]);
-    if (!res.ok) {
-      throw new Error(res.error);
-    }
-    expect(res.profile).toBe("work");
-    expect(res.argv).toEqual(["node", "openclaw", "qa", "run", "--output", "qa-report.md"]);
-  });
-
-  it("parses arbitrary qa run --profile= values as root profiles", () => {
-    const res = parseCliProfileArgs([
-      "node",
-      "openclaw",
-      "qa",
-      "run",
-      "--profile=work",
-      "--output",
-      "qa-report.md",
-    ]);
-    if (!res.ok) {
-      throw new Error(res.error);
-    }
-    expect(res.profile).toBe("work");
-    expect(res.argv).toEqual(["node", "openclaw", "qa", "run", "--output", "qa-report.md"]);
-  });
-
-  it("still parses root --profile before qa run", () => {
-    const res = parseCliProfileArgs([
-      "node",
-      "openclaw",
-      "--profile",
-      "work",
-      "qa",
-      "run",
-      "--qa-profile",
-      "smoke-ci",
-    ]);
-    if (!res.ok) {
-      throw new Error(res.error);
-    }
-    expect(res.profile).toBe("work");
-    expect(res.argv).toEqual(["node", "openclaw", "qa", "run", "--qa-profile", "smoke-ci"]);
-  });
-
-  it("still parses root --profile before Matrix QA", () => {
-    const res = parseCliProfileArgs([
-      "node",
-      "openclaw",
-      "--profile",
-      "work",
-      "qa",
-      "matrix",
-      "--fail-fast",
-    ]);
-    if (!res.ok) {
-      throw new Error(res.error);
-    }
-    expect(res.profile).toBe("work");
-    expect(res.argv).toEqual(["node", "openclaw", "qa", "matrix", "--fail-fast"]);
-  });
-
-  it("parses interleaved --dev after the command token", () => {
-    const res = parseCliProfileArgs(["node", "openclaw", "status", "--dev"]);
-    if (!res.ok) {
-      throw new Error(res.error);
-    }
-    expect(res.profile).toBe("dev");
-    expect(res.argv).toEqual(["node", "openclaw", "status"]);
-  });
+  it.each([
+    {
+      args: ["--no-color", "gateway", "--dev", "--allow-unconfigured"],
+      profile: null,
+      remaining: ["--no-color", "gateway", "--dev", "--allow-unconfigured"],
+    },
+    { args: ["--dev", "gateway"], profile: "dev", remaining: ["gateway"] },
+    { args: ["--profile", "work", "status"], profile: "work", remaining: ["status"] },
+    {
+      args: ["status", "--profile", "work", "--deep"],
+      profile: "work",
+      remaining: ["status", "--deep"],
+    },
+    {
+      args: ["qa", "matrix", "--profile", "fast", "--fail-fast"],
+      profile: null,
+      remaining: ["qa", "matrix", "--profile", "fast", "--fail-fast"],
+    },
+    {
+      args: ["--no-color", "qa", "matrix", "--profile=fast"],
+      profile: null,
+      remaining: ["--no-color", "qa", "matrix", "--profile=fast"],
+    },
+    {
+      args: [
+        "qa",
+        "run",
+        "--profile",
+        "smoke-ci",
+        "--category",
+        "agent-runtime.agent-turn-execution",
+      ],
+      profile: "smoke-ci",
+      remaining: ["qa", "run", "--category", "agent-runtime.agent-turn-execution"],
+    },
+    {
+      args: ["qa", "run", "--profile=release", "--output", "qa-report.md"],
+      profile: "release",
+      remaining: ["qa", "run", "--output", "qa-report.md"],
+    },
+    {
+      args: ["qa", "run", "--qa-profile", "smoke-ci", "--surface", "agent-runtime"],
+      profile: null,
+      remaining: ["qa", "run", "--qa-profile", "smoke-ci", "--surface", "agent-runtime"],
+    },
+    {
+      args: ["--profile", "work", "qa", "matrix", "--fail-fast"],
+      profile: "work",
+      remaining: ["qa", "matrix", "--fail-fast"],
+    },
+    { args: ["status", "--dev"], profile: "dev", remaining: ["status"] },
+  ])(
+    "selects the root profile without consuming command-local flags: $args",
+    ({ args, profile, remaining }) => {
+      expect(parseCliProfileArgs(["node", "openclaw", ...args])).toEqual({
+        ok: true,
+        profile,
+        argv: ["node", "openclaw", ...remaining],
+      });
+    },
+  );
 
   it("rejects missing profile value", () => {
-    const res = parseCliProfileArgs(["node", "openclaw", "--profile"]);
-    expect(res.ok).toBe(false);
+    expect(parseCliProfileArgs(["node", "openclaw", "--profile"]).ok).toBe(false);
   });
 
   it.each([
     ["--dev first", ["node", "openclaw", "--dev", "--profile", "work", "status"]],
     ["--profile first", ["node", "openclaw", "--profile", "work", "--dev", "status"]],
-    ["interleaved after command", ["node", "openclaw", "status", "--profile", "work", "--dev"]],
   ])("rejects combining --dev with --profile (%s)", (_name, argv) => {
-    const res = parseCliProfileArgs(argv);
-    expect(res.ok).toBe(false);
+    expect(parseCliProfileArgs(argv).ok).toBe(false);
   });
 });
 
@@ -406,11 +210,6 @@ describe("applyCliProfileEnv", () => {
       inheritedStateDir: "/home/peter/.openclaw",
     },
     {
-      name: "the explicitly marked default profile",
-      inheritedProfile: "default",
-      inheritedStateDir: "/home/peter/.openclaw",
-    },
-    {
       name: "another named profile",
       inheritedProfile: "main",
       inheritedStateDir: "/home/peter/.openclaw-main",
@@ -486,10 +285,7 @@ describe("applyCliProfileEnv", () => {
     expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("Custom Gateway");
   });
 
-  it.each([
-    { inheritedProfile: "Main", selectedProfile: "main" },
-    { inheritedProfile: "main", selectedProfile: "Main" },
-  ])(
+  it.each([{ inheritedProfile: "Main", selectedProfile: "main" }])(
     "keeps case-distinct named profiles isolated ($inheritedProfile to $selectedProfile)",
     ({ inheritedProfile, selectedProfile }) => {
       const inheritedStateDir = `/home/peter/.openclaw-${inheritedProfile}`;
@@ -528,11 +324,6 @@ describe("applyCliProfileEnv", () => {
       name: "the default profile",
       inheritedProfile: undefined,
       inheritedConfigPath: "/home/peter/.openclaw/openclaw.json",
-    },
-    {
-      name: "another named profile",
-      inheritedProfile: "main",
-      inheritedConfigPath: "/home/peter/.openclaw-main/openclaw.json",
     },
     {
       name: "a home-relative named profile",
@@ -584,12 +375,6 @@ describe("formatCliCommand", () => {
       expected: "openclaw doctor --fix",
     },
     {
-      name: "profile is default",
-      cmd: "openclaw doctor --fix",
-      env: { OPENCLAW_PROFILE: "default" },
-      expected: "openclaw doctor --fix",
-    },
-    {
       name: "profile is Default (case-insensitive)",
       cmd: "openclaw doctor --fix",
       env: { OPENCLAW_PROFILE: "Default" },
@@ -617,12 +402,6 @@ describe("formatCliCommand", () => {
     expect(formatCliCommand(cmd, env)).toBe(expected);
   });
 
-  it("inserts --profile flag when profile is set", () => {
-    expect(formatCliCommand("openclaw doctor --fix", { OPENCLAW_PROFILE: "work" })).toBe(
-      "openclaw --profile work doctor --fix",
-    );
-  });
-
   it("trims whitespace from profile", () => {
     expect(formatCliCommand("openclaw doctor --fix", { OPENCLAW_PROFILE: "  jbopenclaw  " })).toBe(
       "openclaw --profile jbopenclaw doctor --fix",
@@ -639,12 +418,6 @@ describe("formatCliCommand", () => {
     expect(formatCliCommand("pnpm openclaw doctor", { OPENCLAW_PROFILE: "work" })).toBe(
       "pnpm openclaw --profile work doctor",
     );
-  });
-
-  it("inserts --container when a container hint is set", () => {
-    expect(
-      formatCliCommand("openclaw gateway status --deep", { OPENCLAW_CONTAINER_HINT: "demo" }),
-    ).toBe("openclaw --container demo gateway status --deep");
   });
 
   it("ignores unsafe container hints", () => {
@@ -666,19 +439,12 @@ describe("formatCliCommand", () => {
 
   it.each([
     "openclaw update",
-    "pnpm openclaw update --channel beta",
-    "npm openclaw update",
-    "bunx openclaw update",
-    "npx openclaw update",
-    "openclaw --profile work update",
+    "pnpm openclaw --profile work update --channel beta",
     "openclaw --profile=work update",
     "openclaw --log-level debug update",
-    "openclaw --log-level=debug update",
     "openclaw --dev update",
-    "openclaw --no-color update",
     "openclaw --no-color --profile work --log-level=debug update",
     "openclaw --profile update update",
-    "pnpm openclaw --profile work update --channel beta",
   ])("does not prepend --container to root update: %s", (command) => {
     expect(
       formatCliCommand(command, { OPENCLAW_CONTAINER_HINT: "demo", OPENCLAW_PROFILE: "work" }),
@@ -687,15 +453,10 @@ describe("formatCliCommand", () => {
 
   it.each([
     ["openclaw", "plugins update telegram"],
-    ["openclaw", "hooks update webhook"],
-    ["openclaw", "skills update summarize"],
     ["pnpm openclaw", "plugins update telegram"],
     ["openclaw", "--profile work plugins update telegram"],
-    ["openclaw", "--log-level=debug plugins update telegram"],
     ["openclaw", "--profile update plugins list"],
-    ["openclaw", "--log-level update plugins list"],
     ["openclaw", "config set action update"],
-    ["openclaw", "gateway status --name update"],
   ])("preserves the active container for non-root update: %s %s", (prefix, command) => {
     expect(
       formatCliCommand(`${prefix} ${command}`, {

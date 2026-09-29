@@ -48,12 +48,13 @@ class DevicePermissionsPage extends OpenClawLightDomElement {
           ? renderSettingsSection(
               { title: t("configPage.deviceSettings.systemAccess") },
               permissions.entries.map(({ id, status }) => {
+                const permissionTitle = t(`configPage.deviceSettings.permissions.${id}.title`);
                 const requestableBinaryPermission =
                   snapshot.device.platform === "macos" &&
                   (id === "screenRecording" || id === "accessibility") &&
                   status === "notDetermined";
                 return renderSettingsRow({
-                  title: t(`configPage.deviceSettings.permissions.${id}.title`),
+                  title: permissionTitle,
                   description: t(`configPage.deviceSettings.permissions.${id}.hint`),
                   stackedOnNarrow: true,
                   control: html`
@@ -63,8 +64,8 @@ class DevicePermissionsPage extends OpenClawLightDomElement {
                         dot: false,
                         label: html`${status === "granted" ? html`<span class="settings-permission-check" aria-hidden="true">${icons.check}</span>` : nothing}${t(`configPage.deviceSettings.permissionStatuses.${requestableBinaryPermission ? "notGranted" : status}`)}`,
                       })}
-                      ${status === "notDetermined" ? html`<button type="button" class="btn" @click=${() => capability?.requestPermission(id)}>${t("configPage.deviceSettings.grant")}</button>` : status === "denied" ? html`<button type="button" class="btn" @click=${() => capability?.openSystemSettings(id)}>${t("configPage.deviceSettings.openSystemSettings")}</button>` : nothing}
-                      ${requestableBinaryPermission ? html`<button type="button" class="btn settings-permission-recovery" @click=${() => capability?.openSystemSettings(id)}>${t("configPage.deviceSettings.openSystemSettings")}</button>` : nothing}
+                      ${status === "notDetermined" ? html`<button type="button" class="btn" aria-label=${`${t("configPage.deviceSettings.grant")}: ${permissionTitle}`} @click=${() => capability?.requestPermission(id)}>${t("configPage.deviceSettings.grant")}</button>` : status === "denied" ? html`<button type="button" class="btn" aria-label=${`${t("configPage.deviceSettings.openSystemSettings")}: ${permissionTitle}`} @click=${() => capability?.openSystemSettings(id)}>${t("configPage.deviceSettings.openSystemSettings")}</button>` : nothing}
+                      ${requestableBinaryPermission ? html`<button type="button" class="btn settings-permission-recovery" aria-label=${`${t("configPage.deviceSettings.openSystemSettings")}: ${permissionTitle}`} @click=${() => capability?.openSystemSettings(id)}>${t("configPage.deviceSettings.openSystemSettings")}</button>` : nothing}
                     </div>
                   `,
                 });
@@ -103,6 +104,7 @@ class DevicePermissionsPage extends OpenClawLightDomElement {
                             <button
                               type="button"
                               class="btn"
+                              aria-label=${`${t("configPage.deviceSettings.openSettings")}: ${t("configPage.deviceSettings.preciseLocation")}`}
                               @click=${() => capability?.openSystemSettings("location")}
                             >
                               ${t("configPage.deviceSettings.openSettings")}

@@ -3,26 +3,17 @@ import {
   type ThinkingCatalogPolicyCarrier,
 } from "../plugins/provider-thinking-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
+import {
+  modelTransportRoutesMatch,
+  normalizeCatalogRouteBaseUrl,
+  resolveCatalogOwnedModelCompat,
+} from "./model-compat-catalog.js";
 
 function mergeCatalogFields<T extends object>(
   base: T | undefined,
   override: T | undefined,
 ): T | undefined {
   return base && override ? { ...base, ...override } : (override ?? base);
-}
-
-export function normalizeCatalogRouteBaseUrl(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    const url = new URL(value);
-    url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
-    return url.toString();
-  } catch {
-    return value.replace(/\/+$/u, "");
-  }
 }
 
 function catalogRouteChanges(base: ModelCatalogEntry, overlay: ModelCatalogEntry): boolean {
@@ -72,7 +63,13 @@ export function overlayCatalogMetadata(
   // routes. Capabilities are atomic with their route; never carry them across
   // an API/endpoint change when the new source omits those facts.
   const routeChanged = catalogRouteChanges(base, overlay);
-  const routeBase = routeChanged ? clearRouteBoundCatalogMetadata(base) : base;
+  // Applied configured routes need exact capability provenance, while names
+  // retain the existing rule for known transport changes.
+  const clearBaseCapabilities =
+    options?.preserveBaseCompat && !options.preserveBaseRoute
+      ? !modelTransportRoutesMatch(base, overlay)
+      : routeChanged;
+  const routeBase = clearBaseCapabilities ? clearRouteBoundCatalogMetadata(base) : base;
   const params = mergeCatalogFields(routeBase.params, overlay.params);
   const thinkingLevelMap = overlay.thinkingLevelMap ?? routeBase.thinkingLevelMap;
   // Options + default are one normalized unit (default ∈ options): an overlay

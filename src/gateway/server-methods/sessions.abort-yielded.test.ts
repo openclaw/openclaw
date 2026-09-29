@@ -17,10 +17,7 @@ import {
   registerSubagentRun,
   settleRequesterAfterSessionSpawns,
 } from "../../agents/subagents/registry/subagent-registry.js";
-import {
-  settleSubagentRegistryPersistenceWork,
-  writeSubagentSessionEntry,
-} from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { clearSessionQueues, enqueueFollowupRun } from "../../auto-reply/reply/queue.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
@@ -77,7 +74,7 @@ async function seedYieldedParent() {
       event: { runId: parentRunId, sessionId: parentId, ts: Date.now(), data },
     });
   }
-  registerSubagentRun({
+  await registerSubagentRun({
     runId: childRunId,
     childSessionKey: childKey,
     requesterSessionKey: parentKey,
@@ -129,7 +126,7 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
         sessionKey: brokenKey,
         defaultSessionId: "broken-child-session",
       });
-      registerSubagentRun({
+      await registerSubagentRun({
         runId: "broken-child-run",
         childSessionKey: brokenKey,
         requesterSessionKey: parentKey,
@@ -222,7 +219,7 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
           }),
         ]);
       } else {
-        expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
+        expect(respond.mock.calls[0]?.slice(0, 2), JSON.stringify(respond.mock.calls[0])).toEqual([
           true,
           { ok: true, abortedRunId: null, status: "aborted" },
         ]);
@@ -242,12 +239,12 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
         expect(acknowledgment.entry).toEqual(replacement);
         return;
       }
-      expect(acknowledgment.entry).toMatchObject({
+      expect(acknowledgment.entry, JSON.stringify(respond.mock.calls[0])).toMatchObject({
         status: "killed",
         abortedLastRun: true,
         lastRunId: parentRunId,
       });
-      await settleSubagentRegistryPersistenceWork();
+      await fixture.settle();
       expect(getSubagentRunByChildSessionKey(childKey)?.killReconciliation).toMatchObject({
         suppressTaskDelivery: true,
       });
@@ -301,7 +298,7 @@ it("leaves an ownerless session without yielded work unchanged", async () => {
 
 it("does not cancel a yielded parent when Stop only clears a queued follow-up", async () => {
   await seedYieldedParent();
-  expect(markSubagentRunTerminated({ runId: childRunId, reason: "killed" })).toBe(1);
+  expect(await markSubagentRunTerminated({ runId: childRunId, reason: "killed" })).toBe(1);
   const before = loadSessionEntry({ agentId: "main", sessionKey: parentKey });
   const followup = createQueueTestRun({ prompt: "Queued follow-up" });
   followup.run = { ...followup.run, agentId: "main", sessionId: parentId, sessionKey: parentKey };

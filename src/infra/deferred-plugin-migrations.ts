@@ -1,23 +1,34 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
+import {
+  closeTrackedStateDatabase,
+  openTrackedStateDatabase,
+} from "../state/openclaw-state-db-handle.js";
+import { assertStateReadSchema } from "../state/openclaw-state-db-read-connection.js";
 import {
   isArtifactPreservingStateRead,
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
-  withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import { withSharedStateWriteCoordinator } from "../state/openclaw-state-db-write-coordination.js";
+import { runManagedStateTransaction } from "../state/openclaw-state-db-transaction.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { isTruthyEnvValue } from "./env.js";
+import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import { runWithSqliteCleanup, throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { invalidateSuccessfulMigrationCheckpointsInTransaction } from "./startup-migration-checkpoint.js";
+import { withStateDatabaseSchemaMaintenance } from "./state-database-maintenance.js";
 import { recordLegacyMigrationRun } from "./state-migrations.receipts.js";
 
 const RUN_PREFIX = "deferred-plugin-migration:";
@@ -32,6 +43,83 @@ const deferredPluginMigrationSchema = z.object({
 });
 
 export type DeferredPluginMigration = z.infer<typeof deferredPluginMigrationSchema>;
+
+type ConfigMigrationCompletion = {
+  configPath: string;
+  expectedPending: readonly DeferredPluginMigration[];
+  resolvedPluginIds: readonly string[];
+  assertCurrent: () => void;
+  published: boolean;
+};
+const configMigrationCompletion = new AsyncLocalStorage<ConfigMigrationCompletion>();
+
+/** The package owner may finish inspected config-only work through the normal file publisher. */
+export async function withDeferredPluginConfigCompletion<T>(
+  params: Omit<ConfigMigrationCompletion, "published">,
+  run: () => Promise<T>,
+): Promise<T> {
+  return await configMigrationCompletion.run({ ...params, published: false }, run);
+}
+
+/** The file rollback's live owner also restores its completed migration obligations. */
+export function withDeferredPluginConfigRollback(
+  params: { configPath: string; env?: NodeJS.ProcessEnv; assertCurrent: () => void },
+  publish: () => void,
+  didMutate: () => boolean,
+): void {
+  const completion = configMigrationCompletion.getStore();
+  if (!completion?.published || completion.configPath !== params.configPath) {
+    publish();
+    return;
+  }
+  let failure: { error: unknown } | undefined;
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      params.assertCurrent();
+      recordDeferredPluginMigrationsInTransaction(db, {
+        pending: completion.expectedPending,
+        expectedPending: completion.expectedPending.filter(
+          (entry) => !completion.resolvedPluginIds.includes(entry.pluginId),
+        ),
+      });
+      try {
+        publish();
+      } catch (error) {
+        if (!didMutate()) {
+          throw error;
+        }
+        failure = { error };
+      }
+      if (!didMutate()) {
+        throw new Error("Config rollback did not publish its restoration.");
+      }
+      // Each mutation checked its live owner. No await remains; settle the observed file effect
+      // even when post-publication verification has since refused that file guard.
+    },
+    { env: params.env },
+    { operationLabel: "state.plugin-migration-input-rollback" },
+  );
+  completion.published = false;
+  // A post-rename verification error must not undo already-restored obligations.
+  if (failure) {
+    throw failure.error;
+  }
+}
+
+/** Exclude only this write's admitted repairs; persisted rows remain pending until publication. */
+export function readConfigWritePendingMigrations(
+  configPath: string,
+  env?: NodeJS.ProcessEnv,
+): readonly DeferredPluginMigration[] {
+  const pending = readDeferredPluginMigrations({ env });
+  const completion = configMigrationCompletion.getStore();
+  if (!completion || completion.configPath !== configPath || completion.published) {
+    return pending;
+  }
+  completion.assertCurrent();
+  assertPendingGeneration(pending, completion.expectedPending);
+  return pending.filter((entry) => !completion.resolvedPluginIds.includes(entry.pluginId));
+}
 
 export class DeferredPluginMigrationConflictError extends Error {
   readonly pending: readonly DeferredPluginMigration[];
@@ -144,6 +232,48 @@ export async function readDeferredPluginMigrationsAsync(
   return pending ?? [];
 }
 
+/** Completion receipts resolve historical warnings without loading their retired reports. */
+export function readDeferredPluginMigrationCompletions(
+  options: Parameters<typeof readDeferredPluginMigrations>[0] = {},
+) {
+  return (
+    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+      if (!tableExists(db, "migration_runs")) {
+        return [];
+      }
+      return executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<Pick<DB, "migration_runs">>(db)
+          .selectFrom("migration_runs")
+          .select(["id", "finished_at"])
+          .where("id", "like", `${RUN_PREFIX}%`)
+          .where("status", "=", "completed"),
+      ).rows.flatMap(({ id, finished_at }) =>
+        finished_at === null
+          ? []
+          : [{ pluginId: id.slice(RUN_PREFIX.length), completedAtMs: finished_at }],
+      );
+    }, options) ?? []
+  );
+}
+
+export async function readDeferredPluginMigrationCompletionsAsync(
+  options: Parameters<typeof readDeferredPluginMigrations>[0] = {},
+) {
+  const context = captureOpenClawStateWorkerContext(options);
+  const { runOpenClawStateWorkerOperation } =
+    await import("../state/openclaw-state-worker-store.js");
+  context.admission.assertCurrent();
+  const completed = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) =>
+      scope.execute({ type: "plugins.deferredMigrations.completions.read", input: undefined }),
+    { existingOnly: true },
+  );
+  context.admission.assertCurrent();
+  return completed ?? [];
+}
+
 /** Bind asynchronous settlement to the same pending records, including newly added owners. */
 export function assertDeferredPluginMigrationsCurrent(params: {
   env?: NodeJS.ProcessEnv;
@@ -156,38 +286,98 @@ export function assertDeferredPluginMigrationsCurrent(params: {
 export function withDeferredPluginMigrationsCurrent<T>(
   params: {
     env?: NodeJS.ProcessEnv;
+    configPath?: string;
     expectedPending: readonly DeferredPluginMigration[];
     onConflict?: (pending: readonly DeferredPluginMigration[]) => T;
   },
   publish: () => T,
 ): T {
+  const scope = configMigrationCompletion.getStore();
+  const completion =
+    scope && scope.configPath === params.configPath && !scope.published ? scope : undefined;
+  const expectedPending = completion?.expectedPending ?? params.expectedPending;
   const databasePath = resolveOpenClawStateSqlitePath(params.env);
   const existing = openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(databasePath);
-  return withSharedStateWriteCoordinator({ databasePath, existing: existing?.db }, () => {
-    // Exclude obligation writers without bootstrapping or migrating unrelated state.
-    if (params.expectedPending.length === 0 && !existing?.db.isTransaction) {
-      const pending = withExistingOpenClawStateDatabaseCurrentReadOnly(
-        ({ db }) => readPendingMigrationRecords(db),
-        params,
+  if (expectedPending.length === 0 && !existing) {
+    if (!existsSync(databasePath)) {
+      return withStateDatabaseSchemaMaintenance({ databasePath }, () =>
+        existsSync(databasePath) ? withDeferredPluginMigrationsCurrent(params, publish) : publish(),
       );
-      if (!pending?.length) {
-        return publish();
-      }
     }
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const pending = pendingMigrationRecords(readPendingMigrationRows(db));
-        if (!isDeepStrictEqual(pending, params.expectedPending) && params.onConflict) {
-          // Commit preservation facts against these rows; callers refuse publication after return.
-          return params.onConflict(pending);
-        }
-        assertPendingGeneration(pending, params.expectedPending);
-        return publish();
+    // Historical empty state needs exclusion, but publication never owns its schema upgrade.
+    const db = openTrackedStateDatabase(databasePath, { existingOnly: true });
+    let publication: { value: T } | undefined;
+    runWithSqliteCleanup(
+      {
+        release() {
+          const errors: unknown[] = [];
+          try {
+            clearNodeSqliteKyselyCacheForDatabase(db);
+          } catch (error) {
+            errors.push(error);
+          }
+          try {
+            closeTrackedStateDatabase(db);
+          } catch (error) {
+            errors.push(error);
+          }
+          throwSqliteLifecycleErrors(errors, "Plugin migration publication cleanup failed.");
+        },
       },
-      { env: params.env },
-      { operationLabel: "state.plugin-migration-input-publication" },
+      "Plugin migration input publication",
+      () => {
+        setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
+        runManagedStateTransaction(
+          db,
+          (): T | undefined => {
+            assertStateReadSchema(db, databasePath);
+            if (readPendingMigrationRecords(db).length > 0) {
+              return undefined;
+            }
+            const value = publish();
+            publication = { value };
+            return value;
+          },
+          {
+            databaseLabel: databasePath,
+            operationLabel: "state.plugin-migration-input-publication",
+          },
+        );
+      },
     );
-  });
+    if (publication) {
+      return publication.value;
+    }
+  }
+  const result = runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const pending = pendingMigrationRecords(readPendingMigrationRows(db));
+      if (!isDeepStrictEqual(pending, expectedPending) && params.onConflict) {
+        // Commit preservation facts against these rows; callers refuse publication after return.
+        return params.onConflict(pending);
+      }
+      assertPendingGeneration(pending, expectedPending);
+      completion?.assertCurrent();
+      const published = publish();
+      if (completion) {
+        completion.assertCurrent();
+        recordDeferredPluginMigrationsInTransaction(db, {
+          pending: pending.filter(
+            (entry) => !completion.resolvedPluginIds.includes(entry.pluginId),
+          ),
+          resolvedPluginIds: completion.resolvedPluginIds,
+          expectedPending,
+        });
+      }
+      return published;
+    },
+    { env: params.env },
+    { operationLabel: "state.plugin-migration-input-publication" },
+  );
+  if (completion) {
+    completion.published = true;
+  }
+  return result;
 }
 
 export function formatDeferredPluginMigration(
@@ -204,93 +394,130 @@ export function formatDeferredPluginMigration(
   return `Plugin "${pending.pluginId}" data/settings upgrade is unfinished: ${pending.reason} Your existing data and settings have been kept. ${next}`;
 }
 
-/** Only the migration owner can resolve a pending record after its work completes. */
-export function recordDeferredPluginMigrations(params: {
+export type DeferredPluginMigrationRecordInput = {
   env?: NodeJS.ProcessEnv;
   pending: readonly DeferredPluginMigration[];
   resolvedPluginIds?: readonly string[];
   expectedPending?: readonly DeferredPluginMigration[];
-}): readonly DeferredPluginMigration[] | undefined {
-  if (params.pending.length === 0 && !params.resolvedPluginIds?.length) {
-    return undefined;
-  }
+};
+
+/** Native row transform; the worker owns its transaction and lease grants. */
+export function recordDeferredPluginMigrationsInTransaction(
+  db: DatabaseSync,
+  params: Omit<DeferredPluginMigrationRecordInput, "env">,
+) {
   const pendingById = new Map(
     params.pending.map((pending) => [
       pending.pluginId,
       deferredPluginMigrationSchema.parse(pending),
     ]),
   );
-  const transitions = runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const currentRows = readPendingMigrationRows(db);
-      if (params.expectedPending) {
-        assertPendingGeneration(pendingMigrationRecords(currentRows), params.expectedPending);
-      }
-      const rows = new Map(currentRows.map((row) => [row.id, row]));
-      const deferred: DeferredPluginMigration[] = [];
-      const resolved: string[] = [];
-      const now = Date.now();
-      for (const current of pendingById.values()) {
-        const runId = `${RUN_PREFIX}${current.pluginId}`;
-        const previous = rows.get(runId);
-        const pending = mergeDeferredPluginMigration(
-          previous
-            ? deferredPluginMigrationSchema.parse(JSON.parse(previous.report_json))
-            : undefined,
-          current,
-        );
-        const reportJson = JSON.stringify(pending);
-        if (previous?.report_json === reportJson) {
-          continue;
-        }
-        recordLegacyMigrationRun(db, {
-          runId,
-          startedAt: now,
-          finishedAt: null,
-          status: "pending",
-          reportJson,
-          upsert: true,
-        });
-        deferred.push(pending);
-      }
-      for (const pluginId of new Set(params.resolvedPluginIds)) {
-        const runId = `${RUN_PREFIX}${pluginId}`;
-        const previous = rows.get(runId);
-        if (pendingById.has(pluginId) || !previous) {
-          continue;
-        }
-        recordLegacyMigrationRun(db, {
-          runId,
-          startedAt: now,
-          finishedAt: now,
-          status: "completed",
-          reportJson: previous.report_json,
-          upsert: true,
-        });
-        resolved.push(pluginId);
-      }
-      if (deferred.length > 0) {
-        invalidateSuccessfulMigrationCheckpointsInTransaction(db);
-      }
-      return { deferred, resolved, pending: pendingMigrationRecords(readPendingMigrationRows(db)) };
-    },
-    { env: params.env },
-    { operationLabel: "state.plugin-migration-deferral" },
-  );
-  const log = createSubsystemLogger("state-migrations");
-  for (const pending of transitions.deferred) {
-    log.warn(formatDeferredPluginMigration(pending, params.env), {
-      pluginId: pending.pluginId,
-      reason: pending.reason,
-      action: pending.command,
+  const currentRows = readPendingMigrationRows(db);
+  if (params.expectedPending) {
+    assertPendingGeneration(pendingMigrationRecords(currentRows), params.expectedPending);
+  }
+  const rows = new Map(currentRows.map((row) => [row.id, row]));
+  const deferred: DeferredPluginMigration[] = [];
+  const resolved: string[] = [];
+  const now = Date.now();
+  for (const current of pendingById.values()) {
+    const runId = `${RUN_PREFIX}${current.pluginId}`;
+    const previous = rows.get(runId);
+    const pending = mergeDeferredPluginMigration(
+      previous ? deferredPluginMigrationSchema.parse(JSON.parse(previous.report_json)) : undefined,
+      current,
+    );
+    const reportJson = JSON.stringify(pending);
+    if (previous?.report_json === reportJson) {
+      continue;
+    }
+    recordLegacyMigrationRun(db, {
+      runId,
+      startedAt: now,
+      finishedAt: null,
       status: "pending",
+      reportJson,
+      upsert: true,
     });
+    deferred.push(pending);
   }
-  for (const pluginId of transitions.resolved) {
-    log.info(`Deferred state migration completed for plugin "${pluginId}".`, {
-      pluginId,
+  for (const pluginId of new Set(params.resolvedPluginIds)) {
+    const runId = `${RUN_PREFIX}${pluginId}`;
+    const previous = rows.get(runId);
+    if (pendingById.has(pluginId) || !previous) {
+      continue;
+    }
+    recordLegacyMigrationRun(db, {
+      runId,
+      startedAt: now,
+      finishedAt: now,
       status: "completed",
+      reportJson: previous.report_json,
+      upsert: true,
     });
+    resolved.push(pluginId);
   }
-  return transitions.pending;
+  if (deferred.length > 0) {
+    invalidateSuccessfulMigrationCheckpointsInTransaction(db);
+  }
+  return { deferred, resolved, pending: pendingMigrationRecords(readPendingMigrationRows(db)) };
+}
+
+/** Only the migration owner can resolve a pending record after its work completes. */
+export async function recordDeferredPluginMigrations(
+  params: DeferredPluginMigrationRecordInput,
+): Promise<readonly DeferredPluginMigration[] | undefined> {
+  if (params.pending.length === 0 && !params.resolvedPluginIds?.length) {
+    return undefined;
+  }
+  const input = structuredClone({
+    pending: params.pending,
+    resolvedPluginIds: params.resolvedPluginIds,
+    expectedPending: params.expectedPending,
+  });
+  const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
+  const { runWithOpenClawStateLeaseWorker } =
+    await import("../state/openclaw-state-lease-worker-storage.js");
+  return withPluginLifecycleLease({ env: params.env }, async (lease) => {
+    const context = captureOpenClawStateWorkerContext({
+      env: params.env,
+      path: lease.databasePath,
+    });
+    const result = await runWithOpenClawStateLeaseWorker(
+      lease.stateLease,
+      context,
+      (scope, identity) =>
+        scope.execute({
+          type: "plugins.deferredMigrations.record",
+          input: {
+            identity,
+            ...input,
+          },
+        }),
+      { assertCurrent: () => lease.assertCurrent() },
+    );
+    if (result.kind === "conflict") {
+      throw new DeferredPluginMigrationConflictError(result.pending);
+    }
+    if (result.kind === "invalid") {
+      throw new z.ZodError(result.issues);
+    }
+    const transitions = result.transitions;
+    const log = createSubsystemLogger("state-migrations");
+    for (const pending of transitions.deferred) {
+      log.warn(formatDeferredPluginMigration(pending, params.env), {
+        pluginId: pending.pluginId,
+        reason: pending.reason,
+        action: pending.command,
+        status: "pending",
+      });
+    }
+    for (const pluginId of transitions.resolved) {
+      log.info(`Deferred state migration completed for plugin "${pluginId}".`, {
+        pluginId,
+        status: "completed",
+      });
+    }
+    return transitions.pending;
+  });
 }

@@ -1,3 +1,5 @@
+import { asNonNegativeFiniteNumber as numericValue } from "openclaw/plugin-sdk/number-runtime";
+
 export type LabelSet = Record<string, string>;
 
 export function sortedLabels(labels: LabelSet): [string, string][] {
@@ -35,4 +37,9 @@ export function formatPrometheusNumber(value: number): string {
     return "0";
   }
   return Number.isInteger(value) ? String(value) : String(Number(value.toPrecision(12)));
+}
+
+export function seconds(ms: number | undefined): number | undefined {
+  const value = numericValue(ms);
+  return value === undefined ? undefined : value / 1000;
 }

@@ -4,12 +4,16 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
-import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
+import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { z } from "zod";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { ClientToolDefinition } from "../agents/command/shared-types.js";
@@ -20,16 +24,7 @@ import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.j
 import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
-import {
-  DEFAULT_INPUT_IMAGE_MAX_BYTES,
-  DEFAULT_INPUT_IMAGE_MIMES,
-  DEFAULT_INPUT_MAX_REDIRECTS,
-  DEFAULT_INPUT_TIMEOUT_MS,
-  extractImageContentFromSource,
-  normalizeMimeList,
-  type InputImageLimits,
-  type InputImageSource,
-} from "../media/input-files.js";
+import { extractImageContentFromSource, type InputImageSource } from "../media/input-files.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import {
   mergeAssistantText,
@@ -49,6 +44,7 @@ import {
 } from "./agent-prompt.js";
 import {
   parseGatewayJsonRequest,
+  retainGatewayHttpResponseWork,
   sendInvalidRequest,
   sendJson,
   sendMissingScopeForbidden,
@@ -59,6 +55,7 @@ import {
 } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { assertGatewayHttpRequestCurrent } from "./http-request-authority.js";
+import { rejectDisabledGatewayUpload } from "./http-upload-policy.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
   authorizeOpenAiCompatibleHttpSession,
@@ -71,14 +68,22 @@ import {
   resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
-import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
-import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
+import {
+  resolveOpenAiCompatError,
+  validateOpenAiSamplingParams,
+  resolveResponseFormat,
+  resolveStopSequences,
+} from "./openai-compat-errors.js";
 import {
   readOpenAiHttpRunTerminal,
   runOpenAiCompatibleAgentCommand,
   type OpenAiCompatibleHttpOptions,
 } from "./openai-compatible-agent-run.js";
+import {
+  resolveOpenAiChatCompletionsLimits,
+  type ResolvedOpenAiChatCompletionsLimits,
+} from "./openai-compatible-input-limits.js";
 import {
   applyToolChoice,
   isToolChoiceConstraintSatisfied,
@@ -87,15 +92,7 @@ import {
   type ToolChoiceConstraint,
 } from "./openai-tool-choice.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
-
-type OpenAiChatMessage = {
-  role?: unknown;
-  content?: unknown;
-  name?: unknown;
-  tool_call_id?: unknown;
-  tool_calls?: unknown;
-  stopReason?: unknown;
-};
+import { areGatewayUploadsEnabled, GATEWAY_UPLOADS_DISABLED_MESSAGE } from "./upload-policy.js";
 
 const OpenAiChatCompletionRequestSchema = z.object({
   model: z.string().optional(),
@@ -118,82 +115,38 @@ const OpenAiChatCompletionRequestSchema = z.object({
 
 type OpenAiChatCompletionRequest = z.infer<typeof OpenAiChatCompletionRequestSchema>;
 
-const DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES = 20 * 1024 * 1024;
-const DEFAULT_OPENAI_MAX_IMAGE_PARTS = 8;
-const DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
-const DEFAULT_OPENAI_IMAGE_LIMITS: InputImageLimits = {
-  allowUrl: false,
-  allowedMimes: new Set(DEFAULT_INPUT_IMAGE_MIMES),
-  maxBytes: DEFAULT_INPUT_IMAGE_MAX_BYTES,
-  maxRedirects: DEFAULT_INPUT_MAX_REDIRECTS,
-  timeoutMs: DEFAULT_INPUT_TIMEOUT_MS,
-};
-
-type ResolvedOpenAiChatCompletionsLimits = {
-  maxBodyBytes: number;
-  maxImageParts: number;
-  maxTotalImageBytes: number;
-  images: InputImageLimits;
-};
-
-function resolveOpenAiChatCompletionsLimits(
-  config: GatewayHttpChatCompletionsConfig | undefined,
-): ResolvedOpenAiChatCompletionsLimits {
-  const imageConfig = config?.images;
-  return {
-    maxBodyBytes: DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES,
-    maxImageParts: DEFAULT_OPENAI_MAX_IMAGE_PARTS,
-    maxTotalImageBytes: DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES,
-    images: {
-      allowUrl: imageConfig?.allowUrl ?? DEFAULT_OPENAI_IMAGE_LIMITS.allowUrl,
-      urlAllowlist: normalizeInputHostnameAllowlist(imageConfig?.urlAllowlist),
-      allowedMimes: normalizeMimeList(imageConfig?.allowedMimes, DEFAULT_INPUT_IMAGE_MIMES),
-      maxBytes: imageConfig?.maxBytes ?? DEFAULT_INPUT_IMAGE_MAX_BYTES,
-      maxRedirects: imageConfig?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
-      timeoutMs: imageConfig?.timeoutMs ?? DEFAULT_INPUT_TIMEOUT_MS,
-    },
-  };
-}
-
 function writeSse(res: ServerResponse, data: unknown) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
-function extractClientToolsFromChatRequest(tools: unknown): ClientToolDefinition[] {
-  if (tools == null) {
-    return [];
-  }
-  if (!Array.isArray(tools)) {
-    throw new Error("tools must be an array");
-  }
+function extractClientToolsFromChatRequest(
+  tools: OpenAiChatCompletionRequest["tools"],
+): ClientToolDefinition[] {
   const clientTools: ClientToolDefinition[] = [];
-  for (const tool of tools) {
-    if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
+  for (const rawTool of tools ?? []) {
+    const tool = asOptionalRecord(rawTool);
+    if (!tool) {
       throw new Error("each tool must be an object");
     }
-    if ((tool as { type?: unknown }).type !== "function") {
+    if (tool.type !== "function") {
       throw new Error("only function tools are supported");
     }
-    const functionValue = (tool as { function?: unknown }).function;
-    if (!functionValue || typeof functionValue !== "object" || Array.isArray(functionValue)) {
+    const functionValue = asOptionalRecord(tool.function);
+    if (!functionValue) {
       throw new Error("tool.function is required");
     }
-    const rawName = (functionValue as { name?: unknown }).name;
-    const name = typeof rawName === "string" ? rawName.trim() : "";
+    const name = normalizeOptionalString(functionValue.name);
     if (!name) {
       throw new Error("tool.function.name is required");
     }
-    const description = (functionValue as { description?: unknown }).description;
-    const parameters = (functionValue as { parameters?: unknown }).parameters;
-    const strict = (functionValue as { strict?: unknown }).strict;
+    const { description, strict } = functionValue;
+    const parameters = asOptionalRecord(functionValue.parameters);
     clientTools.push({
       type: "function",
       function: {
         name,
         ...(typeof description === "string" ? { description } : {}),
-        ...(parameters && typeof parameters === "object" && !Array.isArray(parameters)
-          ? { parameters: parameters as Record<string, unknown> }
-          : {}),
+        ...(parameters ? { parameters } : {}),
         ...(typeof strict === "boolean" ? { strict } : {}),
       },
     });
@@ -206,7 +159,7 @@ type ChatCompletionStreamIdentity = { runId: string; model: string; created: num
 function writeChatCompletionChunk(
   res: ServerResponse,
   identity: ChatCompletionStreamIdentity,
-  chunk: { choices: unknown[]; usage?: OpenAiChatCompletionsUsage },
+  chunk: { choices: ChatCompletionChunk.Choice[]; usage?: OpenAiChatCompletionsUsage },
 ) {
   writeSse(res, {
     id: identity.runId,
@@ -217,39 +170,14 @@ function writeChatCompletionChunk(
   });
 }
 
-function writeAssistantRoleChunk(res: ServerResponse, params: ChatCompletionStreamIdentity) {
-  writeChatCompletionChunk(res, params, {
-    choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
-  });
-}
-
-function writeAssistantContentChunk(
+function writeChatCompletionChoice(
   res: ServerResponse,
-  params: ChatCompletionStreamIdentity & { content: string },
+  identity: ChatCompletionStreamIdentity,
+  delta: ChatCompletionChunk.Choice.Delta,
+  finishReason: "stop" | "length" | "tool_calls" | null = null,
 ) {
-  writeChatCompletionChunk(res, params, {
-    choices: [
-      {
-        index: 0,
-        delta: { content: params.content },
-        finish_reason: null,
-      },
-    ],
-  });
-}
-
-function writeAssistantFinishChunk(
-  res: ServerResponse,
-  params: ChatCompletionStreamIdentity & { finishReason: "stop" | "length" | "tool_calls" },
-) {
-  writeChatCompletionChunk(res, params, {
-    choices: [
-      {
-        index: 0,
-        delta: {},
-        finish_reason: params.finishReason,
-      },
-    ],
+  writeChatCompletionChunk(res, identity, {
+    choices: [{ index: 0, delta, finish_reason: finishReason }],
   });
 }
 
@@ -260,21 +188,13 @@ function writeAssistantToolCallsIncrementalChunks(
   },
 ) {
   for (const [index, call] of params.toolCalls.entries()) {
-    writeChatCompletionChunk(res, params, {
-      choices: [
+    writeChatCompletionChoice(res, params, {
+      tool_calls: [
         {
-          index: 0,
-          delta: {
-            tool_calls: [
-              {
-                index,
-                id: call.id,
-                type: "function",
-                function: { name: call.name, arguments: "" },
-              },
-            ],
-          },
-          finish_reason: null,
+          index,
+          id: call.id,
+          type: "function",
+          function: { name: call.name, arguments: "" },
         },
       ],
     });
@@ -287,19 +207,11 @@ function writeAssistantToolCallsIncrementalChunks(
         start,
         Math.min(start + 256, call.arguments.length),
       );
-      writeChatCompletionChunk(res, params, {
-        choices: [
+      writeChatCompletionChoice(res, params, {
+        tool_calls: [
           {
-            index: 0,
-            delta: {
-              tool_calls: [
-                {
-                  index,
-                  function: { arguments: call.arguments.slice(start, end) },
-                },
-              ],
-            },
-            finish_reason: null,
+            index,
+            function: { arguments: call.arguments.slice(start, end) },
           },
         ],
       });
@@ -308,34 +220,17 @@ function writeAssistantToolCallsIncrementalChunks(
   }
 }
 
-function writeUsageChunk(
-  res: ServerResponse,
-  params: ChatCompletionStreamIdentity & {
-    usage: OpenAiChatCompletionsUsage;
-  },
-) {
-  writeChatCompletionChunk(res, params, {
-    choices: [],
-    usage: params.usage,
-  });
-}
-
-function asMessages(val: unknown): OpenAiChatMessage[] {
-  return Array.isArray(val) ? (val as OpenAiChatMessage[]) : [];
-}
-
 function extractTextContent(content: unknown): string | undefined {
   if (typeof content === "string") {
     return content;
   }
   if (Array.isArray(content)) {
     const parts = content.map((part) => {
-      if (!part || typeof part !== "object") {
+      const record = asOptionalObjectRecord(part);
+      if (!record) {
         return undefined;
       }
-      const type = (part as { type?: unknown }).type;
-      const text = (part as { text?: unknown }).text;
-      const inputText = (part as { input_text?: unknown }).input_text;
+      const { type, text, input_text: inputText } = record;
       if ((type === "text" || type === "input_text") && typeof text === "string") {
         return text;
       }
@@ -368,44 +263,27 @@ function extractAssistantToolCalls(value: unknown): ConversationToolCall[] {
   }
   const calls: ConversationToolCall[] = [];
   for (const rawCall of value) {
-    if (!rawCall || typeof rawCall !== "object" || Array.isArray(rawCall)) {
+    const call = asOptionalRecord(rawCall);
+    if (!call) {
       continue;
     }
-    const id = normalizeOptionalString((rawCall as { id?: unknown }).id) ?? "";
-    const functionValue = (rawCall as { function?: unknown }).function;
-    if (!functionValue || typeof functionValue !== "object" || Array.isArray(functionValue)) {
-      continue;
-    }
-    const name = normalizeOptionalString((functionValue as { name?: unknown }).name) ?? "";
+    const id = normalizeOptionalString(call.id);
+    const functionValue = asOptionalRecord(call.function);
+    const name = normalizeOptionalString(functionValue?.name);
     if (!id || !name) {
       continue;
     }
-    const argumentsValue = stringifyToolCallArguments(
-      (functionValue as { arguments?: unknown }).arguments,
-    );
+    const argumentsValue = stringifyToolCallArguments(functionValue?.arguments);
     calls.push({ id, name, arguments: argumentsValue });
   }
   return calls;
 }
 
 function resolveImageUrlPart(part: unknown): string | undefined {
-  if (!part || typeof part !== "object") {
-    return undefined;
-  }
-  const imageUrl = (part as { image_url?: unknown }).image_url;
-  if (typeof imageUrl === "string") {
-    const trimmed = imageUrl.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
-  }
-  if (!imageUrl || typeof imageUrl !== "object") {
-    return undefined;
-  }
-  const rawUrl = (imageUrl as { url?: unknown }).url;
-  if (typeof rawUrl !== "string") {
-    return undefined;
-  }
-  const trimmed = rawUrl.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  const imageUrl = asOptionalObjectRecord(part)?.image_url;
+  return normalizeOptionalString(
+    typeof imageUrl === "string" ? imageUrl : asOptionalObjectRecord(imageUrl)?.url,
+  );
 }
 
 type ExtractedImageUrls = { kind: "valid"; urls: string[] } | { kind: "invalid" };
@@ -416,10 +294,7 @@ function extractImageUrls(content: unknown): ExtractedImageUrls {
     return { kind: "valid", urls };
   }
   for (const part of content) {
-    if (!part || typeof part !== "object") {
-      continue;
-    }
-    if ((part as { type?: unknown }).type !== "image_url") {
+    if (asOptionalObjectRecord(part)?.type !== "image_url") {
       continue;
     }
     const url = resolveImageUrlPart(part);
@@ -432,7 +307,6 @@ function extractImageUrls(content: unknown): ExtractedImageUrls {
 }
 
 type ActiveTurnContext = {
-  activeTurnIndex: number;
   activeUserMessageIndex: number;
   imageUrls: ExtractedImageUrls;
 };
@@ -465,11 +339,10 @@ function parseImageUrlToSource(url: string): InputImageSource {
   return { type: "url", url };
 }
 
-function resolveActiveTurnContext(messagesUnknown: unknown): ActiveTurnContext {
-  const messages = asMessages(messagesUnknown);
+function resolveActiveTurnContext(messages: unknown[] = []): ActiveTurnContext {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const msg = messages[i];
-    if (!msg || typeof msg !== "object") {
+    const msg = asOptionalObjectRecord(messages[i]);
+    if (!msg) {
       continue;
     }
     const role = normalizeOptionalString(msg.role) ?? "";
@@ -480,13 +353,11 @@ function resolveActiveTurnContext(messagesUnknown: unknown): ActiveTurnContext {
     const imageUrls: ExtractedImageUrls =
       normalizedRole === "user" ? extractImageUrls(msg.content) : { kind: "valid", urls: [] };
     return {
-      activeTurnIndex: i,
       activeUserMessageIndex: normalizedRole === "user" ? i : -1,
       imageUrls,
     };
   }
   return {
-    activeTurnIndex: -1,
     activeUserMessageIndex: -1,
     imageUrls: { kind: "valid", urls: [] },
   };
@@ -537,21 +408,21 @@ async function resolveImagesForRequest(
 }
 
 function buildAgentPrompt(
-  messagesUnknown: unknown,
+  messages: unknown[] | undefined,
   activeTurnContext: Pick<ActiveTurnContext, "activeUserMessageIndex" | "imageUrls">,
 ): {
   message: string;
   extraSystemPrompt?: string;
 } {
-  const messages = asMessages(messagesUnknown);
   const hasActiveTurnImage =
     activeTurnContext.imageUrls.kind === "valid" && activeTurnContext.imageUrls.urls.length > 0;
 
   const systemParts: string[] = [];
   const conversationEntries: ConversationEntry[] = [];
 
-  for (const [i, msg] of messages.entries()) {
-    if (!msg || typeof msg !== "object") {
+  for (const [i, rawMessage] of (messages ?? []).entries()) {
+    const msg = asOptionalObjectRecord(rawMessage);
+    if (!msg) {
       continue;
     }
     const role = normalizeOptionalString(msg.role) ?? "";
@@ -633,64 +504,6 @@ function resolveChatCompletionUsage(result: unknown): OpenAiChatCompletionsUsage
   return toOpenAiChatCompletionsUsage(resolveAgentRunUsage(result));
 }
 
-function resolveIncludeUsageForStreaming(payload: OpenAiChatCompletionRequest): boolean {
-  // Keep parsing aligned with OpenAI wire-format field names.
-  // Flow reference: src/agents/openai-transport-stream.ts:1262-1273
-  const streamOptions = payload.stream_options;
-  if (!streamOptions || typeof streamOptions !== "object" || Array.isArray(streamOptions)) {
-    return false;
-  }
-  return (streamOptions as { include_usage?: unknown }).include_usage === true;
-}
-
-function resolveResponseFormat(value: unknown): Record<string, unknown> | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("response_format must be an object");
-  }
-  const obj = value as Record<string, unknown>;
-  const type = obj.type;
-  if (type !== "text" && type !== "json_object" && type !== "json_schema") {
-    throw new Error("response_format.type must be text, json_object, or json_schema");
-  }
-  return obj;
-}
-
-function resolveStopSequences(value: unknown): string[] | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  const list = typeof value === "string" ? [value] : value;
-  if (!Array.isArray(list)) {
-    throw new Error("stop must be a string or array of strings");
-  }
-  // OpenAI Chat Completions accepts at most 4 stop sequences.
-  if (list.length > 4) {
-    throw new Error("stop supports at most 4 sequences");
-  }
-  const sequences: string[] = [];
-  for (const item of list) {
-    if (typeof item !== "string" || item.length === 0) {
-      throw new Error("stop entries must be non-empty strings");
-    }
-    sequences.push(item);
-  }
-  return sequences.length > 0 ? sequences : undefined;
-}
-
-function resolveChatCompletionTokenCap(value: unknown, field: string): number | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  const maxTokens = asPositiveSafeInteger(value);
-  if (maxTokens === undefined) {
-    throw new Error(`${field} must be a positive safe integer`);
-  }
-  return maxTokens;
-}
-
 export async function handleOpenAiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -726,29 +539,29 @@ export async function handleOpenAiHttpRequest(
   if (!payload) {
     return true;
   }
-  const stream = payload.stream === true;
-  const streamIncludeUsage = stream && resolveIncludeUsageForStreaming(payload);
-  const model = typeof payload.model === "string" ? payload.model : "openclaw";
-  const user = typeof payload.user === "string" ? payload.user : undefined;
-  let maxTokens: number | undefined;
-  try {
-    const maxCompletionTokens = resolveChatCompletionTokenCap(
-      payload.max_completion_tokens,
-      "max_completion_tokens",
+  const hasMedia = (payload.messages ?? []).some((message) => {
+    const content = asOptionalObjectRecord(message)?.content;
+    return (
+      Array.isArray(content) &&
+      content.some((part) => {
+        const type = asOptionalObjectRecord(part)?.type;
+        return type === "image_url" || type === "file";
+      })
     );
-    const legacyMaxTokens = resolveChatCompletionTokenCap(payload.max_tokens, "max_tokens");
-    maxTokens = maxCompletionTokens ?? legacyMaxTokens;
-  } catch (err) {
-    sendInvalidRequest(res, formatErrorMessage(err).trim());
+  });
+  if (rejectDisabledGatewayUpload(res, hasMedia)) {
     return true;
   }
-  const temperature = typeof payload.temperature === "number" ? payload.temperature : undefined;
-  const topP = typeof payload.top_p === "number" ? payload.top_p : undefined;
-  const frequencyPenalty =
-    typeof payload.frequency_penalty === "number" ? payload.frequency_penalty : undefined;
-  const presencePenalty =
-    typeof payload.presence_penalty === "number" ? payload.presence_penalty : undefined;
-  const seed = typeof payload.seed === "number" ? payload.seed : undefined;
+  const stream = payload.stream === true;
+  const streamIncludeUsage = stream && payload.stream_options?.include_usage === true;
+  const model = payload.model ?? "openclaw";
+  const user = payload.user;
+  const maxTokens = payload.max_completion_tokens ?? payload.max_tokens ?? undefined;
+  const temperature = payload.temperature ?? undefined;
+  const topP = payload.top_p ?? undefined;
+  const frequencyPenalty = payload.frequency_penalty ?? undefined;
+  const presencePenalty = payload.presence_penalty ?? undefined;
+  const seed = payload.seed ?? undefined;
   let responseFormat: Record<string, unknown> | undefined;
   try {
     responseFormat = resolveResponseFormat(payload.response_format);
@@ -872,8 +685,16 @@ export async function handleOpenAiHttpRequest(
   let images: ImageContent[];
   try {
     assertGatewayHttpRequestCurrent(handled.requestAuth);
-    images = await resolveImagesForRequest(activeTurnContext, limits, abortController.signal, () =>
-      assertGatewayHttpRequestCurrent(handled.requestAuth),
+    images = await resolveImagesForRequest(
+      activeTurnContext,
+      limits,
+      abortController.signal,
+      () => {
+        assertGatewayHttpRequestCurrent(handled.requestAuth);
+        if (hasMedia && !areGatewayUploadsEnabled(getRuntimeConfig())) {
+          throw new Error(GATEWAY_UPLOADS_DISABLED_MESSAGE);
+        }
+      },
     );
   } catch (err) {
     if (abortController.signal.aborted) {
@@ -883,11 +704,18 @@ export async function handleOpenAiHttpRequest(
       sendUnauthorized(res);
       return true;
     }
+    if (rejectDisabledGatewayUpload(res, hasMedia)) {
+      return true;
+    }
     logWarn(`openai-compat: invalid image_url content: ${String(err)}`);
     sendInvalidRequest(res, "Invalid image_url content in `messages`.");
     return true;
   }
 
+  // Preparation can yield across a runtime policy publication, including the last image.
+  if (rejectDisabledGatewayUpload(res, hasMedia)) {
+    return true;
+  }
   if (!prompt.message && images.length === 0) {
     sendInvalidRequest(res, "Missing user message in `messages`.");
     return true;
@@ -914,6 +742,7 @@ export async function handleOpenAiHttpRequest(
       operatorScopes: handled.operatorScopes,
       abortSignal: abortController.signal,
       hasCurrentClientAuthority: handled.requestAuth.hasCurrentClientAuthority,
+      hasClientUploads: hasMedia,
       streamParams,
       resolveGatewayContext: opts.resolveGatewayContext,
     });
@@ -951,34 +780,10 @@ export async function handleOpenAiHttpRequest(
         return true;
       }
 
-      if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
-        const commentary = resolveAssistantResultText(result) ?? "";
-        sendJson(res, 200, {
-          id: runId,
-          object: "chat.completion",
-          created,
-          model,
-          choices: [
-            {
-              index: 0,
-              message: {
-                role: "assistant",
-                content: commentary,
-                tool_calls: pendingToolCalls.map((call) => ({
-                  id: call.id,
-                  type: "function",
-                  function: { name: call.name, arguments: call.arguments },
-                })),
-              },
-              finish_reason: "tool_calls",
-            },
-          ],
-          usage,
-        });
-        return true;
-      }
-      const content = resolveAssistantResultText(result) || "No response from OpenClaw.";
-
+      const toolCalls =
+        stopReason === "tool_calls" && pendingToolCalls?.length ? pendingToolCalls : undefined;
+      const content =
+        resolveAssistantResultText(result) || (toolCalls ? "" : "No response from OpenClaw.");
       sendJson(res, 200, {
         id: runId,
         object: "chat.completion",
@@ -987,8 +792,20 @@ export async function handleOpenAiHttpRequest(
         choices: [
           {
             index: 0,
-            message: { role: "assistant", content },
-            finish_reason: stopReason === "length" ? "length" : "stop",
+            message: {
+              role: "assistant",
+              content,
+              ...(toolCalls
+                ? {
+                    tool_calls: toolCalls.map((call) => ({
+                      id: call.id,
+                      type: "function",
+                      function: { name: call.name, arguments: call.arguments },
+                    })),
+                  }
+                : {}),
+            },
+            finish_reason: toolCalls ? "tool_calls" : stopReason === "length" ? "length" : "stop",
           },
         ],
         usage,
@@ -1016,7 +833,6 @@ export async function handleOpenAiHttpRequest(
 
   setSseHeaders(res);
 
-  let wroteStopChunk = false;
   let assistantText: AssistantTextSnapshot = { text: "" };
   let streamedAssistantText = assistantText;
   let pendingAssistantText: AssistantTextSnapshot | undefined;
@@ -1024,7 +840,6 @@ export async function handleOpenAiHttpRequest(
   let finalFinishReason: "stop" | "length" = "stop";
   let finalToolCalls: ReturnType<typeof readOpenAiHttpRunTerminal>["pendingToolCalls"];
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
-  let finalizeRequested = false;
   let finalizeScheduled = false;
   let resultResolved = false;
   let closed = false;
@@ -1032,8 +847,8 @@ export async function handleOpenAiHttpRequest(
   let terminalStreamError: { message: string; type: string; code?: string } | undefined;
   let terminalLifecyclePhase: "end" | "error" = "end";
 
-  const maybeFinalize = () => {
-    if (closed || finalizeScheduled || !finalizeRequested) {
+  const requestFinalize = () => {
+    if (closed || finalizeScheduled) {
       return;
     }
     if (!resultResolved) {
@@ -1069,7 +884,7 @@ export async function handleOpenAiHttpRequest(
       }
       const content = text.slice(streamedAssistantText.text.length);
       if (content) {
-        writeAssistantContentChunk(res, { ...streamIdentity, content });
+        writeChatCompletionChoice(res, streamIdentity, { content });
       }
       if (finalToolCalls) {
         writeAssistantToolCallsIncrementalChunks(res, {
@@ -1079,30 +894,21 @@ export async function handleOpenAiHttpRequest(
       }
       closed = true;
       unsubscribe();
-      if (!wroteStopChunk) {
-        writeAssistantFinishChunk(res, {
-          ...streamIdentity,
-          finishReason: finalToolCalls ? "tool_calls" : finalFinishReason,
-        });
-        wroteStopChunk = true;
-      }
+      writeChatCompletionChoice(
+        res,
+        streamIdentity,
+        {},
+        finalToolCalls ? "tool_calls" : finalFinishReason,
+      );
       if (streamIncludeUsage && finalUsage) {
-        writeUsageChunk(res, { ...streamIdentity, usage: finalUsage });
+        writeChatCompletionChunk(res, streamIdentity, { choices: [], usage: finalUsage });
       }
       writeDone(res);
       res.end();
     });
   };
 
-  const requestFinalize = () => {
-    finalizeRequested = true;
-    maybeFinalize();
-  };
-
   const unsubscribe = onAgentEventForRun(runId, (evt) => {
-    if (evt.runId !== runId) {
-      return;
-    }
     if (closed) {
       return;
     }
@@ -1142,7 +948,7 @@ export async function handleOpenAiHttpRequest(
       if (!content) {
         return;
       }
-      writeAssistantContentChunk(res, { ...streamIdentity, content });
+      writeChatCompletionChoice(res, streamIdentity, { content });
       return;
     }
 
@@ -1178,14 +984,7 @@ export async function handleOpenAiHttpRequest(
   // Agent cleanup and deferred SSE delivery have independent lifetimes;
   // shutdown must wait until both have settled, whichever finishes last.
   const releaseAgentRootWork = retainGatewayRootWorkAdmissionContinuation();
-  const releaseResponseRootWork = retainGatewayRootWorkAdmissionContinuation();
-  const releaseStreamRootWork = () => {
-    res.off("finish", releaseStreamRootWork);
-    res.off("close", releaseStreamRootWork);
-    releaseResponseRootWork?.();
-  };
-  res.once("finish", releaseStreamRootWork);
-  res.once("close", releaseStreamRootWork);
+  const releaseStreamRootWork = retainGatewayHttpResponseWork(res);
 
   onDisconnect = () => {
     closed = true;
@@ -1193,7 +992,7 @@ export async function handleOpenAiHttpRequest(
     releaseStreamRootWork();
   };
 
-  writeAssistantRoleChunk(res, streamIdentity);
+  writeChatCompletionChoice(res, streamIdentity, { role: "assistant" });
 
   void (async () => {
     try {

@@ -6,30 +6,67 @@ import {
 } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import type { UserProfileGitHubIdentity } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
-import { normalizeGitHubLogin } from "../utils/github-login.js";
-import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
 import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "./openclaw-state-db.js";
+  getAdmittedSqliteSchemaFacts,
+  type SqliteSchemaFacts,
+} from "../infra/sqlite-schema-facts.js";
+import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { normalizeGitHubLogin } from "../utils/github-login.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
+import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { deleteUserPreference, selectUserPreferenceValues } from "./user-preferences.store.js";
-import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
+import {
+  captureUserProfileAuthorityRead,
+  publishUserProfileAuthorityChange,
+} from "./user-profile-events.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
 import {
+  selectUserProfileEmailAlias,
   selectResolvedUserProfileMetadataById,
   setUserProfileEmailBinding,
   userProfilesDb,
 } from "./user-profiles-internal.js";
-import { ensureUserProfilesSchema, UserProfileOwnerError } from "./user-profiles-schema.js";
-import type { CachedGitHubIdentity } from "./user-profiles.types.js";
+import { UserProfileOwnerError } from "./user-profiles-schema.js";
+import type {
+  CachedGitHubIdentity,
+  StoredGitHubIdentity,
+  UserProfileGitHubAttribution,
+  UserProfileGitHubAttributionRead,
+} from "./user-profiles.types.js";
 
 const GITHUB_PROVIDER = "github";
 const GITHUB_LOGIN_SUBJECT_PREFIX = "login:";
+const githubColumnFacts = new WeakMap<
+  SqliteSchemaFacts,
+  { primaryAccount: boolean; verifiedLogin: boolean }
+>();
 
-type StoredGitHubIdentity = {
-  accountId: number;
-  login: string;
-};
+function readGitHubColumns(db: DatabaseSync) {
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  if (!schema) {
+    return {
+      primaryAccount: tableHasColumn(db, "user_profiles", "primary_github_account_id"),
+      verifiedLogin: tableHasColumn(db, "user_profile_identities", "canonical_login"),
+    };
+  }
+  let columns = githubColumnFacts.get(schema);
+  if (!columns) {
+    const hasColumn = (table: "user_profiles" | "user_profile_identities", column: string) => {
+      const sql = schema.tableSql.get(table);
+      return sql !== undefined && parseSqliteTableDefinition(sql, table).columns.has(column);
+    };
+    columns = {
+      primaryAccount: hasColumn("user_profiles", "primary_github_account_id"),
+      verifiedLogin: hasColumn("user_profile_identities", "canonical_login"),
+    };
+    githubColumnFacts.set(schema, columns);
+  }
+  return columns;
+}
 
 function parseStoredGitHubIdentity(row: {
   subject: string | null | undefined;
@@ -55,13 +92,17 @@ export function selectStoredGitHubIdentities(
   if (profileIds?.length === 0) {
     return new Map();
   }
+  const columns = readGitHubColumns(db);
+  if (!columns.verifiedLogin) {
+    return new Map();
+  }
   let query = userProfilesDb(db)
     .selectFrom("user_profile_identities")
     .innerJoin("user_profiles", "user_profiles.id", "user_profile_identities.profile_id")
     .select(["profile_id", "subject", "canonical_login"])
     // Read-only catalog projections must not initialize a pre-feature database.
     .select((eb) => [
-      tableHasColumn(db, "user_profiles", "primary_github_account_id")
+      columns.primaryAccount
         ? "user_profiles.primary_github_account_id"
         : eb.val<number | null>(null).as("primary_github_account_id"),
     ])
@@ -103,7 +144,7 @@ export function selectStoredGitHubIdentities(
   );
 }
 
-export function resolveCachedGitHubIdentityInDatabase(
+function resolveCachedGitHubIdentityInDatabase(
   db: DatabaseSync,
   params: { accountId: number; email: string },
 ): CachedGitHubIdentity | undefined {
@@ -115,17 +156,11 @@ export function resolveCachedGitHubIdentityInDatabase(
     !tableExists(db, "user_profiles") ||
     !tableExists(db, "user_profile_emails") ||
     !tableExists(db, "user_profile_identities") ||
-    !tableHasColumn(db, "user_profile_identities", "canonical_login")
+    !readGitHubColumns(db).verifiedLogin
   ) {
     return undefined;
   }
-  const alias = executeSqliteQueryTakeFirstSync(
-    db,
-    userProfilesDb(db)
-      .selectFrom("user_profile_emails")
-      .select("profile_id")
-      .where("email", "=", email),
-  );
+  const alias = selectUserProfileEmailAlias(db, email);
   const profile = alias ? selectResolvedUserProfileMetadataById(db, alias.profile_id) : undefined;
   if (!profile) {
     return undefined;
@@ -134,20 +169,6 @@ export function resolveCachedGitHubIdentityInDatabase(
   return identity?.accounts.some((account) => account.accountId === params.accountId)
     ? { profileId: profile.id, updatedAt: profile.updated_at }
     : undefined;
-}
-
-/** All verified handles are searchable; the primary controls only public credit/projection. */
-export function listUserProfileGitHubLogins(
-  options: OpenClawStateDatabaseOptions = {},
-): Map<string, string[]> {
-  const database = openOpenClawStateDatabase(options);
-  ensureUserProfilesSchema(options, database);
-  return new Map(
-    [...selectStoredGitHubIdentities(database.db)].map(([id, profile]) => [
-      id,
-      profile.accounts.map((account) => account.login),
-    ]),
-  );
 }
 
 export function githubAuthenticationSubject(login: string): string {
@@ -170,17 +191,35 @@ export function selectUserProfileGitHubIdentities(
   );
 }
 
-/** Resolves bounded participants for verified identities that have not opted out of public credit. */
-export function resolveUserProfileGitHubAttribution(
+/** Resolves current verified identities and public-credit preferences without initializing storage. */
+export async function resolveUserProfileGitHubAttribution(
   profileIds: readonly string[],
   options: OpenClawStateDatabaseOptions = {},
-): Map<string, StoredGitHubIdentity | null> {
+): Promise<UserProfileGitHubAttribution> {
   if (profileIds.length === 0) {
     return new Map();
   }
-  const database = openOpenClawStateDatabase(options);
-  ensureUserProfilesSchema(options, database);
-  const { db } = database;
+  const reply = await executeExistingOpenClawStateRead(
+    options,
+    { type: "userProfiles.githubAttribution.resolve", profileIds },
+    { current: true },
+  );
+  if (!reply) {
+    return new Map();
+  }
+  if (!reply.ok || reply.type !== "userProfiles.githubAttribution.resolve") {
+    throw new Error("GitHub attribution reader returned an unexpected result");
+  }
+  return reply.identities;
+}
+
+function resolveUserProfileGitHubAttributionInDatabase(
+  db: DatabaseSync,
+  profileIds: readonly string[],
+): UserProfileGitHubAttributionRead {
+  if (profileIds.length === 0 || !tableExists(db, "user_profiles")) {
+    return { identities: new Map(), canonicalProfileIds: [] };
+  }
   const profiles = executeSqliteQuerySync(
     db,
     userProfilesDb(db)
@@ -192,15 +231,74 @@ export function resolveUserProfileGitHubAttribution(
     profiles.map((profile) => [profile.id, profile.merged_into ?? profile.id] as const),
   );
   const canonicalIds = [...new Set(canonicalBySource.values())];
-  const identities = selectStoredGitHubIdentities(db, canonicalIds);
+  const identities: ReturnType<typeof selectStoredGitHubIdentities> = tableExists(
+    db,
+    "user_profile_identities",
+  )
+    ? selectStoredGitHubIdentities(db, canonicalIds)
+    : new Map();
   const preferences = selectUserPreferenceValues(db, canonicalIds, GIT_COAUTHOR_PREFERENCE_KEY);
-  return new Map(
-    [...canonicalBySource].map(([sourceId, canonicalId]) => [
-      sourceId,
-      isGitCoauthorCreditEnabled(preferences.get(canonicalId))
-        ? (identities.get(canonicalId)?.primary ?? null)
-        : null,
-    ]),
+  return {
+    identities: new Map(
+      [...canonicalBySource].map(([sourceId, canonicalId]) => [
+        sourceId,
+        isGitCoauthorCreditEnabled(preferences.get(canonicalId))
+          ? (identities.get(canonicalId)?.primary ?? null)
+          : null,
+      ]),
+    ),
+    canonicalProfileIds: canonicalIds,
+  };
+}
+
+/** Bind public credit to its live profile owner before any later publication awaits. */
+export async function prepareUserProfileGitHubAttribution(
+  profileIds: readonly string[],
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<{ identities: UserProfileGitHubAttribution; isCurrent: () => boolean }> {
+  const selectedProfileIds = [...profileIds];
+  const context = captureOpenClawStateWorkerContext(options);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const authority = await captureUserProfileAuthorityRead(context.admission);
+    const reply = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env: context.environment },
+      { type: "userProfiles.githubAttribution.resolve", profileIds: selectedProfileIds },
+      { context, current: true },
+    );
+    context.admission.assertCurrent();
+    if (reply && (!reply.ok || reply.type !== "userProfiles.githubAttribution.resolve")) {
+      throw new Error("GitHub attribution reader returned an unexpected result");
+    }
+    const isCurrent = authority.bind([
+      ...selectedProfileIds,
+      ...(reply?.canonicalProfileIds ?? []),
+    ]);
+    if (isCurrent) {
+      return { identities: reply?.identities ?? new Map(), isCurrent };
+    }
+  }
+  throw new Error("Git co-author credit changed while preparing attribution");
+}
+
+export function readUserProfileGitHubCommand(
+  db: DatabaseSync,
+  command: Extract<
+    OpenClawStateReadCommand,
+    { type: "userProfiles.githubIdentity.cached" | "userProfiles.githubAttribution.resolve" }
+  >,
+):
+  | { type: "userProfiles.githubIdentity.cached"; identity: CachedGitHubIdentity | undefined }
+  | ({ type: "userProfiles.githubAttribution.resolve" } & UserProfileGitHubAttributionRead) {
+  return runSqliteDeferredTransactionSync(db, () =>
+    command.type === "userProfiles.githubIdentity.cached"
+      ? {
+          type: command.type,
+          identity: resolveCachedGitHubIdentityInDatabase(db, command),
+        }
+      : {
+          type: command.type,
+          ...resolveUserProfileGitHubAttributionInDatabase(db, command.profileIds),
+        },
   );
 }
 
@@ -236,9 +334,91 @@ export function prepareUserProfileGitHubMerge(
   );
 }
 
+type GitHubProfileAlias =
+  | { kind: "email"; email: string }
+  | { kind: "github-login"; subject: string };
+
+function readGitHubIdentityBinding(db: DatabaseSync, alias: GitHubProfileAlias, accountId: number) {
+  const kysely = userProfilesDb(db);
+  const subject = String(accountId);
+  const existing = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("user_profile_identities")
+      .leftJoin("user_profiles", "user_profiles.id", "user_profile_identities.profile_id")
+      .select(["profile_id", "canonical_login", "primary_github_account_id"])
+      .where("provider", "=", GITHUB_PROVIDER)
+      .where("subject", "=", subject)
+      .where("canonical_login", "is not", null),
+  );
+  const aliasIdentity =
+    alias.kind === "email"
+      ? selectUserProfileEmailAlias(db, alias.email)
+      : executeSqliteQueryTakeFirstSync(
+          db,
+          kysely
+            .selectFrom("user_profile_identities")
+            .select("profile_id")
+            .where("provider", "=", GITHUB_PROVIDER)
+            .where("subject", "=", alias.subject)
+            .where("canonical_login", "is", null),
+        );
+  const aliasProfileId = aliasIdentity
+    ? selectResolvedUserProfileMetadataById(db, aliasIdentity.profile_id)?.id
+    : undefined;
+  const aliasGitHubIdentity = aliasProfileId
+    ? selectStoredGitHubIdentities(db, [aliasProfileId]).get(aliasProfileId)
+    : undefined;
+  const existingProfileId = existing
+    ? selectResolvedUserProfileMetadataById(db, existing.profile_id)?.id
+    : undefined;
+  return { existing, aliasIdentity, aliasProfileId, aliasGitHubIdentity, existingProfileId };
+}
+
+function assertCompatibleGitHubEmailBinding(
+  binding: ReturnType<typeof readGitHubIdentityBinding>,
+  accountId: number,
+) {
+  const { existingProfileId, aliasProfileId, aliasGitHubIdentity } = binding;
+  if (
+    [
+      binding.aliasIdentity?.profile_id,
+      binding.existing?.profile_id,
+      aliasProfileId,
+      existingProfileId,
+    ].includes(GATEWAY_OWNER_PROFILE_ID)
+  ) {
+    throw new UserProfileOwnerError("merge");
+  }
+  if (
+    (existingProfileId && existingProfileId !== aliasProfileId) ||
+    (aliasGitHubIdentity &&
+      !aliasGitHubIdentity.accounts.some((account) => account.accountId === accountId))
+  ) {
+    throw new Error(
+      "GitHub identity requires explicit linking to this email; ask an administrator to use users.linkEmail",
+    );
+  }
+}
+
+/** The email owner checks the same conflicts even when optional GitHub metadata is unavailable. */
+export function assertGitHubEmailIdentityBinding(
+  db: DatabaseSync,
+  email: string,
+  accountId: number,
+) {
+  if (!Number.isSafeInteger(accountId) || accountId <= 0) {
+    throw new TypeError("GitHub account id must be a positive safe integer");
+  }
+  assertCompatibleGitHubEmailBinding(
+    readGitHubIdentityBinding(db, { kind: "email", email }, accountId),
+    accountId,
+  );
+}
+
 export function applyVerifiedGitHubIdentity(params: {
   db: DatabaseSync;
-  alias: { kind: "email"; email: string } | { kind: "github-login"; subject: string };
+  alias: GitHubProfileAlias;
   identity: { accountId: number; login: string };
   preserveEmailProfile?: boolean;
   createProfile: () => string;
@@ -256,54 +436,11 @@ export function applyVerifiedGitHubIdentity(params: {
   const kysely = userProfilesDb(db);
   const subject = String(params.identity.accountId);
   const now = Date.now();
-  const existing = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely
-      .selectFrom("user_profile_identities")
-      .leftJoin("user_profiles", "user_profiles.id", "user_profile_identities.profile_id")
-      .select(["profile_id", "canonical_login", "primary_github_account_id"])
-      .where("provider", "=", GITHUB_PROVIDER)
-      .where("subject", "=", subject)
-      .where("canonical_login", "is not", null),
-  );
-  const aliasIdentity =
-    params.alias.kind === "email"
-      ? executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("user_profile_emails")
-            .select("profile_id")
-            .where("email", "=", params.alias.email),
-        )
-      : executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("user_profile_identities")
-            .select("profile_id")
-            .where("provider", "=", GITHUB_PROVIDER)
-            .where("subject", "=", params.alias.subject)
-            .where("canonical_login", "is", null),
-        );
-  const aliasProfileId = aliasIdentity
-    ? selectResolvedUserProfileMetadataById(db, aliasIdentity.profile_id)?.id
-    : undefined;
-  const aliasGitHubIdentity = aliasProfileId
-    ? selectStoredGitHubIdentities(db, [aliasProfileId]).get(aliasProfileId)
-    : undefined;
-  const existingProfileId = existing
-    ? selectResolvedUserProfileMetadataById(db, existing.profile_id)?.id
-    : undefined;
-  if (
-    params.preserveEmailProfile &&
-    ((existingProfileId && existingProfileId !== aliasProfileId) ||
-      (aliasGitHubIdentity &&
-        !aliasGitHubIdentity.accounts.some(
-          (account) => account.accountId === params.identity.accountId,
-        )))
-  ) {
-    throw new Error(
-      "GitHub identity requires explicit linking to this email; ask an administrator to use users.linkEmail",
-    );
+  const bindingFacts = readGitHubIdentityBinding(db, params.alias, params.identity.accountId);
+  const { existing, aliasIdentity, aliasProfileId, aliasGitHubIdentity, existingProfileId } =
+    bindingFacts;
+  if (params.preserveEmailProfile) {
+    assertCompatibleGitHubEmailBinding(bindingFacts, params.identity.accountId);
   }
   const reusableAliasProfileId =
     aliasProfileId &&
@@ -324,14 +461,14 @@ export function applyVerifiedGitHubIdentity(params: {
   ) {
     throw new UserProfileOwnerError("merge");
   }
-  params.mutation?.before(
-    db,
+  const affectedProfileIds = [
     currentProfileId,
     targetProfileId,
     ...(aliasIdentity ? [aliasIdentity.profile_id] : []),
     ...(aliasProfileId ? [aliasProfileId] : []),
     ...(existing ? [existing.profile_id] : []),
-  );
+  ];
+  params.mutation?.before(db, ...affectedProfileIds);
   const currentIdentity =
     currentProfileId === aliasProfileId
       ? aliasGitHubIdentity
@@ -362,10 +499,7 @@ export function applyVerifiedGitHubIdentity(params: {
     existing.canonical_login !== login ||
     aliasIdentity?.profile_id !== targetProfileId;
   if (
-    currentProfileId === targetProfileId &&
-    existing?.profile_id === targetProfileId &&
-    existing.canonical_login === login &&
-    aliasIdentity?.profile_id === targetProfileId &&
+    !authorityChanged &&
     (primaryAccountId === undefined || existing.primary_github_account_id === primaryAccountId)
   ) {
     return { profileId: targetProfileId, changed: false };
@@ -381,62 +515,30 @@ export function applyVerifiedGitHubIdentity(params: {
         .where("id", "=", targetProfileId),
     );
   }
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .insertInto("user_profile_identities")
-      .values({
-        provider: GITHUB_PROVIDER,
-        subject,
-        profile_id: targetProfileId,
-        canonical_login: login,
-        created_at: now,
-      })
-      .onConflict((conflict) =>
-        conflict.columns(["provider", "subject"]).doUpdateSet({
-          profile_id: targetProfileId,
-          canonical_login: login,
-        }),
-      ),
-  );
-  if (params.alias.kind === "email") {
-    setUserProfileEmailBinding(db, params.alias.email, targetProfileId, now);
-  } else {
+  const writeIdentity = (identitySubject: string, canonicalLogin: string | null) => {
+    const binding = { profile_id: targetProfileId, canonical_login: canonicalLogin };
     executeSqliteQuerySync(
       db,
       kysely
         .insertInto("user_profile_identities")
         .values({
           provider: GITHUB_PROVIDER,
-          subject: params.alias.subject,
-          profile_id: targetProfileId,
-          canonical_login: null,
+          subject: identitySubject,
+          ...binding,
           created_at: now,
         })
-        .onConflict((conflict) =>
-          conflict.columns(["provider", "subject"]).doUpdateSet({
-            profile_id: targetProfileId,
-            canonical_login: null,
-          }),
-        ),
+        .onConflict((conflict) => conflict.columns(["provider", "subject"]).doUpdateSet(binding)),
     );
+  };
+  writeIdentity(subject, login);
+  if (params.alias.kind === "email") {
+    setUserProfileEmailBinding(db, params.alias.email, targetProfileId, now);
+  } else {
+    writeIdentity(params.alias.subject, null);
   }
   if (authorityChanged) {
-    params.mutation?.authority(
-      currentProfileId,
-      targetProfileId,
-      ...(aliasIdentity ? [aliasIdentity.profile_id] : []),
-      ...(aliasProfileId ? [aliasProfileId] : []),
-      ...(existing ? [existing.profile_id] : []),
-    );
-    publishUserProfileAuthorityChange(
-      db,
-      currentProfileId,
-      targetProfileId,
-      ...(aliasIdentity ? [aliasIdentity.profile_id] : []),
-      ...(aliasProfileId ? [aliasProfileId] : []),
-      ...(existing ? [existing.profile_id] : []),
-    );
+    params.mutation?.authority(...affectedProfileIds);
+    publishUserProfileAuthorityChange(db, ...affectedProfileIds);
   }
   return { profileId: targetProfileId, changed: true };
 }

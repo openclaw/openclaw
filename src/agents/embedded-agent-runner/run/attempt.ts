@@ -5,7 +5,12 @@ import {
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import { runWithAsyncWorkResources } from "../../../shared/async-work-resources.js";
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
-import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import { createStageTimingTracker } from "../../../shared/stage-timing.js";
+import {
+  bindOperatorModelExecution,
+  readRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../../admitted-run-context.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import { materializeBundleMcpToolsForRun } from "../../agent-bundle-mcp-tools.js";
 import { AgentRunTerminalOutcomeError } from "../../agent-run-terminal-error.js";
@@ -44,7 +49,6 @@ import {
   startEmbeddedAttemptDiagnostics,
   type EmitDiagnosticRunCompleted,
 } from "./attempt-setup.js";
-import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
@@ -60,19 +64,37 @@ import type {
 export async function runEmbeddedAttempt(
   input: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
-  const parentSignal = getAsyncWorkSignal();
-  const resourceAbortSignal = parentSignal
-    ? input.abortSignal
-      ? AbortSignal.any([input.abortSignal, parentSignal])
-      : parentSignal
-    : input.abortSignal;
-  return await runWithAsyncWorkResources((onAcquired) =>
-    runEmbeddedAttemptOwned(
-      input,
-      (release) => onAcquired({ release, releaseBeforeResultWhenIdle: true }),
-      resourceAbortSignal,
-    ),
-  );
+  const modelExecution = bindOperatorModelExecution(readRunOperatorAuthority(input), {
+    provider: input.provider,
+    model: input.modelId,
+  });
+  try {
+    const attempt = modelExecution
+      ? {
+          ...input,
+          abortSignal: input.abortSignal
+            ? AbortSignal.any([input.abortSignal, modelExecution.signal])
+            : modelExecution.signal,
+        }
+      : input;
+    const parentSignal = getAsyncWorkSignal();
+    const resourceAbortSignal = parentSignal
+      ? attempt.abortSignal
+        ? AbortSignal.any([attempt.abortSignal, parentSignal])
+        : parentSignal
+      : attempt.abortSignal;
+    const result = await runWithAsyncWorkResources((onAcquired) =>
+      runEmbeddedAttemptOwned(
+        attempt,
+        (release) => onAcquired({ release, releaseBeforeResultWhenIdle: true }),
+        resourceAbortSignal,
+      ),
+    );
+    modelExecution?.assertCurrent();
+    return result;
+  } finally {
+    modelExecution?.release();
+  }
 }
 
 async function runEmbeddedAttemptOwned(
@@ -214,7 +236,7 @@ async function runEmbeddedAttemptOwned(
     const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
     const { diagnosticTrace, runTrace, emitCompleted } = startEmbeddedAttemptDiagnostics(params);
     emitDiagnosticRunCompleted = emitCompleted;
-    const corePluginToolStages = createEmbeddedRunStageTracker();
+    const corePluginToolStages = createStageTimingTracker(Date.now);
     let toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
     const preparedToolBase = await prepare("attempt.tool-base", () =>
       prepareEmbeddedAttemptToolBase({
@@ -281,7 +303,6 @@ async function runEmbeddedAttemptOwned(
         isRawModelRun,
       }),
     );
-    // Track sessions_yield tool invocation (callback pattern, like clientToolCallDetected)
     let yieldDetected = false;
     let yieldMessage: string | null = null;
     let yieldAcknowledgment: string | undefined;
@@ -450,14 +471,13 @@ async function runEmbeddedAttemptOwned(
       // Read catalog counters before the finally-phase cleanup clears the
       // run-scoped catalog session; afterwards the counts are gone.
       const catalogSession = toolSearchCatalogRef?.current;
+      const providerRetry =
+        preparedSessionRuntime.agentSession.settingsManager.getProviderRetrySettings();
       return {
         ...executionResult,
         codeModeEngaged: codeModeControlsEnabledForRun,
-        providerRetryMaxRetries:
-          preparedSessionRuntime.agentSession.settingsManager.getProviderRetrySettings().maxRetries,
-        providerRetryMaxDelayMs:
-          preparedSessionRuntime.agentSession.settingsManager.getProviderRetrySettings()
-            .maxRetryDelayMs,
+        providerRetryMaxRetries: providerRetry.maxRetries,
+        providerRetryMaxDelayMs: providerRetry.maxRetryDelayMs,
         ...(catalogSession
           ? {
               bridgeCalls: {

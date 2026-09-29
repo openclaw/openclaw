@@ -383,8 +383,5 @@ export function decideChannelIngress(
   if (activation.effect === "skip") {
     return decisiveDecision({ admission: "skip", decision: "allow", gate: activation, gates });
   }
-  if (activation.effect === "observe") {
-    return decisiveDecision({ admission: "observe", decision: "allow", gate: activation, gates });
-  }
   return decisiveDecision({ admission: "dispatch", decision: "allow", gate: activation, gates });
 }

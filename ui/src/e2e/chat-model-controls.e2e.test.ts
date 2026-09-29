@@ -197,6 +197,7 @@ suite.define(() => {
       await cdp.detach();
       if (route === "chat") {
         expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
+          expectedSessionId: "session:agent:main:main",
           model: "example/model-999",
         });
       }
@@ -501,6 +502,7 @@ suite.define(() => {
         await search.press("Enter");
         const patch = await gateway.waitForRequest("sessions.patch");
         expect(patch.params).toEqual({
+          expectedSessionId: `session:${sessionKey}`,
           key: sessionKey,
           model: `openai/gpt-5.5@${work.authProfileId}`,
         });
@@ -607,7 +609,7 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__input").first();
         const model = composer.locator('[data-chat-model-select="true"]');
         const effort = composer.locator('[data-chat-thinking-select="true"]');
-        await expect.poll(() => model.getAttribute("title")).toBe(longName);
+        await expect.poll(() => model.getAttribute("aria-label")).toContain(longName);
         await expect.poll(() => effort.isVisible()).toBe(true);
         for (const width of [320, 375, 393, 430, 560, 768, 1280]) {
           await page.setViewportSize({ width, height: 900 });
@@ -791,6 +793,7 @@ suite.define(() => {
               (await gateway.getRequests("sessions.patch")).map(({ params }) => params),
             )
             .toContainEqual({
+              expectedSessionId: "session:agent:main:main",
               key: "agent:main:main",
               model: "openai/speed-only",
             });

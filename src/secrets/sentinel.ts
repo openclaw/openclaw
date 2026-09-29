@@ -77,7 +77,10 @@ export function sealSecretSentinel(value: string, meta: { label: string }): stri
 }
 
 /** Opens a process-local sentinel and rejects malformed or tampered values. */
-export function resolveSecretSentinel(sentinel: string): string | undefined {
+export function resolveSecretSentinel(
+  sentinel: string,
+  cipherKey: Uint8Array = secretSentinelCipherKey,
+): string | undefined {
   if (!looksLikeSecretSentinel(sentinel)) {
     return undefined;
   }
@@ -95,7 +98,7 @@ export function resolveSecretSentinel(sentinel: string): string | undefined {
     const tagStart = SECRET_SENTINEL_SCOPE_BYTES + SECRET_SENTINEL_NONCE_BYTES;
     const tag = sealed.subarray(tagStart, tagStart + SECRET_SENTINEL_TAG_BYTES);
     const ciphertext = sealed.subarray(SECRET_SENTINEL_HEADER_BYTES);
-    const decipher = createDecipheriv(SECRET_SENTINEL_CIPHER, secretSentinelCipherKey, nonce);
+    const decipher = createDecipheriv(SECRET_SENTINEL_CIPHER, cipherKey, nonce);
     decipher.setAAD(scope);
     decipher.setAuthTag(tag);
     const value = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
@@ -105,6 +108,11 @@ export function resolveSecretSentinel(sentinel: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** Bootstrap the trusted egress Worker without resolving or copying plaintext values. */
+export function copySecretSentinelDecryptionKey(): Uint8Array {
+  return Uint8Array.from(secretSentinelCipherKey);
 }
 
 /** Swaps every known sentinel substring and reports unknown sentinel-shaped values. */

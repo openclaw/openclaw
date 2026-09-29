@@ -1,5 +1,4 @@
 import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
-// Xai provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import type {
   RealtimeTranscriptionProviderPlugin,
@@ -13,7 +12,7 @@ import {
   normalizeXaiRealtimeTranscriptionProviderConfig,
   type XaiRealtimeTranscriptionEncoding,
 } from "./capability-provider-metadata-factory.js";
-import { XAI_BASE_URL } from "./model-definitions.js";
+import { normalizeXaiRealtimeBaseUrl } from "./realtime-voice-config.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
 
 type XaiTranscriptionRuntime = Pick<
@@ -24,9 +23,8 @@ type XaiTranscriptionRuntime = Pick<
 >;
 
 type XaiRealtimeTranscriptionSessionConfig = RealtimeTranscriptionSessionCreateRequest & {
-  apiKey: string;
   // Late-bound bearer; called per (re)connect.
-  resolveApiKey?: () => Promise<string>;
+  resolveApiKey: () => Promise<string>;
   baseUrl: string;
   sampleRate: number;
   encoding: XaiRealtimeTranscriptionEncoding;
@@ -53,10 +51,6 @@ const XAI_REALTIME_STT_CLOSE_TIMEOUT_MS = 5_000;
 const XAI_REALTIME_STT_MAX_RECONNECT_ATTEMPTS = 5;
 const XAI_REALTIME_STT_RECONNECT_DELAY_MS = 1000;
 const XAI_REALTIME_STT_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
-
-function normalizeXaiRealtimeBaseUrl(value?: string): string {
-  return normalizeOptionalString(value ?? process.env.XAI_BASE_URL) ?? XAI_BASE_URL;
-}
 
 function toXaiRealtimeWsUrl(config: XaiRealtimeTranscriptionSessionConfig): string {
   const url = new URL(normalizeXaiRealtimeBaseUrl(config.baseUrl));
@@ -153,7 +147,7 @@ function createXaiRealtimeTranscriptionSession(
     callbacks: config,
     url: () => toXaiRealtimeWsUrl(config),
     headers: async () => {
-      const apiKey = config.resolveApiKey ? await config.resolveApiKey() : config.apiKey;
+      const apiKey = await config.resolveApiKey();
       return {
         Authorization: `Bearer ${apiKey}`,
         ...xaiUserAgentHeaderFor(config.baseUrl),
@@ -185,12 +179,9 @@ export function buildXaiRealtimeTranscriptionProvider(
     createSession: (req) => {
       const config = normalizeXaiRealtimeTranscriptionProviderConfig(req.providerConfig);
       // createSession must stay sync per RealtimeTranscriptionProviderPlugin; bearer is resolved lazily in headers().
-      const seedApiKey =
-        normalizeOptionalString(config.apiKey) ?? normalizeOptionalString(process.env.XAI_API_KEY);
       return createXaiRealtimeTranscriptionSession(
         {
           ...req,
-          apiKey: seedApiKey ?? "",
           resolveApiKey: () =>
             resolveXaiRealtimeApiKey(config.apiKey, req.cfg, runtime.resolveApiKeyForProvider),
           baseUrl: normalizeXaiRealtimeBaseUrl(config.baseUrl),

@@ -1,17 +1,15 @@
 import { channel } from "node:diagnostics_channel";
+import { addAbortListener } from "node:events";
 import { statSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import { sqliteReaderDatabasePathKey } from "../../infra/sqlite-reader-lifecycle.js";
-import {
-  publishSqliteWalCheckpointObservation,
-  type SqliteWalCheckpointSnapshot,
-} from "../../infra/sqlite-wal-checkpoint.js";
-import { captureStateDatabaseCoordinatorRuntime } from "../../infra/state-database-coordinator.js";
+import { publishSqliteWalCheckpointObservation } from "../../infra/sqlite-wal-checkpoint.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OpenClawAgentDatabaseClaim } from "../../state/openclaw-agent-db-identity.js";
@@ -19,7 +17,10 @@ import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "../../state/opencl
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-lifecycle.js";
 import { cleanupRetiredAgentDatabaseLease } from "../../state/openclaw-agent-execution-cleanup.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
-import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
+import {
+  publishOpenClawStateDatabaseWorkerAdmission,
+  registerOpenClawStateDatabaseAsyncResource,
+} from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
@@ -40,14 +41,25 @@ import type {
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { revokeSqliteReclamationCommit } from "./session-accessor.sqlite-reclamation-commit.js";
-import { logSqliteReclamationWorkerOutcome } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
+import {
+  logSqliteReclamationWorkerOutcome,
+  logSqliteReclamationWorkerRetirement,
+  type SqliteReclamationWorkerRetirementReason,
+} from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
+import type {
+  SqliteCanonicalValidationWorkerRequest,
+  SqliteReclamationWorkerCloseRequest,
+  SqliteReclamationWorkerMessage,
+  SqliteReclamationWorkerRequest,
+  WorkerCleanup,
+} from "./session-accessor.sqlite-reclamation-worker.types.js";
 import {
   withSqliteMutationWorkerCoordination,
   type SqliteMutationWorkerCoordination,
 } from "./session-accessor.sqlite-worker-coordination.js";
 import {
   runSqliteMutationWorkerRequest,
-  type SqliteMutationWorkerMessage,
+  SqliteMutationWorkerSettledRefusal,
   type SqliteMutationWorkerValidationOwner,
   type SqliteWorkerWriteAdmission,
 } from "./session-accessor.sqlite-worker-request.js";
@@ -59,28 +71,6 @@ import {
 } from "./session-accessor.sqlite-worker-transport.js";
 
 type DatabaseOptions = SqliteSessionReclamationPlan["databaseOptions"];
-export type SqliteReclamationWorkerRequest = {
-  type: "reclaim";
-  operationId: number;
-  commitGate: SharedArrayBuffer;
-  plan: SqliteSessionReclamationPlan;
-  coordination: SqliteMutationWorkerCoordination;
-};
-export type SqliteReclamationWorkerCloseRequest = {
-  type: "close";
-  operationId: number;
-  coordination: SqliteMutationWorkerCoordination;
-};
-export type SqliteCanonicalValidationWorkerRequest = {
-  type: "canonical-validation";
-  operationId: number;
-  commitGate: SharedArrayBuffer;
-  databaseOptions: DatabaseOptions;
-  maxRows: number;
-  maxBytes: number;
-  initializeCanonicalValidation: boolean;
-  coordination: SqliteMutationWorkerCoordination;
-};
 type SqliteMutationWorkerRequest =
   | SqliteReclamationWorkerRequest
   | SqliteCanonicalValidationWorkerRequest;
@@ -89,16 +79,9 @@ type MutationRunParams<Result> = {
   validationOwner?: SqliteMutationWorkerValidationOwner;
   diagnostics?: SqliteSessionReclamationDiagnostics;
   commitGate: SharedArrayBuffer;
-  onCommitRequest: () => unknown[];
+  onCommitRequest: () => void;
   withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
 };
-type WorkerCleanup = { cleanupWarnings: string[]; settled: boolean };
-export type SqliteReclamationWorkerMessage =
-  | SqliteMutationWorkerMessage<SqliteSessionReclamationResult>
-  | { type: "lease"; receipt: OpenClawAgentDatabaseWorkerLeaseReceipt }
-  | { type: "checkpoint"; operationId: number; snapshot: SqliteWalCheckpointSnapshot }
-  | ({ type: "closed" } & WorkerCleanup);
-
 const log = createSubsystemLogger("session-sqlite");
 type ReclamationWorkerSlot = {
   worker?: SqliteReclamationWorker;
@@ -110,12 +93,6 @@ const retained = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionReclamationWorkers"),
   () => new Map<string, SqliteReclamationWorker>(),
 );
-
-channel("openclaw.memory.critical").subscribe(() => {
-  for (const worker of retained.values()) {
-    worker.retireIfIdle();
-  }
-});
 
 /** The global archive FIFO bounds ordinary reclamation's whole-buffer heaps. */
 export function withSqliteReclamationWorker<T>(
@@ -164,7 +141,7 @@ export async function withSqliteCanonicalValidationWorker<T>(
   } finally {
     closed = true;
     await queue.enqueue("canonical-validation", async () => {
-      await slot.worker?.close();
+      await slot.worker?.close("exclusive-handoff");
     });
   }
 }
@@ -179,7 +156,7 @@ async function useReclamationWorker<T>(
   assertRequestCurrent();
   claim.assertCurrent();
   if (slot.worker && !slot.worker.matches(options, claim)) {
-    await slot.worker.close();
+    await slot.worker.close("matches-mismatch");
     slot.worker = undefined;
   }
   assertRequestCurrent();
@@ -193,9 +170,19 @@ async function useReclamationWorker<T>(
   try {
     return await worker.use(() => run(worker));
   } catch (error) {
+    let reusable = false;
+    try {
+      worker.assertCurrent(options, claim);
+      reusable = true;
+    } catch {
+      // Physical replacement, revocation and transport failures retire the connection.
+    }
+    if (reusable) {
+      throw error;
+    }
     // An uncertain mutation is never replayed; a replacement serves only a later request.
     try {
-      await worker.close();
+      await worker.close("failure");
       if (slot.worker === worker) {
         slot.worker = undefined;
       }
@@ -227,13 +214,22 @@ export class SqliteReclamationWorker {
   private revoked = false;
   private retired = false;
   private idle?: NodeJS.Timeout;
+  private idleDrainListener?: Disposable;
   private operationId = 0;
+  private readonly createdAt = performance.now();
+  private opsServed = 0;
+  private kind = "unused";
+  private retirementReason?: SqliteReclamationWorkerRetirementReason;
   private readonly unregisterAgent: () => void;
   private readonly unregisterState: () => void;
   private readonly stateContext;
   private readonly beforeExit = () => {
     void this.close().catch((error: unknown) => log.error(String(error)));
   };
+  private readonly onIdle = () => {
+    void this.close("idle-ttl").catch((error: unknown) => log.error(String(error)));
+  };
+  private readonly onMemoryPressure = () => this.retireIfIdle();
 
   constructor(
     private readonly options: DatabaseOptions,
@@ -271,11 +267,10 @@ export class SqliteReclamationWorker {
   matches(options: DatabaseOptions, claim: OpenClawAgentDatabaseClaim): boolean {
     return (
       !this.revoked &&
+      !this.failure &&
       isDeepStrictEqual(this.options, options) &&
       this.identity === claim.identity &&
-      resolveOpenClawStateSqlitePath(options.env) === this.stateContext.admission.databasePath &&
-      captureStateDatabaseCoordinatorRuntime().directory ===
-        this.stateContext.coordinatorRuntime.directory
+      resolveOpenClawStateSqlitePath(options.env) === this.stateContext.admission.databasePath
     );
   }
 
@@ -299,7 +294,7 @@ export class SqliteReclamationWorker {
   }
 
   async use<T>(run: () => Promise<T>): Promise<T> {
-    clearTimeout(this.idle);
+    this.clearIdleTimer();
     this.transport?.channel.ref();
     const operation = Promise.resolve().then(run);
     this.active = operation;
@@ -309,15 +304,31 @@ export class SqliteReclamationWorker {
       this.active = undefined;
       if (!this.revoked) {
         this.transport?.channel.unref();
-        this.idle = setTimeout(this.beforeExit, SQLITE_IDLE_HANDLE_TTL_MS);
+        this.idle = setTimeout(this.onIdle, SQLITE_IDLE_HANDLE_TTL_MS);
         this.idle.unref();
+        if (this.onRetired) {
+          const drainSignal = getGatewayRestartDrainSignal();
+          if (drainSignal.aborted) {
+            this.retireIfIdle("revoked");
+          } else {
+            this.idleDrainListener = addAbortListener(drainSignal, () =>
+              this.retireIfIdle("revoked"),
+            );
+          }
+        }
       }
     }
   }
 
-  retireIfIdle(): void {
+  private clearIdleTimer(): void {
+    this.idleDrainListener?.[Symbol.dispose]();
+    this.idleDrainListener = undefined;
+    clearTimeout(this.idle);
+  }
+
+  retireIfIdle(reason: SqliteReclamationWorkerRetirementReason = "pressure"): void {
     if (this.transport && this.idle && !this.active && !this.revoked) {
-      void this.close().catch((error: unknown) => log.error(String(error)));
+      void this.close(reason).catch((error: unknown) => log.error(String(error)));
     }
   }
 
@@ -385,6 +396,7 @@ export class SqliteReclamationWorker {
     },
   ): Promise<Result> {
     const startedAt = performance.now();
+    this.kind = params.kind;
     this.assertCurrent(params.databaseOptions, params.claim);
     const transport = (this.transport ??= await this.start());
     this.assertCurrent(params.databaseOptions, params.claim);
@@ -393,6 +405,7 @@ export class SqliteReclamationWorker {
       params.diagnostics.workerThreadId = this.workerThreadId;
     }
     const operationId = ++this.operationId;
+    this.opsServed += 1;
     this.commitGate = params.commitGate;
     let exitCode: number | undefined;
     const operation = withSqliteMutationWorkerCoordination(
@@ -408,24 +421,31 @@ export class SqliteReclamationWorker {
           onExit: (code) => {
             exitCode = code;
           },
-          onCommitRequest: () => {
-            const errors = params.onCommitRequest();
-            if (errors.length) {
-              log.warn("SQLite session reclamation recovered commit settlement errors", {
-                errors: errors.map(String),
-                path: this.options.path,
-              });
-            }
-          },
+          onCommitRequest: params.onCommitRequest,
           withWriteAdmission: params.withWriteAdmission,
           validationOwner: params.validationOwner,
           dispatch: () =>
-            worker.postMessage(params.request(operationId, coordination), [
-              ...params.transferList,
-              ...(coordination.stateLifecycle ? [coordination.stateLifecycle] : []),
-            ]),
-        }),
-    );
+            worker.postMessage(params.request(operationId, coordination), [...params.transferList]),
+        }).then(
+          (value) => ({ value }),
+          (error: unknown) => {
+            if (error instanceof SqliteMutationWorkerSettledRefusal) {
+              return { error: error.cause };
+            }
+            throw error;
+          },
+        ),
+    )
+      .catch((error: unknown) => {
+        this.failure ??= toStringifiedError(error);
+        throw error;
+      })
+      .then((outcome) => {
+        if ("error" in outcome) {
+          throw outcome.error;
+        }
+        return outcome.value;
+      });
     const observeCompletion = (outcome: "resolved" | "rejected", failure?: unknown) =>
       logSqliteReclamationWorkerOutcome({
         startedAt,
@@ -471,17 +491,29 @@ export class SqliteReclamationWorker {
         this.healthyCloseAcknowledged = this.closeRequested && message.settled;
         this.closed.resolve();
       } else if (message.type === "lease") {
-        if (
-          message.receipt.agentId !== this.options.agentId ||
-          message.receipt.path !== this.options.path ||
-          message.receipt.ownerPid !== process.pid ||
-          message.receipt.sharedStateIdentity !== this.stateContext.admission.identity.key ||
-          (this.lease && !isDeepStrictEqual(this.lease, message.receipt))
-        ) {
-          this.failure = new Error("SQLite reclamation Worker changed its lease receipt");
-          this.requestTermination(transport);
-        } else {
+        try {
+          // First creation binds the captured path admission; replacement still revokes it.
+          publishOpenClawStateDatabaseWorkerAdmission(this.stateContext.admission);
+        } catch (error) {
+          this.failure ??= toStringifiedError(error);
+        }
+        try {
+          // Revoked read authority cannot discard an already acquired exact cleanup receipt.
+          if (
+            message.receipt.agentId !== this.options.agentId ||
+            message.receipt.path !== this.options.path ||
+            message.receipt.ownerPid !== process.pid ||
+            message.receipt.sharedStateIdentity !== this.stateContext.admission.identity.key ||
+            (this.lease && !isDeepStrictEqual(this.lease, message.receipt))
+          ) {
+            throw new Error("SQLite reclamation Worker changed its lease receipt");
+          }
           this.lease = message.receipt;
+        } catch (error) {
+          this.failure ??= toStringifiedError(error);
+        }
+        if (this.failure) {
+          this.requestTermination(transport);
         }
       }
     });
@@ -519,6 +551,10 @@ export class SqliteReclamationWorker {
         resolve();
       });
     });
+    // Only ordinary retained Workers use pressure retirement; validation scopes own their close.
+    if (this.onRetired) {
+      channel("openclaw.memory.critical").subscribe(this.onMemoryPressure);
+    }
     return transport;
   }
 
@@ -555,14 +591,16 @@ export class SqliteReclamationWorker {
   }
 
   private revoke(): void {
+    this.retirementReason ??= "revoked";
     this.revoked = true;
     if (this.commitGate) {
       revokeSqliteReclamationCommit(this.commitGate);
     }
-    clearTimeout(this.idle);
+    this.clearIdleTimer();
   }
 
-  async close(): Promise<void> {
+  async close(reason: SqliteReclamationWorkerRetirementReason = "revoked"): Promise<void> {
+    this.retirementReason ??= reason;
     this.revoke();
     if (this.retired) {
       return;
@@ -582,10 +620,7 @@ export class SqliteReclamationWorker {
         await runOpenClawAgentWorkerWrite(this.options, async () => {
           const operationId = ++this.operationId;
           await withSqliteMutationWorkerCoordination(
-            {
-              ...this.stateContext,
-              coordinatorRuntime: { ...this.stateContext.coordinatorRuntime, keepAlive: false },
-            },
+            this.stateContext,
             transport,
             operationId,
             async (coordination) => {
@@ -597,7 +632,7 @@ export class SqliteReclamationWorker {
                     operationId,
                     coordination,
                   } satisfies SqliteReclamationWorkerCloseRequest,
-                  coordination.stateLifecycle ? [coordination.stateLifecycle] : [],
+                  [],
                 );
               } catch (error) {
                 await terminateSqliteMutationWorker(transport);
@@ -611,7 +646,7 @@ export class SqliteReclamationWorker {
             },
           );
           if (transport.kind === "pooled") {
-            // The task cannot yield its slot until the parent's close delegate has released.
+            // The task cannot yield its slot until the parent's native close has settled.
             try {
               worker.postMessage({ type: "release", operationId }, []);
             } catch (error) {
@@ -663,6 +698,7 @@ export class SqliteReclamationWorker {
         });
       }
       this.retired = true;
+      channel("openclaw.memory.critical").unsubscribe(this.onMemoryPressure);
       this.unregisterAgent();
       this.unregisterState();
       process.off("beforeExit", this.beforeExit);
@@ -671,6 +707,13 @@ export class SqliteReclamationWorker {
         this.transport.channel.close();
       }
       this.onRetired?.(this);
+      logSqliteReclamationWorkerRetirement({
+        reason: this.retirementReason ?? reason,
+        kind: this.kind,
+        startedAt: this.createdAt,
+        opsServed: this.opsServed,
+        workerThreadId: this.workerThreadId,
+      });
     })().finally(() => {
       this.closing = undefined;
     }));

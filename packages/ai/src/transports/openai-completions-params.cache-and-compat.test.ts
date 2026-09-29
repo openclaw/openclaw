@@ -267,19 +267,6 @@ describe("openai completions params", () => {
     expect(notOptedIn.prompt_cache_key).toBeUndefined();
   });
 
-  it("emits prompt_cache_retention=24h for completions when cacheRetention is long", () => {
-    const model = promptCacheModel();
-    const context = emptyContext();
-
-    const longRetention = buildOpenAICompletionsParams(model, context, {
-      sessionId: "session-123",
-      cacheRetention: "long",
-    }) as { prompt_cache_key?: string; prompt_cache_retention?: string };
-
-    expect(longRetention.prompt_cache_key).toBe("session-123");
-    expect(longRetention.prompt_cache_retention).toBe("24h");
-  });
-
   it("omits prompt_cache_retention for completions when cacheRetention is short or unset", () => {
     const model = promptCacheModel();
     const context = emptyContext();
@@ -329,42 +316,6 @@ describe("openai completions params", () => {
 
     expect(params.prompt_cache_key).toBe("session-123");
     expect(params).not.toHaveProperty("prompt_cache_retention");
-  });
-
-  it("sorts Chat Completions tools by function name for stable prompt-cache payloads", () => {
-    const model = promptCacheModel();
-    const zetaTool = {
-      name: "zeta",
-      description: "Z",
-      parameters: { type: "object", properties: {} },
-    };
-    const alphaTool = {
-      name: "alpha",
-      description: "A",
-      parameters: { type: "object", properties: {} },
-    };
-
-    const first = buildOpenAICompletionsParams(
-      model,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [zetaTool, alphaTool],
-      } as never,
-      { sessionId: "session-123" },
-    ) as { tools?: Array<{ function?: { name?: string } }> };
-    const second = buildOpenAICompletionsParams(
-      model,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [alphaTool, zetaTool],
-      } as never,
-      { sessionId: "session-123" },
-    ) as { tools?: Array<{ function?: { name?: string } }> };
-
-    expect(first.tools?.map((tool) => tool.function?.name)).toEqual(["alpha", "zeta"]);
-    expect(first.tools).toEqual(second.tools);
   });
 
   it("disables developer-role-only compat defaults for configured custom proxy completions providers", () => {

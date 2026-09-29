@@ -15,7 +15,10 @@ import {
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
+import {
+  currentConfigObject,
+  resolveEditableSnapshotConfig,
+} from "../../lib/config/config-state-model.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
@@ -72,6 +75,18 @@ class LabsPage extends OpenClawLightDomElement {
     return resolveLabFeatureState(this.editableConfig(), feature).enabled;
   }
 
+  private decisionPreferenceKnown(): boolean {
+    const configState = this.context?.runtimeConfig.state;
+    return (
+      configState?.connected &&
+      !configState.configLoading &&
+      !configState.lastError &&
+      configState.configSnapshot?.valid !== false &&
+      currentConfigObject(configState) !== null &&
+      this.editableConfig() !== null
+    );
+  }
+
   private canToggle(): boolean {
     const configState = this.context?.runtimeConfig.state;
     return Boolean(
@@ -95,7 +110,11 @@ class LabsPage extends OpenClawLightDomElement {
   ) {
     const scope = this.gateway.capture();
     const runtimeConfig = this.context.runtimeConfig;
-    if (!scope || !this.canToggle()) {
+    if (
+      !scope ||
+      !this.canToggle() ||
+      (featureId === "decisionAssistance" && !this.decisionPreferenceKnown())
+    ) {
       return;
     }
     const isCurrent = () =>
@@ -181,6 +200,32 @@ class LabsPage extends OpenClawLightDomElement {
 
   private renderFeature(feature: LabFeature) {
     const title = feature.title();
+    // A missing/stale/unreadable snapshot is not an observed opt-out. Keep
+    // this foundation row honest without changing other Labs owners here.
+    if (feature.id === "decisionAssistance" && !this.decisionPreferenceKnown()) {
+      const configState = this.context.runtimeConfig.state;
+      return renderSettingsRow({
+        title,
+        description: html`
+          ${feature.description()}
+          <br />
+          <span role="status"
+            >${
+              configState.configLoading
+                ? t("labsPage.decisionAssistance.loading")
+                : t("labsPage.decisionAssistance.unavailable")
+            }</span
+          >
+          <button
+            class="btn btn--sm"
+            ?disabled=${!configState.connected || configState.configLoading}
+            @click=${() => void this.context.runtimeConfig.refresh()}
+          >
+            ${t("labsPage.decisionAssistance.refresh")}
+          </button>
+        `,
+      });
+    }
     const featureState = resolveLabFeatureState(this.editableConfig(), feature);
     const canToggle = this.canToggle();
     const defaultDescription = renderSettingsDefaultDescription(
@@ -189,6 +234,11 @@ class LabsPage extends OpenClawLightDomElement {
     );
     const description = html`
       ${feature.description()}
+      ${
+        feature.id === "decisionAssistance" && featureState.enabled
+          ? html`<br />${t("labsPage.decisionAssistance.optedIn")}`
+          : nothing
+      }
       <a href=${feature.docsUrl} target=${EXTERNAL_LINK_TARGET} rel=${buildExternalLinkRel()}
         >${t("labsPage.documentation")}</a
       >

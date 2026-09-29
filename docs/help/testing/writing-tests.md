@@ -79,7 +79,7 @@ measured with `pnpm test <file> --maxWorkers=1` on one worker:
   deleting coverage.
 - The maintainer-tooling family uses `RELEASE_ONLY_TOOLING_SHARDS` and matching
   maintainer leaves in mixed fast configs: product-only PRs and main omit it,
-  tooling-owner PRs run the full family, and manual CI and Full Release Validation
+  tooling-owner PRs select their affected files (with full-family fallback for unresolved owners), and manual CI and Full Release Validation
   retain it. Keep tests in their canonical configs, with their process and timer
   policies, so new files inherit the same owner routing. Dedicated product E2E
   and live tests remain outside this tier. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
@@ -91,6 +91,20 @@ measured with `pnpm test <file> --maxWorkers=1` on one worker:
   shared state that would need one.
 - State the measured cost in the PR for every new or materially changed test
   file, and the CI seconds once the run exists.
+
+## Raw SQLite state access
+
+`closeOpenClawStateDatabaseForTest()` closes native handles synchronously, but
+worker-backed state writes (plugin state, deferred plugin migrations, and other
+worker stores) keep a worker connection whose retirement only starts at that
+call. Its final close checkpoints and deletes the WAL under an exclusive lock at
+an arbitrary later time. Before opening the database with a raw `DatabaseSync`,
+or copying, hashing, or snapshotting its files, `await
+closeOpenClawStateDatabaseAsync()` (or `closeStateDatabaseForTest()` from
+`src/test-utils/database-cleanup.ts`, which also clears failure latches).
+Otherwise the raw connection can fail with `SQLITE_BUSY`, or the snapshot can
+change underneath the test. `PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE` on
+a raw connection proves that no other connection remains.
 
 ## Flake triage
 

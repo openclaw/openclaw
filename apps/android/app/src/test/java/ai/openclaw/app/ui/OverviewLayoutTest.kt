@@ -5,6 +5,8 @@ import ai.openclaw.app.AndroidScreenshotScene
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.GatewayNodesDevicesSummary
+import ai.openclaw.app.GatewayPairedDeviceSummary
+import ai.openclaw.app.GatewayPendingDeviceSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
@@ -20,6 +22,7 @@ import android.provider.Settings
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
@@ -155,6 +158,62 @@ class OverviewLayoutTest {
   }
 
   @Test
+  fun nodesRowPreservesPairingSummariesWithoutListedNodes() {
+    val pending =
+      (1..2).map { index ->
+        GatewayPendingDeviceSummary(
+          requestId = "request-$index",
+          deviceId = "pending-device-$index",
+          displayName = "Pending phone $index",
+          remoteIp = null,
+          roles = listOf("node"),
+          scopes = emptyList(),
+          requestedAtMs = null,
+          repair = false,
+        )
+      }
+    val paired =
+      listOf(
+        GatewayPairedDeviceSummary(
+          deviceId = "paired-device",
+          displayName = "Paired phone",
+          remoteIp = null,
+          roles = listOf("node"),
+          scopes = emptyList(),
+          tokens = emptyList(),
+          approvedAtMs = null,
+        ),
+      )
+    val cases =
+      listOf(
+        GatewayNodesDevicesSummary(emptyList(), pending, emptyList()) to "2 pending",
+        GatewayNodesDevicesSummary(emptyList(), emptyList(), paired) to "1 paired",
+        GatewayNodesDevicesSummary(emptyList(), pending, paired) to "2 pending",
+        GatewayNodesDevicesSummary(emptyList(), emptyList(), emptyList()) to "None paired",
+      )
+    composeRule.setContent { ShellScreen(model) }
+    val failures = mutableListOf<String>()
+    for ((index, case) in cases.withIndex()) {
+      val (summary, expected) = case
+      composeRule.runOnIdle {
+        ReflectionHelpers.getField<MutableStateFlow<GatewayNodesDevicesSummary>>(runtime, "_nodesDevicesSummary").value = summary
+      }
+      val row =
+        composeRule
+          .onNodeWithContentDescription("Open Nodes")
+          .performScrollTo()
+          .assertIsDisplayed()
+          .assertHasClickAction()
+      capture("pairing-without-nodes-$index")
+      val labels = row.fetchSemanticsNode().config[SemanticsProperties.Text].map { it.text }
+      if (expected !in labels || (expected != "None paired" && "None paired" in labels)) {
+        failures += "Expected $expected in Nodes row, found $labels"
+      }
+    }
+    assertTrue(failures.joinToString("\n"), failures.isEmpty())
+  }
+
+  @Test
   fun chatUsesTheThemePrimaryActionInDarkAndLightModes() {
     composeRule.setContent { ShellScreen(model) }
     val paints = mutableListOf<Pair<Int, Int>>()
@@ -181,7 +240,7 @@ class OverviewLayoutTest {
     composeRule.onNodeWithContentDescription("Talk settings").performScrollTo().performClick()
     composeRule.onNodeWithText("Configure wake words, talk, and playback.").assertIsDisplayed()
     composeRule.onNodeWithContentDescription("Back").performClick()
-    composeRule.onNodeWithText("Overview").assertIsDisplayed()
+    composeRule.onNode(hasScrollToIndexAction() and hasAnyDescendant(hasText("Overview"))).assertIsDisplayed()
   }
 
   @Test

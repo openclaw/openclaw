@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { isRecord } from "../utils.js";
 import {
+  extractBundleServerMap,
   loadEnabledBundleConfig,
   readBundleJsonObject,
   resolveBundleJsonOpenFailure,
@@ -49,6 +50,7 @@ type EnabledBundleMcpConfigResult = {
   config: BundleMcpConfig;
   diagnostics: BundleMcpDiagnostic[];
   prepareDataDirsByServer: Record<string, BundleMcpDataDirOwnership>;
+  pluginIdsByServer: Record<string, string>;
 };
 type BundleMcpRuntimeSupport = {
   hasSupportedStdioServer: boolean;
@@ -89,25 +91,7 @@ function resolveBundleMcpConfigPaths(params: {
 }
 
 export function extractMcpServerMap(raw: unknown): Record<string, BundleMcpServerConfig> {
-  if (!isRecord(raw)) {
-    return {};
-  }
-  const nested = isRecord(raw.mcpServers)
-    ? raw.mcpServers
-    : isRecord(raw.servers)
-      ? raw.servers
-      : raw;
-  if (!isRecord(nested)) {
-    return {};
-  }
-  const result: Record<string, BundleMcpServerConfig> = {};
-  for (const [serverName, serverRaw] of Object.entries(nested)) {
-    if (!isRecord(serverRaw)) {
-      continue;
-    }
-    result[serverName] = { ...serverRaw };
-  }
-  return result;
+  return extractBundleServerMap(raw, ["mcpServers", "servers"]);
 }
 
 function isExplicitRelativePath(value: string): boolean {
@@ -131,10 +115,6 @@ function expandBundleRootPlaceholders(params: {
   });
 }
 
-function normalizeBundlePath(targetPath: string): string {
-  return path.normalize(path.resolve(targetPath));
-}
-
 function normalizeExpandedAbsolutePath(value: string): string {
   return path.isAbsolute(value) ? path.normalize(value) : value;
 }
@@ -147,6 +127,21 @@ function absolutizeBundleMcpServer(params: {
   agentFormat?: boolean;
 }): BundleMcpServerConfig {
   const next: BundleMcpServerConfig = { ...params.server };
+  const expand = (value: string) =>
+    expandBundleRootPlaceholders({
+      value,
+      rootDir: params.rootDir,
+      pluginDataDir: params.pluginDataDir,
+    });
+  const resolveArgument = (value: unknown) => {
+    if (typeof value !== "string") {
+      return value;
+    }
+    const expanded = expand(value);
+    return isExplicitRelativePath(expanded)
+      ? path.resolve(params.baseDir, expanded)
+      : normalizeExpandedAbsolutePath(expanded);
+  };
 
   if (
     typeof next.cwd !== "string" &&
@@ -156,70 +151,33 @@ function absolutizeBundleMcpServer(params: {
     next.cwd = params.baseDir;
   }
 
-  const command = next.command;
-  if (typeof command === "string") {
-    const expanded = expandBundleRootPlaceholders({
-      value: command,
-      rootDir: params.rootDir,
-      pluginDataDir: params.pluginDataDir,
-    });
-    next.command = isExplicitRelativePath(expanded)
-      ? path.resolve(params.baseDir, expanded)
-      : normalizeExpandedAbsolutePath(expanded);
+  if (typeof next.command === "string") {
+    next.command = resolveArgument(next.command);
   }
 
   const cwd = next.cwd;
   if (typeof cwd === "string") {
-    const expanded = expandBundleRootPlaceholders({
-      value: cwd,
-      rootDir: params.rootDir,
-      pluginDataDir: params.pluginDataDir,
-    });
+    const expanded = expand(cwd);
     next.cwd = path.isAbsolute(expanded) ? expanded : path.resolve(params.baseDir, expanded);
   }
 
   const workingDirectory = next.workingDirectory;
   if (typeof workingDirectory === "string") {
-    const expanded = expandBundleRootPlaceholders({
-      value: workingDirectory,
-      rootDir: params.rootDir,
-      pluginDataDir: params.pluginDataDir,
-    });
+    const expanded = expand(workingDirectory);
     next.workingDirectory = path.isAbsolute(expanded)
       ? path.normalize(expanded)
       : path.resolve(params.baseDir, expanded);
   }
 
   if (Array.isArray(next.args)) {
-    next.args = next.args.map((entry) => {
-      if (typeof entry !== "string") {
-        return entry;
-      }
-      const expanded = expandBundleRootPlaceholders({
-        value: entry,
-        rootDir: params.rootDir,
-        pluginDataDir: params.pluginDataDir,
-      });
-      if (!isExplicitRelativePath(expanded)) {
-        return normalizeExpandedAbsolutePath(expanded);
-      }
-      return path.resolve(params.baseDir, expanded);
-    });
+    next.args = next.args.map(resolveArgument);
   }
 
   if (isRecord(next.env)) {
     next.env = Object.fromEntries(
       Object.entries(next.env).map(([key, value]) => [
         key,
-        typeof value === "string"
-          ? normalizeExpandedAbsolutePath(
-              expandBundleRootPlaceholders({
-                value,
-                rootDir: params.rootDir,
-                pluginDataDir: params.pluginDataDir,
-              }),
-            )
-          : value,
+        typeof value === "string" ? normalizeExpandedAbsolutePath(expand(value)) : value,
       ]),
     );
   }
@@ -393,7 +351,7 @@ function loadBundleFileBackedMcpConfig(params: {
     params.bundleFormat === "agent"
       ? // SAFETY: The required Agent Plugins manifest already established this canonical root.
         pluginCacheRealpathSync(params.rootDir)!
-      : normalizeBundlePath(params.rootDir);
+      : path.resolve(params.rootDir);
   const absolutePath = path.resolve(rootDir, params.relativePath);
   const result = readBundleJsonObject({
     rootDir,
@@ -424,7 +382,7 @@ function loadBundleFileBackedMcpConfig(params: {
         })
       : undefined;
   const servers = agentLoaded?.servers ?? extractMcpServerMap(result.raw);
-  const baseDir = normalizeBundlePath(path.dirname(absolutePath));
+  const baseDir = path.dirname(absolutePath);
   return {
     config: {
       mcpServers: Object.fromEntries(
@@ -456,7 +414,7 @@ function loadRootRelativeMcpConfig(params: {
   rootDir: string;
   mcpServers: Record<string, BundleMcpServerConfig>;
 }): { config: BundleMcpRuntimeConfig; diagnostics: string[] } {
-  const rootDir = normalizeBundlePath(params.rootDir);
+  const rootDir = path.resolve(params.rootDir);
   return {
     config: {
       mcpServers: Object.fromEntries(
@@ -580,27 +538,52 @@ export function loadEnabledBundleMcpConfig(params: {
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,
-    createEmptyConfig: (): BundleMcpRuntimeConfig => ({
+    createEmptyConfig: (): BundleMcpRuntimeConfig & {
+      pluginIdsByServer: Record<string, string>;
+    } => ({
       mcpServers: {},
       prepareDataDirsByServer: {},
+      pluginIdsByServer: {},
     }),
-    loadBundleConfig: loadBundleMcpConfig,
+    loadBundleConfig: (bundle) =>
+      withMcpPluginOwnership(bundle.pluginId, loadBundleMcpConfig(bundle)),
     loadNativePluginConfig: ({ record }) =>
       record.mcpServers
-        ? loadRootRelativeMcpConfig({
-            rootDir: record.rootDir,
-            mcpServers: record.mcpServers,
-          })
+        ? withMcpPluginOwnership(
+            record.id,
+            loadRootRelativeMcpConfig({
+              rootDir: record.rootDir,
+              mcpServers: record.mcpServers,
+            }),
+          )
         : undefined,
     createDiagnostic: (pluginId, message) => ({ pluginId, message }),
   });
   return {
     config: { mcpServers: loaded.config.mcpServers },
     diagnostics: loaded.diagnostics,
+    pluginIdsByServer: loaded.config.pluginIdsByServer,
     prepareDataDirsByServer: Object.fromEntries(
       Object.entries(loaded.config.prepareDataDirsByServer).filter(
         (entry): entry is [string, BundleMcpDataDirOwnership] => entry[1] !== null,
       ),
     ),
+  };
+}
+
+function withMcpPluginOwnership(
+  pluginId: string,
+  loaded: { config: BundleMcpRuntimeConfig; diagnostics: string[] },
+) {
+  // Merge provenance alongside the server map so a later declaration owns both.
+  // Reconstructing ownership from inspection names would attribute shadowed servers twice.
+  return {
+    ...loaded,
+    config: {
+      ...loaded.config,
+      pluginIdsByServer: Object.fromEntries(
+        Object.keys(loaded.config.mcpServers).map((name) => [name, pluginId]),
+      ),
+    },
   };
 }

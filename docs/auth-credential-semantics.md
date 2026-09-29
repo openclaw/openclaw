@@ -105,6 +105,14 @@ or model availability changes, including cooldown and blocked-state transitions.
 Usage timestamps, success history, and failure counters remain recorded without
 invalidating chat metadata or broadcasting a change to connected clients.
 
+Gateway model-auth status reads share provider preparation across clients for the
+same agent and published config/auth generation. Credential warning and expiry
+boundaries also invalidate preparation; explicit refresh bypasses it. Each reply
+still computes current expiry durations, reads auxiliary usage from its existing
+cache, and applies the requesting client's profile-identity visibility.
+File-backed external CLI bootstrap health stays with its reader's freshness
+lifecycle because external login can change without a Gateway publication.
+
 Repeated model resolution reuses persisted auth rows while the owning database's
 write generation and file identity remain unchanged. Committed auth writes and
 runtime snapshot reloads invalidate those rows immediately. Database, WAL, and
@@ -116,6 +124,9 @@ and personal-account selection still run on each request. Isolated agent scopes
 and private database snapshots do not share this cache. Gateway cache misses reuse
 a read-only child whose lifetime ends at shutdown; each read reacquires its source
 admission and closes its SQLite handles before returning.
+Detached connection, cron, heartbeat, and hook callbacks retain that Gateway's
+read-only worker scope without inheriting startup or request authority. Shutdown
+refuses late callbacks before they can create another reader.
 Usage bookkeeping invalidates later cache reuse while admitted reads can finish
 their snapshots. Credential, selection, ownership, and lifecycle changes still
 invalidate in-flight preparation.
@@ -196,6 +207,8 @@ Personal pins keep the existing same-provider failover policy: ordered shared ac
 Do not write `type: "aws-sdk"` into the credential store; stored credentials are only `api_key`, `token`, or `oauth`. If a legacy `auth-profiles.json` has such a marker, `openclaw doctor --fix` moves it to `auth.profiles` and removes the marker from the store.
 
 When a selected stored profile is removed, credential-scoped model discovery reports `selected_auth_profile_unavailable` before consulting dynamic model metadata. Restore the credential or select another configured profile; registering the model does not repair missing authentication. Config-only AWS SDK profiles remain valid without a stored credential. Chat admission and agent commands retain an explicit same-provider selection when its credential disappears so authentication can report recovery. Stale automatic selections and selections for incompatible providers are still cleared.
+
+OAuth re-authentication preserves an existing profile id only when the provider's account-identity matcher proves that the new credential belongs to the same account. A different or ambiguous account keeps the provider's new profile id, so explicit session pins do not cross account boundaries. Unavailable pins remain strict and emit a session-scoped warning. For a credential already removed before re-login, deliberately select a configured account with `model@profile`, or reconnect the intended account with `openclaw models auth login --provider <provider> --profile-id <selected-profile-id>`. No session rows or stored credentials are rewritten during upgrade.
 
 ## Explicit auth order filtering
 

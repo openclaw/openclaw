@@ -1,4 +1,3 @@
-// Fal provider module implements model/runtime integration.
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import {
   downloadGeneratedMusicAsset,
@@ -12,7 +11,7 @@ import {
   postJsonRequest,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveFalHttpRequestConfig } from "./http-config.js";
 
 const DEFAULT_FAL_MUSIC_MODEL = "fal-ai/minimax-music/v2.6";
@@ -25,10 +24,6 @@ const FAL_MUSIC_MODELS = [
   FAL_ACE_STEP_MODEL,
   FAL_STABLE_AUDIO_MODEL,
 ] as const;
-
-function resolveFalMusicModel(model: string | undefined): string {
-  return normalizeOptionalString(model) ?? DEFAULT_FAL_MUSIC_MODEL;
-}
 
 function buildFalMinimaxBody(req: MusicGenerationRequest): Record<string, unknown> {
   const lyrics = normalizeOptionalString(req.lyrics);
@@ -87,12 +82,12 @@ function buildFalMusicRequestBody(
 }
 
 function resolveFalMusicMetadata(payload: unknown): Record<string, unknown> | undefined {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+  if (!isRecord(payload)) {
     return undefined;
   }
   const metadata: Record<string, unknown> = {};
   for (const key of ["seed", "tags"]) {
-    const value = (payload as Record<string, unknown>)[key];
+    const value = payload[key];
     if (value !== undefined && value !== null) {
       metadata[key] = value;
     }
@@ -140,7 +135,7 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
 
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         await resolveFalHttpRequestConfig({ req, capability: "audio" });
-      const model = resolveFalMusicModel(req.model);
+      const model = normalizeOptionalString(req.model) ?? DEFAULT_FAL_MUSIC_MODEL;
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/${model}`,
         headers,
@@ -166,10 +161,7 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
           requestFailedMessage: "fal generated music download failed",
           maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
         });
-        const lyrics =
-          typeof payload === "object" && payload && !Array.isArray(payload)
-            ? normalizeOptionalString((payload as Record<string, unknown>).lyrics)
-            : undefined;
+        const lyrics = isRecord(payload) ? normalizeOptionalString(payload.lyrics) : undefined;
         return {
           tracks: [track],
           model,

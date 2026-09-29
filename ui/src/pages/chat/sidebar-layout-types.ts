@@ -8,7 +8,6 @@ export type SidebarSlotId =
   | "detail"
   | "discussion"
   | "portal"
-  | "tasks"
   | "terminal"
   | "workspace"
   | `plugin:${string}/${string}`;
@@ -17,8 +16,6 @@ export type SidebarPanel = {
   slot: SidebarSlotId;
   environmentId?: string;
   portalId?: string;
-  /** Selected task within the Tasks panel; absence shows its list. */
-  taskId?: string;
 };
 export type SidebarDock = "bottom" | "left" | "right";
 export type SidebarColumn = {
@@ -41,4 +38,6 @@ export type SidebarLayout = {
   dashboardPresentationOverride?: "split" | "expanded" | null;
   /** Focus the active side panel without swapping its saved main/side placement. */
   expandedSide?: boolean;
+  /** Explicit panel dismissal suppresses automatic resource reveals for this session. */
+  resourceAutoOpenDismissed?: boolean;
 };

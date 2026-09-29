@@ -223,6 +223,7 @@ function installed(packageRoot, artifactRoot) {
 
 function recovered(stateDir, artifactRoot, postCore = false) {
   const prefix = postCore ? "full-repair" : "repair";
+  const outputPrefix = postCore ? "recovery-update" : "repair";
   const statusPrefix = postCore ? "full-repair-status" : "update-status";
   const selectedRunId = postCore ? postCoreRunId : runId;
   const before = readJson(path.join(artifactRoot, `${prefix}-service-before.json`));
@@ -231,8 +232,8 @@ function recovered(stateDir, artifactRoot, postCore = false) {
   const statusExit = Number(
     fs.readFileSync(path.join(artifactRoot, `${statusPrefix}.exit`), "utf8"),
   );
-  const repairOutput = fs.readFileSync(path.join(artifactRoot, `${prefix}.json`), "utf8");
-  const repairError = fs.readFileSync(path.join(artifactRoot, `${prefix}.err`), "utf8");
+  const repairOutput = fs.readFileSync(path.join(artifactRoot, `${outputPrefix}.json`), "utf8");
+  const repairError = fs.readFileSync(path.join(artifactRoot, `${outputPrefix}.err`), "utf8");
   const row = withDatabase(stateDir, false, (db) => readRun(db, selectedRunId));
   const operations = after.operations.slice(before.operations.length);
   const callers = after.callers.slice(before.callers.length);
@@ -338,11 +339,14 @@ function createDeadlineHook(packageRoot, artifactRoot) {
     .readdirSync(dist)
     .filter((file) => /\.[cm]?js$/u.test(file))
     .map((file) => ({
+      name: file,
       url: pathToFileURL(path.join(dist, file)).href,
       source: fs.readFileSync(path.join(dist, file), "utf8"),
     }));
   const marker = "async function updatePluginsAfterCoreUpdate(params) {";
-  const plugins = modules.filter((module) => module.source.includes(marker));
+  const plugins = modules.filter(
+    (module) => module.name.startsWith("update-command-plugins-") && module.source.includes(marker),
+  );
   const mutations = modules.filter((module) =>
     /mutateConfigFileWithRetry as \w+/u.test(module.source),
   );

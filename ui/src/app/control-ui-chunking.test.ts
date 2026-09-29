@@ -69,6 +69,20 @@ describe("Control UI build chunking", () => {
     });
   });
 
+  it("lets snapshot prewarming load independently of the measured chat boot group", () => {
+    const database = new URL("../pages/chat/session-snapshot-database.ts", import.meta.url)
+      .pathname;
+    const stableGroup = controlUiCodeSplitting.groups[0];
+    const chatGroup = controlUiCodeSplitting.groups.find(
+      (group) => group.name === "control-ui-boot-chat",
+    )!;
+
+    expect(chatGroup.test?.(database)).toBe(true);
+    expect(stableGroup?.test?.(database)).toBe(true);
+    expect(controlUiStableChunkName(database)).toBe("session-snapshot-database");
+    expect(stableGroup?.priority).toBeGreaterThan(chatGroup.priority);
+  });
+
   it("consolidates shared boot without pulling in the chat route or optional panels", () => {
     // Recursive inclusion is a correctness requirement for this group: merging
     // the lazy boot graph without it emitted chunks whose execution order broke

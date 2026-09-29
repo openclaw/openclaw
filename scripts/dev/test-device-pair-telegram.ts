@@ -1,4 +1,3 @@
-// Test Device Pair Telegram script supports OpenClaw repository automation.
 import { pathToFileURL } from "node:url";
 import { getRuntimeConfig } from "../../src/config/config.js";
 import { matchPluginCommand, executePluginCommand } from "../../src/plugins/commands.js";
@@ -51,11 +50,7 @@ function writeStdoutLine(...parts: string[]): void {
   process.stdout.write(`${parts.join(" ")}\n`);
 }
 
-function writeStderrLine(message: string): void {
-  process.stderr.write(`${message}\n`);
-}
-
-function readArg(args: string[], flag: string, short?: string): string | undefined {
+function readArg(args: readonly string[], flag: string, short?: string): string | undefined {
   const idx = args.indexOf(flag);
   if (idx !== -1 && idx + 1 < args.length) {
     return args[idx + 1];
@@ -101,8 +96,8 @@ function validateArgs(args: readonly string[]): void {
 function parseDevicePairTelegramArgs(args: readonly string[]): DevicePairTelegramArgs {
   validateArgs(args);
   return {
-    accountId: readArg([...args], "--account", "-a"),
-    chatId: readArg([...args], "--chat", "-c"),
+    accountId: readArg(args, "--account", "-a"),
+    chatId: readArg(args, "--chat", "-c"),
     help: args.includes("--help") || args.includes("-h"),
   };
 }
@@ -134,10 +129,7 @@ async function runDevicePairTelegram(
   deps: DevicePairTelegramDeps = createDefaultDeps(),
 ): Promise<DevicePairTelegramResult> {
   const { accountId, chatId, help } = parseDevicePairTelegramArgs(args);
-  if (help) {
-    throw new UsageError(usage());
-  }
-  if (!chatId) {
+  if (help || !chatId) {
     throw new UsageError(usage());
   }
 
@@ -195,7 +187,7 @@ async function main(): Promise<void> {
       result.messageId ? `message=${result.messageId}` : "",
     );
   } catch (error) {
-    writeStderrLine(error instanceof Error ? error.message : String(error));
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = error instanceof UsageError ? error.exitCode : 1;
   }
 }

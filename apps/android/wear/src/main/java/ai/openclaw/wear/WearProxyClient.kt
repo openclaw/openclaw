@@ -149,11 +149,8 @@ internal class WearProxyClient private constructor(
               WearMessage.Request(requestId = requestId, method = method, params = params),
             ),
         )
-      } catch (_: CancellationException) {
-        currentCoroutineContext().ensureActive()
-        invalidatePreferredPhone(preferredPhone?.takeIf { it.nodeId == nodeId })
-        throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
-      } catch (_: Throwable) {
+      } catch (error: Throwable) {
+        if (error is CancellationException) currentCoroutineContext().ensureActive()
         invalidatePreferredPhone(preferredPhone?.takeIf { it.nodeId == nodeId })
         throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
       }
@@ -224,12 +221,10 @@ internal class WearProxyClient private constructor(
   private suspend fun resolvePhoneNode(): String =
     try {
       nodeResolver.reachablePhoneNodeId()
-    } catch (_: CancellationException) {
+    } catch (error: Throwable) {
       // Play Services can cancel its Task while this request remains active.
       // Preserve actual caller cancellation; map transport cancellation below.
-      currentCoroutineContext().ensureActive()
-      throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
-    } catch (_: Throwable) {
+      if (error is CancellationException) currentCoroutineContext().ensureActive()
       throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
     } ?: throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
 
@@ -353,14 +348,14 @@ internal class WearProxyClient private constructor(
             selectReachablePhoneNodeId(
               capabilityClient
                 .getCapability(WearProtocol.PHONE_CAPABILITY, CapabilityClient.FILTER_REACHABLE)
-                .await()
+                .awaitWearTask()
                 .nodes
                 .map { node -> WearReachablePhoneNode(id = node.id, isNearby = node.isNearby) },
             )
           },
         transport =
           WearMessageTransport { nodeId, path, data ->
-            messageClient.sendMessage(nodeId, path, data).await()
+            messageClient.sendMessage(nodeId, path, data).awaitWearTask()
           },
       )
     }
@@ -425,7 +420,7 @@ internal class WearEventSequenceTracker {
       return
     }
     val previous = lastSequence
-    val streamChanged = this.streamId != streamId && (this.streamId != null || streamId != null)
+    val streamChanged = this.streamId != streamId
     this.streamId = streamId
     if (awaitingSnapshot || previous == null || streamChanged || sequence > previous) lastSequence = sequence
     awaitingSnapshot = false
@@ -444,12 +439,7 @@ internal class WearEventSequenceTracker {
       eventGeneration += 1
       return WearSequenceDecision.Accepted
     }
-    if (this.streamId != streamId && (this.streamId != null || streamId != null)) {
-      awaitingSnapshot = true
-      eventGeneration += 1
-      return WearSequenceDecision.GapOrReset
-    }
-    if (sequence == previous + 1) {
+    if (this.streamId == streamId && sequence == previous + 1) {
       lastSequence = sequence
       eventGeneration += 1
       return WearSequenceDecision.Accepted
@@ -502,12 +492,7 @@ internal class WearEventSequenceTracker {
     sequence: Long?,
   ): Boolean {
     if (awaitingSnapshot) return false
-    if (
-      this.streamId != responseStreamId &&
-      (this.streamId != null || responseStreamId != null)
-    ) {
-      return false
-    }
+    if (this.streamId != responseStreamId) return false
     val currentSequence = lastSequence
     return if (sequence == null) {
       requestEventGeneration == eventGeneration
@@ -598,7 +583,7 @@ internal class WearEventResyncBuffer(
   }
 }
 
-private suspend fun <T> Task<T>.await(): T =
+internal suspend fun <T> Task<T>.awaitWearTask(): T =
   suspendCancellableCoroutine { continuation ->
     addOnSuccessListener { value -> if (continuation.isActive) continuation.resume(value) }
     addOnFailureListener { error -> if (continuation.isActive) continuation.resumeWithException(error) }

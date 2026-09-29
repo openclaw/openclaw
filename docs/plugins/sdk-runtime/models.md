@@ -10,6 +10,41 @@ sidebarTitle: "Model helpers"
 
 Call a model, resolve model-selection policy, and resolve provider auth without importing host internals. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference.
 
+## Protected model egress for standalone commands
+
+`withConfiguredModelEgress` from `openclaw/plugin-sdk/secret-egress-runtime`
+runs an explicit standalone command for an official plugin with a destination-bound credential
+sentinel. It resolves the selected provider's configured API-key SecretRef
+through the normal secret resolver, including file-backed keys, and uses the
+provider's model route policy for its HTTPS endpoint on port 443. It supports
+OpenAI-compatible Responses and Completions routes. OAuth, auth-profile
+references, custom request headers, and custom request transport are unsupported.
+This is a private JavaScript-only host binding for bundled and separately
+published official plugins, not a third-party plugin API.
+
+```typescript
+const { withConfiguredModelEgress } = await import("openclaw/plugin-sdk/secret-egress-runtime");
+await withConfiguredModelEgress({ config, provider, model, signal }, async (egress) => {
+  // Keep hostEnv on the credential-owning host for the authenticated bridge.
+  // Send only sentinel, baseUrl, model, and public caBundle to the remote app.
+  await runRemoteAppThroughBridge(egress, signal);
+});
+```
+
+The callback receives `sentinel`, `baseUrl`, `model`, `allowedHosts`, `hostEnv`,
+and the public `caBundle` contents. Supply `onOutput(text, stream)` to receive
+live output with resolved credentials redacted, including values split between
+chunks; pass the callback's `onOutputChunk` to the command runner. The caller owns its bridge and remote
+process, must honor cancellation, and must join both before its callback
+settles. Cancellation revokes proxy access immediately; callback completion or
+failure revokes access, stops the isolated proxy, and removes its private CA
+directory. Credentials and proxy grants never enter the shared secret store.
+
+This is an explicit command-scoped proxy using the existing secret egress
+implementation. It does not require enabling or restarting the Gateway's
+persistent egress proxy. Import the SDK module only in the command execution
+path; importing it alone does not load model or secret runtime code.
+
 ## Prepared simple completions
 
 The `openclaw/plugin-sdk/simple-completion-runtime` helpers support preparing a
@@ -40,6 +75,24 @@ compatible preparations share the existing generation's resources. A result from
 a closed host cannot start another completion; prepare again under the current
 host.
 
+## Low-level completions
+
+The `complete` and `completeSimple` helpers from `openclaw/plugin-sdk/llm` accept
+an optional fourth `assertCurrent` callback. It runs after transport setup and
+immediately before provider dispatch. A thrown error or an aborted
+`options.signal` prevents dispatch; the callback stays outside provider options.
+Existing three-argument calls remain supported.
+
+The `resolveOpenAIModelReasoningEfforts`, `resolveOpenAIReasoningEffortMap`, and
+`resolveOpenAIReasoningEffortMapping` helpers from the same SDK subpath read the
+OpenAI model's effort capabilities and configured native mappings.
+
+Native harnesses can use `selectSupportedReasoningEffort` from
+`openclaw/plugin-sdk/agent-harness-attempt-runtime` with their validated effort order and
+supported efforts. It keeps a supported request, otherwise chooses the next
+higher supported effort, or the highest available effort when none is higher.
+Backend adapters retain protocol validation and special-mode handling.
+
 ## Model namespaces
 
 <AccordionGroup>
@@ -62,8 +115,8 @@ host.
     equivalent control and otherwise may ignore them. They do not weaken the
     execution mode's isolation guarantees.
 
-    To require the configured agent runtime and a literal zero-tool model
-    surface, select isolated execution explicitly:
+    To require fresh inference through the configured agent runtime, select
+    isolated execution explicitly:
 
     ```typescript
     const result = await api.runtime.llm.complete({
@@ -79,10 +132,17 @@ host.
     ```
 
     This mode accepts exactly one user message. Core derives the configured CLI
-    or harness owner, starts a fresh context, exposes no model-callable tools,
+    or harness owner, starts a fresh context, supplies no model-callable tools,
     and never falls back to direct provider transport. Unsupported runtimes fail
     before inference. `result.execution.owner` reports the selected owner;
     token usage remains absent when a CLI cannot report it.
+
+    Agents API has a documented exception to the literal zero-tool guarantee:
+    its restricted sessions may retain service-owned helpers despite having no
+    executor or supplied tools. Output rejection cannot prevent those helpers
+    from acting during inference. Callers requiring zero tools must select a
+    runtime that enforces that boundary. See the
+    [isolated-completion contract](/plugins/sdk-agent-harness/registration#isolated-completion).
 
     Completion failures expose a stable `code` on the thrown error. Isolated
     callers can distinguish authorization, invalid isolated input, unsupported

@@ -14,6 +14,7 @@ import {
 } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { SqliteSessionReclamationAdmissionDiagnostics } from "./session-accessor.sqlite-contract.js";
+import type { SessionMaintenanceLiveProtection } from "./session-accessor.sqlite-lifecycle-types.js";
 import { revokeSqliteReclamationCommit } from "./session-accessor.sqlite-reclamation-commit.js";
 import {
   observeSqliteMutationWorkerEnd,
@@ -79,7 +80,10 @@ export function withSqliteMutationWorkerLifetime<T>(
 }
 
 export type SqliteWorkerWriteAdmission<Result> = (
-  run: (refusal?: { error: unknown }) => Promise<Result | undefined>,
+  run: (
+    refusal?: { error: unknown },
+    maintenanceProtection?: SessionMaintenanceLiveProtection,
+  ) => Promise<Result | undefined>,
   diagnostics: SqliteSessionReclamationAdmissionDiagnostics,
 ) => Promise<void>;
 
@@ -89,6 +93,7 @@ export type SqliteMutationWorkerValidationOwner = {
 };
 
 export type SqliteMutationWorkerMessage<Result> =
+  | { type: "refused"; operationId: number; settled: true }
   | { type: "commit-request"; operationId: number }
   | { type: "admission-request" | "admission-release"; operationId: number; admissionId: number }
   | {
@@ -98,6 +103,13 @@ export type SqliteMutationWorkerMessage<Result> =
       settled: true;
       validation?: OpenClawAgentDatabaseValidation;
     };
+
+/** Transport settlement is separate from the caller's refused authority. */
+export class SqliteMutationWorkerSettledRefusal extends Error {
+  constructor(cause: Error) {
+    super(cause.message, { cause });
+  }
+}
 
 /** Share request authority, not connection lifetime: cold mutations join exit; sweeps join each result. */
 export function runSqliteMutationWorkerRequest<Result>(params: {
@@ -131,6 +143,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
       | undefined;
     let admissionId = 0;
     let completed = false;
+    let settledRefusal = false;
     const admissionTasks: Promise<void>[] = [];
     const terminate = () => {
       void terminateSqliteMutationWorker(transport).catch((failure: unknown) => {
@@ -172,7 +185,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
         .then(() => {
           const failure = workerError ?? transportError ?? params.getFailure?.();
           if (failure) {
-            reject(failure);
+            reject(settledRefusal ? new SqliteMutationWorkerSettledRefusal(failure) : failure);
           } else if (code !== undefined && code !== 0) {
             reject(new Error(`SQLite transcript archive worker exited with code ${code}`));
           } else if (result === undefined) {
@@ -226,7 +239,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
         };
         admission = requested;
         const task = params
-          .withWriteAdmission(async (refusal) => {
+          .withWriteAdmission(async (refusal, maintenanceProtection) => {
             if (completed) {
               return undefined;
             }
@@ -240,6 +253,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                 operationId,
                 admissionId: requested.id,
                 allowed,
+                maintenanceProtection,
                 validation:
                   allowed && params.validationOwner?.isCurrent()
                     ? getOpenClawAgentDatabaseValidation(params.validationOwner.database)
@@ -287,6 +301,14 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
         admission = undefined;
         released.diagnostics.releaseCause = "worker-release";
         released.released.resolve();
+      } else if (message.type === "refused") {
+        if (!message.settled || params.completion !== "result") {
+          fail(new Error("SQLite reclamation Worker omitted refusal settlement"));
+          return;
+        }
+        settledRefusal = true;
+        workerError ??= new Error("SQLite reclamation Worker request was refused");
+        finish();
       } else if (message.type === "reclaimed") {
         if (!message.settled) {
           fail(new Error("SQLite reclamation Worker omitted operation settlement"));

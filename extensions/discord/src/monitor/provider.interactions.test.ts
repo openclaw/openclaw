@@ -5,7 +5,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi } from "vitest";
 import { DISCORD_VOICE_COMMAND_SPEC } from "../voice/command.js";
 import { createDiscordProviderInteractionSurface } from "./provider.interactions.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.manager.js";
+import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 type InteractionParams = Parameters<typeof createDiscordProviderInteractionSurface>[0];
 type CreateNativeCommand = NonNullable<InteractionParams["createNativeCommand"]>;

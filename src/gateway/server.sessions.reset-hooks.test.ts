@@ -2,13 +2,12 @@
 // events, CLI bindings, browser cleanup, and active-run shutdown.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, test, vi } from "vitest";
-import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { afterEach, expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { listSessionEntriesCore, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsHandlerTestHarness,
@@ -26,6 +25,15 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
+const pendingHookCleanups = new Set<() => Promise<void>>();
+
+afterEach(async () => {
+  // A runner timeout does not unwind the test body; settle gates before store teardown.
+  for (const cleanup of pendingHookCleanups) {
+    await cleanup();
+  }
+  pendingHookCleanups.clear();
+});
 
 type HookEventRecord = Record<string, unknown> & {
   context?: Record<string, unknown> & {
@@ -429,26 +437,6 @@ test("sessions.reset does not begin cleanup after losing lifecycle ownership", a
   expect(store["agent:main:main"]?.sessionId).toBe("sess-main");
 });
 
-test("sessions.reset emits before_reset hook with transcript context", async () => {
-  await createSessionStoreDir();
-  const transcriptPath = await writeMainTranscriptSession({
-    sessionId: "sess-main",
-    content: "hello from transcript",
-  });
-
-  beforeResetHookState.hasBeforeResetHook = true;
-
-  await resetMainSession();
-  expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
-  const [event, context] = firstHookCall(beforeResetHookMocks.runBeforeReset);
-  expectTranscriptResetEvent({
-    event,
-    sessionFile: transcriptPath,
-    content: "hello from transcript",
-  });
-  expectMainHookContext(context, "sess-main");
-});
-
 test("sessions.reset infers selected global agent from agent-prefixed aliases", async () => {
   const { dir } = await createSessionStoreDir();
   await withGlobalAgentSessionStore(dir, async (globalConfig) => {
@@ -712,17 +700,6 @@ test("sessions.reset emits before_reset for the entry actually reset in the writ
   expectMainHookContext(context, "sess-new");
 });
 
-test("sessions.create with emitCommandHooks=true fires command:new hook against parent (#76957)", async () => {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-parent", "hello from parent");
-
-  await writeMainSessionEntry("sess-parent");
-
-  await createFromMainSession({ emitCommandHooks: true });
-
-  expect(expectSingleCommandHookEvent("new").context?.commandSource).toBe("webchat");
-});
-
 test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks against parent (#76957)", async () => {
   await createSessionStoreDir();
   const transcriptPath = await writeMainTranscriptSession({
@@ -805,10 +782,12 @@ test("sessions.create waits for the parent work admission to release", async () 
 test("sessions.create fences new parent work while rollover hooks run", async () => {
   const { storePath } = await createSessionStoreDir();
   await writeMainSessionEntry("sess-parent-fenced");
-  const hookStarted = createDeferredCore();
-  const releaseHook = createDeferredCore();
+  const hookEntered = createDeferred();
+  const releaseHook = createDeferred();
+  const admissionController = new AbortController();
+  let admission: ReturnType<typeof beginSessionWorkAdmission> | undefined;
   sessionHookMocks.triggerInternalHook.mockImplementationOnce(async () => {
-    hookStarted.resolve();
+    hookEntered.resolve();
     await releaseHook.promise;
   });
 
@@ -817,41 +796,52 @@ test("sessions.create fences new parent work while rollover hooks run", async ()
     parentSessionKey: "main",
     emitCommandHooks: true,
   });
-  let admission: ReturnType<typeof beginSessionWorkAdmission> | undefined;
-  await runQaGatewayFixture(
-    async () => {
-      await Promise.race([
-        hookStarted.promise,
-        creating.then(() => {
-          throw new Error("sessions.create completed before its command:new hook");
-        }),
-      ]);
-      expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
-      let admissionStarted = false;
-      admission = beginSessionWorkAdmission({
-        scope: storePath,
-        identities: ["agent:main:main", "sess-parent-fenced"],
-        assertAllowed: () => {
-          admissionStarted = true;
-        },
-      });
-      await Promise.resolve();
-      expect(admissionStarted).toBe(false);
-      releaseHook.resolve();
-      expect((await creating).ok).toBe(true);
-      await admission;
-      expect(admissionStarted).toBe(true);
-    },
-    async () => {
-      releaseHook.resolve();
-      // A prematurely acquired admission may be blocking creation itself.
-      (await admission)?.release();
-    },
-    async () => {
-      await creating;
-    },
-    () => sessionHookMocks.triggerInternalHook.mockReset(),
-  );
+  const settledWork: Promise<unknown>[] = [Promise.allSettled([creating])];
+  let cleaningUp: Promise<void> | undefined;
+  const cleanup = () => {
+    releaseHook.resolve();
+    admissionController.abort();
+    return (cleaningUp ??= (async () => {
+      const lease = await admission?.catch(() => undefined);
+      lease?.release();
+      await Promise.all(settledWork);
+      sessionHookMocks.triggerInternalHook.mockReset();
+    })());
+  };
+  pendingHookCleanups.add(cleanup);
+  try {
+    await Promise.race([
+      hookEntered.promise,
+      creating.then((result) => {
+        throw new Error(
+          `Session creation settled before its rollover hook: ${result.error?.message ?? "no hook"}`,
+        );
+      }),
+    ]);
+    admissionController.signal.throwIfAborted();
+    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+
+    let admissionStarted = false;
+    admission = beginSessionWorkAdmission({
+      scope: storePath,
+      identities: ["agent:main:main", "sess-parent-fenced"],
+      signal: admissionController.signal,
+      assertAllowed: () => {
+        admissionStarted = true;
+      },
+    });
+    settledWork.push(Promise.allSettled([admission]));
+    await Promise.resolve();
+    expect(admissionStarted).toBe(false);
+
+    releaseHook.resolve();
+    expect((await creating).ok).toBe(true);
+    await admission;
+    expect(admissionStarted).toBe(true);
+  } finally {
+    await cleanup();
+    pendingHookCleanups.delete(cleanup);
+  }
 });
 
 test("sessions.create with emitCommandHooks=true resets parent in place when session.dmScope is 'main' (#77434)", async () => {

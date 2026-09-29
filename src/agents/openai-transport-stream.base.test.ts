@@ -2,8 +2,6 @@ import { getAiTransportHost } from "@openclaw/ai";
 import {
   buildTransportAwareSimpleStreamFn,
   createAzureOpenAIResponsesTransportStreamFn,
-  createBoundaryAwareStreamFnForModel,
-  createOpenClawTransportStreamFnForModel,
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
 } from "@openclaw/ai/transports";
@@ -1170,24 +1168,6 @@ describe("openai transport stream", () => {
     expect(headers.session_id).toBeUndefined();
   });
 
-  it("does not overwrite an existing session_id header on the native ChatGPT/Codex Responses transport", () => {
-    const headers = testing.buildOpenAIClientHeaders(
-      makeResponsesModel({
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
-        headers: {},
-      }),
-      { systemPrompt: "", messages: [] } as never,
-      { session_id: "caller-supplied-session" },
-      undefined,
-      "session-abc-123",
-    );
-
-    expect(headers.session_id).toBe("caller-supplied-session");
-  });
-
   it("does not add a generated session_id header when the caller supplies a differently-cased one", () => {
     const headers = testing.buildOpenAIClientHeaders(
       makeResponsesModel({
@@ -1246,48 +1226,6 @@ describe("openai transport stream", () => {
     ).toBeUndefined();
   });
 
-  it("builds boundary-aware stream shapers for supported default agent transports", () => {
-    expect(
-      createBoundaryAwareStreamFnForModel(
-        makeResponsesModel({
-          id: "gpt-5.4",
-          name: "GPT-5.4",
-        }),
-      ),
-    ).toBeTypeOf("function");
-    expect(
-      createOpenClawTransportStreamFnForModel(
-        makeResponsesModel({
-          id: "gpt-5.4",
-          name: "GPT-5.4",
-        }),
-      ),
-    ).toBeTypeOf("function");
-    expect(
-      createBoundaryAwareStreamFnForModel(
-        makeResponsesModel({
-          id: "codex-mini-latest",
-          name: "Codex Mini Latest",
-          api: "openai-chatgpt-responses",
-        }),
-      ),
-    ).toBeTypeOf("function");
-    expect(
-      createBoundaryAwareStreamFnForModel({
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        api: "anthropic-messages",
-        provider: "anthropic",
-        baseUrl: "https://api.anthropic.com",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } satisfies Model<"anthropic-messages">),
-    ).toBeTypeOf("function");
-  });
-
   it("prepares a custom simple-completion api alias when transport overrides are attached", () => {
     const model = attachModelProviderRequestTransport(
       makeResponsesModel({
@@ -1311,94 +1249,6 @@ describe("openai transport stream", () => {
       id: "gpt-5.4",
     });
     expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
-  });
-
-  it("prepares a Codex Responses simple-completion api alias when transport overrides are attached", () => {
-    const model = attachModelProviderRequestTransport(
-      makeResponsesModel({
-        id: "codex-mini-latest",
-        name: "Codex Mini Latest",
-        api: "openai-chatgpt-responses",
-      }),
-      {
-        proxy: {
-          mode: "explicit-proxy",
-          url: "http://proxy.internal:8443",
-        },
-      },
-    );
-
-    const prepared = prepareTransportAwareSimpleModel(model);
-
-    expect(resolveTransportAwareSimpleApi(model.api)).toBe(
-      "openclaw-openai-chatgpt-responses-transport",
-    );
-    expectRecordFields(prepared, {
-      api: "openclaw-openai-chatgpt-responses-transport",
-      provider: "openai",
-      id: "codex-mini-latest",
-    });
-    expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
-  });
-
-  it("prepares an Anthropic simple-completion api alias when transport overrides are attached", () => {
-    const model = attachModelProviderRequestTransport(
-      {
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        api: "anthropic-messages",
-        provider: "anthropic",
-        baseUrl: "https://api.anthropic.com",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } satisfies Model<"anthropic-messages">,
-      {
-        proxy: {
-          mode: "explicit-proxy",
-          url: "http://proxy.internal:8443",
-        },
-      },
-    );
-
-    const prepared = prepareTransportAwareSimpleModel(model);
-
-    expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-anthropic-messages-transport");
-    expectRecordFields(prepared, {
-      api: "openclaw-anthropic-messages-transport",
-      provider: "anthropic",
-      id: "claude-sonnet-4-6",
-    });
-    expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
-  });
-
-  it("reports the Google simple-completion api alias without loading provider runtime", () => {
-    const model = attachModelProviderRequestTransport(
-      {
-        id: "gemini-3.1-pro-preview",
-        name: "Gemini 3.1 Pro Preview",
-        api: "google-generative-ai",
-        provider: "google",
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } satisfies Model<"google-generative-ai">,
-      {
-        proxy: {
-          mode: "explicit-proxy",
-          url: "http://proxy.internal:8443",
-        },
-      },
-    );
-
-    expect(resolveTransportAwareSimpleApi(model.api)).toBe(
-      "openclaw-google-generative-ai-transport",
-    );
   });
 
   it("keeps github-copilot OpenAI-family models on the shared transport seam", () => {

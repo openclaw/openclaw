@@ -3,13 +3,9 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it, vi } from "vitest";
 import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
-import {
   readMigrationArtifactIdentity,
   type MigrationArtifact,
-} from "./doctor-session-sqlite-artifact.js";
+} from "../infra/session-sqlite-migration-artifact.js";
 import {
   createSessionSqliteMigrationRun,
   recordCompletedMigrationMoves,
@@ -19,9 +15,13 @@ import {
   type ActiveSessionSqliteMigrationRun,
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetManifest,
-} from "./doctor-session-sqlite-migration-run.js";
-import * as migrationRun from "./doctor-session-sqlite-migration-run.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
+} from "../infra/session-sqlite-migration-manifest.js";
+import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
+import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   collectRecoveryInventory,
   protectRecoveryDependencies,

@@ -2,10 +2,14 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import chokidar from "chokidar";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../config/runtime-write-application.js";
+import * as configFileSource from "../config/source-file.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -13,6 +17,7 @@ import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { createWatcherMock } from "./config-reload.watcher.test-support.js";
 import {
   clearInstanceBindingProbeCoordinators,
   installInstanceBindingProbeCoordinator,
@@ -185,17 +190,26 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       await useGatewayGraphPluginRuntime();
       const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
       const port = portClaim.port;
-      const watch = chokidar.watch;
-      let configWatcher: ReturnType<typeof watch> | undefined;
-      const watchSpy = vi.spyOn(chokidar, "watch").mockImplementation((paths, options) => {
-        if (!(typeof paths === "string" ? [paths] : paths).includes(configPath)) {
-          return watch(paths, options);
-        }
-        // Explicit writes own reloads; inject the filesystem echo at its race boundary below.
-        configWatcher = new chokidar.FSWatcher(options);
-        queueMicrotask(() => configWatcher?.emit("ready"));
-        return configWatcher;
-      });
+      const createConfigFileAdapter = configFileSource.createConfigFileAdapter;
+      let configWatcher: ReturnType<typeof createWatcherMock> | undefined;
+      const watchSpy = vi
+        .spyOn(configFileSource, "createConfigFileAdapter")
+        .mockImplementation((options) => {
+          if (options.path !== configPath) {
+            return createConfigFileAdapter(options);
+          }
+          // Explicit writes own reloads; inject the filesystem echo at its race boundary below.
+          const watcher = createWatcherMock();
+          configWatcher = watcher;
+          const adapter = watcher.attach(options);
+          return {
+            ...adapter,
+            start() {
+              adapter.start();
+              queueMicrotask(() => watcher.emit("ready"));
+            },
+          };
+        });
       onTestFinished(() => watchSpy.mockRestore());
       server = await startTestGatewayServer(portClaim, {
         auth: { mode: "none" },
@@ -265,7 +279,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         }),
       );
       const persisted = JSON.parse(await fs.readFile(configPath, "utf8"));
+      const application = createRuntimeConfigWriteApplication();
       const committed = await commitConfigWithPendingPluginInstalls({
+        writeOptions: attachRuntimeConfigWriteApplication({}, application),
         nextConfig: {
           ...persisted,
           channels: {
@@ -285,9 +301,10 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         },
       });
       expect(committed.afterWrite.mode).toBe("auto");
-      await expect
-        .poll(async () => (await settledProbe("cold-chat")).captured?.label)
-        .toBe("installed setup");
+      expect(application.claimed).toBe(true);
+      // Persistence schedules application; await its owner before probing the replacement.
+      await expect(application.result).resolves.toBe("applied");
+      expect((await settledProbe("cold-chat")).captured?.label).toBe("installed setup");
       expect(await settledProbe("cold-chat")).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
       expect(await settledProbe("sibling-chat")).toEqual(sibling);
       assert.ok(configWatcher);
@@ -320,7 +337,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
 
   it.each([
     {
-      name: "hands off live and pending webhook accounts while preserving a manual stop",
+      name: "hands off live and pending webhook accounts without requiring a restart while preserving a manual stop",
       teardownFails: false,
     },
     {

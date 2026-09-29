@@ -1,6 +1,8 @@
+import type { LitElement } from "lit";
 import { expect, vi } from "vitest";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { patchSettings } from "../../app/settings.ts";
+import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
 import {
   createGatewayHarness,
   createSessionsHarness,
@@ -8,6 +10,7 @@ import {
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
 import { createGatewayRequestMock, createTestGatewayClient } from "../gateway-client.ts";
+import { settleLitElement, settleLitElements } from "../lit-settle.ts";
 
 export const roster: AgentsListResult = {
   defaultId: "main",
@@ -118,15 +121,31 @@ export async function mountRoster(
   gateway.connection.gatewayUrl = gatewayUrl;
   patchSettings({ gatewayUrl });
   const sessions = createSessionsHarness("main", ["agent:main:main"]);
-  if (childRows) {
-    sessions.list.mockResolvedValue({ ...result, sessions: childRows, count: childRows.length });
-  }
+  sessions.list.mockImplementation((options) => {
+    const children =
+      childRows ??
+      (options?.spawnedBy
+        ? result.sessions.filter((row) => row.spawnedBy === options.spawnedBy)
+        : undefined);
+    return Promise.resolve(
+      children
+        ? { ...result, sessions: children, count: children.length }
+        : sessions.sessions.state.result,
+    );
+  });
   const mainRows = fixtureRows.filter((row) => row.agentId === "main");
   sessions.publish({ result: { ...result, count: mainRows.length, sessions: mainRows } });
   const mounted = await mountSidebar(gateway, sessions.sessions, "panel", agents, approvalQueue);
   mounted.sidebar.connected = true;
   await mounted.sidebar.updateComplete;
   return { ...mounted, sessions, request, gatewayHarness, result };
+}
+
+export async function settleRoster(sidebar: SidebarLifecycleState) {
+  await sidebar.updateComplete;
+  await vi.dynamicImportSettled();
+  await settleLitElements(sidebar.querySelectorAll<LitElement>("openclaw-sidebar-agent-roster"));
+  await settleLitElement(sidebar);
 }
 
 export function agentIds(sidebar: HTMLElement) {
@@ -159,12 +178,5 @@ export async function toggleRoster(sidebar: HTMLElement) {
 }
 
 export async function selectFilter(sidebar: SidebarLifecycleState, value: string) {
-  sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")?.click();
-  await vi.waitFor(() => {
-    expect(sidebar.querySelector(".sidebar-session-sort-menu")).not.toBeNull();
-  });
-  sidebar
-    .querySelector(".sidebar-session-sort-menu")
-    ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } }, bubbles: true }));
-  await sidebar.updateComplete;
+  await activateSessionMenuValue(sidebar, value);
 }

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { WorktreeGitPolicy } from "../agents/worktrees/checkout-git-config.js";
 import { splitNullBuffer } from "../agents/worktrees/git-path-inventory.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import { retryableGitNetworkOperation, withGitNetworkRetry } from "../infra/git-network-retry.js";
 import { runCommandBuffered } from "../process/exec.js";
@@ -17,6 +18,19 @@ type GitCommandOptions = {
   beforeRun?: () => void;
 };
 type GitCommandResult = { code: number | null; stdout: Buffer };
+
+export function githubPublicationApiArgs(endpoint: string, method = "GET"): string[] {
+  return [
+    "gh",
+    "api",
+    "--hostname",
+    "github.com",
+    "--method",
+    method,
+    endpoint,
+    ...(method === "GET" ? [] : ["--input", "-"]),
+  ];
+}
 
 export async function runPublicationCommand(argv: string[], options: GitCommandOptions = {}) {
   return await withGitNetworkRetry(
@@ -177,9 +191,7 @@ async function readOptionalAttributeFile(file: string): Promise<Buffer | undefin
   try {
     return await fs.readFile(file);
   } catch (error) {
-    const code =
-      typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-    if (code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
     }
     throw error;
@@ -387,10 +399,47 @@ const GITHUB_CREDENTIAL_ARGS = [
   "credential.helper=!gh auth git-credential",
 ] as const;
 
+export async function readGitHubPublicationCoauthorTrailers(params: {
+  cwd: string;
+  headCommit: string;
+  command: typeof requirePublicationCommand;
+}): Promise<string[]> {
+  const output = await params.command(
+    [
+      "git",
+      "-c",
+      "trailer.separators=:",
+      "-c",
+      "trailer.co-authored-by.key=Co-authored-by",
+      "show",
+      "-s",
+      "--format=%(trailers:key=Co-authored-by,only,unfold)",
+      params.headCommit,
+    ],
+    { cwd: params.cwd },
+  );
+  return output.split(/\r?\n/u);
+}
+
 export function appendGitHubPublicationMessage(base: string, lines: readonly string[]): string {
-  const present = new Set(base.split(/\r?\n/u).map((line) => line.trim()));
-  const missing = lines.filter((line) => !present.has(line));
-  return missing.length > 0 ? `${base.trimEnd()}\n\n${missing.join("\n")}` : base.trimEnd();
+  const footer = [...new Set(lines)].join("\n");
+  return footer ? `${base.trimEnd()}\n\n${footer}` : base.trimEnd();
+}
+
+/** Prepared commits use our terminal credit footer, never matching prose elsewhere in the message. */
+export function hasGitHubPublicationMessageFooter(
+  message: string,
+  coauthorTrailers: readonly string[],
+  publicationMarker: string,
+): boolean {
+  const lines = message.replace(/[\r\n]+$/u, "").split(/\r?\n/u);
+  const separator = lines.lastIndexOf("");
+  if (separator < 1 || lines.at(-1) !== publicationMarker) {
+    return false;
+  }
+  const actual = lines.slice(separator + 1, -1);
+  const expected = new Set(coauthorTrailers);
+  return actual.length === expected.size && [...expected].every((line) => actual.includes(line));
 }
 
 export async function assertGitHubPublicationBranchRef(

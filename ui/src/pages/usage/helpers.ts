@@ -90,8 +90,6 @@ export function selectUsageSessionKeys(
   return selected.length === 1 && selected[0] === key ? [] : [key];
 }
 
-const normalizeQueryText = (value: string): string => normalizeLowercaseStringOrEmpty(value);
-
 const globToRegex = (pattern: string): RegExp => {
   const escaped = pattern
     .replace(/[.+^${}()|[\]\\]/g, "\\$&")
@@ -241,7 +239,7 @@ const prepareUsageQuery = (
     warnings.push(`Missing value for ${term.key}`);
   }
 
-  const value = normalizeQueryText(term.value ?? "");
+  const value = normalizeLowercaseStringOrEmpty(term.value ?? "");
   const numericSpec = Object.hasOwn(NUMERIC_QUERY_SPECS, key)
     ? NUMERIC_QUERY_SPECS[key]
     : undefined;
@@ -315,7 +313,7 @@ export const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(
   const warnings: string[] = [];
   const categoricalTerms = new Map<string, UsageQueryPredicate[]>();
   const predicates = terms.map((term) => {
-    const key = normalizeQueryText(term.key ?? "");
+    const key = normalizeLowercaseStringOrEmpty(term.key ?? "");
     const predicate = prepareUsageQuery(term, key, warnings);
     if (!MULTI_VALUE_QUERY_KEYS.has(key)) {
       return predicate;

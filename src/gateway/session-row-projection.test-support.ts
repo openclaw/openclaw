@@ -17,6 +17,7 @@ import {
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
+import { projectGatewaySessionRunState } from "./session-utils-display.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import {
   materializeSessionRow,
@@ -108,9 +109,13 @@ export function createSessionRowProjectionFixture(params: {
       fallbackModel: presentation.activeModel,
       membership: new Set(),
       parents: new Set(
-        [entry.spawnedBy, entry.parentSessionKey].filter((parentKey): parentKey is string =>
-          Boolean(parentKey),
-        ),
+        [
+          entry.spawnedBy,
+          entry.parentSessionKey,
+          ...(rowContext.subagentRunsByChildSessionKey.get(fields.key) ?? []).map(
+            (run) => run.controllerSessionKey || run.requesterSessionKey,
+          ),
+        ].filter((parentKey): parentKey is string => Boolean(parentKey)),
       ),
       generation:
         previous &&
@@ -146,7 +151,24 @@ export function createSessionRowProjectionFixture(params: {
     return sortSessionRows(selected, query.sortBy);
   };
   const projection: SessionRowProjection = {
+    observeGeneration() {
+      const observedRevision = revision;
+      let active = true;
+      return {
+        isCurrent: (row) => active && revision === observedRevision && projection.isCurrent(row),
+        dispose() {
+          active = false;
+        },
+      };
+    },
     readPreparedRowContext: () => rowContext,
+    readPreparedSpawnedBy(query) {
+      const row = describe(query);
+      return row
+        ? projectGatewaySessionRunState({ key: row.key, now: Date.now(), rowContext })
+            .subagentOwner || row.storedEntry?.spawnedBy
+        : undefined;
+    },
     capture: describe,
     findBySessionId: (query) =>
       [...rows.values()].filter(
@@ -158,6 +180,8 @@ export function createSessionRowProjectionFixture(params: {
           (!query.storePath || row.storeTarget.storePath === query.storePath),
       ),
     describe,
+    readSource: () => undefined,
+    readMembership: (query) => describe(query)?.membership,
     // This row-only fixture cannot certify the resident owner's complete ancestry graph.
     ancestorRows: () => undefined,
     setArchivePageSize: () => {},
@@ -206,6 +230,7 @@ export function createSessionRowProjectionFixture(params: {
       return row
         ? {
             agentId: row.agentId,
+            generation: row.generation,
             canonicalKey: row.key,
             entry: row.entry,
             storeKey: row.key,
@@ -213,6 +238,10 @@ export function createSessionRowProjectionFixture(params: {
             storePath: row.storeTarget.storePath,
           }
         : null;
+    },
+    sharingTargetState(query) {
+      const target = projection.sharingTarget(query);
+      return target ? { status: "ready", target } : { status: "missing" };
     },
     hasMembership: (path, key, identity) =>
       [...rows.values()].some(
@@ -224,11 +253,16 @@ export function createSessionRowProjectionFixture(params: {
     },
     dirtyRowCount: 0,
     needsMaterialization: false,
+    getPolicyConfig: () => cfg,
+    get sharingRevision() {
+      return revisionToken;
+    },
     state: {
       get revision() {
         return revisionToken;
       },
       cfg,
+      policyConfig: cfg,
       modelCatalog,
       rowContext,
       scope: (options) => ({

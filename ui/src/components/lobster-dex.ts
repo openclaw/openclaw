@@ -84,25 +84,17 @@ export function recordLobsterVisit(
       if (existing.firstSeenAt !== null && existing.name !== null && !shinyNews) {
         return;
       }
-      entries.set(paletteId, {
-        firstSeenAt: existing.firstSeenAt ?? Date.now(),
-        name: existing.name ?? details.name ?? null,
-        shinySeenAt: existing.shinySeenAt ?? (details.shiny === true ? Date.now() : null),
-      });
-    } else {
-      entries.set(paletteId, {
-        firstSeenAt: Date.now(),
-        name: details.name ?? null,
-        shinySeenAt: details.shiny === true ? Date.now() : null,
-      });
     }
+    entries.set(paletteId, {
+      firstSeenAt: existing?.firstSeenAt ?? Date.now(),
+      name: existing?.name ?? details.name ?? null,
+      shinySeenAt: existing?.shinySeenAt ?? (details.shiny === true ? Date.now() : null),
+    });
     writeDex(entries);
   } catch {
     // best-effort — a full or blocked storage must not break visits
   }
 }
-
-// ---- Familiarity ----
 
 type LobsterFamiliarityTier = "shy" | "regular" | "friend";
 
@@ -161,8 +153,6 @@ export function getLobsterFamiliarity(): LobsterFamiliarity {
   return { tier, wary, visits, shoos };
 }
 
-// ---- Long memory ----
-
 // Milestone honorifics for the hover title, earned by lifetime visits across
 // all palettes. Highest earned title wins; below the first rung there is none.
 const HONORIFICS: Array<[number, string]> = [
@@ -172,12 +162,7 @@ const HONORIFICS: Array<[number, string]> = [
 ];
 
 export function lobsterHonorific(visits: number): string | null {
-  for (const [threshold, title] of HONORIFICS) {
-    if (visits >= threshold) {
-      return title;
-    }
-  }
-  return null;
+  return HONORIFICS.find(([threshold]) => visits >= threshold)?.[1] ?? null;
 }
 
 // True when `now` is the month/day anniversary of a palette's first recorded

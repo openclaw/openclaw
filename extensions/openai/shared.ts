@@ -1,40 +1,15 @@
-// Openai plugin module implements shared behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createLazyRuntimeModule,
   createLazyRuntimeSurface,
 } from "openclaw/plugin-sdk/lazy-runtime";
-import {
-  buildFirstTemplateModel,
-  findCatalogTemplate,
-  matchesExactOrPrefix,
-  normalizeProviderId,
-} from "openclaw/plugin-sdk/provider-model-metadata";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-metadata";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { classifyOpenAIBaseUrl, isOpenAICodexBaseUrl } from "./base-url.js";
+import { classifyOpenAIBaseUrl, isOpenAICodexBaseUrl, OPENAI_API_BASE_URL } from "./base-url.js";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
+import { TOKEN_SHARING_AUTH_FLOW } from "./token-sharing.js";
 import { resolveOpenAITransportTurnState } from "./transport-policy.js";
-
-type SyntheticOpenAIModelCatalogCost = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-};
-
-type SyntheticOpenAIModelCatalogEntry = {
-  provider: string;
-  id: string;
-  name: string;
-  reasoning?: boolean;
-  input?: ("text" | "image")[];
-  contextWindow?: number;
-  contextTokens?: number;
-  cost?: SyntheticOpenAIModelCatalogCost;
-};
-
-const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 
 export const OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS = 272_000;
 
@@ -74,13 +49,10 @@ type OpenAIResponsesProviderHooks = Pick<
   | "buildReplayPolicy"
   | "prepareExtraParams"
   | "wrapStreamFn"
+  | "wrapSimpleCompletionStreamFn"
   | "resolveTransportTurnState"
   | "isCacheTtlEligible"
 >;
-
-const resolveOpenAIResponsesTransportTurnState: NonNullable<
-  OpenAIResponsesProviderHooks["resolveTransportTurnState"]
-> = (ctx) => resolveOpenAITransportTurnState(ctx);
 
 const loadResponsesStream = createLazyRuntimeModule(() => import("./responses-stream.runtime.js"));
 const wrapOpenAIResponsesProviderStreamFn: NonNullable<
@@ -106,34 +78,14 @@ export function buildOpenAIResponsesProviderHooks(options?: {
     buildReplayPolicy: buildOpenAIReplayPolicy,
     prepareExtraParams: (ctx) => defaultOpenAIResponsesExtraParams(ctx.extraParams, options),
     wrapStreamFn: wrapOpenAIResponsesProviderStreamFn,
-    resolveTransportTurnState: resolveOpenAIResponsesTransportTurnState,
+    wrapSimpleCompletionStreamFn: (ctx) =>
+      ctx.auth?.mode === "oauth" && ctx.auth.authFlow === TOKEN_SHARING_AUTH_FLOW
+        ? wrapOpenAIResponsesProviderStreamFn({
+            ...ctx,
+            // Isolated completions share credential policy but must remain tool-free.
+            nativeWebSearchAllowedByToolPolicy: false,
+          })
+        : undefined,
+    resolveTransportTurnState: resolveOpenAITransportTurnState,
   };
 }
-
-export function buildOpenAISyntheticCatalogEntry(
-  template: ReturnType<typeof findCatalogTemplate>,
-  entry: {
-    id: string;
-    reasoning: boolean;
-    input: readonly ("text" | "image")[];
-    contextWindow: number;
-    contextTokens?: number;
-    cost?: SyntheticOpenAIModelCatalogCost;
-  },
-): SyntheticOpenAIModelCatalogEntry | undefined {
-  if (!template) {
-    return undefined;
-  }
-  return {
-    ...template,
-    id: entry.id,
-    name: entry.id,
-    reasoning: entry.reasoning,
-    input: [...entry.input],
-    contextWindow: entry.contextWindow,
-    ...(entry.contextTokens === undefined ? {} : { contextTokens: entry.contextTokens }),
-    ...(entry.cost === undefined ? {} : { cost: entry.cost }),
-  };
-}
-
-export { buildFirstTemplateModel, findCatalogTemplate, matchesExactOrPrefix };

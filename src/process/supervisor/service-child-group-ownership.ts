@@ -4,8 +4,8 @@ import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 
 export type ProcessCommand =
-  | { argv: string[] }
-  | { argvUnavailable: true; executable: string; uid: number };
+  | { argv: string[]; serviceMarker?: string }
+  | { argvUnavailable: true; uid: number };
 
 type GroupMember = {
   pid: number;
@@ -13,6 +13,21 @@ type GroupMember = {
   state: string;
   command?: { ppid: number } & ProcessCommand;
 };
+
+/** Reject a known unsupported legacy contract before launching application work. */
+export function assertProcessGroupControl(): void {
+  if (process.platform !== "linux") {
+    return;
+  }
+  try {
+    process.kill(0, 0);
+  } catch (cause) {
+    throw new Error(
+      "Process-group ownership is unavailable; use a matching Node host and worker with native process ownership. Cleanup cannot fall back to transport-only execution.",
+      { cause },
+    );
+  }
+}
 
 /** Only kernel absence, observed outside the owned group, confirms extinction. */
 export function isOwnedProcessGroupGone(pgid: number): boolean {
@@ -61,7 +76,10 @@ export function* readProcessGroupMembers(
         if (pid !== process.pid && ["ENOENT", "ESRCH"].includes(extractErrorCode(error) ?? "")) {
           continue;
         }
-        throw error;
+        throw new Error(
+          `Could not classify PID ${pid}: process command inspection failed (${extractErrorCode(error) ?? "unavailable"}).`,
+          { cause: error },
+        );
       }
       // comm can contain spaces, newlines and parentheses; pgrp follows PPID
       // after its final closing parenthesis (Linux procfs stat fields 1..5).
@@ -75,7 +93,9 @@ export function* readProcessGroupMembers(
         const flags = Number(stat.slice(stat.lastIndexOf(")") + 2).split(/\s+/)[6]);
         const kernelThread = Number.isInteger(flags) && (flags & 0x0020_0000) !== 0;
         if (!kernelThread && !isPidDefinitelyDead(pid)) {
-          throw new Error(`Cannot identify live process ${pid}`);
+          throw new Error(
+            `Could not classify PID ${pid}: live userspace process has no readable arguments.`,
+          );
         }
       }
       yield {

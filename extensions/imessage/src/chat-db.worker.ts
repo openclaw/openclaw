@@ -57,6 +57,21 @@ export function openExistingSqliteWorkerBackend(
         );
         return typeof row?.guid === "string" ? row.guid : null;
       }
+      if (command.type === "messageChats") {
+        return executeSqliteQuerySync(
+          db,
+          query
+            .selectFrom("message as m")
+            .innerJoin("chat_message_join as cmj", "cmj.message_id", "m.ROWID")
+            .innerJoin("chat as c", "c.ROWID", "cmj.chat_id")
+            .select([
+              "cmj.chat_id as chatId",
+              "c.guid as chatGuid",
+              "c.chat_identifier as chatIdentifier",
+            ])
+            .where("m.guid", "=", command.input.messageGuid),
+        ).rows;
+      }
       const { target, text, sentAfterMs } = command.input;
       let selection = query
         .selectFrom("message as m")

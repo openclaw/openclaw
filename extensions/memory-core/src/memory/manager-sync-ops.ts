@@ -26,7 +26,7 @@ import { cleanupAgedMemoryReindexTempFiles, removeMemoryDatabaseFiles } from "./
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import { withMemoryIndexPublishGeneration } from "./manager-index-generation-lease.js";
 import {
-  applyMemoryFallbackProviderState,
+  resolveMemoryProviderState,
   resolveFallbackCurrentProviderId,
   resolveMemoryFallbackProviderRequest,
 } from "./manager-provider-state.js";
@@ -42,7 +42,8 @@ import {
 import { MEMORY_INDEX_META_KEY } from "./manager-retrieval-read.js";
 import { readMemoryShadowIdentity } from "./manager-shadow-task.js";
 import { MemoryManagerSourceSyncOps } from "./manager-source-sync-ops.js";
-import type { MemorySyncProgressState } from "./manager-sync-base.js";
+import type { MemoryEmbeddingBatchConfig, MemorySyncProgressState } from "./manager-sync-base.js";
+import { hasTargetedSessionSyncParams } from "./manager-sync-control.js";
 import {
   markMemoryTargetArchiveFilesDirty,
   runMemoryTargetedSessionSync,
@@ -98,11 +99,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
 
   protected abstract readonly createProvider: MemoryManagerProviderFactory;
   protected abstract releaseProvider(provider: EmbeddingProvider): void;
-  private fallbackProviderInitPromise: Promise<boolean> | null = null;
+  protected fallbackProviderInitPromise: Promise<boolean> | null = null;
   protected syncProviderGeneration: MemorySyncProviderGeneration | null = null;
 
-  protected beginSyncProviderGeneration(_options?: { forceFtsOnly?: boolean }): void {}
-  protected endSyncProviderGeneration(): void {}
+  protected abstract beginSyncProviderGeneration(options?: { forceFtsOnly?: boolean }): void;
+  protected abstract endSyncProviderGeneration(): void;
 
   protected override shouldDeferSourceWideBatch(): boolean {
     const generation = this.syncProviderGeneration;
@@ -120,12 +121,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     );
   }
 
-  protected async retireCurrentProvider(): Promise<void> {
-    const provider = this.provider;
-    this.provider = null;
-    this.providerRuntime = undefined;
-    await provider?.close?.();
-  }
+  protected abstract retireCurrentProvider(): Promise<void>;
 
   private createSyncProgress(
     onProgress: (update: MemorySyncProgressUpdate) => void,
@@ -179,7 +175,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   }
 
   protected async runSync(params?: MemorySyncParams) {
-    const hasTargetSessionRequest = this.hasRequestedTargetSessionSync(params);
+    const hasTargetSessionRequest = hasTargetedSessionSyncParams(params);
     let needsFullReindex = Boolean(params?.force && !hasTargetSessionRequest);
     try {
       // An unavailable configured provider must not replace semantic vectors
@@ -234,11 +230,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         configuredScopeHash: resolveConfiguredScopeHash({
           workspaceDir: this.workspaceDir,
           extraPaths: this.settings.extraPaths,
-          multimodal: {
-            enabled: this.settings.multimodal.enabled,
-            modalities: this.settings.multimodal.modalities,
-            maxFileBytes: this.settings.multimodal.maxFileBytes,
-          },
+          multimodal: this.settings.multimodal,
         }),
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
@@ -361,36 +353,14 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         const shouldSyncMemory = this.sources.has("memory") && (this.dirty || isSearchBootstrap);
         const shouldSyncSessions = this.shouldSyncSessions(params, needsFullSessionReindex);
 
-        if (this.shouldDeferSourceWideBatch()) {
-          await this.executeSourceWideSync({
-            shouldSyncMemory,
-            shouldSyncSessions,
-            needsFullReindex,
-            needsFullSessionReindex,
-            targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
-            progress: progress ?? undefined,
-          });
-          if (shouldSyncSessions) {
-            this.clearSessionRetryState();
-          } else {
-            this.refreshSessionDirtyFlag();
-          }
-        } else {
-          if (shouldSyncMemory) {
-            await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
-          }
-
-          if (shouldSyncSessions) {
-            await this.syncArchiveFiles({
-              needsFullReindex: needsFullSessionReindex,
-              targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
-              progress: progress ?? undefined,
-            });
-            this.clearSessionRetryState();
-          } else {
-            this.refreshSessionDirtyFlag();
-          }
-        }
+        await this.executeSourceSync({
+          shouldSyncMemory,
+          shouldSyncSessions,
+          needsFullReindex,
+          needsFullSessionReindex,
+          targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
+          progress: progress ?? undefined,
+        });
       } catch (err) {
         this.dirty ||= this.sources.has("memory");
         const reason = formatErrorMessage(err);
@@ -432,20 +402,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     return isMemoryEmbeddingOperationError(err);
   }
 
-  private hasRequestedTargetSessionSync(params?: MemorySyncParams): boolean {
-    return Boolean(
-      params?.sessions?.some((session) => session.sessionId.trim().length > 0) ||
-      params?.archiveFiles?.some((sessionFile) => sessionFile.trim().length > 0),
-    );
-  }
-
-  protected resolveBatchConfig(): {
-    enabled: boolean;
-    wait: boolean;
-    concurrency: number;
-    pollIntervalMs: number;
-    timeoutMs: number;
-  } {
+  protected resolveBatchConfig(): MemoryEmbeddingBatchConfig {
     const batch = this.settings.remote?.batch;
     const enabled = Boolean(batch?.enabled && this.provider && this.providerRuntime?.batchEmbed);
     return {
@@ -476,10 +433,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     }
   }
 
-  protected getPendingFallbackProviderInitialization(): Promise<boolean> | null {
-    return this.fallbackProviderInitPromise;
-  }
-
   private async activateFallbackProviderOnce(reason: string): Promise<boolean> {
     const currentProviderId = resolveFallbackCurrentProviderId({
       provider: this.provider,
@@ -497,14 +450,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       return false;
     }
 
-    const currentState = {
-      provider: this.provider,
-      fallbackFrom: this.fallbackFrom,
-      fallbackReason: this.fallbackReason,
-      providerUnavailableReason: undefined,
-      providerRuntime: this.providerRuntime,
-      lifecycle: this.providerLifecycle,
-    };
     this.providerLifecycle = {
       mode: "degraded",
       providerId: currentProviderId,
@@ -535,11 +480,12 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       return false;
     }
 
-    const fallbackState = applyMemoryFallbackProviderState({
-      current: currentState,
+    const fallbackState = resolveMemoryProviderState({
+      provider: fallbackResult.provider,
+      runtime: fallbackResult.runtime,
+      requestedProvider: currentProviderId,
       fallbackFrom: currentProviderId,
-      reason,
-      result: fallbackResult,
+      fallbackReason: reason,
     });
     this.fallbackFrom = fallbackState.fallbackFrom;
     this.fallbackReason = fallbackState.fallbackReason;
@@ -589,30 +535,12 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           const shouldSyncMemory = shouldRetryMemoryOnFailure;
           const shouldSyncSessions = shouldRetrySessionsOnFailure;
 
-          if (this.shouldDeferSourceWideBatch()) {
-            await this.executeSourceWideSync({
-              shouldSyncMemory,
-              shouldSyncSessions,
-              needsFullReindex: true,
-              progress: params.progress,
-            });
-            if (shouldSyncSessions) {
-              this.clearSessionRetryState();
-            } else {
-              this.refreshSessionDirtyFlag();
-            }
-          } else {
-            if (shouldSyncMemory) {
-              await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
-            }
-
-            if (shouldSyncSessions) {
-              await this.syncArchiveFiles({ needsFullReindex: true, progress: params.progress });
-              this.clearSessionRetryState();
-            } else {
-              this.refreshSessionDirtyFlag();
-            }
-          }
+          await this.executeSourceSync({
+            shouldSyncMemory,
+            shouldSyncSessions,
+            needsFullReindex: true,
+            progress: params.progress,
+          });
           if (!shouldSyncMemory) {
             this.clearMemoryRetryState();
           }
@@ -630,11 +558,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             scopeHash: resolveConfiguredScopeHash({
               workspaceDir: this.workspaceDir,
               extraPaths: this.settings.extraPaths,
-              multimodal: {
-                enabled: this.settings.multimodal.enabled,
-                modalities: this.settings.multimodal.modalities,
-                maxFileBytes: this.settings.multimodal.maxFileBytes,
-              },
+              multimodal: this.settings.multimodal,
             }),
             chunkTokens: this.settings.chunking.tokens,
             chunkOverlap: this.settings.chunking.overlap,

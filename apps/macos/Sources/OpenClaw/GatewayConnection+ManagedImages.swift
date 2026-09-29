@@ -18,9 +18,7 @@ extension GatewayConnection {
             agentID: agentID,
             artifactId: artifactId)
         let responseData = try await self.request(
-            method: request.method,
-            params: request.params,
-            timeoutMs: request.timeoutMs,
+            request,
             ifCurrentServerLease: lease)
         let response = try JSONDecoder().decode(ArtifactsDownloadResult.self, from: responseData)
         let maximumBytes = Self.maximumManagedMediaBytes(for: kind)

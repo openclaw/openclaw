@@ -9,7 +9,7 @@ import {
   countTranscriptEventsForPath,
   createTranscriptEventReader,
   readOnlySqliteDbStats,
-} from "./doctor-session-sqlite-readers.js";
+} from "../infra/session-sqlite-migration-readers.js";
 
 describe("read-only SQLite transcript statistics", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);

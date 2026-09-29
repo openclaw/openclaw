@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
+import * as gatewayBindings from "../../daemon/managed-gateway-bindings.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import type { executeMutableUpdate } from "./update-command-execution.js";
@@ -70,7 +71,8 @@ vi.mock("../../infra/install-source-utils.js", async (importOriginal) => ({
   resolveNpmSpecMetadata: mocks.npmMetadata,
 }));
 
-vi.mock("../../infra/update-runner-git-recovery.js", () => ({
+vi.mock("../../infra/update-runner-git-recovery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-runner-git-recovery.js")>()),
   readCurrentGitUpdateRecovery: mocks.readGitRecovery,
 }));
 
@@ -78,7 +80,8 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: { error: mocks.runtimeError },
 }));
 
-vi.mock("./schema-preflight.js", () => ({
+vi.mock("./schema-preflight.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./schema-preflight.js")>()),
   captureTargetDatabaseSchemaContext: mocks.captureSchemaContext,
   checkTargetDatabaseSchemasForContexts: mocks.checkTargetSchemas,
   formatSchemaRefusalLines: mocks.formatSchemaRefusalLines,
@@ -116,7 +119,7 @@ vi.mock("./update-command-service.js", async () => {
   return {
     maybeRestartServiceAfterFailedMutableUpdate: mocks.maybeRestartService,
     maybeStopManagedServiceBeforeMutableUpdate: mocks.maybeStopService,
-    shouldBlockMutableUpdateFromGatewayServiceEnv: mocks.shouldBlockServiceUpdate,
+    mutableUpdateGatewayServiceBlock: mocks.shouldBlockServiceUpdate,
     UpdateCommandAbort: actual.UpdateCommandAbort,
     resolveUpdatedGatewayRestartPort,
   };
@@ -206,6 +209,7 @@ function inspectOrStopService(phase: "inspect" | "prepare" = "prepare"): PreMana
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([]);
   mocks.serviceStopped = false;
   mocks.validateCanary.mockResolvedValue({
     status: "ok",

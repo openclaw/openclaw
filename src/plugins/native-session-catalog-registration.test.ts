@@ -328,7 +328,7 @@ describe("registered native catalog access", () => {
         list: () => blockers.promise,
         read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
       };
-      const active = Array.from({ length: phase === "queued" ? 3 : 0 }, (_, index) =>
+      const active = Array.from({ length: phase === "queued" ? 15 : 0 }, (_, index) =>
         listSessionCatalogProvider({ ...blocker, id: `blocking-${index}` }, {}),
       );
       const pending = withPluginRuntimeGatewayRequestScope(

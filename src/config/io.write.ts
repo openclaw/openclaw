@@ -4,7 +4,8 @@ import { err, ok } from "@openclaw/normalization-core/result";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { isVerbose } from "../global-state.js";
 import {
-  readDeferredPluginMigrations,
+  readConfigWritePendingMigrations,
+  withDeferredPluginConfigRollback,
   withDeferredPluginMigrationsCurrent,
 } from "../infra/deferred-plugin-migrations.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
@@ -46,16 +47,16 @@ import {
 } from "./io.audit.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { prepareCronOwnerWriteRefusal } from "./io.cron-owner-refusal.js";
-import { recordConfigWriteMetadata } from "./io.meta.js";
+import { recordConfigWriteMetadata, stampConfigWriteMetadata } from "./io.meta.js";
 import {
   containsConfigIncludeDirective,
   hashConfigRaw,
+  hashConfigRevision,
   hasConfigMeta,
   resolveConfigForRead,
   resolveGatewayMode,
   restoreAuthoredTildePathsForWrite,
 } from "./io.read-helpers.js";
-import { hashConfigRevision } from "./io.snapshot.js";
 import { loggedConfigWarningFingerprints, setBoundedConfigIoWarningEntry } from "./io.state.js";
 import type {
   ConfigWriteInputBasis,
@@ -77,14 +78,13 @@ import {
 import { resolvePersistCandidateForWrite } from "./io.write-prepare.js";
 import {
   assertBaseSnapshotStillCurrent,
-  createGuardedConfigFileSystem,
+  createConfigFileWriteGuard,
   formatConfigArtifactTimestamp,
   resolveConfigSizeBaselineBytes,
   resolveConfigStatMetadata,
   resolveConfigWriteBlockingReasons,
   resolveConfigWriteSuspiciousReasons,
   rollbackConfigFileWriteIfUnchanged,
-  stampConfigVersion,
   tightenStateDirPermissionsIfNeeded,
 } from "./io.write-safety.js";
 import { prepareConfigWriteTopology } from "./io.write-topology.js";
@@ -132,7 +132,7 @@ export async function writeConfigFileFromContext(
       }
     : await readSnapshot();
   const snapshot = snapshotRead.snapshot;
-  const deferredPluginMigrations = readDeferredPluginMigrations({ env: deps.env });
+  const deferredPluginMigrations = readConfigWritePendingMigrations(configPath, deps.env);
   const configForWrite = preserveDeferredPluginMigrationConfig({
     sourceConfig: snapshot.sourceConfig,
     nextConfig: cfg,
@@ -260,10 +260,11 @@ export async function writeConfigFileFromContext(
   const validatedCandidate = validationCandidate as OpenClawConfig;
   const previousSource =
     snapshot.authoredConfig ?? snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
-  const materialized = stampConfigVersion(
+  const materialized = stampConfigWriteMetadata(
     snapshot.exists
       ? validatedCandidate
       : initializeNativeSessionCatalogPreferences(validatedCandidate),
+    undefined,
     options.lastTouchedVersionOverride,
     snapshot.exists ? previousSource : null,
   );
@@ -301,7 +302,11 @@ export async function writeConfigFileFromContext(
     nextConfig: applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths),
     pending: deferredPluginMigrations,
   });
-  const stampedOutputConfig = stampConfigVersion(outputConfig, options.lastTouchedVersionOverride);
+  const stampedOutputConfig = stampConfigWriteMetadata(
+    outputConfig,
+    undefined,
+    options.lastTouchedVersionOverride,
+  );
   rejectConfigNonFiniteNumbers(stampedOutputConfig);
   const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
   const nextHash = hashConfigRaw(json);
@@ -475,7 +480,7 @@ export async function writeConfigFileFromContext(
       warn: (message) => deps.logger.warn(message),
       skipOutputLogs: options.skipOutputLogs,
     });
-    const guardedFs = createGuardedConfigFileSystem(
+    const writeGuard = createConfigFileWriteGuard(
       configPath,
       deps.fs,
       options.assertConfigPathForWrite,
@@ -497,18 +502,26 @@ export async function writeConfigFileFromContext(
         previousSnapshot: snapshot,
         committedHash: publication.phase === "removed" ? hashConfigRaw(null) : nextHash,
         fsModule: deps.fs,
-        ...guardedFs.captureRollbackProof(assertCurrent),
+        ...writeGuard.captureRollbackProof(assertCurrent),
+        withPublication: (publish, didMutate) =>
+          withDeferredPluginConfigRollback(
+            { configPath, env: deps.env, assertCurrent },
+            publish,
+            didMutate,
+          ),
       });
     await using preparedFile = await prepareConfigFileWrite({
       configPath,
       content: json,
       previousRaw: snapshot.raw,
-      fsModule: guardedFs.fileSystem,
-      assertCurrent: guardedFs.assertCurrent,
+      fsModule: writeGuard.fileSystem,
+      assertCurrent: writeGuard.assertCurrent,
+      assertBeforeMutation: writeGuard.assertBeforeMutation,
+      onDestinationState: writeGuard.onDestinationState,
     });
     await options.beforeCommit?.();
     const result = withDeferredPluginMigrationsCurrent(
-      { env: deps.env, expectedPending: deferredPluginMigrations },
+      { env: deps.env, configPath, expectedPending: deferredPluginMigrations },
       () => {
         const published = preparedFile.publish();
         publication.phase = "published";

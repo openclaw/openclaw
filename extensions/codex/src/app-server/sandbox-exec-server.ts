@@ -4,8 +4,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import type { IncomingMessage } from "node:http";
-import { isIP, type AddressInfo } from "node:net";
+import { isIP } from "node:net";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
@@ -291,7 +290,7 @@ async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenCla
   }
   const environmentId = buildEnvironmentId(sandbox);
   const authPath = `/openclaw-${randomUUID()}`;
-  const url = `ws://127.0.0.1:${(address as AddressInfo).port}${authPath}`;
+  const url = `ws://127.0.0.1:${address.port}${authPath}`;
   const common = {
     authPath,
     closed: false,
@@ -318,16 +317,19 @@ async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenCla
   server.on("connection", (socket, request) => {
     // ws emits error for maxPayload rejections before auth or JSON-RPC sees the frame.
     socket.on("error", handleExecServerSocketError);
-    if (!isAuthorizedExecServerRequest(execServer, request)) {
+    const requestUrl = new URL(request.url ?? "", "ws://127.0.0.1");
+    if (
+      requestUrl.pathname !== execServer.authPath &&
+      ("node" in execServer || !execServer.processAuthorities?.has(requestUrl.pathname))
+    ) {
       socket.close(1008, "unauthorized");
       return;
     }
     if ("node" in execServer) {
-      handleNodeConnection(execServer, socket, request);
+      handleNodeConnection(execServer, socket, requestUrl);
       return;
     }
-    const requestPath = new URL(request.url ?? "", "ws://127.0.0.1").pathname;
-    handleConnection(execServer, socket, execServer.processAuthorities?.get(requestPath));
+    handleConnection(execServer, socket, execServer.processAuthorities?.get(requestUrl.pathname));
   });
   embeddedAgentLog.info("codex sandbox exec-server started", {
     environmentId,
@@ -360,17 +362,6 @@ async function releaseOpenClawExecServer(execServer: OpenClawLeasedExecServer): 
 function buildEnvironmentId(sandbox: SandboxContext): string {
   const hash = createHash("sha256").update(sandbox.runtimeId).digest("hex").slice(0, 16);
   return `openclaw-sandbox-${hash}`;
-}
-
-function isAuthorizedExecServerRequest(
-  execServer: OpenClawLeasedExecServer,
-  request: IncomingMessage,
-): boolean {
-  const url = new URL(request.url ?? "", "ws://127.0.0.1");
-  return (
-    url.pathname === execServer.authPath ||
-    (!("node" in execServer) && execServer.processAuthorities?.has(url.pathname) === true)
-  );
 }
 
 function readCodexPlacementNodeId(sandbox: SandboxContext): string | undefined {
@@ -421,9 +412,9 @@ function readCodexPlacementWorkspaceIdentity(sandbox: SandboxContext): {
 function handleNodeConnection(
   execServer: OpenClawNodeExecServer,
   socket: WebSocket,
-  request: IncomingMessage,
+  requestUrl: URL,
 ): void {
-  const leaseId = new URL(request.url ?? "", "ws://127.0.0.1").searchParams.get("lease");
+  const leaseId = requestUrl.searchParams.get("lease");
   const lease = leaseId ? execServer.node.leases.get(leaseId) : undefined;
   if (!lease || lease.claimed || lease.closed) {
     socket.close(1008, "execution channel unavailable");
@@ -431,16 +422,10 @@ function handleNodeConnection(
   }
   // stdio has exactly one connection; a fresh attempt always owns a fresh channel.
   lease.claimed = true;
-  const cleanup = startCodexNodeExecServerRelay({ lease, socket });
-  execServer.cleanupTasks.add(cleanup);
-  void cleanup.then(
-    () => execServer.cleanupTasks.delete(cleanup),
-    (error: unknown) => {
-      execServer.cleanupTasks.delete(cleanup);
-      embeddedAgentLog.warn("codex paired-device exec-server relay failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    },
+  trackExecServerCleanup(
+    execServer,
+    startCodexNodeExecServerRelay({ lease, socket }),
+    "codex paired-device exec-server relay failed",
   );
 }
 
@@ -499,18 +484,29 @@ function handleConnection(
     });
   });
   socket.on("close", () => {
-    const cleanup = session.close();
-    execServer.cleanupTasks.add(cleanup);
-    void cleanup.then(
-      () => execServer.cleanupTasks.delete(cleanup),
-      (error: unknown) => {
-        execServer.cleanupTasks.delete(cleanup);
-        embeddedAgentLog.warn("codex sandbox exec-server socket cleanup failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      },
+    trackExecServerCleanup(
+      execServer,
+      session.close(),
+      "codex sandbox exec-server socket cleanup failed",
     );
   });
+}
+
+function trackExecServerCleanup(
+  execServer: OpenClawLeasedExecServer,
+  cleanup: Promise<void>,
+  failureMessage: string,
+): void {
+  execServer.cleanupTasks.add(cleanup);
+  void cleanup.then(
+    () => execServer.cleanupTasks.delete(cleanup),
+    (error: unknown) => {
+      execServer.cleanupTasks.delete(cleanup);
+      embeddedAgentLog.warn(failureMessage, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
 }
 
 function handleExecServerSocketError(error: unknown): void {

@@ -1,12 +1,10 @@
+import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import type { WorkerProvider } from "../../plugins/types.js";
+import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
-import {
-  StaleWorkerBuildError,
-  verifyWorkerAdmissionHandshake,
-  type ExpectedWorkerBuild,
-} from "./admission.js";
+import { StaleWorkerBuildError, type ExpectedWorkerBuild } from "./admission.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
@@ -65,6 +63,7 @@ export function createWorkerEnvironmentTransportLifecycle(options: {
 
 type WorkerEnvironmentAccessOptions = {
   store: WorkerEnvironmentStore;
+  getCleanupError: (record: WorkerEnvironmentRecord) => string | undefined;
   getConfig: () => OpenClawConfig;
   projectNamespace?: string;
   prepareCurrentBundle: () => Promise<ExpectedWorkerBuild>;
@@ -149,16 +148,40 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   };
 
   const project = (record: WorkerEnvironmentRecord) => {
+    const cleanupError = options.getCleanupError(record);
     const desktopAvailable =
       options.getConfig().cloudWorkers?.desktop === true &&
       inState(record, "ready", "idle", "attached") &&
       record.desktop !== null;
     const nodeTunnelStatus = nodeTunnels?.status(record.environmentId);
+    const preparedProject = record.preparation
+      ? readWorkerProjectSnapshot(record.profileSnapshot.project)
+      : undefined;
+    const projectLabel = preparedProject
+      ? "source" in preparedProject
+        ? normalizeCloudRepo(preparedProject.source.url)
+        : preparedProject.label
+      : undefined;
     return {
       ...record,
-      ...((record.state === "failed" || record.state === "orphaned") && record.lastError
+      ...(record.preparation && preparedProject
+        ? {
+            preparation: {
+              ...record.preparation,
+              project: {
+                ...(projectLabel ? { label: projectLabel } : {}),
+                baseCommit: preparedProject.baseCommit,
+              },
+            },
+          }
+        : {}),
+      ...((record.state === "failed" ||
+        record.state === "orphaned" ||
+        (record.destroyRequestedAtMs !== null && record.state !== "destroyed")) &&
+      record.lastError
         ? { error: boundedError(record.lastError) }
         : {}),
+      ...(cleanupError ? { error: cleanupError } : {}),
       desktopAvailable,
       desktopApps: desktopAvailable
         ? (record.desktop?.apps?.map((app) => app.id).toSorted() ?? [])
@@ -182,7 +205,18 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       );
     }
     const provider = providerFor(record.providerId);
-    return await identityResolverFor(record, provider, record.leaseId)(record.sshEndpoint.keyRef);
+    return await identityResolverFor(
+      record,
+      provider,
+      record.leaseId,
+    )(record.sshEndpoint.keyRef, {
+      // Direct lookup has no tunnel; its service and exact lease own the invocation.
+      assertCurrent: () => {
+        if (options.isStopping()) {
+          throw serviceError("invalid_state", "Worker environment service is stopping");
+        }
+      },
+    });
   };
 
   const bindPreparedWorkspace = async (
@@ -270,11 +304,9 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (
         !inState(record, "ready", "idle", "attached") ||
         record.destroyRequestedAtMs !== null ||
-        !record.leaseId
+        !record.leaseId ||
+        !record.bootstrapReceipt
       ) {
-        throw serviceError("invalid_state", `Cannot start tunnel in state: ${record.state}`);
-      }
-      if (!record.bootstrapReceipt) {
         throw serviceError("invalid_state", `Cannot start tunnel in state: ${record.state}`);
       }
       if (record.sharedHost === null) {
@@ -286,7 +318,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (
         record.ownerEpoch === request.ownerEpoch &&
         record.lastError &&
-        !verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)
+        !sameWorkerBuild(record.bootstrapReceipt, currentBundle)
       ) {
         throw new WorkerRuntimeRefreshPendingError(boundedError(record.lastError));
       }
@@ -298,9 +330,10 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       ) {
         throw serviceError("invalid_state", "Worker tunnel owner credential is not current");
       }
-      if (!verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)) {
+      if (!sameWorkerBuild(record.bootstrapReceipt, currentBundle)) {
         throw new StaleWorkerBuildError();
       }
+      request.authorize?.();
       const nodeDeviceId = record.nodeDeviceId;
       const nodeBundle =
         typeof nodeDeviceId === "string" &&
@@ -328,6 +361,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
             openclawVersion: currentBundle.openclawVersion,
             protocolFeatures: [...currentBundle.protocolFeatures],
           },
+          authorize: request.authorize,
         });
         stopStartup = async () => await nodeTunnels.stop(record.environmentId, record.ownerEpoch);
         return;
@@ -520,6 +554,12 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     if (!startup || launchEpoch === undefined) {
       throw serviceError("launcher_failure", "Worker desktop app launcher failed to start");
     }
+    const assertLaunchOwner = async () => {
+      const { record } = requireLaunchable();
+      if (record.ownerEpoch !== launchEpoch) {
+        throw serviceError("invalid_state", "Worker desktop app launch owner changed");
+      }
+    };
     try {
       await startup;
     } catch (error) {
@@ -536,23 +576,13 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       }
       // A teardown aborts the SSH child before mutating the durable row. Wait for the
       // environment lock, then report the authoritative lifecycle state instead of a launch error.
-      await withLock(request.environmentId, async () => {
-        const { record } = requireLaunchable();
-        if (record.ownerEpoch !== launchEpoch) {
-          throw serviceError("invalid_state", "Worker desktop app launch owner changed");
-        }
-      });
+      await withLock(request.environmentId, assertLaunchOwner);
       throw serviceError(
         "launcher_failure",
         `worker desktop ${request.app} launcher failed; verify the app is installed and retry`,
       );
     }
-    await withLock(request.environmentId, async () => {
-      const { record } = requireLaunchable();
-      if (record.ownerEpoch !== launchEpoch) {
-        throw serviceError("invalid_state", "Worker desktop app launch owner changed");
-      }
-    });
+    await withLock(request.environmentId, assertLaunchOwner);
     return { app: request.app, status: "ready" };
   };
 

@@ -1,8 +1,8 @@
 // Cron ops regression tests cover service operation regressions.
 import { describe, expect, it, vi } from "vitest";
 import {
-  createCronRegressionState,
   createAbortAwareIsolatedRunner,
+  createCronRegressionState,
   createDueIsolatedJob,
   createIsolatedRegressionJob,
   setupCronRegressionFixtures,
@@ -33,9 +33,9 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { mockCall } from "../../test-utils/mock-call-assertions.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { createCronMutationCompletion } from "../mutation-completion.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import { start } from "./ops-lifecycle.js";
 import { remove, update } from "./ops-mutations.js";
 import { enqueueRun, run } from "./ops-run.js";
@@ -177,7 +177,7 @@ describe("cron service ops regressions", () => {
       markGatewayRestartDraining();
       await expect(
         completion.run(() => enqueueRun(state, job.id, "force", { commitGuard })),
-      ).rejects.toThrow("gateway is draining for restart");
+      ).rejects.toThrow("Gateway is restarting. Please try again shortly.");
       expect(completion.isCommitted()).toBe(false);
       expect(getTotalQueueSize()).toBe(0);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
@@ -220,7 +220,7 @@ describe("cron service ops regressions", () => {
     await expect(start(state)).resolves.toBeUndefined();
     expect(state.store.jobs[0]?.state.nextRunAtMs).toBe(scheduledAt);
     if (state.timer) {
-      clearTimeout(state.timer);
+      state.timer.cancel();
       state.timer = null;
     }
   });
@@ -796,7 +796,11 @@ describe("cron service ops regressions", () => {
       mutation: "removed",
       reason: "Cron job removed by operator.",
       mutate: async (state: ReturnType<typeof createCronRegressionState>, jobId: string) => {
-        await expect(remove(state, jobId)).resolves.toEqual({ ok: true, removed: true });
+        await expect(remove(state, jobId)).resolves.toEqual({
+          ok: true,
+          removed: true,
+          activeRunCancellationRequested: true,
+        });
       },
       expectRemoved: true,
     },
@@ -874,7 +878,7 @@ describe("cron service ops regressions", () => {
         }),
       ]);
       expect(
-        readCronTaskRunHistoryPage({
+        readCronRunHistoryPageForTests({
           storeKey: cronStoreKey(store.storePath),
           jobId: job.id,
           runId,

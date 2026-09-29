@@ -8,9 +8,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createMockCronStateForJobs } from "../cron/service.test-harness.js";
 import { listPage } from "../cron/service/ops-read.js";
 import type { CronJob } from "../cron/types.js";
+import {
+  createSqliteReadOnlyWorkerScope,
+  isSqliteInspectionDeadlineOwnedByCaller,
+} from "../infra/sqlite-readonly-worker.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { useSpawnBrokerTestFixture } from "../process/spawn-broker/host.test-support.js";
 import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type { GatewayCronState } from "./server-cron.js";
 
@@ -65,22 +70,35 @@ describe("createLazyGatewayCronState", () => {
     const state = createCronState(cron);
     hoisted.setState(state);
     let observedBroker: unknown = "not-built";
+    let observedReadOnlyScope = false;
     hoisted.buildGatewayCronService.mockImplementationOnce(() => {
       observedBroker = getSpawnBroker();
+      observedReadOnlyScope = isSqliteInspectionDeadlineOwnedByCaller();
       return state;
     });
 
-    const lazy = runWithSpawnBroker(broker, () => createLazyGatewayCronState(createParams()));
+    const readers = createSqliteReadOnlyWorkerScope({
+      signal: new AbortController().signal,
+      deadlineOwnedByCaller: true,
+    });
+    const lazy = readers.run(() =>
+      runWithSpawnBroker(broker, () => createLazyGatewayCronState(createParams())),
+    );
 
     expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
     expect(lazy.cron.getJob("demo")).toBeUndefined();
     expect(lazy.cron.getDefaultAgentId()).toBeUndefined();
 
-    await runInDetachedAsyncContext(() => lazy.cron.status());
+    try {
+      await runInDetachedAsyncContext(() => lazy.cron.status());
+    } finally {
+      await readers.close();
+    }
 
     expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
     expect(cron["status"]).toHaveBeenCalledTimes(1);
     expect(observedBroker === broker).toBe(true);
+    expect(observedReadOnlyScope).toBe(true);
   });
 
   it("loads the cron service for direct job reads", async () => {
@@ -470,6 +488,7 @@ describe("createLazyGatewayCronState", () => {
 
 function createParams(overrides: Partial<OpenClawConfig> = {}) {
   return {
+    scheduler: createTestGatewayScheduler(),
     cfg: {
       ...overrides,
     } as OpenClawConfig,

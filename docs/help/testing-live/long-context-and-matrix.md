@@ -191,6 +191,7 @@ Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=mode
 
 | Provider/model                                      | Notes      |
 | --------------------------------------------------- | ---------- |
+| `anthropic/claude-opus-5-5`                         |            |
 | `anthropic/claude-opus-5`                           |            |
 | `anthropic/claude-opus-4-8`                         |            |
 | `anthropic/claude-sonnet-5`                         |            |
@@ -214,7 +215,7 @@ Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=mode
 | `xai/grok-4.5`                                      |            |
 | `xai/grok-4.20-0309-reasoning`                      |            |
 | `zai/glm-5.1`                                       |            |
-| `fireworks/accounts/fireworks/routers/glm-5p2-fast` |            |
+| `fireworks/accounts/fireworks/routers/glm-5p3-fast` |            |
 | `minimax-portal/minimax-m3`                         |            |
 
 The curated **small-model** list (`OPENCLAW_LIVE_MODELS=small` / `OPENCLAW_LIVE_GATEWAY_MODELS=small`), from `SMALL_LIVE_MODEL_PRIORITY`:

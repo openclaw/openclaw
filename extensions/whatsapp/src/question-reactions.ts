@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/question-gateway-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
+import { listWhatsAppDeliveredMessageIdentities } from "./inbound/send-result.js";
 
 type WhatsAppQuestionReactionIdentity = {
   accountId: string;
@@ -37,35 +38,6 @@ function addCandidate(values: string[], value: string | null | undefined): void 
   }
 }
 
-function listDeliveredIdentities(
-  results: readonly OutboundDeliveryResult[],
-): Array<{ messageId: string; remoteJid: string }> {
-  const identities: Array<{ messageId: string; remoteJid: string }> = [];
-  const seen = new Set<string>();
-  const add = (messageId?: string, remoteJid?: string) => {
-    const id = messageId?.trim() ?? "";
-    const jid = remoteJid?.trim() ?? "";
-    const key = `${jid}:${id}`;
-    if (id && id !== "unknown" && jid && !seen.has(key)) {
-      seen.add(key);
-      identities.push({ messageId: id, remoteJid: jid });
-    }
-  };
-  for (const result of results) {
-    if (result.channel !== "whatsapp") {
-      continue;
-    }
-    add(result.messageId, result.toJid);
-    for (const raw of result.receipt?.raw ?? []) {
-      add(raw.messageId, raw.toJid);
-    }
-    for (const part of result.receipt?.parts ?? []) {
-      add(part.raw?.messageId ?? part.platformMessageId, part.raw?.toJid);
-    }
-  }
-  return identities;
-}
-
 export function registerWhatsAppQuestionReactionTargetForDeliveredPayload(params: {
   cfg: OpenClawConfig;
   target: { channel: string; accountId?: string | null };
@@ -81,7 +53,7 @@ export function registerWhatsAppQuestionReactionTargetForDeliveredPayload(params
     accountId: params.target.accountId,
   }).accountId;
   let registered = false;
-  for (const identity of listDeliveredIdentities(params.results)) {
+  for (const identity of listWhatsAppDeliveredMessageIdentities(params.results, () => true)) {
     registered =
       questionReactionTargets.register(binding, { accountId, ...identity }) || registered;
   }

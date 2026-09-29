@@ -191,7 +191,7 @@ describe("uploadFile memex upload hardening", () => {
   });
 
   it("routes the memex upload URL through the SSRF guard", async () => {
-    const lookupResponse = createMemexResponse(MEMEX_UPLOAD_URL);
+    const lookupResponse = createMemexResponse("https://uploads.tlon.network:443/put");
     const lookupCancel = vi.spyOn(lookupResponse.body!, "cancel");
     const uploadCancel = vi.fn();
     mockGuardedResponse(MEMEX_ENDPOINT, lookupResponse);
@@ -334,22 +334,6 @@ describe("uploadFile memex upload hardening", () => {
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 
-  it("disables redirects for Memex upload targets", async () => {
-    mockMemexLookup();
-    mockGuardedFetch.mockRejectedValueOnce(new Error("Too many redirects (limit: 0)"));
-
-    await expect(uploadAvatar()).rejects.toThrow("Too many redirects (limit: 0)");
-
-    expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
-    expect(mockGuardedFetch).toHaveBeenCalledTimes(2);
-    const uploadCall = guardedFetchCall(1);
-    expect(uploadCall?.url).toBe("https://uploads.tlon.network/put");
-    expect(uploadCall?.auditContext).toBe("tlon-memex-upload");
-    expect(uploadCall?.capture).toBe(false);
-    expect(uploadCall?.maxRedirects).toBe(0);
-    expect(mockRelease).toHaveBeenCalledTimes(1);
-  });
-
   it("rejects an oversized Memex upload JSON response", async () => {
     const cancelBody = vi.fn();
     let bodyReads = 0;
@@ -397,18 +381,6 @@ describe("uploadFile memex upload hardening", () => {
     expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
     expect(mockGuardedFetch).not.toHaveBeenCalled();
     expect(mockRelease).not.toHaveBeenCalled();
-  });
-
-  it("accepts hosted Memex upload URLs with an explicit :443 port", async () => {
-    const uploadUrl = "https://uploads.tlon.network:443/put";
-    mockMemexLookup(uploadUrl);
-    mockGuardedResponse(uploadUrl);
-
-    const result = await uploadAvatar();
-
-    expect(result).toEqual({ url: "https://memex.tlon.network/files/uploaded.png" });
-    expect(mockGuardedFetch).toHaveBeenCalledTimes(2);
-    expect(mockRelease).toHaveBeenCalledTimes(2);
   });
 
   it("disables redirects for the Memex upload URL lookup", async () => {

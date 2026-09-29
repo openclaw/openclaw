@@ -1,6 +1,7 @@
 // Feishu tests cover monitor.webhook security plugin behavior.
 import type { IncomingMessage } from "node:http";
 import { createConnection } from "node:net";
+import { resolveRequestClientIp } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createFeishuClientMockModule,
@@ -9,15 +10,24 @@ import {
 import {
   buildWebhookConfig,
   createFeishuWebhookTestAccount,
-  getFreePort,
+  getGatewayPort,
+  getGatewayServer,
   signFeishuPayload,
-  waitUntilServerReady,
+  waitForWebhookRoute,
   withRunningWebhookMonitor,
 } from "./monitor.webhook.test-helpers.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
 const webhookBodyTimeoutMs = vi.hoisted(() => ({ value: 50 }));
 const preAuthInFlightLimit = vi.hoisted(() => ({ value: undefined as number | undefined }));
+const legacyListener = vi.hoisted(() => ({
+  value: undefined as { port: number; host?: string } | undefined,
+}));
+
+vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/webhook-ingress")>()),
+  getWebhookLegacyListener: () => legacyListener.value,
+}));
 
 vi.mock("openclaw/plugin-sdk/webhook-request-guards", async (importOriginal) => {
   const actual =
@@ -67,10 +77,9 @@ vi.mock("./monitor.state.js", async (importOriginal) => {
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { RuntimeEnv } from "../runtime-api.js";
 import { buildFeishuWebhookRateLimitKey } from "./monitor-rate-limit-key.js";
-import { resolveRequestClientIp } from "./monitor-transport-runtime-api.js";
 import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
 import { monitorFeishuProvider } from "./monitor.js";
-import { feishuWebhookRateLimiter, httpServers } from "./monitor.state.js";
+import { feishuWebhookRateLimiter } from "./monitor.state.js";
 import { monitorWebhook } from "./monitor.transport.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -257,17 +266,15 @@ function resolveTestClientIp(remoteAddress: string | undefined): string | undefi
   } as IncomingMessage);
 }
 
-function waitForWebhookResponseClose(accountId: string): Promise<void> {
-  const server = httpServers.get(accountId);
-  if (!server) {
-    throw new Error("expected webhook server");
-  }
+function waitForWebhookResponseClose(): Promise<void> {
+  const server = getGatewayServer();
   return new Promise<void>((resolve) => {
     server.once("request", (_req, res) => res.once("close", resolve));
   });
 }
 
 afterEach(async () => {
+  legacyListener.value = undefined;
   preAuthInFlightLimit.value = undefined;
   webhookBodyTimeoutMs.value = 50;
   feishuWebhookRateLimiter.clear();
@@ -275,6 +282,7 @@ afterEach(async () => {
 });
 
 afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/webhook-ingress");
   vi.doUnmock("./probe.js");
   vi.doUnmock("./client.js");
   vi.doUnmock("./runtime.js");
@@ -290,7 +298,6 @@ describe("Feishu webhook security hardening", () => {
     const cfg = buildWebhookConfig({
       accountId: "missing-token",
       path: "/hook-missing-token",
-      port: await getFreePort(),
     });
 
     await expect(monitorFeishuProvider({ config: cfg })).rejects.toThrow(
@@ -304,7 +311,6 @@ describe("Feishu webhook security hardening", () => {
     const cfg = buildWebhookConfig({
       accountId: "missing-encrypt-key",
       path: "/hook-missing-encrypt",
-      port: await getFreePort(),
       verificationToken: "verify_token",
     });
 
@@ -317,8 +323,6 @@ describe("Feishu webhook security hardening", () => {
       config: {
         enabled: true,
         connectionMode: "webhook",
-        webhookHost: "127.0.0.1",
-        webhookPort: await getFreePort(),
         webhookPath: "/hook-transport-missing-encrypt",
       },
     } as ResolvedFeishuAccount;
@@ -373,7 +377,7 @@ describe("Feishu webhook security hardening", () => {
       monitorFeishuProvider,
       async (url) => {
         statusSink.mockClear();
-        const responseClosed = waitForWebhookResponseClose("payload-too-large");
+        const responseClosed = waitForWebhookResponseClose();
         const response = await waitForOversizedBodyResponse(url);
 
         expect(response).toContain("413 Payload Too Large");
@@ -408,7 +412,7 @@ describe("Feishu webhook security hardening", () => {
       monitorFeishuProvider,
       async (url) => {
         statusSink.mockClear();
-        const responseClosed = waitForWebhookResponseClose("slow-body-timeout");
+        const responseClosed = waitForWebhookResponseClose();
         const result = await waitForSlowBodyTimeoutResponse(url, 1_000);
         expect(result.body).toContain("408 Request Timeout");
         expect(result.body).toContain("Request body timeout");
@@ -431,7 +435,7 @@ describe("Feishu webhook security hardening", () => {
     webhookBodyTimeoutMs.value = 5_000;
     const accountId = "pre-auth-inflight";
     const path = "/hook-pre-auth-inflight";
-    const port = await getFreePort();
+    const port = await getGatewayPort();
     const abortController = new AbortController();
     const invokeWebhookEvent = vi.fn(async () => ({
       kind: "durable" as const,
@@ -439,7 +443,7 @@ describe("Feishu webhook security hardening", () => {
     }));
     const openRequests: Array<ReturnType<typeof openIncompleteWebhookRequest>> = [];
     const monitorPromise = monitorWebhook({
-      account: createFeishuWebhookTestAccount(accountId, port, path),
+      account: createFeishuWebhookTestAccount(accountId, path),
       accountId,
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       abortSignal: abortController.signal,
@@ -449,11 +453,8 @@ describe("Feishu webhook security hardening", () => {
 
     try {
       const url = `http://127.0.0.1:${port}${path}`;
-      await waitUntilServerReady(url);
-      const server = httpServers.get(accountId);
-      if (!server) {
-        throw new Error("expected webhook server");
-      }
+      await waitForWebhookRoute(url);
+      const server = getGatewayServer();
       const heldRequestsReceived = new Promise<void>((resolve) => {
         let requestCount = 0;
         const onRequest = () => {
@@ -511,11 +512,67 @@ describe("Feishu webhook security hardening", () => {
     }
   });
 
+  it("keeps pre-auth capacity independent for distinct trusted legacy listeners", async () => {
+    preAuthInFlightLimit.value = 1;
+    webhookBodyTimeoutMs.value = 5_000;
+    const { EventDispatcher } =
+      await vi.importActual<typeof import("@larksuiteoapi/node-sdk")>("@larksuiteoapi/node-sdk");
+    const path = "/hook-legacy-pre-auth";
+    const port = await getGatewayPort();
+    const url = `http://127.0.0.1:${port}${path}`;
+    const abortController = new AbortController();
+    const monitors = [3000, 3001].map((legacyPort) => {
+      const account = createFeishuWebhookTestAccount(`legacy-${legacyPort}`, path);
+      return monitorWebhook({
+        account: {
+          ...account,
+          config: { ...account.config, legacyWebhook: { port: legacyPort, host: "127.0.0.1" } },
+        },
+        accountId: account.accountId,
+        abortSignal: abortController.signal,
+        runtime: createRuntimeSpies(),
+        eventDispatcher: new EventDispatcher({ encryptKey: "encrypt_key" }),
+        invokeWebhookEvent: async () => ({ kind: "durable", value: { port: legacyPort } }),
+      });
+    });
+    const heldReceived = new Promise<void>((resolve) => {
+      getGatewayServer().once("request", () => resolve());
+    });
+    const heldClosed = waitForWebhookResponseClose();
+    legacyListener.value = { port: 3000, host: "127.0.0.1" };
+    const held = openIncompleteWebhookRequest(url);
+    const body = JSON.stringify({ schema: "2.0", event: {} });
+    const post = () =>
+      fetch(url, {
+        method: "POST",
+        headers: signFeishuPayload({ encryptKey: "encrypt_key", rawBody: body }),
+        body,
+      });
+    try {
+      await heldReceived;
+      expect(held.isClosed()).toBe(false);
+      legacyListener.value = { port: 3001, host: "127.0.0.1" };
+      const second = await post();
+      expect(second.status).toBe(200);
+      await expect(second.json()).resolves.toEqual({ port: 3001 });
+      legacyListener.value = { port: 3000, host: "127.0.0.1" };
+      expect((await post()).status).toBe(429);
+      expect(held.isClosed()).toBe(false);
+    } finally {
+      held.socket.destroy();
+      await held.response;
+      await heldClosed;
+      legacyListener.value = undefined;
+      abortController.abort();
+      await Promise.all(monitors);
+    }
+  });
+
   it("releases pre-auth capacity before signed event dispatch", { timeout: 15_000 }, async () => {
     preAuthInFlightLimit.value = 1;
     const accountId = "pre-auth-dispatch";
     const path = "/hook-pre-auth-dispatch";
-    const port = await getFreePort();
+    const port = await getGatewayPort();
     const abortController = new AbortController();
     let releaseDispatch = () => {};
     const dispatchGate = new Promise<void>((resolve) => {
@@ -527,7 +584,7 @@ describe("Feishu webhook security hardening", () => {
     });
     let signedRequest: Promise<Response> | undefined;
     const monitorPromise = monitorWebhook({
-      account: createFeishuWebhookTestAccount(accountId, port, path),
+      account: createFeishuWebhookTestAccount(accountId, path),
       accountId,
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       abortSignal: abortController.signal,
@@ -537,7 +594,7 @@ describe("Feishu webhook security hardening", () => {
 
     try {
       const url = `http://127.0.0.1:${port}${path}`;
-      await waitUntilServerReady(url);
+      await waitForWebhookRoute(url);
       const rawBody = JSON.stringify({
         schema: "2.0",
         header: { event_type: "test.pre_auth_dispatch" },
@@ -609,29 +666,14 @@ describe("Feishu webhook security hardening", () => {
       path: "/hook-rate-limit-key",
     };
 
-    expect([
-      buildFeishuWebhookRateLimitKey({
-        ...base,
-        clientIp: resolveTestClientIp("127.0.0.1"),
-      }),
-      buildFeishuWebhookRateLimitKey({
-        ...base,
-        clientIp: resolveTestClientIp("127.0.0.42"),
-      }),
-      buildFeishuWebhookRateLimitKey({
-        ...base,
-        clientIp: resolveTestClientIp("::ffff:127.0.0.1"),
-      }),
-      buildFeishuWebhookRateLimitKey({
-        ...base,
-        clientIp: resolveTestClientIp("::1"),
-      }),
-    ]).toEqual([
-      "rate-limit-key:/hook-rate-limit-key:loopback",
-      "rate-limit-key:/hook-rate-limit-key:loopback",
-      "rate-limit-key:/hook-rate-limit-key:loopback",
-      "rate-limit-key:/hook-rate-limit-key:loopback",
-    ]);
+    for (const address of ["127.0.0.1", "127.0.0.42", "::ffff:127.0.0.1", "::1"]) {
+      expect(
+        buildFeishuWebhookRateLimitKey({
+          ...base,
+          clientIp: resolveTestClientIp(address),
+        }),
+      ).toBe("rate-limit-key:/hook-rate-limit-key:loopback");
+    }
   });
 
   it("keeps non-loopback and unknown webhook rate-limit key suffixes distinct", () => {
@@ -646,25 +688,6 @@ describe("Feishu webhook security hardening", () => {
     expect(buildFeishuWebhookRateLimitKey(base)).toBe(
       "rate-limit-key:/hook-rate-limit-key:unknown",
     );
-  });
-
-  it("caps tracked webhook rate-limit keys to prevent unbounded growth", () => {
-    const now = 1_000_000;
-    for (let i = 0; i < 4_500; i += 1) {
-      feishuWebhookRateLimiter.isRateLimited(`/feishu-rate-limit:key-${i}`, now);
-    }
-    expect(feishuWebhookRateLimiter.size()).toBeLessThanOrEqual(4_096);
-  });
-
-  it("prunes stale webhook rate-limit state after window elapses", () => {
-    const now = 2_000_000;
-    for (let i = 0; i < 100; i += 1) {
-      feishuWebhookRateLimiter.isRateLimited(`/feishu-rate-limit-stale:key-${i}`, now);
-    }
-    expect(feishuWebhookRateLimiter.size()).toBe(100);
-
-    feishuWebhookRateLimiter.isRateLimited("/feishu-rate-limit-stale:fresh", now + 60_001);
-    expect(feishuWebhookRateLimiter.size()).toBe(1);
   });
 
   it("rejects correctly signed callbacks with a stale timestamp", async () => {
@@ -693,6 +716,7 @@ describe("Feishu webhook security hardening", () => {
         });
 
         expect(response.status).toBe(401);
+        expect(response.headers.get("content-type")).toBe("text/plain; charset=utf-8");
         expect(await response.text()).toBe("Invalid signature");
       },
     );

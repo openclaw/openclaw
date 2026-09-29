@@ -222,7 +222,7 @@ class SystemsSidebar extends OpenClawLightDomElement {
           aria-label=${t("systems.refresh")}
           title=${t("systems.refresh")}
           ?disabled=${controller.loading || !controller.connected}
-          @click=${() => void controller.refresh()}
+          @click=${() => void controller.refresh("manual")}
         >
           ${icons.refresh}
         </button>

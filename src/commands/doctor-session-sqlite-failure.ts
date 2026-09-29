@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareGithubIssue } from "../infra/github-issue.js";
-import { VERSION } from "../version.js";
+import type { DoctorSessionSqliteIssue } from "../infra/session-sqlite-migration-issues.js";
 import {
   canonicalMigrationFilePath,
   readSessionSqliteMigrationManifest,
@@ -13,9 +13,9 @@ import {
   type SessionSqliteMigrationGithubIssue,
   type SessionSqliteMigrationTargetInput,
   type SessionSqliteMigrationTargetManifest,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
+import { VERSION } from "../version.js";
 import type {
-  DoctorSessionSqliteIssue,
   DoctorSessionSqliteTargetReport,
   SessionSqliteMigrationFailureIssue,
 } from "./doctor-session-sqlite-types.js";
@@ -39,6 +39,7 @@ export function writeSessionSqliteMigrationFailureReports(
       : manifest.targets
     : [];
   const payload = {
+    failedAt: manifest?.failedAt,
     generatedAt: new Date().toISOString(),
     manifestPath: sanitizeFailureReportText(shortenFailureReportPath(manifestPath)),
     reason: params.reason,
@@ -64,9 +65,6 @@ export function writeSessionSqliteMigrationFailureReports(
   fs.writeFileSync(markdownPath, renderFailureMarkdown(payload), { mode: 0o600 });
   if (manifest) {
     manifest.failureReports = {
-      ...(manifest.failureReports?.githubIssue
-        ? { githubIssue: manifest.failureReports.githubIssue }
-        : {}),
       jsonPath,
       markdownPath,
     };
@@ -126,6 +124,7 @@ export function createSessionSqliteMigrationFailureIssue(
   const reportBody =
     persistedBody ??
     renderFailureMarkdown({
+      failedAt: manifest.failedAt,
       generatedAt: new Date().toISOString(),
       manifestPath: sanitizeFailureReportText(shortenFailureReportPath(manifestPath)),
       reason: "session SQLite migration failed",
@@ -238,6 +237,7 @@ function resolveFailureReportPaths(manifestPath: string): {
 }
 
 function renderFailureMarkdown(payload: {
+  failedAt?: string;
   generatedAt: string;
   manifestPath: string;
   reason: string;
@@ -260,6 +260,7 @@ function renderFailureMarkdown(payload: {
     "# Session SQLite Migration Failure",
     "",
     `- Run: ${payload.runId}`,
+    `- Failed: ${payload.failedAt ?? "not recorded"}`,
     `- Generated: ${payload.generatedAt}`,
     `- OpenClaw version: ${payload.version}`,
     `- Reason: ${sanitizeFailureReportText(payload.reason)}`,

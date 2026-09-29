@@ -3,18 +3,6 @@ import { describe, expect, it } from "vitest";
 import { extractInlineSimpleCommand, stripInlineStatus } from "./reply-inline.js";
 
 describe("stripInlineStatus", () => {
-  it("strips /status directive from message", () => {
-    const result = stripInlineStatus("/status hello world");
-    expect(result.cleaned).toBe("hello world");
-    expect(result.didStrip).toBe(true);
-  });
-
-  it("preserves newlines in multi-line messages", () => {
-    const result = stripInlineStatus("first line\nsecond line\nthird line");
-    expect(result.cleaned).toBe("first line\nsecond line\nthird line");
-    expect(result.didStrip).toBe(false);
-  });
-
   it("preserves newlines when stripping /status", () => {
     const result = stripInlineStatus("/status\nfirst paragraph\n\nsecond paragraph");
     expect(result.cleaned).toBe("first paragraph\n\nsecond paragraph");
@@ -38,25 +26,25 @@ describe("stripInlineStatus", () => {
 });
 
 describe("extractInlineSimpleCommand", () => {
-  it("extracts /help command", () => {
-    const result = extractInlineSimpleCommand("/help some question");
-    expect(result?.command).toBe("/help");
-    expect(result?.cleaned).toBe("some question");
-  });
-
   it("preserves newlines after extracting command", () => {
     const result = extractInlineSimpleCommand("/help first line\nsecond line");
     expect(result?.command).toBe("/help");
     expect(result?.cleaned).toBe("first line\nsecond line");
   });
 
-  it.each(["/help", "/commands", "/whoami", "/id"])(
-    "preserves code bytes when extracting %s",
-    (command) => {
-      const code = "    if ready:\r\n\t\trun('a  b')  \r\n";
-      expect(extractInlineSimpleCommand(`${command}\r\n${code}`)?.cleaned).toBe(code);
-    },
-  );
+  it.each([
+    ["/help", "/help"],
+    ["/commands", "/commands"],
+    ["/whoami", "/whoami"],
+    ["/id", "/whoami"],
+    ["/ID", "/whoami"],
+  ])("preserves code bytes when extracting %s", (command, expectedCommand) => {
+    const code = "    if ready:\r\n\t\trun('a  b')  \r\n";
+    expect(extractInlineSimpleCommand(`${command}\r\n${code}`)).toEqual({
+      command: expectedCommand,
+      cleaned: code,
+    });
+  });
 
   it("returns null for empty body", () => {
     expect(extractInlineSimpleCommand("")).toBeNull();

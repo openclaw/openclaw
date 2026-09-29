@@ -1,11 +1,12 @@
 import fs from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -13,9 +14,12 @@ import {
   assignSessionOwner,
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
+  persistSessionTranscriptTurn,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
+import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -26,7 +30,7 @@ afterEach(() => {
 
 describe("canonical SQLite metadata reads", () => {
   it.each(["agent:main:plain", "agent:main:matrix:channel:!Mixed:example.org"])(
-    "omits saved prompts while preserving the complete metadata for %s",
+    "omits saved prompts from metadata reads and transcript batches for %s",
     async (sessionKey) => {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("canonical-metadata-") };
       const scope = { agentId: "main", env, sessionKey };
@@ -70,6 +74,20 @@ describe("canonical SQLite metadata reads", () => {
       try {
         expect(loadSessionEntryReadOnly({ ...scope, projection: "list" })).toEqual(expected);
         expect(queries.textBytes.entries).toBeLessThan(2048);
+        queries.textBytes.entries = 0;
+        runOpenClawAgentWriteTransaction((writer) => {
+          expect(
+            appendTranscriptEventsInTransaction(
+              writer,
+              resolveSqliteTranscriptScope({ ...scope, sessionId: sessionKey }),
+              [
+                { type: "custom", id: "first", parentId: null, data: "synthetic" },
+                { type: "custom", id: "second", parentId: "first", data: "synthetic" },
+              ],
+            ),
+          ).toBe(2);
+        }, scope);
+        expect(queries.textBytes.entries).toBeLessThan(4096);
       } finally {
         queries.restore();
       }
@@ -89,7 +107,7 @@ describe("canonical SQLite metadata reads", () => {
     },
   );
 
-  it("validates a folded sibling before selecting the exact opaque target", () => {
+  it("validates a folded sibling before selecting or preparing the exact opaque target", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("canonical-metadata-sibling-") };
     const sessionKey = "agent:main:matrix:channel:!Mixed:example.org";
     const scope = { agentId: "main", env, sessionKey };
@@ -117,6 +135,18 @@ describe("canonical SQLite metadata reads", () => {
         "non-canonical persisted row",
       );
     }
+    const shouldAppend = vi.fn(() => true);
+    await expect(
+      persistSessionTranscriptTurn(
+        { ...scope, sessionId: sessionKey },
+        {
+          expectedSessionId: sessionKey,
+          messages: [{ message: { role: "user", content: "must not prepare" }, shouldAppend }],
+          updateMode: "none",
+        },
+      ),
+    ).rejects.toThrow("non-canonical persisted row");
+    expect(shouldAppend).not.toHaveBeenCalled();
   });
 
   it.each([

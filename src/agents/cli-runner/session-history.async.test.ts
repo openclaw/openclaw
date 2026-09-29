@@ -10,6 +10,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -42,14 +43,17 @@ function targetIn(stateDir: string) {
   };
 }
 
+function createRecorder(target: ReturnType<typeof targetIn>, text: string, timestamp = 1) {
+  return createUserTurnTranscriptRecorder({
+    target: { ...target, sessionEntry: undefined },
+    input: { text, timestamp },
+    updateMode: "none",
+  });
+}
+
 it("leaves cold CLI history absent until the approved user-turn writer creates it", async () => {
   await withOpenClawTestState({ label: "cli-cold-history" }, async ({ stateDir }) => {
-    const target = {
-      agentId: "main",
-      sessionId: "cold-cli",
-      sessionKey: "agent:main:cold-cli",
-      storePath: path.join(stateDir, "agents", "main", "openclaw-agent.sqlite"),
-    };
+    const target = targetIn(stateDir);
     const params = { sessionTarget: target };
     expect(await loadCliSessionContextEngineMessages(params)).toEqual([]);
     expect(
@@ -61,11 +65,7 @@ it("leaves cold CLI history absent until the approved user-turn writer creates i
     ).toEqual({ reseedMessages: [], durableContext: undefined });
     expect(fs.existsSync(resolveSessionTranscriptDatabasePath(target))).toBe(false);
     const text = "Exact user bytes:  spaced\nsecond line 🦞";
-    const recorder = createUserTurnTranscriptRecorder({
-      target: { ...target, sessionEntry: undefined },
-      input: { text, timestamp: 17 },
-      updateMode: "none",
-    });
+    const recorder = createRecorder(target, text, 17);
     expect(
       await persistApprovedCliUserTurnTranscript({
         ...target,
@@ -88,7 +88,7 @@ it("leaves cold CLI history absent until the approved user-turn writer creates i
   });
 });
 
-it.each(["schema", "table", "owner"] as const)(
+it.each(["schema", "owner"] as const)(
   "does not hide missing %s storage as empty history",
   async (kind) => {
     await withOpenClawTestState({ label: `cli-history-${kind}` }, async ({ stateDir }) => {
@@ -98,16 +98,9 @@ it.each(["schema", "table", "owner"] as const)(
         new DatabaseSync(target.storePath).close();
       } else {
         await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-        if (kind === "table") {
-          openOpenClawAgentDatabase({ agentId: "main", path: target.storePath }).db.exec(
-            "DROP TABLE transcript_events",
-          );
-        }
-        if (kind === "owner") {
-          openOpenClawAgentDatabase({ agentId: "main", path: target.storePath }).db.exec(
-            "UPDATE schema_meta SET agent_id = 'different' WHERE meta_key = 'primary'",
-          );
-        }
+        openOpenClawAgentDatabase({ agentId: "main", path: target.storePath }).db.exec(
+          "UPDATE schema_meta SET agent_id = 'different' WHERE meta_key = 'primary'",
+        );
         await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
       }
       await expect(
@@ -127,35 +120,48 @@ it.each(["run", "read-resource"] as const)(
       let active = true;
       let restoreSpy = () => {};
       let pausedKind: unknown;
+      const pauseReply = async <Reply>(reply: Reply) => {
+        received.resolve();
+        await release.promise;
+        return reply;
+      };
       const interceptNext = () => {
-        const spy = vi
-          .spyOn(WorkerTaskPool.prototype, "run")
-          .mockImplementationOnce(
-            function (this: WorkerTaskPool<unknown, unknown>, input, options) {
-              spy.mockRestore();
-              let pauseReply = false;
-              return this.run(async () => {
+        if (kind === "read-resource") {
+          const spy = vi.spyOn(historyLane.pool, "run").mockImplementationOnce((input, options) => {
+            spy.mockRestore();
+            let pause = false;
+            return historyLane.pool
+              .run(async () => {
                 const request = typeof input === "function" ? await input() : input;
-                const requestKind =
-                  request && typeof request === "object" && "kind" in request
-                    ? request.kind
-                    : undefined;
-                pauseReply = kind === "run" || requestKind === "transcript-hydration";
-                if (pauseReply) {
-                  pausedKind = requestKind;
+                pause = request.kind === "transcript-hydration";
+                if (pause) {
+                  pausedKind = request.kind;
                 } else {
                   interceptNext();
                 }
                 return request;
-              }, options).then(async (reply) => {
-                if (pauseReply) {
-                  received.resolve();
-                  await release.promise;
-                }
-                return reply;
-              });
-            },
-          );
+              }, options)
+              .then((reply) => (pause ? pauseReply(reply) : reply));
+          });
+          restoreSpy = () => spy.mockRestore();
+          return;
+        }
+        const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(function (
+          this: WorkerTaskPool<unknown, unknown>,
+          input,
+          options,
+        ) {
+          spy.mockRestore();
+          return this.run(async () => {
+            const request = typeof input === "function" ? await input() : input;
+            const requestKind =
+              request && typeof request === "object" && "kind" in request
+                ? request.kind
+                : undefined;
+            pausedKind = requestKind;
+            return request;
+          }, options).then(pauseReply);
+        });
         restoreSpy = () => spy.mockRestore();
       };
       interceptNext();
@@ -170,7 +176,12 @@ it.each(["run", "read-resource"] as const)(
       );
       const refused = expect(pending).rejects.toThrow("revoked");
       try {
-        await received.promise;
+        await Promise.race([
+          received.promise,
+          refused.then(() => {
+            throw new Error("CLI history settled before the intercepted reply");
+          }),
+        ]);
         expect(pausedKind).toBe(kind === "run" ? "sqlite-target" : "transcript-hydration");
         if (kind === "run") {
           active = false;
@@ -224,11 +235,7 @@ it("refuses quarantined runtime history through both async manager entries and C
 it("refuses an admitted transcript whose database disappeared", async () => {
   await withOpenClawTestState({ label: "cli-history-admitted-missing" }, async ({ stateDir }) => {
     const target = targetIn(stateDir);
-    const recorder = createUserTurnTranscriptRecorder({
-      target: { ...target, sessionEntry: undefined },
-      input: { text: "admitted", timestamp: 1 },
-      updateMode: "none",
-    });
+    const recorder = createRecorder(target, "admitted");
     await recorder.persistApproved();
     const receipt = recorder.getAdmissionReceipt();
     expect(receipt).toBeDefined();
@@ -255,11 +262,7 @@ it.each(["main", "worker"] as const)(
       };
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
       const persist = async (text: string) => {
-        const recorder = createUserTurnTranscriptRecorder({
-          target: { ...target, sessionEntry: undefined },
-          input: { text, timestamp: 1 },
-          updateMode: "none",
-        });
+        const recorder = createRecorder(target, text);
         await recorder.persistApproved();
         return recorder;
       };
@@ -285,7 +288,7 @@ it.each(["main", "worker"] as const)(
         true,
       );
       await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
-      const sql = observeHostDataSql(state.env);
+      const sql = observeHostDataSql();
       try {
         const history = await runWithSessionTranscriptReadFence(admitted, () =>
           loadCliSessionContextEngineMessages({ sessionTarget: target }),

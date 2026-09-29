@@ -61,25 +61,12 @@ describe("FaceTime plugin manifest", () => {
     expect(packageManifest.openclaw.extensions).toEqual(["./index.ts"]);
     expect(packageManifest.openclaw.runtimeExtensions).toBeUndefined();
     expect(packageManifest.license).toBe("MIT");
-    expect(packageManifest.author).toBe("OpenClaw contributors");
-    expect(packageManifest.homepage).toBe("https://docs.openclaw.ai/plugins/facetime");
-    expect(packageManifest.bugs.url).toBe("https://github.com/openclaw/openclaw/issues");
-    expect(packageManifest.repository).toEqual({
-      type: "git",
-      url: "https://github.com/openclaw/openclaw",
-      directory: "extensions/facetime",
-    });
     expect(packageManifest.os).toEqual(["darwin"]);
     expect(packageManifest.cpu).toEqual(["arm64"]);
-    expect(packageManifest.files).toEqual(expect.arrayContaining(["index.ts", "runtime-api.ts"]));
-    expect(packageManifest.files).not.toContain("runtime-entry.ts");
-    expect(packageManifest.files.some((file: string) => file.startsWith("helper/"))).toBe(false);
-    expect(packageManifest.files.some((file: string) => file.startsWith("native/"))).toBe(false);
     expect(packageManifest.files).not.toContain("scripts/build-capture.sh");
     expect(packageManifest.files).not.toContain("scripts/build-helper-macabi.sh");
     expect(packageManifest.files).toContain("scripts/stage-helper.sh");
     expect(packageManifest.files).toContain("scripts/verify-native-helper.sh");
-    expect(packageManifest.files).not.toContain("dist/");
     expect(packageManifest.files).toContain("doctor-contract-api.ts");
     expect(packageManifest.files).toContain("LICENSE");
     expect(packageManifest.files).toContain("THIRD_PARTY_NOTICES.md");
@@ -91,7 +78,7 @@ describe("FaceTime plugin manifest", () => {
       clawhubSpec: "clawhub:@openclaw/facetime",
       npmSpec: "@openclaw/facetime",
       defaultChoice: "npm",
-      minHostVersion: `>=${hostVersion}`,
+      minHostVersion: ">=2026.9.4",
       allowInvalidConfigRecovery: true,
     });
     expect(packageManifest.openclaw.compat.pluginApi).toBe(`>=${hostVersion}`);

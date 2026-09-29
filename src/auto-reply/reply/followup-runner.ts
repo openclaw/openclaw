@@ -17,9 +17,9 @@ import type { ReplyPayload } from "../types.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { accountFollowupTurn } from "./agent-runner-result-accounting.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
+import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import {
   admitFollowupTurn,
-  settleQueuedFollowupPresentation,
   type AdmittedFollowupTurn,
   type FollowupRunnerParams,
 } from "./followup-turn-admission.js";
@@ -94,6 +94,21 @@ export function createFollowupRunner(
     withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () => executeFollowup(queued), {
       inheritRequestScope: false,
     });
+  const deliverProgress = async (
+    turn: AdmittedFollowupTurn,
+    payloads: ReplyPayload[],
+    kind: "tool" | "block",
+    runId = turn.runId,
+  ) => {
+    await deliverFollowupDecision({
+      decision: { kind: "deliver", payloads },
+      turn,
+      defaults,
+      runId,
+      runFollowup,
+      kind,
+    });
+  };
   const executeFollowup = async (queued: FollowupRun): Promise<void> => {
     let disposition: FollowupDrainDisposition = { kind: "retry", error: undefined };
     let operation: ReplyOperation | undefined;
@@ -126,14 +141,7 @@ export function createFollowupRunner(
           ) {
             admissionNotices.push(payload);
           } else {
-            await deliverFollowupDecision({
-              decision: { kind: "deliver", payloads: [payload] },
-              turn,
-              defaults,
-              runId: turn.runId,
-              runFollowup,
-              kind: "block",
-            });
+            await deliverProgress(turn, [payload], "block");
           }
         },
       });
@@ -157,26 +165,10 @@ export function createFollowupRunner(
       const execution = await executeFollowupTurn({
         turn,
         defaults,
-        onToolResult: async (payload, identity) => {
-          await deliverFollowupDecision({
-            decision: { kind: "deliver", payloads: [payload] },
-            turn,
-            defaults,
-            runId: identity.runId,
-            runFollowup,
-            kind: "tool",
-          });
-        },
-        onCompactionNoticePayload: async (payload, identity) => {
-          await deliverFollowupDecision({
-            decision: { kind: "deliver", payloads: [payload] },
-            turn,
-            defaults,
-            runId: identity.runId,
-            runFollowup,
-            kind: "block",
-          });
-        },
+        onToolResult: (payload, identity) =>
+          deliverProgress(turn, [payload], "tool", identity.runId),
+        onCompactionNoticePayload: (payload, identity) =>
+          deliverProgress(turn, [payload], "block", identity.runId),
       });
       // A closed execution result is terminal queue work. Commit consumption
       // before accounting/delivery so their failures cannot replay model or tool effects.
@@ -201,14 +193,7 @@ export function createFollowupRunner(
         turn.sendPolicy === "allow" &&
         turn.queued.currentInboundEventKind !== "room_event"
       ) {
-        await deliverFollowupDecision({
-          decision: { kind: "deliver", payloads: admissionNotices },
-          turn,
-          defaults,
-          runId: turn.runId,
-          runFollowup,
-          kind: "block",
-        });
+        await deliverProgress(turn, admissionNotices, "block");
       }
       if (
         execution.execution.outcome.kind === "settled" &&
@@ -304,7 +289,7 @@ export function createFollowupRunner(
       }
       try {
         if (queuedFollowupAdmitted) {
-          await settleQueuedFollowupPresentation(defaults);
+          await settleQueuedFollowupPresentation(defaults.opts?.onQueuedFollowupSettled);
         }
       } finally {
         progressContinuation?.close();
@@ -320,10 +305,8 @@ export function createFollowupRunner(
       }
       if (disposition.kind === "consumed") {
         completeFollowupRunLifecycle(queued);
-        if (admittedRunId) {
-          clearAgentRunContext(admittedRunId);
-        }
-      } else if (disposition.kind === "retry" && admittedRunId) {
+      }
+      if (disposition.kind !== "deferred" && admittedRunId) {
         clearAgentRunContext(admittedRunId);
       }
       operation?.complete();

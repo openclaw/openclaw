@@ -6,7 +6,7 @@ import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.entry.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
-import { historyPages } from "../../config/sessions/session-transcript-worker-resources.js";
+import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withAgentDatabaseMaintenanceLease } from "../../state/openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../../state/openclaw-agent-db-schema.js";
@@ -46,10 +46,10 @@ async function seedTranscript(state: OpenClawTestState) {
 function holdFirstChunk() {
   const entered = createDeferredCore();
   const release = createDeferredCore();
-  const run = historyPages.run.bind(historyPages);
+  const run = historyLane.pool.run.bind(historyLane.pool);
   let chunks = 0;
   let splitUtf8 = false;
-  const spy = vi.spyOn(historyPages, "run").mockImplementation((input, options) => {
+  const spy = vi.spyOn(historyLane.pool, "run").mockImplementation((input, options) => {
     const receive = options.onRequest;
     return run(input, {
       ...options,
@@ -126,7 +126,7 @@ it("rejects a persisted quarantine through the history worker without retargetin
     manager.appendMessage(makeUserMessage("keep the original view", 2));
     const before = manager.getPersistedEntries();
     const priorTarget = manager.getSessionTarget();
-    const dispatch = vi.spyOn(historyPages, "run");
+    const dispatch = vi.spyOn(historyLane.pool, "run");
     try {
       const failure = await manager.setSessionTargetAsync(target).catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(Error);
@@ -143,7 +143,7 @@ it("rejects a persisted quarantine through the history worker without retargetin
       expect(manager.getSessionTarget()).toEqual(priorTarget);
       expect(manager.getCwd()).toBe("/retained");
       expect(manager.isPersisted()).toBe(false);
-      expect(historyPages.getSnapshot()).toMatchObject({ activeTasks: 0, pendingTasks: 0 });
+      expect(historyLane.pool.getSnapshot()).toMatchObject({ activeTasks: 0, pendingTasks: 0 });
     } finally {
       dispatch.mockRestore();
       expect(clearOpenClawDatabaseQuarantine(target.storePath, { env: state.env })).toBe(true);
@@ -236,7 +236,7 @@ it("joins a cancelled stream without adopting its already received prefix", asyn
       await gate.wait(pending);
       controller.abort(reason);
       await refused;
-      expect(historyPages.getSnapshot()).toMatchObject({
+      expect(historyLane.pool.getSnapshot()).toMatchObject({
         workers: 0,
         activeTasks: 0,
         pendingTasks: 0,

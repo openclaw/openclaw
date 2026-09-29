@@ -5,6 +5,7 @@ import type {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import pLimit from "p-limit";
 import { deriveConceptTags } from "./concept-vocabulary.js";
 import {
@@ -443,10 +444,7 @@ export async function readShortTermRecallEntries(params: {
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const store = await readStore(workspaceDir, nowIso);
-  return Object.values(store.entries).filter(
-    (entry): entry is ShortTermRecallEntry =>
-      Boolean(entry) && entry.source === "memory" && isShortTermMemoryPath(entry.path),
-  );
+  return Object.values(store.entries).filter((entry) => isShortTermMemoryPath(entry.path));
 }
 
 export function resolveShortTermSourcePathCandidates(
@@ -458,15 +456,5 @@ export function resolveShortTermSourcePathCandidates(
   if (!normalizedPath.startsWith("memory/")) {
     basenames.push(path.posix.join("memory", path.posix.basename(normalizedPath)));
   }
-  const seen = new Set<string>();
-  const resolved: string[] = [];
-  for (const relativePath of basenames) {
-    const absolutePath = path.resolve(workspaceDir, relativePath);
-    if (seen.has(absolutePath)) {
-      continue;
-    }
-    seen.add(absolutePath);
-    resolved.push(absolutePath);
-  }
-  return resolved;
+  return uniqueStrings(basenames.map((relativePath) => path.resolve(workspaceDir, relativePath)));
 }

@@ -1,18 +1,16 @@
 import { note } from "../../packages/terminal-core/src/note.js";
+import { readResolvedDeferredPluginMigrationWarnings } from "../infra/deferred-plugin-migration-warnings.js";
 import {
   UPDATE_ACTIVATION_TIMEOUT_REASON,
   UPDATE_ENVIRONMENT_FAILURE_REASONS,
 } from "../shared/update-outcome.js";
 
-/** Startup and proven-pristine preflights do not need a public ledger snapshot. */
-export async function noteStaleUpdateRuns(options: {
-  migrateState?: boolean;
-  requireStartupMigrationCheckpoint?: boolean;
-  skipPristineStartupStateMigrations?: boolean;
-}): Promise<void> {
-  if (options.requireStartupMigrationCheckpoint || options.skipPristineStartupStateMigrations) {
-    return;
-  }
+/** Report unfinished or failed update work during Doctor diagnostics. */
+export async function noteStaleUpdateRuns(
+  options: {
+    migrateState?: boolean;
+  } = {},
+): Promise<void> {
   const [
     { staleUpdateRunGuidance },
     { listUpdateRunsAsync },
@@ -72,7 +70,17 @@ export async function noteStaleUpdateRuns(options: {
     ) {
       note(`Update ${latest.runId}: ${renderUpdateRunReport(latest).markdown}`, "Update history");
     }
-    const warnings = updateRunWarningMessages(latest.steps);
+    const resolvedWarnings = await readResolvedDeferredPluginMigrationWarnings(
+      latest.steps.map((step) => step.detail),
+    );
+    const warningSteps = latest.steps.filter((step) => {
+      const completedAtMs = step.detail ? resolvedWarnings.get(step.detail) : undefined;
+      return (
+        completedAtMs === undefined ||
+        completedAtMs < (step.endedAtMs ?? latest.finishedAtMs ?? latest.createdAtMs)
+      );
+    });
+    const warnings = updateRunWarningMessages(warningSteps);
     if (warnings.length) {
       note(
         `Recorded warnings from update ${latest.runId} (a later repair may have resolved them):\n${warnings.slice(-3).join("\n")}`,

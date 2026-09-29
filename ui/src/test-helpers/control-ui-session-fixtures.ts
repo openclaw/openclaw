@@ -129,6 +129,11 @@ export function createControlUiSessionFixtures(
     listed.add(key);
   }
   const read = (key: string) => ({ ...record(key).row });
+  // Match Gateway projection clocks so a cached descriptor cannot outrank a fresh list.
+  const sample = <T extends Record<string, unknown>>(row: T, now: number) => ({
+    ...row,
+    snapshotAt: row.snapshotAt ?? now,
+  });
   const patch = (key: string, fields: Record<string, unknown>) => {
     const value = record(key);
     const next = { ...value.row };
@@ -276,11 +281,18 @@ export function createControlUiSessionFixtures(
       value.changed.add(field);
     }
   };
-  const abortRuns = (inputKey: string, runId?: string, confirmedRunIds?: string[]) => {
+  const abortRuns = (
+    inputKey: string,
+    runId: string | undefined,
+    response: Record<string, unknown>,
+  ) => {
+    const confirmedRunIds = Array.isArray(response.runIds)
+      ? response.runIds.filter((id): id is string => typeof id === "string")
+      : undefined;
     const key = canonicalKey(inputKey);
     const value = confirmedRunIds?.length ? record(inputKey) : records.get(key);
     if (!value) {
-      return { aborted: false, runIds: [] as string[] };
+      return { ...response, aborted: false, runIds: [] as string[] };
     }
     const activeRunIds = Array.isArray(value.row.activeRunIds)
       ? value.row.activeRunIds.filter((id): id is string => typeof id === "string")
@@ -290,7 +302,7 @@ export function createControlUiSessionFixtures(
     const runIds = runId ? candidates.filter((id) => id === runId) : candidates;
     const aborted = runIds.length > 0 || (!runId && value.row.hasActiveRun === true);
     if (!aborted) {
-      return { aborted: false, runIds };
+      return { ...response, aborted: false, runIds };
     }
     const sequence = ++runEventSequence;
     for (const id of runIds) {
@@ -311,7 +323,71 @@ export function createControlUiSessionFixtures(
     for (const field of Object.keys(fields)) {
       value.changed.add(field);
     }
-    return { aborted, runIds };
+    return { ...response, aborted, runIds };
+  };
+  // sessions.abort settles the session and its controlled descendants; the Gateway
+  // computes activity at read time, so every later describe/list/history read is idle.
+  const settleSessionAbort = (inputKey: string, aborted: boolean) => {
+    const key = canonicalKey(inputKey);
+    const value = records.get(key);
+    if (!value) {
+      return;
+    }
+    const activeRunIds = Array.isArray(value.row.activeRunIds)
+      ? value.row.activeRunIds.filter((id): id is string => typeof id === "string")
+      : [];
+    if (
+      activeRunIds.length === 0 &&
+      value.row.hasActiveRun !== true &&
+      value.row.hasActiveSubagentRun !== true
+    ) {
+      return;
+    }
+    const sequence = ++runEventSequence;
+    for (const id of activeRunIds) {
+      runsFor(key).set(id, { status: "killed", acknowledged: true, sequence });
+    }
+    const fields = {
+      activeRunIds: [],
+      hasActiveRun: false,
+      hasActiveSubagentRun: false,
+      status: aborted ? "killed" : value.row.status === "running" ? "done" : value.row.status,
+      ...(aborted ? { abortedLastRun: true, lastRunError: undefined } : {}),
+      updatedAt: Math.max(Date.now(), (value.row.updatedAt ?? 0) + 1),
+    };
+    value.lastRunEventSequence = sequence;
+    value.row = { ...value.row, ...fields };
+    for (const field of Object.keys(fields)) {
+      value.changed.add(field);
+    }
+  };
+  // Abort receipts are lifecycle writes; a returned receipt replaces the chat.abort reply.
+  const commitAbort = (method: string, params: unknown, response: unknown) => {
+    if (!isRecord(params) || !isRecord(response)) {
+      return undefined;
+    }
+    if (
+      method === "chat.abort" &&
+      typeof params.sessionKey === "string" &&
+      response.aborted === true
+    ) {
+      const runId = typeof params.runId === "string" ? params.runId : undefined;
+      return abortRuns(params.sessionKey, runId, response);
+    }
+    if (
+      method === "sessions.abort" &&
+      typeof params.key === "string" &&
+      (response.status === "aborted" || response.status === "no-active-run")
+    ) {
+      // Like the Gateway, a run-scoped Stop settles only that run; only a
+      // session-wide Stop cascades to every run and controlled descendant.
+      if (typeof params.runId !== "string") {
+        settleSessionAbort(params.key, response.status === "aborted");
+      } else if (response.status === "aborted") {
+        abortRuns(params.key, params.runId, {});
+      }
+    }
+    return undefined;
   };
   const materialize = (key: string, fields: Partial<ControlUiSessionFixture>) => {
     const value = record(key);
@@ -363,6 +439,7 @@ export function createControlUiSessionFixtures(
         : isRecord(params) && params.archived === true
           ? "archived"
           : "active";
+    const now = Date.now();
     const projectedSessions = list(response.sessions).map((row) => {
       if (!isRecord(row)) {
         return row;
@@ -381,7 +458,7 @@ export function createControlUiSessionFixtures(
       } else {
         next.category = category;
       }
-      return next;
+      return sample(next, now);
     });
     const spawnedBy =
       isRecord(params) && typeof params.spawnedBy === "string" ? params.spawnedBy.trim() : "";
@@ -479,14 +556,39 @@ export function createControlUiSessionFixtures(
       ? { ok: true, ...only }
       : { ok: false, ...(matches.length ? { candidates: matches.slice(0, 10) } : {}) };
   };
+  // History publishes a full row replacement. An unseeded wire-only fixture
+  // has no canonical metadata to publish until its caller declares the row.
+  const sessionInfo = (key: string) =>
+    listed.has(canonicalKey(key)) ? sample(read(key), Date.now()) : undefined;
   return {
     read,
     resolve,
-    // History publishes a full row replacement. An unseeded wire-only fixture
-    // has no canonical metadata to publish until its caller declares the row.
-    sessionInfo: (key: string) => (listed.has(canonicalKey(key)) ? read(key) : undefined),
+    sessionInfo,
+    readResponse(
+      method: "sessions.resolve" | "sessions.describe" | "session.members.listEvidence",
+      params: unknown,
+      scenario: { sessionKey: string; allowedSessionVisibilities: readonly string[] },
+    ) {
+      if (method === "sessions.resolve") {
+        return resolve(isRecord(params) ? params : {});
+      }
+      const field = method === "sessions.describe" ? "key" : "sessionKey";
+      const requestedKey = isRecord(params) ? params[field] : undefined;
+      const key = typeof requestedKey === "string" ? requestedKey : scenario.sessionKey;
+      if (method === "sessions.describe") {
+        return { session: sessionInfo(key) ?? null };
+      }
+      const row = read(key);
+      return {
+        sessionKey: row.key,
+        members: [],
+        identities: [],
+        role: row.sharingRole ?? "admin",
+        allowedVisibilities: scenario.allowedSessionVisibilities,
+      };
+    },
     patch,
-    abortRuns,
+    commitAbort,
     trackRun,
     materialize,
     list,

@@ -1,12 +1,9 @@
-/**
- * Tracks prompt-cache snapshot changes for observability diagnostics.
- */
-import crypto from "node:crypto";
 import {
   sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { NormalizedUsage } from "../usage.js";
@@ -83,20 +80,12 @@ const MAX_TOOL_SCHEMA_FINGERPRINT_STRING_CHARS = 4_096;
 const MIN_CACHE_BREAK_TOKEN_DROP = 1_000;
 const MAX_STABLE_CACHE_READ_RATIO = 0.95;
 
-function digestText(value: string): string {
-  return crypto.createHash("sha256").update(value).digest("hex");
-}
-
 function buildTrackerKey(params: {
   promptCacheKey?: string;
   sessionKey?: string;
   sessionId: string;
 }): string {
-  const promptCacheKey = params.promptCacheKey?.trim();
-  if (promptCacheKey) {
-    return promptCacheKey;
-  }
-  return params.sessionKey?.trim() || params.sessionId;
+  return params.promptCacheKey?.trim() || params.sessionKey?.trim() || params.sessionId;
 }
 
 function normalizeToolSchemaFingerprint(
@@ -166,18 +155,9 @@ function normalizeToolSchemaFingerprint(
   }
 }
 
-function buildToolDigest(tools: readonly PromptCacheToolSnapshot[]): string {
-  // Cache identity includes the exact visible descriptor, not just its name;
-  // canonical ordering prevents discovery order from looking like a break.
-  return digestText(stableStringify(sortPromptCacheToolsByName(tools)));
-}
-
 function setTracker(key: string, tracker: PromptCacheTracker): void {
-  if (trackers.has(key)) {
-    trackers.delete(key);
-  } else if (trackers.size >= MAX_TRACKERS) {
-    pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
-  }
+  trackers.delete(key);
+  pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
   trackers.set(key, tracker);
 }
 
@@ -255,14 +235,14 @@ export function collectPromptCacheTools(
       const snapshot: PromptCacheToolSnapshot = { name };
       try {
         if (typeof tool.description === "string") {
-          snapshot.descriptionDigest = digestText(tool.description);
+          snapshot.descriptionDigest = sha256Hex(tool.description);
         }
       } catch {
-        snapshot.descriptionDigest = digestText("[unreadable tool description]");
+        snapshot.descriptionDigest = sha256Hex("[unreadable tool description]");
       }
       try {
         if (tool.parameters !== undefined) {
-          snapshot.schemaDigest = digestText(
+          snapshot.schemaDigest = sha256Hex(
             stableStringify(
               normalizeToolSchemaFingerprint(tool.parameters, {
                 remainingNodes: MAX_TOOL_SCHEMA_FINGERPRINT_NODES,
@@ -272,7 +252,7 @@ export function collectPromptCacheTools(
           );
         }
       } catch {
-        snapshot.schemaDigest = digestText("[unreadable tool schema]");
+        snapshot.schemaDigest = sha256Hex("[unreadable tool schema]");
       }
       snapshots.push(snapshot);
     } catch {
@@ -305,11 +285,11 @@ export function beginPromptCacheObservation(params: {
     cacheRetention: params.cacheRetention,
     streamStrategy: params.streamStrategy,
     transport: params.transport,
-    systemPromptDigest: digestText(splitSystemPrompt?.stablePrefix ?? params.systemPrompt),
+    systemPromptDigest: sha256Hex(splitSystemPrompt?.stablePrefix ?? params.systemPrompt),
     ...(splitSystemPrompt
-      ? { systemPromptSuffixDigest: digestText(splitSystemPrompt.dynamicSuffix) }
+      ? { systemPromptSuffixDigest: sha256Hex(splitSystemPrompt.dynamicSuffix) }
       : {}),
-    toolDigest: buildToolDigest(tools),
+    toolDigest: sha256Hex(stableStringify(tools)),
     toolCount: tools.length,
     toolNames: tools.map((tool) => tool.name),
   };

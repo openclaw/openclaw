@@ -28,7 +28,7 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 const boundary = vi.hoisted(
   (): {
     afterReply?: (reply: unknown) => Promise<void>;
-    afterRotate?: () => Promise<void>;
+    afterCleanup?: () => Promise<void>;
     failRetirement: boolean;
   } => ({ failRetirement: false }),
 );
@@ -36,51 +36,65 @@ vi.mock("../infra/worker-task-pool.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/worker-task-pool.js")>();
   return {
     ...actual,
-    WorkerTaskPool: class<Input, Output> extends actual.WorkerTaskPool<Input, Output> {
-      constructor(options: WorkerTaskPoolOptions<Output>) {
-        // Exercise real queue admission without retaining hundreds of megabytes.
-        super({ ...options, maxPendingBytes: 256 * 1024 });
-      }
-      override run(...args: Parameters<WorkerTaskPool<Input, Output>["run"]>) {
-        const result = super.run(...args);
-        const observe = boundary.afterReply;
-        return observe
-          ? result.then(async (reply) => {
-              await observe(reply);
-              return reply;
-            })
-          : result;
-      }
-      override async rotate(...args: Parameters<WorkerTaskPool<Input, Output>["rotate"]>) {
-        if (boundary.failRetirement) {
-          throw new Error("synthetic retirement failure");
-        }
-        await super.rotate(...args);
-        await boundary.afterRotate?.();
-      }
+    createOwnedWorkerTaskPool: <Input, Output>(options: WorkerTaskPoolOptions<Output>) => {
+      // Exercise real queue admission without retaining hundreds of megabytes.
+      const pool = actual.createOwnedWorkerTaskPool<Input, Output>({
+        ...options,
+        maxPendingBytes: 256 * 1024,
+      });
+      let observedRead = false;
+      return {
+        ...pool,
+        run(...args: Parameters<WorkerTaskPool<Input, Output>["run"]>) {
+          observedRead = true;
+          const result = pool.run(...args);
+          const observe = boundary.afterReply;
+          return observe
+            ? result.then(async (reply) => {
+                await observe(reply);
+                return reply;
+              })
+            : result;
+        },
+        async rotate() {
+          if (observedRead && boundary.failRetirement) {
+            throw new Error("synthetic retirement failure");
+          }
+          await pool.rotate();
+          if (observedRead) {
+            await boundary.afterCleanup?.();
+          }
+        },
+        async closeResources(...args: Parameters<typeof pool.closeResources>) {
+          await pool.closeResources(...args);
+          if (observedRead) {
+            await boundary.afterCleanup?.();
+          }
+        },
+      };
     },
   };
 });
 
 afterEach(() => {
   boundary.afterReply = undefined;
-  boundary.afterRotate = undefined;
+  boundary.afterCleanup = undefined;
   boundary.failRetirement = false;
   vi.restoreAllMocks();
 });
 
-function placement(
+async function placement(
   sessionId = "subject",
   agentId = "main",
   sessionKey = `agent:${agentId}:${sessionId}`,
 ) {
-  return createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }).startDispatch(
-    {
-      sessionId,
-      sessionKey,
-      agentId,
-    },
-  );
+  return await createWorkerSessionPlacementStore({
+    database: openOpenClawStateDatabase(),
+  }).startDispatch({
+    sessionId,
+    sessionKey,
+    agentId,
+  });
 }
 
 function pauseRegistry() {
@@ -92,6 +106,7 @@ function pauseRegistry() {
     .mockImplementationOnce((...args) => {
       const prepared = prepare(...args);
       return {
+        assertCurrent: prepared.assertCurrent,
         read: async () => {
           entered.resolve();
           await resume.promise;
@@ -141,7 +156,7 @@ function isEvidenceReply(reply: unknown): boolean {
 
 it("charges captured discovery paths to queue capacity and recovers after refusal", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const subject = placement();
+    const subject = await placement();
     replaceSessionEntrySync(subject, { sessionId: subject.sessionId, updatedAt: 1 });
     const small: OpenClawConfig = { agents: { list: [{ id: "main" }] } };
     const large: OpenClawConfig = {
@@ -169,7 +184,7 @@ it.each(["path", "root", "agent"] as const)(
   "revokes unresolved discovery before a %s close can finish",
   async (selection) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const subject = placement();
+      const subject = await placement();
       replaceSessionEntrySync(subject, { sessionId: subject.sessionId, updatedAt: 1 });
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       const gate = pauseInventory();
@@ -204,7 +219,7 @@ it.each([false, true])(
       const store = state.statePath("custom", "shared.json");
       const cfg: OpenClawConfig = { session: { store } };
       setRuntimeConfigSnapshot(cfg, cfg);
-      const subject = placement();
+      const subject = await placement();
       openOpenClawAgentDatabase({
         agentId: "other",
         path: state.statePath("custom", "shared.sqlite"),
@@ -237,7 +252,7 @@ it("keeps a different legacy family usable while another family closes", async (
     const store = state.statePath("custom", "shared.json");
     const cfg: OpenClawConfig = { session: { store } };
     setRuntimeConfigSnapshot(cfg, cfg);
-    const subject = placement();
+    const subject = await placement();
     replaceSessionEntrySync(
       { ...subject, storePath: store },
       { sessionId: subject.sessionId, updatedAt: 1 },
@@ -265,7 +280,7 @@ it("captures config, environment, cwd and placement identity before discovery yi
     const store = path.relative(process.cwd(), state.statePath("captured.sqlite"));
     const cfg: OpenClawConfig = { session: { store } };
     setRuntimeConfigSnapshot(cfg, cfg);
-    const subject = placement();
+    const subject = await placement();
     replaceSessionEntrySync(
       { ...subject, storePath: store },
       { sessionId: subject.sessionId, updatedAt: 1 },
@@ -306,7 +321,7 @@ it.each(["evidence", "settlement"] as const)(
       fs.symlinkSync(physical, alias);
       const cfg: OpenClawConfig = { session: { store: alias } };
       setRuntimeConfigSnapshot(cfg, cfg);
-      const subject = placement();
+      const subject = await placement();
       // A fixed shared store is selected only for agents with persisted scoped rows.
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: "agent:main:anchor", storePath: physical },
@@ -332,7 +347,7 @@ it.each(["evidence", "settlement"] as const)(
           }
         }
       };
-      boundary.afterRotate = async () => {
+      boundary.afterCleanup = async () => {
         if (phase === "settlement" && evidenceRead) {
           await write();
         }
@@ -345,7 +360,7 @@ it.each(["evidence", "settlement"] as const)(
         expect(wrote).toBe(true);
       } finally {
         boundary.afterReply = undefined;
-        boundary.afterRotate = undefined;
+        boundary.afterCleanup = undefined;
       }
       expect(await (await createWorkerPlacementSessionEvidenceResolver([subject]))(subject)).toBe(
         "current",
@@ -362,7 +377,7 @@ it.each(["path", "root"] as const)(
       const aliasDir = state.statePath("aliases");
       fs.mkdirSync(aliasDir);
       const alias = path.join(aliasDir, "session.sqlite");
-      const subject = placement();
+      const subject = await placement();
       replaceSessionEntrySync(
         { ...subject, storePath: physical },
         { sessionId: subject.sessionId, updatedAt: 1 },
@@ -405,14 +420,14 @@ it.each(["path", "root"] as const)(
   },
 );
 
-it("rejects discovery revoked during final reader retirement", async () => {
+it("rejects discovery revoked during final reader cleanup", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const subject = placement();
+    const subject = await placement();
     replaceSessionEntrySync(subject, { sessionId: subject.sessionId, updatedAt: 1 });
     let revoke: Promise<void> | undefined;
-    boundary.afterRotate = async () => {
-      boundary.afterRotate = undefined;
-      // Close joins the same in-flight retirement; do not wait for ourselves here.
+    boundary.afterCleanup = async () => {
+      boundary.afterCleanup = undefined;
+      // Close joins native cleanup; do not wait for ourselves here.
       revoke = drainAgentDatabaseResources({ agentId: "main" }, async () => {});
     };
     try {
@@ -422,7 +437,7 @@ it("rejects discovery revoked during final reader retirement", async () => {
       expect(revoke).toBeDefined();
       await revoke;
     } finally {
-      boundary.afterRotate = undefined;
+      boundary.afterCleanup = undefined;
       await revoke;
     }
   });
@@ -430,7 +445,7 @@ it("rejects discovery revoked during final reader retirement", async () => {
 
 it("transfers a Windows-normalized environment through inventory and evidence workers", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const subject = placement();
+    const subject = await placement();
     replaceSessionEntrySync(subject, { sessionId: subject.sessionId, updatedAt: 1 });
     const { OPENCLAW_STATE_DIR, ...otherEnv } = process.env;
     const normalized = withMockedPlatform("win32", () =>
@@ -455,8 +470,8 @@ it("transfers a Windows-normalized environment through inventory and evidence wo
 
 it("rereads incognito absence when a row appears in the same native owner during disk work", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const disk = placement("disk-current");
-    const incognito = placement(
+    const disk = await placement("disk-current");
+    const incognito = await placement(
       "private-created",
       "main",
       "agent:main:dashboard:incognito-created",
@@ -492,7 +507,7 @@ it("rejects absence when the configured alias selects another database after the
     const previous = state.statePath("previous.sqlite");
     const replacement = state.statePath("replacement.sqlite");
     const alias = state.statePath("selected.sqlite");
-    const subject = placement("alias-retarget");
+    const subject = await placement("alias-retarget");
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: "agent:main:anchor", storePath: previous },
       {
@@ -538,7 +553,7 @@ it("keeps the fixed physical owner and current precedence across canonical and m
       session: { store },
     };
     setRuntimeConfigSnapshot(cfg, cfg);
-    const subject = placement("shared-subject", "ops");
+    const subject = await placement("shared-subject", "ops");
     subject.sessionKey = "agent:main:main";
     for (const agentId of ["main", "ops"]) {
       replaceSessionEntrySync(

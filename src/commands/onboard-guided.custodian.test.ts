@@ -841,25 +841,6 @@ describe("runGuidedOnboarding custodian flow", () => {
     );
   });
 
-  it("quips about detected coding agents", async () => {
-    const prompter = createWizardPrompter();
-    const deps = setupDeps({
-      prompter,
-      detect: vi.fn(async () =>
-        detection({
-          candidates: [candidate("claude-cli", "Claude Code"), candidate("codex-cli", "Codex")],
-        }),
-      ),
-    });
-
-    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
-
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("good taste"),
-      expect.anything(),
-    );
-  });
-
   it("renders detected candidates without leaking interpolation placeholders", async () => {
     const prompter = createWizardPrompter();
     const deps = setupDeps({
@@ -936,11 +917,21 @@ describe("runGuidedOnboarding custodian flow", () => {
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/authored");
   });
 
-  it("falls back to the OpenClaw chat when applying setup fails", async () => {
-    const prompter = createWizardPrompter();
-    const applySetup = vi.fn(async () => {
-      throw new Error("config write raced");
-    }) as unknown as GuidedOnboardingDeps["applySetup"];
+  it.each([
+    ["config", "Setup failed", "config write raced"],
+    ["workspace", "Workspace setup failed", "workspace could not be prepared"],
+    ["gateway", "Gateway setup failed", "service install failed"],
+  ])("identifies %s failures and keeps the setup-chat recovery", async (step, title, detail) => {
+    const stop = vi.fn();
+    const prompter = createWizardPrompter({ progress: () => ({ update: vi.fn(), stop }) });
+    const applySetup = vi.fn<NonNullable<GuidedOnboardingDeps["applySetup"]>>(async () => {
+      if (step === "config") {
+        throw new Error(detail);
+      }
+      return step === "workspace"
+        ? { ...setupApplyResult(), workspaceReady: false }
+        : { ...setupApplyResult(), gateway: { status: "failed", error: detail } };
+    });
     const deps = setupDeps({ prompter, applySetup });
     const runtime = makeRuntime();
 
@@ -949,6 +940,10 @@ describe("runGuidedOnboarding custodian flow", () => {
     expect(deps.launchHatchTui).not.toHaveBeenCalled();
     expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/work", runtime, true, "main");
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
-    expect(notes).toContain("config write raced");
+    expect(notes).toContain(detail);
+    expect(notes).toContain("Let's finish together in chat instead.");
+    expect(stop).toHaveBeenLastCalledWith(title);
+    expect(stop).not.toHaveBeenCalledWith("AI check failed.");
+    expect(prompter.note).toHaveBeenCalledWith(expect.stringContaining(detail), title);
   });
 });

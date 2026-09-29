@@ -1,7 +1,3 @@
-import { prependSystemPromptAdditionAfterCacheBoundary } from "@openclaw/ai/internal/shared";
-/**
- * Builds and repairs prompt inputs for embedded-agent attempts.
- */
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
   ContextEnginePromptCacheInfo,
@@ -9,10 +5,10 @@ import type {
   ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
 import { pruneMapToMaxSize } from "../../../infra/map-size.js";
+import type { HookRunner } from "../../../plugins/hooks.js";
 import { drainPluginNextTurnInjectionContext } from "../../../plugins/host-hook-state.js";
 import { buildPluginAgentTurnPrepareContext } from "../../../plugins/host-hooks.js";
 import type {
-  PluginAgentTurnPrepareResult,
   PluginNextTurnInjectionRecord,
   PluginHookAgentContext,
   PluginHookBeforePromptBuildResult,
@@ -31,33 +27,14 @@ import { resolveContextEngineCapabilities } from "../context-engine-capabilities
 import { log } from "../logger.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-type PromptBuildHookRunner = {
-  hasHooks: (
-    hookName: "agent_turn_prepare" | "heartbeat_prompt_contribution" | "before_prompt_build",
-  ) => boolean;
-  runAgentTurnPrepare?: (
-    event: {
-      prompt: string;
-      messages: unknown[];
-      queuedInjections: PluginNextTurnInjectionRecord[];
-    },
-    ctx: PluginHookAgentContext,
-  ) => Promise<PluginAgentTurnPrepareResult | undefined>;
-  runHeartbeatPromptContribution?: (
-    event: { sessionKey?: string; agentId?: string; heartbeatName?: string },
-    ctx: PluginHookAgentContext,
-  ) => Promise<PluginAgentTurnPrepareResult | undefined>;
-  runBeforePromptBuild: (
-    event: { prompt: string; messages: unknown[] },
-    ctx: PluginHookAgentContext,
-  ) => Promise<PluginHookBeforePromptBuildResult | undefined>;
-};
+type PromptBuildHookRunner = Pick<HookRunner, "runBeforePromptBuild"> &
+  Partial<Pick<HookRunner, "runAgentTurnPrepare" | "runHeartbeatPromptContribution">> & {
+    hasHooks: (
+      hookName: "agent_turn_prepare" | "heartbeat_prompt_contribution" | "before_prompt_build",
+    ) => boolean;
+  };
 
-// Cache drained next-turn injections by runId so retry attempts within the
-// same run reuse the first-attempt drain rather than calling drain again
-// (which destructively consumes from the session store and would return [] on
-// retry, dropping injection context). The cache is bounded to keep memory flat
-// across long-lived processes; entries are evicted FIFO once the cap is hit.
+// Draining consumes durable injections. Retain them for retries of the same run.
 const PROMPT_BUILD_DRAIN_CACHE_MAX = 256;
 const promptBuildDrainCache = new Map<string, PluginNextTurnInjectionRecord[]>();
 
@@ -73,28 +50,19 @@ function rememberDrainedInjections(
   promptBuildDrainCache.set(runId, injections);
 }
 
-/**
- * Releases the per-run drained-injection cache. Call when a run terminates so
- * the cap stays headroom for active runs.
- */
+/** Release at run termination so active retries retain cache headroom. */
 export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): void {
   if (runId) {
     promptBuildDrainCache.delete(runId);
   }
 }
 
-/**
- * Resolves prompt-build hook contributions for one attempt. Next-turn
- * injections are drained once per run and cached for retries so destructive
- * session-store reads do not lose plugin context after a failed first attempt.
- */
 export async function resolvePromptBuildHookResult(params: {
   config: OpenClawConfig;
   prompt: string;
   messages: unknown[];
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
-  bootstrapContextRunKind?: EmbeddedRunAttemptParams["bootstrapContextRunKind"];
 }): Promise<PluginHookBeforePromptBuildResult> {
   const runId = params.hookCtx.runId;
   const cachedInjections = runId ? promptBuildDrainCache.get(runId) : undefined;
@@ -367,25 +335,9 @@ function extractUserMessagePromptText(content: unknown): string | undefined {
 function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: string): boolean {
   const normalizedPrompt = prompt.replace(/\r\n/g, "\n");
   const normalizedOrphanText = orphanText.replace(/\r\n/g, "\n").trim();
-  if (!normalizedOrphanText) {
-    return false;
-  }
-  const queuedBlockPrefix = `${QUEUED_USER_MESSAGE_MARKER}\n${normalizedOrphanText}`;
   return (
-    normalizedPrompt === queuedBlockPrefix ||
-    normalizedPrompt.startsWith(`${queuedBlockPrefix}\n`) ||
-    normalizedPrompt.includes(`\n${queuedBlockPrefix}\n`) ||
+    normalizedOrphanText.length > 0 &&
     `\n${normalizedPrompt}\n`.includes(`\n${normalizedOrphanText}\n`)
-  );
-}
-
-function shouldDropStaleInternalOrphanedUserPrompt(params: {
-  prompt: string;
-  leafMessage: { provenance?: unknown };
-}): boolean {
-  return (
-    params.prompt.trim().length > 0 &&
-    shouldPreserveUserFacingSessionStateForInputProvenance(params.leafMessage.provenance)
   );
 }
 
@@ -400,7 +352,6 @@ function shouldDropStaleInternalOrphanedUserPrompt(params: {
  */
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
-  trigger: EmbeddedRunAttemptParams["trigger"];
   leafMessage: { content?: unknown; provenance?: unknown };
 }): { prompt: string; merged: boolean; removeLeaf: boolean } {
   const orphanText = extractUserMessagePromptText(params.leafMessage.content);
@@ -408,10 +359,8 @@ export function mergeOrphanedTrailingUserPrompt(params: {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
   if (
-    shouldDropStaleInternalOrphanedUserPrompt({
-      prompt: params.prompt,
-      leafMessage: params.leafMessage,
-    })
+    params.prompt.trim().length > 0 &&
+    shouldPreserveUserFacingSessionStateForInputProvenance(params.leafMessage.provenance)
   ) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
@@ -435,13 +384,6 @@ export function resolveAttemptFsWorkspaceOnly(params: {
     cfg: params.config,
     agentId: params.sessionAgentId,
   });
-}
-
-export function prependSystemPromptAddition(params: {
-  systemPrompt: string;
-  systemPromptAddition?: string;
-}): string {
-  return prependSystemPromptAdditionAfterCacheBoundary(params);
 }
 
 type AfterTurnRuntimeContextAttempt = Pick<
@@ -504,7 +446,6 @@ function resolveRuntimeContextSessionTarget(params: {
   };
 }
 
-/** Build runtime context passed into context-engine afterTurn hooks. */
 export function buildAfterTurnRuntimeContext(params: {
   attempt: AfterTurnRuntimeContextAttempt;
   workspaceDir: string;

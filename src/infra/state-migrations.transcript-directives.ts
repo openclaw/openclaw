@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
@@ -40,7 +39,10 @@ import {
   TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE,
   transcriptDirectiveArchivesNeedMigration,
 } from "./state-migrations.transcript-directives-archives.js";
-import { transformHistoricalTranscriptEvent } from "./state-migrations.transcript-directives-transform.js";
+import {
+  parseDirectiveMigrationTranscriptEvent,
+  transformHistoricalTranscriptEvent,
+} from "./state-migrations.transcript-directives-transform.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 const MIGRATION_META_KEY = "historical-transcript-directives-v1";
@@ -159,14 +161,6 @@ function writeMigrationCursor(
   );
 }
 
-function parseTranscriptEvent(raw: string, owner: string): TranscriptEvent {
-  try {
-    return JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`${owner} contains invalid transcript JSON`, { cause: error });
-  }
-}
-
 function listTranscriptSessionBatch(database: DatabaseSync, afterSessionId: string): string[] {
   const db = getNodeSqliteKysely<TranscriptDirectiveMigrationDatabase>(database);
   return executeSqliteQuerySync(
@@ -182,11 +176,7 @@ function listTranscriptSessionBatch(database: DatabaseSync, afterSessionId: stri
   ).rows.map((row) => row.session_id);
 }
 
-function planTranscriptSession(
-  database: DatabaseSync,
-  pathname: string,
-  sessionId: string,
-): TranscriptRowPlan[] {
+function readTranscriptSessionRows(database: DatabaseSync, sessionId: string) {
   const db = getNodeSqliteKysely<TranscriptDirectiveMigrationDatabase>(database);
   return executeSqliteQuerySync(
     database,
@@ -196,8 +186,19 @@ function planTranscriptSession(
       .where("session_id", "=", sessionId)
       .where(transcriptEventJsonSql(database), "like", "%[[%")
       .orderBy("seq", "asc"),
-  ).rows.map((row) => {
-    const event = parseTranscriptEvent(row.event_json, `${pathname}:${sessionId}:${row.seq}`);
+  ).rows;
+}
+
+function planTranscriptSession(
+  database: DatabaseSync,
+  pathname: string,
+  sessionId: string,
+): TranscriptRowPlan[] {
+  return readTranscriptSessionRows(database, sessionId).map((row) => {
+    const event = parseDirectiveMigrationTranscriptEvent(
+      row.event_json,
+      `${pathname}:${sessionId}:${row.seq}`,
+    );
     const transformed = transformHistoricalTranscriptEvent(event);
     return {
       eventJson: row.event_json,
@@ -212,16 +213,7 @@ function assertTranscriptSessionSourceUnchanged(
   sessionId: string,
   planned: readonly TranscriptRowPlan[],
 ): void {
-  const db = getNodeSqliteKysely<TranscriptDirectiveMigrationDatabase>(database);
-  const current = executeSqliteQuerySync(
-    database,
-    db
-      .selectFrom("transcript_events")
-      .select([transcriptEventJsonSql(database).as("event_json"), "seq"])
-      .where("session_id", "=", sessionId)
-      .where(transcriptEventJsonSql(database), "like", "%[[%")
-      .orderBy("seq", "asc"),
-  ).rows;
+  const current = readTranscriptSessionRows(database, sessionId);
   if (
     current.length !== planned.length ||
     current.some(
@@ -269,12 +261,6 @@ function hasActiveAgentDatabaseLease(agentId: string, env: NodeJS.ProcessEnv): b
   }
 }
 
-async function yieldBetweenTranscriptBatches(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
-
 async function migrateTranscriptSessions(params: {
   agentId: string;
   database: DatabaseSync;
@@ -287,15 +273,22 @@ async function migrateTranscriptSessions(params: {
   while (true) {
     const sessionIds = listTranscriptSessionBatch(params.database, afterSessionId);
     if (sessionIds.length === 0) {
-      runSqliteImmediateTransactionSync(params.database, () => {
-        assertAgentDatabaseMaintenanceAuthority();
-        writeMigrationCursor(params.database, params.agentId, {
-          generation: "",
-          phase: "archives",
-          sessionId: "",
-        });
-        assertAgentDatabaseMaintenanceAuthority();
-      });
+      runSqliteImmediateTransactionSync(
+        params.database,
+        () => {
+          assertAgentDatabaseMaintenanceAuthority();
+          writeMigrationCursor(params.database, params.agentId, {
+            generation: "",
+            phase: "archives",
+            sessionId: "",
+          });
+          assertAgentDatabaseMaintenanceAuthority();
+        },
+        {
+          databaseLabel: params.pathname,
+          operationLabel: "historical-transcript-directives.cursor",
+        },
+      );
       return rewrittenSessions;
     }
     for (const sessionId of sessionIds) {
@@ -331,7 +324,9 @@ async function migrateTranscriptSessions(params: {
     }
     // Keep the caller responsive between bounded batches. The next transaction
     // revalidates maintenance ownership before mutating state.
-    await yieldBetweenTranscriptBatches();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
   }
 }
 

@@ -5,16 +5,29 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
 import { readUserProfileAliasRevision } from "../state/user-profile-events.js";
-import { isGatewayAuthPolicyCurrent, resolveGatewayAuthPolicyGeneration } from "./auth-policy.js";
+import { isGatewayAuthPolicyCurrent, captureGatewayAuthPolicy } from "./auth-policy.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendUnauthorized } from "./http-common.js";
+import { sendGatewayHttpAuthFailure } from "./http-operator-access.js";
 import {
   GatewayOperatorAccessDeniedError,
   hasCurrentGatewayOperatorAccess,
 } from "./operator-access-policy.js";
 import { readOperatorRolePolicyRevision } from "./operator-role-policy.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+
+/** Authority ended; its response has already been answered or closed. */
+export class GatewayHttpRequestAuthorityError extends Error {}
+
+/** Request owners consume authority outcomes; unexpected failures keep their own diagnostics. */
+export function finishGatewayHttpAuthorityError(res: ServerResponse, error: unknown): boolean {
+  if (error instanceof GatewayOperatorAccessDeniedError) {
+    sendGatewayHttpAuthFailure(res, { ok: false, reason: "operator_access_denied" });
+    return true;
+  }
+  return error instanceof GatewayHttpRequestAuthorityError;
+}
 
 export type GatewayHttpRequestAuthOptions = {
   auth: ResolvedGatewayAuth;
@@ -47,7 +60,8 @@ export function captureHttpRequestAuthority(
   params: GatewayHttpRequestAuthOptions & { req: IncomingMessage },
 ): () => boolean {
   const cfg = params.cfg ?? getRuntimeConfig();
-  const generation = resolveGatewayAuthPolicyGeneration(cfg);
+  // HTTP scopes come from credential/header grants and role ceilings, never identityScopes.
+  const policy = captureGatewayAuthPolicy(cfg, null);
   const authGeneration = resolveSharedGatewaySessionGeneration(
     params.auth,
     params.trustedProxies ?? cfg.gateway?.trustedProxies,
@@ -58,7 +72,7 @@ export function captureHttpRequestAuthority(
     const current = params.getRuntimeConfig?.() ?? getRuntimeConfig();
     return (
       !params.req.socket?.destroyed &&
-      isGatewayAuthPolicyCurrent(generation, current) &&
+      isGatewayAuthPolicyCurrent(policy, current) &&
       (roleRevision === undefined || roleRevision === readOperatorRolePolicyRevision()) &&
       aliasRevision === readUserProfileAliasRevision() &&
       authGeneration ===
@@ -77,15 +91,14 @@ export function bindHttpResponseAuthority<T>(
 ): T & GatewayHttpResponseAuthority {
   const assertCurrent = () => {
     if (res.writableEnded || res.destroyed) {
-      throw new Error("HTTP request authority expired");
+      throw new GatewayHttpRequestAuthorityError("HTTP request authority expired");
     }
     if (!hasCurrentGatewayOperatorAccess(auth.operatorAccessAuthority)) {
       throw new GatewayOperatorAccessDeniedError();
     }
     if (!hasCurrentClientAuthority()) {
-      res.removeHeader("Set-Cookie");
       sendUnauthorized(res);
-      throw new Error("Unauthorized");
+      throw new GatewayHttpRequestAuthorityError("Unauthorized");
     }
   };
   return {

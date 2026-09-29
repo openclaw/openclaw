@@ -92,7 +92,6 @@ export function restoreFeishuLifecycleStateDir(originalStateDir: string | undefi
 const FEISHU_PREFETCHED_BOT_OPEN_ID_SOURCE = {
   kind: "prefetched",
   botOpenId: "ou_bot_1",
-  botName: "Bot",
 } as const;
 
 export function createFeishuLifecycleReplyDispatcher(): FeishuLifecycleReplyDispatcher {
@@ -108,6 +107,7 @@ function createImmediateInboundDebounce() {
   return {
     resolveInboundDebounceMs: vi.fn(() => 0),
     createInboundDebouncer: <T>(params: InboundDebouncerParams<T>) => ({
+      shouldBuffer: () => false,
       enqueue: async (item: T) => {
         try {
           await params.onFlush?.([item], createTestInboundDebounceFlush).completion;

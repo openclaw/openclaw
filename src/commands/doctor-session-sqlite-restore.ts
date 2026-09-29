@@ -9,15 +9,17 @@ import { requireDirectorySync, syncDirectorySync } from "../infra/directory-dura
 import { hashFileDescriptorSync } from "../infra/file-descriptor.js";
 import { FsSafeError } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import {
   moveMigrationArtifact,
   readMigrationArtifactIdentity,
+  sameMigrationArtifact,
   statMigrationPath,
-} from "./doctor-session-sqlite-artifact.js";
+  type MigrationArtifactIdentity,
+} from "../infra/session-sqlite-migration-artifact.js";
 import {
   assertSafeSessionSqliteMigrationMove,
   canonicalMigrationFilePath,
+  collectRecordedConsumedArchives,
   filterRestoreManifestTargets,
   hasSymbolicLinkInDirectoryPath,
   isRegularFileWithoutFollowingSymlinks,
@@ -30,7 +32,8 @@ import {
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetInput,
   type SessionSqliteMigrationTargetManifest,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import type { DoctorSessionSqliteRestoreReport } from "./doctor-session-sqlite-types.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
 
@@ -134,7 +137,7 @@ async function reconcileRestorePublications(
         await moveMigrationArtifact(
           move.archivePath,
           move.sourcePath,
-          move.artifact.identity,
+          readRestoreArchiveIdentity(move, 2n),
           () => {
             assertSafeSessionSqliteMigrationMove(move, target);
             recordRestoredMigrationMove(context.manifest, context.manifestPath, move);
@@ -385,34 +388,6 @@ function restoreMovePlanKey(manifestPath: string, move: SessionSqliteMigrationMo
   return `${manifestPath}\u0000${migrationMoveKey(move)}`;
 }
 
-export function collectRecordedConsumedArchives(
-  manifest: SessionSqliteMigrationManifest,
-): Set<string> {
-  const consumed = new Set(manifest.restore?.consumedArchives ?? []);
-  const restoredSources = new Set(manifest.restore?.restoredFiles ?? []);
-  if (restoredSources.size === 0) {
-    return consumed;
-  }
-  const movesBySource = new Map<string, SessionSqliteMigrationMove[]>();
-  for (const target of manifest.targets) {
-    for (const move of uniqueRestoreMoves(target)) {
-      const moves = movesBySource.get(move.sourcePath) ?? [];
-      moves.push(move);
-      movesBySource.set(move.sourcePath, moves);
-    }
-  }
-  // Older shipped manifests only recorded restored source paths. Preserve that evidence when the
-  // source identifies exactly one archive, then persist the explicit archive path on this run.
-  for (const sourcePath of restoredSources) {
-    const moves = movesBySource.get(sourcePath);
-    const move = moves?.length === 1 ? moves[0] : undefined;
-    if (move) {
-      consumed.add(move.archivePath);
-    }
-  }
-  return consumed;
-}
-
 type RestoreArchiveInspection =
   | { state: "available"; snapshot: RestoreArchiveSnapshot }
   | { state: "invalid"; reason: string }
@@ -606,6 +581,21 @@ async function restoreSessionSqliteMigrationManifest(
   };
 }
 
+function readRestoreArchiveIdentity(
+  move: SessionSqliteMigrationMove,
+  expectedLinks = 1n,
+): MigrationArtifactIdentity {
+  const identity = readMigrationArtifactIdentity(move.archivePath, expectedLinks);
+  // A retained receipt can predate an APFS remount; publication must bind to the live device.
+  if (
+    move.artifact &&
+    !sameMigrationArtifact(identity, move.artifact.identity, { ignoreDevice: true })
+  ) {
+    throw new Error("archive identity or contents changed; refusing restore");
+  }
+  return identity;
+}
+
 async function restoreMigrationMove(params: {
   manifest: SessionSqliteMigrationManifest;
   manifestPath: string;
@@ -652,7 +642,7 @@ async function restoreMigrationMove(params: {
     assertRestoreDirectories(move);
     fs.mkdirSync(path.dirname(move.sourcePath), { recursive: true, mode: 0o700 });
     assertRestoreDirectories(move);
-    const identity = move.artifact?.identity ?? readMigrationArtifactIdentity(move.archivePath);
+    const identity = readRestoreArchiveIdentity(move);
     // Publication rechecks these exact bytes; matching the plan also preserves its index count.
     if (
       planned.action === "restore" &&
@@ -682,7 +672,7 @@ async function restoreMigrationMove(params: {
       }
       writeSessionSqliteMigrationManifest({ manifest, manifestPath });
     }
-    await moveMigrationArtifact(move.archivePath, move.sourcePath, move.artifact.identity, () => {
+    await moveMigrationArtifact(move.archivePath, move.sourcePath, identity, () => {
       assertRestoreDirectories(move);
       recordRestoredMigrationMove(manifest, manifestPath, move);
     });

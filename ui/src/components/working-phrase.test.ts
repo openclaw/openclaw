@@ -13,6 +13,7 @@ type WorkingPhraseElement = HTMLElement & {
   phrases: readonly string[] | undefined;
   updateComplete: Promise<boolean>;
   requestUpdate: () => void;
+  render: () => unknown;
 };
 
 const NOW = 2_000_000_000;
@@ -36,19 +37,62 @@ async function textAt(element: WorkingPhraseElement, elapsedMs: number): Promise
 
 describe("openclaw-working-phrase", () => {
   let element: WorkingPhraseElement;
+  let visibility: DocumentVisibilityState;
 
   beforeEach(() => {
     vi.useFakeTimers({ now: NOW });
+    visibility = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
     element = mountPhrase();
   });
 
   afterEach(() => {
     element.remove();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
-  it("stays silent before the quiet threshold", async () => {
-    expect(await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS - 5_000)).toBe("");
+  it("renders only when the grace period or a phrase rotation changes its text", async () => {
+    await element.updateComplete;
+    const render = vi.spyOn(element, "render");
+
+    await vi.advanceTimersByTimeAsync(WORKING_PHRASE_SHOW_AFTER_MS - 1_000);
+    expect(element.textContent?.trim()).toBe("");
+    expect(render).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    const first = element.textContent?.replace(/\s+/g, " ").trim();
+    expect(first).toMatch(PHRASE_TEXT);
+    expect(render).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(WORKING_PHRASE_ROTATE_EVERY_MS - 1_000);
+    expect(render).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(render).toHaveBeenCalledTimes(2);
+    expect(element.textContent?.replace(/\s+/g, " ").trim()).not.toBe(first);
+  });
+
+  it("pauses hidden polling, catches up on return, and stops after removal", async () => {
+    element.startMs = NOW - WORKING_PHRASE_SHOW_AFTER_MS;
+    await element.updateComplete;
+    const first = element.textContent;
+    const render = vi.spyOn(element, "render");
+
+    visibility = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(WORKING_PHRASE_ROTATE_EVERY_MS);
+    expect(render).not.toHaveBeenCalled();
+    expect(element.textContent).toBe(first);
+
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await element.updateComplete;
+    expect(render).toHaveBeenCalledOnce();
+    expect(element.textContent).not.toBe(first);
+
+    element.remove();
+    await vi.advanceTimersByTimeAsync(WORKING_PHRASE_ROTATE_EVERY_MS);
+    expect(render).toHaveBeenCalledOnce();
   });
 
   it.each([3, 4, 6, 8, 10, 12, 24])(

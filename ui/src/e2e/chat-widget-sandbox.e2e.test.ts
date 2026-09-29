@@ -14,8 +14,8 @@ import {
 } from "../../../src/gateway/control-ui-csp.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import {
-  clickBoardWidgetControl,
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -440,6 +440,15 @@ suite.define(() => {
           await expect
             .poll(() =>
               inline.locator("html").evaluate((root) => getComputedStyle(root).colorScheme),
+            )
+            .toBe("dark");
+          // A light proxy between dark documents paints an opaque UA canvas.
+          await expect
+            .poll(() =>
+              outer
+                .contentFrame()
+                .locator("html")
+                .evaluate((root) => getComputedStyle(root).colorScheme),
             )
             .toBe("dark");
           await expect

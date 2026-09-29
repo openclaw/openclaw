@@ -275,7 +275,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
       this.field.disabled || this.loading || this.saving || this.cancelling || !this.inspection;
     const failure = this.error || this.context.saveError;
     return html`<openclaw-modal-dialog
-      .label=${t("pluginsPage.credentials.referenceTitle")}
+      .label=${`${t("pluginsPage.credentials.referenceTitle")}: ${this.descriptor.label}`}
       @modal-cancel=${(event: Event) => {
         event.preventDefault();
         void this.cancelReference();
@@ -374,6 +374,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
               ${credential?.kind === "reference" ? html`<code>${credential.ref.id}</code>` : nothing}
               <button
                 class="btn btn--sm"
+                aria-label=${`${t(environment ? "pluginsPage.credentials.viewSource" : "pluginsPage.credentials.editReference")}: ${this.descriptor.label}`}
                 aria-describedby=${ifDefined(this.field.descriptionId)}
                 ?disabled=${this.loading || !credential || !this.context.canInspect}
                 @click=${() => this.openReference()}
@@ -421,7 +422,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
                 <button
                   class="settings-secret__toggle"
                   type="button"
-                  aria-label=${t(this.revealed ? "pluginsPage.credentials.hide" : "pluginsPage.credentials.reveal")}
+                  aria-label=${`${t(this.revealed ? "pluginsPage.credentials.hide" : "pluginsPage.credentials.reveal")}: ${this.descriptor.label}`}
                   aria-pressed=${this.revealed}
                   ?disabled=${disabled || this.loading || (!this.literal && credential?.kind !== "literal")}
                   @click=${() => this.toggleReveal()}
@@ -432,6 +433,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
               <div class="plugin-credential__links">
                 ${this.descriptor.signupUrl ? html`<a href=${this.descriptor.signupUrl} target="_blank" rel="noopener noreferrer">${t("pluginsPage.credentials.signup")}${icons.externalLink}</a>` : nothing}<button
                   class="btn btn--ghost btn--sm"
+                  aria-label=${`${t("pluginsPage.credentials.useReference")}: ${this.descriptor.label}`}
                   aria-describedby=${ifDefined(this.field.descriptionId)}
                   ?disabled=${disabled || this.loading || !credential || !this.context.canInspect}
                   @click=${() => this.openReference()}

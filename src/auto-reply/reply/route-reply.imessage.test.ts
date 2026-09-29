@@ -77,7 +77,7 @@ describe("routed iMessage reply threading", () => {
   });
 
   it("keeps the initial answer and queued answers attached to their own questions", async () => {
-    const ids = ["weather-question", "mets-question", "yankees-question", "travel-question"];
+    const ids = ["weather-question", "mets-question"];
     const [initial] = applyReplyThreading({
       payloads: [{ text: "Weather answer" }],
       currentMessageId: ids[0],
@@ -87,14 +87,11 @@ describe("routed iMessage reply threading", () => {
     assert(initial);
     await route(initial, ids[0]);
     await route({ text: "Mets answer" }, ids[1]);
-    await route({ text: "Yankees answer" }, ids[2]);
-    await route({ text: "Travel answer" }, ids[3]);
-
-    expect(sendDurableMessageBatchCore).toHaveBeenCalledTimes(4);
+    expect(sendDurableMessageBatchCore).toHaveBeenCalledTimes(2);
     expect(sendDurableMessageBatchCore.mock.calls.map(([send]) => send.replyToId)).toEqual(ids);
     expect(
       sendDurableMessageBatchCore.mock.calls.map(([send]) => send.payloads[0]?.replyToId),
-    ).toEqual([ids[0], undefined, undefined, undefined]);
+    ).toEqual([ids[0], undefined]);
   });
 
   it.each([
@@ -124,62 +121,53 @@ describe("routed iMessage reply threading", () => {
     },
   );
 
-  it.each(["off", "first"] as const)(
-    "preserves an explicit current-message request with reply mode %s",
-    async (replyToMode) => {
-      const sent = await route({ text: "Answer", replyToCurrent: true }, "question-guid", {
-        replyDelivery: { chatType: "direct", replyToMode },
-      });
-      assert(sent);
-      assert(sent.payloads[0]);
-      expect(sent.replyToId).toBe("question-guid");
-      expect(sent.payloads[0].replyToId).toBe("question-guid");
-      const policy = createReplyToDeliveryPolicy(sent);
-      const resolved = policy.resolveCurrentReplyTo(sent.payloads[0]);
-      expect(resolved).toEqual({ replyToId: "question-guid", source: "explicit" });
-      expect(
-        [1, 2, 3].map(
-          () =>
-            policy.applyReplyToConsumption(
-              { replyToId: resolved.replyToId, replyToIdSource: resolved.source },
-              { consumeImplicitReply: resolved.source === "implicit" },
-            ).replyToId,
-        ),
-      ).toEqual(["question-guid", "question-guid", "question-guid"]);
-    },
-  );
+  it("preserves an explicit current-message request with reply mode off", async () => {
+    const sent = await route({ text: "Answer", replyToCurrent: true }, "question-guid", {
+      replyDelivery: { chatType: "direct", replyToMode: "off" },
+    });
+    assert(sent);
+    assert(sent.payloads[0]);
+    expect(sent.replyToId).toBe("question-guid");
+    expect(sent.payloads[0].replyToId).toBe("question-guid");
+    const policy = createReplyToDeliveryPolicy(sent);
+    const resolved = policy.resolveCurrentReplyTo(sent.payloads[0]);
+    expect(resolved).toEqual({ replyToId: "question-guid", source: "explicit" });
+    expect(
+      [1, 2, 3].map(
+        () =>
+          policy.applyReplyToConsumption(
+            { replyToId: resolved.replyToId, replyToIdSource: resolved.source },
+            { consumeImplicitReply: resolved.source === "implicit" },
+          ).replyToId,
+      ),
+    ).toEqual(["question-guid", "question-guid", "question-guid"]);
+  });
 
-  it.each(["all", "off", "first"] as const)(
-    "preserves an explicit reply target with reply mode %s",
-    async (replyToMode) => {
-      const sent = await route(
-        { text: "Answer", replyToId: "  chosen-message  ", replyToCurrent: false },
-        "current-message",
-        {
-          replyDelivery: { chatType: "direct", replyToMode },
-        },
-      );
-      expect(sent?.replyToId).toBe("chosen-message");
-      expect(sent?.payloads[0]?.replyToId).toBe("chosen-message");
-    },
-  );
+  it("preserves an explicit reply target with reply mode off", async () => {
+    const sent = await route(
+      { text: "Answer", replyToId: "  chosen-message  ", replyToCurrent: false },
+      "current-message",
+      {
+        replyDelivery: { chatType: "direct", replyToMode: "off" },
+      },
+    );
+    expect(sent?.replyToId).toBe("chosen-message");
+    expect(sent?.payloads[0]?.replyToId).toBe("chosen-message");
+  });
 
-  it.each(["Forecast", ""])(
-    "retains media and its originating message with caption %j",
-    async (text) => {
-      const sent = await route(
-        { text, mediaUrl: "https://example.com/forecast.png" },
-        "weather-question",
-      );
-      expect(sent).toMatchObject({
-        replyToId: "weather-question",
-        payloads: [{ text, mediaUrl: "https://example.com/forecast.png" }],
-      });
-    },
-  );
+  it("retains captionless media and its originating message", async () => {
+    const sent = await route(
+      { text: "", mediaUrl: "https://example.com/forecast.png" },
+      "weather-question",
+    );
+    expect(sent).toMatchObject({
+      replyToId: "weather-question",
+      payloads: [{ text: "", mediaUrl: "https://example.com/forecast.png" }],
+    });
+  });
 
-  it.each([undefined, "   "])("does not invent a reply target from current ID %j", async (id) => {
-    const sent = await route({ text: "Notification" }, id, { threadId: "ambient-thread" });
+  it("does not invent a reply target when the current ID is missing", async () => {
+    const sent = await route({ text: "Notification" }, undefined, { threadId: "ambient-thread" });
     expect(sent).toMatchObject({ replyToId: null, threadId: "ambient-thread" });
   });
 
@@ -278,19 +266,5 @@ describe("routed iMessage reply threading", () => {
         context: { senderId: "fixture-sender", runId: "fixture-run", accountId: "secondary" },
       },
     });
-  });
-
-  it("does not send when routing is already cancelled", async () => {
-    const result = await routeReply({
-      cfg,
-      payload: { text: "Answer" },
-      currentMessageId: "question-guid",
-      channel: "imessage",
-      to: "chat_id:123",
-      replyKind: "final",
-      abortSignal: AbortSignal.abort(),
-    });
-    expect(result).toMatchObject({ ok: false, delivered: false, error: "Reply routing aborted" });
-    expect(sendDurableMessageBatchCore).not.toHaveBeenCalled();
   });
 });

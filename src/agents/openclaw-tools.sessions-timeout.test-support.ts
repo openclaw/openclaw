@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi, type Mock } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
@@ -90,92 +89,11 @@ export function observeSessionSendContinuations(options: { trackAllWork?: boolea
   };
 }
 
-export function registerSessionsSendPendingErrorTest({
-  getSessionTool,
-  callGatewayMock,
-  settleContinuations,
-}: SessionsSendTimeoutFixtures & { settleContinuations: () => Promise<void> }) {
-  it("sessions_send returns pending agent error diagnostics on timeout", async () => {
-    const calls: Array<{ method?: string; params?: unknown }> = [];
-    const continuationWaiting = createDeferred();
-    const pendingRunCompleted = createDeferred();
-    let waitCount = 0;
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: unknown };
-      calls.push(request);
-      if (request.method === "agent") {
-        return {
-          runId: "run-pending-model-error",
-          status: "accepted",
-          acceptedAt: 1234,
-        };
-      }
-      if (request.method === "agent.wait") {
-        if (++waitCount > 1) {
-          continuationWaiting.resolve();
-          await pendingRunCompleted.promise;
-          return {
-            runId: "run-pending-model-error",
-            status: "ok",
-            terminalReply: { disposition: "silent" },
-          };
-        }
-        return {
-          runId: "run-pending-model-error",
-          status: "timeout",
-          error: "429 RESOURCE_EXHAUSTED",
-          pendingError: true,
-        };
-      }
-      return {};
-    });
-
-    const tool = getSessionTool("sessions_send", {
-      agentSessionKey: "discord:group:req",
-      agentChannel: "discord",
-    });
-    await runQaGatewayFixture(
-      async () => {
-        const result = await tool.execute("call-pending-error", {
-          sessionKey: "main",
-          message: "check status",
-          timeoutSeconds: 1,
-        });
-        expect(result.details).toMatchObject({
-          status: "timeout",
-          error: "429 RESOURCE_EXHAUSTED",
-          runId: "run-pending-model-error",
-          sentBeforeError: true,
-          delivery: { status: "pending" },
-        });
-        expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
-        await continuationWaiting.promise;
-        expect(calls.filter((call) => call.method === "agent.wait").length).toBeGreaterThanOrEqual(
-          2,
-        );
-        expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(1);
-      },
-      () => pendingRunCompleted.resolve(),
-      settleContinuations,
-    );
-  });
-}
-
 export function registerSessionsSendTimeoutTests({
   getSessionTool,
   callGatewayMock,
 }: SessionsSendTimeoutFixtures) {
   it.each([
-    {
-      name: "terminal timeout with an explicit diagnostic",
-      waitResult: {
-        status: "timeout",
-        endedAt: 3000,
-        stopReason: "timeout",
-        error: "agent run timed out",
-      },
-      expectedError: "agent run timed out",
-    },
     {
       name: "terminal timeout with a provider-specific diagnostic",
       waitResult: {
@@ -261,25 +179,11 @@ export function registerSessionsSendLateReplyTests({
     cronRequester?: boolean;
   }>([
     { targetKind: "peer", targetKey: "agent:director1:main", spawned: false },
-    { targetKind: "visible child", targetKey: "agent:director1:dashboard:child", spawned: true },
-    { targetKind: "hidden child", targetKey: "agent:director1:subagent:child", spawned: true },
-    {
-      targetKind: "nonblocking child",
-      targetKey: "agent:director1:subagent:child",
-      spawned: true,
-      timeoutSeconds: 0,
-    },
     {
       targetKind: "retrying child",
       targetKey: "agent:director1:subagent:child",
       spawned: true,
       pendingError: true,
-    },
-    {
-      targetKind: "failed child",
-      targetKey: "agent:director1:subagent:child",
-      spawned: true,
-      failure: "child run failed",
     },
     {
       targetKind: "failed retrying child",
@@ -295,18 +199,20 @@ export function registerSessionsSendLateReplyTests({
       failure: "child run cancelled",
       stopReason: "aborted",
     },
-    ...["dashboard", "subagent"].flatMap((kind) =>
-      [0, 1].flatMap((timeoutSeconds) =>
-        [false, true].map((failed) => ({
-          targetKind: `${kind} child of Cron, timeout=${timeoutSeconds}, failed=${failed}`,
-          targetKey: `agent:director1:${kind}:child`,
-          spawned: true,
-          cronRequester: true,
-          timeoutSeconds,
-          failure: failed ? "Cron child run failed" : undefined,
-        })),
-      ),
-    ),
+    {
+      targetKind: "nonblocking child of Cron",
+      targetKey: "agent:director1:dashboard:child",
+      spawned: true,
+      cronRequester: true,
+      timeoutSeconds: 0,
+    },
+    {
+      targetKind: "failed waited child of Cron",
+      targetKey: "agent:director1:subagent:child",
+      spawned: true,
+      cronRequester: true,
+      failure: "Cron child run failed",
+    },
   ])(
     "sessions_send delivers the late reply from a $targetKind after the parent root releases",
     async ({

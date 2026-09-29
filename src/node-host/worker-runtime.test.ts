@@ -31,13 +31,13 @@ const fixture = vi.hoisted(() => ({
     invoke: vi.fn(),
     handleInput: vi.fn(),
     cancel: vi.fn(),
-    cancelAll: vi.fn(),
+    cancelAll: vi.fn(async () => undefined),
     updateGatewayConnection: vi.fn(),
     close: vi.fn(),
   },
 }));
 vi.mock("node:readline", () => ({ createInterface: () => fixture.input }));
-vi.mock("./startup-state-migrations.js", () => ({ runStartupMigrations: async () => {} }));
+vi.mock("./startup-state-readiness.js", () => ({ ensureNodeHostStateReady: () => {} }));
 vi.mock("./config.js", () => ({ loadNodeHostConfig: fixture.loadConfig }));
 vi.mock("./runtime.js", () => ({ prepareNodeHostRuntime: fixture.prepare }));
 vi.mock("../infra/path-env.js", () => ({ ensureOpenClawCliOnPath: vi.fn() }));
@@ -625,6 +625,7 @@ it("publishes host stats through the native bridge only while connected", async 
         connection: { url: "wss://gateway.example.test", protocol: 4, capabilities: [] },
       }),
     );
+    await vi.advanceTimersByTimeAsync(0);
     expect(publications()).toHaveLength(1);
     expect(publications()[0]).toMatchObject({
       type: "node-event",

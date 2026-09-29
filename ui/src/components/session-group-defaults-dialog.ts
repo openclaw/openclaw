@@ -14,8 +14,8 @@ import { renderPlaceBrowser } from "../pages/new-session/place-browser.ts";
 import "../styles/new-session.css";
 import { icons } from "./icons.ts";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
+import { syncPopoverLabel } from "./web-awesome-popover.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
-import "./web-awesome-popover.ts";
 
 registerNewSessionSetupEnglish();
 
@@ -225,6 +225,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                     >
                   </button>
                   <wa-popover
+                    ${ref(syncPopoverLabel)}
                     class="new-session-page__select new-session-page__project-popover new-session-page__picker-popover session-group-defaults__folder-popover"
                     for="session-group-defaults-folder-trigger"
                     placement="bottom-start"

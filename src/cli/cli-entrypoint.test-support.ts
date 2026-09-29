@@ -5,6 +5,11 @@ export const cliRecoveryEntrypoints = {
     sourceWorkerName: "../entry",
     distWorkerPath: "entry.js",
   },
+  daemon: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "daemon-cli",
+    distWorkerPath: "cli/daemon-cli.js",
+  },
   sessionAccessor: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../config/sessions/session-accessor",
@@ -34,6 +39,25 @@ export const cliRecoveryEntrypoints = {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../process/output-drain",
     distWorkerPath: "process/output-drain.js",
+  },
+} as const;
+
+// Keep the message action and its native command stub in the same prepared graph.
+export const cliMessageExitEntrypoints = {
+  helpers: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "program/message/helpers",
+    distWorkerPath: "cli/program/message/helpers.js",
+  },
+  command: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../commands/message",
+    distWorkerPath: "commands/message.js",
+  },
+  oneShotExit: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "one-shot-exit",
+    distWorkerPath: "cli/one-shot-exit.js",
   },
 } as const;
 

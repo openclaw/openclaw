@@ -1,7 +1,11 @@
+import { renameSync } from "node:fs";
 import { expect, it, vi } from "vitest";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../../../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  registerOpenClawStateDatabaseAsyncResource,
+} from "../../../state/openclaw-state-db-cache.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../../../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
@@ -50,6 +54,57 @@ it("does not retain a removed live-only row as a prepared durable payload", asyn
     expect(prepared.consume((runs) => [...runs.values()])).toEqual({ ready: true, value: [] });
   });
 });
+
+it.each(["reopening", "replacing"] as const)(
+  "rejects a retired published snapshot after %s the database file",
+  async (change) => {
+    await withPersistedReads(async () => {
+      const entry = retainedRun();
+      persistSubagentRunsToDiskOrThrow(new Map([[entry.runId, entry]]));
+      const context = captureOpenClawStateWorkerContext();
+      const original = await prepareSubagentRunsSnapshotForRunIds(new Map(), ["collector"]);
+      const release = createDeferredCore();
+      const unregister = registerOpenClawStateDatabaseAsyncResource({
+        close: () => release.promise,
+      });
+      const closing = closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
+      try {
+        expect(() => captureOpenClawStateWorkerContext()).toThrow("read admission is closed");
+        const retired = {
+          ...entry,
+          completion: { required: false, resultText: "retired publication" },
+        };
+        persistSubagentRunsToDiskOrThrow(new Map([[entry.runId, retired]]), [entry.runId]);
+        release.resolve();
+        await closing;
+        if (change === "replacing") {
+          renameSync(context.admission.databasePath, `${context.admission.databasePath}.retired`);
+        }
+        const reopened = {
+          ...entry,
+          completion: { required: false, resultText: "reopened durable result" },
+        };
+        saveSubagentRegistryToSqlite(new Map([[entry.runId, reopened]]));
+        const current = captureOpenClawStateWorkerContext();
+        expect(current.admission.identity.key === context.admission.identity.key).toBe(
+          change === "reopening",
+        );
+        const consume = vi.fn();
+        expect(() => original.consume(consume)).toThrow("read admission changed");
+        expect(consume).not.toHaveBeenCalled();
+        const prepared = await prepareSubagentRunsSnapshotForRunIds(new Map(), ["collector"]);
+        expect(prepared.consume((runs) => runs.get(entry.runId)?.completion?.resultText)).toEqual({
+          ready: true,
+          value: "reopened durable result",
+        });
+      } finally {
+        release.resolve();
+        await closing;
+        unregister();
+      }
+    });
+  },
+);
 
 it.each(["delete", "replace", "move alias", "full publication"] as const)(
   "applies a %s in the prepared read's consuming frame",

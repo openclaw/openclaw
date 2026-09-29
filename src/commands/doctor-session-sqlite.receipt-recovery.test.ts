@@ -9,11 +9,11 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-migration.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
+import { readSessionSqliteMigrationManifest } from "../infra/session-sqlite-migration-manifest.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { readMigrationArtifactIdentity } from "./doctor-session-sqlite-artifact.js";
-import { readSessionSqliteMigrationManifest } from "./doctor-session-sqlite-migration-run.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 
@@ -42,7 +42,7 @@ describe("retained session receipt recovery", () => {
     "recovers verified $replacement content (failed manifest: $failedManifest)",
     async ({ replacement, failedManifest }) => {
       await withOpenClawTestState({ label: "receipt-rebind" }, async (state) => {
-        const { cfg, storePath, scope } = seedDeferredPluginSessionSource(
+        const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(
           state,
           "default",
           "brave",
@@ -92,7 +92,7 @@ describe("retained session receipt recovery", () => {
         expect(
           loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label,
         ).toBe("Current metadata");
-        recordDeferredPluginMigrations({
+        await recordDeferredPluginMigrations({
           env: state.env,
           pending: [],
           resolvedPluginIds: ["brave"],
@@ -106,7 +106,7 @@ describe("retained session receipt recovery", () => {
     "protects retained history when replacement events are %s",
     async (change) => {
       await withOpenClawTestState({ label: "receipt-incomplete-database" }, async (state) => {
-        const { cfg, storePath, scope } = seedDeferredPluginSessionSource(
+        const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(
           state,
           "default",
           "brave",
@@ -176,12 +176,7 @@ describe("retained session receipt recovery", () => {
           expect(recovered.supportIssue?.body).toContain(`[${issue.code}]`);
         }
         expect(markdownReport).toContain("doctor recover completed with remaining issues");
-        expect(
-          fs.readFileSync(recovered.migrationRun!.failureReportMarkdownPath!, "utf8"),
-        ).toContain("[retained_plugin_source_conflict]");
-        expect(
-          fs.readFileSync(recovered.migrationRun!.failureReportMarkdownPath!, "utf8"),
-        ).not.toContain("restored and validated");
+        expect(markdownReport).not.toContain("restored and validated");
       });
     },
   );

@@ -35,7 +35,9 @@ export type FakeSession = {
   disconnect: ReturnType<typeof vi.fn<() => Promise<void>>>;
   emit: (eventType: string, data: Record<string, unknown>) => void;
   id: string;
-  off: ReturnType<typeof vi.fn>;
+  off: ReturnType<
+    typeof vi.fn<(eventType: string, handler: (event: SessionEventShape) => void) => void>
+  >;
   on: ReturnType<typeof vi.fn>;
   rpc: {
     history: {

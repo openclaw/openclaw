@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 370300,
-  "reason": "Avatar-hat catalog measured 370,196 B locally against main baseline 369,600 B (enforcement 370,176 B); 370,300 B rounds up with Linux headroom, and the unchanged 512 B growth and 64 B build-variance allowances give a 370,876 B enforcement limit, 700 B (0.19 %) above the base limit.",
-  "updatedAt": "2026-09-21"
+  "startupJsGzipBytes": 371771,
+  "reason": "Approved by @steipete for PR #158567 on 2026-09-27: measured startup bundle 371,771 B after main reconciliation and canonical boot-module regeneration, +1,015 B (0.27%) over the previous baseline. Paired baseline and cap retain the 512 B growth and 64 B build-variance allowances, yielding a 372,347 B enforcement limit.",
+  "updatedAt": "2026-09-27"
 }

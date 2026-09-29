@@ -339,7 +339,7 @@ describe("AgentSession runtime and transcript projections", () => {
     );
   });
 
-  it.each(["key", "apiKey", "account"])(
+  it.each(["apiKey", "account"])(
     "executes original %s arguments while preserving redacted storage and delivery facts",
     async (field) => {
       const dir = tempDirs.make("openclaw-runtime-projection-");

@@ -1,13 +1,14 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-// Control UI view renders activity screen content.
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsStatus, renderSettingsToggle } from "../../components/settings-ui.ts";
+import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
-import { formatTimeMs } from "../../lib/format.ts";
+import { createMsFormatter } from "../../lib/format.ts";
 import "../../styles/activity.css";
 import { activityRunInspectorHref } from "./run-inspector-model.ts";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
@@ -34,18 +35,6 @@ type ActivityProps = {
   onEntryToggle: (id: string, open: boolean) => void;
   onScroll: (event: Event) => void;
 };
-
-function formatActivityTime(value: number): string {
-  return formatTimeMs(
-    value,
-    {
-      hour: "numeric",
-      minute: "2-digit",
-      second: "2-digit",
-    },
-    "",
-  );
-}
 
 function formatDuration(value: number): string {
   if (!Number.isFinite(value) || value < 0) {
@@ -101,10 +90,6 @@ function matchesEntry(entry: ActivityEntry, needle: string): boolean {
   return haystack.includes(needle);
 }
 
-function resolveToolNames(entries: readonly ActivityEntry[]): string[] {
-  return sortUniqueStrings(entries.map((entry) => entry.toolName));
-}
-
 function filterEntries(props: ActivityProps): ActivityEntry[] {
   const needle = normalizeLowercaseStringOrEmpty(props.filterText);
   return props.entries.filter((entry) => {
@@ -153,8 +138,10 @@ function renderToolFilter(props: ActivityProps, toolNames: string[]) {
       ${icons.listFilter}
     </button>
     <wa-popover
+      ${ref(syncPopoverLabel)}
       class="activity-live-filter-popover"
       for="activity-live-filter-trigger"
+      aria-label=${t("activity.filters")}
       placement="bottom-end"
       without-arrow
       @wa-show=${(event: Event) => setLiveFilterExpanded(event, true)}
@@ -222,16 +209,15 @@ const STATUS_KINDS = {
   error: "danger",
 } as const satisfies Record<ActivityStatus, "warn" | "ok" | "danger">;
 
-function statusKind(status: ActivityStatus): "warn" | "ok" | "danger" {
-  return STATUS_KINDS[status];
-}
-
-function renderEntry(props: ActivityProps, entry: ActivityEntry) {
+function renderEntry(
+  props: ActivityProps,
+  entry: ActivityEntry,
+  formatTimestamp: ReturnType<typeof createMsFormatter>,
+) {
   const open = props.expandedIds.has(entry.id);
   return html`
     <details
       class="activity-entry activity-entry--${entry.status}"
-      role="listitem"
       .open=${open}
       @toggle=${(event: Event) =>
         props.onEntryToggle(entry.id, (event.currentTarget as HTMLDetailsElement).open)}
@@ -241,7 +227,7 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
         <span class="activity-entry__main">
           <span class="activity-entry__title">
             ${renderSettingsStatus({
-              kind: statusKind(entry.status),
+              kind: STATUS_KINDS[entry.status],
               label: statusLabel(entry.status),
             })}
             <span class="activity-entry__tool mono">${entryLabel(entry)}</span>
@@ -249,7 +235,7 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
           <span class="activity-entry__text">${buildEntrySummary(entry)}</span>
         </span>
         <span class="activity-entry__meta">
-          <span>${formatActivityTime(entry.updatedAt)}</span>
+          <span>${formatTimestamp(entry.updatedAt)}</span>
           <span>${formatDuration(entry.durationMs)}</span>
         </span>
       </summary>
@@ -294,7 +280,11 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
 }
 
 export function renderActivity(props: ActivityProps) {
-  const toolNames = resolveToolNames(props.entries);
+  const formatTimestamp = createMsFormatter(
+    { hour: "numeric", minute: "2-digit", second: "2-digit" },
+    "",
+  );
+  const toolNames = sortUniqueStrings(props.entries.map((entry) => entry.toolName));
   const filtered = filterEntries(props);
   const hasAnyFilters =
     props.filterText.trim() ||
@@ -346,7 +336,7 @@ export function renderActivity(props: ActivityProps) {
         ${renderLiveToolbar(props, toolNames)}
         <div
           class="activity-stream"
-          role="list"
+          role="group"
           aria-label=${t("activity.streamLabel")}
           @scroll=${props.onScroll}
         >
@@ -361,7 +351,7 @@ export function renderActivity(props: ActivityProps) {
                     }
                   </div>
                 `
-              : filtered.map((entry) => renderEntry(props, entry))
+              : filtered.map((entry) => renderEntry(props, entry, formatTimestamp))
           }
         </div>
       </div>

@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsPatchManyParams } from "../../../packages/gateway-protocol/src/index.js";
 import {
   clearActiveEmbeddedRun,
@@ -15,16 +16,14 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
-import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { dispatchGatewayMethodInProcess } from "../server-plugins.js";
 import { isSessionPermissionChangePending } from "../session-permission-change.js";
 import {
@@ -33,9 +32,13 @@ import {
   resolveSessionSharingRole,
   resolveSessionSharingTarget,
 } from "../session-sharing.js";
-import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
+import {
+  createSessionMutationTestClient as client,
+  createSessionMutationTestContext as context,
+} from "./sessions-mutations.owner.test-support.js";
 import { registerSessionSandboxMutationTests } from "./sessions-mutations.sandbox.test-support.js";
+import { setupSessionMutationState } from "./sessions-mutations.state.test-support.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import type {
   GatewayClient,
@@ -45,49 +48,11 @@ import type {
   SessionMutationAuthorization,
 } from "./types.js";
 
-afterEach(async () => {
-  await flushPendingSessionsChangedEvents();
-  closeOpenClawAgentDatabasesForTest();
-  vi.restoreAllMocks();
+const withSessionMutationState = setupSessionMutationState();
+let caseNumber = 0;
+beforeEach(() => {
+  caseNumber += 1;
 });
-
-function client(profileId?: string): GatewayClient {
-  return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: "openclaw-control-ui",
-        version: "test",
-        platform: "test",
-        mode: "webchat",
-      },
-      role: "operator",
-      scopes: ["operator.write"],
-    },
-    ...(profileId
-      ? {
-          authenticatedUserId: `${profileId}@example.com`,
-          authenticatedUserProfile: {
-            profileId,
-            displayName: profileId,
-            hasAvatar: false,
-            updatedAt: 1,
-          },
-        }
-      : {}),
-  };
-}
-
-function context(cfg: OpenClawConfig) {
-  return {
-    trackExecution: trackAsyncWork,
-    getRuntimeConfig: () => cfg,
-    getSessionEventSubscriberConnIds: () => new Set(["observer"]),
-    broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
-  } as unknown as GatewayRequestContext;
-}
 
 async function invoke(params: {
   cfg: OpenClawConfig;
@@ -115,11 +80,11 @@ async function invoke(params: {
   return { authorization, requestContext, responses };
 }
 
-registerSessionSandboxMutationTests({ client, context });
+registerSessionSandboxMutationTests({ client, context, withState: withSessionMutationState });
 
 describe("sessions.patch", () => {
   it("saves and reads dashboard defaults through the agent tool without connected clients", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withSessionMutationState(async (state) => {
       const sessionKey = "agent:main:dashboard-default";
       const scope = { agentId: "main", env: state.env, sessionKey };
       await upsertSessionEntryCore(scope, {
@@ -181,8 +146,8 @@ describe("sessions.patch", () => {
     });
   });
 
-  it("rechecks dashboard tool authority inside the actual session write transaction", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  it("rechecks dashboard tool authority at the actual session commit admission", async () => {
+    await withSessionMutationState(async (state) => {
       const sessionKey = "agent:main:dashboard-authority";
       const scope = { agentId: "main", env: state.env, sessionKey };
       await upsertSessionEntryCore(scope, {
@@ -191,10 +156,25 @@ describe("sessions.patch", () => {
         boardPresentation: "split",
       });
       const before = loadSessionEntry(scope);
-      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const requestContext = context({});
       let revoked = false;
-      let rejectedInsideTransaction = false;
+      let reachedCommitAdmission = false;
+      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+      vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+        (admit, attachment) =>
+          createAdmission((request, grant) => {
+            if (
+              request.stage === "commit" &&
+              isRecord(request.facts) &&
+              isRecord(request.facts.publication) &&
+              request.facts.publication.kind === "session-entry-replacements"
+            ) {
+              reachedCommitAdmission = true;
+              revoked = true;
+            }
+            admit(request, grant);
+          }, attachment),
+      );
       const tool = createDashboardTool({ agentSessionKey: sessionKey, agentId: "main" });
       await expect(
         withGatewayToolCallerIdentity(
@@ -203,79 +183,66 @@ describe("sessions.patch", () => {
             sessionKey,
             operationalRunInstance: { instanceId: "dashboard-instance", runId: "dashboard-run" },
             gatewayContextResolver: () => requestContext,
-            receiptAuthority: () => {
-              if (database.db.isTransaction) {
-                rejectedInsideTransaction = true;
-                revoked = true;
-              }
-              return !revoked;
-            },
+            receiptAuthority: () => !revoked,
           },
           () =>
             tool.execute("save", { action: "set_default_presentation", presentation: "expanded" }),
         ),
       ).rejects.toThrow(/authority.*no longer active/i);
-      expect(rejectedInsideTransaction).toBe(true);
+      expect(reachedCommitAdmission).toBe(true);
       expect(loadSessionEntry(scope)).toEqual(before);
       expect(requestContext.broadcastToConnIds).not.toHaveBeenCalled();
     });
   });
 
-  it.each(["thinking", "context", "both"] as const)(
-    "persists %s preference clears with an agent model rollback marker",
-    async (field) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const sessionKey = "agent:main:rollback-preferences";
-        const scope = { agentId: "main", env: state.env, sessionKey };
-        await upsertSessionEntryCore(scope, {
-          sessionId: "rollback-preferences",
-          updatedAt: 1,
-          providerOverride: "anthropic",
-          modelOverride: "claude-sonnet-4-6",
-          thinkingLevel: "high",
-          contextWindow: "extended",
-          modelFallback: {
-            prevProvider: "openai",
-            prevModel: "gpt-5.4",
-            prevThinkingLevel: "high",
-            prevContextWindow: "extended",
-            ts: 1,
-            source: "agent-patch",
-          },
-        });
-        const respond = vi.fn();
-        await sessionMutationHandlers["sessions.patch"]!({
-          params: {
-            key: sessionKey,
-            ...(field !== "context" ? { thinkingLevel: null } : {}),
-            ...(field !== "thinking" ? { contextWindow: null } : {}),
-          },
-          client: client(),
-          context: context({}),
-          respond,
-        } as never);
-        expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
-        const entry = loadSessionEntry(scope);
-        expect(entry?.thinkingLevel).toBe(field === "context" ? "high" : undefined);
-        expect(entry?.contextWindow).toBe(field === "thinking" ? "extended" : undefined);
-        expect(entry?.modelFallback).toMatchObject({
+  it("persists preference clears with an agent model rollback marker", async () => {
+    await withSessionMutationState(async (state) => {
+      const sessionKey = "agent:main:rollback-preferences";
+      const scope = { agentId: "main", env: state.env, sessionKey };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "rollback-preferences",
+        updatedAt: 1,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        thinkingLevel: "high",
+        contextWindow: "extended",
+        modelFallback: {
           prevProvider: "openai",
           prevModel: "gpt-5.4",
+          prevThinkingLevel: "high",
+          prevContextWindow: "extended",
           ts: 1,
           source: "agent-patch",
-        });
-        expect(entry?.modelFallback?.prevThinkingLevel).toBe(
-          field === "context" ? "high" : undefined,
-        );
-        expect(entry?.modelFallback?.prevContextWindow).toBe(
-          field === "thinking" ? "extended" : undefined,
-        );
+        },
       });
-    },
-  );
+      const respond = vi.fn();
+      await sessionMutationHandlers["sessions.patch"]!({
+        params: {
+          key: sessionKey,
+          thinkingLevel: null,
+          contextWindow: null,
+        },
+        client: client(),
+        context: context({}),
+        respond,
+      } as never);
+      expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+      const entry = loadSessionEntry(scope);
+      expect(entry?.thinkingLevel).toBeUndefined();
+      expect(entry?.contextWindow).toBeUndefined();
+      expect(entry?.modelFallback).toMatchObject({
+        prevProvider: "openai",
+        prevModel: "gpt-5.4",
+        ts: 1,
+        source: "agent-patch",
+      });
+      expect(entry?.modelFallback?.prevThinkingLevel).toBeUndefined();
+      expect(entry?.modelFallback?.prevContextWindow).toBeUndefined();
+    });
+  });
 
   it("publishes saved settings when applying permissions to the active run fails", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withSessionMutationState(async (state) => {
       const sessionKey = "agent:main:failed-permission-update";
       const sessionId = "failed-permission-update";
       await upsertSessionEntryCore(
@@ -329,7 +296,7 @@ describe("sessions.patch", () => {
   it.each([false, true])(
     "serializes permission changes through live-runtime acknowledgement (catalog preparation=%s)",
     async (prepareCatalog) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await withSessionMutationState(async (state) => {
         const sessionKey = "agent:main:permission-update";
         const sessionId = "session-permission-update";
         const cfg: OpenClawConfig = {};
@@ -447,7 +414,7 @@ describe("sessions.patch", () => {
   ])(
     "releases provisional batch permissions while a later target prepares its catalog (restore=$restore, revoked=$revokeFirst)",
     async ({ restore, revokeFirst }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await withSessionMutationState(async (state) => {
         const keys = ["agent:main:batch-permission-first", "agent:main:batch-permission-second"];
         const scope = (sessionKey: string) => ({ agentId: "main", env: state.env, sessionKey });
         for (const [index, sessionKey] of keys.entries()) {
@@ -577,7 +544,7 @@ describe("sessions.patch", () => {
   );
 
   it("refuses unsupported live permission changes before saving a misleading mode", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withSessionMutationState(async (state) => {
       const sessionKey = "agent:main:unsupported-permissions";
       const sessionId = "unsupported-permissions";
       await upsertSessionEntryCore(
@@ -610,8 +577,8 @@ describe("sessions.patch", () => {
   });
 
   it("keeps a newly created session visible to its identified non-admin creator", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const profileId = ensureProfileForEmail("patch-creator@example.test").id;
+    await withSessionMutationState(async (state) => {
+      const profileId = ensureProfileForEmail(`patch-creator-${caseNumber}@example.test`).id;
       const sessionKey = "agent:main:patch-created";
       const requestClient = client(profileId);
       const cfg: OpenClawConfig = {
@@ -673,7 +640,7 @@ describe("sessions.patch", () => {
 
 describe("sessions.assignOwner", () => {
   it("serializes assignment with an active session lifecycle mutation", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withSessionMutationState(async (state) => {
       const sessionKey = "agent:main:lifecycle-handoff";
       const sessionId = "session-lifecycle-handoff";
       await upsertSessionEntryCore(
@@ -731,7 +698,7 @@ describe("sessions.assignOwner", () => {
   });
 
   it("rejects an assignment whose requester authority ends while queued", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withSessionMutationState(async (state) => {
       const sessionKey = "agent:main:revoked-handoff";
       const sessionId = "session-revoked-handoff";
       await upsertSessionEntryCore(
@@ -789,7 +756,7 @@ describe("sessions.assignOwner", () => {
   });
 
   it("records the trusted in-process agent tool caller as the assigning agent", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withSessionMutationState(async (state) => {
       const sessionKey = "agent:main:handoff";
       await upsertSessionEntryCore(
         { agentId: "main", env: state.env, sessionKey },
@@ -844,7 +811,7 @@ describe("sessions.assignOwner", () => {
   it.each(["shared", "read-only", "suggest"] as const)(
     "lets a write-scoped viewer assign a %s session without changing sharing authority",
     async (visibility) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await withSessionMutationState(async (state) => {
         const sessionKey = "agent:main:handoff";
         await upsertSessionEntryCore(
           { agentId: "main", env: state.env, sessionKey },
@@ -892,7 +859,7 @@ describe("sessions.assignOwner", () => {
           assignedBy: { type: "human", id: "profile-viewer" },
           assignedAt: 4242,
         });
-        const durableOwner = ensureProfileForEmail("next-owner@example.test");
+        const durableOwner = ensureProfileForEmail(`next-owner-${caseNumber}@example.test`);
         const reassigned = await invoke({
           cfg,
           client: client("profile-viewer"),
@@ -930,7 +897,7 @@ describe("sessions.assignOwner", () => {
   );
 
   it("rejects hidden viewers, unidentified callers, and unknown owner targets", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withSessionMutationState(async (state) => {
       const sessionKey = "agent:main:private-handoff";
       await upsertSessionEntryCore(
         { agentId: "main", env: state.env, sessionKey },

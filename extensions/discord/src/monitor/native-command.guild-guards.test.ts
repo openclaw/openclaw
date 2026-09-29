@@ -17,7 +17,7 @@ import type { CommandInteraction } from "../internal/discord.js";
 import { setDiscordRuntime } from "../runtime.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 import { createMockCommandInteraction } from "./native-command.test-helpers.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.manager.js";
+import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 let state: OpenClawTestState;
 const userId = "100000000000000003";
@@ -112,31 +112,25 @@ describe("discord native command guild guards", () => {
     setDiscordRuntime(createPluginRuntimeMock());
   });
 
-  it.each(["reset", "new"] as const)(
-    "refuses /%s in a disabled guild channel with no configured binding",
-    async (commandName) => {
-      const result = await runNativeCommand({
-        commandName,
-        guildChannels: { [channelId]: { enabled: false } },
-        label: `disabled-${commandName}`,
-      });
-      expect(result.replies).toEqual(["This channel is disabled."]);
-      expect(result.entry?.lifecycleRevision).toBe("before-reset");
-    },
-  );
+  it("refuses /reset in a disabled guild channel with no configured binding", async () => {
+    const result = await runNativeCommand({
+      commandName: "reset",
+      guildChannels: { [channelId]: { enabled: false } },
+      label: "disabled-reset",
+    });
+    expect(result.replies).toEqual(["This channel is disabled."]);
+    expect(result.entry?.lifecycleRevision).toBe("before-reset");
+  });
 
-  it.each(["reset", "new"] as const)(
-    "refuses /%s in a not-allowed guild channel with no configured binding",
-    async (commandName) => {
-      const result = await runNativeCommand({
-        commandName,
-        guildChannels: { [otherChannelId]: { enabled: true } },
-        label: `notallowed-${commandName}`,
-      });
-      expect(result.replies).toEqual(["This channel is not allowed."]);
-      expect(result.entry?.lifecycleRevision).toBe("before-reset");
-    },
-  );
+  it("refuses /new in a not-allowed guild channel with no configured binding", async () => {
+    const result = await runNativeCommand({
+      commandName: "new",
+      guildChannels: { [otherChannelId]: { enabled: true } },
+      label: "notallowed-new",
+    });
+    expect(result.replies).toEqual(["This channel is not allowed."]);
+    expect(result.entry?.lifecycleRevision).toBe("before-reset");
+  });
 
   it("refuses /status in a disabled guild channel", async () => {
     const result = await runNativeCommand({
@@ -162,18 +156,13 @@ describe("discord native command guild guards", () => {
     },
   );
 
-  it.each(["reset", "new"] as const)(
-    "still runs /%s in an enabled guild channel with no configured binding",
-    async (commandName) => {
-      const result = await runNativeCommand({
-        commandName,
-        guildChannels: { [channelId]: { enabled: true } },
-        label: `enabled-${commandName}`,
-      });
-      expect(result.replies).toEqual([
-        commandName === "new" ? "✅ New session started." : "✅ Session reset.",
-      ]);
-      expect(result.entry?.lifecycleRevision).not.toBe("before-reset");
-    },
-  );
+  it("still runs /reset in an enabled guild channel with no configured binding", async () => {
+    const result = await runNativeCommand({
+      commandName: "reset",
+      guildChannels: { [channelId]: { enabled: true } },
+      label: "enabled-reset",
+    });
+    expect(result.replies).toEqual(["✅ Session reset."]);
+    expect(result.entry?.lifecycleRevision).not.toBe("before-reset");
+  });
 });

@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   readStringValue,
+  resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRetainedLegacyDefaultAgentId } from "../config/legacy.default-agent-owner-state.js";
@@ -103,6 +104,41 @@ export type ResolvedAgentConfig = {
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
 };
+
+/** ACP primaries select the harness; explicit fallback lists still configure native calls. */
+export function resolveAgentModelConfigForRuntime(
+  agent: Pick<ResolvedAgentConfig, "model" | "runtime"> | undefined,
+  runtime: "native" | "acp" = "native",
+): ResolvedAgentConfig["model"] {
+  const model = agent?.model;
+  if (runtime === "acp" || agent?.runtime?.type !== "acp") {
+    return model;
+  }
+  return model && typeof model === "object" && Array.isArray(model.fallbacks)
+    ? { fallbacks: model.fallbacks }
+    : undefined;
+}
+
+/** Native overrides exclude ACP harness primaries without changing authored configuration. */
+export function resolveAgentNativeModelPrimary(
+  cfg: OpenClawConfig,
+  agentId: string,
+): string | undefined {
+  return resolvePrimaryStringValue(
+    resolveAgentModelConfigForRuntime(resolveAgentConfig(cfg, agentId)),
+  );
+}
+
+/** Native requests inherit the raw default, including its configured auth-profile suffix. */
+export function resolveNativeModelPrimary(
+  cfg: OpenClawConfig,
+  agentId: string,
+): string | undefined {
+  return (
+    resolveAgentNativeModelPrimary(cfg, agentId) ??
+    resolvePrimaryStringValue(cfg.agents?.defaults?.model)
+  );
+}
 
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
 function stripNullBytes(s: string): string {

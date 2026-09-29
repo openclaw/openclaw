@@ -7,19 +7,6 @@ import type { WorkboardMutationScope, WorkboardPromoteInput } from "./store-inpu
 import { clearDiagnostics, normalizeBoundedString } from "./store-normalizers.js";
 
 export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
-  async promoteReady(now = Date.now()): Promise<{ cards: WorkboardCard[]; count: number }> {
-    return await this.enqueueMutation(async () => {
-      const promoted: WorkboardCard[] = [];
-      for (const card of await this.list()) {
-        const next = await this.promoteDependencyReady(card.id, now);
-        if (next.status !== card.status) {
-          promoted.push(next);
-        }
-      }
-      return { cards: promoted, count: promoted.length };
-    });
-  }
-
   async move(
     id: string,
     status: unknown,
@@ -52,10 +39,7 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
     scope?: WorkboardMutationScope | null,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
       const reason = normalizeBoundedString(input.reason, undefined, 1000, "promote reason");
       const comments = reason

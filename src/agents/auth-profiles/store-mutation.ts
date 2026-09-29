@@ -9,10 +9,6 @@ import type { AuthProfileStore } from "./types.js";
 
 const INLINE_OAUTH_TOKEN_FIELDS = ["access", "refresh", "idToken"] as const;
 
-function hasInlineOAuthTokenMaterial(credential: object): boolean {
-  return INLINE_OAUTH_TOKEN_FIELDS.some((field) => Reflect.get(credential, field) !== undefined);
-}
-
 function hasChangedInlineOAuthTokenMaterial(params: {
   credential: object;
   existingCredential: object;
@@ -46,10 +42,7 @@ function preserveLegacyOAuthRefsOnSave(params: {
     ) {
       continue;
     }
-    if (
-      hasInlineOAuthTokenMaterial(credential) &&
-      hasChangedInlineOAuthTokenMaterial({ credential, existingCredential })
-    ) {
+    if (hasChangedInlineOAuthTokenMaterial({ credential, existingCredential })) {
       continue;
     }
     // Preserve legacy oauthRef ownership when current save data did not replace

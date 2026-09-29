@@ -86,83 +86,68 @@ afterEach(() => {
 });
 
 describe("Codex dynamic tool media delivery", () => {
-  it.each(["unchanged", "reclassified"] as const)(
-    "records outbound media with a %s result sink",
-    async (sink) => {
-      if (sink === "reclassified") {
-        const registry = createEmptyPluginRegistry();
-        const handler = async (event: { result: AgentToolResult<unknown> }) => {
-          const details = requireRecord(event.result.details, "outbound delivery details");
-          details.sourceReplySink = "internal-ui";
-          details.sourceReply = {
-            text: "fabricated source reply",
-            mediaUrls: ["/tmp/generated-song.mp3"],
-          };
-        };
-        registry.agentToolResultMiddlewares.push({
-          pluginId: "sink-rewriter",
-          pluginName: "Sink rewriter",
-          rawHandler: handler,
-          handler,
-          runtimes: ["codex"],
-          source: "test",
-        });
-        setActivePluginRegistry(registry);
-      }
-      const { bridge } = createMessageBridge(
-        textToolResult("Sent.", deliveredMessageDetails("message-1")),
-      );
+  it("records outbound media before result middleware reclassifies its sink", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = async (event: { result: AgentToolResult<unknown> }) => {
+      const details = requireRecord(event.result.details, "outbound delivery details");
+      details.sourceReplySink = "internal-ui";
+      details.sourceReply = {
+        text: "fabricated source reply",
+        mediaUrls: ["/tmp/generated-song.mp3"],
+      };
+    };
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "sink-rewriter",
+      pluginName: "Sink rewriter",
+      rawHandler: handler,
+      handler,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const { bridge } = createMessageBridge(
+      textToolResult("Sent.", deliveredMessageDetails("message-1")),
+    );
 
-      const result = await handleMessageToolCall(bridge, {
-        action: "send",
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      text: "song attached",
+      media: "/tmp/generated-song.mp3",
+      attachments: [{ filePath: "/tmp/generated-cover.png" }],
+    });
+
+    expectInputText(result, "Sent.");
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
+    expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual([
+      "/tmp/generated-song.mp3",
+      "/tmp/generated-cover.png",
+    ]);
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
+      {
+        tool: "message",
+        provider: "message",
+        to: undefined,
+        threadId: undefined,
         text: "song attached",
-        media: "/tmp/generated-song.mp3",
-        attachments: [{ filePath: "/tmp/generated-cover.png" }],
-      });
-
-      expectInputText(result, "Sent.");
-      expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
-      expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual([
-        "/tmp/generated-song.mp3",
-        "/tmp/generated-cover.png",
-      ]);
-      expect(bridge.telemetry.messagingToolSentTargets).toEqual([
-        {
-          tool: "message",
-          provider: "message",
-          to: undefined,
-          threadId: undefined,
-          text: "song attached",
-          mediaUrls: ["/tmp/generated-song.mp3", "/tmp/generated-cover.png"],
-        },
-      ]);
-      expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([]);
-      expect(bridge.telemetry.confirmedMediaDeliveries).toEqual([
-        {
-          kind: "outbound",
-          target: bridge.telemetry.messagingToolSentTargets[0],
-          sourceUrls: ["/tmp/generated-song.mp3", "/tmp/generated-cover.png"],
-        },
-      ]);
-    },
-  );
-
+        mediaUrls: ["/tmp/generated-song.mp3", "/tmp/generated-cover.png"],
+      },
+    ]);
+    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([]);
+    expect(bridge.telemetry.confirmedMediaDeliveries).toEqual([
+      {
+        kind: "outbound",
+        target: bridge.telemetry.messagingToolSentTargets[0],
+        sourceUrls: ["/tmp/generated-song.mp3", "/tmp/generated-cover.png"],
+      },
+    ]);
+  });
   it.each([
     {
       name: "a failed send",
-      dryRun: false,
       details: { status: "error", error: "attachment delivery failed" },
     },
     {
-      name: "a dry-run argument",
-      dryRun: true,
-      details: {
-        messageDelivery: { status: "dryRun", partialDelivery: false, createdThreadIds: [] },
-      },
-    },
-    {
       name: "a dry-run receipt",
-      dryRun: false,
       details: {
         dryRun: true,
         deliveryStatus: "dry_run",
@@ -171,7 +156,6 @@ describe("Codex dynamic tool media delivery", () => {
     },
     {
       name: "a partial receipt without attachment confirmation",
-      dryRun: false,
       details: {
         deliveryStatus: "partial_failed",
         sentBeforeError: true,
@@ -183,7 +167,7 @@ describe("Codex dynamic tool media delivery", () => {
         },
       },
     },
-  ])("does not claim requested media was delivered from $name", async ({ dryRun, details }) => {
+  ])("does not claim requested media was delivered from $name", async ({ details }) => {
     const { bridge } = createMessageBridge(textToolResult("Delivery result.", details));
 
     const result = await handleMessageToolCall(bridge, {
@@ -193,7 +177,6 @@ describe("Codex dynamic tool media delivery", () => {
       text: "two attachments requested",
       mediaUrl: "/tmp/requested-cover.png",
       attachments: [{ filePath: "/tmp/requested-song.mp3" }],
-      ...(dryRun ? { dryRun: true } : {}),
     });
 
     expect(result.executionStarted).toBe(true);

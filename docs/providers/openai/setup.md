@@ -1,5 +1,5 @@
 ---
-summary: "Connect OpenAI with an API key or a ChatGPT/Codex subscription"
+summary: "Connect OpenAI with an API key, Codex subscription, or Sign in with ChatGPT (Beta)"
 read_when:
   - You are connecting OpenAI to OpenClaw for the first time
   - You want Codex subscription auth instead of API keys
@@ -7,6 +7,9 @@ read_when:
 title: "OpenAI setup"
 sidebarTitle: "Setup"
 ---
+
+Compare [OpenAI authentication methods](/providers/openai/authentication) to
+choose based on model access, hosted plugins, usage tracking, and permissions.
 
 ## Getting started
 
@@ -421,3 +424,79 @@ sidebarTitle: "Setup"
 
   </Tab>
 </Tabs>
+
+<a id="chatgpt-token-sharing-preview" />
+
+<a id="sign-in-with-chatgpt-preview" />
+
+## Sign in with ChatGPT (Beta)
+
+Use Sign in with ChatGPT (SIWC) for app-specific authorization to spend your
+Codex allowance on eligible Responses API requests. Check shared allowance
+usage in [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage). OpenClaw
+does not show SIWC quota or per-app usage, and does not set per-app limits;
+ChatGPT may offer app-specific controls for your account.
+
+Your account and workspace must have SIWC registration and token sharing enabled
+by OpenAI.
+
+SIWC does not support OpenAI-hosted plugins or connected apps yet. Those require
+a Codex credential with connector invocation scope, which device-code login does
+not grant. OpenClaw tools and locally configured plugins can still use their own
+credentials. See
+[OpenAI authentication](/providers/openai/authentication) to compare the methods.
+
+Run this on the computer running OpenClaw:
+
+```bash
+openclaw models auth login --provider openai --method siwc
+```
+
+Approve token sharing during sign-in to enable model calls. If you grant identity
+permissions only, OpenClaw saves the account but asks you to enable sharing or
+choose another credential before inference.
+
+The browser returns to `http://localhost:8080/auth/callback`. If your browser runs
+on another computer, forward its port 8080 to OpenClaw's IPv4 loopback before
+starting sign-in. For an SSH host, keep this command running on your browser's
+computer:
+
+```bash
+ssh -N -L 8080:127.0.0.1:8080 user@gateway-host
+```
+
+Open the sign-in link on that computer.
+
+To reconnect an existing account, sign in with the same ChatGPT user and
+workspace. To switch either, choose **Connect a different ChatGPT account or
+workspace** in the sign-in prompt.
+
+### Current limitations
+
+- Developer function tools and web search are supported. OpenAI-hosted plugins,
+  connected apps, hosted MCP tools, tool search, and hosted image generation are
+  not supported yet.
+- Text, images, and files can be inputs when the selected Responses model accepts
+  them. This does not grant access to the Files upload API, audio or video input,
+  or the transcription API.
+- SIWC credentials do not authorize image generation, audio transcription,
+  speech synthesis, or memory embeddings. Configure a separate
+  compatible credential for those tools. Onboarding continues with the agent's
+  emoji when no image-generation provider is available; an avatar is optional.
+- Responses requests use HTTP streaming. WebSocket inference and SIWC quota
+  reporting in OpenClaw are not available.
+- With the Codex runtime, SIWC requires a managed local process and an isolated
+  agent home. Automatic context summarization is supported; manual `/compact`,
+  remote execution, and supervised sessions are unavailable with this credential.
+
+OpenClaw discovers SIWC model choices from the selected account through
+`GET https://api.openai.com/v1/models`, using the same profile's access token as
+inference. Only models marked for display are offered, with their account-specific
+names and order. Switching profiles uses that profile's catalog. A successful
+empty list stays empty; a rejected credential does not fall back to static model
+access. If discovery is temporarily unavailable, OpenClaw retains static hints
+and marks discovery unavailable. Codex app-server's bundled or cached model list
+is not proof of current SIWC account access.
+
+Model and allowance eligibility are enforced by OpenAI. SIWC does not import
+ChatGPT conversations or Codex history.

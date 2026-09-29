@@ -49,6 +49,7 @@ type SubagentRunReadSqliteRow = Pick<
   swarm_run_id: string | null;
   run_timeout_seconds: number | null;
   execution_status: SubagentRunRecord["execution"]["status"];
+  interruption_reason: string | null;
   started_at: number | null;
   session_started_at: number | null;
   accumulated_runtime_ms: number | null;
@@ -58,6 +59,7 @@ type SubagentRunReadSqliteRow = Pick<
   generation: number | null;
   outcome_status: string | null;
   delivery_status: string | null;
+  delivery_disposition: string | null;
   delivery_suspended_at: number | null;
   requester_agent_id: string | null;
   collect: number | null;
@@ -74,17 +76,24 @@ function parentStoreColumns(db: DatabaseSync) {
       ];
 }
 
-export function readSubagentRun(
-  database: OpenClawStateDatabase,
+export function readSubagentRunRow(
+  database: Pick<OpenClawStateDatabase, "db">,
   runId: string,
-): SubagentRunRecord | null {
-  const row = executeSqliteQuerySync(
+): SubagentRunSqliteRow | undefined {
+  return executeSqliteQuerySync(
     database.db,
     getNodeSqliteKysely<SubagentRegistryDatabase>(database.db)
       .selectFrom("subagent_runs")
       .selectAll()
       .where("run_id", "=", runId),
   ).rows[0];
+}
+
+export function readSubagentRun(
+  database: OpenClawStateDatabase,
+  runId: string,
+): SubagentRunRecord | null {
+  const row = readSubagentRunRow(database, runId);
   return row ? rowToSubagentRunRecord(row) : null;
 }
 
@@ -216,7 +225,7 @@ const subagentMaintenancePayload =
     ELSE payload_json END`;
 
 function readSubagentSessionListRows(
-  scope?: { controllerSessionKeys?: readonly string[]; runIds?: readonly string[] },
+  scope?: { controllerSessionKeys?: readonly string[] },
   database: Pick<OpenClawStateDatabase, "db"> = openOpenClawStateDatabase(),
 ): SubagentRunReadSqliteRow[] {
   const { db } = database;
@@ -237,9 +246,6 @@ function readSubagentSessionListRows(
             // Materialize compact metadata once; an inline CTE repeats retained JSON work per field.
             subagentMetadataPayload.as("payload_json"),
           ]);
-          if (scope?.runIds) {
-            return selected.where("run_id", "in", sqliteStringSet(scope.runIds));
-          }
           return scope?.controllerSessionKeys
             ? selected.where(subagentControllerFilter(scope.controllerSessionKeys))
             : selected;
@@ -269,6 +275,9 @@ function readSubagentSessionListRows(
         subagentPayloadJsonValue<SubagentRunRecord["execution"]["status"]>("$.execution.status").as(
           "execution_status",
         ),
+        subagentPayloadJsonValue<string | null>("$.execution.interruptionReason").as(
+          "interruption_reason",
+        ),
         subagentPayloadJsonValue<number | null>("$.execution.startedAt").as("started_at"),
         subagentPayloadJsonValue<number | null>("$.sessionStartedAt").as("session_started_at"),
         subagentPayloadJsonValue<number | null>("$.accumulatedRuntimeMs").as(
@@ -280,6 +289,9 @@ function readSubagentSessionListRows(
         subagentPayloadJsonValue<number | null>("$.generation").as("generation"),
         subagentPayloadJsonValue<string | null>("$.execution.outcome.status").as("outcome_status"),
         subagentPayloadJsonValue<string | null>("$.delivery.status").as("delivery_status"),
+        subagentPayloadJsonValue<string | null>("$.delivery.disposition").as(
+          "delivery_disposition",
+        ),
         subagentPayloadJsonValue<string | null>("$.requesterAgentId").as("requester_agent_id"),
         subagentPayloadJsonValue<number | null>("$.delivery.suspendedAt").as(
           "delivery_suspended_at",
@@ -332,6 +344,9 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
       createdAt: row.created_at,
       execution: {
         status: row.execution_status,
+        ...(row.interruption_reason === "gateway-restart"
+          ? { interruptionReason: "gateway-restart" as const }
+          : {}),
         ...(startedAt !== undefined ? { startedAt } : {}),
         ...(endedAt !== undefined ? { endedAt } : {}),
         ...(outcomeStatus ? { outcome: { status: outcomeStatus } } : {}),
@@ -344,6 +359,9 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
       delivery: deliveryStatus
         ? {
             status: deliveryStatus,
+            ...(row.delivery_disposition === "intentional_non_delivery"
+              ? { disposition: "intentional_non_delivery" as const }
+              : {}),
             ...(normalizeFiniteNumber(row.delivery_suspended_at) !== undefined
               ? { suspendedAt: row.delivery_suspended_at ?? undefined }
               : {}),
@@ -390,7 +408,7 @@ export function loadSubagentRunsForSessionFromSqlite(
 /** Loads all persisted generations for one child session through its existing index. */
 export function loadSubagentRunsForChildSessionFromSqlite(
   childSessionKey: string,
-  database?: OpenClawStateDatabase,
+  database?: Pick<OpenClawStateDatabase, "db">,
 ): SubagentRunRecord[] {
   return loadScopedSubagentRuns({ kind: "child", sessionKey: childSessionKey }, database);
 }
@@ -448,22 +466,11 @@ export function loadSubagentSessionListRunsFromSqlite(
   return runs;
 }
 
-export function loadSubagentRunsForSessionsFromSqlite(
-  sessionKeys: readonly string[],
-  inMemoryRuns: Iterable<SubagentRunReadRecord>,
-  projection: "full",
-): { sessionKeys: Set<string>; runs: Map<string, SubagentRunRecord>; complete: boolean };
-export function loadSubagentRunsForSessionsFromSqlite(
-  sessionKeys: readonly string[],
-  inMemoryRuns: Iterable<SubagentRunReadRecord>,
-  projection: "session-list",
-): { sessionKeys: Set<string>; runs: Map<string, SubagentRunReadRecord>; complete: boolean };
 /** Select identities and their records from the same persisted read snapshot. */
 export function loadSubagentRunsForSessionsFromSqlite(
   sessionKeys: readonly string[],
   inMemoryRuns: Iterable<SubagentRunReadRecord>,
-  projection: "full" | "session-list",
-): { sessionKeys: Set<string>; runs: Map<string, SubagentRunReadRecord>; complete: boolean } {
+): { sessionKeys: Set<string>; runs: Map<string, SubagentRunRecord>; complete: boolean } {
   const database = openOpenClawStateDatabase();
   const { db } = database;
   return runSqliteDeferredTransactionSync(db, () => {
@@ -477,10 +484,7 @@ export function loadSubagentRunsForSessionsFromSqlite(
       sessionKeys,
       identities.map((row) => ({
         childSessionKey: row.child_session_key,
-        requesterSessionKey:
-          projection === "session-list"
-            ? row.requester_session_key.trim()
-            : row.requester_session_key,
+        requesterSessionKey: row.requester_session_key,
       })),
       inMemoryRuns,
     );
@@ -494,26 +498,17 @@ export function loadSubagentRunsForSessionsFromSqlite(
     const runIds = identities
       .filter((row) => selectedRunIds.has(row.run_id.trim()))
       .map((row) => row.run_id);
-    const runs = new Map<string, SubagentRunReadRecord>();
-    // Each projection has its own cache; only complete physical coverage may seed it.
+    const runs = new Map<string, SubagentRunRecord>();
+    // Only complete physical coverage may seed the full-record cache.
     const complete = runIds.length === identities.length;
     if (runIds.length) {
-      if (projection === "full") {
-        for (const row of readSubagentRegistryRows(
-          complete ? undefined : { kind: "runs", runIds },
-          database,
-        )) {
-          const entry = rowToSubagentRunRecord(row);
-          if (entry) {
-            runs.set(entry.runId, entry);
-          }
-        }
-      } else {
-        for (const row of readSubagentSessionListRows({ runIds }, database)) {
-          const entry = rowToSubagentRunReadRecord(row);
-          if (entry) {
-            runs.set(entry.runId, entry);
-          }
+      for (const row of readSubagentRegistryRows(
+        complete ? undefined : { kind: "runs", runIds },
+        database,
+      )) {
+        const entry = rowToSubagentRunRecord(row);
+        if (entry) {
+          runs.set(entry.runId, entry);
         }
       }
     }

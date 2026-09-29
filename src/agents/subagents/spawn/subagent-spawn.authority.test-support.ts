@@ -30,8 +30,7 @@ import {
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry.test-support.js";
-import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
+import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -217,8 +216,13 @@ export function installSpawnAuthorityFixture() {
   const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
   let stateDir = "";
   let pluginSnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
+  const settle = () => settleSubagentRegistryPersistenceWork();
 
   beforeEach(async () => {
+    // Failed cleanup retains the prior owner instead of replacing its live stores.
+    if (stateDir) {
+      throw new Error("Previous spawn authority fixture cleanup is incomplete");
+    }
     pluginSnapshot = captureActivePluginRegistrySnapshot();
     stateDir = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-spawn-authority-")));
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
@@ -240,8 +244,6 @@ export function installSpawnAuthorityFixture() {
     clearConfigCache();
     clearRuntimeConfigSnapshot();
     resetSubagentRegistryForTests({ persist: false });
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(
       () => getActivePluginRegistry() ?? createTestRegistry([]),
     );
@@ -254,22 +256,44 @@ export function installSpawnAuthorityFixture() {
   });
 
   afterEach(async () => {
-    await settleSubagentRegistryPersistenceWork();
-    resetSubagentRegistryForTests({ persist: false });
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    schedulerTesting.reset();
-    await cleanupSessionStateForTest({ stateDir });
-    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
-    vi.mocked(callGateway).mockReset();
-    spawnTesting.setDepsForTest();
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-    await flushLogger();
-    resetLogger();
-    await rm(stateDir, { recursive: true, force: true });
-    restoreActivePluginRegistrySnapshot(pluginSnapshot);
-    env.restore();
+    const failures: unknown[] = [];
+    try {
+      await settle();
+    } catch (error) {
+      failures.push(error);
+    }
+    // Settled delivery failures still permit cleanup; live roots retain their stores.
+    if (getActiveGatewayRootWorkCount() === 0) {
+      try {
+        resetSubagentRegistryForTests({ persist: false });
+        schedulerTesting.reset();
+        await cleanupSessionStateForTest({ stateDir });
+        vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
+        vi.mocked(callGateway).mockReset();
+        spawnTesting.setDepsForTest();
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+        await flushLogger();
+        resetLogger();
+        // Resource cleanup finished; removal failure must not retain a retired owner.
+        try {
+          await rm(stateDir, { recursive: true, force: true });
+        } catch (error) {
+          failures.push(error);
+        }
+        restoreActivePluginRegistrySnapshot(pluginSnapshot);
+        env.restore();
+        stateDir = "";
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Spawn authority fixture cleanup failed");
+    }
   });
 
   async function createBoundParent(runtime: "embedded" | "plugin-harness" = "embedded") {
@@ -329,6 +353,7 @@ export function installSpawnAuthorityFixture() {
   }
 
   return {
+    settle,
     parentSessionKey,
     parentRunId,
     groupId,

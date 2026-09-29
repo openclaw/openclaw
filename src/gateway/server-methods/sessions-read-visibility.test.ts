@@ -7,6 +7,7 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../../config/sessions/session-accessor.sqlite-participants.native.js";
+import * as sessionHistoryWorkers from "../../config/sessions/session-history-worker-runtime.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -14,13 +15,13 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
 import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
 import { rolePolicyConfig } from "../session-sharing.test-utils.js";
-import * as sessionTranscriptReaders from "../session-transcript-readers.js";
 import {
   directSessionReq,
   seedLinearSessionTranscript,
   setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
 import {
+  disposeSessionReadContexts,
   identifiedClient,
   initializeSessionReadContext,
   listSessions,
@@ -28,7 +29,8 @@ import {
 } from "./sessions-read-cache.test-support.js";
 
 setupGatewaySessionsHandlerTestHarness();
-afterEach(() => {
+afterEach(async () => {
+  await disposeSessionReadContexts();
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
@@ -501,7 +503,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
     visibility: "shared",
   });
 
-  const originalRead = sessionTranscriptReaders.readRecentSessionMessagesWithStatsAsync;
+  const originalRead = sessionHistoryWorkers.readSessionHistoryPageInWorker;
   for (const mutation of [
     { name: "visibility change", sessionId, visibility: "draft" as const },
     {
@@ -520,7 +522,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
       },
     );
     const readSpy = vi
-      .spyOn(sessionTranscriptReaders, "readRecentSessionMessagesWithStatsAsync")
+      .spyOn(sessionHistoryWorkers, "readSessionHistoryPageInWorker")
       .mockImplementationOnce(async (...args) => {
         await replaceSessionEntry(
           { agentId: "main", sessionKey, storePath },
@@ -557,7 +559,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
   );
   let currentCfg = roleConfig("view");
   const roleDriftRead = vi
-    .spyOn(sessionTranscriptReaders, "readRecentSessionMessagesWithStatsAsync")
+    .spyOn(sessionHistoryWorkers, "readSessionHistoryPageInWorker")
     .mockImplementationOnce(async (...args) => {
       currentCfg = roleConfig("none");
       return await originalRead(...args);

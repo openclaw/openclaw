@@ -11,6 +11,7 @@ import {
   hasAbortableSessionRun,
   hasDirectSessionRun,
   replayPendingChatAbort,
+  reconcileChatRunLifecycle,
 } from "./run-lifecycle.ts";
 
 function makeSessionsResult(rows: (Pick<GatewaySessionRow, "key"> & Partial<GatewaySessionRow>)[]) {
@@ -34,7 +35,8 @@ describe("hasAbortableSessionRun", () => {
   });
 });
 
-type AbortHost = Parameters<typeof replayPendingChatAbort>[0];
+type AbortHost = Parameters<typeof replayPendingChatAbort>[0] &
+  Parameters<typeof reconcileChatRunLifecycle>[0];
 
 function makeAbortHost(over: Partial<AbortHost> = {}): AbortHost {
   return {
@@ -56,33 +58,42 @@ function makeAbortHost(over: Partial<AbortHost> = {}): AbortHost {
 }
 
 describe("handleAbortChat", () => {
-  it("dispatches sessions.abort when only descendant work remains", async () => {
-    const request = vi.fn(async () => ({ status: "aborted" }));
-    const host = makeAbortHost({
-      client: createTestGatewayClient(request),
-      chatMessage: "@Alex interrupted draft",
-      chatMentions: [{ profileId: "alex-profile", start: 0, end: 5 }],
-      sessionsResult: makeSessionsResult([
-        {
-          key: "agent:main",
-          hasActiveRun: false,
-          hasActiveSubagentRun: true,
-          status: "done",
-        },
-      ]),
-    });
+  it.each([false, true])(
+    "dispatches descendant Stop with preserveDraft=%s",
+    async (preserveDraft) => {
+      const request = vi.fn(async () => ({ status: "aborted" }));
+      const host = makeAbortHost({
+        client: createTestGatewayClient(request),
+        chatMessage: "@Alex interrupted draft",
+        chatReplyTarget: { messageId: "original", text: "Quoted source" },
+        chatMentions: [{ profileId: "alex-profile", start: 0, end: 5 }],
+        sessionsResult: makeSessionsResult([
+          {
+            key: "agent:main",
+            hasActiveRun: false,
+            hasActiveSubagentRun: true,
+            status: "done",
+          },
+        ]),
+      });
 
-    expect(hasDirectSessionRun(host)).toBe(false);
-    expect(hasAbortableSessionRun(host)).toBe(true);
-    await handleAbortChat(host);
+      expect(hasDirectSessionRun(host)).toBe(false);
+      expect(hasAbortableSessionRun(host)).toBe(true);
+      await handleAbortChat(host, { preserveDraft });
 
-    expect(request).toHaveBeenCalledWith("sessions.abort", {
-      key: "agent:main",
-      clearQueued: true,
-    });
-    expect(host.chatMessage).toBe("");
-    expect(host.chatMentions).toEqual([]);
-  });
+      expect(request).toHaveBeenCalledWith("sessions.abort", {
+        key: "agent:main",
+        clearQueued: true,
+      });
+      expect(host.chatMessage).toBe(preserveDraft ? "@Alex interrupted draft" : "");
+      expect(host.chatMentions).toEqual(
+        preserveDraft ? [{ profileId: "alex-profile", start: 0, end: 5 }] : [],
+      );
+      expect(host.chatReplyTarget).toEqual(
+        preserveDraft ? { messageId: "original", text: "Quoted source" } : null,
+      );
+    },
+  );
 
   it("routes recovered embedded Stop through sessions.abort with its run id", async () => {
     const request = vi.fn(async () => ({ status: "aborted" }));
@@ -137,6 +148,46 @@ describe("handleAbortChat", () => {
     expect(refreshCurrentChat).not.toHaveBeenCalled();
     expect(host.chatRunId).toBe("run-live");
   });
+
+  it.each([false, true])(
+    "keeps a replayed warning with its terminal run (replacement pending: %s)",
+    async (replacementPending) => {
+      const response = createDeferred<unknown>();
+      const host = makeAbortHost({
+        client: createTestGatewayClient(vi.fn(() => response.promise)),
+        connected: false,
+        chatRunId: "stopped-run",
+        requestUpdate: vi.fn(),
+      });
+      await handleAbortChat(host, { preserveDraft: true });
+      host.connected = true;
+      const stopped = replayPendingChatAbort(host);
+      reconcileChatRunLifecycle(host, {
+        outcome: "interrupted",
+        runId: "stopped-run",
+        clearLocalRun: true,
+        armLocalTerminalReconcile: true,
+        publishRunStatus: false,
+      });
+      if (replacementPending) {
+        host.chatQueue = [
+          {
+            id: "replacement",
+            text: "Next turn",
+            createdAt: 0,
+            sendState: "sending",
+            sendRunId: "replacement-run",
+          },
+        ];
+      }
+      vi.mocked(host.requestUpdate!).mockClear();
+      const warning = "The stopped reply could not be saved to history.";
+      response.resolve({ aborted: true, warning });
+      await stopped;
+      expect(host.chatRunError?.summary).toBe(replacementPending ? undefined : warning);
+      expect(host.requestUpdate).toHaveBeenCalledTimes(replacementPending ? 0 : 1);
+    },
+  );
 
   it("settles a recovered embedded run when sessions.abort reports no active run", async () => {
     const request = vi.fn(async () => ({ ok: true, abortedRunId: null, status: "no-active-run" }));
@@ -377,6 +428,7 @@ describe("handleAbortChat", () => {
 
     expect(host.pendingAbort).toEqual({
       sourceClient: client,
+      recoveryScope: client.recoveryScope,
       sessionKey: "agent:main",
       conversation: { sessionKey: "agent:main" },
       runId: "run-main",
@@ -397,6 +449,7 @@ describe("replayPendingChatAbort", () => {
       client,
       pendingAbort: {
         sourceClient: client,
+        recoveryScope: client.recoveryScope,
         runId: "run-main",
         sessionKey: "global",
         agentId: "work",
@@ -435,6 +488,7 @@ describe("replayPendingChatAbort", () => {
         },
         pendingAbort: {
           sourceClient: client,
+          recoveryScope: client.recoveryScope,
           runId: "run-main",
           sessionKey: "global",
           agentId: "work",
@@ -447,7 +501,7 @@ describe("replayPendingChatAbort", () => {
       expect(request).not.toHaveBeenCalled();
       expect(host.pendingAbort).toBeNull();
       if (sameScope) {
-        expect(host.chatError).toContain("operator.write");
+        expect(host.chatError).toContain("operator.sessions.write");
       } else {
         expect(host.chatError).toBe("Current scope warning");
       }
@@ -466,6 +520,7 @@ describe("replayPendingChatAbort", () => {
       chatRunId: "run-main",
       pendingAbort: {
         sourceClient: client,
+        recoveryScope: client.recoveryScope,
         runId: "run-main",
         sessionKey: "agent:main:telegram:direct:queued-user",
         conversation: { sessionKey: "agent:main:telegram:direct:queued-user", agentId: "main" },
@@ -487,6 +542,7 @@ describe("replayPendingChatAbort", () => {
       client: createTestGatewayClient(replacementRequest),
       pendingAbort: {
         sourceClient,
+        recoveryScope: sourceClient.recoveryScope,
         runId: "run-main",
         sessionKey: "agent:main:telegram:direct:queued-user",
         conversation: { sessionKey: "agent:main:telegram:direct:queued-user", agentId: "main" },

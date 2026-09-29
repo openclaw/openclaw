@@ -245,8 +245,9 @@ export function resetOpenClawOwnedToolHooks(): void {
 export async function createHostTtsRuntimeContract(
   attempt: Parameters<typeof createAdmittedHostCapabilityTestFixture>[0],
   audioPath: string,
+  options: { nativeModelPolicySupport?: "exact" } = {},
 ) {
-  const host = await createAdmittedHostCapabilityTestFixture(attempt);
+  const host = await createAdmittedHostCapabilityTestFixture(attempt, options);
   const synthesis = vi.spyOn(ttsRuntime, "textToSpeech").mockResolvedValue({
     success: true,
     audioPath,

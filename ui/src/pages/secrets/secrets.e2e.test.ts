@@ -277,7 +277,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}settings/secrets`);
-      await page.getByRole("heading", { name: "Secrets" }).waitFor();
+      await page.getByRole("heading", { name: "Secrets", level: 1, exact: true }).waitFor();
 
       const existingSecretRow = page.getByRole("row", { name: /SERVICE_API_KEY/u });
       await existingSecretRow.getByRole("button", { name: "Actions: SERVICE_API_KEY" }).click();
@@ -391,7 +391,7 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}settings/secrets`);
-        await page.getByRole("heading", { name: "Secrets" }).waitFor();
+        await page.getByRole("heading", { name: "Secrets", level: 1, exact: true }).waitFor();
 
         await page.getByRole("button", { name: "Add", exact: true }).click();
         const addDialog = page.locator('openclaw-modal-dialog[label="Add"]');
@@ -614,7 +614,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}settings/secrets`);
-      await page.getByRole("heading", { name: "Secrets" }).waitFor();
+      await page.getByRole("heading", { name: "Secrets", level: 1, exact: true }).waitFor();
       await page.getByText(/Gateway\/admin required/u).waitFor();
       expect(await page.getByRole("button", { name: "Add", exact: true }).count()).toBe(0);
       expect(await page.getByRole("button", { name: "Bulk Add", exact: true }).count()).toBe(0);

@@ -9,6 +9,7 @@ import {
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isSessionMember, type SessionEntry } from "../config/sessions.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
+import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -27,12 +28,11 @@ import type { GatewayClient } from "./server-methods/types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
 import {
   prepareGatewaySessionStoreTargetsReadOnly,
-  resolveGatewaySessionStoreTargetsReadOnly,
   resolveGatewaySessionStoreTargetWithStore,
   type GatewaySessionStoreCache,
   type GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-lookup.js";
-import { resolveCanonicalSessionStoreMatchFromStoreKeys } from "./session-utils-store.js";
+import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 
 export type SessionSharingTarget = {
   agentId: string;
@@ -41,6 +41,8 @@ export type SessionSharingTarget = {
   storeKey: string;
   storeKeys: string[];
   storePath: string;
+  /** Physical source selected by the store reader, independent of its configured locator. */
+  readSource?: CapturedSessionEntryReadSource;
 };
 
 export function resolveSessionVisibility(
@@ -49,14 +51,13 @@ export function resolveSessionVisibility(
   return entry.visibility ?? "shared";
 }
 
-/** Compare access facts only after the mutation owner has preserved the canonical target. */
+/** Compare access facts only after the caller has preserved the canonical target. */
 export function hasSessionReadAccessChanged(
   previous: SessionEntry | undefined,
   current: SessionEntry,
 ): boolean {
   return (
     !previous?.sessionId?.trim() ||
-    !previous.lifecycleRevision?.trim() ||
     previous.sessionId !== current.sessionId ||
     previous.lifecycleRevision !== current.lifecycleRevision ||
     sessionCreatorProfileId(previous.createdActor) !==
@@ -104,6 +105,7 @@ export function resolveSessionSharingTarget(params: {
     clone: false,
     // Authorization rechecks current metadata; prompt snapshots are not part of that binding.
     projection: "list",
+    readConsistency: "latest",
     // Batch callers reuse one store snapshot; single-target checks must not
     // materialize unrelated sessions for every task or authorization recheck.
     exactRead: params.exactRead ?? !params.storeCache,
@@ -113,21 +115,10 @@ export function resolveSessionSharingTarget(params: {
   return toSessionSharingTarget(target);
 }
 
-/** Fresh metadata for one synchronous batch; no authorization decisions are retained. */
-export function resolveSessionSharingTargets(params: {
-  cfg: OpenClawConfig;
-  targets: readonly { sessionKey: string; agentId?: string }[];
-}): Array<SessionSharingTarget | null> {
-  return resolveGatewaySessionStoreTargetsReadOnly({
-    cfg: params.cfg,
-    targets: params.targets.map(({ sessionKey, agentId }) => ({ key: sessionKey, agentId })),
-  }).map(toSessionSharingTarget);
-}
-
 function toSessionSharingTarget(
   target: ReturnType<typeof resolveGatewaySessionStoreTargetWithStore>,
 ): SessionSharingTarget | null {
-  const match = resolveCanonicalSessionStoreMatchFromStoreKeys(target.store, target.storeKeys);
+  const match = findCanonicalStoreMatch(target.store, target.storeKeys);
   return match
     ? {
         agentId: target.agentId,
@@ -136,6 +127,7 @@ function toSessionSharingTarget(
         storeKey: match.key,
         storeKeys: target.storeKeys,
         storePath: target.storePath,
+        readSource: target.capturedReadSource,
       }
     : null;
 }
@@ -387,6 +379,8 @@ export function authorizeOwnSessionMutation(params: {
   target: SessionSharingTarget | null;
   /** Preserve the admitted person even if the retained client's scopes or identity change. */
   expectedProfileId?: string;
+  /** A resident session projection supplies the same canonical creator predicate. */
+  isCreator?: (actor: SessionEntry["createdActor"]) => boolean;
 }): ErrorShape | null {
   if (params.expectedProfileId === undefined) {
     return null;
@@ -396,7 +390,10 @@ export function authorizeOwnSessionMutation(params: {
     actor.profileId.trim() &&
     operatorScopeSatisfied("operator.sessions.write", params.client?.connect?.scopes ?? []) &&
     actor.profileId === params.expectedProfileId &&
-    (!params.target || isSessionCreatorProfile(params.target.entry.createdActor, actor.profileId))
+    (!params.target ||
+      (params.isCreator
+        ? params.isCreator(params.target.entry.createdActor)
+        : isSessionCreatorProfile(params.target.entry.createdActor, actor.profileId)))
     ? null
     : errorShape(ErrorCodes.FORBIDDEN, "Session-scoped writes require your own session.");
 }

@@ -3,7 +3,7 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import type { CdpActionTimeouts } from "./cdp.js";
 
 export type ChromeMcpStructuredPage = {
@@ -101,6 +101,7 @@ export type NormalizedChromeMcpProfileOptions = {
   browserUrl?: string;
   command: string;
   args: string[];
+  env?: Record<string, string>;
 };
 export type ChromeMcpOptionsInput =
   | string
@@ -140,10 +141,7 @@ export type ChromeMcpProcessCleanupDeps = {
   taskkillProcessTree?: (pid: number) => Promise<void>;
 };
 
-export type ChromeMcpOwnedProcess = {
-  pid: number;
-  identity: string;
-};
+export type ChromeMcpOwnedProcess = Pick<ChromeMcpProcessSnapshot, "pid" | "identity">;
 
 export type ChromeMcpProcessCleanupTarget = {
   root: ChromeMcpOwnedProcess;

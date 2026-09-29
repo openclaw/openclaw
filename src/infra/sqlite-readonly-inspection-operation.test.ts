@@ -18,7 +18,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const originalArgv = process.argv;
 const originalExitCode = process.exitCode;
 beforeEach(() => {
-  // Runtime setup can preload coordinator owners before this file's native-open mock.
+  // Runtime setup can preload SQLite owners before this file's native-open mock.
   vi.resetModules();
 });
 afterEach(() => {
@@ -28,12 +28,7 @@ afterEach(() => {
 });
 
 async function inspectFailure(
-  operation:
-    | "coordinator"
-    | "backup-source"
-    | "snapshot-open"
-    | "snapshot-copy"
-    | "snapshot-backup",
+  operation: "backup-source" | "snapshot-open" | "snapshot-copy" | "snapshot-backup",
   failure: Error,
 ) {
   const root = tempDirs.make("sqlite-inspection-operation-");
@@ -46,18 +41,9 @@ async function inspectFailure(
   source.close();
   const before = fs.readFileSync(sourcePath);
   const sqlite = await import("./node-sqlite.js");
-  const { withStateDatabaseCoordinatorRuntimeDirectory } =
-    await import("./state-database-coordinator.js");
-  const { resolveLifecycleCoordinatorPath } = await import("./state-database-coordinator-paths.js");
-  const coordinatorPath = resolveLifecycleCoordinatorPath("state-handles", {
-    databasePath: sourcePath,
-    runtimeDirectory: root,
-    uid: typeof process.getuid === "function" ? process.getuid() : undefined,
-  });
   const opened: DatabaseSync[] = [];
   vi.mocked(sqlite.openNodeSqliteDatabase).mockImplementation((location, options) => {
     if (
-      (operation === "coordinator" && location === coordinatorPath) ||
       (operation === "backup-source" && location === sourcePath) ||
       (operation === "snapshot-open" &&
         path.dirname(location).startsWith(stagingRoot) &&
@@ -96,10 +82,8 @@ async function inspectFailure(
     sourcePath,
     stagingRoot,
   ];
-  await withStateDatabaseCoordinatorRuntimeDirectory(root, async () => {
-    await import("./sqlite-readonly-location.worker.js");
-    await completed.promise;
-  });
+  await import("./sqlite-readonly-location.worker.js");
+  await completed.promise;
   expect(process.exitCode).toBe(1);
   expect(format).toHaveBeenCalledOnce();
   const [observedFailure] = expectDefined(format.mock.calls[0], "inspection failure");
@@ -117,21 +101,7 @@ async function inspectFailure(
 }
 
 describe("registered SQLite read-only worker operation diagnostics", () => {
-  it("reads cause metadata once through the registered worker", async () => {
-    let causeReads = 0;
-    const failure = Object.defineProperty(new Error("open failure"), "cause", {
-      get() {
-        causeReads += 1;
-        return undefined;
-      },
-    });
-    const { observedFailure } = await inspectFailure("coordinator", failure);
-    expect(observedFailure).toBe(failure);
-    expect(causeReads).toBe(1);
-  });
-
   it.each([
-    ["coordinator", "acquiring its state-handles coordinator"],
     ["backup-source", "opening the source database"],
     ["snapshot-open", "creating its private snapshot"],
     ["snapshot-copy", "creating its private snapshot"],
@@ -159,40 +129,22 @@ describe("registered SQLite read-only worker operation diagnostics", () => {
     },
   );
 
-  it("keeps a non-extensible coordinator error and its instanceof handling", async () => {
-    const { SqliteCoordinatorError } = await import("./sqlite-coordinator.js");
-    const { StateDatabaseCoordinatorContentionError } =
-      await import("./state-database-coordinator.js");
-    const failure = Object.preventExtensions(
-      new StateDatabaseCoordinatorContentionError("state-handles"),
-    );
-    const { write, observedFailure } = await inspectFailure("coordinator", failure);
-    expect(observedFailure).toBe(failure);
-    expect(failure).toBeInstanceOf(SqliteCoordinatorError);
-    expect(failure).toBeInstanceOf(StateDatabaseCoordinatorContentionError);
-    expect(write).toHaveBeenCalledExactlyOnceWith(
-      JSON.stringify({
-        ok: false,
-        message:
-          "failed while acquiring its state-handles coordinator: another OpenClaw process owns state-handles",
-      }),
-    );
-  });
-
-  it("keeps aggregate identity and admits only bounded cause codes through the registered worker", async () => {
+  it("keeps aggregate identity through staging and admits only bounded cause codes through the registered worker", async () => {
     const cause = Object.assign(new Error("hidden cause prose"), { code: "EIO", errcode: 778 });
     const failure = Object.freeze(
       new AggregateError([cause, new Error("hidden cleanup")], "read failed", { cause }),
     );
-    const { write, observedFailure } = await inspectFailure("coordinator", failure);
-    expect(observedFailure).toBe(failure);
+    const { write, observedFailure } = await inspectFailure("backup-source", failure);
+    expect(observedFailure instanceof Error && observedFailure.cause).toBe(failure);
     expect(write).toHaveBeenCalledExactlyOnceWith(
-      JSON.stringify({
-        ok: false,
-        message:
-          "failed while acquiring its state-handles coordinator: read failed (code=EIO, errcode=778)",
-      }),
+      expect.stringContaining(
+        "failed while opening the source database: read failed (SQLite errcode=778)",
+      ),
     );
+    const [message] = expectDefined(write.mock.calls[0], "worker output");
+    expect(message).toContain("code=EIO, errcode=778");
+    expect(message).not.toContain("hidden cause prose");
+    expect(message).not.toContain("hidden cleanup");
   });
 
   it("keeps the source operation through the snapshot owner's existing staging wrapper", async () => {

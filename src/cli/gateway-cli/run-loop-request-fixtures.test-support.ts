@@ -15,7 +15,6 @@ export type RequestFixtures = {
   acquireGatewayLock: Mock<
     (opts?: { port?: number }) => Promise<{ release: Mock<() => Promise<void>> }>
   >;
-  reloadTaskRuntimeStateFromStore: Mock<() => Promise<void>>;
   runLoopWithStart: (params: {
     start: ReturnType<typeof createSignaledStart>["start"];
     runtime: ReturnType<typeof createRuntimeWithExitSignal>["runtime"];
@@ -44,6 +43,7 @@ export type RequestFixtures = {
   commitManagedServiceUpdateHandoff: Mock<
     typeof import("../../infra/update-managed-service-handoff.js").commitManagedServiceUpdateHandoff
   >;
+  waitForSystemServiceUpdateHandoffs: Mock<() => Promise<void> | undefined>;
   isGatewayWorkAdmissionClosed: () => boolean;
   gatewayLog: { info: Mock; warn: Mock; error: Mock };
 };

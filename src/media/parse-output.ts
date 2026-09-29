@@ -14,6 +14,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { MarkdownImageSpan as MarkdownImageMatch } from "../../packages/markdown-core/src/image-spans.js";
 import { findCodeRegions } from "../shared/text/code-regions.js";
 import { parseInlineDirectives } from "../utils/directive-tags.js";
+import { parseInboundMediaUri } from "./inbound-media-uri.js";
 
 /** Captures legacy MEDIA: attachment directives from model/tool output. */
 const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
@@ -85,8 +86,7 @@ function hasTraversalOrUnsupportedHomeDirPrefix(candidate: string): boolean {
   );
 }
 
-// Broad structural check: does this look like a local file path? Used only for
-// stripping MEDIA: lines from output text — never for media approval.
+// Structural spelling only; media approval additionally rejects traversal and unsupported homes.
 function looksLikeLocalFilePath(candidate: string): boolean {
   return (
     candidate.startsWith("/") ||
@@ -102,17 +102,7 @@ function looksLikeLocalFilePath(candidate: string): boolean {
 // Recognize safe local file path patterns for media approval, rejecting
 // traversal and unsupported home-dir paths so they never reach downstream load/send logic.
 function isLikelyLocalPath(candidate: string): boolean {
-  if (hasTraversalOrUnsupportedHomeDirPrefix(candidate)) {
-    return false;
-  }
-  return (
-    candidate.startsWith("/") ||
-    candidate.startsWith("./") ||
-    isSupportedHomeRelativePath(candidate) ||
-    WINDOWS_DRIVE_RE.test(candidate) ||
-    candidate.startsWith("\\\\") ||
-    (!SCHEME_RE.test(candidate) && (candidate.includes("/") || candidate.includes("\\")))
-  );
+  return !hasTraversalOrUnsupportedHomeDirPrefix(candidate) && looksLikeLocalFilePath(candidate);
 }
 
 function normalizeRemoteMediaHostname(value: string): string {
@@ -194,6 +184,14 @@ function isValidMedia(
   }
   if (hasHttpUrlPrefix(candidate)) {
     return isAllowedRemoteMediaUrl(candidate);
+  }
+
+  if (/^media:\/\//i.test(candidate)) {
+    try {
+      return parseInboundMediaUri(candidate) !== null;
+    } catch {
+      return false;
+    }
   }
 
   if (isLikelyLocalPath(candidate)) {

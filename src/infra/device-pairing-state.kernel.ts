@@ -1,5 +1,4 @@
 // Shared snapshot, lock, and normalization owner for device pairing domain modules.
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   loadDevicePairingStoreState,
@@ -10,20 +9,14 @@ import { pruneExpiredPending } from "./pairing-files.js";
 
 const DEVICE_PAIRING_PENDING_TTL_MS = 5 * 60 * 1000;
 
-function pruneExpiredDevicePairingRequests(state: DevicePairingStoreState, nowMs: number): void {
-  pruneExpiredPending(state.pendingById, nowMs, DEVICE_PAIRING_PENDING_TTL_MS);
-  // Node capability requests are durable operator decisions. Their lifecycle
-  // owner resolves them on approval, rejection, replacement, reconnect cleanup,
-  // or node-role removal.
-}
-
 /** Read authoritative rows inside the worker transaction or an admitted migration. */
 export function loadDevicePairingStateForMutation(
   nowMs: number,
   baseDir?: string,
 ): DevicePairingStoreState {
   const state = loadDevicePairingStoreState(baseDir);
-  pruneExpiredDevicePairingRequests(state, nowMs);
+  // Node capability requests remain until their approval or reconnect lifecycle resolves them.
+  pruneExpiredPending(state.pendingById, nowMs, DEVICE_PAIRING_PENDING_TTL_MS);
   return state;
 }
 
@@ -112,46 +105,4 @@ export function resolveRequestedDeviceRoles(input: { role?: string; roles?: stri
 /** Clone a paired device's role-token map before mutation. */
 export function cloneDevicePairingTokens(device: PairedDevice): Record<string, DeviceAuthToken> {
   return device.tokens ? { ...device.tokens } : {};
-}
-
-/** Refresh one compatible pending request or replace a superseded request set atomically. */
-export function reconcilePendingPairingRequests<
-  TPending extends { requestId: string },
-  TIncoming,
->(params: {
-  pendingById: Record<string, TPending>;
-  existing: readonly TPending[];
-  incoming: TIncoming;
-  canRefreshSingle: (existing: TPending, incoming: TIncoming) => boolean;
-  refreshSingle: (existing: TPending, incoming: TIncoming) => TPending;
-  buildReplacement: (params: { existing: readonly TPending[]; incoming: TIncoming }) => TPending;
-  persist: () => void;
-}): { status: "pending"; request: TPending; created: boolean } {
-  if (
-    params.existing.length === 1 &&
-    params.canRefreshSingle(
-      expectDefined(params.existing[0], "existing entry at 0"),
-      params.incoming,
-    )
-  ) {
-    const refreshed = params.refreshSingle(
-      expectDefined(params.existing[0], "existing entry at 0"),
-      params.incoming,
-    );
-    params.pendingById[refreshed.requestId] = refreshed;
-    params.persist();
-    return { status: "pending", request: refreshed, created: false };
-  }
-
-  for (const existing of params.existing) {
-    delete params.pendingById[existing.requestId];
-  }
-
-  const request = params.buildReplacement({
-    existing: params.existing,
-    incoming: params.incoming,
-  });
-  params.pendingById[request.requestId] = request;
-  params.persist();
-  return { status: "pending", request, created: true };
 }

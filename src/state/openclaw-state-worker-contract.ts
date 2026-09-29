@@ -1,11 +1,24 @@
+import type { ZodIssue } from "zod";
+import type { AcpSessionWriteOperations } from "../acp/runtime/session-meta-write.types.js";
 import type { AuthProfileRowRead, UserModelAuthProfile } from "../agents/auth-profiles/types.js";
 import type { NativeHookRelayStoreWorkerOperations } from "../agents/harness/native-hook-relay-store.worker-contract.js";
 import type { McpOAuthReadOperations } from "../agents/mcp-oauth-store.kernel.js";
 import type { McpOAuthWriteOperations } from "../agents/mcp-oauth-store.types.js";
+import type {
+  SandboxRegistryInsert,
+  SandboxRegistryWrite,
+} from "../agents/sandbox/registry.kernel.js";
 import type { SubagentRegistryWrite } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
-import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
+import type {
+  WorkspaceAttestation,
+  WorkspaceAttestationInput,
+} from "../agents/workspace-state-store.kernel.js";
+import type { WorktreeRegistryReadOperations } from "../agents/worktrees/registry-read.worker.js";
+import type { WorktreeRetirementOperations } from "../agents/worktrees/registry-retirement.worker.js";
+import type { WorktreeRunLeaseRowInput } from "../agents/worktrees/run-lease-store.kernel.js";
 import type { AuditEventListQuery, AuditEventListPage } from "../audit/audit-event-types.js";
 import type { AuditWriterOperations } from "../audit/audit-event-writer.types.js";
+import type { ChannelIngressWorkerOperations } from "../channels/message/ingress-queue.worker-contract.js";
 import type { ClawInstallSchemaVersionRow } from "../claws/provenance-runtime-read.kernel.js";
 import type { readSqliteDatabaseBloat } from "../commands/doctor-db-bloat.read.js";
 import type { ConfigHealthPatch } from "../config/io.health-state.kernel.js";
@@ -13,23 +26,28 @@ import type {
   ConfigHealthSnapshot,
   ConfigHealthEntryBasis,
 } from "../config/io.health-state.types.js";
-import type { CronStateWorkerOperations } from "../cron/store/dispatch.worker.js";
+import type { CronStateWorkerOperations } from "../cron/store/worker-contract.js";
 import type { FleetRegistryWriteOperations } from "../fleet/registry.types.js";
 import type {
   RepositoryGitHubPublicationPendingQuery,
   RepositoryGitHubPublicationStatusRow,
 } from "../gateway/github-repository-publication.kernel.js";
-import type {
-  ManagedImageRecord,
-  ManagedImageRecordEntry,
-} from "../gateway/managed-image-record-store.types.js";
+import type { ManagedImageRecordWorkerOperations } from "../gateway/managed-image-record-store.types.js";
 import type { OperatorApprovalWorkerOperations } from "../gateway/operator-approval-store.worker-contract.js";
 import type {
   SessionGroupCatalogMutation,
   SessionGroupCatalogMutationResult,
 } from "../gateway/session-group-catalog.types.js";
+import type { WorkerInferenceStoreOperations } from "../gateway/worker-environments/inference-store.worker-contract.js";
+import type { WorkerPlacementDispatchStoreOperations } from "../gateway/worker-environments/placement-record.js";
+import type { PlacementTurnClaimWorkerOperations } from "../gateway/worker-environments/placement-turn-claims.worker-contract.js";
 import type { WorkerEnvironmentWorkerOperations } from "../gateway/worker-environments/store-worker-contract.js";
-import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
+import type {
+  DeferredPluginMigration,
+  DeferredPluginMigrationRecordInput,
+  recordDeferredPluginMigrationsInTransaction,
+  readDeferredPluginMigrationCompletions,
+} from "../infra/deferred-plugin-migrations.js";
 import type { DeliveryQueueWorkerOperations } from "../infra/delivery-queue.worker-contract.js";
 import type * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import type { DeviceIdentity } from "../infra/device-identity-store.js";
@@ -42,6 +60,10 @@ import type { WebPushWorkerOperations } from "../infra/push-web-store.worker-con
 import type { SessionDeliveryWorkerOperations } from "../infra/session-delivery-queue.worker-contract.js";
 import type { PreparedSqliteAuditRecord } from "../infra/sqlite-audit-record.kernel.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import type {
+  SqliteWalPeriodicRequest,
+  SqliteWalPeriodicResult,
+} from "../infra/sqlite-wal-write-admission.js";
 import type { SqliteWorkerPreparedBackend } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
 import type { TelemetryWorkerOperations } from "../infra/telemetry-worker-contract.js";
@@ -49,6 +71,7 @@ import type {
   InterruptedUpdateSettlement,
   InterruptedUpdateSettlementResult,
 } from "../infra/update-run-interruption-contract.js";
+import type { UpdateRunReconciliationOperations } from "../infra/update-run-reconciliation.types.js";
 import type { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
 import type { NodeWorkerJournalWorkerOperations } from "../node-host/node-worker-journal.worker-contract.js";
 import type { PluginBlobWorkerOperations } from "../plugin-state/plugin-blob-worker-contract.js";
@@ -56,27 +79,24 @@ import type { PluginStateWorkerOperations } from "../plugin-state/plugin-state-w
 import type { PluginBindingApprovalEntry } from "../plugins/conversation-binding-state.types.js";
 import type { PluginMetadataStateSelector } from "../plugins/installed-plugin-index-row.js";
 import type { HostedCatalogSnapshotWorkerOperations } from "../plugins/official-external-plugin-catalog-snapshot-store.worker-contract.js";
-import type {
-  ProjectRegistryIdentity,
-  ProjectRegistryInsert,
-  ProjectRegistryRecord,
-} from "../projects/project-registry.kernel.js";
+import type { PluginSourceAdmissionPublication } from "../plugins/plugin-source-admission.types.js";
+import type { ProjectRegistryWorkerOperations } from "../projects/project-registry.worker-contract.js";
+import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
+import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-config-ref.kernel.js";
 import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
-import type {
-  SessionStateEventInput,
-  SessionStateNotice,
-} from "../sessions/session-state-events.kernel.js";
+import type { SessionStateWorkerOperations } from "../sessions/session-state-events.worker-contract.js";
 import type { SessionUpstreamLink } from "../sessions/session-upstream-links.kernel.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import type { SkillUploadWorkerOperations } from "../skills/lifecycle/upload-store.worker.js";
 import type * as curator from "../skills/workshop/curator.kernel.js";
 import type { listStoredSkillProposalEventsInDatabase } from "../skills/workshop/store-sqlite-event.js";
+import type { SkillWorkshopExecutionOperations } from "../skills/workshop/store.worker-contract.js";
 import type { SkillProposalEvent, SkillProposalRecord } from "../skills/workshop/types.js";
-import type { TaskRegistryWorkerOperations } from "../tasks/task-registry.worker-contract.js";
 import type {
   TranscriptReadOperations,
   TranscriptWriteOperations,
 } from "../transcripts/store-worker-contract.js";
+import type { TuiLastSessionWorkerOperations } from "../tui/tui-last-session.contract.js";
 import type { AgentProvenance } from "./agent-provenance.types.js";
 import type { PreparedBackupRunRecord } from "./backup-run-records.kernel.js";
 import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.contract.js";
@@ -89,7 +109,15 @@ import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; identityKey: string };
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
-export type OpenClawStateWorkerOperations = McpOAuthReadOperations &
+export type OpenClawStateWorkerOperations = UpdateRunReconciliationOperations &
+  CaptureWorkerOperations &
+  TuiLastSessionWorkerOperations &
+  AcpSessionWriteOperations &
+  WorktreeRetirementOperations &
+  WorktreeRegistryReadOperations &
+  SessionStateWorkerOperations &
+  McpOAuthReadOperations &
+  SkillWorkshopExecutionOperations &
   CurrentConversationBindingWorkerOperations &
   McpOAuthWriteOperations &
   WebPushWorkerOperations &
@@ -106,19 +134,37 @@ export type OpenClawStateWorkerOperations = McpOAuthReadOperations &
   UserPreferenceWorkerOperations &
   OnboardingRecommendationWriteOperations &
   UserProfileWorkerOperations &
+  ChannelIngressWorkerOperations &
   CronStateWorkerOperations &
   FleetRegistryWriteOperations &
+  ProjectRegistryWorkerOperations &
   WorkerEnvironmentWorkerOperations &
+  WorkerInferenceStoreOperations &
+  PlacementTurnClaimWorkerOperations &
+  WorkerPlacementDispatchStoreOperations &
   SessionDeliveryWorkerOperations &
   DeliveryQueueWorkerOperations &
   TranscriptReadOperations &
   TranscriptWriteOperations &
   NodeWorkerJournalWorkerOperations &
-  TaskRegistryWorkerOperations &
   SkillUploadWorkerOperations &
-  OpenClawStateLeaseLifecycleOperations & {
+  OpenClawStateLeaseLifecycleOperations &
+  ManagedImageRecordWorkerOperations & {
+    "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
+    "worktrees.admitRunLease": { input: WorktreeRunLeaseRowInput; output: void };
+    "worktrees.reapRunLeases": { input: { scopes: string[] }; output: void };
+    "worktrees.releaseRunLease": {
+      input: { worktreeId: string; token: string };
+      output: void;
+    };
     "deviceIdentity.read": { input: { identityKey: string }; output: DeviceIdentity | null };
     "deviceIdentity.load": { input: { identityKey: string }; output: DeviceIdentity };
+    "sandboxRegistry.insertIfMissing": { input: SandboxRegistryInsert; output: void };
+    "sandboxRegistry.write": { input: SandboxRegistryWrite; output: void };
+    "workspace.replaceAttestation": {
+      input: WorkspaceAttestationInput;
+      output: WorkspaceAttestation;
+    };
     "updateRuns.reconcileInterrupted": {
       input: InterruptedUpdateSettlement;
       output: InterruptedUpdateSettlementResult;
@@ -174,16 +220,12 @@ export type OpenClawStateWorkerOperations = McpOAuthReadOperations &
     };
     "agentProvenance.list": { input: undefined; output: AgentProvenance[] };
     "secrets.purge": { input: SecretStoreExpiryCutoffs; output: number };
+    "secrets.writeForConfigRef": {
+      input: SecretStoreConfigRefWrite;
+      output: { name: string };
+    };
     "promotions.markNotified": { input: { slugs: string[]; now: number }; output: true };
     "promotions.recordClaim": { input: PreparedPromotionClaim; output: void };
-    "sessionState.recordGoalChange": {
-      input: { event: SessionStateEventInput & { kind: "goal_changed" }; now: number };
-      output: SessionStateNotice[];
-    };
-    "sessionState.prune": { input: { now: number }; output: void };
-    "managedImages.read": { input: { attachmentId: string }; output: ManagedImageRecord | null };
-    "managedImages.entries": { input: { sessionKey?: string }; output: ManagedImageRecordEntry[] };
-    "managedImages.originalMediaIds": { input: undefined; output: string[] };
     "doctor.databaseBloat": {
       input: undefined;
       output: ReturnType<typeof readSqliteDatabaseBloat>;
@@ -194,23 +236,6 @@ export type OpenClawStateWorkerOperations = McpOAuthReadOperations &
     "sessionGroups.mutate": {
       input: SessionGroupCatalogMutation;
       output: SessionGroupCatalogMutationResult;
-    };
-    "projects.findRoot": { input: { repoRoot: string }; output: string | undefined };
-    "projects.list": { input: undefined; output: ProjectRegistryRecord[] };
-    "worktrees.list": { input: undefined; output: ManagedWorktreeRecord[] };
-    "worktrees.liveIds": { input: undefined; output: string[] };
-    "projects.resolve": { input: { id: string }; output: ProjectRegistryRecord | undefined };
-    "projects.insert": {
-      input: { project: ProjectRegistryInsert; lease: OpenClawStateLeaseIdentity };
-      output: ProjectRegistryRecord;
-    };
-    "projects.remove": {
-      input: { project: ProjectRegistryIdentity; lease: OpenClawStateLeaseIdentity };
-      output: boolean;
-    };
-    "projects.resolveRefreshOwner": {
-      input: { project: ProjectRegistryIdentity; lease: OpenClawStateLeaseIdentity };
-      output: ProjectRegistryRecord | undefined;
     };
     "skills.curator.read": {
       input: { skillFiles: readonly string[] };
@@ -246,9 +271,29 @@ export type OpenClawStateWorkerOperations = McpOAuthReadOperations &
       input: { selector: PluginMetadataStateSelector; artifactPreservingReadOnly?: boolean };
       output: { value_json: string } | undefined;
     };
+    "plugins.metadata.sourceAdmission.publish": {
+      input: PluginSourceAdmissionPublication;
+      output: boolean;
+    };
+    "plugins.deferredMigrations.record": {
+      input: Omit<DeferredPluginMigrationRecordInput, "env"> & {
+        identity: OpenClawStateLeaseIdentity;
+      };
+      output:
+        | {
+            kind: "recorded";
+            transitions: ReturnType<typeof recordDeferredPluginMigrationsInTransaction>;
+          }
+        | { kind: "conflict"; pending: readonly DeferredPluginMigration[] }
+        | { kind: "invalid"; issues: ZodIssue[] };
+    };
     "plugins.deferredMigrations.read": {
       input: { artifactPreservingReadOnly: boolean };
       output: readonly DeferredPluginMigration[];
+    };
+    "plugins.deferredMigrations.completions.read": {
+      input: undefined;
+      output: ReturnType<typeof readDeferredPluginMigrationCompletions>;
     };
     "claws.install-schema-versions": {
       input: { artifactPreservingReadOnly: boolean };
@@ -267,6 +312,10 @@ export type OpenClawStateWorkerOperations = McpOAuthReadOperations &
     "diagnostic.register": {
       input: { scope: string; maxEntries: number; record: PreparedSqliteAuditRecord };
       output: void;
+    };
+    "config.snapshot.upsert": {
+      input: { record: PreparedSqliteAuditRecord; expectedPayloadJson?: string | null };
+      output: boolean;
     };
   };
 
@@ -294,13 +343,17 @@ export type OpenClawStateWorkerBackend = SqliteWorkerPreparedBackend<
     OpenClawStateWorkerCleanupOperations
 >;
 
-/** Commands dispatched after the lightweight lease and metadata bootstrap paths. */
+/** Commands dispatched after the independently prepared backend paths. */
 export type OpenClawStateWorkerRuntimeCommand = Exclude<
   Parameters<OpenClawStateWorkerBackend["execute"]>[0],
   {
     type:
       | "plugins.metadata.read"
       | "database.inspectIdle"
+      | "database.walMaintenance"
+      | "agentDatabases.releaseExitedLease"
+      | keyof CaptureWorkerOperations
+      | keyof PluginStateWorkerOperations
       | keyof OpenClawStateLeaseLifecycleOperations;
   }
 >;
@@ -308,8 +361,6 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
 /** Host-only admission options; never serialized with a worker command. */
 export type OpenClawStateWorkerOperationOptions = {
   preparation?: OpenClawStateWorkerOpenPreparation;
-  /** Acquire matching lifecycle custody for each dispatched command. */
-  requireStateLifecycle?: boolean;
   existingOnly?: boolean;
   assertCurrent?: (commandType?: PropertyKey) => void;
   createAdmission?: SqliteWorkerAdmissionFactory;

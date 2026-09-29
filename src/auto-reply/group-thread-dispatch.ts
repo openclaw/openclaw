@@ -253,7 +253,7 @@ export async function dispatchGroupThread(
   const group =
     ctx.GroupThread?.group ??
     (peerId ? resolveGroupThreadConfig({ cfg, channel, peerId }) : undefined);
-  if (!peerId || !group || resolveBoundAcpDispatchSessionKey({ ctx, cfg })) {
+  if (!peerId || !group || (await resolveBoundAcpDispatchSessionKey({ ctx, cfg }))) {
     return undefined;
   }
   const accountId = normalizeAccountId(ctx.AccountId);

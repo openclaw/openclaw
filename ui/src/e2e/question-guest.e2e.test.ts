@@ -174,7 +174,7 @@ suite.define(() => {
         }
         expect(
           registered,
-          "The Guest's original agent run must register an ordinary question",
+          `The Guest's original agent run must register an ordinary question: ${registered.error?.message ?? "no Gateway error"}`,
         ).toMatchObject({ ok: true });
         await panel.getByText(guestQuestionPrompt, { exact: true }).waitFor();
         await screenshot("ordinary-question-pending.png");

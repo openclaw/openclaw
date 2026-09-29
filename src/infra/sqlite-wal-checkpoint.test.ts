@@ -14,6 +14,7 @@ import {
 } from "./sqlite-reader-lifecycle.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import {
+  createSqliteWalCheckpoint,
   onSqliteWalCheckpoint,
   publishSqliteWalCheckpointObservation,
   type SqliteWalCheckpointSnapshot,
@@ -23,7 +24,60 @@ import { configureSqliteWalMaintenance } from "./sqlite-wal.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("SQLite WAL checkpoint observations", () => {
-  it("recycles an oversized completed WAL during admitted periodic maintenance without waiting for readers", () => {
+  it("retains relayed health across native generations and rejects older observations", () => {
+    const databasePath = path.join(tempDirs.make("openclaw-wal-health-relay-"), "state.sqlite");
+    const database = openNodeSqliteDatabase(databasePath);
+    database.exec("PRAGMA journal_mode=WAL; CREATE TABLE events(value TEXT)");
+    const reader = openNodeSqliteDatabase(databasePath);
+    const owner = createSqliteWalCheckpoint(database, { databasePath }, 64 * 1024 * 1024);
+    const replacement = createSqliteWalCheckpoint(database, { databasePath }, 64 * 1024 * 1024);
+    try {
+      expect(owner.checkpoint("PASSIVE")).toBe(true);
+      const completed = owner.snapshot!;
+      expect(completed.lastCompletedAtNs).toBe(completed.observedAtNs);
+      replacement.adopt(completed);
+      reader.exec("BEGIN");
+      reader.prepare("SELECT value FROM events").all();
+      database.exec("INSERT INTO events VALUES ('retained')");
+      expect(replacement.checkpoint("PASSIVE")).toBe(false);
+      owner.adopt(replacement.snapshot!);
+      expect(owner.health).toMatchObject({
+        state: "blocked",
+        consecutiveBlocked: 1,
+        lastCompletedAtMs: completed.health.lastCompletedAtMs,
+      });
+      expect(owner.checkpoint("PASSIVE")).toBe(false);
+      const blocked = owner.snapshot;
+      expect(blocked?.lastCompletedAtNs).toBe(completed.observedAtNs);
+      owner.adopt(completed);
+      expect(owner.snapshot).toEqual(blocked);
+      expect(owner.health).toMatchObject({ consecutiveBlocked: 2, warning: true });
+      reader.exec("ROLLBACK");
+      expect(owner.checkpoint("PASSIVE")).toBe(true);
+      owner.adopt(replacement.snapshot!);
+      expect(owner.health).toMatchObject({ state: "complete", consecutiveBlocked: 0 });
+      const recovered = owner.snapshot!;
+      const delayed = createSqliteWalCheckpoint(database, { databasePath }, 64 * 1024 * 1024);
+      reader.exec("BEGIN");
+      reader.prepare("SELECT value FROM events").all();
+      database.exec("INSERT INTO events VALUES ('newer')");
+      expect(delayed.checkpoint("PASSIVE")).toBe(false);
+      const newerBlocked = delayed.snapshot!;
+      delayed.adopt(recovered);
+      expect(delayed.snapshot).toMatchObject({
+        observedAtNs: newerBlocked.observedAtNs,
+        lastCompletedAtNs: recovered.observedAtNs,
+        health: { state: "blocked" },
+      });
+      owner.adopt(newerBlocked);
+      expect(owner.snapshot?.lastCompletedAtNs).toBe(recovered.observedAtNs);
+    } finally {
+      reader.close();
+      database.close();
+    }
+  });
+
+  it("recycles an oversized completed WAL during admitted periodic maintenance without waiting for readers", async () => {
     vi.useFakeTimers();
     const databasePath = path.join(tempDirs.make("openclaw-wal-recycle-"), "state.sqlite");
     const { DatabaseSync } = requireNodeSqlite();
@@ -46,7 +100,7 @@ describe("SQLite WAL checkpoint observations", () => {
       }
       const oversized = fs.statSync(`${databasePath}-wal`).size;
       expect(oversized).toBeGreaterThan(64 * 1024 * 1024);
-      vi.advanceTimersByTime(100);
+      await vi.advanceTimersByTimeAsync(100);
       expect(fs.statSync(`${databasePath}-wal`).size).toBe(oversized);
       reader = new DatabaseSync(databasePath, { readOnly: true });
       reader.exec("BEGIN");
@@ -55,12 +109,13 @@ describe("SQLite WAL checkpoint observations", () => {
       );
       admitted = true;
       const started = performance.now();
-      vi.advanceTimersByTime(100);
+      await vi.advanceTimersByTimeAsync(100);
       expect(performance.now() - started).toBeLessThan(1_000);
       expect(fs.statSync(`${databasePath}-wal`).size).toBe(oversized);
+      expect(maintenance.health?.state).toBe("blocked");
       expect(writer.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5_000);
       reader.exec("ROLLBACK");
-      vi.advanceTimersByTime(100);
+      await vi.advanceTimersByTimeAsync(100);
       expect(fs.statSync(`${databasePath}-wal`).size).toBeLessThanOrEqual(64 * 1024 * 1024);
       expect(maintenance.health?.state).toBe("complete");
       expect(writer.prepare("SELECT length(value) AS bytes FROM payload").get()?.bytes).toBe(

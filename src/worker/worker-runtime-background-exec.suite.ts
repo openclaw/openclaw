@@ -1,19 +1,27 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdirSync, realpathSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { WorkerTranscriptCommitParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
-import { listRunningSessions, waitForExecScope } from "../agents/bash-process-registry.js";
+import {
+  deleteSession,
+  listRunningSessions,
+  markBackgrounded,
+  waitForExecScope,
+} from "../agents/bash-process-registry.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { NodeWorkerJournalWorker } from "../node-host/node-worker-journal-worker.js";
-import type { NodeWorkerLaunchReceipt } from "../node-host/node-worker-launch-store.js";
+import {
+  NodeWorkerLaunchStore,
+  type NodeWorkerLaunchReceipt,
+} from "../node-host/node-worker-launch-store.js";
 import {
   inspectNodeWorkerProcessIdentity,
   requireNodeWorkerProcessIdentity,
@@ -26,7 +34,7 @@ import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import type { NodeWorkerLaunchInput } from "./node-supervisor-protocol.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
-import { parseWorkerProcessResult, type WorkerProcessResult } from "./worker-process-protocol.js";
+import { parseWorkerProcessMessage, type WorkerProcessResult } from "./worker-process-protocol.js";
 import { workerBackgroundExecEntrypoints } from "./worker-runtime-background-exec-entrypoints.test-support.js";
 
 const workerProcessUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.worker);
@@ -174,10 +182,14 @@ export function registerWorkerBackgroundExecLifecycleTests({
           capacity = next;
         },
       });
+      const launches = new NodeWorkerLaunchStore(
+        new NodeWorkerJournalWorker({ env: supervisorOptions.env }),
+      );
       let command: NodeWorkerProcessIdentity | undefined;
       let runtime: NodeWorkerProcessIdentity | undefined;
       let runtimeStopped = false;
       let pendingCleanupObserved = false;
+      let nativeAnchorLoss = false;
       let nodeHost: ChildProcess | undefined;
       let caseFailure: { error: unknown } | undefined;
       try {
@@ -281,6 +293,8 @@ export function registerWorkerBackgroundExecLifecycleTests({
             runtimeStopped = true;
           }
           process.kill(crashed === "anchor" ? worker.pid : runtime!.pid, "SIGKILL");
+          nativeAnchorLoss =
+            crashed === "anchor" && running.workerCleanupMode === "linux-subreaper";
         }
         await waitForFast(
           async () => {
@@ -299,9 +313,14 @@ export function registerWorkerBackgroundExecLifecycleTests({
               }
             }
             expect({ available: capacity.available, pendingCleanupObserved }).toEqual({
-              available: 1,
+              available: nativeAnchorLoss ? 0 : 1,
               pendingCleanupObserved: crashed === "anchor",
             });
+            if (nativeAnchorLoss) {
+              // Known PID death is not the lost wait owner's descendant-extinction certificate.
+              expect(inspectNodeWorkerProcessIdentity(runtime!)).toBe("dead");
+              expect(inspectNodeWorkerProcessIdentity(command!)).toBe("dead");
+            }
           },
           { timeout: 10_000 },
         );
@@ -310,6 +329,14 @@ export function registerWorkerBackgroundExecLifecycleTests({
           runtime: inspectNodeWorkerProcessIdentity(runtime!),
           command: inspectNodeWorkerProcessIdentity(command!),
         }).toEqual({ worker: "dead", runtime: "dead", command: "dead" });
+        if (nativeAnchorLoss) {
+          await expect(launches.get(input.launchId)).resolves.toMatchObject({
+            state: "running",
+            workerCleanupMode: "linux-subreaper",
+            workerDescendantsReaped: false,
+          });
+          await expect(launches.nonterminalCount()).resolves.toBe(1);
+        }
       } catch (error) {
         caseFailure = { error };
       } finally {
@@ -331,19 +358,27 @@ export function registerWorkerBackgroundExecLifecycleTests({
               expect(inspectNodeWorkerProcessIdentity(command!)).toBe("dead"),
             );
           }
+          const stopEnvironment = () =>
+            supervisor.stopEnvironment({
+              gatewayNamespace: input.gatewayNamespace,
+              environmentId: plan.admission.environmentId,
+              sessionId: plan.admission.sessionId,
+              ownerEpoch: plan.admission.ownerEpoch,
+            });
           try {
-            await waitForFast(
-              async () =>
-                await supervisor.stopEnvironment({
-                  gatewayNamespace: input.gatewayNamespace,
-                  environmentId: plan.admission.environmentId,
-                  sessionId: plan.admission.sessionId,
-                  ownerEpoch: plan.admission.ownerEpoch,
-                }),
-              { timeout: 10_000 },
-            );
+            if (nativeAnchorLoss) {
+              await expect(stopEnvironment()).rejects.toThrow("cleanup remains unconfirmed");
+            } else {
+              await waitForFast(stopEnvironment, { timeout: 10_000 });
+            }
           } finally {
-            await supervisor.close();
+            if (nativeAnchorLoss) {
+              await expect(supervisor.close()).rejects.toThrow("cleanup remains unconfirmed");
+              expect(capacity.available).toBe(0);
+              await expect(launches.nonterminalCount()).resolves.toBe(1);
+            } else {
+              await supervisor.close();
+            }
           }
         } catch (cleanupError) {
           caseFailure = {
@@ -369,8 +404,8 @@ export function registerWorkerBackgroundExecLifecycleTests({
     const output = new PassThrough();
     const result = createDeferred<WorkerProcessResult>();
     output.on("data", (chunk: Buffer) => {
-      const parsed = parseWorkerProcessResult(JSON.parse(chunk.toString("utf8")));
-      if (parsed) {
+      const parsed = parseWorkerProcessMessage(JSON.parse(chunk.toString("utf8")));
+      if (parsed?.type === "result") {
         result.resolve(parsed);
       }
     });
@@ -402,4 +437,93 @@ export function registerWorkerBackgroundExecLifecycleTests({
       }
     }
   });
+}
+
+export function registerWorkerExecEnvironmentFinalizationTests({
+  runExecProcess,
+  createWorkerRuntimeEnvironment,
+}: {
+  runExecProcess: typeof import("../agents/bash-tools.exec-runtime.js").runExecProcess;
+  createWorkerRuntimeEnvironment: typeof import("./worker.runtime.js").createWorkerRuntimeEnvironment;
+}) {
+  it.each(["foreground", "hidden-background"] as const)(
+    "keeps environment state until %s exec finalization and task settlement finish",
+    async (visibility) => {
+      const sessionId = `worker-finalizer-${visibility}`;
+      const scopeKey = `worker:${sessionId}`;
+      const environment = await createWorkerRuntimeEnvironment(sessionId);
+      const finalizing = createDeferred();
+      const releaseFinalizer = createDeferred();
+      const settling = createDeferred();
+      const releaseSettlement = createDeferred();
+      const settledStateDirs: Array<string | undefined> = [];
+      const closeSettled = vi.fn();
+      let run: Awaited<ReturnType<typeof runExecProcess>> | undefined;
+      try {
+        run = await runExecProcess({
+          command: "worker-finalizer-fixture",
+          workdir: environment.stateDir,
+          env: {},
+          sandbox: {
+            containerName: "worker-finalizer-fixture",
+            workspaceDir: environment.stateDir,
+            containerWorkdir: environment.stateDir,
+            buildExecSpec: async () => ({
+              argv: [process.execPath, "-e", "process.stdout.write('worker-finalizer-output')"],
+              env: {},
+              stdinMode: "pipe-closed",
+            }),
+            finalizeExec: async () => {
+              finalizing.resolve();
+              await releaseFinalizer.promise;
+            },
+          },
+          usePty: false,
+          warnings: [],
+          maxOutput: 1000,
+          pendingMaxOutput: 1000,
+          notifyOnExit: false,
+          scopeKey,
+          timeoutSec: null,
+          onSettledBeforeNotify: async () => {
+            settling.resolve();
+            await releaseSettlement.promise;
+            settledStateDirs.push(process.env.OPENCLAW_STATE_DIR);
+          },
+        });
+        if (visibility === "hidden-background") {
+          markBackgrounded(run.session);
+          deleteSession(run.session.id);
+        }
+        await finalizing.promise;
+        const closing = environment.close();
+        void closing.then(closeSettled, closeSettled);
+        await Promise.resolve();
+
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(environment.stateDir);
+        await expect(stat(environment.stateDir)).resolves.toBeDefined();
+        releaseFinalizer.resolve();
+        await settling.promise;
+        expect(run.session.finalizing).toBe(true);
+        expect(run.session.exited).toBe(false);
+        expect(closeSettled).not.toHaveBeenCalled();
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(environment.stateDir);
+        expect(process.env.OPENCLAW_CONFIG_PATH).toBe(
+          path.join(environment.stateDir, "openclaw.json"),
+        );
+        await expect(stat(environment.stateDir)).resolves.toBeDefined();
+        releaseSettlement.resolve();
+        await run.promise;
+        await closing;
+        expect(closeSettled).toHaveBeenCalledOnce();
+        expect(settledStateDirs).toEqual([environment.stateDir]);
+        await expect(stat(environment.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        releaseFinalizer.resolve();
+        releaseSettlement.resolve();
+        await run?.promise;
+        await environment.close();
+      }
+    },
+  );
 }

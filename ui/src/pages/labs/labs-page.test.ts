@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { applyMergePatch } from "../../../../src/config/merge-patch.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import { invalidateConfigConnection } from "../../lib/config/config-state-model.ts";
 import {
   createApplicationContextProvider,
   type ApplicationContextProvider,
@@ -12,7 +14,7 @@ import {
 import { LAB_FEATURES } from "./labs-registry.ts";
 import "./labs-page.ts";
 
-type LabsPageElement = HTMLElement & { updateComplete: Promise<boolean> };
+type LabsPageElement = HTMLElement & { updateComplete: Promise<boolean>; requestUpdate(): void };
 
 type RuntimeConfigState = {
   connected: boolean;
@@ -20,6 +22,7 @@ type RuntimeConfigState = {
   configSnapshot: {
     hash: string;
     sourceConfig: Record<string, unknown>;
+    valid?: boolean;
   } | null;
   lastError: string | null;
 };
@@ -59,7 +62,7 @@ function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
     state,
     ensureLoaded: vi.fn(async () => undefined),
     refresh: vi.fn(async () => undefined),
-    patch: vi.fn(async () => true),
+    patch: vi.fn(async (_input: { raw: Record<string, unknown>; note: string }) => true),
     subscribe(listener: (state: RuntimeConfigState) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -461,4 +464,141 @@ describe("LabsPage tool search enablement", () => {
       note: "labs: update toolSearch",
     });
   });
+});
+
+describe("LabsPage Decision assistance", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    [undefined, false],
+    [false, false],
+    [{ mode: "auto" }, false],
+    [true, true],
+  ])(
+    "reflects saved intent %j independently of model selection",
+    async (decisionAssistance, expected) => {
+      const { page } = await mountPage({
+        agents: { defaults: { experimental: { decisionAssistance } } },
+      });
+      const row = labRow(page, "Decision assistance");
+      expect(labToggle(page, "Decision assistance").checked).toBe(expected);
+      expect(row.textContent).toContain("No features use this setting yet");
+      expect(row.textContent?.includes("Preference saved.")).toBe(expected);
+    },
+  );
+
+  it("saves explicit opt-in without a model, reloads it, and resets only the gate", async () => {
+    const initial = {
+      agents: {
+        defaults: { experimental: { localModelLean: true } },
+        entries: { quiet: { decisionModel: "" } },
+      },
+    };
+    const { page, runtimeConfig, provider } = await mountPage(initial);
+    runtimeConfig.patch.mockImplementationOnce(async ({ raw }) => {
+      const saved = applyMergePatch(initial, raw) as Record<string, unknown>;
+      runtimeConfig.state.configSnapshot = { hash: "saved-hash", sourceConfig: saved };
+      return true;
+    });
+    const toggle = labToggle(page, "Decision assistance");
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    await page.updateComplete;
+    await page.updateComplete;
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { agents: { defaults: { experimental: { decisionAssistance: true } } } },
+      note: "labs: update decisionAssistance",
+    });
+    const saved = runtimeConfig.state.configSnapshot!.sourceConfig;
+    provider.remove();
+    const reloaded = await mountPage(saved);
+    const savedToggle = labToggle(reloaded.page, "Decision assistance");
+    expect(savedToggle.checked).toBe(true);
+    savedToggle.checked = false;
+    savedToggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    await reloaded.page.updateComplete;
+    expect(reloaded.runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { agents: { defaults: { experimental: { decisionAssistance: null } } } },
+      note: "labs: update decisionAssistance",
+    });
+    const resetRequest = reloaded.runtimeConfig.patch.mock.calls[0]?.[0];
+    if (!resetRequest) {
+      throw new Error("Expected a reset patch");
+    }
+    const reset = applyMergePatch(saved, resetRequest.raw) as Record<string, unknown>;
+    expect(reset).toEqual(initial);
+    reloaded.provider.remove();
+    const resetPage = await mountPage(reset);
+    expect(labToggle(resetPage.page, "Decision assistance").checked).toBe(false);
+  });
+
+  it.each(["failure", "reconnect"])("keeps pending intent scoped through %s", async (outcome) => {
+    const pending = deferred<boolean>();
+    const { page, runtimeConfig, gateway } = await mountPage({});
+    runtimeConfig.patch.mockImplementationOnce(() => pending.promise);
+    const toggle = labToggle(page, "Decision assistance");
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    await page.updateComplete;
+    expect(toggle.checked).toBe(true);
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+    expect(labRow(page, "Decision assistance").textContent).not.toContain("Preference saved.");
+    if (outcome === "reconnect") {
+      gateway.setPhase("reconnecting");
+      gateway.setPhase("connected");
+    }
+    pending.resolve(false);
+    await pending.promise;
+    await page.updateComplete;
+    expect(toggle.checked).toBe(false);
+    expect(page.querySelector('[role="alert"]') !== null).toBe(outcome === "failure");
+    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
+  });
+
+  it.each(["missing", "loading", "read failure", "invalid", "disconnected", "stale"])(
+    "does not present %s configuration as an observed opt-out",
+    async (state) => {
+      const { page, runtimeConfig } = await mountPage({
+        agents: { defaults: { experimental: { decisionAssistance: true } } },
+      });
+      if (state === "missing") {
+        runtimeConfig.state.configSnapshot = null;
+      }
+      if (state === "loading") {
+        runtimeConfig.state.configLoading = true;
+      }
+      if (state === "read failure") {
+        runtimeConfig.state.lastError = "Configuration read failed";
+      }
+      if (state === "invalid") {
+        runtimeConfig.state.configSnapshot!.valid = false;
+      }
+      if (state === "disconnected") {
+        runtimeConfig.state.connected = false;
+      }
+      if (state === "stale") {
+        invalidateConfigConnection(runtimeConfig.state);
+      }
+      page.requestUpdate();
+      await page.updateComplete;
+      const row = labRow(page, "Decision assistance");
+      expect(row.querySelector("wa-switch")).toBeNull();
+      expect(row.textContent).toContain(
+        state === "loading" ? "Loading setting" : "Couldn’t load this setting",
+      );
+      expect(row.textContent).not.toContain("Default: Disabled");
+      expect(runtimeConfig.patch).not.toHaveBeenCalled();
+      if (state === "read failure") {
+        row.querySelector<HTMLButtonElement>("button")!.click();
+        expect(runtimeConfig.refresh).toHaveBeenCalledOnce();
+        runtimeConfig.state.lastError = null;
+        page.requestUpdate();
+        await page.updateComplete;
+        expect(labToggle(page, "Decision assistance").checked).toBe(true);
+      }
+    },
+  );
 });

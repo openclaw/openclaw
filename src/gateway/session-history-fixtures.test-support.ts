@@ -1,3 +1,5 @@
+import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+
 export function textContent(text: string) {
   return [{ type: "text" as const, text }];
 }
@@ -62,4 +64,64 @@ export async function readSseEvent(
     }
     state.buffer += decoder.decode(chunk.value, { stream: true });
   }
+}
+
+export function createGatewayHistoryText(
+  role: "user" | "assistant",
+  text: unknown,
+  timestamp: number,
+) {
+  return { role, content: [{ type: "text", text }], timestamp };
+}
+
+export function createGatewayHistoryMessageToolCall(
+  id: string,
+  args: Record<string, unknown>,
+  timestamp: number,
+) {
+  return {
+    role: "assistant",
+    content: [{ type: "toolCall", id, name: "message", arguments: args }],
+    timestamp,
+  };
+}
+
+export function createGatewayHistoryMessageToolResult(
+  id: string,
+  content: unknown,
+  timestamp: number,
+) {
+  return { role: "toolResult", toolName: "message", toolCallId: id, content, timestamp };
+}
+
+export function createGatewayHistoryDeliveryMirror(text: unknown, timestamp: number) {
+  return {
+    role: "assistant",
+    provider: "openclaw",
+    model: "delivery-mirror",
+    content: [{ type: "text", text }],
+    timestamp,
+  };
+}
+
+export function hasGatewayHistoryMessageToolMirror(message: unknown) {
+  return Boolean(
+    message &&
+    typeof message === "object" &&
+    (message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror,
+  );
+}
+
+export function collectHistoryTextValues(historyMessages: unknown[]) {
+  return historyMessages
+    .map((message) => {
+      if (message && typeof message === "object") {
+        const entry = message as { text?: unknown };
+        if (typeof entry.text === "string") {
+          return entry.text;
+        }
+      }
+      return extractFirstTextBlock(message);
+    })
+    .filter((value): value is string => typeof value === "string");
 }

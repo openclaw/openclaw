@@ -1,17 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import * as queueNamespace from "../delivery-queue-sqlite-namespace.js";
-import * as queueSqlite from "../delivery-queue-sqlite.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
+import * as queueWorker from "../delivery-queue-worker-store.js";
 import { OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import { withStableDeliveryPreparation } from "./delivery-queue-preparation.js";
 
 describe("stable delivery preparation", () => {
   let stateDir = "";
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
+    afterEach(async () => {
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       cleanup();
     });
@@ -26,21 +29,22 @@ describe("stable delivery preparation", () => {
     "preserves ordinary checkpoint failure cleanup from %s",
     async (state) => {
       const failure = new Error("checkpoint rejected before native storage");
-      const claim = vi
-        .spyOn(queueNamespace, "upsertDeliveryQueueEntryOnceAcrossNamespaces")
-        .mockReturnValue(true);
-      const replace = vi
-        .spyOn(queueNamespace, "replacePendingDeliveryQueueEntry")
-        .mockReturnValue(true);
-      if (state === "modifiers_started") {
-        replace.mockReturnValueOnce(true);
-      }
-      replace.mockImplementationOnce(() => {
-        throw failure;
-      });
-      const terminalize = vi
-        .spyOn(queueSqlite, "terminalizePendingDeliveryQueueEntry")
-        .mockReturnValue({ status: "terminalized", retained: true });
+      const execute = queueWorker.executeDeliveryQueueOperation;
+      let failed = false;
+      const operations = vi
+        .spyOn(queueWorker, "executeDeliveryQueueOperation")
+        .mockImplementation(async (...args) => {
+          const command = args[2];
+          if (
+            command.type === "deliveryQueue.replacePreparation" &&
+            command.input.replacementEntry.preparationState === "prepared" &&
+            !failed
+          ) {
+            failed = true;
+            throw failure;
+          }
+          return execute(...args);
+        });
       try {
         await expect(
           withStableDeliveryPreparation({
@@ -54,20 +58,29 @@ describe("stable delivery preparation", () => {
             },
           }),
         ).rejects.toBe(failure);
+        const writes = operations.mock.calls.map((args) => args[2]);
         if (state === "claimed") {
-          expect(replace.mock.calls.at(-1)?.[0].replacementEntry).toMatchObject({
-            preparationState: "claimed",
-            preparationLeaseExpiresAt: 0,
+          const release = writes.at(-1);
+          expect(release).toMatchObject({
+            type: "deliveryQueue.replacePreparation",
+            input: {
+              replacementEntry: { preparationState: "claimed", preparationLeaseExpiresAt: 0 },
+            },
           });
-          expect(terminalize).not.toHaveBeenCalled();
+          expect(
+            writes.filter((command) => command.type === "deliveryQueue.failPreparation"),
+          ).toHaveLength(0);
         } else {
-          expect(terminalize).toHaveBeenCalledOnce();
-          expect(terminalize.mock.calls[0]?.[0].entry).toMatchObject({ preparationState: state });
+          expect(
+            writes.filter((command) => command.type === "deliveryQueue.failPreparation"),
+          ).toEqual([
+            expect.objectContaining({
+              input: { entry: expect.objectContaining({ preparationState: state }) },
+            }),
+          ]);
         }
       } finally {
-        claim.mockRestore();
-        replace.mockRestore();
-        terminalize.mockRestore();
+        operations.mockRestore();
       }
     },
   );

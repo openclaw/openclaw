@@ -6,6 +6,7 @@ import { getMachineDisplayName } from "../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../infra/os-summary.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveChannelMessageToolHints, resolveChannelReactionGuidance } from "./channel-tools.js";
+import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
 import { collectRuntimeChannelCapabilities } from "./runtime-capabilities.js";
 import { detectRuntimeShell } from "./shell-utils.js";
@@ -24,6 +25,7 @@ export async function resolveAgentRuntimePrompt(params: {
   channel?: string;
   accountId?: string | null;
   chatType?: ChatType;
+  requesterProfileId?: string;
 }) {
   const runtimeChannel = normalizeMessageChannel(params.channel);
   const channelPromptContext = {
@@ -44,7 +46,15 @@ export async function resolveAgentRuntimePrompt(params: {
     agentId: params.agentId,
   });
   const machineName = await getMachineDisplayName();
-  await prepareActiveNodeContext();
+  await prepareActiveNodeContext(params.requesterProfileId);
+  const preparedGitCoauthorPrompt = Object.hasOwn(params, "preparedGitCoauthorPrompt")
+    ? params.preparedGitCoauthorPrompt
+    : await resolveSessionGitCoauthorPrompt({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      });
   const systemPromptParams = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
@@ -53,9 +63,8 @@ export async function resolveAgentRuntimePrompt(params: {
     ...(Object.hasOwn(params, "preparedRepoRoot")
       ? { preparedRepoRoot: params.preparedRepoRoot }
       : {}),
-    ...(Object.hasOwn(params, "preparedGitCoauthorPrompt")
-      ? { preparedGitCoauthorPrompt: params.preparedGitCoauthorPrompt }
-      : {}),
+    preparedGitCoauthorPrompt,
+    requesterProfileId: params.requesterProfileId,
     runtime: {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,

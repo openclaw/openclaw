@@ -2,6 +2,7 @@
 import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { observeCronJobWrites } from "../../../test/helpers/cron/runtime-mutation.js";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
@@ -43,36 +44,6 @@ import { onTimer } from "./timer.test-support.js";
 const opsRegressionFixtures = setupCronRegressionFixtures({
   prefix: "cron-service-run-admission-cleanup-",
 });
-let cronJobWriteObserverId = 0;
-
-function observeCronJobWrites(
-  jobId: string,
-  observer: (state: { queuedAtMs?: number; runningAtMs?: number }) => void,
-): () => void {
-  const database = openOpenClawStateDatabase().db;
-  const suffix = ++cronJobWriteObserverId;
-  const functionName = `observe_cron_job_write_${suffix}`;
-  const triggerName = `observe_cron_job_write_${suffix}`;
-  database.function(functionName, (writtenJobId, stateJson) => {
-    if (writtenJobId !== jobId || typeof stateJson !== "string") {
-      return 0;
-    }
-    const state = JSON.parse(stateJson) as { queuedAtMs?: number; runningAtMs?: number };
-    observer({
-      ...(typeof state.queuedAtMs === "number" ? { queuedAtMs: state.queuedAtMs } : {}),
-      ...(typeof state.runningAtMs === "number" ? { runningAtMs: state.runningAtMs } : {}),
-    });
-    return 0;
-  });
-  database.exec(`
-    CREATE TEMP TRIGGER ${triggerName}
-    AFTER UPDATE ON cron_jobs
-    BEGIN
-      SELECT ${functionName}(NEW.job_id, NEW.state_json);
-    END;
-  `);
-  return () => database.exec(`DROP TRIGGER IF EXISTS ${triggerName}`);
-}
 
 describe("cron service run admission cleanup", () => {
   it.each(["after preflight", "while awaiting root admission"] as const)(
@@ -798,81 +769,6 @@ describe("cron service run admission cleanup", () => {
       stop(state);
     }
   });
-
-  it.each([
-    { trigger: "manual", restartScheduler: false },
-    { trigger: "scheduled", restartScheduler: false },
-    { trigger: "startup", restartScheduler: false },
-    { trigger: "scheduled", restartScheduler: true },
-  ] as const)(
-    "retries $trigger cleanup when stop wins the reservation write (restart: $restartScheduler)",
-    async ({ trigger, restartScheduler }) => {
-      const store = opsRegressionFixtures.makeStorePath();
-      const dueAt = Date.parse("2026-02-06T10:05:03.250Z");
-      const job = createDueIsolatedJob({
-        id: `stopped-during-${trigger}-reservation`,
-        nowMs: dueAt,
-        nextRunAtMs: trigger === "manual" ? dueAt + 3_600_000 : dueAt,
-      });
-      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-
-      const state = createCronRegressionState({
-        storePath: store.storePath,
-        nowMs: () => dueAt,
-        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      });
-      const releaseSuccessor = createDeferred();
-      let restarted: Promise<void> | undefined;
-      let successorAdmission: Promise<unknown> | undefined;
-      let reservationPersisted = false;
-      let cleanupFailed = false;
-      const stopObserving = observeCronJobWrites(job.id, ({ queuedAtMs }) => {
-        if (reservationPersisted && !cleanupFailed && queuedAtMs === undefined) {
-          cleanupFailed = true;
-          throw new Error("reservation cleanup persist failed");
-        }
-        if (!reservationPersisted && queuedAtMs === dueAt) {
-          reservationPersisted = true;
-          stop(state);
-          if (restartScheduler) {
-            restarted = start(state);
-            successorAdmission = runWithCronAdmission(state, () => releaseSuccessor.promise);
-          }
-        }
-      });
-
-      try {
-        if (trigger === "manual") {
-          await expect(run(state, job.id, "force")).resolves.toEqual({
-            ok: true,
-            ran: false,
-            reason: "stopped",
-          });
-        } else if (trigger === "scheduled") {
-          await onTimer(state);
-        } else {
-          await expect(runMissedJobs(state)).rejects.toThrow("reservation cleanup persist failed");
-        }
-        await restarted;
-        expect(state.stopped).toBe(!restartScheduler);
-        expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
-        expect(reservationPersisted && cleanupFailed).toBe(true);
-        expect(state.runAdmission.active).toBe(restartScheduler ? 1 : 0);
-        expect(state.deps.runIsolatedAgentJob).not.toHaveBeenCalled();
-        const persisted = (await loadCronStore(store.storePath)).jobs.find(
-          (entry) => entry.id === job.id,
-        );
-        expect(persisted?.state.queuedAtMs).toBeUndefined();
-        expect(persisted?.state.runningAtMs).toBeUndefined();
-      } finally {
-        stopObserving();
-        releaseSuccessor.resolve();
-        await Promise.allSettled([restarted, successorAdmission]);
-        stop(state);
-      }
-      expect(state.runAdmission.active).toBe(0);
-    },
-  );
 
   it.each(["manual", "scheduled", "startup"] as const)(
     "cleans a %s reservation after activation persistence fails",

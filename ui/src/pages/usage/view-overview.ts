@@ -1,9 +1,9 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-// Control UI view renders usage render overview screen content.
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
+import { icons } from "../../components/icons.ts";
 import { renderSettingsSection, renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
@@ -11,27 +11,22 @@ import { formatDurationCompact } from "../../lib/format-duration.ts";
 import {
   buildUsageCostWindows,
   buildUsageCostWindowSummary,
-  formatUsageCost,
+  formatAnalysisCost,
   formatDayLabel,
   formatFullDate,
   formatIsoDate,
   formatUsageTokens,
 } from "./metrics.ts";
 import type { UsageInsightStats } from "./metrics.ts";
-import type {
-  UsageAggregates,
-  UsageColumnId,
-  UsageSessionEntry,
-  UsageTotals,
-  CostDailyEntry,
+import {
+  DEFAULT_VISIBLE_COLUMNS,
+  type UsageAggregates,
+  type UsageColumnId,
+  type UsageSessionEntry,
+  type UsageTotals,
+  type CostDailyEntry,
 } from "./types.ts";
 import { renderSessionBarRow } from "./view-session-row.ts";
-
-function formatAnalysisCost(value: number): string {
-  const magnitude = Math.abs(value);
-  const decimals = magnitude === 0 || magnitude >= 0.01 ? 2 : magnitude >= 0.0001 ? 4 : 6;
-  return formatUsageCost(value, decimals);
-}
 
 function renderFilterChips(
   selectedDays: string[],
@@ -107,7 +102,7 @@ function renderFilterChips(
               <span class="filter-chip-label">${t(labelKey)}: ${value}</span>
               <openclaw-tooltip .content=${t("usage.filters.remove")}>
                 <button class="filter-chip-remove" @click=${onClear} aria-label=${t(removeKey)}>
-                  ×
+                  ${icons.x}
                 </button>
               </openclaw-tooltip>
             </div>
@@ -526,11 +521,12 @@ function renderSessionsCard(
   onSessionSortChange: (sort: "tokens" | "cost" | "recent" | "messages" | "errors") => void,
   onSessionSortDirChange: (dir: "asc" | "desc") => void,
   onSessionsTabChange: (tab: "all" | "recent") => void,
-  visibleColumns: UsageColumnId[],
+  visibleColumns: UsageColumnId[] | undefined,
   totalSessions: number,
   onClearSessions: () => void,
 ) {
-  const showColumn = (id: UsageColumnId) => visibleColumns.includes(id);
+  const columns = visibleColumns ?? DEFAULT_VISIBLE_COLUMNS;
+  const showColumn = (id: UsageColumnId) => columns.includes(id);
   const showAgent =
     showColumn("agent") || new Set(sessions.map((session) => session.agentId)).size > 1;
   const formatSessionListLabel = (s: UsageSessionEntry): string => {
@@ -580,29 +576,17 @@ function renderSessionsCard(
           }
         }
       }
-      let sortValue: number;
-      switch (sessionSort) {
-        case "recent":
-          sortValue = session.updatedAt ?? 0;
-          break;
-        case "messages":
-          sortValue = usage?.messageCounts?.total ?? 0;
-          break;
-        case "errors":
-          sortValue = usage?.messageCounts?.errors ?? 0;
-          break;
-        case "cost":
-          sortValue = cost;
-          break;
-        case "tokens":
-          sortValue = tokens;
-          break;
-      }
       return {
         session,
         displayLabel: formatSessionListLabel(session),
         value: isTokenMode ? tokens : cost,
-        sortValue,
+        sortValue: {
+          recent: session.updatedAt ?? 0,
+          messages: usage?.messageCounts?.total ?? 0,
+          errors: usage?.messageCounts?.errors ?? 0,
+          cost,
+          tokens,
+        }[sessionSort],
       };
     })
     .toSorted((a, b) => {
@@ -737,32 +721,28 @@ function renderSessionsCard(
           }
         </div>
         ${
-          sessionsTab === "recent"
-            ? displayedEntries.length === 0
-              ? html` <div class="usage-empty-block">${t("usage.sessions.noRecent")}</div> `
-              : html`
-                  <div class="session-bars session-bars--recent">
-                    ${renderSessionBarRows(displayedEntries)}
-                  </div>
-                `
-            : displayedEntries.length === 0
-              ? html` <div class="usage-empty-block">${t("usage.sessions.noneInRange")}</div> `
-              : html`
-                  <div class="session-bars">
-                    ${renderSessionBarRows(displayedEntries)}
-                    ${
-                      sessions.length > displayedEntries.length
-                        ? html`
-                            <div class="usage-more-sessions">
-                              ${t("usage.sessions.more", {
-                                count: String(sessions.length - displayedEntries.length),
-                              })}
-                            </div>
-                          `
-                        : nothing
-                    }
-                  </div>
-                `
+          displayedEntries.length === 0
+            ? html`<div class="usage-empty-block">
+                ${t(sessionsTab === "recent" ? "usage.sessions.noRecent" : "usage.sessions.noneInRange")}
+              </div>`
+            : html`
+                <div
+                  class=${sessionsTab === "recent" ? "session-bars session-bars--recent" : "session-bars"}
+                >
+                  ${renderSessionBarRows(displayedEntries)}
+                  ${
+                    sessionsTab === "all" && sessions.length > displayedEntries.length
+                      ? html`
+                          <div class="usage-more-sessions">
+                            ${t("usage.sessions.more", {
+                              count: String(sessions.length - displayedEntries.length),
+                            })}
+                          </div>
+                        `
+                      : nothing
+                  }
+                </div>
+              `
         }
         ${
           selectedCount > 1

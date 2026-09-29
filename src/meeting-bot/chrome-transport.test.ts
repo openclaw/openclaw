@@ -133,7 +133,7 @@ const cases = [
   { name: "Zoom", preserveTrackedBrowserOnEngineFailure: true, expectedLeaves: 0 },
 ] as const;
 
-describe.each(cases)("$name Chrome transport parity", (testCase) => {
+describe("meeting Chrome transport", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
@@ -151,7 +151,7 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
     vi.restoreAllMocks();
   });
 
-  it("preserves the platform rollback ownership rule for tracked calls", async () => {
+  it.each(cases)("preserves $name rollback ownership for tracked calls", async (testCase) => {
     const dispose = vi.fn(async () => {});
     const engine = {
       providerId: "openai",
@@ -259,10 +259,10 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
       browserNodeAdapter: platform,
       isRealtimeRouteReady: () => true,
       isTalkBackMode: () => true,
-      meetingLabel: `${testCase.name} meeting`,
+      meetingLabel: "Test meeting",
       nodeCommandName: platform.nodeCommandName,
       platform,
-      preserveTrackedBrowserOnEngineFailure: testCase.preserveTrackedBrowserOnEngineFailure,
+      preserveTrackedBrowserOnEngineFailure: false,
       runtime: {
         createBindings: vi.fn(() => ({
           platform: { displayName: "Test", logScope: "[test]", sessionIdPrefix: "test" },

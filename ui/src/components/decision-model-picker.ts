@@ -60,6 +60,8 @@ export function renderDecisionModelPicker(params: {
     disabled: params.disabled,
     title: params.title,
     showSelectedDetail: true,
+    groupByProvider: true,
+    searchPlaceholder: t("chat.modelControls.searchModels"),
     onOpen: params.onOpen,
     onChange: (value) =>
       params.onChange(value === INHERIT_VALUE || (!params.inherit && value === "") ? null : value),

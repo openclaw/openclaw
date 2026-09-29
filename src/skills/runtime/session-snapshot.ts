@@ -52,12 +52,6 @@ type ReusableSkillSnapshotResult = {
   snapshotVersion: number;
 };
 
-function cacheSkillSnapshot(cacheKey: string, snapshot: SkillSnapshot): SkillSnapshot {
-  skillSnapshotCache.set(cacheKey, snapshot);
-  pruneMapToMaxSize(skillSnapshotCache, SKILL_SNAPSHOT_CACHE_MAX);
-  return snapshot;
-}
-
 export async function resolveReusableWorkspaceSkillSnapshot(
   params: ReusableSkillSnapshotParams,
 ): Promise<ReusableSkillSnapshotResult> {
@@ -129,7 +123,6 @@ export async function resolveReusableWorkspaceSkillSnapshot(
   }
   const sourceScope = {
     executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
-    agentId: params.agentId,
   };
   const sourceVersion = getSkillsSourceVersion(watcherWorkspaceDir, sourceScope);
   const effectiveVersion = getSkillsSnapshotVersion(watcherWorkspaceDir);
@@ -159,8 +152,8 @@ export async function resolveReusableWorkspaceSkillSnapshot(
     };
   };
 
-  const buildSnapshotCacheKey = () =>
-    JSON.stringify([
+  const cachedRebuild = async () => {
+    const snapshotCacheKey = JSON.stringify([
       params.workspaceDir,
       librarySelections,
       skillRoots,
@@ -171,8 +164,6 @@ export async function resolveReusableWorkspaceSkillSnapshot(
       eligibility,
       fingerprintSkillSnapshotConfig(params.config),
     ]);
-
-  const cachedRebuild = async (snapshotCacheKey = buildSnapshotCacheKey()) => {
     const cachedSnapshot = skillSnapshotCache.get(snapshotCacheKey);
     if (cachedSnapshot) {
       return cachedSnapshot;
@@ -200,7 +191,9 @@ export async function resolveReusableWorkspaceSkillSnapshot(
         if (!projectionIsCurrent()) {
           return undefined;
         }
-        return cacheSkillSnapshot(snapshotCacheKey, snapshot);
+        skillSnapshotCache.set(snapshotCacheKey, snapshot);
+        pruneMapToMaxSize(skillSnapshotCache, SKILL_SNAPSHOT_CACHE_MAX);
+        return snapshot;
       });
       pending = { promise, waiters };
       pendingSkillSnapshots.set(snapshotCacheKey, pending);

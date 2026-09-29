@@ -1,20 +1,123 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { performance } from "node:perf_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi } from "vitest";
+import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import {
+  createReplyOperation,
+  type ReplyOperation,
+} from "../auto-reply/reply/reply-run-registry.js";
+import { runGatewayLoop } from "../cli/gateway-cli/run-loop.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import * as reclamationWorker from "../config/sessions/session-accessor.sqlite-reclamation-worker.js";
+import {
+  createSessionMaintenanceStatisticsOperation,
+  runSqliteSessionReclamation,
+} from "../config/sessions/session-accessor.sqlite-reclamation.js";
+import { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
+import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
+import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
+import * as systemdTimeout from "../infra/systemd-stop-timeout.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import {
+  beginAgentDeletionJournal,
+  completeAgentDeletionJournalInDatabase,
+} from "../state/agent-deletion-journal.js";
+import {
   assertNoOpenClawAgentDatabaseLeasesReadOnly,
   OpenClawAgentDatabaseLeaseActiveError,
 } from "../state/openclaw-agent-db-lease.js";
-import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
+import * as schema from "../state/openclaw-agent-db-schema.js";
 import {
+  closeOpenClawAgentDatabasesForTest,
   listOpenIncognitoAgentDatabases,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { readOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
+import type { GatewayServer } from "./server-public.js";
+
+it("closes a Gateway with an active plugin while retaining a deleted agent store", async () => {
+  const fixture = await createGatewayMetadataCloseFixture("gateway-retained-deleted-agent-close");
+  try {
+    const pluginId = fixture.pluginId;
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: pluginId });
+    const registered = new PluginInstance(record.id, { record, registry });
+    let disposed = false;
+    registered.lifecycle.onDispose(() => {
+      disposed = true;
+    });
+    registry.plugins.push(record);
+    setActivePluginRegistry(registry);
+    const port = await fixture.reservePort();
+    const server = await fixture.start(port);
+    expect(fixture.kernels.get(port)?.pluginRuntime.registry.plugins).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: pluginId })]),
+    );
+    const activeStore = path.join(fixture.state.sessionsDir("main"), "sessions.json");
+    const retainedStore = path.join(fixture.state.sessionsDir("retired"), "sessions.json");
+    for (const [agentId, storePath] of [
+      ["main", activeStore],
+      ["retired", retainedStore],
+    ] as const) {
+      await replaceSessionEntry(
+        { agentId, storePath, sessionKey: `agent:${agentId}:main` },
+        {
+          sessionId: `${agentId}-session`,
+          updatedAt: 1,
+          pluginExtensions: { [pluginId]: { active: true } },
+        },
+      );
+    }
+    const retainedDatabase = path.join(fixture.state.agentDir("retired"), "openclaw-agent.sqlite");
+    const operationId = randomUUID();
+    beginAgentDeletionJournal(
+      {
+        agentId: "retired",
+        operationId,
+        agentDir: fixture.state.agentDir("retired"),
+        sessionsDir: fixture.state.sessionsDir("retired"),
+        workspaceDir: path.join(fixture.state.root, "workspace-retired"),
+        databasePaths: [retainedDatabase],
+        deleteFiles: false,
+      },
+      { env: fixture.state.env },
+    );
+    runOpenClawStateWriteTransaction(
+      (database) => completeAgentDeletionJournalInDatabase(database, "retired", operationId),
+      { env: fixture.state.env },
+    );
+    await expect(server.close({ reason: "gateway stopping" })).resolves.toBeUndefined();
+    expect(disposed).toBe(true);
+    expect((await fs.stat(retainedDatabase)).isFile()).toBe(true);
+    expect(
+      loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" })
+        ?.pluginExtensions,
+    ).toBeUndefined();
+  } finally {
+    await fixture.cleanup();
+  }
+}, 300_000);
 
 it.each(["stop", "restart"] as const)(
   "releases agent leases for Doctor after the final Gateway %s while its process stays alive",
@@ -65,51 +168,221 @@ it.each(["stop", "restart"] as const)(
   },
 );
 
-it("joins admitted agent database resources before releasing their lease and shared state", async () => {
-  const fixture = await createGatewayMetadataCloseFixture("gateway-agent-resource-close");
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  let closing: Promise<void> | undefined;
-  let unregister: (() => void) | undefined;
-  try {
-    const server = await fixture.start(await fixture.reservePort());
-    const agent = openOpenClawAgentDatabase({ agentId: "main", env: fixture.state.env });
-    const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
-    unregister = registerOpenClawAgentDatabaseAsyncResource({
-      agentId: "main",
-      path: agent.path,
-      revoke() {},
-      async close() {
-        entered.resolve();
-        await release.promise;
-      },
-    });
-    closing = server.close({ reason: "gateway restarting", restartExpectedMs: 1_500 });
-    await Promise.race([
-      entered.promise,
-      closing.then(() => {
-        throw new Error("Gateway acknowledged closure before its agent resource joined");
-      }),
-    ]);
-    expect(agent.db.isOpen).toBe(true);
-    expect(shared.isOpen).toBe(true);
-    expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: fixture.state.env })).toThrow(
-      OpenClawAgentDatabaseLeaseActiveError,
-    );
-    release.resolve();
-    await closing;
-    expect(agent.db.isOpen).toBe(false);
-    expect(shared.isOpen).toBe(false);
-    expect(() =>
-      assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: fixture.state.env }),
-    ).not.toThrow();
-  } finally {
-    release.resolve();
-    await Promise.allSettled([closing]);
-    unregister?.();
-    await fixture.cleanup();
-  }
-});
+it.skipIf(process.platform !== "linux")(
+  "joins agent resources and records a clean witness after a managed SIGTERM drain",
+  async () => {
+    const fixture = await createGatewayMetadataCloseFixture("gateway-agent-resource-close");
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const started = createDeferredCore<GatewayServer>();
+    const exited = createDeferredCore<number>();
+    const exit = vi.fn((code: number) => exited.resolve(code));
+    const completeBoot = vi.fn();
+    const previousStops = new Set(process.listeners("SIGTERM"));
+    let closing: Promise<void> | undefined;
+    let unregister: (() => void) | undefined;
+    let stop: ((signal: "SIGTERM") => void) | undefined;
+    let operation: ReplyOperation | undefined;
+    let execution: ReturnType<typeof captureOpenClawAgentDatabaseExecution> | undefined;
+    const writerReleased = createDeferredCore();
+    try {
+      for (const name of SUPERVISOR_HINT_ENV_VARS) {
+        vi.stubEnv(name, undefined);
+      }
+      vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
+      vi.spyOn(systemdTimeout, "readSystemdStopTimeout").mockResolvedValue({
+        timeoutMs: 90_000,
+        source: "systemd fixture TimeoutStopUSec",
+      });
+      const port = await fixture.reservePort();
+      void runGatewayLoop({
+        lockPort: port,
+        completeBoot,
+        start: async (options) => {
+          const server = await fixture.start(port, {
+            hostLifecycle: options?.hostLifecycle,
+            startupOperation: options?.startupOperation,
+          });
+          started.resolve(server);
+          return server;
+        },
+        runtime: { log() {}, error() {}, exit },
+      }).catch(started.reject);
+      const server = await started.promise;
+      await nextTurn();
+      stop = process.listeners("SIGTERM").find((listener) => !previousStops.has(listener));
+      assert(stop);
+      const kernel = fixture.kernels.get(port);
+      assert(kernel);
+      operation = createReplyOperation({
+        sessionKey: "agent:main:managed-restart",
+        sessionId: "managed-restart",
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+      bindGatewayContextResolver(operation, kernel.resolvePluginGatewayContext);
+      operation.abortSignal.addEventListener(
+        "abort",
+        () => {
+          void execution?.release().then(() => {
+            operation?.complete();
+            writerReleased.resolve();
+          }, writerReleased.reject);
+        },
+        { once: true },
+      );
+      const options = { agentId: "main", env: fixture.state.env };
+      const agent = openOpenClawAgentDatabase(options);
+      agent.db.exec("INSERT INTO auth_profile_state VALUES ('restart-proof', '{}', 1)");
+      const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
+      execution = captureOpenClawAgentDatabaseExecution(options);
+      const writer = execution;
+      await writer.runExisting(
+        {
+          assertCurrent: () => writer.assertCurrent(),
+          createAdmission: (binding) => () => ({
+            nativeLocations: binding.nativeLocations,
+            admission: createSqliteWorkerOperationAdmission((request, grant) => {
+              binding.authorize(request);
+              writer.assertCurrent();
+              assert(grant());
+            }, binding.attachment),
+          }),
+        },
+        (scope) =>
+          scope.execute({
+            type: "session.entries.replace",
+            input: {
+              expectedRows: new Map(),
+              validationKeys: ["agent:main:managed-restart"],
+              labelOwnerKeys: [],
+              replacements: [
+                {
+                  sessionKey: "agent:main:managed-restart",
+                  entry: { sessionId: "managed-restart", updatedAt: 1 },
+                },
+              ],
+            },
+          }),
+      );
+      const reclamationClose = vi.spyOn(
+        reclamationWorker.SqliteReclamationWorker.prototype,
+        "close",
+      );
+      await runSqliteSessionReclamation({
+        forceInProcess: false,
+        plan: createSessionMaintenanceStatisticsOperation({ ...options, path: agent.path }),
+      });
+      const hostLeaseCount = shared
+        .prepare("SELECT count(*) AS n FROM agent_database_leases WHERE path = ?")
+        .get(agent.path)?.n;
+      expect(hostLeaseCount).toBe(3);
+      // External cleanup can outlive the stop budget; idle writers must not wait for it.
+      const removeSidecar = kernel.registerConnectionDependentSidecars({
+        async stop() {
+          entered.resolve();
+          await release.promise;
+        },
+      });
+      unregister = () => {
+        removeSidecar();
+      };
+      expect(
+        writeGatewayRestartIntentSync({
+          env: fixture.state.env,
+          targetPid: process.pid,
+          intent: { reason: "gateway.restart", force: true, waitMs: 30_000 },
+        }),
+      ).toBe(true);
+      const close = vi.spyOn(server, "close");
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+      stop("SIGTERM");
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(operation.abortSignal.aborted).toBe(false);
+      expect(close).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(close).toHaveBeenCalledWith({
+        reason: "gateway restarting",
+        restartExpectedMs: 1_500,
+        drainTimeoutMs: 0,
+      });
+      closing = close.mock.results[0]?.value;
+      assert(closing);
+      await Promise.race([
+        entered.promise,
+        closing.then(() => {
+          throw new Error("Gateway acknowledged closure before its agent resource joined");
+        }),
+      ]);
+      expect(isAgentRunRestartAbortReason(operation.abortSignal.reason)).toBe(true);
+      await writerReleased.promise;
+      expect(reclamationClose).toHaveBeenCalledOnce();
+      await reclamationClose.mock.results[0]?.value;
+      expect(
+        shared
+          .prepare("SELECT count(*) AS n FROM agent_database_leases WHERE path = ?")
+          .get(agent.path)?.n,
+      ).toBe(1);
+      await vi.advanceTimersByTimeAsync(10_001);
+      expect(exit).not.toHaveBeenCalled();
+      expect(agent.db.isOpen).toBe(true);
+      expect(shared.isOpen).toBe(true);
+      expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: fixture.state.env })).toThrow(
+        OpenClawAgentDatabaseLeaseActiveError,
+      );
+      await vi.advanceTimersByTimeAsync(4_999);
+      release.resolve();
+      await closing;
+      await expect(exited.promise).resolves.toBe(0);
+      expect(completeBoot).toHaveBeenCalledExactlyOnceWith({
+        outcome: "planned_restart",
+        reason: expect.stringMatching(/restart \(SIGTERM: gateway\.restart\)$/),
+      });
+      expect(agent.db.isOpen).toBe(false);
+      expect(shared.isOpen).toBe(false);
+      expect(() =>
+        assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: fixture.state.env }),
+      ).not.toThrow();
+      expect(
+        readOpenClawAgentIntegrityVerification(agent.path, fixture.state.env)?.clean_close,
+      ).toBe(1);
+      closeOpenClawAgentDatabasesForTest(fixture.state.stateDir);
+      resetGatewayWorkAdmission();
+      const gate = schema.agentDatabaseIntegrityBeforeMutationSteps;
+      let diagnostics: SqliteIntegrityDiagnostics | undefined;
+      vi.spyOn(schema, "agentDatabaseIntegrityBeforeMutationSteps").mockImplementation(function* (
+        ...args
+      ) {
+        const result = yield* gate(...args);
+        diagnostics = args[3];
+        return result;
+      });
+      const reopened = openOpenClawAgentDatabase(options);
+      expect(diagnostics?.integrityGateOutcome).toBe("cached");
+      expect(
+        reopened.db
+          .prepare("SELECT state_json FROM auth_profile_state WHERE state_key='restart-proof'")
+          .get(),
+      ).toEqual({ state_json: "{}" });
+    } finally {
+      release.resolve();
+      operation?.complete();
+      await execution?.release();
+      await Promise.allSettled([closing]);
+      vi.useRealTimers();
+      if (!exit.mock.calls.length && stop) {
+        stop("SIGTERM");
+        await exited.promise;
+      }
+      unregister?.();
+      await fixture.cleanup();
+      resetGatewayWorkAdmission();
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    }
+  },
+);
 
 it("rejects Gateway closure when an agent handle cannot close and retains its lease", async () => {
   const fixture = await createGatewayMetadataCloseFixture("gateway-agent-close-failure");

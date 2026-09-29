@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { setImmediate } from "node:timers/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ContextVisibilityMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getMediaDir } from "openclaw/plugin-sdk/media-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
@@ -11,10 +11,14 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   defaultSlackTestConfig,
+  getSlackHandlerOrThrow,
   getSlackClient,
   getSlackTestState,
   resetSlackTestState,
-  runSlackMessageOnce,
+  runSlackHandlerWithDispatch,
+  startSlackMonitor,
+  stopSlackMonitor,
+  waitForSlackTestApp,
 } from "./monitor.test-helpers.js";
 import * as mediaRuntime from "./monitor/media.runtime.js";
 import type { SlackMessageEvent } from "./types.js";
@@ -56,59 +60,81 @@ function captureReplyContexts<T extends Record<string, unknown>>() {
   return contexts;
 }
 
+function historyConfig(users = ["U1"], contextVisibility: ContextVisibilityMode = "allowlist") {
+  const config: OpenClawConfig = {
+    channels: {
+      slack: {
+        groupPolicy: "open",
+        contextVisibility,
+        channels: { C1: { requireMention: true, users } },
+      },
+    },
+  };
+  slackTestState.config = config;
+  return config;
+}
+
+function revokeHistory(config: OpenClawConfig) {
+  const revoked: OpenClawConfig = {
+    channels: { slack: { ...config.channels?.slack, enabled: false } },
+  };
+  setRuntimeConfigSnapshot(revoked, revoked);
+}
+
+function imageFile(name: string) {
+  return {
+    id: `F${name}`,
+    name: `${name}.png`,
+    mimetype: "image/png",
+    url_private: `https://files.slack.com/${name}.png`,
+  };
+}
+
+function imageResponse() {
+  return new Response(Buffer.from("historical image"), {
+    headers: { "content-type": "image/png" },
+  });
+}
+
+async function runHistoryMessage(event: SlackMessageEvent) {
+  const monitor = startSlackMonitor(monitorSlackProvider);
+  try {
+    await waitForSlackTestApp(monitor, "started");
+    const handler = await getSlackHandlerOrThrow("message");
+    // Policy interleavings own these downloads; host load must not expire their deadlines.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await runSlackHandlerWithDispatch(handler, { event });
+  } finally {
+    vi.useRealTimers();
+    await stopSlackMonitor(monitor);
+  }
+}
+
 describe("Slack native history sender policy through monitor dispatch", () => {
-  it.each(["allowlist", "allowlist_quote", "all"] as const)(
+  it.each(["allowlist", "all"] as const)(
     "enforces %s visibility before bot history hydration and dispatch",
     async (contextVisibility) => {
-      slackTestState.config = {
-        channels: {
-          slack: {
-            groupPolicy: "open",
-            contextVisibility,
-            channels: { C1: { requireMention: true, users: ["U1", "UALLOWED", "BONLY"] } },
-          },
-        },
-      };
+      historyConfig(["U1", "UALLOWED", "BONLY"], contextVisibility);
       const messages = [
         { ts: "102", user: "UDENIED", bot_id: "BONLY", text: "denied user identity" },
         { ts: "101", bot_id: "BDENIED", text: "denied bot identity" },
         { ts: "100", user: "UALLOWED", bot_id: "BALLOWED", text: "allowed bot user" },
         { ts: "99", bot_id: "BONLY", text: "allowed bot-only identity" },
-      ].map((message) =>
-        Object.assign(message, {
-          files: [
-            {
-              id: `F${message.ts}`,
-              name: `${message.ts}.png`,
-              mimetype: "image/png",
-              url_private: `https://files.slack.com/${message.ts}.png`,
-            },
-          ],
-        }),
-      );
+      ].map((message) => Object.assign(message, { files: [imageFile(message.ts)] }));
       getSlackClient().conversations.history.mockResolvedValue({ messages });
-      mediaFetchMock.mockImplementation(
-        async () =>
-          new Response(Buffer.from("image data"), {
-            headers: { "content-type": "image/png" },
-          }),
-      );
+      mediaFetchMock.mockImplementation(async () => imageResponse());
       const captured = captureReplyContexts<{
         Body?: string;
         RawBody?: string;
         InboundHistory?: Array<{ body: string; media?: Array<{ path?: string }> }>;
       }>();
       try {
-        await runSlackMessageOnce(
-          monitorSlackProvider,
-          {
-            event: makeSlackMessageEvent({
-              text: "<@bot-user> inspect prior bot discussion",
-              ts: "103",
-              channel_type: "channel",
-            }),
-          },
-          { awaitDispatch: true },
+        await runHistoryMessage(
+          makeSlackMessageEvent({
+            text: "<@bot-user> inspect prior bot discussion",
+            ts: "103",
+            channel_type: "channel",
+          }),
         );
         expect(captured).toHaveLength(1);
         const visible = contextVisibility === "all" ? messages : messages.slice(2);
@@ -144,24 +170,12 @@ describe("Slack native history sender policy through monitor dispatch", () => {
   it.each(["room", "thread"] as const)(
     "stops %s bot history media and dispatch when live policy is revoked during its native read",
     async (scope) => {
-      const config: OpenClawConfig = {
-        channels: {
-          slack: {
-            groupPolicy: "open",
-            contextVisibility: "allowlist",
-            channels: { C1: { requireMention: true, users: ["U1", "UALLOWED"] } },
-          },
-        },
-      };
-      const revoked: OpenClawConfig = {
-        channels: { slack: { ...config.channels?.slack, enabled: false } },
-      };
-      slackTestState.config = config;
+      const config = historyConfig(["U1", "UALLOWED"]);
       setRuntimeConfigSnapshot(config, config);
       const client = getSlackClient();
       const read = scope === "thread" ? client.conversations.replies : client.conversations.history;
       read.mockImplementation(async () => {
-        setRuntimeConfigSnapshot(revoked, revoked);
+        revokeHistory(config);
         return {
           messages: [
             {
@@ -169,30 +183,19 @@ describe("Slack native history sender policy through monitor dispatch", () => {
               user: "UALLOWED",
               bot_id: "BALLOWED",
               text: "revoked bot context",
-              files: [
-                {
-                  id: "FREVOKED",
-                  name: "revoked.png",
-                  mimetype: "image/png",
-                  url_private: "https://files.slack.com/revoked.png",
-                },
-              ],
+              files: [imageFile("revoked")],
             },
           ],
         };
       });
       try {
-        await runSlackMessageOnce(
-          monitorSlackProvider,
-          {
-            event: makeSlackMessageEvent({
-              text: "<@bot-user> inspect bot discussion",
-              ts: "103",
-              channel_type: "channel",
-              ...(scope === "thread" ? { thread_ts: "100" } : {}),
-            }),
-          },
-          { awaitDispatch: true },
+        await runHistoryMessage(
+          makeSlackMessageEvent({
+            text: "<@bot-user> inspect bot discussion",
+            ts: "103",
+            channel_type: "channel",
+            ...(scope === "thread" ? { thread_ts: "100" } : {}),
+          }),
         ).catch((error: unknown) => {
           expect(error).toBeInstanceOf(Error);
         });
@@ -209,24 +212,10 @@ describe("Slack native history sender policy through monitor dispatch", () => {
   it.each([false, true])(
     "settles historical media before dispatch when mid-download revocation is %s",
     async (revoke) => {
-      const config: OpenClawConfig = {
-        channels: {
-          slack: {
-            groupPolicy: "open",
-            contextVisibility: "allowlist",
-            channels: { C1: { requireMention: true, users: ["U1"] } },
-          },
-        },
-      };
-      slackTestState.config = config;
+      const config = historyConfig();
       setRuntimeConfigSnapshot(config, config);
       const client = getSlackClient();
-      const files = [1, 2, 3, 4].map((id) => ({
-        id: `F${id}`,
-        name: `${id}.png`,
-        mimetype: "image/png",
-        url_private: `https://files.slack.com/${id}.png`,
-      }));
+      const files = [1, 2, 3, 4].map((id) => imageFile(String(id)));
       client.conversations.history.mockResolvedValue({
         messages: [{ ts: "100", user: "U1", text: "four historical images", files }],
       });
@@ -244,19 +233,15 @@ describe("Slack native history sender policy through monitor dispatch", () => {
         await release.promise;
         return url === "https://files.slack.com/2.png"
           ? new Response("expired URL", { status: 404 })
-          : new Response(Buffer.from("historical image"), {
-              headers: { "content-type": "image/png" },
-            });
+          : imageResponse();
       });
       const captured = captureReplyContexts<{
         InboundHistory?: Array<{ media?: Array<{ path?: string }> }>;
       }>();
       const mediaDir = getMediaDir();
       await fs.mkdir(mediaDir, { recursive: true });
-      const run = runSlackMessageOnce(
-        monitorSlackProvider,
-        { event: makeSlackMessageEvent({ ts: "103", text: "<@bot-user> inspect images" }) },
-        { awaitDispatch: true },
+      const run = runHistoryMessage(
+        makeSlackMessageEvent({ ts: "103", text: "<@bot-user> inspect images" }),
       ).catch((error: unknown) => {
         if (!revoke) {
           throw error;
@@ -266,10 +251,7 @@ describe("Slack native history sender policy through monitor dispatch", () => {
       try {
         await started.promise;
         if (revoke) {
-          const revoked: OpenClawConfig = {
-            channels: { slack: { ...config.channels?.slack, enabled: false } },
-          };
-          setRuntimeConfigSnapshot(revoked, revoked);
+          revokeHistory(config);
         }
         release.resolve();
         await run;
@@ -314,16 +296,7 @@ describe("Slack native history sender policy through monitor dispatch", () => {
   );
 
   it("observes a rejected direct image while joining pending forwarded media", async () => {
-    const config: OpenClawConfig = {
-      channels: {
-        slack: {
-          groupPolicy: "open",
-          contextVisibility: "allowlist",
-          channels: { C1: { requireMention: true, users: ["U1"] } },
-        },
-      },
-    };
-    slackTestState.config = config;
+    const config = historyConfig();
     setRuntimeConfigSnapshot(config, config);
     const directUrl = "https://files.slack.com/direct.png";
     getSlackClient().conversations.history.mockResolvedValue({
@@ -332,9 +305,7 @@ describe("Slack native history sender policy through monitor dispatch", () => {
           ts: "100",
           user: "U1",
           text: "mixed historical media",
-          files: [
-            { id: "FDIRECT", name: "direct.png", mimetype: "image/png", url_private: directUrl },
-          ],
+          files: [imageFile("direct")],
           attachments: [{ is_share: true, image_url: "https://files.slack.com/forwarded.png" }],
         },
       ],
@@ -365,17 +336,13 @@ describe("Slack native history sender policy through monitor dispatch", () => {
         bothStarted.resolve();
       }
       await (url === directUrl ? releaseDirect.promise : releaseForwarded.promise);
-      return new Response(Buffer.from("historical image"), {
-        headers: { "content-type": "image/png" },
-      });
+      return imageResponse();
     });
     const mediaDir = getMediaDir();
     await fs.mkdir(mediaDir, { recursive: true });
     let settled = false;
-    const run = runSlackMessageOnce(
-      monitorSlackProvider,
-      { event: makeSlackMessageEvent({ ts: "103", text: "<@bot-user> inspect mixed media" }) },
-      { awaitDispatch: true },
+    const run = runHistoryMessage(
+      makeSlackMessageEvent({ ts: "103", text: "<@bot-user> inspect mixed media" }),
     )
       .catch((error: unknown) => {
         expect(error).toBeInstanceOf(Error);
@@ -385,10 +352,7 @@ describe("Slack native history sender policy through monitor dispatch", () => {
       });
     try {
       await bothStarted.promise;
-      const revoked: OpenClawConfig = {
-        channels: { slack: { ...config.channels?.slack, enabled: false } },
-      };
-      setRuntimeConfigSnapshot(revoked, revoked);
+      revokeHistory(config);
       releaseDirect.resolve();
       await directFinished.promise;
       await setImmediate();
