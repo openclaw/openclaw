@@ -1,3 +1,4 @@
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import {
   openOpenClawStateDatabase,
@@ -101,6 +102,14 @@ export async function sharedRepositoryWorkspace() {
         }
       : loaded;
   });
+  replaceSessionEntrySync(
+    { agentId: "main", sessionKey: SESSION_KEY },
+    {
+      ...original(SESSION_KEY).entry,
+      worktree: undefined,
+      repositoryWorkspaceId: workspace.workspaceId,
+    },
+  );
   return workspace;
 }
 

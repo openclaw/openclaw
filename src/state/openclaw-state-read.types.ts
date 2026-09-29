@@ -88,6 +88,7 @@ import type {
   AgentDeletionJournalStatus,
 } from "./agent-deletion-journal.types.js";
 import type {
+  SharedGitHubPublicationReadInput,
   GitHubPublicationReceiptTarget,
   GitHubPublicationRow,
   RepositoryGitHubPublicationReceiptTarget,
@@ -199,6 +200,7 @@ export type OpenClawStateReadCommand =
       publicationKind: "shared" | "personal";
       requestId: string;
     }
+  | { type: "githubPublication.sharedObservation"; input: SharedGitHubPublicationReadInput }
   | { type: "githubPublication.request"; requestId: string }
   | { type: "githubRepository.request"; requestId: string }
   | { type: "githubPublication.knownPullRequestUrls"; input: GitHubPublicationReceiptTarget }
@@ -319,6 +321,10 @@ export type OpenClawStateReadResult =
   | {
       type: "githubPublication.lifecycle";
       lifecycle: GitHubPublicationSessionLifecycle | undefined;
+    }
+  | {
+      type: "githubPublication.sharedObservation";
+      row: GitHubPublicationRow | RepositoryGitHubPublicationRow | undefined;
     }
   | {
       type: "githubPublication.request";

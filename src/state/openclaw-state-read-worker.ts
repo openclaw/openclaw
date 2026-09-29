@@ -103,6 +103,22 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
   if (command.type === "cron.jobNames") {
     return { ...command, jobIds: [...command.jobIds] };
   }
+  if (command.type === "githubPublication.sharedObservation") {
+    return {
+      type: command.type,
+      input: {
+        ...command.input,
+        session: { ...command.input.session },
+        selector: { ...command.input.selector },
+        entry: {
+          ...command.input.entry,
+          ...(command.input.entry.worktree
+            ? { worktree: { ...command.input.entry.worktree } }
+            : {}),
+        },
+      },
+    };
+  }
   if (command.type === "sessionRepositoryWorkspaces.find") {
     return {
       type: command.type,
@@ -265,6 +281,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       (sum, id) => sum + Buffer.byteLength(id, "utf8"),
       bytes + Buffer.byteLength(command.storePath ?? "", "utf8"),
     );
+  }
+  if (command.type === "githubPublication.sharedObservation") {
+    return bytes + Buffer.byteLength(JSON.stringify(command.input), "utf8");
   }
   if (command.type === "sessionRepositoryWorkspaces.find") {
     return command.owners.reduce(
