@@ -63,7 +63,10 @@ it.each(["asc", "desc"] as const)("orders history timestamps and ties %s", (sort
     { id: "tie-b", createdAt: 5, endedAt: 20 },
     { id: "last-event", createdAt: 0, lastEventAt: 30 },
   ].map((record) => ({
-    ...record,
+    id: record.id,
+    createdAt: record.createdAt,
+    endedAt: record.endedAt,
+    lastEventAt: record.lastEventAt,
     jobId: "job",
     status: "succeeded",
     detail: { kind: "cron-run", storeKey: "store", status: "ok", runId: record.id },
