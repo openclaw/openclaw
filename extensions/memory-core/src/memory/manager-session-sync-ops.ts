@@ -437,17 +437,11 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     sessions?: MemorySessionSyncTarget[];
     archiveFiles?: string[];
   }) {
-    const files = new Set<string>();
     const corpusEntries = await this.listSessionCorpusEntries();
-    for (const file of this.normalizeTargetArchiveFiles(params.archiveFiles, corpusEntries) ?? []) {
-      files.add(file);
-    }
-    for (const file of await this.resolveArchiveFilesForSyncTargets(
-      params.sessions,
-      corpusEntries,
-    )) {
-      files.add(file);
-    }
+    const files = new Set([
+      ...(this.normalizeTargetArchiveFiles(params.archiveFiles, corpusEntries) ?? []),
+      ...(await this.resolveArchiveFilesForSyncTargets(params.sessions, corpusEntries)),
+    ]);
     return files.size > 0 ? { corpusEntries, targetArchiveFiles: files } : null;
   }
 

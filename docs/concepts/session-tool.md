@@ -169,6 +169,7 @@ During healthy worker provisioning or workspace preparation, accepted input stay
 
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return immediately.
 - **Wait for reply:** set a timeout and get the response inline.
+- **Guide your running child:** with no `mode` and `timeoutSeconds: 0`, a send to your own spawned child steers into its active run and acknowledges queue admission, like `mode: "steer"`, not persistence or model consumption. This admission is not restart-durable. Use `mode: "followup"` for a separate child turn with its own completion. An idle child or one whose run rejects the steer starts a new turn. Explicit modes keep their existing behavior.
 - **Continue a paused child task:** send the continuation without `mode`. When the caller controls a native child paused by `sessions_yield` with task-owned completion, the runtime resumes that task automatically, preserving its identity and original completion recipient. Use `mode: "resume"` to require this behavior explicitly. An explicit `mode: "followup"` starts a separate turn and leaves the paused task intact.
 
 A separate follow-up to your native child starts only after Gateway admission
@@ -218,9 +219,13 @@ to keep the receiver's configured budget; bound the CLI wait separately with
 [`gateway call --timeout`](/cli/gateway/query#gateway-call-method).
 
 An accepted result keeps target admission separate from announcement delivery.
-`targetDisposition` is `queued` for a new turn or `steered` for an active turn;
+`targetDisposition` is `queued` for a new turn or `steered` for an active turn, including default sends with no reply wait to your own running child;
 `delivery.status` describes only the later announcement as `pending` or `skipped`.
 Neither field is a target-completion receipt.
+Default zero-wait sends to your own running child acknowledge queue admission,
+like `mode: "steer"`; they do not confirm transcript persistence or model consumption
+and are not restart-durable. They produce no separate completion turn. Use
+`mode: "followup"` when you need that separate child turn and completion.
 
 If an idempotent retry finds that the original admission is still pending, the
 tool returns an error with `sentBeforeError: true` and the existing run ID, without
@@ -269,7 +274,7 @@ Subagent coordination does not use this loop. A child report goes to its recipie
 
 Isolated scheduled jobs receive no automatic reply turns, including failure notifications. Their peer-target announcements remain unchanged. If such a scheduled job's wait ends before a native child replies, that reply follows the target's existing announcement path without a reciprocal reply exchange.
 
-These reply deliveries apply to new or follow-up turns. `mode: "steer"` returns admission only for guidance added to an active run and leaves completion with that run's existing owner. It uses the existing `sessions_send` access checks. For the built-in runtime, a busy tool or model response can delay transcript persistence until the next steering boundary; the send's reply-wait deadline does not withdraw admitted guidance. Acceptance is not proof of transcript persistence or model consumption, and does not make the in-memory steering queue restart-durable. Existing explicit cancellation, run-lifecycle, and authorization rules still apply. `mode: "notify"` queues context without starting a turn. Registered task completion and paused-task resume keep their existing completion owner and do not add a second reply delivery.
+These reply deliveries apply to new or follow-up turns. Default sends with no reply wait to your own running child skip separate reply delivery and leave completion with the active run's owner. `mode: "steer"` returns admission only for guidance added to an active run and leaves completion with that run's existing owner. It uses the existing `sessions_send` access checks. For the built-in runtime, a busy tool or model response can delay transcript persistence until the next steering boundary; the send's reply-wait deadline does not withdraw admitted guidance. Acceptance is not proof of transcript persistence or model consumption, and does not make the in-memory steering queue restart-durable. Existing explicit cancellation, run-lifecycle, and authorization rules still apply. `mode: "notify"` queues context without starting a turn. Registered task completion and paused-task resume keep their existing completion owner and do not add a second reply delivery.
 
 Child coordination stays in agent context and raw transcripts. The receiving chat hides child reports and automatic coordination replies, while normal task-completion summaries and direct human answers remain visible. Historical messages without source provenance cannot be classified as child traffic.
 

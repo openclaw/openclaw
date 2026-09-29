@@ -81,6 +81,7 @@ import {
 } from "./session-canonical-key.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
+import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -159,7 +160,7 @@ export function listSessionChildEntriesReadOnly(
             "current_session_id",
             "updated_at",
           ])
-        : db.selectFrom("session_nodes").selectAll();
+        : db.selectFrom("session_nodes").selectAll().select(sessionEntrySnapshotColumns);
     // Separate indexed lookups avoid a whole-store scan chosen for OR with ordering.
     const sessionKeys = db.selectFrom("session_nodes").select("session_key");
     const childKeys = sessionKeys

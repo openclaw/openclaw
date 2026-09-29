@@ -41,6 +41,7 @@ import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
+import { admitMigratedGatewayRecovery } from "./update-command-service-recovery.js";
 import {
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
@@ -163,7 +164,7 @@ export async function finishUpdate(
       params.rollbackBlockedReason = "state-migrated-no-rollback";
     }
     let result = initialResult;
-    let recoverService = initialRecoverService;
+    let recoverService = initialRecoverService && !params.rollbackBlockedReason;
     if (
       result.status === "error" &&
       (params.packageTransaction ||
@@ -216,7 +217,6 @@ export async function finishUpdate(
     }
     if (result.status === "error" && params.rollbackBlockedReason) {
       result = { ...result, reason: params.rollbackBlockedReason };
-      recoverService = false;
     } else if (
       result.status === "error" &&
       params.result.status === "ok" &&
@@ -235,6 +235,8 @@ export async function finishUpdate(
         { env: params.opts.run.env },
       );
     }
+    recoverService ||=
+      !gatewayStartAttempted && (await admitMigratedGatewayRecovery(params, result, assertCurrent));
     if (isUpdateGatewayReadinessPending(result)) {
       triageAllowed = false;
       return { result, recoverService: false };

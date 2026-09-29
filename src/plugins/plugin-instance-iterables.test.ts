@@ -162,24 +162,31 @@ describe("plugin async iterable protocol", () => {
     await iterator.return();
   });
 
-  it.each(["inner", "outer"] as const)(
-    "fences nested result readers and callable chunks when the %s consumer closes",
-    async (closed) => {
+  it.each([
+    { closed: "inner", terminal: false },
+    { closed: "outer", terminal: false },
+    { closed: "inner", terminal: true },
+    { closed: "outer", terminal: true },
+  ])(
+    "fences nested callable results when $closed closes (terminal=$terminal)",
+    async ({ closed, terminal }) => {
       const instance = owner();
       const inner = instance.retainConsumer();
       const outer = instance.retainConsumer();
       const called = vi.fn(() => "chunk");
       const source = instance.wrap({
         async *[Symbol.asyncIterator]() {
-          yield { read: called };
+          const chunk = { read: called };
+          if (!terminal) {
+            yield chunk;
+          }
+          return chunk;
         },
       });
       const iterator = outer.wrap(inner.wrap(source))[Symbol.asyncIterator]();
       try {
         const next = await iterator.next();
-        if (next.done) {
-          throw new Error("Expected a callable chunk");
-        }
+        expect(next.done).toBe(terminal);
         const chunk = next.value;
         expect(chunk.read()).toBe("chunk");
         (closed === "inner" ? inner : outer).release();

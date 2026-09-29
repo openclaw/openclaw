@@ -151,6 +151,7 @@ export async function prepareGatewayKernelState(params: {
     workerLiveEvents,
     nodeWorkerGatewayNamespace,
     nodeWorkerBundleRetention,
+    runtimeInstall,
     bindDeviceNodeControl,
     bindWorkerNodeDesktopControl,
     bindNodeWorkspaceBindingResolver,
@@ -185,7 +186,7 @@ export async function prepareGatewayKernelState(params: {
           warn: (message) => log.warn(message),
         })
       : undefined;
-  const workerPlacementRuntime =
+  const workerPlacement =
     workerEnvironmentService &&
     workerEnvironmentStartup &&
     nodeWorkerGatewayNamespace &&
@@ -237,6 +238,9 @@ export async function prepareGatewayKernelState(params: {
           }),
         )
       : undefined;
+  const workerPlacementRuntime = workerPlacement
+    ? { ...workerPlacement, runtimeInstall }
+    : undefined;
   if (workerPlacementRuntime && workerEnvironmentService) {
     const { createDevicePlacementDemandReader } =
       await import("./worker-environments/device-placement-demand.js");

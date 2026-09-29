@@ -174,8 +174,15 @@ export function createMergeOutcomeFixtureHarness() {
         restPolicy?: string;
         priorCi?: Partial<ReturnType<typeof createPriorCiFixtureState>>;
         postAuthorityRestBoundary?: "start" | "complete";
+        afterPolicyRead?: boolean;
       },
       restObservationAppliedAt: 0,
+      restObservations: [] as Array<{
+        main?: string;
+        advanceMain?: boolean;
+        pr?: Record<string, unknown>;
+        priorCi?: Partial<ReturnType<typeof createPriorCiFixtureState>>;
+      }>,
       restMergePayload: null as null | {
         sha: string;
         merge_method: string;
@@ -382,8 +389,7 @@ const advanceMain=()=>{
   git(["--git-dir="+process.env.FIXTURE_REMOTE,"update-ref","refs/heads/main",next,parent]);
   s.mainAdvances.push(next);
 };
-const applyRestObservation=()=>{
-  const next=s.restObservation;
+const applyRestObservation=(next=s.restObservation)=>{
   if(next.main) git(["push","-q","--force","origin",next.main+":refs/heads/main"]);
   if(next.pr) Object.assign(s.pr,next.pr);
   if(next.advanceMain) advanceMain();
@@ -437,7 +443,7 @@ else if(args[0]==="api"&&args.includes("user")) {
 }
 else if(args[0]==="api"&&args.includes("repos/fixture/repo/pulls/123")) {
   if(s.repoAuthorityUnavailable) fail("repository metadata unavailable");
-  if(s.restObservation&&s.restObservation.postAuthorityRestBoundary===undefined&&
+  if(s.restObservation&&!s.restObservation.afterPolicyRead&&s.restObservation.postAuthorityRestBoundary===undefined&&
     (s.quotaTriggered||(s.graphqlMergeProjection&&s.observationReads>0))) {
     applyRestObservation();
   }
@@ -452,7 +458,8 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/pulls/123")) {
   out(args.includes("--include")?"HTTP/2.0 200 OK\\n\\n"+JSON.stringify(record):record);
 }
 else if(args[0]==="api"&&args.includes("repos/fixture/repo/git/ref/heads/main")) {
-  if(s.restObservation?.main&&s.restMainReads===0&&s.observationReads>0) applyRestObservation();
+  if(s.restMainReads%2===0&&s.restObservations.length) applyRestObservation(s.restObservations.shift());
+  if(s.restObservation?.main&&!s.restObservation.afterPolicyRead&&s.restMainReads===0&&s.observationReads>0) applyRestObservation();
   s.restMainReads++;
   if(s.restMainAdvance&&s.pr.state==="OPEN") {
     const retained=spawnSync("git",["show","refs/openclaw/pr-merge-outcomes/123:outcome.json"],{cwd:process.env.FIXTURE_REPO,encoding:"utf8"});
@@ -472,6 +479,7 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/git/ref/heads/main"))
     if(s.restMainFault==="wrong-type") reference.object.type="tag";
     if(s.restMainFault==="missing-object") delete reference.object;
     if(s.restMainFault==="invalid-sha") reference.object.sha="not-a-commit";
+    if(s.restMainFault==="unavailable-sha-once") {reference.object.sha="f".repeat(40);s.restMainFault="";save();}
   }
   out(reference);
   if(s.restObservation?.postAuthorityRestBoundary) {
@@ -495,6 +503,7 @@ else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/rules
     ...(s.priorCi.enabled?[{type:"pull_request",parameters:{required_approving_review_count:s.priorCi.reviewCount,require_code_owner_review:s.priorCi.requireCodeOwners,require_last_push_approval:s.priorCi.requireLastPush,required_review_thread_resolution:s.priorCi.requireThreads}}]:[]),
     ...(s.restPolicy==="queue"?[{type:"merge_queue"}]:s.restPolicy==="unsupported"?[{type:"workflows"}]:[])
   ]]);
+  if(s.restObservation?.afterPolicyRead&&s.restMainReads>0) applyRestObservation();
 }
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/check-suites/"))) {
   const endpoint=args.find(arg=>arg.startsWith("repos/fixture/repo/check-suites/"));

@@ -11,6 +11,7 @@ import type {
   BrowserStatus,
   BrowserTabsResult,
   BrowserTransport,
+  ProfileStatus,
   SnapshotAriaNode,
 } from "./client.types.js";
 import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
@@ -31,6 +32,7 @@ export type {
   BrowserTab,
   BrowserTabsResult,
   BrowserTransport,
+  ProfileStatus,
 } from "./client.types.js";
 export type { BrowserDoctorCheck, BrowserDoctorReport } from "./doctor.js";
 
@@ -73,21 +75,6 @@ async function sendTabCloseRequest(
     signal: opts?.signal,
   });
 }
-
-export type ProfileStatus = {
-  name: string;
-  transport?: BrowserTransport;
-  cdpPort: number | null;
-  cdpUrl: string | null;
-  color: string;
-  driver: "openclaw" | "existing-session" | "extension";
-  running: boolean;
-  tabCount: number;
-  isDefault: boolean;
-  isRemote: boolean;
-  missingFromConfig?: boolean;
-  reconcileReason?: string | null;
-};
 
 export type BrowserResetProfileResult = {
   ok: true;

@@ -1,7 +1,7 @@
+import { Routes } from "discord-api-types/v10";
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
-  createChannelMessage,
   deleteChannelMessage,
   editChannelMessage,
   type RequestClient,
@@ -116,12 +116,12 @@ export function createDiscordDraftStream(params: {
         ? { message_id: replyToMessageId, fail_if_not_exists: false }
         : undefined;
       activeCreateGeneration = generation;
-      const sent = await createChannelMessage<{ id?: string }>(rest, targetChannelId, {
+      const sent = (await rest.post(Routes.channelMessages(targetChannelId), {
         body: {
           ...body,
           ...(messageReference ? { message_reference: messageReference } : {}),
         },
-      });
+      })) as { id?: string }; // SAFETY: The create response's ID is checked before use.
       const sentMessageId = sent?.id;
       const shouldDiscardStaleCreate = activeCreateGeneration === generation && discardActiveCreate;
       activeCreateGeneration = undefined;

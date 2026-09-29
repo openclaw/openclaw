@@ -15,6 +15,7 @@ import {
   prepareClaudeNoPrefillRequestContext,
   requiresClaudeAdaptiveThinking,
   resolveClaudeOpus5ModelIdentity,
+  resolveClaudeSonnet55ModelIdentity,
   supportsClaudeAdaptiveThinking,
   usesClaudeFable5MessagesContract,
   usesClaudeStreamingRefusalContract,
@@ -100,7 +101,8 @@ function isKimiAnthropicProvider(provider: string | undefined): boolean {
 function useAnthropicServerSideFallback(model: AnthropicTransportModel): boolean {
   return (
     (usesClaudeFable5MessagesContract(model) ||
-      resolveClaudeOpus5ModelIdentity(model) !== undefined) &&
+      resolveClaudeOpus5ModelIdentity(model) !== undefined ||
+      resolveClaudeSonnet55ModelIdentity(model) !== undefined) &&
     isDirectAnthropicModel(model)
   );
 }
@@ -494,7 +496,7 @@ async function buildAnthropicParams(
     max_tokens: maxTokens,
     stream: true,
   };
-  // Fable 5 and Opus 5 safety classifiers can decline benign-adjacent work.
+  // Fable 5, Opus 5, and Sonnet 5.5 safety classifiers can decline benign-adjacent work.
   // Anthropic owns the per-category fallback recommendation so routing can
   // evolve without a client release.
   if (!isOAuthToken && useAnthropicServerSideFallback(model)) {

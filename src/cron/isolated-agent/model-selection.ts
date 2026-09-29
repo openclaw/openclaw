@@ -227,37 +227,56 @@ export async function resolveCronModelSelection(
     agentId: ownerAgentId,
     manifestPlugins: owner.metadataSnapshot,
   };
-  let provider = resolvedDefault.provider;
-  let model = resolvedDefault.model;
-  let modelSource: CronModelSelectionSource = "default";
-  let configuredProfileId = splitTrailingAuthProfile(
-    resolveAgentModelPrimaryValue(cfgWithAgentDefaults.agents?.defaults?.model) ?? "",
-  ).profile;
-
-  const subagentModelConfigSelection = resolveSubagentModelConfigSelectionResult({
-    cfg: owner.config,
-    agentId: ownerAgentId,
-    agentConfigOverride: ownerAgentConfigOverride,
-  });
-  const subagentModelRaw = normalizeModelSelection(subagentModelConfigSelection?.raw);
-  const subagentModelSource: CronModelSelectionSource =
-    subagentModelConfigSelection?.source === "agent" ? "agent" : "subagent";
-  if (subagentModelRaw) {
-    // Subagent/agent model config is advisory here: invalid refs fall back to
-    // defaults so an agent config typo does not prevent unrelated cron runs.
-    const resolvedSubagent = resolveAllowedModelRefCore({
-      ...selectionParams,
-      raw: subagentModelRaw,
-    });
-    if (!("error" in resolvedSubagent)) {
-      provider = resolvedSubagent.ref.provider;
-      model = resolvedSubagent.ref.model;
-      modelSource = subagentModelSource;
-      configuredProfileId = splitTrailingAuthProfile(subagentModelRaw).profile;
+  const selection = (
+    ref: { provider: string; model: string },
+    modelSource: CronModelSelectionSource,
+    profileModel?: string,
+  ): Extract<ResolveCronModelSelectionResult, { ok: true }> => {
+    const configuredProfileId = splitTrailingAuthProfile(profileModel ?? "").profile;
+    return {
+      ok: true,
+      provider: ref.provider,
+      model: ref.model,
+      modelSource,
+      ...(configuredProfileId ? { configuredProfileId } : {}),
+      cfgWithAgentDefaults,
+      owner,
+    };
+  };
+  const override = (
+    raw: string | undefined,
+    source: "payload" | "session" | "agent" | "subagent",
+  ): ResolveCronModelSelectionResult | undefined => {
+    if (!raw) {
+      return undefined;
     }
+    const resolved = resolveAllowedModelRefCore({ ...selectionParams, raw });
+    if (!("error" in resolved)) {
+      return selection(resolved.ref, source, source === "session" ? undefined : raw);
+    }
+    // Payload overrides are explicit; invalid advisory config falls through.
+    return source === "payload"
+      ? {
+          ok: false,
+          error: formatCronPayloadModelRejection({
+            cfg: owner.config,
+            agentId: ownerAgentId,
+            modelOverride: raw,
+            error: resolved.error,
+          }),
+        }
+      : undefined;
+  };
+
+  const modelOverrideRaw = params.payload.kind === "agentTurn" ? params.payload.model : undefined;
+  const payloadSelection = override(
+    typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined,
+    "payload",
+  );
+  if (payloadSelection) {
+    return payloadSelection;
   }
 
-  let hooksGmailModelApplied = false;
   const hooksGmailModelRef = params.isGmailHook
     ? resolveHooksGmailModel({
         cfg: owner.config,
@@ -265,77 +284,38 @@ export async function resolveCronModelSelection(
         manifestPlugins: owner.metadataSnapshot,
       })
     : null;
-  if (hooksGmailModelRef) {
-    // Gmail hook models are specialized defaults: apply them only when the
-    // configured ref is allowed, otherwise keep the broader cron default.
-    const status = getModelRefStatus({
-      ...selectionParams,
-      ref: hooksGmailModelRef,
-    });
-    if (status.allowed) {
-      provider = hooksGmailModelRef.provider;
-      model = hooksGmailModelRef.model;
-      hooksGmailModelApplied = true;
-      modelSource = "hook";
-      configuredProfileId = splitTrailingAuthProfile(
-        owner.config.hooks?.gmail?.model ?? "",
-      ).profile;
-    }
+  if (
+    hooksGmailModelRef &&
+    getModelRefStatus({ ...selectionParams, ref: hooksGmailModelRef }).allowed
+  ) {
+    return selection(hooksGmailModelRef, "hook", owner.config.hooks?.gmail?.model);
   }
 
-  const modelOverrideRaw = params.payload.kind === "agentTurn" ? params.payload.model : undefined;
-  const modelOverride = typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined;
-  if (modelOverride !== undefined && modelOverride.length > 0) {
-    // Payload model overrides are explicit cron config, so reject disallowed
-    // refs instead of silently falling back to defaults.
-    const resolvedOverride = resolveAllowedModelRefCore({
-      ...selectionParams,
-      raw: modelOverride,
-    });
-    if ("error" in resolvedOverride) {
-      return {
-        ok: false,
-        error: formatCronPayloadModelRejection({
-          cfg: owner.config,
-          agentId: ownerAgentId,
-          modelOverride,
-          error: resolvedOverride.error,
-        }),
-      };
-    }
-    provider = resolvedOverride.ref.provider;
-    model = resolvedOverride.ref.model;
-    modelSource = "payload";
-    configuredProfileId = splitTrailingAuthProfile(modelOverride).profile;
+  const sessionModelOverride = params.sessionEntry.modelOverride?.trim();
+  const sessionSelection = override(
+    sessionModelOverride
+      ? `${params.sessionEntry.providerOverride?.trim() || resolvedDefault.provider}/${sessionModelOverride}`
+      : undefined,
+    "session",
+  );
+  if (sessionSelection) {
+    return sessionSelection;
   }
 
-  if (!modelOverride && !hooksGmailModelApplied) {
-    const sessionModelOverride = params.sessionEntry.modelOverride?.trim();
-    if (sessionModelOverride) {
-      // Stored session overrides are lowest precedence so explicit cron payload
-      // and hook-specific models can intentionally move a run away from history.
-      const sessionProviderOverride =
-        params.sessionEntry.providerOverride?.trim() || resolvedDefault.provider;
-      const resolvedSessionOverride = resolveAllowedModelRefCore({
-        ...selectionParams,
-        raw: `${sessionProviderOverride}/${sessionModelOverride}`,
-      });
-      if (!("error" in resolvedSessionOverride)) {
-        provider = resolvedSessionOverride.ref.provider;
-        model = resolvedSessionOverride.ref.model;
-        modelSource = "session";
-        configuredProfileId = undefined;
-      }
-    }
-  }
-
-  return {
-    ok: true,
-    provider,
-    model,
-    modelSource,
-    ...(configuredProfileId ? { configuredProfileId } : {}),
-    cfgWithAgentDefaults,
-    owner,
-  };
+  const subagentSelection = resolveSubagentModelConfigSelectionResult({
+    cfg: owner.config,
+    agentId: ownerAgentId,
+    agentConfigOverride: ownerAgentConfigOverride,
+  });
+  return (
+    override(
+      normalizeModelSelection(subagentSelection?.raw),
+      subagentSelection?.source === "agent" ? "agent" : "subagent",
+    ) ??
+    selection(
+      resolvedDefault,
+      "default",
+      resolveAgentModelPrimaryValue(cfgWithAgentDefaults.agents?.defaults?.model),
+    )
+  );
 }

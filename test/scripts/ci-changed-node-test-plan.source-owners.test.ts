@@ -1032,6 +1032,18 @@ describe("CI changed Node test plan", () => {
       expected: ["test/scripts/tsgo-core-test-shards.test.ts"],
     },
     {
+      changedPath: "scripts/lib/ci-proof-test-inventory.mts",
+      expected: ["test/vitest-pr-exempt-retention.test.ts"],
+    },
+    {
+      changedPath: "scripts/lib/test-selector-source-facts.mts",
+      expected: ["test/vitest-pr-exempt-retention.test.ts"],
+    },
+    {
+      changedPath: "scripts/lib/test-source-term-matcher.mts",
+      expected: ["test/vitest-pr-exempt-retention.test.ts"],
+    },
+    {
       changedPath: "src/plugins/plugin-instance.ts",
       expected: [
         "test/scripts/eager-import-closure.test.ts",
@@ -1067,6 +1079,7 @@ describe("CI changed Node test plan", () => {
           runnerBackend: "github",
           includeReleaseOnlyToolingShards: false,
           includeReleaseOnlyRuntimeTests: false,
+          includePrExemptRuntimeTests: false,
           onFallback: (reason) => reasons.push(reason),
         });
         expect(shards, reasons.join("\n")).not.toBeNull();
@@ -1074,6 +1087,9 @@ describe("CI changed Node test plan", () => {
         for (const guard of expected) {
           expect(files.filter((file) => file === guard)).toHaveLength(1);
         }
+        expect(files.includes("test/vitest-pr-exempt-retention.test.ts")).toBe(
+          expected.includes("test/vitest-pr-exempt-retention.test.ts"),
+        );
         expect(files).toContain(importer);
         expect(files).toContain(deferred);
         expect(files).not.toContain("test/scripts/mobile-release-ci.test.ts");

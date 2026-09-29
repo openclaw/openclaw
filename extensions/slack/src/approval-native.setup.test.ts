@@ -23,13 +23,21 @@ describe("Slack approval setup guidance", () => {
     expect(text).not.toContain("`channels.slack.dm.allowFrom`");
   });
 
-  it("does not reuse exec setup copy for plugin approval setup", () => {
+  it("guides plugin approvals to the scoped reviewer list and live bot workspace", () => {
     expect(
       slackApprovalCapability.describeExecApprovalSetup?.({
         channel: "slack",
         channelLabel: "Slack",
       }),
     ).toContain("`channels.slack.execApprovals.approvers`");
-    expect(slackApprovalCapability.describePluginApprovalSetup).toBeUndefined();
+    const text = slackApprovalCapability.describePluginApprovalSetup?.({
+      channel: "slack",
+      channelLabel: "Slack",
+      accountId: "work",
+    });
+    expect(text).toContain("`approvals.plugin.slack`");
+    expect(text).toContain("bot's workspace");
+    expect(text).toContain("Slack bot is connected");
+    expect(text).not.toContain("execApprovals");
   });
 });

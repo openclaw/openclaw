@@ -39,7 +39,10 @@ import { parsePluginReleaseSelection } from "./lib/plugin-npm-release.ts";
 import { loadChangelogCollection, loadReleaseChangelog } from "./lib/release-changelog.mjs";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
 import { ensureReleasePublishToolingTag } from "./lib/release-publish-preflight-evidence.mts";
-import { formatReleasePublishPreflight } from "./lib/release-publish-preflight-interface.mts";
+import {
+  formatReleasePublishPreflight,
+  isStableLatestPublication,
+} from "./lib/release-publish-preflight-interface.mts";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import {
   downloadFullReleaseNpmPreflight,
@@ -1628,6 +1631,10 @@ export function buildPublishCommand(
     ["release_profile", "from-validation"],
     ["wait_for_clawhub", "false"],
   ];
+  if (mode === "publish" && isStableLatestPublication(options.tag, options.npmDistTag)) {
+    // Stable policy: GitHub goes Latest right after npm verification, before Docker.
+    fields.push(["finalize_release_before_docker", "true"]);
+  }
   if (options.npmTelegramRunId) {
     fields.push(["npm_telegram_run_id", options.npmTelegramRunId]);
   }

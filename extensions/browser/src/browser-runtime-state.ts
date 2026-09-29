@@ -25,6 +25,12 @@ export type BrowserDashboardRegistration = {
 };
 export type BrowserSessionTabOperationKey = string | symbol | BrowserDashboardRegistration;
 
+export type BrowserSessionTabAuthority = {
+  runtime?: BrowserStateRuntime;
+  assertCurrent?: () => void;
+  dashboardRegistration?: BrowserDashboardRegistration;
+};
+
 export type BrowserStateRuntime = {
   sessionTabs: PluginStateKeyedStore<unknown>;
   sessionTabInitialization?: Promise<void>;
@@ -45,6 +51,15 @@ const {
 });
 
 export { getBrowserStateRuntime, getOptionalBrowserStateRuntime, setBrowserStateRuntime };
+
+export function captureBrowserSessionTabAuthority(
+  authority: BrowserSessionTabAuthority = {},
+): BrowserSessionTabAuthority {
+  return {
+    ...authority,
+    runtime: authority.runtime ?? getOptionalBrowserStateRuntime() ?? undefined,
+  };
+}
 
 export function isBrowserStateRuntimeCurrent(
   runtime: BrowserStateRuntime | undefined,

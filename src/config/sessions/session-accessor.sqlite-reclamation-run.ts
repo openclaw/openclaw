@@ -10,6 +10,7 @@ import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import type {
+  SessionMaintenanceLiveProtection,
   SqliteSessionReclamationPlan,
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
@@ -51,6 +52,7 @@ function prepareReclamationWorkerTransferList(plan: SqliteSessionReclamationPlan
 export async function runPreparedSqliteSessionReclamation(
   params: {
     diagnostics?: SqliteSessionReclamationDiagnostics;
+    refreshMaintenanceProtection?: () => SessionMaintenanceLiveProtection;
     onWorkerResult?: (
       result: SqliteSessionReclamationResult,
       databaseIdentity: string | symbol,
@@ -95,12 +97,14 @@ export async function runPreparedSqliteSessionReclamation(
             plan.databaseOptions,
             async () => {
               let refusal: { error: unknown } | undefined;
+              let maintenanceProtection: SessionMaintenanceLiveProtection | undefined;
               try {
+                maintenanceProtection = params.refreshMaintenanceProtection?.();
                 assertCommitAllowed();
               } catch (error) {
                 refusal = { error };
               }
-              const completed = await run(refusal);
+              const completed = await run(refusal, maintenanceProtection);
               if (completed) {
                 // Publish captured identities after transaction settlement, before releasing the writer.
                 params.onWorkerResult?.(completed, claim.identity);

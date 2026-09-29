@@ -66,7 +66,6 @@ extensions/browser/src/browser/output-files.ts	1
 extensions/browser/src/browser/paths.ts	1
 extensions/browser/src/browser/playwright-core.runtime.ts	2
 extensions/browser/src/browser/pw-download-capture.ts	1
-extensions/browser/src/browser/pw-role-snapshot.ts	1
 extensions/browser/src/browser/pw-session-actions.ts	2
 extensions/browser/src/browser/pw-session-navigation.ts	1
 extensions/browser/src/browser/pw-tools-core.interactions.actions.ts	2
@@ -75,9 +74,7 @@ extensions/browser/src/browser/pw-tools-core.interactions.execution.ts	4
 extensions/browser/src/browser/pw-tools-core.interactions.navigation.ts	1
 extensions/browser/src/browser/pw-tools-core.snapshot.ts	1
 extensions/browser/src/browser/routes/agent.act.normalize.ts	1
-extensions/browser/src/browser/routes/agent.act.shared.ts	3
-extensions/browser/src/browser/routes/basic.ts	6
-extensions/browser/src/browser/routes/permissions.ts	1
+extensions/browser/src/browser/routes/agent.act.shared.ts	1
 extensions/browser/src/browser/routes/tabs.ts	6
 extensions/browser/src/browser/server-context.remote-tab-ops.harness.ts	2
 extensions/browser/src/browser/server-context.tab-ops.ts	2
@@ -85,7 +82,6 @@ extensions/browser/src/browser/server-middleware.ts	2
 extensions/browser/src/browser/system-chrome-cookies.ts	1
 extensions/browser/src/browser/system-profiles.ts	1
 extensions/browser/src/browser/test-port.ts	1
-extensions/browser/src/browser/unhandled-rejections.ts	2
 extensions/browser/src/cli/browser-cli-actions-input/register.batch.ts	1
 extensions/browser/src/cli/browser-cli-manage.ts	1
 extensions/browser/src/cli/browser-cli-shared.ts	1
@@ -264,14 +260,14 @@ extensions/discord/src/components-registry.ts	3
 extensions/discord/src/components.builders.ts	1
 extensions/discord/src/components.parse.ts	12
 extensions/discord/src/doctor-contract.ts	4
-extensions/discord/src/internal/api.guild.ts	9
-extensions/discord/src/internal/api.messages.ts	9
+extensions/discord/src/internal/api.guild.ts	3
+extensions/discord/src/internal/api.messages.ts	5
 extensions/discord/src/internal/api.reactions.ts	1
 extensions/discord/src/internal/api.users.ts	3
 extensions/discord/src/internal/api.webhooks.ts	1
 extensions/discord/src/internal/command-comparison.ts	1
 extensions/discord/src/internal/command-deploy.ts	3
-extensions/discord/src/internal/commands.ts	6
+extensions/discord/src/internal/commands.ts	5
 extensions/discord/src/internal/components.message.ts	9
 extensions/discord/src/internal/components.modal.ts	1
 extensions/discord/src/internal/embeds.ts	1
@@ -1956,9 +1952,7 @@ src/cli/program/action-reparse.ts	1
 src/cli/program/command-tree.ts	1
 src/cli/program/json-mode.ts	2
 src/cli/program/message/helpers.ts	1
-src/cli/program/message/register.emoji-sticker.ts	1
 src/cli/program/message/register.permissions-search.ts	2
-src/cli/program/message/register.poll.ts	1
 src/cli/program/preaction.ts	1
 src/cli/program/program-context.ts	2
 src/cli/program/register-lazy-command.ts	1
@@ -2287,7 +2281,6 @@ src/gateway/mcp-app-reconstruction.ts	1
 src/gateway/mcp-http.handlers.ts	4
 src/gateway/mcp-http.schema.ts	3
 src/gateway/node-browser-proxy-policy.ts	1
-src/gateway/node-command-policy.ts	2
 src/gateway/node-pairing-ssh-verify.ts	1
 src/gateway/node-registry.ts	1
 src/gateway/openai-agent-run-usage.ts	1
@@ -3266,7 +3259,6 @@ ui/src/pages/memory-import/view.ts	2
 ui/src/pages/model-providers/view.ts	3
 ui/src/pages/model-setup/provider-picker.ts	2
 ui/src/pages/model-setup/view.ts	2
-ui/src/pages/new-session/discovery.ts	3
 ui/src/pages/new-session/draft-place-browser.ts	2
 ui/src/pages/new-session/place-browser.ts	1
 ui/src/pages/new-session/preferences.ts	1
