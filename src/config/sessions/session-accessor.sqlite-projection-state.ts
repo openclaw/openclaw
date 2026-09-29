@@ -3,7 +3,6 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { SessionEntryLifecycleUpsertConflictError } from "./session-accessor.lifecycle-types.js";
 import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
-import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import {
   deleteLegacySessionEntryRows,
@@ -19,8 +18,9 @@ import {
   shouldRemoveSessionEntry,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
+  ProjectedLifecycleCommitResult,
+  ProjectedLifecycleRemovalCommitInput,
   ProjectedLifecycleMutation,
-  SessionEntryMaintenanceInput,
   SessionEntryMaintenancePlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
@@ -30,21 +30,6 @@ import {
 import { appendSessionResetBoundary } from "./session-accessor.sqlite-reset-boundary.js";
 import type { ResolvedSqliteReadScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "./types.js";
-
-export type ProjectedLifecycleCommitResult = {
-  archivedTranscripts: SessionLifecycleArchivedTranscript[];
-  beforeCount: number;
-  maintenancePlans: SessionEntryMaintenancePlan[];
-  removedSessionKeys: string[];
-  pendingArchives: boolean;
-};
-
-export type ProjectedLifecycleRemovalCommitInput = {
-  projected: ProjectedLifecycleMutation;
-  materializationFailed: boolean;
-  allowCanonicalRepair?: boolean;
-  maintenance: SessionEntryMaintenanceInput | null;
-};
 
 type ProjectedLifecycleCommitOptions = Omit<ProjectedLifecycleRemovalCommitInput, "maintenance"> & {
   removalPlans: MaterializedSessionStateDeletePlan[];

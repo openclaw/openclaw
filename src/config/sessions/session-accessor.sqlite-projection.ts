@@ -58,6 +58,7 @@ import {
   projectSessionEntryLifecycleMutation,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
+  ProjectedLifecycleCommitResult,
   ProjectedLifecycleMutation,
   SessionEntryLifecycleMutationParams,
   SessionEntryMaintenanceInput,
@@ -68,10 +69,7 @@ import {
   applySessionEntryMaintenance,
   finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort,
 } from "./session-accessor.sqlite-maintenance.js";
-import {
-  commitProjectedSessionEntryLifecycleMutationInDatabase,
-  type ProjectedLifecycleCommitResult,
-} from "./session-accessor.sqlite-projection-state.js";
+import { commitProjectedSessionEntryLifecycleMutationInDatabase } from "./session-accessor.sqlite-projection-state.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
 import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlite-replacement-worker.js";

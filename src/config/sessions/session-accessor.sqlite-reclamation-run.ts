@@ -17,15 +17,13 @@ import type {
   DeleteSessionEntryLifecycleParams,
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
-import {
-  prepareSessionDeletionInDatabase,
-  type SessionDeletionPlanningOperation,
-  type SessionDeletionPlanningResult,
-} from "./session-accessor.sqlite-deletion-plan.js";
+import { prepareSessionDeletionInDatabase } from "./session-accessor.sqlite-deletion-plan.js";
 import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
 import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
 import { publishSessionEntryWorkerInvalidations } from "./session-accessor.sqlite-entry-cache-publication.js";
 import type {
+  SessionDeletionPlanningOperation,
+  SessionDeletionPlanningResult,
   SqliteSessionReclamationPlan,
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";

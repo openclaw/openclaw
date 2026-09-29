@@ -9,12 +9,8 @@ import {
   type OpenClawAgentDatabaseIdentity,
 } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import type { DeleteSessionEntryLifecycleParams } from "./session-accessor.sqlite-contract.js";
-import {
-  sqliteLifecycleTargetSnapshotsEqual,
-  type SqliteLifecycleTargetSnapshot,
-} from "./session-accessor.sqlite-entry-equality.js";
+import { sqliteLifecycleTargetSnapshotsEqual } from "./session-accessor.sqlite-entry-equality.js";
 import { readLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-store.js";
 import {
   readSqliteSessionGenerationClaim,
@@ -28,69 +24,21 @@ import {
   planSessionStateAfterEntryRemoval,
   readReferencedSessionIdsAfterTargetMutation,
 } from "./session-accessor.sqlite-lifecycle-state.js";
-import type { SqliteSessionDeletionScope } from "./session-accessor.sqlite-lifecycle-types.js";
+import type {
+  SessionDeletionPlanningOperation,
+  SessionDeletionPlanningResult,
+  SessionDeletionValidation,
+  SessionEntryDeletionPlanInput,
+  SessionEntryDeletionPlanResult,
+  SessionHistoricalDeletionCheckInput,
+  SessionHistoricalDeletionCheckResult,
+  SessionHistoricalDeletionPlanInput,
+  SessionHistoricalDeletionPlanResult,
+  SqliteSessionDeletionScope,
+} from "./session-accessor.sqlite-lifecycle-types.js";
 import { readSessionNodeArtifactFingerprint } from "./session-accessor.sqlite-node-artifacts.js";
 import { collectSessionAdmissionReferences } from "./session-history-eviction-candidates.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
-
-/** Transportable planning facts; live guards and native identity remain with their owners. */
-type SessionDeletionPlanningParams = Omit<
-  DeleteSessionEntryLifecycleParams,
-  "commitGuard" | "expectedDatabaseIdentity" | "descendantRunBasis"
->;
-
-type SessionEntryDeletionPlanInput = {
-  deleteParams: SessionDeletionPlanningParams;
-  archiveDirectory: string;
-  admissionIdentities: readonly string[];
-  allowLockedEntryRemoval: boolean;
-  expectedPluginOwnerId?: string;
-};
-type SessionEntryDeletionPlanResult =
-  | { kind: "missing" }
-  | { kind: "expected-entry-mismatch" }
-  | {
-      kind: "ready";
-      value: {
-        archiveDirectory: string;
-        current: SqliteLifecycleTargetSnapshot[number];
-        entryPlans: SessionStateDeletePlan[];
-        historicalGenerationIds: string[];
-        targetSnapshot: SqliteLifecycleTargetSnapshot;
-      };
-    };
-
-type SessionDeletionPlanningValidation = {
-  deleteParams: SessionDeletionPlanningParams;
-  preparedTargetSnapshot: SqliteLifecycleTargetSnapshot;
-  scope?: SqliteSessionDeletionScope;
-};
-type SessionHistoricalDeletionCheckInput = {
-  validation: SessionDeletionPlanningValidation;
-  sessionId: string;
-  admissionIdentities: readonly string[];
-};
-type SessionHistoricalDeletionPlanInput = SessionHistoricalDeletionCheckInput & {
-  archiveDirectory: string;
-  archiveTranscript: boolean;
-};
-type SessionHistoricalDeletionPlanResult =
-  | { kind: "expected-entry-mismatch" }
-  | { kind: "skip" }
-  | { kind: "ready"; plan: SessionStateDeletePlan };
-type SessionHistoricalDeletionCheckResult =
-  | { kind: "expected-entry-mismatch" }
-  | { kind: "ready"; protectedSessionIds: string[] };
-
-export type SessionDeletionPlanningOperation =
-  | { operation: "entry"; input: SessionEntryDeletionPlanInput }
-  | { operation: "history"; input: SessionHistoricalDeletionPlanInput }
-  | { operation: "check"; input: SessionHistoricalDeletionCheckInput };
-
-export type SessionDeletionPlanningResult =
-  | { operation: "entry"; value: SessionEntryDeletionPlanResult }
-  | { operation: "history"; value: SessionHistoricalDeletionPlanResult }
-  | { operation: "check"; value: SessionHistoricalDeletionCheckResult };
 
 export function prepareSessionDeletionInDatabase(
   database: OpenClawAgentDatabase,
@@ -350,12 +298,6 @@ function shouldDeleteSqliteSessionEntryLifecycle(
   }
   return true;
 }
-
-export type SessionDeletionValidation = {
-  deleteParams: DeleteSessionEntryLifecycleParams;
-  preparedTargetSnapshot: SqliteLifecycleTargetSnapshot;
-  scope?: SqliteSessionDeletionScope;
-};
 
 export function readValidatedSessionDeletionTarget(
   database: OpenClawAgentDatabase,

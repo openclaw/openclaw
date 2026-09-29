@@ -36,6 +36,7 @@ import {
   readSessionEntryStore,
 } from "./session-accessor.sqlite-entry-store.js";
 import type {
+  LifecycleRemovalProjectionInput,
   ProjectedLifecycleMutation,
   SessionEntryRemovalPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
@@ -342,12 +343,6 @@ export function readSessionGenerationIdsForKeys(
       .where("session_key", "in", sqliteStringSet(sessionKeys)),
   ).rows.map((row) => row.session_id);
 }
-
-export type LifecycleRemovalProjectionInput = {
-  allowCanonicalRepair?: boolean;
-  archiveDirectory: string;
-  removals: readonly SessionEntryLifecycleRemoval[];
-};
 
 function selectProjectedLifecycleRemovals(
   database: OpenClawAgentDatabase,

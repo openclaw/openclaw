@@ -24,7 +24,6 @@ import type {
 import {
   prepareSessionDeletionInDatabase,
   readValidatedSessionDeletionTarget,
-  type SessionDeletionValidation,
 } from "./session-accessor.sqlite-deletion-plan.js";
 import { runSqliteSessionDeletionTransaction } from "./session-accessor.sqlite-deletion.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
@@ -39,6 +38,7 @@ import {
   projectSessionEntryLifecycleRemovalsInDatabase,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
+  SessionDeletionValidation,
   ReclamationDatabaseOptions,
   ReclamationDeleteParams,
   SessionEntryMaintenanceInput,

@@ -25,17 +25,8 @@ import type {
   SessionEntryLifecycleRemoval,
   SessionEntryLifecycleUpsert,
 } from "./session-accessor.sqlite-contract.js";
-import type {
-  SessionDeletionPlanningOperation,
-  SessionDeletionPlanningResult,
-} from "./session-accessor.sqlite-deletion-plan.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
-import type { LifecycleRemovalProjectionInput } from "./session-accessor.sqlite-lifecycle-state.js";
 import type { SessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
-import type {
-  ProjectedLifecycleCommitResult,
-  ProjectedLifecycleRemovalCommitInput,
-} from "./session-accessor.sqlite-projection-state.js";
 import type {
   SessionEntryCommitContext,
   SessionEntryCreateWithTranscriptOptions,
@@ -45,6 +36,92 @@ import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 // Shared plan shapes only. Runtime ownership stays in maintenance and lifecycle-state.
+
+/** Transportable planning facts; live guards and native identity remain with their owners. */
+type SessionDeletionPlanningParams = Omit<
+  DeleteSessionEntryLifecycleParams,
+  "commitGuard" | "expectedDatabaseIdentity" | "descendantRunBasis"
+>;
+
+export type SessionEntryDeletionPlanInput = {
+  deleteParams: SessionDeletionPlanningParams;
+  archiveDirectory: string;
+  admissionIdentities: readonly string[];
+  allowLockedEntryRemoval: boolean;
+  expectedPluginOwnerId?: string;
+};
+export type SessionEntryDeletionPlanResult =
+  | { kind: "missing" }
+  | { kind: "expected-entry-mismatch" }
+  | {
+      kind: "ready";
+      value: {
+        archiveDirectory: string;
+        current: SqliteLifecycleTargetSnapshot[number];
+        entryPlans: SessionStateDeletePlan[];
+        historicalGenerationIds: string[];
+        targetSnapshot: SqliteLifecycleTargetSnapshot;
+      };
+    };
+
+type SessionDeletionPlanningValidation = {
+  deleteParams: SessionDeletionPlanningParams;
+  preparedTargetSnapshot: SqliteLifecycleTargetSnapshot;
+  scope?: SqliteSessionDeletionScope;
+};
+export type SessionHistoricalDeletionCheckInput = {
+  validation: SessionDeletionPlanningValidation;
+  sessionId: string;
+  admissionIdentities: readonly string[];
+};
+export type SessionHistoricalDeletionPlanInput = SessionHistoricalDeletionCheckInput & {
+  archiveDirectory: string;
+  archiveTranscript: boolean;
+};
+export type SessionHistoricalDeletionPlanResult =
+  | { kind: "expected-entry-mismatch" }
+  | { kind: "skip" }
+  | { kind: "ready"; plan: SessionStateDeletePlan };
+export type SessionHistoricalDeletionCheckResult =
+  | { kind: "expected-entry-mismatch" }
+  | { kind: "ready"; protectedSessionIds: string[] };
+
+export type SessionDeletionPlanningOperation =
+  | { operation: "entry"; input: SessionEntryDeletionPlanInput }
+  | { operation: "history"; input: SessionHistoricalDeletionPlanInput }
+  | { operation: "check"; input: SessionHistoricalDeletionCheckInput };
+
+export type SessionDeletionPlanningResult =
+  | { operation: "entry"; value: SessionEntryDeletionPlanResult }
+  | { operation: "history"; value: SessionHistoricalDeletionPlanResult }
+  | { operation: "check"; value: SessionHistoricalDeletionCheckResult };
+
+export type SessionDeletionValidation = {
+  deleteParams: DeleteSessionEntryLifecycleParams;
+  preparedTargetSnapshot: SqliteLifecycleTargetSnapshot;
+  scope?: SqliteSessionDeletionScope;
+};
+
+export type LifecycleRemovalProjectionInput = {
+  allowCanonicalRepair?: boolean;
+  archiveDirectory: string;
+  removals: readonly SessionEntryLifecycleRemoval[];
+};
+
+export type ProjectedLifecycleCommitResult = {
+  archivedTranscripts: SessionLifecycleArchivedTranscript[];
+  beforeCount: number;
+  maintenancePlans: SessionEntryMaintenancePlan[];
+  removedSessionKeys: string[];
+  pendingArchives: boolean;
+};
+
+export type ProjectedLifecycleRemovalCommitInput = {
+  projected: ProjectedLifecycleMutation;
+  materializationFailed: boolean;
+  allowCanonicalRepair?: boolean;
+  maintenance: SessionEntryMaintenanceInput | null;
+};
 
 export type SessionEntryLifecycleMutationParams = {
   /** Internal durable comparison paired with the caller's live descendant guard. */
