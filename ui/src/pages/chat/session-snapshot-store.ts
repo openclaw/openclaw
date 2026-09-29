@@ -16,6 +16,7 @@ import {
 import {
   CHAT_SNAPSHOT_METADATA_STORE_NAME,
   CHAT_SNAPSHOT_STORE_NAME,
+  debugSnapshotStore,
   openSessionSnapshotDatabase,
   readStoredChatSnapshotRecord,
   resetSessionSnapshotDatabase,
@@ -86,14 +87,6 @@ type PendingSessionState = {
 
 const activeStores = new Set<SessionSnapshotStore>();
 
-function debugSnapshotStore(message: string, error?: unknown): void {
-  if (error === undefined) {
-    console.debug(`[chat-snapshot-cache] ${message}`);
-  } else {
-    console.debug(`[chat-snapshot-cache] ${message}`, error);
-  }
-}
-
 function sanitizeSnapshot(snapshot: ChatSessionSnapshot): unknown {
   try {
     const json = JSON.stringify(snapshot);
@@ -158,20 +151,15 @@ async function readSnapshotMetadata(): Promise<SessionSnapshotMetadata[] | null>
 }
 
 function measureStoredRecordWeight(record: SessionSnapshotRecord): number {
-  const snapshotWeight = measureChatSnapshotWeight(record.snapshot) ?? 0;
-  try {
-    return (
-      snapshotWeight +
-      JSON.stringify({
-        cursorMatchesSnapshot: record.cursorMatchesSnapshot,
-        savedAt: record.savedAt,
-        sessionId: record.sessionId,
-        sessionKey: record.sessionKey,
-      }).length
-    );
-  } catch {
-    return snapshotWeight;
-  }
+  return (
+    (measureChatSnapshotWeight(record.snapshot) ?? 0) +
+    JSON.stringify({
+      cursorMatchesSnapshot: record.cursorMatchesSnapshot,
+      savedAt: record.savedAt,
+      sessionId: record.sessionId,
+      sessionKey: record.sessionKey,
+    }).length
+  );
 }
 
 async function writeSnapshotRecords(
@@ -341,10 +329,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   }
 
   async flush(): Promise<void> {
-    if (this.writeTimer !== null) {
-      globalThis.clearTimeout(this.writeTimer);
-      this.writeTimer = null;
-    }
+    this.clearWriteTimer();
     const pending = [...this.pending.entries()];
     const pendingRevisions = new Map(
       pending.map(([sessionKey]) => [sessionKey, this.revisions.get(sessionKey) ?? 0]),
@@ -380,10 +365,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   }
 
   clearMemory(): void {
-    if (this.writeTimer !== null) {
-      globalThis.clearTimeout(this.writeTimer);
-      this.writeTimer = null;
-    }
+    this.clearWriteTimer();
     this.pending.clear();
     this.hydratedSnapshots.clear();
     this.revisions.clear();
@@ -402,13 +384,18 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     };
     this.pending.set(sessionKey, pending);
     this.savedAtBySession.set(sessionKey, pending.savedAt);
-    if (this.writeTimer !== null) {
-      globalThis.clearTimeout(this.writeTimer);
-    }
+    this.clearWriteTimer();
     this.writeTimer = globalThis.setTimeout(() => {
       this.writeTimer = null;
       void this.flush();
     }, CHAT_SNAPSHOT_WRITE_DELAY_MS);
+  }
+
+  private clearWriteTimer(): void {
+    if (this.writeTimer !== null) {
+      globalThis.clearTimeout(this.writeTimer);
+      this.writeTimer = null;
+    }
   }
 
   private async seedSavedAtIndex(): Promise<void> {

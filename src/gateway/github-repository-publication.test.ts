@@ -154,7 +154,7 @@ describe("repository checkpoint GitHub publication", () => {
     "records unavailable %s publication without losing its accepted recovery checkpoint",
     async (source) => {
       const f = await repositoryFixture();
-      const retained = getSessionRepositoryWorkspaceStore().get(f.workspace.workspaceId);
+      const retained = await getSessionRepositoryWorkspaceStore().get(f.workspace.workspaceId);
       checkpoint.mockImplementation(async (_request, use) => await use({}));
       const personal = source === "personal" ? await createPersonalPublicationFixture() : undefined;
       if (personal) {
@@ -193,7 +193,9 @@ describe("repository checkpoint GitHub publication", () => {
         last_effect: null,
         owner_profile_id: personal?.owner ?? null,
       });
-      expect(getSessionRepositoryWorkspaceStore().get(f.workspace.workspaceId)).toEqual(retained);
+      expect(await getSessionRepositoryWorkspaceStore().get(f.workspace.workspaceId)).toEqual(
+        retained,
+      );
       expect(await request()).toEqual(result);
       await coordinator.resumeSessionRequests();
       expect(checkpoint).toHaveBeenCalledOnce();
@@ -545,12 +547,10 @@ describe("repository checkpoint GitHub publication", () => {
       expect(f.runtime.effects).toEqual(["push"]);
       if (boundary === "move") {
         if (person) {
+          const requestId = listRepositoryGitHubPublications()[0]!.request_id;
+          const prepared = await person.coordinator.preparePersonalStatus(requestId);
           expect(
-            person.coordinator.personalStatus(
-              person.action,
-              person.action,
-              listRepositoryGitHubPublications()[0]!.request_id,
-            ),
+            person.coordinator.personalStatus(person.action, person.action, requestId, prepared),
           ).toMatchObject({
             result: { status: "failed", code: "session_changed" },
             confirmation: null,

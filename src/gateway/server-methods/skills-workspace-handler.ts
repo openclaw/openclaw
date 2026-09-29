@@ -65,7 +65,7 @@ export type ResolvedSkillsWorkspace = Extract<
 
 export const SKILL_PROPOSAL_RESPONSE_HANDLED = Symbol("skill proposal response handled");
 
-export function defineSkillsProposalWorkspaceHandler<TParams>(
+export function defineSkillsProposalWorkspaceHandler<TParams extends { agentId?: string }>(
   method: string,
   validate: Validator<TParams>,
   run: (

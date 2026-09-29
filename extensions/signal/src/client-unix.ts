@@ -4,7 +4,7 @@ import net from "node:net";
 import { fileURLToPath } from "node:url";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { SignalRpcOptions } from "./client-types.js";
+import type { SignalRpcOptions, SignalSseEvent } from "./client-types.js";
 import { isSignalQuoteMetadataRejection } from "./quote-rejection.js";
 import { assertSignalSocketEndpoint } from "./socket-path.js";
 
@@ -157,7 +157,7 @@ export async function streamSignalUnixEvents(params: {
   account?: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
-  onEvent: (event: { event?: string; data?: string; id?: string }) => unknown;
+  onEvent: (event: SignalSseEvent) => unknown;
   onStreamOpen?: () => void;
 }): Promise<void> {
   // The monitor uses zero for unlimited stream idle time, not a 1 ms handshake.

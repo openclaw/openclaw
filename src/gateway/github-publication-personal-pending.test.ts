@@ -33,10 +33,10 @@ it.each([false, true])(
   "selects the last validated pending receipt without transporting content (older corrupt=%s)",
   async (corrupt) => {
     const fixture = await createPersonalPublicationFixture();
-    const workspace = sharedRepositoryWorkspace();
+    const workspace = await sharedRepositoryWorkspace();
     let latest: ReturnType<typeof repositoryReceipt> | undefined;
     for (let index = 128; index >= 1; index--) {
-      const row = repositoryReceipt(workspace.workspaceId, {
+      const row = repositoryReceipt(workspace, {
         request_id: `pending-${String(index).padStart(3, "0")}`,
         idempotency_key: `pending-${index}`,
         owner_profile_id: fixture.owner,
@@ -59,7 +59,7 @@ it.each([false, true])(
       ["finished", { status: "published" }],
     ] as const) {
       insertRepositoryGitHubPublication(
-        repositoryReceipt(workspace.workspaceId, {
+        repositoryReceipt(workspace, {
           request_id: requestId,
           idempotency_key: requestId,
           owner_profile_id: fixture.owner,
@@ -106,8 +106,8 @@ it.each([false, true])(
 
 it("rechecks a terminal receipt when confirming an older pending read", async () => {
   const fixture = await createPersonalPublicationFixture();
-  const workspace = sharedRepositoryWorkspace();
-  const row = repositoryReceipt(workspace.workspaceId, {
+  const workspace = await sharedRepositoryWorkspace();
+  const row = repositoryReceipt(workspace, {
     owner_profile_id: fixture.owner,
     connection_generation: fixture.generation,
     identity_source: "personal",
@@ -188,9 +188,9 @@ it.each([false, true])(
       .run("needs_confirmation", published.requestId);
     const fallback = vi.spyOn(personalStore, "readPersonalGitHubPublication");
     if (corrupt) {
-      const workspace = sharedRepositoryWorkspace();
+      const workspace = await sharedRepositoryWorkspace();
       insertRepositoryGitHubPublication(
-        repositoryReceipt(workspace.workspaceId, {
+        repositoryReceipt(workspace, {
           owner_profile_id: fixture.owner,
           connection_generation: fixture.generation,
           identity_source: "personal",

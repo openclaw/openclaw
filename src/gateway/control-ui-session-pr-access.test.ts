@@ -107,7 +107,7 @@ describe("registered session PR subscriptions", () => {
         "operator.admin",
         async (f) => {
           const key = "agent:main:dashboard:incognito-pr-retirement";
-          const repository = getSessionRepositoryWorkspaceStore().create({
+          const repository = await getSessionRepositoryWorkspaceStore().create({
             agentId: "main",
             sessionKey: key,
             url: "https://github.com/synthetic/private",
@@ -174,7 +174,7 @@ describe("registered session PR subscriptions", () => {
         async (f) => {
           const key = "agent:main:dashboard:incognito-pr-reader";
           const workspace = repository
-            ? getSessionRepositoryWorkspaceStore().create({
+            ? await getSessionRepositoryWorkspaceStore().create({
                 agentId: "main",
                 sessionKey: key,
                 url: "https://github.com/synthetic/private",
@@ -697,7 +697,7 @@ it.each(["local", "repository"] as const)(
       const repositories = getSessionRepositoryWorkspaceStore();
       const repository =
         source === "repository"
-          ? repositories.create({
+          ? await repositories.create({
               agentId: "main",
               sessionKey,
               url: "https://github.com/synthetic/publication",
@@ -771,7 +771,7 @@ it("keeps warm default-loader SQL constant as readers join without a native row 
     vi.stubGlobal("fetch", provider);
     const f = await createFixture("operator.read", true);
     try {
-      const repository = getSessionRepositoryWorkspaceStore().create({
+      const repository = await getSessionRepositoryWorkspaceStore().create({
         agentId: "main",
         sessionKey,
         url: "https://github.com/synthetic/publication",
@@ -845,7 +845,7 @@ it("drops cached subscription hydration after physical database replacement", as
       vi.stubGlobal("fetch", provider);
       const f = await createFixture("operator.read", true);
       try {
-        const repository = getSessionRepositoryWorkspaceStore().create({
+        const repository = await getSessionRepositoryWorkspaceStore().create({
           agentId: "main",
           sessionKey,
           url: "https://github.com/synthetic/publication",
@@ -931,7 +931,7 @@ it.each(["concurrency limit", "earlier refresh", "refresh timer", "publication"]
           for (let index = 0; index < (waitingOn === "concurrency limit" ? 5 : 1); index++) {
             const key = `agent:main:queued-pr-${index}`;
             keys.push(key);
-            const repository = getSessionRepositoryWorkspaceStore().create({
+            const repository = await getSessionRepositoryWorkspaceStore().create({
               agentId: "main",
               sessionKey: key,
               url: `https://github.com/synthetic/queued-${index}`,

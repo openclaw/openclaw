@@ -141,7 +141,12 @@ describe("gateway agent handler chat.abort integration", () => {
           session: expect.objectContaining({ key: "global", sessionId: "global-session-id", goal }),
         }),
         new Set(["conn-1"]),
-        { agentId: "work", dropIfSlow: true, sessionKeys: ["global"] },
+        {
+          agentId: "work",
+          dropIfSlow: true,
+          sessionKeys: ["global"],
+          prepareSessionProjection: expect.any(Function),
+        },
       );
     });
   });
@@ -339,10 +344,7 @@ describe("gateway agent handler chat.abort integration", () => {
           releaseSessionWrite = resolve;
         });
       }
-      const store = {
-        "agent:main:main": buildExistingMainStoreEntry(),
-      };
-      return await updater(store);
+      return await updater({ "agent:main:main": buildExistingMainStoreEntry() });
     });
     mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
 
@@ -507,10 +509,7 @@ describe("gateway agent handler chat.abort integration", () => {
           releaseSessionWrite = resolve;
         });
       }
-      const store = {
-        "agent:main:main": buildExistingMainStoreEntry(),
-      };
-      return await updater(store);
+      return await updater({ "agent:main:main": buildExistingMainStoreEntry() });
     });
     mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
 

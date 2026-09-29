@@ -25,11 +25,11 @@ type RequesterRunParams = Pick<
 >;
 
 /** Failure cleanup belongs to the whole fallback chain, while its admission is still live. */
-export function settleFailedRequesterRun(
+export async function settleFailedRequesterRun(
   params: RequesterRunParams,
   error: unknown,
   assertCurrent?: () => void,
-): unknown {
+): Promise<unknown> {
   const instance =
     params.admittedRunContext?.operationalRunInstance ??
     params.preparedRunAdmission?.operationalRunInstance;
@@ -56,7 +56,10 @@ export function settleFailedRequesterRun(
     return error;
   }
   try {
-    settleRequesterRun(params, { meta: { durationMs: 0 } }, () => {});
+    await settleRequesterRun(params, { meta: { durationMs: 0 } }, () => {
+      assertCurrent?.();
+      params.preparedRunAdmission?.assertSourceCurrent();
+    });
   } catch (settlementError) {
     const failure = new AggregateError(
       [error, settlementError],
@@ -71,11 +74,11 @@ export function settleFailedRequesterRun(
 }
 
 /** Transfers the complete logical run's children only after retries have finished. */
-export function settleRequesterRun(
+export async function settleRequesterRun(
   params: RequesterRunParams,
   result: EmbeddedAgentRunResult,
   assertCurrent: () => void,
-): void {
+): Promise<void> {
   const instance =
     params.admittedRunContext?.operationalRunInstance ??
     params.preparedRunAdmission?.operationalRunInstance;
@@ -98,6 +101,16 @@ export function settleRequesterRun(
     requesterSessionKey: params.sessionKey,
     requesterAgentId: params.agentId,
     requesterTurnRunId: params.runId,
+    assertCurrent: () => {
+      assertCurrent();
+      params.abortSignal?.throwIfAborted();
+      if (
+        instance &&
+        getActiveAgentRunDelegatedAuthority(instance)?.operationalRunInstance !== instance
+      ) {
+        throw createSessionPlacementSettlementClosedAbortError();
+      }
+    },
   };
   assertCurrent();
   params.abortSignal?.throwIfAborted();
@@ -110,12 +123,12 @@ export function settleRequesterRun(
   try {
     if (result.meta.continuationPending) {
       // The outbox transfers this batch only after its waiting status is delivered.
-      if (markRequesterTurnYielded(requester) === 0) {
+      if ((await markRequesterTurnYielded(requester)) === 0) {
         throw new Error("accepted continuation children were not durably registered");
       }
       return;
     }
-    const settled = settleRequesterAfterSessionSpawns({
+    const settled = await settleRequesterAfterSessionSpawns({
       ...requester,
       requesterYielded: result.meta.yielded === true,
       acceptedSessionSpawns: result.acceptedSessionSpawns ?? [],

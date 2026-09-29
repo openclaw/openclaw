@@ -65,7 +65,13 @@ export function createSubagentPersistenceMock(
     onSubagentRegistryPersisted: (listener: () => void) => registerListener(listeners, listener),
     persistSubagentRunsToDisk: publishAfter(methods.persistSubagentRunsToDisk),
     persistSubagentRunsToDiskOrThrow: publishAfter(methods.persistSubagentRunsToDiskOrThrow),
-    restoreSubagentRunsFromDisk: publishAfter(methods.restoreSubagentRunsFromDisk),
+    restoreSubagentRunsFromDisk: async (
+      ...args: Parameters<typeof methods.restoreSubagentRunsFromDisk>
+    ) => {
+      const result = await methods.restoreSubagentRunsFromDisk(...args);
+      notifyListeners(listeners, undefined);
+      return result;
+    },
     persistSubagentRunsToDiskAsyncOrThrow: (async (runs, ids, options) => {
       const snapshot = structuredClone(runs);
       for (const runId of options.retireRunIds ?? []) {

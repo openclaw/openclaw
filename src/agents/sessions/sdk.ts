@@ -191,15 +191,15 @@ function getAttributionHeaders(
   model: Model,
   settingsManager: SettingsManager,
 ): Record<string, string> | undefined {
-  // Transports outside the OpenAI families do not consult the attribution policy,
-  // so forward its OpenRouter header set as caller headers. Like the transport-side
-  // policy, OpenRouter app attribution does not depend on install telemetry.
-  const { attributionProvider, attributionHeaders } = resolveProviderRequestPolicy({
+  // SDK-backed session streams do not all consult the attribution policy, so forward its
+  // documented header set as caller headers. Hidden (spec-only) attribution stays with the
+  // transports that verify it. Like the transport-side policy, this ignores install telemetry.
+  const { attributionHeaders, allowsHiddenAttribution } = resolveProviderRequestPolicy({
     provider: model.provider,
     api: model.api,
     baseUrl: model.baseUrl,
   });
-  if (attributionProvider === "openrouter") {
+  if (attributionHeaders && !allowsHiddenAttribution) {
     return attributionHeaders;
   }
 

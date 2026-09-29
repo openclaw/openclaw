@@ -364,6 +364,17 @@ accepted writes. A newer conversation choice or reset invalidates a pending
 remembered-session restore. The existing scope keys, heartbeat filtering,
 SQLite rows, missing-store behavior, and update behavior are unchanged.
 
+Repository workspace lookup, creation, base binding, checkpoint acceptance, and
+deletion execute in the shared-state worker. Revision comparisons and immutable
+base checks remain in its synchronous transactions. Native commit receipts publish
+current repository facts before session observers run; a lost ordinary reply does
+not discard a committed workspace identity. File cleanup follows settled row
+deletion. Synchronous Git, placement, and publication guards consume prepared
+facts bound to the original database lifecycle, refusing unsettled mutations.
+Session presentation prepares repository rows alongside its other metadata;
+private rows retain facts only for the request's synchronous publication frame.
+Schemas, stored values, permissions, retention, and update behavior are unchanged.
+
 ## Migrate a caller
 
 Completed-child archive lookups resolve durable store ownership and check exact
@@ -562,6 +573,13 @@ publication, rollback, and uncertain-outcome owners. Native harness mutation
 objects remain with their process-held owner. No cross-database atomicity,
 retention change, or new update step is introduced.
 
+Deletion keeps the configured session store's artifact directory when worker
+admission pins an alias to its physical database. Process-held native deletion
+checks the original session immediately before its synchronous mutation; it does
+not recheck that row after removing it in the same transaction. Archive locations,
+Incognito expiry, schemas, retention, and update behavior retain their existing
+contracts.
+
 Cron retention discovery uses a separate, single-worker maintenance lane within the
 same session database lifecycle owner. Foreground history and exact-entry reads
 keep their own queue while full-store validation runs. Both lanes retain the same
@@ -633,9 +651,21 @@ removed a terminal receipt.
 
 Uncertain outcomes stay fenced. Definite failures retain the existing delivery
 failure and replay rules, and outcome-bearing settlement publishes its new
-delivery receipt. Initial requester-yield creation and requester/session reads
-remain separate worker migration work. Schema, retention, and update behavior
-are unchanged.
+delivery receipt.
+
+Initial requester yield and cohort creation use the same queued registry writer
+and publication episode. Session authority is captured before cold registry
+restoration yields. A cohort commit retains its original requester-turn marker
+until host promotion finishes; a second acknowledged commit releases that marker
+before scheduling its wake. Restoration reads fresh complete rows through the
+existing state read worker and continues only the same recorded cohort, without
+repeating its first write or treating a persisted flag as a completed handoff.
+Retired episodes preserve known or uncertain native outcomes and refuse further
+writes until canonical reconciliation can establish a current owner.
+
+Other requester/session reads, including process-held incognito authority
+acquisition, remain separate worker migration work. Schema, retention, and update
+behavior are unchanged.
 
 Concurrent first opens wait for owner-record publication and a transient schema
 initializer within one database busy timeout. Incomplete records never grant

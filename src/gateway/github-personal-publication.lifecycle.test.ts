@@ -1,3 +1,5 @@
+import { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applySessionEntryLifecycleMutation,
@@ -5,6 +7,8 @@ import {
   patchSessionEntryCore,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
@@ -108,7 +112,7 @@ describe("personal publication session lifecycle", () => {
     const binding = { publicationKind: "personal" as const, requestId: published.requestId };
     const lifecycle = readGitHubPublicationSessionLifecycle(binding);
     const repositories = getSessionRepositoryWorkspaceStore();
-    const workspace = repositories.create({
+    const workspace = await repositories.create({
       agentId: "main",
       sessionKey: SESSION_KEY,
       url: "https://github.com/example/receipt-guard.git",
@@ -157,7 +161,7 @@ describe("personal publication session lifecycle", () => {
         }),
       });
       expect(session.read()).toMatchObject(successor);
-      expect(repositories.get(workspace.workspaceId)).toEqual(workspace);
+      expect(await repositories.get(workspace.workspaceId)).toEqual(workspace);
       expect(readPersonalGitHubPublication(owner, { requestId: published.requestId })).toEqual(
         receipt,
       );
@@ -166,6 +170,139 @@ describe("personal publication session lifecycle", () => {
       release.resolve();
       await deletion;
       restore();
+    }
+  });
+
+  it("preserves receipts and repository ownership when a foreign write crosses the native receipt grant", async () => {
+    const { owner, client, context, coordinator } = fixture;
+    const session = await persistPublicationTestSession();
+    const action = preparePersonalGitHubSessionAction(
+      { client, context },
+      { sessionKey: SESSION_KEY },
+    );
+    const published = await coordinator.requestPersonalForSession(request(), action);
+    const receipt = readPersonalGitHubPublication(owner, { requestId: published.requestId });
+    expect(receipt?.status).toBe("published");
+    const binding = { publicationKind: "personal" as const, requestId: published.requestId };
+    const lifecycle = readGitHubPublicationSessionLifecycle(binding);
+    expect(lifecycle).toBeDefined();
+    const repositories = getSessionRepositoryWorkspaceStore();
+    const workspace = await repositories.create({
+      agentId: "main",
+      sessionKey: SESSION_KEY,
+      url: "https://github.com/example/receipt-grant.git",
+      assertCurrent: () => {},
+    });
+    const original = session.read();
+    const successor = {
+      ...original,
+      sessionId: "foreign-receipt-successor",
+      lifecycleRevision: "foreign-receipt-generation",
+      updatedAt: Date.now(),
+    };
+    const databasePath = resolveSqliteTargetFromSessionStorePath(session.storePath, {
+      agentId: "main",
+    }).path;
+    if (!databasePath) {
+      throw new Error("Receipt fixture has no physical session database");
+    }
+    const peer = new DatabaseSync(databasePath);
+    let injected = false;
+    let receiptAdmitted = false;
+    let nativeAbsent = false;
+    const held = holdReceiptDeletion();
+    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+    const admission = vi
+      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((admit, attachment) =>
+        createAdmission((nativeRequest, grant) => {
+          const facts = nativeRequest.facts;
+          if (
+            !injected &&
+            receiptAdmitted &&
+            nativeRequest.stage === "commit" &&
+            (facts === undefined ||
+              (isRecord(facts) &&
+                facts.kind === "session-entry-current" &&
+                facts.domainFacts === undefined &&
+                isRecord(facts.source) &&
+                facts.source.sessionKey === SESSION_KEY))
+          ) {
+            nativeAbsent = isRecord(facts) && facts.entry === undefined;
+            admit(nativeRequest, () => {
+              expect(
+                peer
+                  .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
+                  .get(SESSION_KEY),
+              ).toBeUndefined();
+              peer.exec("BEGIN IMMEDIATE");
+              try {
+                peer
+                  .prepare(
+                    "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+                  )
+                  .run(
+                    SESSION_KEY,
+                    successor.sessionId,
+                    JSON.stringify(successor),
+                    successor.updatedAt,
+                  );
+                peer
+                  .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+                  .run(SESSION_KEY);
+                peer.exec("COMMIT");
+              } catch (error) {
+                peer.exec("ROLLBACK");
+                throw error;
+              }
+              injected = true;
+              return grant();
+            });
+            return;
+          }
+          admit(nativeRequest, grant);
+        }, attachment),
+      );
+    const deletion = applySessionEntryLifecycleMutation({
+      agentId: "main",
+      storePath: session.storePath,
+      removals: [{ sessionKey: SESSION_KEY, expectedEntry: original }],
+      skipMaintenance: true,
+    }).then(
+      (value) => ({ value, error: undefined }),
+      (error: unknown) => ({ value: undefined, error }),
+    );
+    try {
+      await Promise.race([
+        held.waiting.promise,
+        deletion.then((outcome) => {
+          throw new Error("Session deletion settled before its receipt grant", { cause: outcome });
+        }),
+      ]);
+      receiptAdmitted = true;
+      held.release.resolve();
+      const outcome = await deletion;
+      expect(injected).toBe(true);
+      expect(
+        peer.prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?").get(SESSION_KEY),
+      ).toEqual({ entry_json: JSON.stringify(successor) });
+      expect(await repositories.get(workspace.workspaceId)).toEqual(workspace);
+      expect(readPersonalGitHubPublication(owner, { requestId: published.requestId })).toEqual(
+        receipt,
+      );
+      expect(readGitHubPublicationSessionLifecycle(binding)).toEqual(lifecycle);
+      expect(nativeAbsent).toBe(true);
+      expect(outcome.error).toMatchObject({
+        message: expect.stringContaining(
+          "Session currency changed while awaiting its native grant",
+        ),
+      });
+    } finally {
+      held.release.resolve();
+      await deletion;
+      held.restore();
+      admission.mockRestore();
+      peer.close();
     }
   });
 
@@ -188,7 +325,7 @@ describe("personal publication session lifecycle", () => {
     );
     expect(oldLifecycle?.lifecycle_revision).not.toBe(original.lifecycleRevision);
     expect(
-      getSessionRepositoryWorkspaceStore().find({ agentId: "main", sessionKey: SESSION_KEY }),
+      await getSessionRepositoryWorkspaceStore().find({ agentId: "main", sessionKey: SESSION_KEY }),
     ).toBeUndefined();
 
     const lateReceipt = createDeferredCore<string>();

@@ -32,11 +32,11 @@ function indexPathProjects(projects: readonly ProjectRegistryRecord[]) {
   return { byPath, byAgent };
 }
 
-export function listProjectRecents(
+export async function listProjectRecents(
   store: Record<string, SessionEntry>,
   profileIds: ReadonlySet<string>,
   projects: readonly ProjectRegistryRecord[],
-): ProjectRecent[] {
+): Promise<ProjectRecent[]> {
   const candidates = Object.entries(store)
     .filter(
       ([, entry]) =>
@@ -53,7 +53,9 @@ export function listProjectRecents(
   let pathProjects: ReturnType<typeof indexPathProjects> | undefined;
   for (const [sessionKey, entry] of candidates) {
     if (entry.repositoryWorkspaceId) {
-      const repository = getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId);
+      const repository = await getSessionRepositoryWorkspaceStore().get(
+        entry.repositoryWorkspaceId,
+      );
       const sessionAgentId = parseAgentSessionKey(sessionKey)?.agentId;
       if (
         !repository ||

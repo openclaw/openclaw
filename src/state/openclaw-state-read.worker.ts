@@ -12,6 +12,7 @@ import {
 } from "../agents/mcp-oauth-store.kernel.js";
 import {
   loadSubagentMaintenanceRunsInDatabase,
+  loadSubagentRegistryFromSqlite,
   loadSubagentRunsByRunIdsFromSqlite,
   loadSubagentRunsForSessionsInDatabase,
   loadSubagentRunsForChildSessionFromSqlite,
@@ -102,7 +103,7 @@ import type {
 } from "./openclaw-state-read.types.js";
 import { isReadRequest } from "./openclaw-state-read.validation.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
-import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.js";
+import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 import {
   listUserChannelIdentitiesInDatabase,
   resolveUserChannelIdentityInDatabase,
@@ -242,6 +243,9 @@ serveOwnedWorkerTasks(
               return readChannelIngressInDatabase(db, command);
             }
             if (command.type === "subagents.runs") {
+              if (command.scope.kind === "all") {
+                return { type: command.type, runs: loadSubagentRegistryFromSqlite({ db }) };
+              }
               if (command.scope.kind === "maintenance") {
                 const maintenance = loadSubagentMaintenanceRunsInDatabase({ db });
                 return {

@@ -80,10 +80,12 @@ describe("repository checkpoint GitHub publication", () => {
       await f.capture("later unselected change\n", "later");
       const retiredCoordinator = person.coordinator;
       restartPersonalPublicationFixture(person);
+      const preparedStatus = await person.coordinator.preparePersonalStatus(first.requestId);
       const pending = person.coordinator.personalStatus(
         person.action,
         person.action,
         first.requestId,
+        preparedStatus,
       );
       expect(pending.confirmation?.workspaceTree).toBe(f.first.workspaceTree);
       expect(() =>
@@ -91,6 +93,7 @@ describe("repository checkpoint GitHub publication", () => {
           { ...person.action, owner: person.otherOwner },
           person.action,
           first.requestId,
+          preparedStatus,
         ),
       ).toThrow();
       if (boundary === "move") {
@@ -108,7 +111,12 @@ describe("repository checkpoint GitHub publication", () => {
         );
         expect(mocks.loadSession(SESSION_KEY).entry.repositoryWorkspaceId).toBeUndefined();
         expect(
-          person.coordinator.personalStatus(person.action, person.action, first.requestId),
+          person.coordinator.personalStatus(
+            person.action,
+            person.action,
+            first.requestId,
+            preparedStatus,
+          ),
         ).toMatchObject({
           result: { status: "failed", code: "session_changed" },
           confirmation: null,

@@ -214,10 +214,7 @@ function schedulerJobByDeclarationKey(
   return match ? { id: match.id as string } : undefined;
 }
 
-export function clawCronGatewayInput(
-  agentId: string,
-  ref: PersistedClawCronRef,
-): Record<string, unknown> {
+export function clawCronGatewayInput(agentId: string, ref: PersistedClawCronRef) {
   const job = ref.job;
   return {
     name: job.name ?? job.id,

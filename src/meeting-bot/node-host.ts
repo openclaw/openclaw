@@ -4,7 +4,7 @@ import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coer
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { MeetingAudioBackendSelection, MeetingAudioRuntime } from "./audio-backend.js";
+import type { MeetingAudioRuntime } from "./audio-backend.js";
 import { decodeMeetingAudioBase64 } from "./audio-base64.js";
 import {
   terminateMeetingBridgeProcess,
@@ -15,10 +15,9 @@ import { splitCommandArgv } from "./command-argv.js";
 import {
   prepareMeetingNodeAudio,
   readMeetingNodeCommand,
-  type MeetingNodeAudioConfig,
+  type MeetingNodeAudioPreparation,
 } from "./node-audio-config.js";
 import { MeetingNodeAudioPullWaiters } from "./node-audio-pull-waiters.js";
-import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
 
 export type { MeetingNodeAudioConfig } from "./node-audio-config.js";
 
@@ -55,24 +54,15 @@ type NodeBridgeSession = {
   terminalEvictionTimer?: ReturnType<typeof setTimeout>;
 };
 
-export type MeetingNodeHostOptions = {
+export type MeetingNodeHostOptions = MeetingNodeAudioPreparation & {
   commandName: string;
   displayName: string;
   browserLabel: string;
   bridgeIdPrefix: string;
-  defaultAudioInputCommand: readonly string[];
-  defaultAudioOutputCommand: readonly string[];
-  defaultAudio?: {
-    backend?: MeetingAudioBackendSelection;
-    bufferBytes: number;
-    format: MeetingRealtimeAudioFormat;
-  };
   talkBackModes: ReadonlySet<string>;
   agentMode: string;
   normalizeUrl(input: unknown): string;
   normalizeMeetingKey(url?: string): string | undefined;
-  assertAudioAvailable(timeoutMs: number): void | Promise<void>;
-  prepareAudio?(config: MeetingNodeAudioConfig, timeoutMs: number): Promise<MeetingAudioRuntime>;
   browser: {
     application: string;
     buildProfileArgs(profile: string): string[];
@@ -377,18 +367,6 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     stale: true,
   });
 
-  const writeOutputChunk = (
-    session: NodeBridgeSession,
-    output: ChildProcess,
-    audio: Buffer,
-  ): Promise<void> => {
-    const stdin = output.stdin;
-    if (!stdin) {
-      return Promise.reject(new Error("audio output stream is closed"));
-    }
-    return writeMeetingOutputChunk(session.outputWriteWaiters, output, stdin, audio);
-  };
-
   const pushAudio = async (params: Record<string, unknown>) => {
     const bridgeId = readNonEmptyString(params.bridgeId);
     const base64 = readNonEmptyString(params.base64);
@@ -409,7 +387,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     }
     const audio = decodeMeetingAudioBase64(base64, "pushAudio");
     try {
-      await writeOutputChunk(session, output, audio);
+      await writeMeetingOutputChunk(session.outputWriteWaiters, output, output.stdin, audio);
     } catch {
       if (
         session.output !== output ||

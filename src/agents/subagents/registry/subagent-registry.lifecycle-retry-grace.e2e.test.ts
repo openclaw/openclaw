@@ -380,12 +380,12 @@ describe("subagent registry lifecycle error grace", () => {
     const onYield = vi.fn();
     const yieldTool = createSessionsYieldTool({
       sessionId: "sess-main",
-      claimYield: () =>
-        mod.markRequesterTurnYielded({
+      claimYield: async () =>
+        (await mod.markRequesterTurnYielded({
           requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
           requesterAgentId: "main",
           requesterTurnRunId,
-        }) > 0,
+        })) > 0,
       onYield,
     });
     const yieldResult = await yieldTool.execute("yield-visible-child", {
@@ -465,7 +465,7 @@ describe("subagent registry lifecycle error grace", () => {
     });
     expect(getAgentCalls()).toHaveLength(1);
     expect(
-      mod.markRequesterTurnYielded({
+      await mod.markRequesterTurnYielded({
         requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
         requesterTurnRunId,
       }),
@@ -527,7 +527,7 @@ describe("subagent registry lifecycle error grace", () => {
     betaBeforeYield.delivery = { ...betaBeforeYield.delivery, status: "in_progress" };
 
     expect(
-      mod.markRequesterTurnYielded({
+      await mod.markRequesterTurnYielded({
         requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
         requesterTurnRunId,
       }),
@@ -613,13 +613,13 @@ describe("subagent registry lifecycle error grace", () => {
     setAssistantOutput(liveChildSessionKey, "live child complete", "run-frozen-live-child");
 
     expect(
-      mod.markRequesterTurnYielded({
+      await mod.markRequesterTurnYielded({
         requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
         requesterTurnRunId,
       }),
     ).toBe(1);
     expect(
-      mod.settleRequesterAfterSessionSpawns({
+      await mod.settleRequesterAfterSessionSpawns({
         requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
         requesterTurnRunId,
         requesterYielded: true,

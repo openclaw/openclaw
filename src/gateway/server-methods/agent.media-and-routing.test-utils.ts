@@ -1095,15 +1095,14 @@ describe("gateway agent handler", () => {
       },
       canonicalKey: childSessionKey,
     });
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const store: Record<string, unknown> = {
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) =>
+      updater({
         [childSessionKey]: {
           sessionId: "sess-followup",
           updatedAt,
         },
-      };
-      return await updater(store);
-    });
+      }),
+    );
     mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(completedRun);
     mocks.replaceSubagentRunAfterSteer.mockReturnValueOnce(true);
     const sessionRow = {
@@ -1248,6 +1247,7 @@ describe("gateway agent handler", () => {
       agentId: "main",
       dropIfSlow: true,
       sessionKeys: ["agent:main:main"],
+      prepareSessionProjection: expect.any(Function),
     });
   });
 

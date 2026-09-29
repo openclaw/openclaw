@@ -153,6 +153,10 @@ import type {
   OpenClawStateWorkerBackend,
   OpenClawStateWorkerRuntimeCommand,
 } from "./openclaw-state-worker-contract.js";
+import {
+  executeRepositoryWorkspaceCommand,
+  isRepositoryWorkspaceCommand,
+} from "./session-repository-workspaces.worker.js";
 import { readUserModelAuthProfile } from "./user-model-accounts.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
 import { executeUserProfileCommand, isUserProfileCommand } from "./user-profiles.worker.js";
@@ -360,6 +364,9 @@ export function executeSharedStateCommand(
       database: open(),
       ...stateOptions(),
     });
+  }
+  if (isRepositoryWorkspaceCommand(command)) {
+    return executeRepositoryWorkspaceCommand(command, open());
   }
   if (isUserProfileCommand(command)) {
     return executeUserProfileCommand(command, {

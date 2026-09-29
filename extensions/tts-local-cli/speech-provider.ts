@@ -119,10 +119,6 @@ function findAudioFile(dir: string, baseName: string): string | null {
   return file === undefined ? null : path.join(dir, file);
 }
 
-function detectFormatFromExtension(filePath: string): SourceFormat | null {
-  return path.extname(filePath).toLowerCase() === ".m4a" ? "m4a" : null;
-}
-
 function hasMpegFrameHeader(buffer: Buffer, offset: number): boolean {
   const mpegHeader = buffer[offset + 1] ?? 0;
   const mpegFormat = buffer[offset + 2] ?? 0;
@@ -239,7 +235,9 @@ async function runCli(params: {
   const audioFile = findAudioFile(params.outputDir, params.filePrefix);
   if (audioFile) {
     const buffer = await readAudioFile(audioFile);
-    const format = detectAudioFormat(buffer) ?? detectFormatFromExtension(audioFile);
+    const format =
+      detectAudioFormat(buffer) ??
+      (path.extname(audioFile).toLowerCase() === ".m4a" ? "m4a" : null);
     if (!format) {
       throw new Error(`CLI TTS: unknown format for ${audioFile}`);
     }
@@ -269,24 +267,6 @@ async function runCli(params: {
   throw new Error("CLI TTS produced no output");
 }
 
-async function runFfmpegToBuffer(params: {
-  args: string[];
-  outputDir: string;
-  outputFileName: string;
-}): Promise<Buffer> {
-  const outputPath = path.join(params.outputDir, params.outputFileName);
-  const { runFfmpeg } = await import("openclaw/plugin-sdk/media-runtime");
-  const { writeExternalFileWithinRoot } = await import("openclaw/plugin-sdk/security-runtime");
-  await writeExternalFileWithinRoot({
-    rootDir: params.outputDir,
-    path: params.outputFileName,
-    write: async (tempPath) => {
-      await runFfmpeg([...params.args, tempPath]);
-    },
-  });
-  return readAudioFile(outputPath);
-}
-
 async function convertAudio(
   inputPath: string,
   outputDir: string,
@@ -303,7 +283,16 @@ async function convertAudio(
   } else {
     args.push("-c:a", "libmp3lame", "-b:a", "128k", "-f", "mp3");
   }
-  return await runFfmpegToBuffer({ args, outputDir, outputFileName });
+  const { runFfmpeg } = await import("openclaw/plugin-sdk/media-runtime");
+  const { writeExternalFileWithinRoot } = await import("openclaw/plugin-sdk/security-runtime");
+  await writeExternalFileWithinRoot({
+    rootDir: outputDir,
+    path: outputFileName,
+    write: async (tempPath) => {
+      await runFfmpeg([...args, tempPath]);
+    },
+  });
+  return readAudioFile(path.join(outputDir, outputFileName));
 }
 
 async function synthesizeCli(

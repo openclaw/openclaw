@@ -79,11 +79,6 @@ enum GatewayStableIdentifier {
         ExactOpaqueIdentifier.key(value)
     }
 
-    static func matches(_ lhs: String, _ rhs: String) -> Bool {
-        guard let lhsKey = self.key(lhs), let rhsKey = self.key(rhs) else { return false }
-        return lhsKey == rhsKey
-    }
-
     static func matches(_ lhs: String?, _ rhs: String?) -> Bool {
         guard let lhsKey = self.key(lhs), let rhsKey = self.key(rhs) else { return false }
         return lhsKey == rhsKey

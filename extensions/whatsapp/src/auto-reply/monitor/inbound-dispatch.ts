@@ -15,7 +15,7 @@ import {
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext, ReplyDispatchKind } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   requireWhatsAppInboundAdmission,
   resolveWhatsAppAdmissionChannelIngress,
@@ -136,16 +136,9 @@ function createWhatsAppChannelDeliveryResult(params: {
 
 function isWhatsAppVisibleDeliveryError(error: unknown): boolean {
   return (
-    (typeof error === "object" &&
-      error !== null &&
-      !Array.isArray(error) &&
-      (error as { visibleReplySent?: unknown }).visibleReplySent === true) ||
+    (isRecord(error) && error.visibleReplySent === true) ||
     (isChannelPartialDeliveryError(error) && error.deliveryResult.visibleReplySent)
   );
-}
-
-function readTrimmedString(value: unknown): string {
-  return normalizeOptionalString(value) ?? "";
 }
 
 function markWhatsAppReplyDeliveryErrorVisibleAfterFlush(
@@ -196,14 +189,14 @@ function resolveWhatsAppDurableReplyToId(params: {
   if (params.payload.replyToId === null) {
     return null;
   }
-  const explicitPayloadReplyToId = readTrimmedString(params.payload.replyToId);
+  const explicitPayloadReplyToId = normalizeOptionalString(params.payload.replyToId);
   if (explicitPayloadReplyToId) {
     return explicitPayloadReplyToId;
   }
   const hasVisibleInboundReplyTarget =
-    Boolean(readTrimmedString(params.context.ReplyToId)) ||
-    Boolean(readTrimmedString(params.context.ReplyToIdFull));
-  const currentInboundMessageId = readTrimmedString(params.currentMessageId);
+    Boolean(normalizeOptionalString(params.context.ReplyToId)) ||
+    Boolean(normalizeOptionalString(params.context.ReplyToIdFull));
+  const currentInboundMessageId = normalizeOptionalString(params.currentMessageId);
   if (params.info.kind === "final" && hasVisibleInboundReplyTarget && currentInboundMessageId) {
     return currentInboundMessageId;
   }

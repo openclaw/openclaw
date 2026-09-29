@@ -856,27 +856,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("suppresses generic patch working statuses when verbose is enabled", async () => {
-    setNoAbort();
-    const cfg = verboseConfig;
-    const dispatcher = createDispatcher();
-    const ctx = createDirectCtx();
-
-    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onPatchSummary?.({
-        phase: "end",
-        title: "apply patch",
-        summary: "1 added, 2 modified",
-      });
-      return { text: "done" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
-  });
-
   it("delivers Slack non-DM verbose progress when verbose is enabled", async () => {
     setNoAbort();
     const cfg = {

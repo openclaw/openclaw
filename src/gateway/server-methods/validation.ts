@@ -1,5 +1,3 @@
-// Validation helpers adapt gateway-protocol validators to standard method
-// INVALID_REQUEST responses.
 import {
   ErrorCodes,
   errorShape,
@@ -12,7 +10,6 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
-/** Type guard function shape produced by gateway-protocol validators. */
 export type Validator<T> = ((params: unknown) => params is T) & {
   errors?: ValidationError[] | null;
 };
@@ -21,7 +18,6 @@ type ValidatedGatewayRequestHandler<T> = (
   options: Omit<GatewayRequestHandlerOptions, "params"> & { params: T },
 ) => ReturnType<GatewayRequestHandler>;
 
-/** Validate params and return the standard method error without emitting a response. */
 export function validateGatewayMethodParams<T>(
   params: unknown,
   validate: Validator<T>,
@@ -36,7 +32,6 @@ export function validateGatewayMethodParams<T>(
   );
 }
 
-/** Validate params and emit the standard INVALID_REQUEST response on failure. */
 export function assertValidParams<T>(
   params: unknown,
   validate: Validator<T>,
