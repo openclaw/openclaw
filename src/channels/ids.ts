@@ -59,12 +59,11 @@ export function findChatChannelLabel(raw?: string | null): string | undefined {
 }
 
 function normalizeRuntimeBundledChatChannelId(normalized: string): ChatChannelId | null {
-  for (const entry of listBundledChannelCatalogEntries()) {
-    if (entry.id === normalized || entry.aliases.includes(normalized)) {
-      return entry.id;
-    }
-  }
-  return null;
+  return (
+    listBundledChannelCatalogEntries().find(
+      (entry) => entry.id === normalized || entry.aliases.includes(normalized),
+    )?.id ?? null
+  );
 }
 
 export function normalizeChatChannelId(raw?: string | null): ChatChannelId | null {
