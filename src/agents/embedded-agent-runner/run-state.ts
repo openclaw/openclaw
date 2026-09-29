@@ -146,6 +146,7 @@ export type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
   handle?: EmbeddedAgentQueueHandle;
   timer?: NodeJS.Timeout;
+  settleOnAbort?: boolean;
 };
 
 export type AbandonedEmbeddedRun = {

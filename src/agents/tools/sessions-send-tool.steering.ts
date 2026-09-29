@@ -38,16 +38,26 @@ export async function queueSessionsSendSteeringWithCustody(
             assertMutationCurrent();
           };
           assertCurrent();
-          const outcome = await queue(assertCurrent, {
+          const queued = queue(assertCurrent, {
             onQueueAccepted: (value) => {
               accepted ||= value;
             },
             onQueueSettled: () => settlement.resolve(),
           });
-          admission.resolve(outcome);
-          if (outcome.queued) {
-            await settlement.promise;
-          }
+          void queued.then(
+            (outcome) => {
+              admission.resolve(outcome);
+              if (!outcome.queued) {
+                settlement.resolve();
+              }
+            },
+            (error: unknown) => {
+              admission.reject(error);
+              settlement.resolve();
+            },
+          );
+          // Receiver teardown can precede a backend's queue receipt.
+          await settlement.promise;
         }),
       );
     } catch (error) {

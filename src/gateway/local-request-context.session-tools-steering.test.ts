@@ -21,6 +21,50 @@ describe("sessions_send steering custody", () => {
   });
   afterEach(drainSessionToolsFixture);
 
+  it.each(["end", "abort", "replaced run end"] as const)(
+    "releases custody on receiver %s when the backend never reports settlement",
+    async (ending) => {
+      await withParticipantSessionToolsFixture(async ({ cfg, turn, bob }) => {
+        expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
+        await withDelayedSessionToolsSteering(
+          cfg,
+          async (receiver) => {
+            const result = await createSessionsSendTool({
+              config: cfg,
+              agentSessionKey: REQUESTER,
+            }).execute("participant-steer", {
+              sessionKey: PARTICIPANT_SHARED,
+              user: bob.profileId,
+              message: "Accepted guidance whose backend omits settlement",
+              mode: "steer",
+              timeoutSeconds: 0,
+            });
+            expect(result.details).toMatchObject({
+              status: "accepted",
+              targetDisposition: "steered",
+            });
+            expect(receiver.pendingCount()).toBe(1);
+            turn.complete();
+            await setImmediate();
+            const releases = turn.releaseCounts.get(bob.profileId) ?? 0;
+            if (ending === "abort") {
+              expect(receiver.abort()).toBe(true);
+            } else {
+              if (ending === "replaced run end") {
+                receiver.replace();
+              }
+              receiver.end();
+            }
+            // Join the already-resolved custody continuation, without a timed wait or polling.
+            await setImmediate();
+            expect(turn.releaseCounts.get(bob.profileId)).toBeGreaterThan(releases);
+          },
+          { reportSettlement: false },
+        );
+      });
+    },
+  );
+
   it.each(["sender completed", "source revoked", "receiver cancelled"] as const)(
     "settles accepted sessions_send steering after %s",
     async (outcome) => {
@@ -76,3 +120,4 @@ describe("sessions_send steering custody", () => {
     },
   );
 });
+import { setImmediate } from "node:timers/promises";

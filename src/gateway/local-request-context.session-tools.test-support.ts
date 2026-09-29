@@ -1,5 +1,6 @@
 import { steerActiveSessionWithOptionalDeliveryWait } from "../agents/embedded-agent-runner/run/attempt-queue-message.js";
 import {
+  abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
@@ -158,7 +159,11 @@ export async function withDelayedSessionToolsSteering(
     commit: () => Promise<void>;
     cancel: () => Promise<void>;
     pendingCount: () => number;
+    end: () => void;
+    abort: () => boolean;
+    replace: () => void;
   }) => Promise<void>,
+  options?: { reportSettlement?: boolean },
 ) {
   const target = {
     agentId: "main",
@@ -220,11 +225,19 @@ export async function withDelayedSessionToolsSteering(
   handle.messageInjectionV2 = {
     version: 2,
     isAvailable: () => true,
-    queueMessage: (text, options, assertCurrent) =>
-      steerActiveSessionWithOptionalDeliveryWait(session, text, options, target.sessionKey, () => {
-        assertCurrent();
-        return true;
-      }),
+    queueMessage: (text, queueOptions, assertCurrent) =>
+      steerActiveSessionWithOptionalDeliveryWait(
+        session,
+        text,
+        options?.reportSettlement === false
+          ? { ...queueOptions, onQueueSettled: undefined }
+          : queueOptions,
+        target.sessionKey,
+        () => {
+          assertCurrent();
+          return true;
+        },
+      ),
   };
   withoutGatewayToolCallerIdentity(() =>
     setActiveEmbeddedRun(target.sessionId, handle, target.sessionKey, undefined, target.agentId),
@@ -236,10 +249,20 @@ export async function withDelayedSessionToolsSteering(
     emit({ type: "agent_settled" });
     await settled.promise;
   };
+  let replacement: ReturnType<typeof createEmbeddedRunHandle> | undefined;
   try {
     await run({
       pendingCount: () => queued.length,
       cancel,
+      end: () => clearActiveEmbeddedRun(target.sessionId, handle, target.sessionKey),
+      abort: () => abortEmbeddedAgentRun(target.sessionId),
+      replace: () => {
+        const next = createEmbeddedRunHandle({ runId: "participant-steering-replacement" });
+        replacement = next;
+        withoutGatewayToolCallerIdentity(() =>
+          setActiveEmbeddedRun(target.sessionId, next, target.sessionKey),
+        );
+      },
       commit: async () => {
         const entry = queued[0];
         if (!entry) {
@@ -257,5 +280,8 @@ export async function withDelayedSessionToolsSteering(
   } finally {
     await cancel();
     clearActiveEmbeddedRun(target.sessionId, handle, target.sessionKey);
+    if (replacement) {
+      clearActiveEmbeddedRun(target.sessionId, replacement, target.sessionKey);
+    }
   }
 }
