@@ -14,7 +14,6 @@ import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import "../../components/agent-select-registration.ts";
 import { renderProjectChip, resolveProjectChip } from "./project-chip.ts";
-import { renderNewSessionTerminalHost } from "./terminal-start.ts";
 import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
 registerNewSessionSetupEnglish();
@@ -130,65 +129,66 @@ export function renderNewSessionPlaceControls({
   const gatewayLabel = gateway.gatewayName
     ? t("newSession.gatewayNamed", { name: gateway.gatewayName })
     : t("newSession.gateway");
-  return html`${
-    nativeTerminal
-      ? renderNewSessionTerminalHost({
-          hosts: data?.terminalHosts,
+  return html`${renderWhereChip({
+    nativeTarget: nativeTerminal
+      ? {
+          hosts: data?.terminalHosts ?? [],
           hostId: place.catalogSelection.terminalHostId,
-          submitting,
-          onSelect: (hostId) => place.catalogSelection.selectTerminalHost(hostId),
-        })
-      : renderWhereChip({
-          idPrefix,
-          state: whereState,
-          environmentQuery: browser.environmentQuery,
-          onEnvironmentQueryInput: (query) => browser.changeEnvironmentQuery(query),
-          gatewayName: gateway.gatewayName,
-          cloudProfileId: place.cloudProfileId,
-          machineClass,
-          os,
-          deviceId: place.deviceId,
-          autoDevice: place.autoDevice,
-          autoPlacementMode: place.modelControl.autoPlacementSelectionMode(),
-          cloudDisabledReason: place.modelControl.cloudRuntimeUnsupportedReason(),
-          cloudProfileDisabledReason: (profile) =>
-            place.modelControl.cloudRuntimeUnsupportedReason(profile),
-          submitting,
-          pendingPlacement,
-          catalogLoading: place.canWrite() && gateway.cloudProfilesPending,
-          isAdmin: place.isAdmin(),
-          ...browser.popoverCallbacks("where"),
-          onSelectDevice: (deviceId) => place.selectDevice(deviceId),
-          onSelectAutoDevice: () => place.selectDevice("", true),
-          onSelectCloudProfile: (profileId, useDefaults) => {
-            if (useDefaults) {
-              place.cloudMachines.applyPending(profileId);
-            }
-            place.selectCloudProfile(profileId);
-          },
-          onSelectCloudOs: (osId) =>
-            place.cloudMachines.selectOs(
-              place.cloudProfileId,
-              osId,
-              cloudProfiles,
-              submitting || pendingPlacement,
-              requestUpdate,
-            ),
-          onSelectCloudMachine: (machineId) =>
-            place.cloudMachines.select(
-              place.cloudProfileId,
-              machineId,
-              cloudProfiles,
-              submitting || pendingPlacement,
-              requestUpdate,
-            ),
-          onConnectMachine,
-          onManageCloudWorkers: () => {
+          onSelect: (hostId) => {
+            place.catalogSelection.selectTerminalHost(hostId);
             browser.close();
-            onNavigate("cloud-workers");
           },
-        })
-  }${
+        }
+      : undefined,
+    idPrefix,
+    state: whereState,
+    environmentQuery: browser.environmentQuery,
+    onEnvironmentQueryInput: (query) => browser.changeEnvironmentQuery(query),
+    gatewayName: gateway.gatewayName,
+    cloudProfileId: place.cloudProfileId,
+    machineClass,
+    os,
+    deviceId: place.deviceId,
+    autoDevice: place.autoDevice,
+    autoPlacementMode: place.modelControl.autoPlacementSelectionMode(),
+    cloudDisabledReason: place.modelControl.cloudRuntimeUnsupportedReason(),
+    cloudProfileDisabledReason: (profile) =>
+      place.modelControl.cloudRuntimeUnsupportedReason(profile),
+    submitting,
+    pendingPlacement,
+    catalogLoading: place.canWrite() && gateway.cloudProfilesPending,
+    isAdmin: place.isAdmin(),
+    ...browser.popoverCallbacks("where"),
+    onSelectDevice: (deviceId) => place.selectDevice(deviceId),
+    onSelectAutoDevice: () => place.selectDevice("", true),
+    onSelectCloudProfile: (profileId, useDefaults) => {
+      if (useDefaults) {
+        place.cloudMachines.applyPending(profileId);
+      }
+      place.selectCloudProfile(profileId);
+    },
+    onSelectCloudOs: (osId) =>
+      place.cloudMachines.selectOs(
+        place.cloudProfileId,
+        osId,
+        cloudProfiles,
+        submitting || pendingPlacement,
+        requestUpdate,
+      ),
+    onSelectCloudMachine: (machineId) =>
+      place.cloudMachines.select(
+        place.cloudProfileId,
+        machineId,
+        cloudProfiles,
+        submitting || pendingPlacement,
+        requestUpdate,
+      ),
+    onConnectMachine,
+    onManageCloudWorkers: () => {
+      browser.close();
+      onNavigate("cloud-workers");
+    },
+  })}${
     nativeTerminal && place.catalogSelection.terminalOnNode
       ? html`<label class="new-session-page__select new-session-page__menu-field"
           ><span>${t("newSession.terminalNodeFolder")}</span
