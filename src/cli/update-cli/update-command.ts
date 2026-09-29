@@ -288,10 +288,9 @@ async function updateCommandInternal(
   retainRuntime: RetainUpdateRuntime,
   initialization?: InitializedUpdate,
 ): Promise<void> {
-  const { timeoutMs } = prepared;
   const run = opts.run!;
   const updateStepTimeoutMs =
-    timeoutMs ?? run.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
+    prepared.timeoutMs ?? run.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
   const target =
     initialization?.target ??
@@ -449,6 +448,7 @@ async function runResolvedUpdate(
   }
 
   const currentCoreFinalization = {
+    opts,
     legacyConfigPlan,
     root,
     previousInstallRoot: discoveredRoot,
@@ -488,7 +488,6 @@ async function runResolvedUpdate(
     const { finishAlreadyCurrentUpdate } = await import("./update-execution.runtime.js");
     return await finishAlreadyCurrentUpdate({
       ...currentCoreFinalization,
-      opts,
       result: {
         status: "skipped",
         mode: packageInstallTarget?.manager ?? "unknown",
@@ -637,7 +636,6 @@ async function runResolvedUpdate(
     return await finishAlreadyCurrentUpdate({
       ...currentCoreFinalization,
       root: result.root ?? root,
-      opts,
       result,
       ownedManagedUpdateEnv: ownedManagedUpdateContext?.env,
       packageUpdateNodeRunner: packageUpdateNodeRunner ?? managedServiceNodeRunner,
