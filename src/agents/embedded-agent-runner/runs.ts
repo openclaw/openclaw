@@ -933,10 +933,9 @@ export function prepareEmbeddedAgentRunCompletionClaim(
   resolveCurrentRegistration: () => EmbeddedRunCompletionRegistration | undefined;
   registered: Promise<EmbeddedRunCompletionRegistration | undefined>;
 } {
-  let settleRegistration!: (registration: EmbeddedRunCompletionRegistration | undefined) => void;
-  const registered = new Promise<EmbeddedRunCompletionRegistration | undefined>((resolve) => {
-    settleRegistration = resolve;
-  });
+  const { promise: registered, resolve: settleRegistration } = createDeferredCore<
+    EmbeddedRunCompletionRegistration | undefined
+  >();
   const claim: EmbeddedRunCompletionClaim = {
     runId,
     lifecycleGeneration: getAgentEventLifecycleGeneration(),
