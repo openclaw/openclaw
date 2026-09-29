@@ -533,14 +533,12 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     return false;
   }
   const toolsAllow = params.toolsAllow;
-  if (toolsAllow === undefined) {
-    return canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options);
-  }
   // Codex native code mode exposes its shell/file surface as one app-server
   // capability, so narrow OpenClaw allowlists must fail closed rather than
   // widening `message` or `web_search` into shell access.
   return (
-    hasWildcardCodexToolsAllow(toolsAllow) &&
+    (toolsAllow === undefined ||
+      toolsAllow.some((name) => normalizeCodexDynamicToolName(name) === "*")) &&
     canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options)
   );
 }
@@ -574,23 +572,15 @@ function canCodexAppServerNativeToolSurfaceHonorSandbox(
   if (!sandbox?.enabled) {
     return true;
   }
-  if (
-    options.sandboxExecServerEnabled === true &&
-    (sandbox.backend || isCodexRemoteExecPlacementSandbox(sandbox)) &&
-    canSandboxToolPolicyExposeCodexNativeToolSurface(sandbox)
-  ) {
-    return true;
-  }
   // Codex app-server native shell, filesystem, and user MCP execution are owned
   // by the app-server process. Without the explicit exec-server integration,
   // active OpenClaw sandboxing must disable the native surface and route shell
   // access through sandbox-backed dynamic tools instead.
-  return false;
-}
-function canSandboxToolPolicyExposeCodexNativeToolSurface(sandbox: {
-  tools: Parameters<typeof isToolAllowed>[0];
-}): boolean {
-  return CODEX_NATIVE_TOOL_REQUIREMENTS.every((toolName) => isToolAllowed(sandbox.tools, toolName));
+  return Boolean(
+    options.sandboxExecServerEnabled === true &&
+    (sandbox.backend || isCodexRemoteExecPlacementSandbox(sandbox)) &&
+    CODEX_NATIVE_TOOL_REQUIREMENTS.every((toolName) => isToolAllowed(sandbox.tools, toolName)),
+  );
 }
 function isCodexMemoryFlushRun(
   params?: Pick<EmbeddedRunAttemptParams, "trigger" | "memoryFlushWritePath">,
@@ -810,9 +800,6 @@ function filterCodexDynamicToolsForAllowlist<T extends OpenClawDynamicTool>(
           : [];
     },
   });
-}
-function hasWildcardCodexToolsAllow(toolsAllow: string[]): boolean {
-  return toolsAllow.some((name) => normalizeCodexDynamicToolName(name) === "*");
 }
 function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
   return (

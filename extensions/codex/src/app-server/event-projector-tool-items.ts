@@ -4,7 +4,10 @@ import {
   projectAgentToolActivity,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  normalizeTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   itemName,
   itemStatus,
@@ -13,7 +16,6 @@ import {
   isProjectedNativeToolItem,
 } from "./event-projector-items.js";
 import { collectDynamicToolContentText } from "./event-projector-tool-output.js";
-import { normalizeNonEmptyString, readNonEmptyString } from "./event-projector-values.js";
 import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
 import {
   sanitizeCodexAgentEventRecord,
@@ -156,15 +158,15 @@ export function isCommandBearingToolItem(
 
 function webSearchToolArgs(item: CodexThreadItem): Record<string, unknown> {
   const action = isJsonObject(item.action) ? item.action : undefined;
-  const actionType = action ? readNonEmptyString(action, "type") : undefined;
+  const actionType = normalizeOptionalString(action?.type);
   const queries =
     action && actionType === "search" ? normalizeTrimmedStringList(action.queries) : [];
   const query =
-    normalizeNonEmptyString(item.query) ??
-    (action && actionType === "search" ? readNonEmptyString(action, "query") : undefined) ??
+    normalizeOptionalString(item.query) ??
+    (actionType === "search" ? normalizeOptionalString(action?.query) : undefined) ??
     queries[0];
-  const url = action ? readNonEmptyString(action, "url") : undefined;
-  const pattern = action ? readNonEmptyString(action, "pattern") : undefined;
+  const url = normalizeOptionalString(action?.url);
+  const pattern = normalizeOptionalString(action?.pattern);
   const args: Record<string, unknown> = {};
   if (query) {
     args.query = query;
@@ -241,7 +243,7 @@ function itemFileChangeRecords(item: CodexThreadItem): JsonObject[] {
 
 function itemFileChanges(item: CodexThreadItem): CodexFileChangeSummary[] {
   return itemFileChangeRecords(item).flatMap((change) => {
-    const path = normalizeNonEmptyString(change.path);
+    const path = normalizeOptionalString(change.path);
     if (!path || change.kind === undefined) {
       return [];
     }
@@ -253,7 +255,7 @@ function fileChangeKindType(kind: unknown): string | undefined {
   if (typeof kind === "string") {
     return kind;
   }
-  return isJsonObject(kind) ? normalizeNonEmptyString(kind.type) : undefined;
+  return isJsonObject(kind) ? normalizeOptionalString(kind.type) : undefined;
 }
 
 function countFileContentLines(content: string): number {
@@ -314,7 +316,7 @@ function truncateFileChangeDiffAtLineBoundary(
 function itemFileChangesForTranscript(item: CodexThreadItem): CodexTranscriptFileChange[] {
   let remainingDiffChars = 10_000;
   return itemFileChangeRecords(item).flatMap((change) => {
-    const path = normalizeNonEmptyString(change.path);
+    const path = normalizeOptionalString(change.path);
     if (!path || change.kind === undefined) {
       return [];
     }

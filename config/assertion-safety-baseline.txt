@@ -126,7 +126,6 @@ extensions/cloudflare-ai-gateway/onboard.ts	1
 extensions/codex/doctor-contract-api.ts	1
 extensions/codex/harness.ts	1
 extensions/codex/index.ts	5
-extensions/codex/src/app-server/approval-bridge.ts	1
 extensions/codex/src/app-server/attempt-diagnostics.ts	2
 extensions/codex/src/app-server/attempt-notifications.ts	1
 extensions/codex/src/app-server/attempt-startup.ts	1
@@ -151,13 +150,12 @@ extensions/codex/src/app-server/plugin-inventory.ts	6
 extensions/codex/src/app-server/plugin-metadata-cache.ts	5
 extensions/codex/src/app-server/plugin-thread-app-admission.ts	1
 extensions/codex/src/app-server/protocol-validators.ts	3
-extensions/codex/src/app-server/remote-workspace-media.ts	4
 extensions/codex/src/app-server/run-attempt-context.ts	2
 extensions/codex/src/app-server/run-attempt-resources.ts	12
 extensions/codex/src/app-server/run-attempt-runtime.ts	1
 extensions/codex/src/app-server/run-attempt-server-requests.ts	2
 extensions/codex/src/app-server/run-attempt-tools.ts	1
-extensions/codex/src/app-server/runtime-artifact.ts	2
+extensions/codex/src/app-server/runtime-artifact.ts	1
 extensions/codex/src/app-server/sandbox-exec-server/http.ts	2
 extensions/codex/src/app-server/sandbox-exec-server/json-rpc.ts	3
 extensions/codex/src/app-server/sandbox-exec-server/processes.ts	1
@@ -177,9 +175,8 @@ extensions/codex/src/command-rpc.ts	1
 extensions/codex/src/conversation-control.ts	1
 extensions/codex/src/migration/apply.ts	2
 extensions/codex/src/migration/auth.ts	3
-extensions/codex/src/migration/plan.ts	5
+extensions/codex/src/migration/plan.ts	4
 extensions/codex/src/migration/session-binding-sidecars.ts	4
-extensions/codex/src/migration/source-files.ts	1
 extensions/codex/src/session-catalog-node-continue.ts	1
 extensions/codex/src/session-catalog-parsing.ts	2
 extensions/codex/src/session-catalog-transcript-item.ts	1
