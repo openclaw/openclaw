@@ -2434,8 +2434,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/cron/service/store.schedule-reload.test.ts",
   "src/cron/service/timer-catchup-concurrency.test.ts",
   "src/cron/service/timer-outcome-finalization.receipts.test.ts",
-  "src/cron/service/timer.heartbeat-timeout-watchdog.test.ts",
-  "src/cron/service/timer.quiet-finalization.test.ts",
   "src/cron/service/timer.regression.test.ts",
   "src/cron/service/timer.test.ts",
   "src/cron/service/timer.timeout-watchdog.test.ts",
