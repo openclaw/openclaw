@@ -268,8 +268,8 @@ export async function prepareReplyAgentPayloads(state: {
       ? payload
       : applyDeliveredReplyToMode(payload);
   };
-  const buildFinalPayloads = (payloads: ReplyPayload[]) =>
-    buildReplyPayloads({
+  const buildFinalPayloads = async (payloads: ReplyPayload[]) => {
+    const result = await buildReplyPayloads({
       config: cfg,
       payloads,
       conversationContext: sessionCtx.agentText ?? sessionCtx.BodyForAgent,
@@ -296,12 +296,13 @@ export async function prepareReplyAgentPayloads(state: {
       accountId: sessionCtx.AccountId,
       normalizeMediaPaths: replyMediaContext.normalizePayload,
     });
+    didLogHeartbeatStrip = result.didLogHeartbeatStrip;
+    return result.replyPayloads;
+  };
   const returnPreparedFallbackPayload = async (
     payload: ReplyPayload,
   ): Promise<ReplyPayload | undefined> => {
-    const result = await buildFinalPayloads([payload]);
-    didLogHeartbeatStrip = result.didLogHeartbeatStrip;
-    const preparedPayload = result.replyPayloads[0];
+    const [preparedPayload] = await buildFinalPayloads([payload]);
     if (!preparedPayload) {
       return undefined;
     }
@@ -447,12 +448,10 @@ export async function prepareReplyAgentPayloads(state: {
       (payload.isReasoning !== true || opts?.reasoningPayloadsEnabled === true) &&
       (payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true),
   );
-  const payloadResult = await buildFinalPayloads(payloadCandidates);
+  let replyPayloads = await buildFinalPayloads(payloadCandidates);
   if (sourceReplyDelivery !== "delivered" && completion.outcome === "delivered") {
     await opts?.onObservedReplyDelivery?.();
   }
-  let { replyPayloads } = payloadResult;
-  didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
   const replyPayloadsWithoutToolWarnings = waitingStatusPayload
     ? replyPayloads.filter((payload) => !isGeneratedToolWarning(payload))
     : replyPayloads;
@@ -470,30 +469,26 @@ export async function prepareReplyAgentPayloads(state: {
     replyPayloads = replyPayloadsWithoutToolWarnings;
   }
   if (shouldDeliverTerminalFailure && !hasTerminalReply && terminalFailurePayload) {
-    const terminalPayloadResult = await buildFinalPayloads([terminalFailurePayload]);
-    replyPayloads = [...replyPayloads, ...terminalPayloadResult.replyPayloads];
-    didLogHeartbeatStrip = terminalPayloadResult.didLogHeartbeatStrip;
+    replyPayloads = [...replyPayloads, ...(await buildFinalPayloads([terminalFailurePayload]))];
   } else if (waitingStatusPayload && !hasTerminalReply) {
-    const acknowledgmentResult = await buildFinalPayloads([waitingStatusPayload]);
+    const acknowledgmentPayloads = await buildFinalPayloads([waitingStatusPayload]);
     replyPayloads =
-      acknowledgmentResult.replyPayloads.length > 0
-        ? [...replyPayloadsWithoutToolWarnings, ...acknowledgmentResult.replyPayloads]
+      acknowledgmentPayloads.length > 0
+        ? [...replyPayloadsWithoutToolWarnings, ...acknowledgmentPayloads]
         : replyPayloads.map((payload) =>
             isGeneratedToolWarning(payload) ? applyFinalReplyToMode(payload) : payload,
           );
-    didLogHeartbeatStrip = acknowledgmentResult.didLogHeartbeatStrip;
   } else if (hasSpecificFallbackFailure && !hasTerminalReply) {
     const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
     if (silentFallbackFailurePayload) {
       return { kind: "return" as const, value: silentFallbackFailurePayload };
     }
   } else if (emptyInteractiveReplyPayload && !hasTerminalReply) {
-    const emptyPayloadResult = await buildFinalPayloads([
+    const emptyPayloads = await buildFinalPayloads([
       buildStrandedRetryMissingDeliveryDiagnostic() ?? emptyInteractiveReplyPayload,
     ]);
-    replyPayloads = [...replyPayloads, ...emptyPayloadResult.replyPayloads];
-    didLogHeartbeatStrip = emptyPayloadResult.didLogHeartbeatStrip;
-    if (emptyPayloadResult.replyPayloads.length > 0) {
+    replyPayloads = [...replyPayloads, ...emptyPayloads];
+    if (emptyPayloads.length > 0) {
       replyOperation.retainFailureUntilComplete();
       replyOperation.fail(
         "run_failed",

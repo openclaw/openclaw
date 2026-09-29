@@ -21,6 +21,7 @@ import {
 
 const supervisorUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.supervisor);
 const turnsUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.turnStore);
+const journalUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.journalWorker);
 
 function writeSupervisorOwnerScript(root: string, waitForCompletedTurn: boolean): string {
   const scriptPath = path.join(root, "supervisor-owner.mjs");
@@ -29,7 +30,7 @@ function writeSupervisorOwnerScript(root: string, waitForCompletedTurn: boolean)
     `
       import fs from "node:fs";
       import { createNodeWorkerSupervisor } from ${JSON.stringify(supervisorUrl.href)};
-      import { NodeWorkerTurnStore } from ${JSON.stringify(turnsUrl.href)};
+      import { NodeWorkerJournalWorker } from ${JSON.stringify(journalUrl.href)};
       const [bundleRoot, stateDir, inputPath] = process.argv.slice(2);
       const supervisor = createNodeWorkerSupervisor({
         bundleRoot,
@@ -44,11 +45,11 @@ function writeSupervisorOwnerScript(root: string, waitForCompletedTurn: boolean)
       const completed = Promise.withResolvers();
       void completed.promise.catch(() => undefined);
       if (${waitForCompletedTurn}) {
-        const finish = NodeWorkerTurnStore.prototype.finish;
-        NodeWorkerTurnStore.prototype.finish = function (params) {
-          const finishing = finish.call(this, params);
-          if (params.expected.launchId === input.launchId) {
-            NodeWorkerTurnStore.prototype.finish = finish;
+        const execute = NodeWorkerJournalWorker.prototype.execute;
+        NodeWorkerJournalWorker.prototype.execute = function (command, authority) {
+          const finishing = execute.call(this, command, authority);
+          if (command.type === "nodeWorker.turn.finish" && command.input[0].expected.launchId === input.launchId) {
+            NodeWorkerJournalWorker.prototype.execute = execute;
             void finishing.then(completed.resolve, completed.reject);
           }
           return finishing;
@@ -73,7 +74,6 @@ export function spawnPendingSupervisorOwner({
   claim: NodeWorkerLaunchClaim;
 }): ChildProcess {
   const storeUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.launchStore);
-  const journalUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.journalWorker);
   const identityUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.processIdentity);
   const claimPath = path.join(root, "claim.json");
   const scriptPath = path.join(root, "pending-owner.mjs");

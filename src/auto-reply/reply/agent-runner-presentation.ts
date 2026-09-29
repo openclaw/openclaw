@@ -13,11 +13,25 @@ import {
   startsWithSilentToken,
   stripLeadingSilentToken,
 } from "../tokens.js";
-import type { ReplyPayload } from "../types.js";
+import type { BlockReplyContext, GetReplyOptions, ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { createBlockReplyDeliveryHandler, type DirectBlockDelivery } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { hasCommittedReplyOperationOutcome } from "./reply-run-registry.js";
+
+export async function deliverPreparedBlockReply(
+  opts: Pick<GetReplyOptions, "onPreparedBlockReply" | "onBlockReply"> | undefined,
+  payload: ReplyPayload,
+  context?: BlockReplyContext,
+): Promise<void> {
+  if (opts?.onPreparedBlockReply) {
+    for (const plan of createStructuredOutboundPayloadPlan([payload])) {
+      await opts.onPreparedBlockReply(plan, context);
+    }
+  } else {
+    await opts?.onBlockReply?.(payload, context);
+  }
+}
 
 /** Builds the channel-presentation callbacks shared by CLI and embedded runs. */
 export function createAgentTurnPresentation(params: {
@@ -124,15 +138,8 @@ export function createAgentTurnPresentation(params: {
   const blockReplyHandler =
     params.turn.opts?.onPreparedBlockReply || params.turn.opts?.onBlockReply
       ? createBlockReplyDeliveryHandler({
-          onBlockReply: async (payload, context) => {
-            if (params.turn.opts?.onPreparedBlockReply) {
-              for (const plan of createStructuredOutboundPayloadPlan([payload])) {
-                await params.turn.opts.onPreparedBlockReply(plan, context);
-              }
-              return;
-            }
-            await params.turn.opts?.onBlockReply?.(payload, context);
-          },
+          onBlockReply: (payload, context) =>
+            deliverPreparedBlockReply(params.turn.opts, payload, context),
           currentMessageId:
             params.turn.sessionCtx.MessageSidFull ?? params.turn.sessionCtx.MessageSid,
           replyThreading: params.turn.replyThreading,

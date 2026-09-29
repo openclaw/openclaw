@@ -489,10 +489,6 @@ class ActivityPage extends OpenClawLightDomElement {
     }
   }
 
-  private clearEntries() {
-    this.liveActivity?.clear();
-  }
-
   private renderMode(route: ActivityRouteData, location: RouteLocation, pending: boolean) {
     if (pending && route.mode === "run") {
       return renderLoadingState();
@@ -601,7 +597,7 @@ class ActivityPage extends OpenClawLightDomElement {
           this.statusFilters = { ...this.statusFilters, [status]: enabled };
         },
         onToggleAutoFollow: (next) => (this.autoFollow = next),
-        onClear: () => this.clearEntries(),
+        onClear: () => this.liveActivity?.clear(),
         onExpandAll: () => {
           this.expandedIds = new Set(this.entries.map((entry) => entry.id));
         },

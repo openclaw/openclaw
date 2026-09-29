@@ -16,7 +16,7 @@ registerChatMessageMetadataEnglish();
 type ChatSelectionPopupActions = {
   paneId: string;
   onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
-  onAskSideChat: (selection: string) => void;
+  onAskSideChat: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
 };
 
 let activeSelectionPopup: {
@@ -179,7 +179,7 @@ function showChatSelectionPopup(
   }
   popup.append(
     button(t("chat.messages.askInSideChat"), () =>
-      activate(() => actions.onAskSideChat(selection.text)),
+      activate(() => actions.onAskSideChat(selection, anchor)),
     ),
   );
   const signal = mountPopup(popup, anchor, actions.paneId);

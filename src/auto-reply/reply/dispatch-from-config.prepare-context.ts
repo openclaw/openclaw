@@ -321,16 +321,6 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     },
   };
   Object.assign(sourceReplyPolicy, sourceReplyDeliveryRuntimeOptions);
-  const {
-    sourceReplyDeliveryMode,
-    sessionStableSourceReplyDeliveryMode,
-    suppressAutomaticSourceDelivery,
-    suppressDelivery,
-    sendPolicyDenied,
-    deliverySuppressionReason,
-    suppressHookUserDelivery,
-    suppressHookReplyLifecycle,
-  } = sourceReplyPolicy;
   const reasoningPayloadsEnabled = params.replyOptions?.reasoningPayloadsEnabled === true;
   const commentaryPayloadsEnabled = params.replyOptions?.commentaryPayloadsEnabled === true;
   const attachSourceReplyDeliveryMode = (
@@ -357,7 +347,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   const unauthorizedTextSlashSourceReplyCtx =
     (chatType === "group" || chatType === "channel") && isUnauthorizedTextSlashCommand(ctx);
   const shouldDeliverPluginBindingReply =
-    !suppressAutomaticSourceDelivery ||
+    !sourceReplyPolicy.suppressAutomaticSourceDelivery ||
     explicitCommandTurnCtx ||
     (ctx.InboundEventKind !== "room_event" && !unauthorizedTextSlashSourceReplyCtx);
 
@@ -535,14 +525,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     chatType,
     sourceReplyPolicy,
     sourceReplyDeliveryRuntimeOptions,
-    sourceReplyDeliveryMode,
-    sessionStableSourceReplyDeliveryMode,
-    suppressAutomaticSourceDelivery,
-    suppressDelivery,
-    sendPolicyDenied,
-    deliverySuppressionReason,
-    suppressHookUserDelivery,
-    suppressHookReplyLifecycle,
+    ...sourceReplyPolicy,
     reasoningPayloadsEnabled,
     commentaryPayloadsEnabled,
     attachSourceReplyDeliveryMode,

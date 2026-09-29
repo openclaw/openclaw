@@ -1,5 +1,6 @@
 // Voice Call API module exposes the plugin public contract.
 import { fetchWithSsrFGuard } from "../../../api.js";
+import type { GetCallStatusResult } from "../../types.js";
 import {
   cancelProviderResponseBody,
   readProviderErrorResponseSnippet,
@@ -54,5 +55,18 @@ export async function guardedJsonApiRequest<T = unknown>(
     )) as T;
   } finally {
     await release();
+  }
+}
+
+/** Failed carrier probes keep calls alive; an empty or missing response is terminal. */
+export async function readProviderCallStatus<T>(
+  request: () => Promise<T>,
+  describe: (data: NonNullable<T>) => GetCallStatusResult,
+): Promise<GetCallStatusResult> {
+  try {
+    const data = await request();
+    return data ? describe(data) : { status: "not-found", isTerminal: true };
+  } catch {
+    return { status: "error", isTerminal: false, isUnknown: true };
   }
 }

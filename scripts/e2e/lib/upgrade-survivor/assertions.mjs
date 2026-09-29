@@ -1189,6 +1189,25 @@ function readMigratedSessionStore(stateDir, targetStorePath) {
           store[row.key] =
             typeof row.session_id === "string" ? { ...entry, sessionId: row.session_id } : entry;
         }
+        if (
+          source === "session_nodes" &&
+          db.prepare("PRAGMA user_version").get().user_version >= 24
+        ) {
+          for (const row of db
+            .prepare("SELECT session_key, field, value_json FROM session_entry_snapshots")
+            .all()) {
+            assert(Object.hasOwn(store, row.session_key), "orphaned session snapshot");
+            assert(
+              ["sessionDiffBaseline", "skillsSnapshot", "systemPromptReport"].includes(row.field),
+              "unknown session snapshot field",
+            );
+            assert(
+              !Object.hasOwn(store[row.session_key], row.field),
+              "duplicate inline session snapshot",
+            );
+            store[row.session_key][row.field] = JSON.parse(row.value_json);
+          }
+        }
         return { source, store };
       }
     } finally {

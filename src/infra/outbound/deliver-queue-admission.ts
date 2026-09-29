@@ -196,7 +196,7 @@ export async function stageAndEnqueueOutboundDelivery(
             params.deliveryQueueStateContext,
           );
       if (!queued.created) {
-        cancelDeliveryQueueMediaRetention(
+        await cancelDeliveryQueueMediaRetention(
           staged.mediaStageId,
           stateDir,
           params.deliveryQueueStateContext,
@@ -227,7 +227,7 @@ export async function stageAndEnqueueOutboundDelivery(
     }
     const errors: unknown[] = [err];
     try {
-      cancelDeliveryQueueMediaRetention(
+      await cancelDeliveryQueueMediaRetention(
         staged.mediaStageId,
         stateDir,
         params.deliveryQueueStateContext,

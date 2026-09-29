@@ -1,4 +1,3 @@
-// Qa Matrix plugin module implements room and fault scenario runtime E2EE behavior.
 import { randomUUID } from "node:crypto";
 import { createMatrixQaClient } from "../substrate/client.js";
 import {
@@ -30,7 +29,8 @@ import {
   MATRIX_QA_SYNC_STATE_AFTER_FAULT_RULE_ID,
   MATRIX_QA_SYNC_STATE_AFTER_KEY,
   MATRIX_QA_SYNC_STATE_AFTER_PARAM,
-  createMatrixQaE2eeDriverClient,
+  createMatrixQaE2eeAccountClient,
+  createMatrixQaE2eeActorClient,
   requireMatrixQaE2eeOutputDir,
   requireMatrixQaGatewayConfigPath,
   registerMatrixQaE2eeScenarioAccount,
@@ -276,32 +276,12 @@ export async function withMatrixQaE2eeDriver<T>(
   run: (client: MatrixQaE2eeScenarioClient) => Promise<T>,
   opts: { actorId?: "driver" | `driver-${string}` } = {},
 ) {
-  const client = await createMatrixQaE2eeDriverClient(context, scenarioId, opts);
+  const client = await createMatrixQaE2eeActorClient(context, scenarioId, "driver", opts);
   try {
     return await run(client);
   } finally {
     await client.stop();
   }
-}
-
-async function createMatrixQaE2eeRegisteredScenarioClient(params: {
-  account: Awaited<ReturnType<typeof registerMatrixQaE2eeScenarioAccount>>;
-  actorId: `driver-${string}`;
-  context: MatrixQaScenarioContext;
-  scenarioId: MatrixQaE2eeScenarioId;
-}) {
-  return await createMatrixQaE2eeScenarioClient({
-    accessToken: params.account.accessToken,
-    actorId: params.actorId,
-    baseUrl: params.context.baseUrl,
-    deviceId: params.account.deviceId,
-    observedEvents: params.context.observedEvents,
-    outputDir: requireMatrixQaE2eeOutputDir(params.context),
-    password: params.account.password,
-    scenarioId: params.scenarioId,
-    timeoutMs: params.context.timeoutMs,
-    userId: params.account.userId,
-  });
 }
 
 export async function withMatrixQaIsolatedE2eeDriverRoom<T>(
@@ -392,11 +372,13 @@ export async function withMatrixQaIsolatedE2eeDriverRoom<T>(
       .replace(/^matrix-e2ee-/, "")
       .replace(/[^A-Za-z0-9_-]/g, "-")
       .slice(0, 28)}`;
-    client = await createMatrixQaE2eeRegisteredScenarioClient({
-      account: driverAccount,
+    client = await createMatrixQaE2eeAccountClient(context, {
+      accessToken: driverAccount.accessToken,
       actorId,
-      context,
+      deviceId: driverAccount.deviceId,
+      password: driverAccount.password,
       scenarioId,
+      userId: driverAccount.userId,
     });
     await Promise.all([
       client.waitForJoinedMember({

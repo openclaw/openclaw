@@ -21,7 +21,7 @@ enum QuickChatModelPatchDecision: Equatable {
 
 enum QuickChatModelControlLogic {
     static func snapshot(
-        target: QuickChatRoutingTarget,
+        target: OpenClawChatSessionTarget,
         models: [OpenClawChatModelChoice],
         sessions: OpenClawChatSessionsListResponse,
         agents: AgentsListResult?,
@@ -108,7 +108,7 @@ enum QuickChatModelControlLogic {
     }
 
     private static func sessionEntry(
-        target: QuickChatRoutingTarget,
+        target: OpenClawChatSessionTarget,
         sessions: [OpenClawChatSessionEntry]) -> OpenClawChatSessionEntry?
     {
         let key = target.sessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -121,7 +121,7 @@ enum QuickChatModelControlLogic {
         return sessions.first(where: { $0.key.lowercased() == "agent:\(agentID):global" })
     }
 
-    private static func agent(target: QuickChatRoutingTarget, agents: AgentsListResult?) -> AgentSummary? {
+    private static func agent(target: OpenClawChatSessionTarget, agents: AgentsListResult?) -> AgentSummary? {
         guard let agents else { return nil }
         let targetAgentID = self.normalized(target.agentID) ??
             OpenClawChatSessionKey.agentID(from: target.sessionKey) ??

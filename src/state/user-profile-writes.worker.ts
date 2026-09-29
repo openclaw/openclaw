@@ -57,7 +57,7 @@ export type UserProfileWriteOperations = {
     >;
   };
   "userProfiles.ensureEmail": {
-    input: { email: string };
+    input: { email: string; expectedGitHubAccountId?: number };
     output: UserProfileWriteResult<ReturnType<typeof ensureProfileForEmail>>;
   };
   "userProfiles.ensureTailscale": {
@@ -229,7 +229,13 @@ export function executeUserProfileWrite(
         return { ok: true, value: { ...result, display: linkedDisplay } };
       }
       case "userProfiles.ensureEmail":
-        return { ok: true, value: ensureProfileForEmail(command.input.email, owned) };
+        return {
+          ok: true,
+          value: ensureProfileForEmail(command.input.email, {
+            ...owned,
+            expectedGitHubAccountId: command.input.expectedGitHubAccountId,
+          }),
+        };
       case "userProfiles.ensureTailscale":
         return { ok: true, value: ensureProfileForTailscaleIdentity(command.input, owned) };
       case "userProfiles.syncGitHub":

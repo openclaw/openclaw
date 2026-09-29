@@ -793,6 +793,46 @@ describe("generateSummary thinking options", () => {
       message: "Summarization failed: model returned no summary text",
     });
   });
+
+  it("identifies a length-stopped reasoning-only summary as an exhausted output budget", async () => {
+    const model = createSummaryModel(true);
+    const streamFn = vi.fn<StreamFn>(() => {
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "done",
+        reason: "length",
+        message: {
+          ...createAssistant("", createUsage(800), 1),
+          content: [{ type: "thinking", thinking: "internal summary reasoning" }],
+          stopReason: "length",
+        },
+      });
+      stream.end();
+      return stream;
+    });
+
+    const result = await generateSummary(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      model,
+      1_000,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "high",
+      streamFn,
+    );
+
+    expect(streamFn).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "summarization_failed",
+        message: expect.stringContaining("output budget (800 tokens) was exhausted"),
+      },
+    });
+  });
 });
 
 describe("split-turn compaction", () => {

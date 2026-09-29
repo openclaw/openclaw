@@ -86,42 +86,37 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
       .finally(() => params.onRequestUpdate?.());
     params.onRequestUpdate?.();
   };
+  const syncSliderPreview = (input: HTMLInputElement, previewIndex?: number) => {
+    const preview = previewIndex === undefined ? undefined : sliderStops[previewIndex];
+    const index = previewIndex ?? sliderIndex;
+    input.style.setProperty("--reasoning-fill", `${sliderFillPercent(index)}%`);
+    input.dataset.effortBoost = preview ? sliderBoost(index) : committedBoost;
+    input.setAttribute(
+      "aria-valuetext",
+      preview ? formatEffortLabel(preview.label) : reasoningValueLabel,
+    );
+    const panel = input.closest(".chat-controls__reasoning-panel");
+    panel?.querySelectorAll<HTMLElement>("[data-chat-thinking-preview-index]").forEach((label) => {
+      label.hidden = !preview || label.dataset.chatThinkingPreviewIndex !== input.value;
+    });
+    const committedLabel = panel?.querySelector<HTMLElement>(
+      "[data-chat-thinking-preview-committed]",
+    );
+    if (committedLabel) {
+      committedLabel.hidden = Boolean(preview);
+    }
+  };
   const resetSliderPreview = (input: HTMLInputElement, restoreValue = false) => {
     if (restoreValue) {
       input.value = String(sliderIndex);
     }
-    input.style.setProperty("--reasoning-fill", `${sliderFillPercent(sliderIndex)}%`);
-    input.dataset.effortBoost = committedBoost;
-    input.setAttribute("aria-valuetext", reasoningValueLabel);
-    const panel = input.closest(".chat-controls__reasoning-panel");
-    panel?.querySelectorAll<HTMLElement>("[data-chat-thinking-preview-index]").forEach((label) => {
-      label.hidden = true;
-    });
-    const committedLabel = panel?.querySelector<HTMLElement>(
-      "[data-chat-thinking-preview-committed]",
-    );
-    if (committedLabel) {
-      committedLabel.hidden = false;
-    }
+    syncSliderPreview(input);
   };
   const onSliderDrag = (event: Event) => {
     const input = event.currentTarget as HTMLInputElement;
-    const stop = sliderStops[Number(input.value)];
-    if (!stop) {
-      return;
-    }
-    input.style.setProperty("--reasoning-fill", `${sliderFillPercent(Number(input.value))}%`);
-    input.dataset.effortBoost = sliderBoost(Number(input.value));
-    input.setAttribute("aria-valuetext", formatEffortLabel(stop.label));
-    const panel = input.closest(".chat-controls__reasoning-panel");
-    panel?.querySelectorAll<HTMLElement>("[data-chat-thinking-preview-index]").forEach((label) => {
-      label.hidden = label.dataset.chatThinkingPreviewIndex !== input.value;
-    });
-    const committedLabel = panel?.querySelector<HTMLElement>(
-      "[data-chat-thinking-preview-committed]",
-    );
-    if (committedLabel) {
-      committedLabel.hidden = true;
+    const index = Number(input.value);
+    if (sliderStops[index]) {
+      syncSliderPreview(input, index);
     }
   };
   const onSliderCommit = (event: Event) => {

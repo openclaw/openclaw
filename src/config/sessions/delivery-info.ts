@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import {
   resolveSessionStoreIdentity,
   resolveSessionStoreKey,
@@ -15,7 +16,8 @@ import {
   loadExactSessionEntryReadOnly,
   openSessionEntryReadView,
 } from "./session-accessor.js";
-import type { SessionEntryReadSource, SessionEntryReadView } from "./session-accessor.types.js";
+import type { SessionEntryReadView } from "./session-accessor.types.js";
+import type { SessionEntryReadSource } from "./session-entry-read-source.types.js";
 import {
   foldedSessionKeyAliasCandidates,
   hasMismatchedCaseSensitiveDeliveryProof,
@@ -23,7 +25,6 @@ import {
   normalizeStoreSessionKey,
 } from "./store-entry.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
-import { parseSessionThreadInfo } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
 
 /** Reads only the current session; missing delivery must not widen into alias discovery. */
@@ -91,7 +92,7 @@ export function extractDeliveryInfoBatch(
 ): DeliveryInfo[] {
   const parsed = sessionKeys.map((sessionKey) => ({
     sessionKey,
-    ...parseSessionThreadInfo(sessionKey),
+    ...resolveSessionThreadInfo(sessionKey),
   }));
   const results: DeliveryInfo[] = parsed.map(({ threadId }) => ({
     deliveryContext: undefined,
@@ -177,7 +178,7 @@ export function extractDeliveryInfoBatch(
         return {
           storePath: read.storePath,
           sessionKeys: read.sessionKeys,
-          projection: "list",
+          projection: "delivery",
           onReadSource: (source) => {
             read.source = source;
           },

@@ -89,6 +89,7 @@ export function selectDeltaNotes(
 export function composePromptMessages(params: {
   thread: SessionCompanionThread;
   question: string;
+  selectionContext?: string;
   referenceContext: string;
   now: number;
 }): SessionCompanionPromptMessage[] {
@@ -101,7 +102,9 @@ export function composePromptMessages(params: {
   }
   messages.push({
     role: "user",
-    content: params.question,
+    content: params.selectionContext
+      ? `${params.question}\n\n<selected-text-context>\n${escapeReferenceText(params.selectionContext)}\n</selected-text-context>`
+      : params.question,
     ts: params.now,
   });
   return messages;

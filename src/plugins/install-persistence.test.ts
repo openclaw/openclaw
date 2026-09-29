@@ -17,7 +17,9 @@ import {
   configWriteMock,
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
   applyPluginUninstallDirectoryRemovalMock,
+  readConfigFileSnapshotForWriteMock,
 } from "../cli/plugins-cli-test-helpers.js";
+import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -51,6 +53,10 @@ const installWriteOptions = {
 };
 
 function installSnapshot(config: OpenClawConfig) {
+  readConfigFileSnapshotForWriteMock.mockResolvedValue({
+    snapshot: { ...createTestConfigSnapshot(config), hash: "config-1" },
+    writeOptions: installWriteOptions,
+  });
   return { config, baseHash: "config-1", writeOptions: installWriteOptions };
 }
 
@@ -186,8 +192,7 @@ describe("persistPluginInstall", () => {
 
     const next = await persistPluginInstall({
       snapshot: {
-        config: baseConfig,
-        baseHash: "config-1",
+        ...installSnapshot(baseConfig),
         writeOptions: {
           assertConfigPathForWrite: installWriteOptions.assertConfigPathForWrite,
           expectedConfigPath: "/tmp/openclaw.json",

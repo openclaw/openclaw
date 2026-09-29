@@ -15,6 +15,7 @@ import {
 } from "../infra/sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import { prepareSqliteDatabaseDirectory } from "../infra/sqlite-wal-filesystem.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import {
   configureSqliteConnectionPragmas,
@@ -110,6 +111,7 @@ export function openUnpublishedStateDatabase(
     if (!original) {
       quarantineOrphanedSqliteSidecars(params.pathname);
       ensureOpenClawStatePermissions(params.pathname, params.env, { createDirectory: true });
+      prepareSqliteDatabaseDirectory(params.pathname);
     }
     return openNativeStateDatabase(params, initialization, original);
   };

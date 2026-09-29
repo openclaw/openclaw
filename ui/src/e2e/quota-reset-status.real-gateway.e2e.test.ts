@@ -340,7 +340,7 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
               },
               { model: "gpt-5.5", path: "/v1/responses" },
             );
-            const auxiliary = await fetch(`${provider.baseUrl}/v1/responses`, {
+            const auxiliary = await provider.fetch("/v1/responses", {
               method: "POST",
               headers: {
                 "content-type": "application/json",

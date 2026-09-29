@@ -38,23 +38,11 @@ enum AudioInputDeviceSelectionResolver {
         let selected = selectedUID?.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedSelection = selected?.isEmpty == false ? selected : nil
         let usableDefault = defaultUID.flatMap { availableUIDs.contains($0) ? $0 : nil }
-
-        guard let normalizedSelection else {
-            return AudioInputDeviceResolution(
-                selectedUID: nil,
-                resolvedUID: usableDefault,
-                fellBackToSystemDefault: false)
-        }
-        if availableUIDs.contains(normalizedSelection) {
-            return AudioInputDeviceResolution(
-                selectedUID: normalizedSelection,
-                resolvedUID: normalizedSelection,
-                fellBackToSystemDefault: false)
-        }
+        let usableSelection = normalizedSelection.flatMap { availableUIDs.contains($0) ? $0 : nil }
         return AudioInputDeviceResolution(
             selectedUID: normalizedSelection,
-            resolvedUID: usableDefault,
-            fellBackToSystemDefault: true)
+            resolvedUID: usableSelection ?? usableDefault,
+            fellBackToSystemDefault: normalizedSelection != nil && usableSelection == nil)
     }
 }
 
@@ -164,21 +152,10 @@ final class AudioInputDeviceObserver: @unchecked Sendable {
     }
 
     private static func defaultInputDeviceID() -> AudioObjectID? {
-        let systemObject = AudioObjectID(kAudioObjectSystemObject)
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultInputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        var deviceID = AudioObjectID(0)
-        var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        let status = AudioObjectGetPropertyData(
-            systemObject,
-            &address,
-            0,
-            nil,
-            &size,
-            &deviceID)
-        guard status == noErr, deviceID != 0 else { return nil }
+        guard let deviceID = AudioPropertyValue.uint32(
+            objectID: AudioObjectID(kAudioObjectSystemObject),
+            selector: kAudioHardwarePropertyDefaultInputDevice), deviceID != 0
+        else { return nil }
         return deviceID
     }
 
@@ -265,14 +242,9 @@ final class AudioInputDeviceObserver: @unchecked Sendable {
     }
 
     private static func deviceIsAlive(_ deviceID: AudioObjectID) -> Bool {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyDeviceIsAlive,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        var alive: UInt32 = 0
-        var size = UInt32(MemoryLayout<UInt32>.size)
-        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &alive)
-        return status == noErr && alive != 0
+        AudioPropertyValue.uint32(
+            objectID: deviceID,
+            selector: kAudioDevicePropertyDeviceIsAlive).map { $0 != 0 } ?? false
     }
 
     private static func deviceHasInput(_ deviceID: AudioObjectID) -> Bool {
@@ -298,6 +270,22 @@ final class AudioInputDeviceObserver: @unchecked Sendable {
 
     private func logDefaultInputChange(reason: StaticString) {
         self.logger.info("audio input changed (\(reason)) (\(Self.defaultInputDeviceSummary(), privacy: .public))")
+    }
+}
+
+enum AudioPropertyValue {
+    static func uint32(
+        objectID: AudioObjectID,
+        selector: AudioObjectPropertySelector) -> UInt32?
+    {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var value: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioObjectGetPropertyData(objectID, &address, 0, nil, &size, &value)
+        return status == noErr ? value : nil
     }
 }
 

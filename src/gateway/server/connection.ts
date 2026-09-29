@@ -7,7 +7,7 @@ import { GATEWAY_STARTUP_PENDING_CLOSE_CAUSE } from "../../../packages/gateway-p
 import { getRuntimeConfig } from "../../config/io.js";
 import { recordPairedNodeDisconnection } from "../../infra/device-pairing-node.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
-import { upsertPresence } from "../../infra/system-presence.js";
+import { commitPresence, upsertPresence } from "../../infra/system-presence.js";
 import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { removeRemoteNodeInfo } from "../../skills/runtime/remote.js";
@@ -487,6 +487,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
           reason: "disconnect",
           watchedSessions: undefined,
         });
+        commitPresence(client.presenceKey, connId);
         buildRequestContext().publishPresence();
       }
       if (currentDisconnectedNodeId) {

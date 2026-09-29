@@ -109,9 +109,13 @@ export function createSessionRowProjectionFixture(params: {
       fallbackModel: presentation.activeModel,
       membership: new Set(),
       parents: new Set(
-        [entry.spawnedBy, entry.parentSessionKey].filter((parentKey): parentKey is string =>
-          Boolean(parentKey),
-        ),
+        [
+          entry.spawnedBy,
+          entry.parentSessionKey,
+          ...(rowContext.subagentRunsByChildSessionKey.get(fields.key) ?? []).map(
+            (run) => run.controllerSessionKey || run.requesterSessionKey,
+          ),
+        ].filter((parentKey): parentKey is string => Boolean(parentKey)),
       ),
       generation:
         previous &&

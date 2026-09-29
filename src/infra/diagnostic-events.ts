@@ -1366,7 +1366,8 @@ function emitDiagnosticEventWithTrust(
   const prepareTracePropagation =
     trusted && !options.queuedPhase && shouldPrepareDiagnosticTracePropagation(enriched);
 
-  if (options.queuedPhase || ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
+  const queued = options.queuedPhase || ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type);
+  if (queued) {
     if (state.asyncQueue.length >= MAX_ASYNC_DIAGNOSTIC_EVENTS) {
       if (!trusted || !PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
         noteAsyncDiagnosticDrop(state, { event: enriched, metadata, privateData, hostPluginId });
@@ -1378,14 +1379,6 @@ function emitDiagnosticEventWithTrust(
       }
     }
     state.asyncQueue.push({ event: enriched, metadata, privateData, hostPluginId });
-    if (prepareTracePropagation) {
-      prepareDiagnosticTracePropagation(
-        cloneDiagnosticValueForListener(enriched),
-        createDiagnosticMetadataForListener(metadata),
-      );
-    }
-    scheduleAsyncDiagnosticDrain(state);
-    return;
   }
 
   if (prepareTracePropagation) {
@@ -1394,7 +1387,11 @@ function emitDiagnosticEventWithTrust(
       createDiagnosticMetadataForListener(metadata),
     );
   }
-  dispatchDiagnosticEvent(state, enriched, metadata, privateData, { hostPluginId });
+  if (queued) {
+    scheduleAsyncDiagnosticDrain(state);
+  } else {
+    dispatchDiagnosticEvent(state, enriched, metadata, privateData, { hostPluginId });
+  }
 }
 
 function isToolExecutionEventInput(

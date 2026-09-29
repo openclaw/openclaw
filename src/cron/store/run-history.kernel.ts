@@ -5,6 +5,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
+  compareCronRunRecordsNewestFirst,
   cronRunRecordStoreKey,
   cronRunRecordToRunLogEntry,
   parseCronRunDetailJson,
@@ -228,12 +229,7 @@ function collectExpiredCronRunIds(records: readonly CronRunRecord[], now: number
     partitions.set(key, partition);
   }
   for (const rows of partitions.values()) {
-    rows.sort(
-      (a, b) =>
-        resolveCronRunRecordTimestamp(b) - resolveCronRunRecordTimestamp(a) ||
-        b.createdAt - a.createdAt ||
-        b.id.localeCompare(a.id),
-    );
+    rows.sort(compareCronRunRecordsNewestFirst);
     for (const row of rows.slice(CRON_HISTORY_KEEP_PER_JOB)) {
       expired.add(row.id);
     }

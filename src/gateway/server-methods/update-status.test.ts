@@ -26,6 +26,7 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -276,8 +277,9 @@ describe("update history RPCs", () => {
     };
     const run = createUpdateRun({ trigger: "api", origin: { updateRecoveryCapture: capture } });
     const publicRun = { ...run, origin: {} };
-    expect(readUpdateRunStatus()).toMatchObject({ activeRun: publicRun, lastRun: publicRun });
-    expect(JSON.stringify(readUpdateRunStatus())).not.toContain("updateRecoveryCapture");
+    const status = await readUpdateRunStatus();
+    expect(status).toMatchObject({ activeRun: publicRun, lastRun: publicRun });
+    expect(JSON.stringify(status)).not.toContain("updateRecoveryCapture");
     expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(true, {
       sentinel: null,
       activeRun: publicRun,
@@ -410,14 +412,21 @@ describe("update history RPCs", () => {
   it("reads fresh status concurrently without copying the shared database", async () => {
     const run = createUpdateRun({ trigger: "api" });
     const backup = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationFromOwnedDatabase");
-    for (const respond of await Promise.all([
-      requestUpdateRead("update.status"),
-      requestUpdateRead("update.status"),
-    ])) {
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ activeRun: run, lastRun: run }),
-      );
+    const sql = observeMainThreadSql();
+    sql.calibrate();
+    try {
+      for (const respond of await Promise.all([
+        requestUpdateRead("update.status"),
+        requestUpdateRead("update.status"),
+      ])) {
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ activeRun: run, lastRun: run }),
+        );
+      }
+      expect(sql.count()).toBe(0);
+    } finally {
+      sql.restore();
     }
     const completed = finishUpdateRun(run.runId, { status: "succeeded" });
     const respond = await requestUpdateRead("update.status");
@@ -510,9 +519,10 @@ describe("update history RPCs", () => {
     });
     expect(await requestUpdateRead("update.runs.list")).toHaveBeenCalledWith(true, { runs: [] });
 
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const currentTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(currentTime - 2_000);
     const active = createUpdateRun({ trigger: "api" });
-    now.mockReturnValue(2_000);
+    now.mockReturnValue(currentTime - 1_000);
     const latest = finishUpdateRun(createUpdateRun({ trigger: "cli" }).runId, {
       status: "skipped",
       reason: "dry-run",
@@ -531,7 +541,7 @@ describe("update history RPCs", () => {
       await requestUpdateRead("update.runs.get", { runId: randomUUID() }),
     ).toHaveBeenCalledWith(true, { run: null });
 
-    now.mockReturnValue(3_000);
+    now.mockReturnValue(currentTime);
     const completed = finishUpdateRun(active.runId, { status: "succeeded" });
     expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(true, {
       sentinel: null,
@@ -576,9 +586,11 @@ it("reconciles an expired legacy admission on Gateway watcher startup", async ()
   const clock = vi.spyOn(Date, "now").mockReturnValue(now - 25 * 60 * 60_000);
   const legacy = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
   clock.mockReturnValue(now);
-  const broadcast = vi.fn();
+  const published = createDeferredCore();
+  const broadcast = vi.fn(() => published.resolve());
   const watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
   try {
+    await published.promise;
     expect(getUpdateRun(legacy.runId)).toMatchObject({
       phase: "finished",
       status: "failed",
@@ -587,6 +599,51 @@ it("reconciles an expired legacy admission on Gateway watcher startup", async ()
     expect(broadcast).toHaveBeenCalledWith(
       "update.run.changed",
       expect.objectContaining({ runId: legacy.runId, status: "failed" }),
+    );
+  } finally {
+    await watcher.stop();
+  }
+});
+
+it("watches a valid active update when newer terminal history is malformed", async () => {
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now - 1_000);
+  const active = createUpdateRun({ trigger: "cli" });
+  clock.mockReturnValue(now);
+  const latest = finishUpdateRun(createUpdateRun({ trigger: "cli" }).runId, {
+    status: "succeeded",
+  });
+  clock.mockRestore();
+  const { db } = openOpenClawStateDatabase();
+  db.prepare("UPDATE update_runs SET origin_json = ? WHERE run_id = ?").run(
+    "not-json",
+    latest.runId,
+  );
+  expect(getUpdateRun(active.runId)).toEqual(active);
+  expect(() => getUpdateRun(latest.runId)).toThrow();
+
+  const observed = createDeferredCore();
+  const broadcast = vi.fn(() => observed.resolve());
+  const log = {
+    warn: vi.fn((message: string) => {
+      // A failed discovery must reach the assertion, not wait for a test timeout.
+      if (message.startsWith("update run watcher stopped:")) {
+        observed.resolve();
+      }
+    }),
+  };
+  const watcher = startUpdateRunWatcher({ lifecycle, broadcast, log });
+  try {
+    await observed.promise;
+    expect(broadcast).toHaveBeenCalledWith("update.run.changed", {
+      runId: active.runId,
+      phase: "requested",
+      status: "running",
+      updatedAtMs: active.updatedAtMs,
+    });
+    expect(lifecycle.scheduler.nextWakeAtMs).not.toBeNull();
+    expect(log.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("update run watcher stopped:"),
     );
   } finally {
     await watcher.stop();
