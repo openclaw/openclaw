@@ -244,6 +244,52 @@ describe("splitMediaFromOutput", () => {
     });
   });
 
+  it.each([
+    'MEDIA:"first.png," "second.png,"',
+    "MEDIA:'first.png,' 'second.png,'",
+    'MEDIA:"first" "second.png,"',
+  ] as const)("keeps an all-rejected quoted list as text: %s", (input) => {
+    // A list states its references through its quote pairs, so a list that yields no reference yields
+    // none at all — there is no whole-payload reading left to take. Cleaning the payload anyway welded
+    // the rejects into a file neither member names and dropped the text with it:
+    // `MEDIA:"first.png," "second.png,"` attached `first.png," "second.png`, while the recorded base
+    // rejects the payload and keeps the line as visible text. The weld needed an extension on the last
+    // member, which is what these three shapes carry.
+    expectRejectedRemoteMediaUrlCase(input);
+  });
+
+  it("keeps a quoted list whose every member is rejected as text", () => {
+    // The lookalikes around the weld: rejected members that leave the payload unable to pass as a
+    // filename at all, so these stayed text even while the weld was reachable.
+    for (const input of [
+      'MEDIA:"first.png," "second"',
+      'MEDIA:"first" "second"',
+      "MEDIA:'first.png,' 'second'",
+    ] as const) {
+      expectRejectedRemoteMediaUrlCase(input);
+    }
+    // The whole-payload reading stays available where no list fixed the boundaries: a lone quoted
+    // reference is still attached by its bare filename, and so is an unquoted one.
+    expectAcceptedMediaPathCase("image.png", 'MEDIA:"image.png"');
+    expectAcceptedMediaPathCase("image.png", "MEDIA:image.png");
+    // An accepted member beside a rejected one is untouched: it is the only member that ever reaches
+    // the accepted path, and the reject stays text.
+    expectParsedMediaOutputCase('MEDIA:"/tmp/first.png" "second,"', {
+      mediaUrls: ["/tmp/first.png"],
+      text: '"second,"',
+    });
+    expectParsedMediaOutputCase('MEDIA:"first.png" "second.png,"', {
+      mediaUrls: ["first.png"],
+      text: '"second.png,"',
+    });
+    // A list that yields no reference makes the same strip-or-keep decision `main` makes, on the same
+    // string: the outer quote pair comes off first, so a payload whose remaining text reads as a path is
+    // stripped and one that reads as a rejected remote URL stays visible.
+    expectRejectedMediaPathCase('MEDIA:"../../a" "../../b"');
+    expectRejectedRemoteMediaUrlCase('MEDIA:"http://evil.example/x.png" "y.png,"');
+    expectRejectedRemoteMediaUrlCase('MEDIA:"http://evil.example/x.png" "y"');
+  });
+
   it("keeps a quoted reference whole when its own value contains that quote", () => {
     // A quoted reference is one whitespace-delimited token, so a quote inside its value never ends the
     // token. Tokenizing on the quote itself cuts the signed URL short and leaks the rest into the

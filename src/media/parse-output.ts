@@ -630,7 +630,12 @@ export function splitMediaOutput(
       // reads the way `main` reads it: one quoted value unwraps as a whole, and anything else splits on
       // whitespace. Both answers come from the one scan, so the payload is never tokenized twice.
       const quotedList = readQuotedMediaReferenceList(payload);
-      const unwrapped = quotedList ? undefined : unwrapQuoted(payload);
+      // `main`'s whole-payload reading of this string, kept even when a list sends the references
+      // elsewhere: a list still carries the outer quote pair that reading takes off, and the decision
+      // whether an unreferenced payload is a local path to strip has to land on the string `main`
+      // decides on, not on the quotes still around it.
+      const stripped = unwrapQuoted(payload);
+      const unwrapped = quotedList ? undefined : stripped;
       const payloadValue = unwrapped ?? payload;
       const parts = quotedList ?? (unwrapped ? [unwrapped] : splitMediaDirectiveParts(payload));
       const mediaStartIndex = media.length;
@@ -660,7 +665,7 @@ export function splitMediaOutput(
         }
       }
 
-      const trimmedPayload = payloadValue.trim();
+      const trimmedPayload = (stripped ?? payload).trim();
       const looksLikeLocalPath =
         looksLikeLocalFilePath(trimmedPayload) || FILE_URL_PREFIX_RE.test(trimmedPayload);
       if (
@@ -687,7 +692,12 @@ export function splitMediaOutput(
         }
       }
 
-      if (!hasValidMedia) {
+      // A list gets no whole-payload reading at all: its quote pairs already fixed where every reference
+      // ends, so a list whose members all failed states no reference and stays the text it was. Cleaning
+      // the payload anyway welded the rejects into `first.png," "second.png` for
+      // `MEDIA:"first.png," "second.png,"` — a name no member states, which the base rejects. Payloads
+      // `main` reads as one value keep this step, bare-filename fallback included.
+      if (quotedList === null && !hasValidMedia) {
         const fallback = unwrapped ?? cleanCandidate(payloadValue);
         if (isValidMedia(fallback, { allowSpaces: true, allowBareFilename: true })) {
           media.push(fallback);
