@@ -34,8 +34,7 @@ export {
 export async function prepareInProcessAgentExecution(input: PrepareInProcessAgentExecutionOptions) {
   const params = { ...input };
   const inheritedAuthority = readOperatorToolGatewayAuthority();
-  const scopedClient = getPluginRuntimeGatewayRequestScope()?.client;
-  const resolved = await resolveInProcessGatewayDispatch(
+  const resolved = resolveInProcessGatewayDispatch(
     "agent",
     { agentId: params.agentId },
     {
@@ -46,7 +45,7 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
   );
   // Profile verification updates the original connection. Sessionless work needs
   // that live principal, not the dispatch copy carrying session tracking metadata.
-  const client = scopedClient ?? resolved.client;
+  const client = getPluginRuntimeGatewayRequestScope()?.client ?? resolved.client;
   let operatorSource = await captureGatewayOperatorRunAuthority({
     client: resolved.operatorSourceClient,
     context: resolved.context,
@@ -125,7 +124,7 @@ async function withInProcessGatewayDispatch<T>(
   options: DispatchGatewayMethodInProcessOptions | undefined,
   run: (resolved: ResolvedInProcessGatewayDispatch) => Promise<T>,
 ): Promise<T> {
-  const resolved = await resolveInProcessGatewayDispatch(method, params, options);
+  const resolved = resolveInProcessGatewayDispatch(method, params, options);
   let releaseOperatorAuthority: (() => void) | undefined;
   try {
     const captured = await captureGatewayOperatorRunAuthority({

@@ -8,7 +8,6 @@ import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 import { isSessionTargetMethod } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
-import { resolveSessionRequestTargets } from "./session-sharing-target-input.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 
 /** Unselected calls can retain the owner only for the shared turn's own session. */
@@ -30,7 +29,11 @@ export function resolveRuntimeSessionParticipant(params: {
       return false;
     }
     try {
-      const targets = resolveSessionRequestTargets(params);
+      const targets = context.resolveSessionRequestTargets?.({
+        method,
+        requestParams: params.requestParams,
+        connId: params.connId,
+      });
       const cfg = context.getRuntimeConfig();
       const own = resolveSessionStoreIdentity({ cfg, ...turn });
       return Boolean(

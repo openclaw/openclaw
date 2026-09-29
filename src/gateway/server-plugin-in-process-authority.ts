@@ -37,6 +37,7 @@ import {
   mergePluginRuntimeClientInternal,
   projectPluginRuntimeClientExecution,
 } from "./server-plugin-runtime-client.js";
+import { resolveRuntimeSessionParticipant } from "./session-tool-participant.js";
 import {
   cancelSubagentCompletionToolHandoff,
   registerSubagentCompletionToolHandoff,
@@ -139,17 +140,17 @@ export function captureOperatorToolGatewayContinuationContext(target?: {
   // Use the normal dispatch owner to intersect scopes and validate the live caller
   // before transferring its source. A cleanup scope alone retains request lifetime.
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
-  return resolveInProcessGatewayDispatch("agent", target, {
+  const resolved = resolveInProcessGatewayDispatch("agent", target, {
     forceSyntheticClient: true,
     operatorRoleActor: { kind: "system" },
     resolveGatewayContext,
     syntheticScopeMode: "exact",
-  }).then(async (resolved) => {
-    const captured = await captureGatewayOperatorRunAuthority({
-      client: resolved.operatorSourceClient,
-      context: resolved.context,
-      hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
-    });
+  });
+  return captureGatewayOperatorRunAuthority({
+    client: resolved.operatorSourceClient,
+    context: resolved.context,
+    hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
+  }).then((captured) => {
     try {
       captured?.authority.assertCurrent();
       resolved.assertContextCurrent();
@@ -235,11 +236,11 @@ export async function runWithOperatorToolGatewayContinuationContext<T>(
   }
 }
 
-export async function resolveInProcessGatewayDispatch(
+export function resolveInProcessGatewayDispatch(
   method: string,
   params: unknown,
   options?: DispatchGatewayMethodInProcessOptions,
-): Promise<ResolvedInProcessGatewayDispatch> {
+): ResolvedInProcessGatewayDispatch {
   const inheritedOperatorAuthority = readOperatorToolGatewayAuthority();
   const scope = getPluginRuntimeGatewayRequestScope();
   const caller = getGatewayToolCallerIdentity();
@@ -254,9 +255,14 @@ export async function resolveInProcessGatewayDispatch(
       `In-process gateway dispatch requires a gateway request scope or instance binding (method: ${method}).`,
     );
   }
-  const runtimeIdentity =
-    readInProcessAgentRuntimeIdentity(options) ?? scope?.client?.internal?.agentRuntimeIdentity;
-  let runtimeParticipant: { assertCurrent: () => void } | undefined;
+  const runtimeParticipant = resolveRuntimeSessionParticipant({
+    method,
+    requestParams: params,
+    runtimeIdentity:
+      readInProcessAgentRuntimeIdentity(options) ?? scope?.client?.internal?.agentRuntimeIdentity,
+    context,
+    connId: scope?.client?.connId,
+  });
   const operatorRunAuthority =
     selection?.operatorAuthority ??
     caller?.operatorAuthority ??
@@ -276,14 +282,6 @@ export async function resolveInProcessGatewayDispatch(
     assertCallerCurrent !== undefined &&
     options.agentToolCaller?.agentId === caller.agentId &&
     options.agentToolCaller.sessionKey === caller.sessionKey;
-  const assertSourceCurrent = () => {
-    operatorRunAuthority?.assertCurrent();
-    if ((resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== context) {
-      throw new Error(
-        `In-process gateway dispatch requires a current gateway instance binding (method: ${method}).`,
-      );
-    }
-  };
   const assertInvocationCurrent = () => {
     selection?.assertCurrent();
     runtimeParticipant?.assertCurrent();
@@ -298,20 +296,6 @@ export async function resolveInProcessGatewayDispatch(
   if (!isHostOwnedAgentRun) {
     assertCallerCurrent?.(method);
   }
-  // Target policy reaches session projection/runtime; keep it behind dispatch preparation.
-  const { resolveRuntimeSessionParticipant } = await import("./session-tool-participant.js");
-  assertSourceCurrent();
-  assertInvocationCurrent();
-  if (!isHostOwnedAgentRun) {
-    assertCallerCurrent?.(method);
-  }
-  runtimeParticipant = resolveRuntimeSessionParticipant({
-    method,
-    requestParams: params,
-    runtimeIdentity,
-    context,
-    connId: scope?.client?.connId,
-  });
   const scopedOperatorProfile = scope?.client?.authenticatedUserProfile;
   const scopedRoleActor = scope?.client?.internal?.operatorRoleActor;
   const scopedActor = resolveGatewayOperatorRoleActor(scope?.client);
@@ -497,6 +481,14 @@ export async function resolveInProcessGatewayDispatch(
     }
     bindInProcessSubagentResume(client.internal, resume);
   }
+  const assertSourceCurrent = () => {
+    operatorRunAuthority?.assertCurrent();
+    if ((resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== context) {
+      throw new Error(
+        `In-process gateway dispatch requires a current gateway instance binding (method: ${method}).`,
+      );
+    }
+  };
   return {
     assertSourceCurrent,
     assertInvocationCurrent,
