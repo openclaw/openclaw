@@ -59,6 +59,19 @@ describe("default pattern table", () => {
       expect(redactSensitiveText(`user= bot pass: ${value}`, { mode: "tools" })).toBe(
         "user= bot pass: opaque…7890",
       );
+      expect(redactSensitiveText(`user =     bot pass: ${value}`, { mode: "tools" })).toBe(
+        "user =     bot pass: opaque…7890",
+      );
+      const longValue = "v".repeat(300);
+      expect(redactSensitiveText(`key=${longValue} pass: ${value}`, { mode: "tools" })).toBe(
+        `key=${longValue} pass: opaque…7890`,
+      );
+      expect(redactSensitiveText(`user\tpass: ${value}`, { mode: "tools" })).toBe(
+        "user\tpass: opaque…7890",
+      );
+      expect(redactSensitiveText(`pass: ${value} pass: ${value}`, { mode: "tools" })).toBe(
+        "pass: opaque…7890 pass: opaque…7890",
+      );
       expect(redactSensitiveText(`host:db.example.test pass: ${value}`, { mode: "tools" })).toBe(
         "host:db.example.test pass: opaque…7890",
       );
@@ -67,6 +80,11 @@ describe("default pattern table", () => {
       );
       const moreProse = "Release notes: all suites pass: nothing else changed. Both pass: done.";
       expect(redactSensitiveText(moreProse, { mode: "tools" })).toBe(moreProse);
+      expect(
+        redactSensitiveText(`smtp:\n  pass:\n    ${value}\n  user: bot`, { mode: "tools" }),
+      ).toBe("smtp:\n  pass:\n    opaque…7890\n  user: bot");
+      const wrappedProse = "The boundary tests now pass:\nolder clients receive compatible values.";
+      expect(redactSensitiveText(wrappedProse, { mode: "tools" })).toBe(wrappedProse);
     });
 
     it("keeps mid-sentence pass: prose when it lands on a bounded-replacement chunk start", () => {
@@ -81,9 +99,8 @@ describe("default pattern table", () => {
     });
 
     it("stays linear on a long unbroken token before pass:", () => {
-      // The inline-field branch runs over the full text; a bounded key/value keeps each start cheap.
-      // 60k stays below the size at which the Bun runtime lane currently drops full-text masks
-      // (tracked separately); the linear-cost property is the same at any length.
+      // One forward pass classifies every occurrence, so the cost is linear in the text. 60k stays
+      // below the size at which the Bun lane currently drops full-text masks (tracked separately).
       const token = "a".repeat(60_000);
       const prose = `${token} pass: still prose`;
       expect(redactSensitiveText(prose, { mode: "tools" })).toBe(prose);
