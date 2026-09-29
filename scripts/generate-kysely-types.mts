@@ -111,18 +111,14 @@ function generateTypes(db: DatabaseSync): string {
   return lines.join("\n");
 }
 
-function readUtf8(file: string): string {
-  return fs.readFileSync(file, "utf8");
-}
-
 function generate(schema: SchemaTarget): void {
   const db = new DatabaseSync(":memory:");
   try {
-    db.exec(readUtf8(schema.schema));
+    db.exec(fs.readFileSync(schema.schema, "utf8"));
     const typesSource = generateTypes(db);
 
     if (verify) {
-      if (typesSource !== readUtf8(schema.outFile)) {
+      if (typesSource !== fs.readFileSync(schema.outFile, "utf8")) {
         console.error(`${schema.outFile} is out of date. Run pnpm db:kysely:gen.`);
         process.exitCode = 1;
       }

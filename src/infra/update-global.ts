@@ -564,6 +564,7 @@ export function resolveGlobalInstallSpec(params: {
  */
 export async function createGlobalInstallEnv(
   env?: NodeJS.ProcessEnv,
+  options: { manager?: GlobalInstallManager } = {},
 ): Promise<NodeJS.ProcessEnv | undefined> {
   const pathPrepend = await resolvePortableGitPathPrepend();
   const sourceEnv = env ?? process.env;
@@ -575,7 +576,10 @@ export async function createGlobalInstallEnv(
   applyPathPrepend(merged, pathPrepend);
   applyWindowsPackageInstallEnv(merged);
   applyCorepackDownloadPromptEnv(merged);
-  applyNpmFreshnessBypassEnv(merged);
+  // Npm freshness policy probes npm itself; Bun installs neither need nor may spawn it.
+  if (options.manager !== "bun") {
+    applyNpmFreshnessBypassEnv(merged);
+  }
   applyPosixNpmScriptShellEnv(merged);
   if (process.versions.bun) {
     merged.OPENCLAW_PACKAGE_BUN_LAUNCHER = process.execPath;
@@ -707,8 +711,11 @@ function isDirectNpmNodeModulesRoot(globalRoot: string | null): boolean {
   );
 }
 
-function inferBunGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
-  return pkgRoot ? (resolveBunGlobalInstallOwner(pkgRoot)?.globalRoot ?? null) : null;
+function inferBunGlobalRootFromPackageRoot(
+  pkgRoot?: string | null,
+  env?: NodeJS.ProcessEnv,
+): string | null {
+  return pkgRoot ? (resolveBunGlobalInstallOwner(pkgRoot, env)?.globalRoot ?? null) : null;
 }
 
 function inferPnpmGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
@@ -1020,6 +1027,7 @@ export async function resolveGlobalInstallTarget(params: {
   timeoutMs: number;
   pkgRoot?: string | null;
   honorPackageRoot?: boolean;
+  env?: NodeJS.ProcessEnv;
   packageName?: string;
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
 }): Promise<ResolvedGlobalInstallTarget> {
@@ -1054,7 +1062,7 @@ export async function resolveGlobalInstallTarget(params: {
     verifiedPnpmIsolatedGlobalRoot || (await isPnpmGlobalPackageRoot(params.pkgRoot))
       ? inferPnpmGlobalRootFromPackageRoot(params.pkgRoot)
       : null;
-  const bunPackageRootGlobalRoot = inferBunGlobalRootFromPackageRoot(params.pkgRoot);
+  const bunPackageRootGlobalRoot = inferBunGlobalRootFromPackageRoot(params.pkgRoot, params.env);
   const honoredDirectNpmRoot =
     verifiedPnpmIsolatedGlobalRoot === null &&
     pnpmIsolatedPackage === null &&

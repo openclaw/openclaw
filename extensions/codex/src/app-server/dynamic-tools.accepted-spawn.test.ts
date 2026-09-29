@@ -32,9 +32,16 @@ afterEach(() => {
 });
 
 describe("Codex accepted child receipts", () => {
-  it.each([true, false, undefined])(
-    "preserves an accepted sessions_spawn after result middleware strips its details (%s)",
-    async (expectsCompletionMessage) => {
+  it.each([
+    { expectsCompletionMessage: true, presentation: {} },
+    {
+      expectsCompletionMessage: false,
+      presentation: { sessionUrl: "https://openclaw.example/chat/main/work", label: "Review" },
+    },
+    { expectsCompletionMessage: undefined, presentation: {} },
+  ])(
+    "preserves an accepted sessions_spawn after result middleware strips its details ($expectsCompletionMessage)",
+    async ({ expectsCompletionMessage, presentation }) => {
       // Preserve #96833: an accepted spawn is a successful tool call, even
       // when its child does not owe a completion message.
       const onAgentToolResult = vi.fn();
@@ -60,6 +67,7 @@ describe("Codex accepted child receipts", () => {
           status: "accepted",
           runId: "run_compacted",
           childSessionKey: "child-compacted",
+          ...presentation,
           ...(expectsCompletionMessage !== undefined ? { expectsCompletionMessage } : {}),
         }),
       );
@@ -88,6 +96,7 @@ describe("Codex accepted child receipts", () => {
           runId: "run_compacted",
           childSessionKey: "child-compacted",
           expectsCompletionMessage: expectsCompletionMessage === true,
+          ...presentation,
         },
       ]);
     },

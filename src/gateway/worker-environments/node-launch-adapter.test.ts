@@ -4,10 +4,12 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
+  NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
@@ -179,6 +181,149 @@ describe("node worker launch adapter", () => {
     } finally {
       resetGatewayWorkAdmission();
     }
+  });
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])(
+    "negotiates idle retention only for node=%s and bundle=%s",
+    async (nodeSupports, bundleSupports) => {
+      const input = launchInput();
+      if (!bundleSupports) {
+        input.descriptor.admission.handshake.protocolFeatures =
+          input.descriptor.admission.handshake.protocolFeatures.filter(
+            (feature) => feature !== NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
+          );
+      }
+      const node = nodeProof();
+      if (nodeSupports) {
+        node.workerHost.idleRetention = true;
+      }
+      const expected = {
+        ...input,
+        ...(nodeSupports && bundleSupports ? { idleRetention: true as const } : {}),
+      };
+      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+        expect(request.params).toEqual(expected);
+        return wire(receipt(expected, "completed"));
+      });
+      const adapter = createNodeWorkerLaunchAdapter({
+        getTransport: () => transportWith(invoke, async () => [node]),
+      });
+      expect(await adapter.launch(launchRequest(input))).toEqual(receipt(expected, "completed"));
+      expect(input).not.toHaveProperty("idleRetention");
+      expect(invoke).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("cancels an in-flight status wait through the existing terminal cancellation receipt", async () => {
+    const input = launchInput();
+    const node = nodeProof();
+    node.workerHost.statusWait = 1;
+    const entered = createDeferred();
+    const controller = new AbortController();
+    const cancellation = new Error("status wait cancelled");
+    const sleep = vi.fn(async () => {});
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+      if (request.command === "worker.launch.v1") {
+        return wire(receipt(input, "running"));
+      }
+      if (request.command === "worker.cancel.v1") {
+        expect(request.isDispatchAuthorized()).toBe(true);
+        return wire(receipt(input, "cancelled"));
+      }
+      expect(request.params).toHaveProperty("waitMs");
+      return new Promise((_, reject) => {
+        request.signal?.addEventListener("abort", () => reject(cancellation), {
+          once: true,
+        });
+        entered.resolve();
+      });
+    });
+    const adapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => transportWith(invoke, async () => [node]),
+      sleep,
+    });
+    const launching = adapter.launch({ ...launchRequest(input), signal: controller.signal });
+    await entered.promise;
+    controller.abort(cancellation);
+    await expect(launching).resolves.toEqual(receipt(input, "cancelled"));
+    expect(sleep).not.toHaveBeenCalled();
+    expect(invoke.mock.calls.map(([request]) => request.command)).toEqual([
+      "worker.launch.v1",
+      "worker.status.v1",
+      "worker.cancel.v1",
+    ]);
+  });
+
+  it.each([
+    { supported: false, timeoutMs: 60_000, waitMs: undefined },
+    { supported: true, timeoutMs: 60_000, waitMs: 20_000 },
+    { supported: true, timeoutMs: 500, waitMs: 375 },
+  ])(
+    "observes completion with status wait $supported and budget $timeoutMs",
+    async ({ supported, timeoutMs, waitMs }) => {
+      const input = launchInput();
+      const node = nodeProof();
+      if (supported) {
+        node.workerHost.statusWait = 1;
+      }
+      const sleep = vi.fn(async () => {});
+      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+        if (request.command === "worker.launch.v1") {
+          return wire(receipt(input, "running"));
+        }
+        expect(request.command).toBe("worker.status.v1");
+        expect(request.params).toEqual({
+          launchId: input.launchId,
+          ...(supported ? { waitMs } : {}),
+        });
+        return wire(receipt(input, "completed"));
+      });
+      const adapter = createNodeWorkerLaunchAdapter({
+        getTransport: () => transportWith(invoke, async () => [node]),
+        sleep,
+        now: () => 0,
+      });
+      await expect(adapter.launch({ ...launchRequest(input), timeoutMs })).resolves.toEqual(
+        receipt(input, "completed"),
+      );
+      expect(sleep).toHaveBeenCalledTimes(supported ? 0 : 1);
+      expect(invoke).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("renegotiates status waits after a connection replacement", async () => {
+    const input = launchInput();
+    const current = nodeProof();
+    current.workerHost.statusWait = 1;
+    let node = current;
+    const sleep = vi.fn(async () => {});
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+      if (invoke.mock.calls.length === 1) {
+        return wire(receipt(input, "running"));
+      }
+      if (invoke.mock.calls.length === 2) {
+        expect(request.params).toHaveProperty("waitMs");
+        node = nodeProof("older-replacement");
+        return { ok: false, error: { code: "DISCONNECTED", message: "connection replaced" } };
+      }
+      if (request.command === "worker.launch.v1") {
+        return wire(receipt(input, "running"));
+      }
+      expect(request.params).toEqual({ launchId: input.launchId });
+      return wire(receipt(input, "completed"));
+    });
+    const adapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => transportWith(invoke, async () => [node]),
+      sleep,
+    });
+    await expect(adapter.launch(launchRequest(input))).resolves.toEqual(
+      receipt(input, "completed"),
+    );
+    expect(sleep).toHaveBeenCalledTimes(2);
   });
 
   it("re-arms only a settled pre-admission deadline with fresh idempotent launch identities", async () => {

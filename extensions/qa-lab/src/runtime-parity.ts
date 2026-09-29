@@ -19,6 +19,7 @@ import {
 } from "./gateway-log-sentinel.js";
 import { readQaJsonResponse } from "./ignored-response-body.js";
 import * as parity from "./parity-shared.js";
+import type { RuntimeId } from "./runtime-id.js";
 import {
   buildRuntimeParityCacheDiagnostics,
   type RuntimeParityCacheDiagnostics,
@@ -28,10 +29,6 @@ import { readQaMessageFunctionCalls, readQaTranscriptMessages } from "./runtime-
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 
 export type { RuntimeParityUsage } from "./runtime-parity-usage.js";
-
-// These are the canonical QA comparison cells, not the extensible product
-// AgentHarness registry. Broader harness coverage needs its own explicit lane.
-export type RuntimeId = "openclaw" | "codex";
 
 type RuntimeParityStatus = "pass" | "fail" | "skip";
 

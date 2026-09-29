@@ -3,18 +3,12 @@
 // does not pull the media probe/store graph in just to read two numbers.
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveChatAttachmentFrameBudgetBytes } from "../shared/chat-attachment-frame-budget.js";
 import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
 
 const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
 
-// A chat.send frame carries attachments as base64 (4/3 expansion) plus the
-// JSON envelope and message text. Advertising more than one WS frame can carry
-// lets the client encode a payload the server hard-drops with 1009 for every
-// pane — the exact failure the hello-ok policy exists to prevent.
-const WS_FRAME_ENVELOPE_SLACK_BYTES = 256 * 1024;
-const MAX_ADVERTISED_ATTACHMENT_BYTES = Math.floor(
-  ((MAX_PAYLOAD_BYTES - WS_FRAME_ENVELOPE_SLACK_BYTES) * 3) / 4,
-);
+const MAX_ADVERTISED_ATTACHMENT_BYTES = resolveChatAttachmentFrameBudgetBytes(MAX_PAYLOAD_BYTES);
 
 /** Default decoded-size ceiling when `agents.defaults.mediaMaxMb` is unset or invalid. */
 export const DEFAULT_CHAT_ATTACHMENT_MAX_BYTES = DEFAULT_CHAT_ATTACHMENT_MAX_MB * 1024 * 1024;

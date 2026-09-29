@@ -60,6 +60,14 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
     init(document: ControlUIDocumentHost) {
         self.document = document
         super.init()
+        document.isNativeAuthAvailable = { [weak self] in
+            guard let self else { return false }
+            guard !self.isClosing else { return false }
+            switch self.availability {
+            case .loading, .ready: return true
+            case .unsupported, .failed: return false
+            }
+        }
         document.webView.navigationDelegate = self
         document.webView.uiDelegate = self
         document.onAuthenticationFailure = { [weak self] error in
