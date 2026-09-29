@@ -404,7 +404,7 @@ describe("catalog publication session rows", () => {
     const { currentOwner } = await setup(true, profile);
     const owner = await currentOwner();
     expect(
-      getPreparedModelFullCatalogAuth(owner.readFullModelCatalog()!)?.authStore.profiles[
+      getPreparedModelFullCatalogAuth(owner.readFullModelCatalog!()!)?.authStore.profiles[
         "custom:synthetic"
       ],
     ).toEqual(profile);
@@ -420,7 +420,7 @@ describe("catalog publication session rows", () => {
     });
     mocks.runPreparedModelCatalogWorker.mockImplementationOnce(async () => loggedOut);
     await owner.loadFullModelCatalog!({ providerIds: ["custom"], refresh: true });
-    const published = getPreparedModelFullCatalogAuth(owner.readFullModelCatalog()!);
+    const published = getPreparedModelFullCatalogAuth(owner.readFullModelCatalog!()!);
     expect(published?.authStore.profiles["custom:synthetic"]).toBeUndefined();
     expect(published?.credentials?.custom).toBeUndefined();
     expect(published?.authModes.custom).toBeUndefined();
