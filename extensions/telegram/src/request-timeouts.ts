@@ -76,10 +76,8 @@ export function resolveTelegramLongPollTimeoutSeconds(timeoutSeconds: unknown): 
 }
 
 export function resolveTelegramStartupProbeTimeoutMs(timeoutSeconds: unknown): number {
-  const getMeTimeoutMs = resolveTelegramRequestTimeoutMs("getme") ?? 15_000;
-  if (typeof timeoutSeconds !== "number" || !Number.isFinite(timeoutSeconds)) {
-    return getMeTimeoutMs;
-  }
-  const configuredTimeoutMs = resolveConfiguredTelegramRequestTimeoutMs(timeoutSeconds) ?? 1_000;
-  return Math.max(getMeTimeoutMs, configuredTimeoutMs);
+  return Math.max(
+    TELEGRAM_REQUEST_TIMEOUTS_MS.getme,
+    resolveConfiguredTelegramRequestTimeoutMs(timeoutSeconds) ?? 0,
+  );
 }

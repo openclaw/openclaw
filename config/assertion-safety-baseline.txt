@@ -1006,7 +1006,6 @@ extensions/telegram/src/doctor-contract.ts	3
 extensions/telegram/src/doctor.ts	10
 extensions/telegram/src/fetch.ts	7
 extensions/telegram/src/forum-service-message.ts	1
-extensions/telegram/src/group-history-window.ts	1
 extensions/telegram/src/interactive-fallback.ts	1
 extensions/telegram/src/miniapp/command.ts	1
 extensions/telegram/src/miniapp/init-data.ts	1
