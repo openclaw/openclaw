@@ -241,7 +241,7 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
       publication.onCommitted?.();
     },
     clearPendingLifecycleError: vi.fn(),
-    countPendingDescendantRuns: () => 0,
+    countPendingDescendantRuns: async () => 0,
     getLatestRunForChildSession: () => null,
     suppressAnnounceForSteerRestart: () => false,
     shouldEmitEndedHookForRun: () => false,

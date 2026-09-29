@@ -56,7 +56,6 @@ import {
   updatePersonalAuthProfileStore,
 } from "./personal-profiles.js";
 import {
-  getRuntimeExternalCliProfileIds,
   mergeRuntimeExternalProfileReferences,
   removePersonalAuthProfileReferences,
   setRuntimeExternalCliProfileIds,
@@ -382,23 +381,6 @@ function convergeRuntimeAuthProfileStoreSnapshot(
     authProfilesLog.warn("auth profile snapshot convergence failed", { err });
     return false;
   }
-}
-
-function setRuntimeExternalProfileMetadata(params: {
-  store: AuthProfileStore;
-  profileIds: ReadonlySet<string>;
-  authoritative: boolean;
-}): void {
-  const profileIds = [...params.profileIds].toSorted();
-  params.store.runtimeExternalProfileIds =
-    profileIds.length > 0 || params.authoritative ? profileIds : undefined;
-  params.store.runtimeExternalProfileIdsAuthoritative = params.authoritative ? true : undefined;
-  setRuntimeExternalCliProfileIds(
-    params.store,
-    getRuntimeExternalCliProfileIds(params.store).filter((profileId) =>
-      params.profileIds.has(profileId),
-    ),
-  );
 }
 
 function materializeRuntimeAuthProfileStoreSnapshot(
@@ -1411,7 +1393,6 @@ export function createAuthProfileStoreRuntime(
     overlayExternalAuthProfiles,
     setRuntimeAuthProfileStoreSnapshot,
     updateRuntimeAuthProfileStoreSnapshot,
-    setRuntimeExternalProfileMetadata,
   });
 
   /** Retain read owners, never copies of their migration refusals, for a session facade. */

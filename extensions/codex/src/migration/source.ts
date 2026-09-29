@@ -10,7 +10,7 @@ import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import type { CodexAppServerStartOptions } from "../app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
 import {
-  isOpenAiCuratedMarketplace,
+  isOpenAiCuratedMarketplaceName,
   marketplaceRef,
   pluginReadParams,
   type CodexPluginMarketplaceRef,
@@ -35,8 +35,6 @@ import {
   type CodexPluginSource,
   type CodexSkillSource,
 } from "./source-files.js";
-
-export type { CodexPluginSource } from "./source-files.js";
 
 type CodexArchiveSource = {
   id: string;
@@ -183,7 +181,7 @@ function discoverInstalledCuratedPluginSources(
 ): InstalledCuratedPlugin[] {
   const installedByName = new Map<string, InstalledCuratedPlugin>();
   for (const marketplace of response.marketplaces) {
-    if (!isOpenAiCuratedMarketplace(marketplace)) {
+    if (!isOpenAiCuratedMarketplaceName(marketplace.name)) {
       continue;
     }
     // Remote catalog entries carry no local path; the API-key curated variant
@@ -213,9 +211,7 @@ function discoverInstalledCuratedPluginSources(
           enabled: summary.enabled,
         },
         marketplace: marketplaceRef(marketplace, CODEX_PLUGINS_MARKETPLACE_NAME),
-        ...(remote
-          ? { readPluginName: summary.remotePluginId?.trim() || undefined }
-          : { readPluginName: pluginName }),
+        readPluginName: remote ? summary.remotePluginId?.trim() || undefined : pluginName,
         remote,
       });
     }

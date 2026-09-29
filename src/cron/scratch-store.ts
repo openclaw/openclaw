@@ -1,39 +1,24 @@
 /** Database-backed per-job scratch storage, kept outside public cron job state. */
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQuerySync, prepareSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
-import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { captureCronMutationCommit } from "./mutation-completion.js";
-import { assertCronJobScratchContent } from "./scratch-contract.js";
+import {
+  assertCronJobScratchContent,
+  type CronJobScratchState,
+  type CronJobScratchWriteResult,
+} from "./scratch-contract.js";
+import { runCronRuntimeMutation } from "./service/runtime-mutation.js";
 import { cronStoreKey } from "./store/key.js";
 import { getCronStoreKysely } from "./store/schema.js";
-
-type CronJobScratch = {
-  content: string;
-  revision: number;
-  sourceSha256?: string;
-  updatedAtMs: number;
-};
-
-/**
- * Present scratch content plus the persisted revision. An unset scratch keeps a
- * tombstone row so `currentRevision` stays monotonic across unset/recreate and
- * stale compare-and-swap writers cannot resurrect old content.
- */
-export type CronJobScratchState = {
-  currentRevision: number;
-  scratch?: CronJobScratch;
-};
-
-export type CronJobScratchWriteResult =
-  | { ok: true; currentRevision: number; scratch?: CronJobScratch }
-  | { ok: false; reason: "revision-conflict"; currentRevision: number };
 
 function rowToState(row: {
   content: string | null;
@@ -148,134 +133,60 @@ export function readHeartbeatMonitorScratchReadOnly(
   );
 }
 
-type ScratchWriteKey = { storeKey: string; jobId: string };
-type ScratchWriteGuard = {
-  revision: number | null;
-  updated_at_ms: number | null;
-  job_id: string | null;
-};
-
-function prepareScratchWriteGuard(db: DatabaseSync) {
-  const cronDb = getCronStoreKysely(db);
-  return prepareSqliteQueryTakeFirstSync<ScratchWriteKey, ScratchWriteGuard>(db, (parameter) =>
-    cronDb
-      // The singleton preserves orphan revisions and the no-scratch state.
-      .selectFrom(cronDb.selectNoFrom((eb) => eb.lit(1).as("one")).as("current"))
-      .leftJoin("cron_job_scratch as scratch", (join) =>
-        join
-          .on(
-            "scratch.store_key",
-            "=",
-            parameter((key) => key.storeKey),
-          )
-          .on(
-            "scratch.job_id",
-            "=",
-            parameter((key) => key.jobId),
-          ),
-      )
-      .leftJoin("cron_jobs as job", (join) =>
-        join
-          .on(
-            "job.store_key",
-            "=",
-            parameter((key) => key.storeKey),
-          )
-          .on(
-            "job.job_id",
-            "=",
-            parameter((key) => key.jobId),
-          ),
-      )
-      // Keep timestamp decoding so out-of-range stored integers still refuse the write.
-      .select(["scratch.revision", "scratch.updated_at_ms", "job.job_id"]),
-  );
-}
-
-// Cache query compilation per connection; every transaction still reads fresh guard rows.
-const scratchWriteGuards = new WeakMap<DatabaseSync, ReturnType<typeof prepareScratchWriteGuard>>();
-
-/** Writes, clears, or compare-and-swaps one scratch row. */
-export function writeCronJobScratch(params: {
-  storePath: string;
-  jobId: string;
-  content: string | null;
-  expectedRevision?: number;
-  sourceSha256?: string;
-  nowMs?: number;
-  options?: OpenClawStateDatabaseOptions;
-}): CronJobScratchWriteResult {
+/** Writes through the existing actor while retaining the original caller's admission. */
+export async function writeCronJobScratch(
+  params: {
+    storePath: string;
+    jobId: string;
+    content: string | null;
+    expectedRevision?: number;
+    sourceSha256?: string;
+    nowMs?: number;
+    options?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
+  },
+  admission?: {
+    context?: OpenClawStateWorkerContext;
+    assertCurrent?: () => void;
+    assertJobCurrent?: (configRevision: string | undefined) => void;
+  },
+): Promise<CronJobScratchWriteResult> {
   if (params.content !== null) {
     assertCronJobScratchContent(params.content);
   }
-  const storeKey = cronStoreKey(params.storePath);
-  const nowMs = params.nowMs ?? Date.now();
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const cronDb = getCronStoreKysely(db);
-      let readGuard = scratchWriteGuards.get(db);
-      if (!readGuard) {
-        readGuard = prepareScratchWriteGuard(db);
-        scratchWriteGuards.set(db, readGuard);
-      }
-      const current = readGuard({ storeKey, jobId: params.jobId });
-      const currentRevision = current?.revision ?? 0;
-      // Job ownership and scratch revision are one CAS boundary. A heartbeat
-      // finishing after durable job deletion must not recreate orphan scratch.
-      if (
-        current?.job_id == null ||
-        (params.expectedRevision !== undefined && params.expectedRevision !== currentRevision)
-      ) {
-        return { ok: false, reason: "revision-conflict", currentRevision } as const;
-      }
-      if (params.content === null && currentRevision === 0) {
-        return { ok: true, currentRevision } as const;
-      }
-      const revision = currentRevision + 1;
-      const sourceSha256 = params.content !== null ? params.sourceSha256?.trim() : undefined;
-      // Full-row replace keeps semantics simple: a write without provenance also
-      // clears a stale migration sha, and an unset leaves a revision tombstone.
-      if (currentRevision > 0) {
-        executeSqliteQuerySync(
-          db,
-          cronDb
-            .deleteFrom("cron_job_scratch")
-            .where("store_key", "=", storeKey)
-            .where("job_id", "=", params.jobId),
-        );
-      }
-      executeSqliteQuerySync(
-        db,
-        cronDb.insertInto("cron_job_scratch").values({
-          store_key: storeKey,
-          job_id: params.jobId,
-          content: params.content,
-          revision,
-          ...(sourceSha256 ? { source_sha256: sourceSha256 } : {}),
-          updated_at_ms: nowMs,
-        }),
-      );
-      const committed = captureCronMutationCommit("cron.scratch.set");
-      if (committed) {
-        deferSqlitePostCommitPublication(db, committed);
-      }
-      if (params.content === null) {
-        return { ok: true, currentRevision: revision } as const;
-      }
-      return {
-        ok: true,
-        currentRevision: revision,
-        scratch: {
-          content: params.content,
-          revision,
-          ...(sourceSha256 ? { sourceSha256 } : {}),
-          updatedAtMs: nowMs,
-        },
-      } as const;
+  const context = admission?.context ?? captureOpenClawStateWorkerContext(params.options);
+  const markCommitted = captureCronMutationCommit("cron.scratch.set");
+  let result: CronJobScratchWriteResult | undefined;
+  await runCronRuntimeMutation({
+    context,
+    type: "cron.writeScratch",
+    input: {
+      storeKey: cronStoreKey(params.storePath),
+      jobId: params.jobId,
+      content: params.content,
+      expectedRevision: params.expectedRevision,
+      sourceSha256: params.sourceSha256,
+      nowMs: params.nowMs ?? Date.now(),
     },
-    params.options,
-    { operationLabel: "cron.scratch.write" },
-  );
+    assertCurrent: () => admission?.assertCurrent?.(),
+    prepare({ configRevision }) {
+      const assertCurrent = () => {
+        admission?.assertCurrent?.();
+        admission?.assertJobCurrent?.(configRevision);
+      };
+      assertCurrent();
+      return { value: {}, assertCurrent };
+    },
+    publish(outcome) {
+      result = outcome.result;
+      if (outcome.written) {
+        markCommitted?.();
+      }
+    },
+  });
+  if (!result) {
+    throw new Error("Cron scratch write has no committed result");
+  }
+  return result;
 }
 
 /**

@@ -265,23 +265,24 @@ async function resolveUncachedCodexNativeSkillIsolation(
   if (process.platform === "win32") {
     homes.push(params.userProfile?.trim() || os.homedir());
   }
-  const personalSkills = await collectPersonalSkillRealPaths(
+  const { complete, skillPaths } = await collectPersonalSkillRealPaths(
     [...new Set(homes.map((home) => path.resolve(home)))],
     params.codexHome,
   );
-  const disabledUserSkillPaths = [
-    // Codex also labels explicit plugin and extra roots as user scope. Preserve those on a
-    // complete provenance scan; fall back to all user paths only when personal-root proof failed.
-    ...(personalSkills.complete
-      ? personalSkills.skillPaths
-      : new Set([
-          ...personalSkills.skillPaths,
-          ...response.data.flatMap((entry) =>
-            entry.skills.filter((skill) => skill.scope === "user").map((skill) => skill.path),
-          ),
-        ])),
-  ].toSorted((left, right) => left.localeCompare(right));
-  return { disabledUserSkillPaths };
+  // Codex also labels explicit plugin and extra roots as user scope. Preserve those on a
+  // complete provenance scan; fall back to all user paths only when personal-root proof failed.
+  if (!complete) {
+    for (const entry of response.data) {
+      for (const skill of entry.skills) {
+        if (skill.scope === "user") {
+          skillPaths.add(skill.path);
+        }
+      }
+    }
+  }
+  return {
+    disabledUserSkillPaths: [...skillPaths].toSorted((left, right) => left.localeCompare(right)),
+  };
 }
 
 /** Applies path-exact session rules after caller config so isolated user skills stay disabled. */

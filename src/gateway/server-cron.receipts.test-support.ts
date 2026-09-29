@@ -212,6 +212,11 @@ export function registerGatewayCronReceiptTests({
           });
           await vi.waitFor(() => expect(activeReceipt()).toBeUndefined());
           expect(reserved).toHaveBeenCalledTimes(2);
+          const completion = expectDefined(runs.mock.results.at(-1), "rearmed on-exit run");
+          if (completion.type !== "return") {
+            throw new Error("Rearmed on-exit run did not return a completion");
+          }
+          await completion.value;
           if (action === "run") {
             expect(runCommandJob.mock.calls[1]?.[0].job.payload).toMatchObject({
               kind: "command",

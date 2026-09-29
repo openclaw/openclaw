@@ -486,14 +486,12 @@ class Monitor {
   registerParent(params: NativeParentRegistration): Promise<ParentRegistrationHandle> {
     return registerNativeSubagentParent(params, {
       states: this.parentStates,
-      children: this.childStates,
       isClosed: () => this.disposed,
       isRetired: (state) => this.retiredParentStates.has(state),
       runtime: this.runtime,
       submissions: this.submissions,
       assignments: this.assignments,
       closes: this.childCloses,
-      deliverPending: (state, child) => this.completionDelivery.deliverPending(state, child),
       deliverDetached: (state) =>
         this.completionDelivery.deliverDetached(state, this.childStates.values()),
       drainAdmissions: (state, owner, turnId) =>

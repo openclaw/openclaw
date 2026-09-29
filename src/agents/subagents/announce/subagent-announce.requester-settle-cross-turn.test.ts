@@ -5,6 +5,7 @@ import {
 } from "../registry/subagent-registry-queries.js";
 import {
   registryRuntimeMock,
+  readDescendantFacts,
   wakeParams,
 } from "./subagent-announce.requester-settle-fixture.test-support.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
@@ -69,12 +70,24 @@ it.each([
   registryRuntimeMock.listSubagentRunsForRequester.mockImplementation((key) =>
     [...runs.values()].filter((entry) => entry.requesterSessionKey === key),
   );
-  registryRuntimeMock.hasDescendantRunAwaitingSettle.mockImplementation((...args) =>
-    hasDescendantRunAwaitingSettleFromRuns(runs, ...args),
-  );
-  registryRuntimeMock.countActiveDescendantRuns.mockImplementation((...args) =>
-    countActiveDescendantRunsFromRuns(runs, ...args),
-  );
+  readDescendantFacts.mockImplementation(async (params) => ({
+    unsettled: hasDescendantRunAwaitingSettleFromRuns(
+      runs,
+      params.requesterSessionKey,
+      params.settledEntry.runId,
+      params.requesterAgentId,
+      params.requesterStorePath,
+      params.settledBefore,
+      params.rootRunIds,
+    ),
+    active: countActiveDescendantRunsFromRuns(
+      runs,
+      params.requesterSessionKey,
+      params.requesterAgentId,
+      params.requesterStorePath,
+      params.rootRunIds,
+    ),
+  }));
   const early = scenario === "older batch";
   expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: short }))).toBe(
     early,

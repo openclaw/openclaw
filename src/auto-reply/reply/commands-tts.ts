@@ -132,20 +132,24 @@ async function buildTtsAudioReply(params: {
 }): Promise<{ reply: ReplyPayload } | { error: string }> {
   const start = Date.now();
   const result = await textToSpeech(params);
-
-  if (result.success && result.audioPath) {
-    setLastTtsAttempt({
-      timestamp: Date.now(),
-      success: true,
-      textLength: params.text.length,
-      summarized: false,
-      provider: result.provider,
-      persona: result.persona,
-      fallbackFrom: result.fallbackFrom,
-      attemptedProviders: result.attemptedProviders,
-      attempts: result.attempts,
-      latencyMs: result.latencyMs,
-    });
+  const success = result.success && Boolean(result.audioPath);
+  setLastTtsAttempt({
+    timestamp: Date.now(),
+    success,
+    textLength: params.text.length,
+    summarized: false,
+    persona: result.persona,
+    attemptedProviders: result.attemptedProviders,
+    attempts: result.attempts,
+    ...(success
+      ? {
+          provider: result.provider,
+          fallbackFrom: result.fallbackFrom,
+          latencyMs: result.latencyMs,
+        }
+      : { error: result.error, latencyMs: Date.now() - start }),
+  });
+  if (success && result.audioPath) {
     return {
       reply: {
         mediaUrl: result.audioPath,
@@ -156,17 +160,6 @@ async function buildTtsAudioReply(params: {
     };
   }
 
-  setLastTtsAttempt({
-    timestamp: Date.now(),
-    success: false,
-    textLength: params.text.length,
-    summarized: false,
-    persona: result.persona,
-    attemptedProviders: result.attemptedProviders,
-    attempts: result.attempts,
-    error: result.error,
-    latencyMs: Date.now() - start,
-  });
   return { error: result.error ?? "unknown error" };
 }
 

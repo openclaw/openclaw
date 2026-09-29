@@ -64,13 +64,10 @@ import { startVisibleCloudSession } from "./sessions-spawn-cloud.js";
 import { resolveVisibleSessionOwner } from "./sessions-spawn-visible-owner.js";
 import { SessionsSpawnPlacementSchema } from "./sessions-spawn-visible.schema.js";
 
-type VisibleSessionsSpawnDeps = {
+export type SessionsSpawnToolOptions = {
   callGateway?: InProcessGatewayCaller;
   registerRun?: typeof registerSubagentRun;
   countActiveRuns?: typeof countActiveRunsForSession;
-};
-
-export type SessionsSpawnToolOptions = {
   agentSessionKey?: string;
   requesterTurnRunId?: string;
   /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
@@ -92,8 +89,7 @@ export type SessionsSpawnToolOptions = {
   /** Backend-derived parent incarnation; never sourced from model arguments. */
   expectedParentSessionId?: string;
   signal?: AbortSignal;
-} & VisibleSessionsSpawnDeps &
-  SpawnedToolContext;
+} & SpawnedToolContext;
 
 type VisibleSessionsSpawnOptions = SessionsSpawnToolOptions & {
   onSpawnEffectsStart?: () => void;

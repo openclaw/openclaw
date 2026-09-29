@@ -1,4 +1,5 @@
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import { asOptionalRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   TelegramAmbientTranscriptWatermark,
   TelegramPromptContextEntry,
@@ -61,18 +62,11 @@ export function isTelegramHistoryEntryAfterAmbientWatermark(
 function telegramChatWindowPayload(
   entry: TelegramPromptContextEntry | undefined,
 ): Record<string, unknown> | undefined {
-  return entry?.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload)
-    ? (entry.payload as Record<string, unknown>)
-    : undefined;
+  return asOptionalRecord(entry?.payload);
 }
 
 function telegramPromptMessages(payload: Record<string, unknown> | undefined) {
-  return Array.isArray(payload?.["messages"])
-    ? payload["messages"].filter(
-        (message): message is Record<string, unknown> =>
-          Boolean(message) && typeof message === "object" && !Array.isArray(message),
-      )
-    : [];
+  return Array.isArray(payload?.["messages"]) ? payload["messages"].filter(isRecord) : [];
 }
 
 export function isTelegramChatWindowPromptContext(entry: TelegramPromptContextEntry): boolean {

@@ -1,9 +1,20 @@
 // Verifies metadata-backed setup registry descriptor lookup.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import {
+  clearBundledDiscoveryModeMemo,
+  prepareBundledDiscoveryMode,
+} from "./bundled-discovery-state.js";
 import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import * as installedPluginIndex from "./installed-plugin-index.js";
+import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   projectPluginMetadataSnapshot,
@@ -53,6 +64,17 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    for (const stateDir of tempDirs.dirs) {
+      closeOpenClawStateDatabaseByPath(
+        resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
+      );
+    }
+    cleanup();
+  }),
+);
+
 function createCurrentSnapshot(params: {
   manifestHash: string;
   cliBackends: string[];
@@ -79,6 +101,73 @@ function createCurrentSnapshot(params: {
 }
 
 describe("setup-registry descriptor lookup", () => {
+  it("keeps prepared CLI activation in the caller's machine-state root", async () => {
+    const { resolvePluginSetupCliBackendDescriptor, resolvePluginSetupCliBackendIds } =
+      await import("./setup-registry.runtime.js");
+    const compatRoot = tempDirs.make("openclaw-cli-compat-");
+    const strictRoot = tempDirs.make("openclaw-cli-strict-");
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    const cache = createPluginCache();
+    try {
+      setTestEnvValue("OPENCLAW_STATE_DIR", strictRoot);
+      const compatEnv = { ...process.env, OPENCLAW_STATE_DIR: compatRoot };
+      const strictEnv = { ...process.env };
+      writeConfigMachineState("plugins.bundledDiscovery", "compat", { env: compatEnv });
+      writeConfigMachineState("plugins.bundledDiscovery", "allowlist", { env: strictEnv });
+      clearBundledDiscoveryModeMemo();
+      await withPluginCache(cache, async () => {
+        const snapshot = createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id: "bundled-cli-owner",
+              origin: "bundled",
+              providers: ["fixture-provider"],
+              cliBackends: ["scope-cli"],
+              enabledByDefault: true,
+            },
+          ],
+        });
+        snapshot.index.plugins[0]!.contributions = {
+          channels: [],
+          channelConfigs: [],
+          providers: snapshot.plugins[0]!.providers,
+          modelCatalogProviders: [],
+          modelSupportPrefixes: [],
+          modelSupportPatterns: [],
+          autoEnableProviderIds: [],
+          commandAliases: [],
+          contracts: {},
+        };
+        const config = { plugins: { allow: ["other-owner"] } };
+        await prepareBundledDiscoveryMode(compatEnv);
+        await prepareBundledDiscoveryMode(strictEnv);
+        const sql = observeMainThreadSql();
+        try {
+          sql.calibrate();
+          for (const env of [compatEnv, strictEnv, compatEnv]) {
+            const enabled = env === compatEnv;
+            const params = { config, env, metadataSnapshot: snapshot };
+            expect(
+              resolvePluginSetupCliBackendDescriptor({ ...params, backend: "scope-cli" }),
+            ).toEqual(
+              enabled ? { pluginId: "bundled-cli-owner", backend: { id: "scope-cli" } } : undefined,
+            );
+            expect(resolvePluginSetupCliBackendIds(params)).toEqual(enabled ? ["scope-cli"] : []);
+          }
+          sql.expectIdle();
+        } finally {
+          sql.restore();
+        }
+      });
+    } finally {
+      try {
+        await retirePluginCache(cache);
+      } finally {
+        envSnapshot.restore();
+      }
+    }
+  });
+
   it("evaluates activation only for owners of the requested CLI backend", async () => {
     const { resolvePluginSetupCliBackendDescriptor } = await import("./setup-registry.runtime.js");
     const snapshot = createPluginMetadataSnapshotFixture({

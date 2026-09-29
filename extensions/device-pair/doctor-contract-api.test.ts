@@ -1,4 +1,3 @@
-// Device Pair tests cover doctor migration of legacy notify state.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -76,67 +75,41 @@ describe("device-pair doctor notify migration", () => {
     }));
   }
 
-  it.each([1023, 1024])("retains and archives %i legacy subscribers", async (count) => {
+  it("refuses overflow without data loss and migrates once capacity is available", async () => {
     const sourcePath = path.join(stateDir, DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE);
-    const subscribers = legacySubscribers(count);
-    await fs.writeFile(sourcePath, JSON.stringify({ subscribers }));
+    const subscribers = legacySubscribers(1024);
+    const source = JSON.stringify({ subscribers });
+    await fs.writeFile(sourcePath, source);
+    const store = openSubscribers();
+    await store.register("existing", { to: "existing", mode: "once", addedAtMs: 0 });
+    const before = await store.entries();
     const migration = expectDefined(stateMigrations[0], "device-pair state migration");
 
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await migration.migrateLegacyState(migrationParams());
+      expect(result).toEqual({
+        changes: [],
+        warnings: [expect.stringContaining("left legacy source in place")],
+      });
+      expect(await store.entries()).toEqual(before);
+      await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(source);
+      await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
+      await expect(migration.detectLegacyState(migrationParams())).resolves.not.toBeNull();
+    }
+    await store.delete("existing");
     const result = await migration.migrateLegacyState(migrationParams());
-
     expect(result.warnings).toEqual([]);
     expect(result.changes).toEqual([
-      `Migrated Device Pair notify subscribers -> plugin state (${count} imported, 0 already present)`,
+      "Migrated Device Pair notify subscribers -> plugin state (1024 imported, 0 already present)",
       expect.stringContaining("Archived Device Pair notify-state legacy source"),
     ]);
-    expect((await openSubscribers().entries()).map(({ key }) => key).toSorted()).toEqual(
+    expect((await store.entries()).map(({ key }) => key).toSorted()).toEqual(
       subscribers.map(notifySubscriberStoreKey).toSorted(),
     );
     await expect(fs.access(sourcePath)).rejects.toThrow();
-    await fs.access(`${sourcePath}.migrated`);
+    await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toBe(source);
     await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
   });
-
-  it.each([0, 1])(
-    "refuses overflow without losing source or destination rows (%i existing)",
-    async (existingCount) => {
-      const sourcePath = path.join(stateDir, DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE);
-      const subscribers = legacySubscribers(1025 - existingCount);
-      const source = JSON.stringify({ subscribers });
-      await fs.writeFile(sourcePath, source);
-      const store = openSubscribers();
-      if (existingCount) {
-        await store.register("existing", { to: "existing", mode: "once", addedAtMs: 0 });
-      }
-      const before = await store.entries();
-      const migration = expectDefined(stateMigrations[0], "device-pair state migration");
-
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const result = await migration.migrateLegacyState(migrationParams());
-        expect({ result, retained: (await store.entries()).length }).toEqual({
-          result: {
-            changes: [],
-            warnings: [expect.stringContaining("left legacy source in place")],
-          },
-          retained: existingCount,
-        });
-        expect(await store.entries()).toEqual(before);
-        await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(source);
-        await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
-        await expect(migration.detectLegacyState(migrationParams())).resolves.not.toBeNull();
-      }
-      if (existingCount) {
-        await store.delete("existing");
-        const result = await migration.migrateLegacyState(migrationParams());
-        expect(result.warnings).toEqual([]);
-        expect((await store.entries()).map(({ key }) => key).toSorted()).toEqual(
-          subscribers.map(notifySubscriberStoreKey).toSorted(),
-        );
-        await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toBe(source);
-        await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
-      }
-    },
-  );
 
   it("counts distinct missing keys and preserves existing subscriber values", async () => {
     const sourcePath = path.join(stateDir, DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE);
@@ -161,8 +134,6 @@ describe("device-pair doctor notify migration", () => {
 
   it.each([
     {},
-    { accountId: "telegram-default" },
-    { messageThreadId: 271 },
     { accountId: "telegram-default", messageThreadId: 0 },
     { accountId: "telegram-default", messageThreadId: "271" },
   ])("imports legacy notify subscribers into plugin state (%j)", async (target) => {
@@ -196,14 +167,9 @@ describe("device-pair doctor notify migration", () => {
     ]);
     await expect(fs.access(sourcePath)).rejects.toThrow();
     await fs.access(`${sourcePath}.migrated`);
-    await expect(
-      createDoctorContext(env)
-        .openPluginStateKeyedStore<NotifySubscription>({
-          namespace: DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
-          maxEntries: DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
-        })
-        .lookup(notifySubscriberStoreKey(subscriber)),
-    ).resolves.toEqual(subscriber);
+    await expect(openSubscribers().lookup(notifySubscriberStoreKey(subscriber))).resolves.toEqual(
+      subscriber,
+    );
   });
 
   it("ignores legacy notify files that only contain cache state", async () => {

@@ -534,16 +534,12 @@ function toggleExpandedCard(bucket: Set<string>, key: string, onChange: () => vo
 
 async function openWikiPreview(lookup: string, props: DreamingProps): Promise<void> {
   const state = props.viewState;
-  const requestId = ++state.wikiPreviewRequestId;
+  resetWikiPreview(state);
+  const requestId = state.wikiPreviewRequestId;
   state.wikiPreviewOpen = true;
   state.wikiPreviewLoading = true;
   state.wikiPreviewTitle = basename(lookup);
   state.wikiPreviewPath = lookup;
-  state.wikiPreviewUpdatedAt = null;
-  state.wikiPreviewContent = "";
-  state.wikiPreviewTotalLines = null;
-  state.wikiPreviewTruncated = false;
-  state.wikiPreviewError = null;
   props.onViewStateChange();
   try {
     const preview = await props.onOpenWikiPage(lookup);

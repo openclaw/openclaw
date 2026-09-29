@@ -49,6 +49,7 @@ import { mockRegistryRequesterWakeMutation } from "./subagent-registry-lifecycle
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { registerSubagentResultRefreshCases } from "./subagent-registry-result-refresh.test-support.js";
 import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
+import { registerYieldedParentCleanupCase } from "./subagent-registry-yielded-cleanup.test-support.js";
 import {
   observeRootWork,
   registerBrowserCleanupBoundaryTests,
@@ -145,7 +146,6 @@ vi.mock("./subagent-registry-state.js", async () => ({
   getSubagentRunsSnapshotForChildSession: mocks.getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForController: mocks.getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
-  getSubagentRunsSnapshotForSessions: mocks.getSubagentRunsSnapshotForRead,
   getSubagentMaintenanceRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
   ...(await import("../../subagent-test-fixtures.test-helpers.js")).createSubagentPersistenceMock(
     mocks,
@@ -2519,64 +2519,71 @@ describe("subagent registry seam flow", () => {
   });
 
   it("retires stable operator cancellation despite a late persisted completion", async () => {
-    {
-      const now = Date.parse("2026-03-24T12:00:00Z");
-      const startedAt = now - 10_000;
-      const killedAt = now - 1_000;
-      const completedAt = now;
-      const runId = "run-killed-stable-cancellation";
-      const childSessionKey = "agent:main:subagent:stable-cancellation";
-      mocks.entries = {
-        [childSessionKey]: {
-          lifecycleRevision: "revision-stable-cancellation",
-          sessionId: "sess-stable-cancellation",
-          updatedAt: completedAt,
-          status: "done",
-          startedAt,
-          endedAt: completedAt,
-        },
-      };
-      mod.addSubagentRunForTests(
-        makeKilledRun(killedAt, {
-          runId,
-          childSessionKey,
-          task: "preserve operator cancellation",
-          killReconciliation: { killedAt, taskCancellationAccepted: true },
-          cleanup: "delete",
-          expectsCompletionMessage: true,
-          createdAt: startedAt,
-          startedAt,
-          archiveAtMs: Date.now(),
-        }),
-      );
-
-      expect(killedAt + 5 * 60_000).toBeGreaterThan(Date.now());
-      vi.setSystemTime(killedAt + 5 * 60_000);
-
-      await mod.testing.sweepOnceForTests();
-
-      await waitForFast(() => {
-        expect(
-          mod
-            .listSubagentRunsForRequester("agent:main:main")
-            .some((entry) => entry.runId === runId),
-        ).toBe(false);
-        expect(mocks.callGateway).toHaveBeenCalledWith({
-          method: "sessions.delete",
-          params: {
-            key: childSessionKey,
-            deleteTranscript: true,
-            emitLifecycleHooks: false,
-            expectedLifecycleRevision: "revision-stable-cancellation",
-            expectedSessionId: "sess-stable-cancellation",
+    const config = mocks.getRuntimeConfig();
+    await mocks.getRuntimeConfig.withImplementation(
+      () => ({
+        ...config,
+        session: { ...config.session, store: mocks.resolveStorePath() },
+      }),
+      async () => {
+        const now = Date.parse("2026-03-24T12:00:00Z");
+        const startedAt = now - 10_000;
+        const killedAt = now - 1_000;
+        const completedAt = now;
+        const runId = "run-killed-stable-cancellation";
+        const childSessionKey = "agent:main:subagent:stable-cancellation";
+        mocks.entries = {
+          [childSessionKey]: {
+            lifecycleRevision: "revision-stable-cancellation",
+            sessionId: "sess-stable-cancellation",
+            updatedAt: completedAt,
+            status: "done",
+            startedAt,
+            endedAt: completedAt,
           },
-          timeoutMs: 10_000,
-          assertDispatchCurrent: expect.any(Function),
-          prepareDispatchCurrent: expect.any(Function),
+        };
+        mod.addSubagentRunForTests(
+          makeKilledRun(killedAt, {
+            runId,
+            childSessionKey,
+            task: "preserve operator cancellation",
+            killReconciliation: { killedAt, taskCancellationAccepted: true },
+            cleanup: "delete",
+            expectsCompletionMessage: true,
+            createdAt: startedAt,
+            startedAt,
+            archiveAtMs: Date.now(),
+          }),
+        );
+
+        expect(killedAt + 5 * 60_000).toBeGreaterThan(Date.now());
+        vi.setSystemTime(killedAt + 5 * 60_000);
+
+        await mod.testing.sweepOnceForTests();
+
+        await waitForFast(() => {
+          expect(
+            mod
+              .listSubagentRunsForRequester("agent:main:main")
+              .some((entry) => entry.runId === runId),
+          ).toBe(false);
+          expect(mocks.callGateway).toHaveBeenCalledWith({
+            method: "sessions.delete",
+            params: {
+              key: childSessionKey,
+              deleteTranscript: true,
+              emitLifecycleHooks: false,
+              expectedLifecycleRevision: "revision-stable-cancellation",
+              expectedSessionId: "sess-stable-cancellation",
+            },
+            timeoutMs: 10_000,
+            assertDispatchCurrent: expect.any(Function),
+            prepareDispatchCurrent: expect.any(Function),
+          });
         });
-      });
-      expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    }
+        expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      },
+    );
   });
 
   it("restores an explicit timeout that predates stable operator cancellation", async () => {
@@ -3648,55 +3655,7 @@ describe("subagent registry seam flow", () => {
     });
   });
 
-  it("wakes a sessions_yield-paused parent when pending descendants settle", async () => {
-    mocks.entries = {
-      "agent:main:subagent:parent": {
-        sessionId: "sess-parent",
-        updatedAt: 1,
-      },
-      "agent:main:subagent:child": {
-        sessionId: "sess-child",
-        updatedAt: 1,
-      },
-    };
-
-    mod.addSubagentRunForTests({
-      runId: "run-yielded-parent",
-      childSessionKey: "agent:main:subagent:parent",
-      task: "yielded parent waiting on descendants",
-      createdAt: Date.parse("2026-06-26T02:17:00Z"),
-      startedAt: Date.parse("2026-06-26T02:18:00Z"),
-      endedAt: Date.parse("2026-06-26T02:19:00Z"),
-      pauseReason: "sessions_yield",
-      wakeOnDescendantSettle: true,
-      cleanupHandled: false,
-      cleanupCompletedAt: undefined,
-    });
-
-    await mod.registerSubagentRun({
-      runId: "run-yielded-child-finished",
-      requesterSessionKey: "agent:main:subagent:parent",
-      requesterDisplayKey: "parent",
-      task: "descendant settles after yield",
-    });
-
-    await waitForFast(() => {
-      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
-    });
-    expectRecordFields(
-      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "child finished announce"),
-      { childRunId: "run-yielded-child-finished" },
-      "child finished announce params",
-    );
-    expectRecordFields(
-      getMockCallArg(mocks.runSubagentAnnounceFlow, 1, 0, "yielded parent wake announce"),
-      {
-        childRunId: "run-yielded-parent",
-        wakeOnDescendantSettle: true,
-      },
-      "yielded parent wake announce params",
-    );
-  });
+  registerYieldedParentCleanupCase({ getRegistry: () => mod, mocks });
 
   it("defers the killed hook until the provisional result reconciles", async () => {
     mockPendingAgentWait();
@@ -4081,7 +4040,16 @@ describe("subagent registry seam flow", () => {
         workspaceDir: undefined,
       });
     });
-    expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
+    const stored = mocks.persistSubagentRunsToDiskOrThrow.mock.calls.at(-1)?.[0].get(runId);
+    expect(stored).toMatchObject({
+      cleanupCompletedAt: now,
+      delivery: {
+        status: "discarded",
+        payload: undefined,
+        discardedAt: now,
+        discardReason: "expired",
+      },
+    });
   });
 
   it("does not emit ended hooks before suspended delete retirement is durable", async () => {

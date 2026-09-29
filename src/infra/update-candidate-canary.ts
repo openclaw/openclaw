@@ -6,6 +6,7 @@ import JSON5 from "json5";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
   parseOpenClawSchemaVersions,
   type OpenClawSchemaVersions,
@@ -14,7 +15,7 @@ import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
-import { launchCanary, terminateCanary, waitBounded } from "./update-candidate-canary-process.js";
+import { launchCanary, stopCanary, waitBounded } from "./update-candidate-canary-process.js";
 import {
   observeUpdateCandidateStartup,
   waitForUpdateCandidateReadiness,
@@ -89,11 +90,12 @@ export async function validateUpdateCandidateCanary(params: {
   nodeRunner?: string;
   assertCurrent?: () => void;
   /** Emit at completion; replaying after the canary shifts persisted step timestamps. */
-  onStep?: (step: UpdateStepResult) => void;
-  onProgress?: (step: UpdateRunStep) => void;
+  onStep?: (step: UpdateStepResult) => void | Promise<void>;
+  onProgress?: (step: UpdateRunStep) => void | Promise<void>;
 }): Promise<CanaryResult> {
   const started = Date.now();
   let rehearsal: UpdateCandidateRehearsal | undefined;
+  let cleanupUncertain = false;
   const sourceEnv = params.env ?? process.env;
   const logTail: string[] = [];
   const stepLogTail: string[] = [];
@@ -102,9 +104,9 @@ export async function validateUpdateCandidateCanary(params: {
   let stepStartedAt = started;
   let activeLintStep: UpdateStepResult | undefined;
   const steps: UpdateStepResult[] = [];
-  const recordStep = (step: UpdateStepResult) => {
+  const recordStep = async (step: UpdateStepResult) => {
     steps.push(step);
-    params.onStep?.(step);
+    await params.onStep?.(step);
   };
   const cleanupRehearsal = async () => {
     if (!rehearsal) {
@@ -150,8 +152,9 @@ export async function validateUpdateCandidateCanary(params: {
     entry: string,
     args: string[],
     observers: Pick<Parameters<typeof launchCanary>[0], "onLine" | "onStdout"> = {},
-  ) =>
-    launchCanary({
+  ) => {
+    params.signal?.throwIfAborted();
+    return launchCanary({
       ...observers,
       entry,
       args,
@@ -162,25 +165,6 @@ export async function validateUpdateCandidateCanary(params: {
       assertCurrent: params.assertCurrent,
       capture,
     });
-  const stopCanary = async (running: ReturnType<typeof launch>, name: string, deadline: number) => {
-    const cleanupStarted = Date.now();
-    if (await terminateCanary(running.child, running.closed, deadline)) {
-      return true;
-    }
-    const step: UpdateStepResult = {
-      name: `${name}-cleanup`,
-      command: "SIGTERM, SIGKILL",
-      cwd: params.root,
-      durationMs: Date.now() - cleanupStarted,
-      exitCode: null,
-      advisory: {
-        kind: "recoverable-maintenance",
-        message:
-          "Update cleanup deadline elapsed before process close and termination requests both completed. Update validation results are unchanged.",
-      },
-    };
-    recordStep(step);
-    return false;
   };
   try {
     const entry = await resolveGatewayInstallEntrypoint(params.root);
@@ -208,7 +192,7 @@ export async function validateUpdateCandidateCanary(params: {
         stdoutTail: message,
         advisory: { kind: "candidate-runtime-unavailable", message },
       };
-      recordStep(step);
+      await recordStep(step);
       // Older targets also lack the isolated canary CLI; retain their shipped finalization path.
       return { status: "ok", phase, durationMs: Date.now() - started, logTail, steps };
     }
@@ -230,6 +214,7 @@ export async function validateUpdateCandidateCanary(params: {
       nodeRunner: params.nodeRunner,
       timeoutMs: params.timeoutMs,
       signal: params.signal,
+      assertCurrent: params.assertCurrent,
       onProgress: params.onProgress,
     });
     // Copying private state has its own size/progress budget; preserve the
@@ -243,7 +228,7 @@ export async function validateUpdateCandidateCanary(params: {
       snapshotCapacity: rehearsal.snapshotCapacity,
       diagnostics: rehearsal.snapshotDiagnostics,
     };
-    recordStep(snapshotStep);
+    await recordStep(snapshotStep);
     env = { ...rehearsal.env };
     const { port, stateDir: copiedStateDir } = rehearsal;
     const doctorResultOptions = { tmpdir: () => copiedStateDir };
@@ -378,7 +363,7 @@ export async function validateUpdateCandidateCanary(params: {
           }
         }
       } finally {
-        await stopCanary(running, command.name, deadline);
+        await stopCanary({ running, name: command.name, root: params.root, deadline, recordStep });
         if (doctorResultPath) {
           doctorReceipt = await consumeUpdatePostInstallDoctorResult(
             doctorResultPath,
@@ -552,7 +537,7 @@ export async function validateUpdateCandidateCanary(params: {
       if (code !== 0 && !doctorAdvisory) {
         throw new Error(failureMessage);
       }
-      params.onStep?.(step);
+      await params.onStep?.(step);
     }
     if (!candidateSchemaVersions) {
       throw new Error("The update did not report its supported database versions");
@@ -572,6 +557,7 @@ export async function validateUpdateCandidateCanary(params: {
     const abortExited = () => processExit.abort();
     running.child.once("exit", abortExited);
     running.child.once("error", abortExited);
+    let startupFailure: unknown;
     try {
       const probeFailure = await waitForUpdateCandidateReadiness({
         port,
@@ -583,10 +569,10 @@ export async function validateUpdateCandidateCanary(params: {
         hasExited: () => running.processExited() || running.hasExited(),
         getExitReason: running.firstStderrLine,
         startupProgress: startupProgress.milestones,
-        onWarning: (message) => {
+        onWarning: async (message) => {
           startupWarnings.push(message);
           capture(message);
-          params.onProgress?.({
+          await params.onProgress?.({
             step: "warning:candidate-gateway-startup",
             status: "completed",
             detail: message,
@@ -615,13 +601,19 @@ export async function validateUpdateCandidateCanary(params: {
             }
           : {}),
       };
-      recordStep(step);
+      await recordStep(step);
+    } catch (error) {
+      startupFailure = error;
+      throw error;
     } finally {
-      await stopCanary(
+      await stopCanary({
         running,
-        "candidate-gateway-startup",
-        Math.max(deadline, Date.now() + Math.min(2_000, Math.floor(budget / 10))),
-      );
+        name: "candidate-gateway-startup",
+        root: params.root,
+        deadline: Math.max(deadline, Date.now() + Math.min(2_000, Math.floor(budget / 10))),
+        recordStep,
+        primaryFailure: startupFailure,
+      });
     }
     return {
       status: "ok",
@@ -636,6 +628,10 @@ export async function validateUpdateCandidateCanary(params: {
       steps,
     };
   } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      cleanupUncertain = true;
+      throw error;
+    }
     const durationMs = Date.now() - stepStartedAt;
     const displayPhase = phase === "lint" ? "health" : phase;
     const failureLine = capture(
@@ -675,7 +671,12 @@ export async function validateUpdateCandidateCanary(params: {
         (fact) => failureLine === `${displayPhase}: ${fact.message} (${durationMs}ms)`,
       );
     failed.stderrTail = stepLogTail.slice(0, repeatsFact ? -1 : undefined).join("\n");
-    params.onStep?.(failed);
+    try {
+      await params.onStep?.(failed);
+    } catch (recordingError) {
+      cleanupUncertain = hasCommandProcessCleanupError(recordingError);
+      throw recordingError;
+    }
     return {
       status: "error",
       reason: failed.failureFacts.some((fact) => fact.code === "candidate-checks-timeout")
@@ -693,6 +694,8 @@ export async function validateUpdateCandidateCanary(params: {
       steps,
     };
   } finally {
-    await cleanupRehearsal();
+    if (!cleanupUncertain) {
+      await cleanupRehearsal();
+    }
   }
 }

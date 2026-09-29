@@ -48,27 +48,6 @@ export type UsageRouteData = {
   error: string | null;
 };
 
-export type UsageColumnId =
-  | "channel"
-  | "agent"
-  | "provider"
-  | "model"
-  | "messages"
-  | "tools"
-  | "errors"
-  | "duration";
-
-export const DEFAULT_VISIBLE_COLUMNS: UsageColumnId[] = [
-  "channel",
-  "agent",
-  "provider",
-  "model",
-  "messages",
-  "tools",
-  "errors",
-  "duration",
-];
-
 export type TimeSeriesPoint = SessionUsageTimePoint;
 
 type UsageDataState = {

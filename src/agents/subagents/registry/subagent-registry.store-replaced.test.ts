@@ -28,6 +28,7 @@ import {
 } from "../completion/subagent-completion-admission.test-helpers.js";
 import { loadPendingFinalDeliveryPayload } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
+import * as lifecycleCleanup from "./subagent-registry-lifecycle-cleanup.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
@@ -252,6 +253,7 @@ it.each(["same", "restore", "unknown retry", "failed", "delivered"] as const)(
     );
     subagentRuns.set(input.subagent.runId, input.subagent);
     await initSubagentRegistry();
+    using retireNotifications = vi.spyOn(lifecycleCleanup, "suspendReplacedStoreNotifications");
     if (change === "unknown retry") {
       await admitCompletionFixtureDatabase();
       database.db.exec(
@@ -276,11 +278,11 @@ it.each(["same", "restore", "unknown retry", "failed", "delivered"] as const)(
       context.resolveGatewayContext = () => context;
       await activateSubagentRegistry(() => context);
       try {
-        await expect(settleRootWork(true)).rejects.toMatchObject({
-          errors: expect.arrayContaining([
-            expect.objectContaining({ message: "retirement write rejected" }),
-          ]),
-        });
+        expect(retireNotifications).toHaveBeenCalled();
+        await expect(retireNotifications.mock.results[0]?.value).rejects.toThrow(
+          "retirement write rejected",
+        );
+        await settleRootWork(true);
         expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.delivery).toEqual(
           receipt,
         );
