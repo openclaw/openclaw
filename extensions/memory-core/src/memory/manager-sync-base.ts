@@ -50,6 +50,14 @@ export type MemorySyncProgressState = {
   report: (update: MemorySyncProgressUpdate) => void;
 };
 
+export type MemoryEmbeddingBatchConfig = {
+  enabled: boolean;
+  wait: boolean;
+  concurrency: number;
+  pollIntervalMs: number;
+  timeoutMs: number;
+};
+
 export type MemoryIndexWorkItem = {
   entry: MemoryIndexEntry;
   source: MemorySource;
@@ -92,13 +100,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected abstract providerUnavailableReason?: string;
   protected abstract providerLifecycle: MemoryProviderLifecycleState;
   protected providerRuntime?: EmbeddingProviderRuntime;
-  protected abstract batch: {
-    enabled: boolean;
-    wait: boolean;
-    concurrency: number;
-    pollIntervalMs: number;
-    timeoutMs: number;
-  };
+  protected abstract batch: MemoryEmbeddingBatchConfig;
   protected readonly sources: Set<MemorySource> = new Set();
   protected readonly sourceInspections = new Map<
     MemorySource,

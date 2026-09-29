@@ -1,6 +1,6 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { BrowserDashboardDefinition } from "./browser-dashboard.types.js";
-import type { BrowserSessionTabAuthority } from "./browser/session-tab-authority.js";
+import type { BrowserSessionTabAuthority } from "./browser-runtime-state.js";
 import { closeBrowserDashboardTabs } from "./browser/session-tab-registry.js";
 import {
   deleteBrowserSessionTabIf,

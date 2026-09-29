@@ -1,4 +1,7 @@
-import { CompactionError } from "../../packages/agent-core/src/harness/types.js";
+import {
+  CompactionError,
+  SummaryOutputBudgetError,
+} from "../../packages/agent-core/src/harness/types.js";
 /**
  * Summarization and fallback helpers for transcript compaction.
  */
@@ -152,7 +155,9 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
           // Caller aborts and transport timeouts are terminal; provider-side
           // AbortErrors without caller cancellation remain retryable.
           shouldRetry: (err) =>
-            !params.signal.aborted && (isAbortError(err) || !isTimeoutError(err)),
+            !params.signal.aborted &&
+            !(err instanceof SummaryOutputBudgetError) &&
+            (isAbortError(err) || !isTimeoutError(err)),
         },
       );
     } catch (err) {

@@ -66,7 +66,6 @@ extensions/browser/src/browser/output-files.ts	1
 extensions/browser/src/browser/paths.ts	1
 extensions/browser/src/browser/playwright-core.runtime.ts	2
 extensions/browser/src/browser/pw-download-capture.ts	1
-extensions/browser/src/browser/pw-role-snapshot.ts	1
 extensions/browser/src/browser/pw-session-actions.ts	2
 extensions/browser/src/browser/pw-session-navigation.ts	1
 extensions/browser/src/browser/pw-tools-core.interactions.actions.ts	2
@@ -75,9 +74,7 @@ extensions/browser/src/browser/pw-tools-core.interactions.execution.ts	4
 extensions/browser/src/browser/pw-tools-core.interactions.navigation.ts	1
 extensions/browser/src/browser/pw-tools-core.snapshot.ts	1
 extensions/browser/src/browser/routes/agent.act.normalize.ts	1
-extensions/browser/src/browser/routes/agent.act.shared.ts	3
-extensions/browser/src/browser/routes/basic.ts	6
-extensions/browser/src/browser/routes/permissions.ts	1
+extensions/browser/src/browser/routes/agent.act.shared.ts	1
 extensions/browser/src/browser/routes/tabs.ts	6
 extensions/browser/src/browser/server-context.remote-tab-ops.harness.ts	2
 extensions/browser/src/browser/server-context.tab-ops.ts	2
@@ -85,7 +82,6 @@ extensions/browser/src/browser/server-middleware.ts	2
 extensions/browser/src/browser/system-chrome-cookies.ts	1
 extensions/browser/src/browser/system-profiles.ts	1
 extensions/browser/src/browser/test-port.ts	1
-extensions/browser/src/browser/unhandled-rejections.ts	2
 extensions/browser/src/cli/browser-cli-actions-input/register.batch.ts	1
 extensions/browser/src/cli/browser-cli-manage.ts	1
 extensions/browser/src/cli/browser-cli-shared.ts	1

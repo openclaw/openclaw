@@ -5,11 +5,11 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
  * plugin SQLite; all other tabs remain process-local.
  */
 import {
-  getOptionalBrowserStateRuntime,
+  captureBrowserSessionTabAuthority,
   isBrowserStateRuntimeCurrent,
   readCurrentBrowserState,
+  type BrowserSessionTabAuthority,
 } from "../browser-runtime-state.js";
-import type { BrowserSessionTabAuthority } from "./session-tab-authority.js";
 import {
   type CleanupKind,
   type CloseParams,
@@ -239,10 +239,7 @@ export async function closeTrackedBrowserTabsForSessions(
   }
   const params = {
     ...input,
-    authority: {
-      ...input.authority,
-      runtime: input.authority?.runtime ?? getOptionalBrowserStateRuntime() ?? undefined,
-    },
+    authority: captureBrowserSessionTabAuthority(input.authority),
   };
   const sessionKeys = new Set(
     params.sessionKeys
@@ -288,10 +285,7 @@ export async function sweepTrackedBrowserTabs(
 ): Promise<number> {
   const params = {
     ...input,
-    authority: {
-      ...input.authority,
-      runtime: input.authority?.runtime ?? getOptionalBrowserStateRuntime() ?? undefined,
-    },
+    authority: captureBrowserSessionTabAuthority(input.authority),
   };
   const volatile =
     params.ordinaryCleanup === false ? [] : Array.from(readVolatileTabs().values()).flat();

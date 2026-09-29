@@ -5,11 +5,13 @@
 import { randomUUID } from "node:crypto";
 import type { SessionEntryCurrentPreparation } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { getBrowserStateRuntime } from "../browser-runtime-state.js";
+import {
+  getBrowserStateRuntime,
+  type BrowserSessionTabAuthority,
+} from "../browser-runtime-state.js";
 import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
-import type { BrowserSessionTabAuthority } from "./session-tab-authority.js";
 import type { BrowserSessionTabRoute } from "./session-tab-route.js";
 import {
   type BrowserSessionTabRecord,

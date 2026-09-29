@@ -2,8 +2,8 @@ import {
   asNullableRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { BrowserSessionTabAuthority } from "./browser-runtime-state.js";
 import type { BrowserTabOwnership } from "./browser/client.types.js";
-import type { BrowserSessionTabAuthority } from "./browser/session-tab-authority.js";
 import type * as sessionTabRegistry from "./browser/session-tab-registry.js";
 import type { BrowserSessionTabRoute } from "./browser/session-tab-route.js";
 

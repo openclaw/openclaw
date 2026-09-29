@@ -25,6 +25,7 @@ import {
   isBrowserStateRuntimeCurrent,
   readCurrentBrowserState,
   type BrowserDashboardOperation,
+  type BrowserSessionTabAuthority,
   type BrowserStateRuntime,
 } from "./browser-runtime-state.js";
 import { resolveCdpControlPolicy } from "./browser/cdp-reachability-policy.js";
@@ -37,7 +38,6 @@ import {
   type ResolvedBrowserProfile,
 } from "./browser/config.js";
 import { withBrowserRequestScope } from "./browser/request-scope.js";
-import type { BrowserSessionTabAuthority } from "./browser/session-tab-authority.js";
 import type { CloseParams } from "./browser/session-tab-cleanup-claim.js";
 import { trackSessionBrowserTab } from "./browser/session-tab-registry.js";
 import {

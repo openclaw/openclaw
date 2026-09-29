@@ -4,17 +4,15 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { z } from "zod";
 import type { BrowserDashboardIdentity } from "../browser-dashboard.types.js";
 import {
+  assertBrowserSessionTabAuthority,
   getBrowserStateRuntime,
   getPendingBrowserDashboardRegistrations,
   getOptionalBrowserStateRuntime,
   setBrowserStateRuntime,
   type BrowserStateRuntime,
   type BrowserSessionTabOperationKey,
-} from "../browser-runtime-state.js";
-import {
-  assertBrowserSessionTabAuthority,
   type BrowserSessionTabAuthority,
-} from "./session-tab-authority.js";
+} from "../browser-runtime-state.js";
 import {
   clearDurableTabAliases,
   rememberDurableTabAliases,
