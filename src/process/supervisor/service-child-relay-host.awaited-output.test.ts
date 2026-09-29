@@ -33,7 +33,7 @@ it.each([false, true])(
   "joins accepted stdout after identity loss while preserving an observed root (root observed=%s)",
   async (rootObserved) => {
     platformMock = mockProcessPlatform("linux");
-    vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
       // This worker intentionally negotiates the legacy group contract.
       if (pid === 0 && signal === 0) {
         return true;
@@ -63,7 +63,7 @@ it.each([false, true])(
       throw new Error("Expected an admitted service generation");
     }
     expect(start.treeOwnership).toBeUndefined();
-    expect(process.kill).toHaveBeenCalledWith(0, 0);
+    expect(killSpy).toHaveBeenCalledWith(0, 0);
     const generation = start.generation;
     let sequence = 0;
     const emit = (payload: ServiceChildAnchorPayload) => {
