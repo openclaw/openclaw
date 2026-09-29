@@ -30,6 +30,7 @@ import {
 import { writeCronJobScratchForMaintenance } from "./scratch-write.kernel.js";
 import { CronService } from "./service.js";
 import * as runtimeMutation from "./service/runtime-mutation.js";
+import * as cronStore from "./store.js";
 import { loadCronJobsStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import { replaceCronRows, upsertCronJobRow } from "./store/row-codec.js";
@@ -180,8 +181,22 @@ describe("cron scratch worker service", () => {
               .where("job_id", "=", job.id),
           );
         writeDefinition(legacy);
-        const loaded = expectDefined(await reader.readJob(job.id), "loaded legacy scratch job");
-        await vi.waitFor(() => expect(Date.now()).toBeGreaterThan(loaded.createdAtMs));
+        const loadStore = cronStore.loadCronJobsStoreWithConfigJobs;
+        const load = vi
+          .spyOn(cronStore, "loadCronJobsStoreWithConfigJobs")
+          .mockImplementationOnce(async (requestedPath) => {
+            const loaded = await loadStore(requestedPath);
+            // Only pin the clock-derived display fallback; persisted config and worker reads stay real.
+            expectDefined(loaded.store.jobs[0], "loaded legacy row").createdAtMs = 1_000;
+            return loaded;
+          });
+        let loaded: CronJob;
+        try {
+          loaded = expectDefined(await reader.readJob(job.id), "loaded legacy scratch job");
+          expect(loaded.createdAtMs).toBe(1_000);
+        } finally {
+          load.mockRestore();
+        }
         expect(await reader.readScratch(job.id)).toMatchObject({
           currentRevision: 1,
           scratch: { content: "legacy private content" },
