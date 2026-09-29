@@ -166,48 +166,7 @@ export function createExtensionPluginSdkBoundaryChecker(options: { repoRoot?: st
   const generatedExtensionAssetSources = new Set(
     listGeneratedExtensionAssetSources({ rootDir: repoRoot }),
   );
-  const collectBoundaryEntries: NonNullable<
-    Parameters<
-      typeof createExtensionImportBoundaryChecker<CollectedBoundaryEntry>
-    >[0]["collectEntries"]
-  > = ({ filePath, relativeFile, references }) => {
-    const extensionRoot = relativeFile.split("/").slice(0, 2).join("/");
-    const entries: CollectedBoundaryEntry[] = [];
-    for (const { kind, line, specifier } of references) {
-      const resolvedPath = resolveBoundarySpecifier(repoRoot, specifier, filePath);
-      if (!resolvedPath) {
-        continue;
-      }
-      const modes: BoundaryMode[] = [];
-      if (
-        specifier.startsWith(".") &&
-        resolvedPath !== extensionRoot &&
-        !resolvedPath.startsWith(extensionRoot + "/")
-      ) {
-        modes.push("relative-outside-package");
-      }
-      if (resolvedPath.startsWith("src/") && !resolvedPath.startsWith("src/plugin-sdk/")) {
-        modes.push("src-outside-plugin-sdk");
-      }
-      if (isNormalizationCoreBypass(specifier, resolvedPath)) {
-        modes.push("normalization-core-bypass");
-      }
-      for (const mode of modes) {
-        entries.push({
-          mode,
-          entry: {
-            file: relativeFile,
-            line,
-            kind,
-            specifier,
-            resolvedPath,
-            reason: classifyReason(mode, kind, resolvedPath, specifier),
-          },
-        });
-      }
-    }
-    return entries;
-  };
+
   const extensionBoundaryChecker = createExtensionImportBoundaryChecker<CollectedBoundaryEntry>({
     repoRoot,
     roots: [BUNDLED_PLUGIN_ROOT_DIR],
@@ -242,7 +201,44 @@ export function createExtensionPluginSdkBoundaryChecker(options: { repoRoot?: st
           !resolvedPath.startsWith(extensionRoot + "/"))
       );
     },
-    collectEntries: collectBoundaryEntries,
+    collectEntries({ filePath, relativeFile, references }) {
+      const extensionRoot = relativeFile.split("/").slice(0, 2).join("/");
+      const entries: CollectedBoundaryEntry[] = [];
+      for (const { kind, line, specifier } of references) {
+        const resolvedPath = resolveBoundarySpecifier(repoRoot, specifier, filePath);
+        if (!resolvedPath) {
+          continue;
+        }
+        const modes: BoundaryMode[] = [];
+        if (
+          specifier.startsWith(".") &&
+          resolvedPath !== extensionRoot &&
+          !resolvedPath.startsWith(extensionRoot + "/")
+        ) {
+          modes.push("relative-outside-package");
+        }
+        if (resolvedPath.startsWith("src/") && !resolvedPath.startsWith("src/plugin-sdk/")) {
+          modes.push("src-outside-plugin-sdk");
+        }
+        if (isNormalizationCoreBypass(specifier, resolvedPath)) {
+          modes.push("normalization-core-bypass");
+        }
+        for (const mode of modes) {
+          entries.push({
+            mode,
+            entry: {
+              file: relativeFile,
+              line,
+              kind,
+              specifier,
+              resolvedPath,
+              reason: classifyReason(mode, kind, resolvedPath, specifier),
+            },
+          });
+        }
+      }
+      return entries;
+    },
     compareEntries: (left, right) => compareEntries(left.entry, right.entry),
   });
   let allInventoryByModePromise: Promise<BoundaryInventoryByMode> | undefined;
@@ -316,9 +312,6 @@ export function createExtensionPluginSdkBoundaryChecker(options: { repoRoot?: st
 
 const defaultBoundaryChecker = createExtensionPluginSdkBoundaryChecker();
 
-/**
- * Entrypoint wrapper for the extension plugin SDK boundary check.
- */
 async function main(argv?: string[], io?: BoundaryCheckIo): Promise<0 | 1> {
   const exitCode = await defaultBoundaryChecker.main(argv, io);
   if (!io) {

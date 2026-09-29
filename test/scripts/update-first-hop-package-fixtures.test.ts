@@ -599,6 +599,7 @@ process.stdout.write(JSON.stringify([{ filename }]));
           PATH: `${bin}:${process.env.PATH}`,
           DOCKER_ARGS_FILE: dockerArgs,
           OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP: "1",
+          OPENCLAW_UPDATE_FIRST_HOP_DOCKER_RUN_TIMEOUT: "",
           OPENCLAW_UPDATE_FIRST_HOP_E2E_SKIP_BUILD: "1",
           OPENCLAW_UPDATE_FIRST_HOP_SOURCE_PACKAGE_TGZ: sourceMode === "explicit" ? tarball : "",
           OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK: "shared-Y6bNiw2w.js",
@@ -670,6 +671,11 @@ process.stdout.write(JSON.stringify([{ filename }]));
         }
       }
       for (const args of invocations) {
+        expect(args.slice(args.indexOf("timeout"), args.indexOf("timeout") + 3)).toEqual([
+          "timeout",
+          "--kill-after=30s",
+          "1800s",
+        ]);
         expect(args[args.indexOf("--entrypoint") + 1]).toBe(
           "/opt/openclaw-e2e/scripts/e2e/lib/prepublish-plugin-registry.sh",
         );

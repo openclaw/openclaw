@@ -498,6 +498,8 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
   useJUnitPlatform()
+  // This platform fixture is loaded by Robolectric, not by JUnit's unsandboxed test discovery.
+  exclude("**/ControlUiAuthWebViewShadow.class")
   if (sodiumTestHost != null) {
     dependsOn(extractCloudflareSodiumTest)
     val nativeDirectory = extractCloudflareSodiumTest.flatMap { it.outputDirectory }

@@ -62,18 +62,11 @@ async function readGoogleChatErrorResponse(response: Response, label: string): P
   return redactToolPayloadText(text);
 }
 
-const headersToObject = (headers?: HeadersInit): Record<string, string> =>
-  headers instanceof Headers
-    ? Object.fromEntries(headers.entries())
-    : Array.isArray(headers)
-      ? Object.fromEntries(headers)
-      : headers || {};
-
 async function withGoogleChatResponse<T>(
   params: GoogleChatRequestHooks & {
     account: ResolvedGoogleChatAccount;
     url: string;
-    init?: RequestInit;
+    init?: Pick<RequestInit, "method" | "body"> & { headers?: Record<string, string> };
     auditContext: string;
     errorPrefix?: string;
     timeoutMs?: number;
@@ -103,7 +96,7 @@ async function withGoogleChatResponse<T>(
     init: {
       ...init,
       headers: {
-        ...headersToObject(init?.headers),
+        ...init?.headers,
         Authorization: `Bearer ${token}`,
       },
     },
@@ -134,7 +127,7 @@ async function withGoogleChatResponse<T>(
 async function fetchJson<T>(
   account: ResolvedGoogleChatAccount,
   url: string,
-  init: RequestInit,
+  init: Pick<RequestInit, "method" | "body">,
   hooks?: GoogleChatRequestHooks,
 ): Promise<T> {
   return await withGoogleChatResponse({
@@ -144,7 +137,6 @@ async function fetchJson<T>(
     init: {
       ...init,
       headers: {
-        ...headersToObject(init.headers),
         "Content-Type": "application/json",
       },
     },

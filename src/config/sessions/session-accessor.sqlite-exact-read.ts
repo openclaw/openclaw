@@ -459,7 +459,11 @@ export function loadExactSessionEntryFromStoreReadOnly(
 }
 
 /** Read requested keys through synchronous store/projection groups. */
-export type ExactSessionEntryBatchScope = Omit<SessionEntryReadScope, "sessionKey"> & {
+export type ExactSessionEntryBatchScope = Omit<
+  SessionEntryReadScope,
+  "sessionKey" | "projection"
+> & {
+  projection?: SessionEntryReadScope["projection"] | "delivery";
   sessionKeys: readonly string[];
   onReadSource?: (source: SessionEntryReadSource) => void;
 };
@@ -471,7 +475,7 @@ function groupExactSessionEntryReadRequests(scopes: readonly ExactSessionEntryBa
     string,
     {
       options: OpenClawAgentDatabaseOptions;
-      projection: SessionEntryReadScope["projection"];
+      projection: ExactSessionEntryBatchScope["projection"];
       requests: Array<{ index: number; sessionKeys: string[] }>;
     }
   >();

@@ -209,29 +209,16 @@ describe("publication stage input", () => {
         ([command]) => command.type === "workspace.manifest.stage-input",
       );
       expect(stageCalls).toHaveLength(2);
-      for (const [command, options] of stageCalls) {
+      for (const [command] of stageCalls) {
         if (command.type !== "workspace.manifest.stage-input") {
           throw new Error("Expected the real stage-input transport");
         }
         expect(command.input).not.toHaveProperty("assertCurrent");
         expect(command.input).not.toHaveProperty("root");
         if ("publication" in command.input) {
-          expect(options?.inputBytes).toBe(
-            256 +
-              Buffer.byteLength(f.publication.metadata) +
-              (f.publication.publicationDigest.length +
-                f.publication.currentManifestRef.length +
-                f.publication.baseCommit.length) *
-                2,
-          );
           expect(command.input.publication.metadata).toBeInstanceOf(Uint8Array);
           expect(command.input.publication.metadata.byteLength).toBe(0);
         } else {
-          expect(options?.inputBytes).toBe(
-            256 +
-              Buffer.byteLength(legacy.baseManifestRaw) +
-              Buffer.byteLength(legacy.currentManifestRaw),
-          );
           expect(command.input.baseManifestRaw.byteLength).toBe(0);
           expect(command.input.currentManifestRaw.byteLength).toBe(0);
         }

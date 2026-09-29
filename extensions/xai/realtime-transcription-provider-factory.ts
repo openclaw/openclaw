@@ -12,7 +12,7 @@ import {
   normalizeXaiRealtimeTranscriptionProviderConfig,
   type XaiRealtimeTranscriptionEncoding,
 } from "./capability-provider-metadata-factory.js";
-import { XAI_BASE_URL } from "./model-definitions.js";
+import { normalizeXaiRealtimeBaseUrl } from "./realtime-voice-config.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
 
 type XaiTranscriptionRuntime = Pick<
@@ -51,10 +51,6 @@ const XAI_REALTIME_STT_CLOSE_TIMEOUT_MS = 5_000;
 const XAI_REALTIME_STT_MAX_RECONNECT_ATTEMPTS = 5;
 const XAI_REALTIME_STT_RECONNECT_DELAY_MS = 1000;
 const XAI_REALTIME_STT_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
-
-function normalizeXaiRealtimeBaseUrl(value?: string): string {
-  return normalizeOptionalString(value ?? process.env.XAI_BASE_URL) ?? XAI_BASE_URL;
-}
 
 function toXaiRealtimeWsUrl(config: XaiRealtimeTranscriptionSessionConfig): string {
   const url = new URL(normalizeXaiRealtimeBaseUrl(config.baseUrl));

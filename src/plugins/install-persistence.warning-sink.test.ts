@@ -8,10 +8,12 @@ import {
   loadPluginManifestRegistryMock,
   planPluginUninstallMock,
   refreshPluginRegistryMock,
+  readConfigFileSnapshotForWriteMock,
   resetPluginsCliTestState,
   pluginsCliRuntimeLogs,
   setInstalledPluginIndexInstallRecords,
 } from "../cli/plugins-cli-test-helpers.js";
+import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { PluginInstallRuntimeDeferral } from "./install-runtime-batch.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 
@@ -30,6 +32,10 @@ const install = {
 describe("plugin install persistence warning audiences", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
+    readConfigFileSnapshotForWriteMock.mockResolvedValue({
+      snapshot: { ...createTestConfigSnapshot(snapshot.config), hash: snapshot.baseHash },
+      writeOptions: snapshot.writeOptions,
+    });
   });
 
   it("delivers deferred source cleanup warnings to the live batch consumer", async () => {

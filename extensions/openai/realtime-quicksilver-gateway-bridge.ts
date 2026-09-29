@@ -7,7 +7,7 @@ import type {
   RealtimeVoiceCloseDisposition,
   RealtimeVoiceCloseOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
-import WebSocket, { type RawData } from "ws";
+import WebSocket from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   assertOpenAIQuicksilverPcmOutput,
@@ -432,7 +432,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       directSocket.sendAudio(this.pendingRawAudio.take());
     }
     for (const frame of connected.bufferedFrames) {
-      this.handleSidebandFrame(frame.data, frame.isBinary);
+      this.delegations?.handleFrame(frame.data, frame.isBinary);
     }
     if (terminalEvent?.kind === "error") {
       throw terminalEvent.error;
@@ -515,7 +515,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   }
 
   private attachSidebandHandlers(socket: OpenAIQuicksilverSocket): void {
-    socket.on("message", (data, isBinary) => this.handleSidebandFrame(data, isBinary));
+    socket.on("message", (data, isBinary) => this.delegations?.handleFrame(data, isBinary));
     socket.on("error", (error) => this.fail(error));
     socket.on("close", (code, rawReason) => {
       const closeCode = code ?? 1006;
@@ -530,10 +530,6 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         }
       }
     });
-  }
-
-  private handleSidebandFrame(data: RawData, isBinary: boolean): void {
-    this.delegations?.handleFrame(data, isBinary);
   }
 
   private scheduleExpiry(ttlMs: number): void {

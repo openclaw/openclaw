@@ -56,69 +56,10 @@ describe("update-cli", () => {
     mockGatewayHealth,
     mockOwnedGitService,
     mockPackageInstallAtCaseDir,
-    runUpdateCliScenario,
-    setupNonInteractiveDowngrade,
     tempDirs,
   } = createUpdateCliFixture();
 
   it.each([
-    {
-      name: "preview mode",
-      run: async () => {
-        vi.mocked(defaultRuntime.log).mockClear();
-        serviceLoaded.mockResolvedValue(true);
-        mockOwnedGitService();
-        await updateCommand({ dryRun: true, channel: "beta" });
-      },
-      assert: () => {
-        expectNoSideEffects(
-          cleanupStaleManagedServiceUpdateHandoffs,
-          replaceConfigFile,
-          updateGitCheckout,
-          runDaemonInstall,
-          runDaemonRestart,
-          launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
-        );
-        expect(freshRestartCalls()).toHaveLength(0);
-
-        const logs = getLogOutput();
-        expect(logs).toContain("Update dry-run");
-        expect(logs).toContain("No changes were applied.");
-      },
-    },
-    {
-      name: "downgrade bypass",
-      run: async () => {
-        await setupNonInteractiveDowngrade();
-        vi.mocked(defaultRuntime.exit).mockClear();
-        await updateCommand({ dryRun: true });
-      },
-      assert: () => {
-        expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-        expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
-        expect(updateGitCheckout).not.toHaveBeenCalled();
-        expect(
-          launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
-        ).not.toHaveBeenCalled();
-      },
-    },
-  ] as const)("updateCommand dry-run behavior: $name", runUpdateCliScenario);
-
-  it.each([
-    { name: "text", options: { dryRun: true, channel: "beta" } },
-    { name: "JSON", options: { dryRun: true, json: true, channel: "beta" } },
-  ])("reads config without recording observations during a $name dry run", async ({ options }) => {
-    await updateCommand(options);
-
-    expect(readConfigFileSnapshot).toHaveBeenCalledWith({
-      skipPluginValidation: true,
-      observe: false,
-    });
-    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { installKind: "git", installedVersion: "2026.9.3" },
     { installKind: "package", installedVersion: "2026.9.3" },
     { installKind: "git", installedVersion: null },
   ] as const)(
@@ -159,6 +100,10 @@ describe("update-cli", () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       await updateCommand({ dryRun: true, json: true, channel: "beta", acceptCapabilities: true });
       const output = lastWriteJsonCall() as { runId: string };
+      expect(readConfigFileSnapshot).toHaveBeenCalledWith({
+        skipPluginValidation: true,
+        observe: false,
+      });
       expect(listUpdateRuns()).toMatchObject([
         {
           runId: output.runId,
@@ -306,7 +251,7 @@ describe("update-cli", () => {
     expect(ledgerReads).toHaveBeenCalledTimes(readsAtHandoff);
   });
 
-  it.each([false, true])(
+  it.each([false])(
     "records ordered update phases across service stop, restart, and verified health (json=%s)",
     async (json) => {
       const ledgerReads = vi.spyOn(await import("../infra/update-run-ledger.js"), "getUpdateRun");

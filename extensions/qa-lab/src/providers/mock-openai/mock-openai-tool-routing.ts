@@ -5,9 +5,14 @@ import type {
   ResponsesInputItem,
   StreamEvent,
 } from "./mock-openai-contracts.js";
-import { findNamedToolDefinition, hasToolDefinition } from "./mock-openai-directives.js";
+import {
+  findNamedToolDefinition,
+  hasDeclaredTool,
+  hasToolDefinition,
+} from "./mock-openai-directives.js";
 import { extractPlannedToolArgs, extractPlannedToolName } from "./mock-openai-events.js";
 import {
+  extractAllRequestTexts,
   extractToolOutput,
   extractToolOutputCallId,
   extractToolOutputStructuredError,
@@ -101,12 +106,14 @@ export function resolveCurrentToolDeclarationSurface(
       ? item.tools
       : [],
   );
-  return additionalTools.length === 0
-    ? body
-    : {
-        ...body,
-        tools: [...(Array.isArray(body.tools) ? body.tools : []), ...additionalTools],
-      };
+  return {
+    ...body,
+    instructions: extractAllRequestTexts(
+      input.filter((item) => item.role === "system" || item.role === "developer"),
+      body,
+    ),
+    tools: [...(Array.isArray(body.tools) ? body.tools : []), ...additionalTools],
+  };
 }
 
 export function findToolCallByCallId(input: ResponsesInputItem[], callId: string) {
@@ -249,13 +256,18 @@ export function isCodeModeControlToolOutput(
   );
 }
 
-export function canCallScenarioTool(body: Record<string, unknown>, name: string) {
+export function canCallScenarioTool(
+  body: Record<string, unknown>,
+  name: string,
+  requireDeclaredTool = false,
+) {
   // The catalog dispatcher owns target lookup and authorization. Its public
   // contract accepts an exact known name without a redundant search round trip.
   return (
-    hasToolDefinition(body, name) ||
-    hasCodeModeExecSurface(body) ||
-    hasToolDefinition(body, "tool_call")
+    (!requireDeclaredTool || hasDeclaredTool(body, name)) &&
+    (hasToolDefinition(body, name) ||
+      hasCodeModeExecSurface(body) ||
+      hasToolDefinition(body, "tool_call"))
   );
 }
 

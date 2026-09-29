@@ -6,6 +6,7 @@ import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
+import { stagedAttachmentBytes } from "./chat-attachments.ts";
 import { resolveChatCommentAnchor } from "./chat-comment-anchor.ts";
 import { createChatSelectionAttachment } from "./chat-selection-attachment.ts";
 import { showChatAnnotationEditor } from "./chat-selection-popup.ts";
@@ -256,6 +257,10 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
         const replacement = createChatSelectionAttachment(
           { ...selected.selectionAnnotation, comment },
           this.props.attachmentLimits,
+          stagedAttachmentBytes(
+            this.props,
+            current.filter((item) => item.id !== attachment.id),
+          ),
         );
         if (!replacement) {
           return false;

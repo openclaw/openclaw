@@ -36,7 +36,9 @@ const DOCKER_E2E_CHUNKS = [
   {
     chunk_id: "package-update-self-upgrade",
     label: "package/update self-upgrade",
-    timeout_minutes: 60,
+    // Six 35m first-hop lanes need two waves at npm weight limit 5; the 20m
+    // survivor (weight 3) overlaps them. Add 10m for job setup and artifacts.
+    timeout_minutes: 80,
     profiles: "beta minimum stable full",
   },
   {

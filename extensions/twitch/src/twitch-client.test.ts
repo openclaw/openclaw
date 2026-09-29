@@ -45,7 +45,7 @@ const disconnectHandlers: Array<(manual: boolean, reason?: Error) => void> = [];
 
 type TwitchClientManagerState = {
   clients: Map<string, unknown>;
-  messageHandlers: Map<string, (message: TwitchChatMessage) => void>;
+  messageHandlers: Map<string, unknown>;
 };
 
 function managerState(manager: TwitchClientManager): TwitchClientManagerState {
@@ -503,39 +503,34 @@ describe("TwitchClientManager", () => {
   });
 
   describe("onMessage", () => {
-    it("cleanup of an earlier handler does not remove a newer registered handler (#83888)", () => {
-      const handler1 = vi.fn();
-      const handler2 = vi.fn();
-      const key = manager.getAccountKey(testAccount);
+    it.each([false, true])(
+      "keeps the current registration after stale cleanup (same handler: %s)",
+      async (sameHandler) => {
+        await manager.getClient(testAccount);
+        const previous = vi.fn();
+        const current = sameHandler ? previous : vi.fn();
+        const cleanup = manager.onMessage(testAccount, previous);
+        manager.onMessage(testAccount, current);
 
-      const cleanup1 = manager.onMessage(testAccount, handler1);
-      manager.onMessage(testAccount, handler2);
+        cleanup();
+        messageHandlers[0]?.("#testchannel", "testuser", "hello", ircMessage("msg-current"));
 
-      // Running the first handler's cleanup must not drop handler2.
-      cleanup1();
+        expect(current).toHaveBeenCalledOnce();
+        expect(current).toHaveBeenCalledWith(expect.objectContaining({ id: "msg-current" }));
+        if (!sameHandler) {
+          expect(previous).not.toHaveBeenCalled();
+        }
+      },
+    );
 
-      expect(managerState(manager).messageHandlers.get(key)).toBe(handler2);
-    });
-
-    it("cleanup of an earlier registration does not remove a newer registration using the same handler", () => {
+    it("cleanup of the current handler stops delivery", async () => {
+      await manager.getClient(testAccount);
       const handler = vi.fn();
-      const key = manager.getAccountKey(testAccount);
-
-      const cleanup1 = manager.onMessage(testAccount, handler);
-      manager.onMessage(testAccount, handler);
-      cleanup1();
-
-      expect(managerState(manager).messageHandlers.get(key)).toBe(handler);
-    });
-
-    it("cleanup of the current handler removes it", () => {
-      const handler = vi.fn();
-      const key = manager.getAccountKey(testAccount);
-
       const cleanup = manager.onMessage(testAccount, handler);
       cleanup();
+      messageHandlers[0]?.("#testchannel", "testuser", "hello", ircMessage("msg-removed"));
 
-      expect(managerState(manager).messageHandlers.has(key)).toBe(false);
+      expect(handler).not.toHaveBeenCalled();
     });
   });
 

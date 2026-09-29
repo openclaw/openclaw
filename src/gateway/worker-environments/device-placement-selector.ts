@@ -1,6 +1,7 @@
 import type { EnvironmentSummary } from "../../../packages/gateway-protocol/src/index.js";
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { availableWorkerSlots } from "../../shared/node-list-parse.js";
 import type { NodeRegistry } from "../node-registry.js";
 import { resolveDevicePlacementEligibility } from "./device-placement-eligibility.js";
 import { deviceUnavailableText } from "./device-provider.js";
@@ -84,7 +85,9 @@ export async function selectDevicePlacementCandidates(params: {
                 0,
                 eligibility.availableSlots - (params.getPendingDispatchCount?.(deviceId) ?? 0),
               )
-            : (node.workerSlots?.available ?? 0),
+            : node.workerSlots
+              ? availableWorkerSlots(node.workerSlots)
+              : 0,
           eligibility,
         };
       }),
