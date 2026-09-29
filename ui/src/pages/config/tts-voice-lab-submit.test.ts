@@ -171,19 +171,29 @@ it("does not offer cloning solely because the RPC is advertised", async () => {
   const { element } = await prepareRecordings(async () => ({ voices: [] }), false, false);
   expect(element.querySelector<HTMLButtonElement>("button.primary")!.disabled).toBe(true);
 });
-it("keeps provider-uncertain stores locked across catalog refresh", async () => {
+it("keeps provider-uncertain stores locked across refresh and dialog reopening", async () => {
   const request = vi.fn(async (method: string) =>
     method === "tts.replicateVoice"
       ? { outcome: "uncertain", message: "Check the project catalog." }
       : { voices: [] },
   );
-  const { button, flush } = await prepareRecordings(request);
+  const { element, button, flush } = await prepareRecordings(request);
   button("Store voice").click();
   await flush();
   expect(button("Store voice").disabled).toBe(true);
   button("Refresh").click();
   await flush();
+  button("Close").click();
+  await flush();
+  element.querySelector<HTMLButtonElement>("button.primary")!.click();
+  await flush();
+  button("Record again").click();
+  await flush();
+  button("Stop recording").click();
+  await flush();
   expect(button("Store voice").disabled).toBe(true);
+  button("Store voice").dispatchEvent(new MouseEvent("click"));
+  await flush();
   expect(request.mock.calls.filter(([method]) => method === "tts.replicateVoice")).toHaveLength(1);
 });
 
@@ -202,3 +212,57 @@ it("locks a dispatched store when its socket closes before a response", async ()
   await flush();
   expect(button("Store voice").disabled).toBe(true);
 });
+
+it.each([undefined, "AQI="])(
+  "requires a new dialog creation after confirmed Store (preview %s)",
+  async (audioBase64) => {
+    const request = vi.fn(async (method: string) =>
+      method === "tts.replicateVoice"
+        ? { outcome: "stored", id: "voice_test", name: "Test voice", audioBase64 }
+        : { voices: [] },
+    );
+    const { element, button, flush, start } = await prepareRecordings(request);
+    button("Store voice").click();
+    await flush();
+    expect(element.textContent).toContain("Test voice");
+    expect(button("Store voice").disabled).toBe(true);
+    const preview = element.querySelector('audio[src^="data:"]');
+    expect(Boolean(preview)).toBe(Boolean(audioBase64));
+
+    // Dispatch also reaches the handler despite native disabled-button suppression.
+    button("Store voice").dispatchEvent(new MouseEvent("click"));
+    const input = element.querySelector("input")!;
+    input.value = "Edited name";
+    input.dispatchEvent(new Event("input"));
+    expect(button("Record again").disabled).toBe(true);
+    button("Record again").dispatchEvent(new MouseEvent("click"));
+    button("Refresh").click();
+    await flush();
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(button("Store voice").disabled).toBe(true);
+    expect(element.querySelector('audio[src^="data:"]')).toBe(preview);
+    button("Store voice").dispatchEvent(new MouseEvent("click"));
+    await flush();
+    expect(request.mock.calls.filter(([method]) => method === "tts.replicateVoice")).toHaveLength(
+      1,
+    );
+
+    button("Close").click();
+    await flush();
+    element.querySelector<HTMLButtonElement>("button.primary")!.click();
+    await flush();
+    expect(element.querySelector('audio[src^="data:"]')).toBeNull();
+    expect(button("Record again").disabled).toBe(false);
+    expect(button("Store voice").disabled).toBe(false);
+    button("Record again").click();
+    await flush();
+    button("Stop recording").click();
+    await flush();
+    button("Store voice").click();
+    await flush();
+    expect(request.mock.calls.filter(([method]) => method === "tts.replicateVoice")).toHaveLength(
+      2,
+    );
+    expect(button("Store voice").disabled).toBe(true);
+  },
+);

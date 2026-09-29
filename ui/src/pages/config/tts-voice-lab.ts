@@ -153,11 +153,10 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
   };
 
   private startRecording(slot: ClipSlot) {
-    if (this.creating || this.recording || this.pending || !this.canWrite) {
+    if (this.creating || this.storedPreview || this.recording || this.pending || !this.canWrite) {
       return;
     }
     this.createError = null;
-    this.storedPreview = null;
     this.pending = slot;
     this.level = 0;
     this.requestNativeMicrophone();
@@ -257,6 +256,9 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
   }
 
   private async createVoice() {
+    if (this.storedPreview) {
+      return;
+    }
     const client = this.client;
     const block = voiceLabSubmitBlock({
       name: this.displayName,
@@ -387,7 +389,7 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
         <button
           type="button"
           class="btn"
-          ?disabled=${this.creating || !this.canWrite || this.pending !== null || (this.recording !== null && !recording)}
+          ?disabled=${this.creating || this.storedPreview !== null || !this.canWrite || this.pending !== null || (this.recording !== null && !recording)}
           @click=${() => (recording ? void this.stopRecording() : this.startRecording(slot))}
         >
           ${
@@ -415,7 +417,12 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
       connected: Boolean(this.client),
       storeUncertain: this.storeUncertain,
     });
-    const canSubmit = !this.creating && !this.recording && !this.pending && submitBlock === null;
+    const canSubmit =
+      !this.creating &&
+      !this.storedPreview &&
+      !this.recording &&
+      !this.pending &&
+      submitBlock === null;
     return html`
       <openclaw-modal-dialog
         label=${t("ttsVoiceLab.create")}
