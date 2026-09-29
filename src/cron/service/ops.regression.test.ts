@@ -177,7 +177,7 @@ describe("cron service ops regressions", () => {
       markGatewayRestartDraining();
       await expect(
         completion.run(() => enqueueRun(state, job.id, "force", { commitGuard })),
-      ).rejects.toThrow("gateway is draining for restart");
+      ).rejects.toThrow("Gateway is restarting. Please try again shortly.");
       expect(completion.isCommitted()).toBe(false);
       expect(getTotalQueueSize()).toBe(0);
       expect(getActiveGatewayRootWorkCount()).toBe(0);

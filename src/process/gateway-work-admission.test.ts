@@ -89,6 +89,27 @@ it("publishes only committed suspension transitions and isolates broken observer
   }
 });
 
+it("preserves the shutdown reason for rejected roots and cancellation until reset", async () => {
+  const signal = getGatewayRestartDrainSignal();
+  markGatewayRestartDraining("stop (SIGTERM)");
+  markGatewayRestartDraining("restart");
+  const message = "Gateway is shutting down. Please try again once it is back online.";
+  expect(signal.reason).toMatchObject({ name: "GatewayDrainingError", message });
+  await expect(beginGatewayRootWorkAdmissionWhenOpen()).rejects.toThrow(message);
+  await expect(runWithGatewayIndependentRootWorkAdmission(async () => {})).rejects.toThrow(message);
+
+  resetGatewayWorkAdmission();
+  expect(getGatewayRestartDrainSignal().aborted).toBe(false);
+  const fence = beginGatewayRestartSignalAdmission();
+  expect(new GatewayDrainingError().message).toBe(
+    "Gateway is restarting. Please try again shortly.",
+  );
+  expect(fence?.rollback()).toBe(true);
+  expect(new GatewayDrainingError().message).toBe(
+    "Gateway is temporarily unavailable. Please try again shortly.",
+  );
+});
+
 it("classifies draining errors only while an authoritative restart signal or drain is active", () => {
   const error = new GatewayDrainingError();
   const firstDrainSignal = getGatewayRestartDrainSignal();
@@ -613,7 +634,7 @@ it.each(continuations)(
       runContinuation(async () => {
         ran();
       }),
-    ).rejects.toThrow("gateway is draining for restart");
+    ).rejects.toThrow("Gateway is restarting. Please try again shortly.");
     expect(ran).not.toHaveBeenCalled();
   },
 );
