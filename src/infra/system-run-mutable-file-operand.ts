@@ -6,7 +6,7 @@ import {
   normalizeNullableString,
 } from "@openclaw/normalization-core/string-coerce";
 import { splitShellArgs } from "../utils/shell-argv.js";
-import { detectPolicyInlineEval } from "./command-analysis/policy.js";
+import { detectInlineEvalInSegments } from "./command-analysis/risks.js";
 import { isInterpreterLikeSafeBin } from "./exec-safe-bin-runtime-policy.js";
 import {
   POSIX_PARSEABLE_SHELL_WRAPPERS,
@@ -366,7 +366,7 @@ export function isSystemRunCommandTextBoundInterpreterInvocation(argv: string[])
     return false;
   }
   if (
-    detectPolicyInlineEval([
+    detectInlineEvalInSegments([
       {
         raw: unwrapped.argv.join(" "),
         argv: unwrapped.argv,

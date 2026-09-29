@@ -4,19 +4,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 
 /** Resolved heartbeat presentation toggles after defaults/channel/account precedence. */
-export type ResolvedHeartbeatVisibility = {
-  /** Whether successful heartbeat content should be sent as visible chat text. */
-  showOk: boolean;
-  /** Whether warning/error heartbeat content should be sent as visible chat text. */
-  showAlerts: boolean;
-  /** Whether heartbeat status should emit indicator events for UI surfaces. */
-  useIndicator: boolean;
-};
+export type ResolvedHeartbeatVisibility = Required<ChannelHeartbeatVisibilityConfig>;
 
 const DEFAULT_VISIBILITY: ResolvedHeartbeatVisibility = {
-  showOk: false, // Silent by default
-  showAlerts: true, // Show content messages
-  useIndicator: true, // Emit indicator events
+  showOk: false,
+  showAlerts: true,
+  useIndicator: true,
 };
 
 /** Resolves heartbeat visibility for a channel, applying account > channel > defaults precedence. */
@@ -27,7 +20,6 @@ export function resolveHeartbeatVisibility(params: {
 }): ResolvedHeartbeatVisibility {
   const { cfg, channel, accountId } = params;
 
-  // Layer 1: Global channel defaults
   const channelDefaults = cfg.channels?.defaults?.heartbeatVisibility;
 
   // Webchat has no channel/account config branch, so only shared channel defaults apply.
@@ -39,7 +31,6 @@ export function resolveHeartbeatVisibility(params: {
     | undefined;
   const perChannel = channelCfg?.heartbeatVisibility;
 
-  // Layer 3: Per-account config (most specific)
   const accountCfg =
     channel !== "webchat" && accountId
       ? resolveChannelAccountEntry(channelCfg?.accounts, accountId, channel, (id) => id)

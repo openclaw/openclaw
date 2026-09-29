@@ -456,6 +456,7 @@ describe("update-cli", () => {
         for (const listener of listeners) {
           listener();
         }
+        await exitCalled.promise;
         // Inspect while preflight remains blocked: ordinary unwind cannot settle this row.
         expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
           runId: before.runId,
@@ -464,7 +465,6 @@ describe("update-cli", () => {
           reason: "interrupted",
           finishedAtMs: expect.any(Number),
         });
-        await exitCalled.promise;
         expect(processExitSpy).toHaveBeenCalledWith(signal === "SIGINT" ? 130 : 143);
         expect(await fs.readFile(path.join(root, "package.json"), "utf8")).toBe(packageBefore);
         expect(packageInstallCommandCall()).toBeUndefined();

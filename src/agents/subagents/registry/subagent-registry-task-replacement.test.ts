@@ -51,12 +51,13 @@ it.each(["end", "error"] as const)(
     const nextWait = createDeferred<AgentWaitResult>();
     const previousSettled = createDeferred();
     const successorSettled = createDeferred();
-    fixture.persist.mockImplementation((...params) => {
-      persistSubagentRunsToDiskOrThrow(...params);
-      if (typeof subagentRuns.get("timeout-predecessor")?.cleanupCompletedAt === "number") {
+    fixture.persist.mockImplementation((runs, ...params) => {
+      persistSubagentRunsToDiskOrThrow(runs, ...params);
+      // Live rows publish after this callback returns; observe the committed snapshot.
+      if (typeof runs.get("timeout-predecessor")?.cleanupCompletedAt === "number") {
         previousSettled.resolve();
       }
-      if (typeof subagentRuns.get("timeout-successor")?.cleanupCompletedAt === "number") {
+      if (typeof runs.get("timeout-successor")?.cleanupCompletedAt === "number") {
         successorSettled.resolve();
       }
     });
