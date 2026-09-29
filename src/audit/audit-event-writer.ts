@@ -283,7 +283,8 @@ export function createAuditEventWriter(options: {
             : "audit execution decision receipt could not be queued",
         );
       } else {
-        unavailable = true;
+        // Reject only the offending payload. A single malformed audit event
+        // must not disable the ledger for the rest of the process lifetime.
         fail(error);
       }
       return false;
