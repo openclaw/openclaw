@@ -271,8 +271,9 @@ function commitCompletionMutations(
 
 function readRequesterBatch(
   database: OpenClawStateDatabase,
-  entries: readonly { subagent: SubagentRunRecord }[],
+  params: Extract<SubagentCompletionMutation, { kind: "requesterWake" | "requesterBatch" }>,
 ): Array<{ expected: SubagentRunRecord; subagent: SubagentRunRecord }> {
+  const entries = params.entries;
   const ids = new Set(entries.map(({ subagent }) => subagent.runId));
   const first = entries[0]?.subagent;
   const cohort = first?.requesterSettleWake?.batchRunIds?.toSorted().join("\0");
@@ -293,8 +294,11 @@ function readRequesterBatch(
     ) {
       throw changedOwner();
     }
-    // A caller may omit retired rows, never a surviving member of the same frozen wave.
-    for (const id of subagent.requesterSettleWake?.batchRunIds ?? []) {
+    // Outcome settlement owns the whole frozen wave; quiet wake decisions may select
+    // current members without settling the remaining siblings' delivery outcomes.
+    for (const id of params.kind === "requesterBatch"
+      ? (subagent.requesterSettleWake?.batchRunIds ?? [])
+      : []) {
       if (!ids.has(id) && !checkedOmittedIds.has(id)) {
         const member = readSubagentRun(database, id);
         if (
@@ -322,7 +326,7 @@ function settleRequesterBatch(
     return reconcileRequesterWake(database, params);
   }
   const now = params.now;
-  const mutations = readRequesterBatch(database, params.entries).map(
+  const mutations = readRequesterBatch(database, params).map(
     ({ expected, subagent }): CompletionMutation => {
       const changedOwner = () =>
         new Error("subagent completion owner changed before settlement: " + expected.runId);
@@ -484,15 +488,13 @@ function mutateRequesterWake(
   if (params.committed) {
     return reconcileRequesterWake(database, params);
   }
-  const mutations = readRequesterBatch(database, params.entries).map(
-    ({ subagent }): CompletionMutation => {
-      if (params.operation.kind === "complete") {
-        return { subagent, retire: completeRequesterSettleWakeState(subagent) };
-      }
-      transitionRequesterSettleWakeState(subagent, params.operation.state);
-      return { subagent };
-    },
-  );
+  const mutations = readRequesterBatch(database, params).map(({ subagent }): CompletionMutation => {
+    if (params.operation.kind === "complete") {
+      return { subagent, retire: completeRequesterSettleWakeState(subagent) };
+    }
+    transitionRequesterSettleWakeState(subagent, params.operation.state);
+    return { subagent };
+  });
   return commitCompletionMutations(database, mutations);
 }
 

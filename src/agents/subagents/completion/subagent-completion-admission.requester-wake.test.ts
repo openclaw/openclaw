@@ -314,7 +314,7 @@ describe("persisted subagent requester wakes", () => {
     }
   });
 
-  it.each(["second owner", "second run write", "retirement"] as const)(
+  it.each(["second owner", "omitted sibling", "second run write", "retirement"] as const)(
     "commits the entire requester batch or nothing when %s refuses settlement",
     async (cut) => {
       const first = records();
@@ -335,7 +335,7 @@ describe("persisted subagent requester wakes", () => {
         const changed = structuredClone(second);
         changed.subagent.generation = (changed.subagent.generation ?? 0) + 1;
         seedSubagentCompletionDelivery({ ...changed, databaseOptions: { database } });
-      } else {
+      } else if (cut !== "omitted sibling") {
         database.db.exec(
           cut === "second run write"
             ? "CREATE TRIGGER reject_batch AFTER UPDATE ON subagent_runs WHEN NEW.run_id = 'completion-second' BEGIN SELECT RAISE(ABORT, 'cut:second'); END"
@@ -365,7 +365,9 @@ describe("persisted subagent requester wakes", () => {
         await driver.run();
         await expect(
           settle!.completeBatch(
-            inputs.map(({ subagent }) => subagent),
+            (cut === "omitted sibling" ? inputs.slice(0, 1) : inputs).map(
+              ({ subagent }) => subagent,
+            ),
             1,
             {
               delivered: false,
@@ -377,7 +379,7 @@ describe("persisted subagent requester wakes", () => {
         expect(inputs.map(({ subagent }) => subagent)).toEqual(liveBefore);
         expect(snapshot()).toEqual(before);
         expect(observed).not.toHaveBeenCalled();
-        if (cut !== "second owner") {
+        if (cut === "second run write" || cut === "retirement") {
           database.db.exec("DROP TRIGGER reject_batch");
         }
         await reopenOwners();

@@ -449,6 +449,12 @@ export function scheduleRequesterSettleWake(
               settledEntry: entry,
               isSourceCurrent,
               transitionBatch: async (batch, state) => {
+                const isCurrent = () =>
+                  isSourceCurrent() &&
+                  isCurrentRequesterSettleWakeBatch(context, batch, state.rearmGeneration);
+                if (!isCurrent()) {
+                  return;
+                }
                 const retainReplay =
                   state.nextAttemptAt !== undefined &&
                   batch.every((member) => member.requesterSettleWake?.status === "dispatching");
@@ -483,7 +489,7 @@ export function scheduleRequesterSettleWake(
                   false,
                   stateContext,
                 );
-                if (!published) {
+                if (!published && isCurrent()) {
                   throw new Error("Requester wake transition awaits current publication");
                 }
               },
