@@ -137,7 +137,7 @@ serveOwnedWorkerTasks(
         return usageCostWorkerFailure(error);
       }
     }
-    const read = async (): Promise<
+    const readRequest = async (): Promise<
       SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]
     > => {
       if (request.kind === "prewarm") {
@@ -576,8 +576,8 @@ serveOwnedWorkerTasks(
       // Database-addressed reads share one custody and reply boundary; discovery and exports
       // retain their existing owners. The scope opens no connection until a reader asks for it.
       return "database" in request
-        ? await withHistoryDatabase(request.database, request.kind, read)
-        : { ok: true, value: await read() };
+        ? await withHistoryDatabase(request.database, request.kind, readRequest)
+        : { ok: true, value: await readRequest() };
     } catch (error) {
       if (
         error instanceof SessionHistoryDeltaPreparationError &&

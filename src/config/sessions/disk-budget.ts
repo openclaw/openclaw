@@ -751,4 +751,3 @@ export async function enforceSessionDiskBudget(params: {
     overBudget: true,
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
