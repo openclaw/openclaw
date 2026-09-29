@@ -1,5 +1,6 @@
 import type { Writable } from "node:stream";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
+import { assertWindowsChildPipesSupported } from "../../infra/windows-appcontainer-spawn-guard.js";
 import type { NodeWorkerCleanupBinding } from "../../node-host/node-worker-launch-receipt.js";
 import { prepareSecretInputStdio, type SpawnStdioEntry } from "../spawn-secret-input.js";
 import { getInheritedProcessLineageFds } from "./inherited-process-lineage.js";
@@ -34,6 +35,7 @@ export type ServiceChildRelayAdapter = SpawnProcessAdapter<NodeJS.Signals | null
 
 /** Prepare transport facts; the host revalidates authority immediately before spawning. */
 export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
+  assertWindowsChildPipesSupported();
   const useWindowsJobAnchor =
     process.platform === "win32" && params.windowsShellCommand !== undefined;
   if (params.ownedWorker && !supportsNodeWorkerProcessOwner()) {
