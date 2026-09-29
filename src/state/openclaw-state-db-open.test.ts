@@ -94,8 +94,7 @@ describe("unpublished state database acquisition", () => {
         { value: "committed" },
       ]);
       expect(reopened.db.isOpen).toBe(true);
-      // One maintenance owner arms the periodic pass and the checkpoint-only tick.
-      expect(maintenanceTimerCount()).toBe(2);
+      expect(maintenanceTimerCount()).toBe(1);
     } finally {
       reopened.walMaintenance.close();
       closeTrackedStateDatabase(reopened.db);

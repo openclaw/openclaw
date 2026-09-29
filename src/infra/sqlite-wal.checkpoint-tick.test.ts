@@ -80,6 +80,29 @@ describe("sqlite WAL checkpoint tick", () => {
     }
   });
 
+  it("arms no checkpoint tick on the main thread by default", () => {
+    vi.useFakeTimers();
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const sqlite = requireNodeSqlite();
+    const dir = tempDirs.make("openclaw-sqlite-wal-no-tick-");
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    const db = new sqlite.DatabaseSync(dbPath);
+    let maintenance: ReturnType<typeof configureSqliteWalMaintenance> | undefined;
+    try {
+      maintenance = configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 60_000,
+        databaseLabel: "wal-no-tick",
+        databasePath: dbPath,
+      });
+      expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 60_000);
+    } finally {
+      maintenance?.close();
+      db.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("checkpoints on the maintenance tick and vacuums only on the periodic pass", async () => {
     vi.useFakeTimers();
     const sqlite = requireNodeSqlite();
@@ -102,6 +125,8 @@ describe("sqlite WAL checkpoint tick", () => {
       configureSqlitePreSchemaPragmas(db);
       maintenance = configureSqliteWalMaintenance(db, {
         checkpointIntervalMs: 60_000,
+        // Worker threads tick by default; the test runs on the main thread.
+        checkpointTickMs: 10_000,
         databaseLabel: "wal-tick",
         databasePath: dbPath,
       });
