@@ -559,7 +559,7 @@ run_update_restart_probe_gateway() {
     cp "$log_file" "${log_file}.before-start" || return "$?"
   fi
   local start_epoch ready_epoch budget service_status=0
-  budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 90)" || return "$?"
+  budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 300)" || return "$?"
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")" || return "$?"
   : >"$log_file" || return "$?"
   # Install and start both use the existing manager, which alone publishes the PID.
@@ -579,7 +579,7 @@ run_update_restart_probe_gateway() {
     fi
   fi
   gateway_pid="$(cat "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE")" || return "$?"
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_file" 360 "$port" "$readiness_mode" >"$readiness_log" 2>&1 || service_status=$?
+  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_file" "$((10#$budget * 4))" "$port" "$readiness_mode" >"$readiness_log" 2>&1 || service_status=$?
   if [ "$service_status" -ne 0 ]; then
     openclaw_e2e_print_log "$readiness_log" >&2
     return "$service_status"

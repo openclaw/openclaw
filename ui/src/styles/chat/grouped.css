@@ -1353,7 +1353,7 @@ img.chat-avatar {
   padding: 12px;
   min-width: 200px;
   max-width: calc(100vw - 48px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--overlay-shadow);
   /* Above the still-connected .chat-reply-context-menu (9999). */
   z-index: 10000;
   animation: scale-in 0.15s ease-out;
@@ -1400,55 +1400,20 @@ img.chat-avatar {
 }
 
 .chat-confirm-popover__cancel {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  background: var(--bg-hover);
   color: var(--muted);
 }
 
 .chat-confirm-popover__cancel:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: color-mix(in srgb, var(--text) 12%, transparent);
 }
 
 .chat-confirm-popover__yes {
-  background: var(--danger);
-  color: var(--media-foreground);
-}
-
-:root:is(
-    [data-theme="dark"],
-    [data-theme="openknot"],
-    [data-theme="dash"],
-    [data-theme="absolutely"],
-    [data-theme="tide"],
-    [data-theme="phosphor"],
-    [data-theme="crt"],
-    [data-theme="manuscript"],
-    [data-theme="rose"],
-    [data-theme="miami"],
-    [data-theme="beacon"]
-  )
-  .chat-confirm-popover__yes {
   background: var(--destructive);
   color: var(--destructive-foreground);
 }
 
 .chat-confirm-popover__yes:hover {
-  background: var(--danger-solid-hover);
-}
-
-:root:is(
-    [data-theme="dark"],
-    [data-theme="openknot"],
-    [data-theme="dash"],
-    [data-theme="absolutely"],
-    [data-theme="tide"],
-    [data-theme="phosphor"],
-    [data-theme="crt"],
-    [data-theme="manuscript"],
-    [data-theme="rose"],
-    [data-theme="miami"],
-    [data-theme="beacon"]
-  )
-  .chat-confirm-popover__yes:hover {
   background: var(--destructive-hover);
 }
 

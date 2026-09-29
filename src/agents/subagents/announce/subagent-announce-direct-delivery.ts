@@ -442,19 +442,29 @@ export async function sendSubagentAnnounceDirectly(
                 settleWakeSourceSessionKeys: params.settleWakeSourceSessionKeys,
                 ...(parentOnly ? { privateCompletion: true as const } : {}),
                 delegatedToolPolicyHandoff:
-                  isSubagentCompletion &&
-                  trustedCompletionEvent &&
+                  ((isSubagentCompletion && trustedCompletionEvent) ||
+                    (sourceToolId === "subagent_settle" &&
+                      params.settleWakeSourceSessionKeys?.length &&
+                      params.isSourceSessionEffectsAllowed)) &&
                   params.sourceSessionKey &&
                   requesterActivity.sessionId &&
                   params.isSourceSessionEffectsAllowed?.() !== false
                     ? {
                         sourceSessionKey: params.sourceSessionKey,
-                        ...(trustedCompletionEvent.childSessionId
+                        ...(trustedCompletionEvent?.childSessionId
                           ? { sourceSessionId: trustedCompletionEvent.childSessionId }
                           : {}),
                         targetSessionKey: canonicalRequesterSessionKey,
                         targetSessionId: requesterActivity.sessionId,
                         idempotencyKey: params.directIdempotencyKey,
+                        ...(sourceToolId === "subagent_settle" && params.settleWakeSourceSessionKeys
+                          ? {
+                              settleBatch: {
+                                sourceSessionKeys: params.settleWakeSourceSessionKeys,
+                                isCurrent: isCompletionDeliveryAllowed,
+                              },
+                            }
+                          : {}),
                       }
                     : undefined,
                 expectFinal: true,

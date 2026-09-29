@@ -423,7 +423,7 @@ describe("fresh trial ownership", () => {
 
 describe("release qualification workflow authority", () => {
   const workflow = parse(readFileSync(".github/workflows/ios-release-e2e.yml", "utf8"));
-  const release = parse(readFileSync(".github/workflows/ios-release.yml", "utf8"));
+  const release = parse(readFileSync(".github/workflows/ios-store-release.yml", "utf8"));
   const ci = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
   it.each([
     ["manual current revision", {}, true],

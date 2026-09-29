@@ -1,11 +1,13 @@
 import { resolveSandboxWorkspaceAuthority } from "../../agents/sandbox/workspace-authority.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
 import {
   listImageGenerationProviders,
   listMusicGenerationProviders,
   listVideoGenerationProviders,
 } from "../../media-generation/registry.js";
 import { RequestScopedSubagentRuntimeError } from "../../plugin-sdk/error-runtime.js";
+import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   createLazyRuntimeMethod,
   createLazyRuntimeMethodBinder,
@@ -21,7 +23,6 @@ import {
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { createRuntimeBase } from "./runtime-base.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
-import { createRuntimeEvents } from "./runtime-events.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
 import type { PluginRuntimeFactory, PluginRuntime } from "./types.js";
@@ -228,7 +229,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
         ? { dispatchReplyFromConfig: _options.dispatchReplyFromConfig }
         : undefined,
     ),
-    events: createRuntimeEvents(),
+    events: { onAgentEvent, onSessionTranscriptUpdate },
     logging: createRuntimeLogging(),
     state: base.state,
 

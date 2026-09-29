@@ -15,7 +15,7 @@ import type { DB } from "./openclaw-state-db.generated.js";
 export type OpenClawStateLeaseIdentity = { scope: string; key: string; owner: string };
 export type OpenClawStateLeaseAcquisition =
   | { kind: "acquired"; expiresAt: number }
-  | { kind: "held"; holder: { owner: string; epoch: number } };
+  | { kind: "held"; holder: { owner: string; epoch: number; expiresAt: number | null } };
 type LeaseDatabase = Pick<DB, "state_leases">;
 
 /** The caller owns the write transaction; only absent or expired leases can be acquired. */
@@ -62,7 +62,10 @@ export function acquireOpenClawStateLeaseInTransaction(
     throw new Error("Conflicting state lease disappeared inside its acquisition transaction");
   }
   // The owner token and recorded creation time identify this lease's grant, not liveness.
-  return { kind: "held", holder: { owner: held.owner, epoch: held.createdAt } };
+  return {
+    kind: "held",
+    holder: { owner: held.owner, epoch: held.createdAt, expiresAt: held.expiresAt },
+  };
 }
 
 export function readOpenClawStateLease(

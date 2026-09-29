@@ -6,7 +6,7 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status
 import { resolveSandboxToolPolicyForAgent } from "../../agents/sandbox/tool-policy.js";
 import { projectEffectiveExecPolicy } from "../../agents/session-permission-exec-mode.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
-import { logWarn } from "../../logger.js";
+import { logInfo, logWarn } from "../../logger.js";
 import {
   WORKER_REQUIRED_LOCAL_TOOL_NAMES,
   WORKER_SESSION_TOOL_NAMES,
@@ -85,6 +85,7 @@ function resolveWorkerCapabilityProfile(params: {
 export function resolveWorkerToolAuthority(params: {
   modelRef: { provider: string; model: string };
   turn: SessionPlacementTurnParams;
+  launchToolNames: readonly WorkerToolName[];
   availableOptionalToolNames?: readonly WorkerOptionalLocalToolName[];
   portalAvailable?: boolean;
 }): WorkerToolAuthority {
@@ -146,10 +147,18 @@ export function resolveWorkerToolAuthority(params: {
       "Worker exec/process withheld: captured exec policy requires local host or interactive approval. Run this turn locally.",
     );
   }
+  const launchToolNames = new Set(params.launchToolNames);
+  const withheld = projected.filter((name) => !launchToolNames.has(name));
+  if (withheld.length > 0) {
+    logInfo(
+      `Worker tools withheld: the node's installed OpenClaw does not support ${withheld.join(", ")}. Update OpenClaw on the node and restart it to enable them.`,
+    );
+  }
   return {
-    allowedToolNames: execUnavailable
-      ? projected.filter((name) => name !== "exec" && name !== "process")
-      : projected,
+    allowedToolNames: projected.filter(
+      (name) =>
+        (!execUnavailable || (name !== "exec" && name !== "process")) && launchToolNames.has(name),
+    ),
     exec,
   };
 }

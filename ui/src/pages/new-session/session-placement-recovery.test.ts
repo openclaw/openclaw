@@ -361,6 +361,8 @@ describe("session placement recovery", () => {
         agentId: "cloud",
         message: "" as const,
         category: "Client work",
+        model: "openai/gpt-5.6-sol",
+        agentRuntime: "codex",
         thinkingLevel: "high",
         toolOverrides: {
           mcpServers: { github: false },
@@ -418,6 +420,10 @@ describe("session placement recovery", () => {
     { name: "an unsupported visibility", value: { visibility: "shared" } },
     { name: "an unsupported Fast Mode", value: { fastMode: "fast" } },
     { name: "a null Fast Mode", value: { fastMode: null } },
+    { name: "an empty runtime", value: { agentRuntime: "" } },
+    { name: "a whitespace runtime", value: { agentRuntime: "  " } },
+    { name: "a non-string runtime", value: { agentRuntime: 42 } },
+    { name: "a null runtime", value: { agentRuntime: null } },
     { name: "malformed tool overrides", value: { toolOverrides: { webSearch: "yes" } } },
     { name: "an unknown field", value: { unknown: true } },
   ])("rejects $name in creating parameters", ({ value }) => {

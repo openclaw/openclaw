@@ -115,6 +115,8 @@ describe("worker turn launcher remote handoff", () => {
           changed: false,
           verifyStable: async () => {},
           verifyLocalStable: async () => {},
+          publishStagedResult: async () => {},
+          discardPreparedStagedResult: async () => {},
           getAppliedWorkspaceResult: () => ({
             manifestRef: MANIFEST_REF,
             manifest: { version: 1 as const, baseCommit: null, entries: [] },

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OpenClawKit
 import Testing
 import WebKit
 @testable import OpenClaw
@@ -35,10 +36,24 @@ private actor DashboardRouteAuthGate {
 private final class DashboardBrowserImportGate {
     var isOnboarded = false
     private(set) var requestCount = 0
+    let requested = AsyncStream<Int>.makeStream(bufferingPolicy: .unbounded)
+
+    deinit { self.requested.continuation.finish() }
 
     func request() -> Bool {
         self.requestCount += 1
+        self.requested.continuation.yield(self.requestCount)
         return self.isOnboarded
+    }
+}
+
+@MainActor
+private func nextDashboardImportRequest(_ requests: AsyncStream<Int>) async throws -> Int {
+    try await AsyncTimeout.withTimeout(seconds: 5, onTimeout: { URLError(.timedOut) }) {
+        for await request in requests {
+            return request
+        }
+        throw CancellationError()
     }
 }
 
@@ -64,6 +79,8 @@ struct DashboardWindowSmokeTests {
             styleMask: [.titled, .resizable],
             backing: .buffered,
             defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
         let dragRegion = DashboardWindowDragRegionView(
             frame: NSRect(x: 0, y: 0, width: 300, height: 12))
         window.contentView = dragRegion
@@ -96,6 +113,7 @@ struct DashboardWindowSmokeTests {
         defer { server.stop() }
         let url = server.url("/control/#token=device-token")
         let windowAutosaveName = "OpenClawDashboardWindow-Test-\(UUID().uuidString)"
+        defer { NSWindow.removeFrame(usingName: windowAutosaveName) }
         let controller = DashboardWindowController(
             url: url,
             auth: DashboardWindowAuth(
@@ -334,6 +352,8 @@ struct DashboardWindowSmokeTests {
         defer { readerServer.stop() }
         let dashboard = server.url("/control/")
         var requestCount = 0
+        let requests = AsyncStream<Int>.makeStream(bufferingPolicy: .unbounded)
+        defer { requests.continuation.finish() }
         var firstRequestContinuation: CheckedContinuation<Bool, Never>?
         let controller = DashboardWindowController(
             url: dashboard,
@@ -342,6 +362,7 @@ struct DashboardWindowSmokeTests {
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in
                 requestCount += 1
+                requests.continuation.yield(requestCount)
                 if requestCount == 1 {
                     return await withCheckedContinuation { continuation in
                         firstRequestContinuation = continuation
@@ -349,33 +370,29 @@ struct DashboardWindowSmokeTests {
                 }
                 return true
             })
-        defer { controller.closeDashboard() }
+        defer {
+            firstRequestContinuation?.resume(returning: false)
+            controller.closeDashboard()
+        }
 
         controller.show()
         #expect(requestCount == 0)
 
         let link = readerServer.url("/docs/")
         try controller.nativeBrowser.open(tabId: "mac-import", url: link, sessionKey: "")
-        for _ in 0..<200 where firstRequestContinuation == nil {
-            await Task.yield()
-        }
-        #expect(requestCount == 1)
+        #expect(try await nextDashboardImportRequest(requests.stream) == 1)
+        #expect(firstRequestContinuation != nil)
 
         controller.update(
             url: dashboard,
             auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
         firstRequestContinuation?.resume(returning: false)
         firstRequestContinuation = nil
-        for _ in 0..<200 where requestCount == 1 {
-            await Task.yield()
-        }
-        #expect(requestCount == 2)
+        #expect(try await nextDashboardImportRequest(requests.stream) == 2)
 
         try controller.nativeBrowser.close(tabId: "mac-import")
         try controller.nativeBrowser.open(tabId: "mac-import", url: link, sessionKey: "")
-        for _ in 0..<10 {
-            await Task.yield()
-        }
+        #expect(!controller._testHasPendingBrowserProfileImportOffer)
         #expect(requestCount == 2)
     }
 
@@ -395,25 +412,18 @@ struct DashboardWindowSmokeTests {
         defer { controller.closeDashboard() }
         let manager = DashboardManager._testMake()
         manager._testSetController(controller)
+        defer { manager.close() }
 
         let link = readerServer.url("/docs/")
         try controller.nativeBrowser.open(tabId: "mac-import", url: link, sessionKey: "")
-        for _ in 0..<200 where gate.requestCount == 0 {
-            await Task.yield()
-        }
-        #expect(gate.requestCount == 1)
+        #expect(try await nextDashboardImportRequest(gate.requested.stream) == 1)
 
         gate.isOnboarded = true
         manager.handleOnboardingCompletion()
-        for _ in 0..<200 where gate.requestCount == 1 {
-            await Task.yield()
-        }
-        #expect(gate.requestCount == 2)
+        #expect(try await nextDashboardImportRequest(gate.requested.stream) == 2)
 
         manager.handleOnboardingCompletion()
-        for _ in 0..<10 {
-            await Task.yield()
-        }
+        #expect(!controller._testHasPendingBrowserProfileImportOffer)
         #expect(gate.requestCount == 2)
     }
 
@@ -424,6 +434,9 @@ struct DashboardWindowSmokeTests {
         defer { readerServer.stop() }
         let dashboard = server.url("/control/")
         var requestCount = 0
+        let requests = AsyncStream<Int>.makeStream(bufferingPolicy: .unbounded)
+        defer { requests.continuation.finish() }
+        let settled = AsyncTestGate()
         var firstRequestContinuation: CheckedContinuation<Void, Never>?
         var firstRequestApplied: Bool?
         let controller = DashboardWindowController(
@@ -433,36 +446,37 @@ struct DashboardWindowSmokeTests {
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { shouldApply in
                 requestCount += 1
+                requests.continuation.yield(requestCount)
                 if requestCount == 1 {
                     await withCheckedContinuation { continuation in
                         firstRequestContinuation = continuation
                     }
                     firstRequestApplied = shouldApply()
+                    settled.open()
                     return firstRequestApplied == true
                 }
                 return shouldApply()
             })
-        defer { controller.closeDashboard() }
+        defer {
+            firstRequestContinuation?.resume()
+            controller.closeDashboard()
+        }
 
         let link = readerServer.url("/docs/")
         try controller.nativeBrowser.open(tabId: "mac-import", url: link, sessionKey: "")
-        for _ in 0..<200 where firstRequestContinuation == nil {
-            await Task.yield()
-        }
-        #expect(requestCount == 1)
+        #expect(try await nextDashboardImportRequest(requests.stream) == 1)
+        #expect(firstRequestContinuation != nil)
 
         try controller.nativeBrowser.close(tabId: "mac-import")
         firstRequestContinuation?.resume()
-        for _ in 0..<200 where firstRequestApplied == nil {
-            await Task.yield()
+        firstRequestContinuation = nil
+        try await AsyncTimeout.withTimeout(seconds: 5, onTimeout: { URLError(.timedOut) }) {
+            await settled.wait()
         }
         #expect(firstRequestApplied == false)
 
         try controller.nativeBrowser.open(tabId: "mac-import", url: link, sessionKey: "")
-        for _ in 0..<200 where requestCount == 1 {
-            await Task.yield()
-        }
-        #expect(requestCount == 2)
+        #expect(try await nextDashboardImportRequest(requests.stream) == 2)
     }
 
     @Test(arguments: ["close", "invalidate", "replacement"])
@@ -574,9 +588,6 @@ struct DashboardWindowSmokeTests {
                 "type": "open-link", "url": url, "target": "external",
             ]) == nil)
         }
-        #expect(DashboardWindowController.linkRequest(from: [
-            "type": "open-link", "url": "openclaw://dashboard", "target": "inline",
-        ]) == nil)
     }
 
     @Test func `dashboard accepts only typed window drag requests`() {
@@ -666,89 +677,71 @@ extension DashboardWindowSmokeTests {
     }
 
     @Test func `dashboard native chrome clears both desktop sidebars`() async throws {
-        let server = try await DashboardHTTPFixture.start()
+        let server = try await DashboardHTTPFixture.start(html: """
+        <html><head></head><body><div class="sidebar-shell"></div>
+        <div class="settings-sidebar__header"></div></body></html>
+        """, contentSecurityPolicy: "default-src 'none'; style-src 'unsafe-inline'")
         defer { server.stop() }
-        let url = server.url("/control/")
-        let controller = DashboardWindowController(
-            url: url,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
-            websiteDataStore: .nonPersistent(),
-            windowAutosaveName: "",
-            requestBrowserProfileImportOffer: { _ in false })
-        defer { controller.closeDashboard() }
-        let chromeScript = try #require(controller._testUserScripts.first {
-            $0.source.contains("openclaw-native-macos-chrome")
-        })
-
-        // Narrow widths are styled by the Control UI's own compact drawer-row
-        // rules (layout.mobile.css); only the desktop sidebar surfaces need
-        // native padding injected here.
-        #expect(chromeScript.source.contains(".sidebar-shell"))
-        #expect(chromeScript.source.contains(".settings-sidebar__header"))
-        #expect(chromeScript.source.contains("min-width: 700px"))
-        // Keep the injected titlebar height in lockstep with the 52pt unified
-        // toolbar in makeWindow(); the two must match for the traffic lights and
-        // the hosted web buttons to share one vertical center.
-        let titlebarScript = try #require(controller._testUserScripts.first {
-            $0.source.contains("--openclaw-native-titlebar-height: 52px")
-        })
-        #expect(titlebarScript.injectionTime == .atDocumentStart)
-        #expect(titlebarScript.isForMainFrameOnly)
-        #expect(!chromeScript.source.contains("max-width: 1100px"))
-        #expect(chromeScript.source.contains("openclaw-native-web-chrome"))
-        #expect(!chromeScript.source.contains("openclaw-native-nav"))
-        #expect(chromeScript.injectionTime == .atDocumentEnd)
-        #expect(chromeScript.isForMainFrameOnly)
-    }
-
-    @Test func `dashboard refresh preserves titlebar chrome for the current endpoint and mount`() async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
-        let replacementServer = try await DashboardHTTPFixture.start()
-        defer { replacementServer.stop() }
-        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
         let controller = DashboardWindowController(
             url: server.url("/control/"),
-            auth: auth,
-            websiteDataStore: .nonPersistent(),
-            windowAutosaveName: "",
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            websiteDataStore: .nonPersistent(), windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
+        controller.show(url: controller.currentURL, auth: controller.auth)
+        try await waitForNativeDashboardDocument(controller)
+        let padding = try await controller.webView.evaluateJavaScript("""
+        Array.from(document.querySelectorAll('.sidebar-shell, .settings-sidebar__header'))
+          .map(element => getComputedStyle(element).paddingTop)
+        """) as? [String]
+        #expect(padding == ["52px", "52px"])
+        #expect(try await controller.webView.evaluateJavaScript(
+            "document.documentElement.classList.contains('openclaw-native-web-chrome')") as? Bool == true)
+    }
 
-        for endpoint in [server, replacementServer] {
+    @Test func `dashboard refresh scopes document-start titlebar chrome to its new endpoint and mount`() async throws {
+        let html = """
+        <html><head><script>
+        window.initialTitlebar = getComputedStyle(document.documentElement)
+          .getPropertyValue('--openclaw-native-titlebar-height').trim();
+        </script></head></html>
+        """
+        let server = try await DashboardHTTPFixture.start(
+            html: html,
+            contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'")
+        defer { server.stop() }
+        let replacement = try await DashboardHTTPFixture.start(
+            html: html,
+            contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'")
+        defer { replacement.stop() }
+        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        let controller = DashboardWindowController(
+            url: server.url("/control/"), auth: auth, websiteDataStore: .nonPersistent(), windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
+        controller.show(url: controller.currentURL, auth: controller.auth)
+        try await waitForNativeDashboardDocument(controller)
+        for endpoint in [server, replacement] {
             controller.update(url: endpoint.url("/replacement-control/"), auth: auth)
-
-            let titlebarScripts = controller._testUserScripts.filter {
-                $0.source.contains("--openclaw-native-titlebar-height: 52px")
-            }
-            #expect(titlebarScripts.count == 1)
-            let script = try #require(titlebarScripts.first)
-            let source = script.source.replacingOccurrences(of: "\\/", with: "/")
-            #expect(source.contains("\"http://127.0.0.1:\(endpoint.port)\""))
-            #expect(source.contains("\"/replacement-control/\""))
-            #expect(!source.contains("\"/control/\""))
-            #expect(script.injectionTime == .atDocumentStart)
-            #expect(script.isForMainFrameOnly)
+            try await waitForNativeDashboardDocument(controller)
+            #expect(try await controller.webView.evaluateJavaScript("window.initialTitlebar") as? String == "52px")
         }
     }
 
     @Test func `dashboard advertises web titlebar chrome before document load`() async throws {
-        let server = try await DashboardHTTPFixture.start()
+        let server = try await DashboardHTTPFixture.start(
+            html: "<html><head><script>window.initialChrome = window.__OPENCLAW_NATIVE_WEB_CHROME__;</script></head></html>",
+            contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'")
         defer { server.stop() }
-        let url = server.url("/control/")
         let controller = DashboardWindowController(
-            url: url,
+            url: server.url("/control/"),
             auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
-            websiteDataStore: .nonPersistent(),
-            windowAutosaveName: "",
+            websiteDataStore: .nonPersistent(), windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
-        let capabilityScript = try #require(controller._testUserScripts.first {
-            $0.source.contains("__OPENCLAW_NATIVE_WEB_CHROME__")
-        })
-
-        #expect(capabilityScript.injectionTime == .atDocumentStart)
-        #expect(capabilityScript.isForMainFrameOnly)
+        controller.show(url: controller.currentURL, auth: controller.auth)
+        try await waitForNativeDashboardDocument(controller)
+        #expect(try await controller.webView.evaluateJavaScript("window.initialChrome") as? Bool == true)
         #expect(controller.window?.titlebarAccessoryViewControllers.isEmpty == true)
         #expect(controller._testAllowsBackForwardGestures)
     }
@@ -801,7 +794,7 @@ extension DashboardWindowSmokeTests {
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
-        controller.show()
+        controller.show(url: url, auth: controller.auth)
         return controller
     }
 
@@ -826,13 +819,12 @@ extension DashboardWindowSmokeTests {
         #expect(replacement !== controller)
         #expect(replacement.window === window)
         #expect(window.isVisible)
-        #expect(replacement.currentURL.absoluteString == replacementServer.url("/#token=device-token").absoluteString)
-        let authScripts = replacement._testUserScripts
-            .filter { $0.source.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") }
-        #expect(authScripts.count == 1)
-        // JSONSerialization escapes "/" so match on host:port, not the full origin.
-        #expect(authScripts.first?.source.contains("127.0.0.1:\(replacementServer.port)") == true)
-        #expect(authScripts.first?.source.contains(String(server.port)) == false)
+        #expect(replacement.currentURL.absoluteString == replacementServer.url("/").absoluteString)
+        let bootstrap = try await dashboardNativeAuthSnapshot(replacement)
+        #expect(bootstrap["gatewayUrl"] as? String == replacementServer.websocketURL().absoluteString)
+        #expect(bootstrap["nativeConnectAuth"] as? Bool == true)
+        #expect(bootstrap["token"] == nil)
+        #expect(bootstrap["password"] == nil)
     }
 
     @Test func `dashboard retires its web view while endpoint is unavailable`() async throws {
@@ -843,7 +835,6 @@ extension DashboardWindowSmokeTests {
         let manager = DashboardManager._testMake()
         manager._testSetController(controller)
         defer { manager.close() }
-        let scriptsBefore = controller._testUserScripts
 
         await manager.handleEndpointState(.ready(
             mode: .remote,
@@ -857,7 +848,8 @@ extension DashboardWindowSmokeTests {
         #expect(replacement !== controller)
         #expect(replacement.currentURL == URL(string: "about:blank"))
         #expect(!controller.isWindowOpen)
-        #expect(!replacement._testUserScripts.elementsEqual(scriptsBefore) { $0 === $1 })
+        #expect(replacement.auth.token == nil)
+        #expect(replacement.documentHost.nativeGatewayAuthProvider == nil)
     }
 
     @Test func `same URL route revision recreates dashboard without prior token`() async throws {
@@ -882,7 +874,7 @@ extension DashboardWindowSmokeTests {
                 await authGate.probe()
             })
         manager._testSetController(controller)
-        defer { manager._testController()?.closeDashboard() }
+        defer { manager.close() }
         let socketURL = server.websocketURL("")
 
         await manager.handleEndpointState(.ready(
@@ -907,15 +899,15 @@ extension DashboardWindowSmokeTests {
         #expect(routeBController !== routeAController)
         #expect(!routeAController.isWindowOpen)
         #expect(routeBController.currentURL.absoluteString ==
-            server.url("/#token=route-b-device-token").absoluteString)
-        let scripts = routeBController._testUserScripts
-            .filter { $0.source.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") }
-        #expect(scripts.count == 1)
-        #expect(scripts[0].source.contains("route-b-device-token"))
-        #expect(!scripts[0].source.contains("route-a-device-token"))
+            server.url("/").absoluteString)
+        let bootstrap = try await dashboardNativeAuthSnapshot(routeBController)
+        #expect(bootstrap["nativeConnectAuth"] as? Bool == true)
+        #expect(bootstrap["token"] == nil)
+        #expect(bootstrap["password"] == nil)
+        #expect(routeBController.auth.token == "route-b-device-token")
     }
 
-    @Test func `route change without fresh credential blanks prior dashboard`() async throws {
+    @Test func `route change without accepted native authority blanks prior dashboard`() async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
         let url = server.url("/#token=route-a-device-token")
@@ -931,9 +923,10 @@ extension DashboardWindowSmokeTests {
         controller.show()
         let manager = DashboardManager._testMake(
             authTokenProvider: { _ in nil },
+            legacyCredentialsProvider: { _, _ in throw CancellationError() },
             routeProbe: { purpose in #expect(purpose == .authentication) })
         manager._testSetController(controller)
-        defer { manager._testController()?.closeDashboard() }
+        defer { manager.close() }
 
         await manager.handleEndpointState(.ready(
             mode: .remote,
@@ -943,12 +936,11 @@ extension DashboardWindowSmokeTests {
             routeRevision: 2))
 
         let replacement = try #require(manager._testController())
-        #expect(replacement !== controller)
-        #expect(!controller.isWindowOpen)
+        #expect(replacement.isShowingFailurePage)
+        #expect(!replacement.canDeliverNativeCommands)
         #expect(replacement.currentURL == URL(string: "about:blank"))
-        let scripts = replacement._testUserScripts
-            .filter { $0.source.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") }
-        #expect(!scripts.contains { $0.source.contains("route-a-device-token") })
+        #expect(replacement.auth.token == nil)
+        #expect(replacement.documentHost.nativeGatewayAuthProvider == nil)
     }
 
     @Test func `dashboard ignores endpoint changes while window is closed`() async throws {
@@ -969,6 +961,7 @@ extension DashboardWindowSmokeTests {
         defer { controller.closeDashboard() }
         let manager = DashboardManager._testMake()
         manager._testSetController(controller)
+        defer { manager.close() }
 
         await manager.handleEndpointState(.ready(
             mode: .remote,

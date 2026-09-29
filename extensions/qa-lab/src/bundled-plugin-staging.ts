@@ -34,11 +34,9 @@ function isQaOpenAiResponsesProviderConfig(config: ModelProviderConfig) {
 
 function resolveQaBundledPluginSourceDir(params: { repoRoot: string; pluginId: string }) {
   assertSafeQaBundledPluginId(params.pluginId);
-  const candidates = [
-    path.join(params.repoRoot, "dist", "extensions", params.pluginId),
-    path.join(params.repoRoot, "dist-runtime", "extensions", params.pluginId),
-    path.join(params.repoRoot, "extensions", params.pluginId),
-  ];
+  const candidates = resolveQaBundledPluginScanRoots(params.repoRoot).map((root) =>
+    path.join(root, params.pluginId),
+  );
   const existingCandidates = candidates.filter((candidate) => existsSync(candidate));
   const manifestCandidates = findQaBundledPluginDirsByManifestId(params);
   const allCandidates = uniqueStrings([...existingCandidates, ...manifestCandidates]);

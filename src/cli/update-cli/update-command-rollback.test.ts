@@ -55,6 +55,7 @@ import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import {
   expectActiveRollbackIdentity,
   expectDoctorRollback,
+  writeDoctorRollbackConfig,
   writeDoctorRollbackReceipt,
 } from "./update-command-rollback.test-support.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
@@ -365,7 +366,7 @@ describe("verified package rollback", () => {
       }
     },
   );
-  it.each([
+  it.for([
     { change: "none", previousVerified: true, restored: true, service: "stopped" },
     ...(process.platform === "win32"
       ? []
@@ -383,6 +384,25 @@ describe("verified package rollback", () => {
     { change: "doctor-compensated", previousVerified: true, restored: true, service: "stopped" },
     { change: "doctor-missing-input", previousVerified: true, restored: false, service: "stopped" },
     { change: "doctor-include", previousVerified: true, restored: true, service: "stopped" },
+    { change: "doctor-include-owned", previousVerified: true, restored: true, service: "stopped" },
+    {
+      change: "doctor-include-owned-alias",
+      previousVerified: true,
+      restored: true,
+      service: "stopped",
+    },
+    {
+      change: "doctor-include-owned-alias-edit",
+      previousVerified: true,
+      restored: false,
+      service: "stopped",
+    },
+    {
+      change: "doctor-include-owned-edit",
+      previousVerified: true,
+      restored: false,
+      service: "stopped",
+    },
     { change: "doctor-include-edit", previousVerified: true, restored: false, service: "stopped" },
     { change: "doctor-input-edit", previousVerified: true, restored: false, service: "stopped" },
     { change: "doctor-capture-edit", previousVerified: true, restored: false, service: "stopped" },
@@ -415,23 +435,15 @@ describe("verified package rollback", () => {
     { change: "none", previousVerified: true, restored: false, service: "no-restart" },
   ])(
     "$change schema change; previous verified=$previousVerified; service=$service",
-    async ({ change, previousVerified, restored, service }) => {
+    async ({ change, previousVerified, restored, service }, context) => {
+      const includeAlias = change.startsWith("doctor-include-owned-alias");
+      if (includeAlias && process.platform === "win32") {
+        context.skip();
+      }
       const stateDir = serviceStateDir;
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const configPath = path.join(stateDir, "openclaw.json");
-      const includePath = path.join(stateDir, "logging.json");
-      const authored = {
-        gateway: { mode: "local" },
-        agents: { defaults: { models: { "openai/gpt-5.6-luna": {} } } },
-        ...(change.startsWith("doctor-include") ? { logging: { $include: "./logging.json" } } : {}),
-      };
-      const originalRaw = `// Fresh install: Doctor has never run.\n${JSON.stringify(authored, null, 2)}\n`;
-      if (change.startsWith("doctor-include")) {
-        fs.writeFileSync(includePath, '{"level":"info"}\n');
-      }
-      if (change.startsWith("doctor") || change === "readonly-config") {
-        fs.writeFileSync(configPath, originalRaw, { mode: 0o600 });
-      }
+      const { configPath, includePath, includeTarget, authored, originalRaw } =
+        writeDoctorRollbackConfig(stateDir, change);
       const configSnapshot = await createConfigIO({
         env: process.env,
         pluginValidation: "skip",
@@ -531,7 +543,9 @@ describe("verified package rollback", () => {
             progress: {},
             managedServiceEnv: process.env,
             onConfigSnapshot: (snapshot) => {
-              activationConfig = snapshot;
+              // The migrated finalizer receives this snapshot through JSON IPC.
+              const finalizerInput = JSON.stringify(snapshot);
+              activationConfig = JSON.parse(finalizerInput);
             },
           });
         const doctorStep =
@@ -572,8 +586,14 @@ describe("verified package rollback", () => {
           }),
         ).toBeUndefined();
         expect(inspected.status).toBe("ok");
-        if (change === "doctor-include-edit") {
+        if (change === "doctor-include-edit" || change === "doctor-include-owned-edit") {
           fs.writeFileSync(includePath, '{"level":"debug"}\n');
+        }
+        if (change === "doctor-include-owned-alias-edit") {
+          const replacement = path.join(stateDir, "logging-replacement.json");
+          fs.copyFileSync(includeTarget, replacement);
+          fs.unlinkSync(includePath);
+          fs.symlinkSync(replacement, includePath);
         }
         if (change === "doctor-operator-edit") {
           operatorEdit();
@@ -721,17 +741,28 @@ describe("verified package rollback", () => {
         change === "doctor-settled-exception" ||
         change === "doctor-unchanged" ||
         change === "doctor-compensated" ||
-        change === "doctor-include"
+        change === "doctor-include" ||
+        change === "doctor-include-owned" ||
+        change === "doctor-include-owned-alias"
       ) {
         expect(fs.readFileSync(configPath, "utf8")).toBe(originalRaw);
         if (process.platform !== "win32") {
           expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
         }
       }
+      if (change === "doctor-include-owned" || change === "doctor-include-owned-alias") {
+        expect(fs.readFileSync(includePath, "utf8")).toBe('{"level":"info"}\n');
+      }
+      if (includeAlias) {
+        expect(fs.lstatSync(includePath).isSymbolicLink()).toBe(true);
+      }
       if (change.startsWith("doctor-") && change.endsWith("edit")) {
         if (change === "doctor-input-edit") {
           expect(fs.readFileSync(configPath, "utf8")).toContain('"debug"');
-        } else if (change === "doctor-include-edit") {
+        } else if (change === "doctor-include-owned-alias-edit") {
+          expect(fs.readFileSync(includePath, "utf8")).toContain('"warn"');
+          expect(fs.readFileSync(includeTarget, "utf8")).toContain('"warn"');
+        } else if (change === "doctor-include-edit" || change === "doctor-include-owned-edit") {
           expect(fs.readFileSync(includePath, "utf8")).toContain('"debug"');
         } else {
           expect(fs.readFileSync(configPath, "utf8")).toContain("Operator edit after activation");
@@ -749,6 +780,8 @@ describe("verified package rollback", () => {
           change === "doctor-unchanged" ||
           change === "doctor-compensated" ||
           change === "doctor-include" ||
+          change === "doctor-include-owned" ||
+          change === "doctor-include-owned-alias" ||
           change === "doctor-restore-edit" ||
           change === "identity-read-failed" ||
           change === "new-agent"
