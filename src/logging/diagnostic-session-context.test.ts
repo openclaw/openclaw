@@ -15,11 +15,16 @@ import {
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { diagnosticLogger } from "./diagnostic-runtime.js";
 import { logWithSessionDiagnosticContext } from "./diagnostic-session-context.js";
+import { startGatewayDiagnosticHeartbeat } from "./diagnostic.js";
 
 async function captureSessionLog(
   params: Omit<Parameters<typeof logWithSessionDiagnosticContext>[0], "level" | "format">,
@@ -176,33 +181,60 @@ describe("diagnostic session context", () => {
     },
   );
 
-  it("discards queued enrichment when its session is replaced", async () => {
-    const scope = { agentId: "main", sessionKey: "agent:main:main" };
-    await seedSessionTranscript({
-      ...scope,
-      sessionId: "previous",
-      messages: [{ role: "assistant", content: "previous private reply" }],
-    });
-    const ready = createDeferred();
-    const resume = createDeferred();
-    const read = sessionReads.withSessionDiagnosticTextInWorker;
-    vi.spyOn(sessionReads, "withSessionDiagnosticTextInWorker").mockImplementation(
-      async (...args) => {
-        ready.resolve();
-        await resume.promise;
-        await read(...args);
-      },
-    );
-    const message = captureSessionLog({ ...scope, activeSessionId: "previous" });
-    try {
-      await ready.promise;
-      await replaceSessionEntry(scope, { sessionId: "replacement", updatedAt: 2 });
-    } finally {
-      resume.resolve();
-      await message;
-    }
-    expect(await message).toBe("");
-  });
+  it.each(["its session is replaced", "diagnostics restart"])(
+    "discards queued enrichment when %s",
+    async (reason) => {
+      const clock = createGatewaySchedulerClock(Date.now());
+      const scheduler = createTestGatewayScheduler(clock.clock);
+      const scope = { agentId: "main", sessionKey: "agent:main:main" };
+      await seedSessionTranscript({
+        ...scope,
+        sessionId: "previous",
+        messages: [{ role: "assistant", content: "previous private reply" }],
+      });
+      const ready = createDeferred();
+      const resume = createDeferred();
+      const read = sessionReads.withSessionDiagnosticTextInWorker;
+      vi.spyOn(sessionReads, "withSessionDiagnosticTextInWorker").mockImplementation(
+        async (...args) => {
+          ready.resolve();
+          await resume.promise;
+          await read(...args);
+        },
+      );
+      const sink = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
+      startGatewayDiagnosticHeartbeat(scheduler, {}, { sampleLiveness: () => null });
+      const message = logWithSessionDiagnosticContext({
+        ...scope,
+        activeSessionId: "previous",
+        level: "warn",
+        format: (fields) => fields,
+      });
+      try {
+        await ready.promise;
+        if (reason === "its session is replaced") {
+          await replaceSessionEntry(scope, { sessionId: "replacement", updatedAt: 2 });
+        } else {
+          setDiagnosticsEnabledForProcess(false);
+          startGatewayDiagnosticHeartbeat(scheduler, {}, { sampleLiveness: () => null });
+          setDiagnosticsEnabledForProcess(true);
+          startGatewayDiagnosticHeartbeat(scheduler, {}, { sampleLiveness: () => null });
+        }
+      } finally {
+        resume.resolve();
+        try {
+          await message;
+        } finally {
+          await scheduler.stop();
+        }
+      }
+      if (reason === "its session is replaced") {
+        expect(sink).toHaveBeenCalledExactlyOnceWith("");
+      } else {
+        expect(sink).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each(["dashboard", "subagent", "internal-session-effects"])(
     "never exposes a %s incognito assistant reply to durable diagnostics",

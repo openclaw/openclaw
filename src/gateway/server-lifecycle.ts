@@ -625,10 +625,6 @@ export async function prepareGatewayLifecycle(params: {
     }
     const enabled = isDiagnosticsEnabled(config);
     setDiagnosticsEnabledForProcess(enabled);
-    if (!enabled) {
-      stopGatewayDiagnosticHeartbeat();
-      return;
-    }
     // Gateway lifecycle owns both this heartbeat job and the monitor
     // it samples, so startup failure and normal close tear them down together.
     startGatewayDiagnosticHeartbeat(runtime.scheduler, undefined, {

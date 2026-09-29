@@ -295,6 +295,65 @@ describe("diagnostic memory", () => {
     }
   });
 
+  it.each([
+    { reason: "rss_threshold", samples: [4000, 4000], rssCriticalBytes: 3000 },
+    { reason: "rss_growth", samples: [1000, 1350, 1700, 2050, 2400], rssCriticalBytes: 10_000 },
+  ])("keeps $reason retirement silent without consuming the report throttle", async (testCase) => {
+    setLoggerOverride({ level: "info", consoleLevel: "silent" });
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onInternalDiagnosticEvent((event) => events.push(event));
+    const pressure = channel("openclaw.memory.critical");
+    const retireIdle = vi.fn();
+    pressure.subscribe(retireIdle);
+    const thresholds = {
+      rssWarningBytes: 10_000,
+      rssCriticalBytes: testCase.rssCriticalBytes,
+      rssGrowthCriticalBytes: 500,
+      growthWindowMs: 10_000,
+      pressureRepeatMs: 60_000,
+    };
+    try {
+      for (const [index, rss] of testCase.samples.entries()) {
+        emitDiagnosticMemorySample(
+          { now: 1000 + index * 5000, memoryUsage: memoryUsage({ rss }), thresholds },
+          false,
+        );
+      }
+      await flushDiagnosticEvents();
+      expect(retireIdle).toHaveBeenCalledTimes(2);
+      expect(workerMemory.sampleTrackedWorkerMemory).not.toHaveBeenCalled();
+      expect(events).toEqual([]);
+
+      // Silent samples must not suppress the first diagnostic warning after re-enable.
+      for (const index of [testCase.samples.length, testCase.samples.length + 1]) {
+        emitDiagnosticMemorySample({
+          now: 1000 + index * 5000,
+          memoryUsage: memoryUsage({
+            rss: testCase.reason === "rss_growth" ? 1000 + index * 350 : 4000,
+          }),
+          thresholds,
+        });
+      }
+      await flushDiagnosticEvents();
+      expect(retireIdle).toHaveBeenCalledTimes(4);
+      expect(events.filter((event) => event.type === "diagnostic.memory.pressure")).toEqual([
+        expect.objectContaining({ level: "critical", reason: testCase.reason }),
+      ]);
+      expect(events.filter((event) => event.type === "log.record")).toEqual([
+        expect.objectContaining({
+          level: "WARN",
+          message: expect.stringContaining(
+            `memory pressure: level=critical reason=${testCase.reason}`,
+          ),
+          attributes: expect.objectContaining({ subsystem: "gateway/diagnostics/memory" }),
+        }),
+      ]);
+    } finally {
+      pressure.unsubscribe(retireIdle);
+      stop();
+    }
+  });
+
   it.each([1, 8, 16, 32])(
     "scales default heap pressure thresholds with a %i GiB V8 limit",
     (heapGiB) => {

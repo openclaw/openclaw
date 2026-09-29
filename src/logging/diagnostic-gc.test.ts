@@ -88,7 +88,7 @@ it("owns demand, queued GC batches, and disable/re-enable through the existing h
 
     setDiagnosticsEnabledForProcess(false);
     first.deliver([{ startTime: 150, duration: 99 }]);
-    stopGatewayDiagnosticHeartbeat();
+    start();
     expect(first.disconnect).toHaveBeenCalledTimes(1);
     now.mockReturnValue(200);
     setDiagnosticsEnabledForProcess(true);
@@ -110,5 +110,6 @@ it("owns demand, queued GC batches, and disable/re-enable through the existing h
   } finally {
     unsubscribe();
     publicUnsubscribe();
+    await scheduler.stop();
   }
 });

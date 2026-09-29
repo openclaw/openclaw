@@ -89,14 +89,17 @@ const state: DiagnosticMemoryState = {
 };
 
 // Convert Node's runtime shape into the diagnostic event contract.
-function normalizeMemoryUsage(memory: NodeJS.MemoryUsage): DiagnosticMemoryUsage {
+function normalizeMemoryUsage(
+  memory: NodeJS.MemoryUsage,
+  collectDiagnostics: boolean,
+): DiagnosticMemoryUsage {
   return {
     rssBytes: memory.rss,
     heapTotalBytes: memory.heapTotal,
     heapUsedBytes: memory.heapUsed,
     externalBytes: memory.external,
     arrayBuffersBytes: memory.arrayBuffers,
-    ...sampleTrackedWorkerMemory(),
+    ...(collectDiagnostics ? sampleTrackedWorkerMemory() : {}),
   };
 }
 
@@ -388,19 +391,25 @@ function logMemoryPressure(
   log.warn(message);
 }
 
-export function emitDiagnosticMemorySample(options?: {
-  now?: number;
-  memoryUsage?: NodeJS.MemoryUsage;
-  heapSizeLimitBytes?: number;
-  processMemoryLimitBytes?: number;
-  physicalMemoryBytes?: number;
-  isBunRuntime?: boolean;
-  uptimeMs?: number;
-  thresholds?: DiagnosticMemoryThresholds;
-  emitSample?: boolean;
-}): DiagnosticMemoryUsage {
+export function emitDiagnosticMemorySample(
+  options?: {
+    now?: number;
+    memoryUsage?: NodeJS.MemoryUsage;
+    heapSizeLimitBytes?: number;
+    processMemoryLimitBytes?: number;
+    physicalMemoryBytes?: number;
+    isBunRuntime?: boolean;
+    uptimeMs?: number;
+    thresholds?: DiagnosticMemoryThresholds;
+    emitSample?: boolean;
+  },
+  collectDiagnostics = true,
+): DiagnosticMemoryUsage {
   const now = options?.now ?? Date.now();
-  const memory = normalizeMemoryUsage(options?.memoryUsage ?? process.memoryUsage());
+  const memory = normalizeMemoryUsage(
+    options?.memoryUsage ?? process.memoryUsage(),
+    collectDiagnostics,
+  );
   const current = { ts: now, memory };
   const thresholds = resolveThresholds(
     options?.thresholds,
@@ -409,7 +418,7 @@ export function emitDiagnosticMemorySample(options?: {
     options?.physicalMemoryBytes ?? DEFAULT_PHYSICAL_MEMORY_BYTES,
     options?.isBunRuntime ?? DEFAULT_IS_BUN_RUNTIME,
   );
-  const shouldEmitSample = options?.emitSample !== false;
+  const shouldEmitSample = collectDiagnostics && options?.emitSample !== false;
 
   if (shouldEmitSample) {
     emitDiagnosticEvent({
@@ -424,7 +433,11 @@ export function emitDiagnosticMemorySample(options?: {
   if (pressure?.level === "critical") {
     channel("openclaw.memory.critical").publish(undefined);
   }
-  if (pressure && shouldEmitPressure(pressure, now, thresholds.pressureRepeatMs)) {
+  if (
+    collectDiagnostics &&
+    pressure &&
+    shouldEmitPressure(pressure, now, thresholds.pressureRepeatMs)
+  ) {
     emitDiagnosticEvent({
       type: "diagnostic.memory.pressure",
       ...pressure,
