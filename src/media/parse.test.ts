@@ -203,6 +203,47 @@ describe("splitMediaFromOutput", () => {
     );
   });
 
+  it.each([
+    // The directive pattern consumes one backtick pair around the payload before the references are read,
+    // exactly as it does on `origin/main`, so the whitespace inside still separates them. Letting the
+    // capture keep the backticks made the payload one quoted value and delivered the single filename
+    // `/tmp/a.png /tmp/b.png`, which exists nowhere.
+    ["MEDIA:`/tmp/a.png /tmp/b.png`", ["/tmp/a.png", "/tmp/b.png"]],
+    [
+      "MEDIA:`/tmp/first image.png /tmp/second image.png`",
+      ["/tmp/first image.png", "/tmp/second image.png"],
+    ],
+  ] as const)("reads a backtick-wrapped line as main reads it: %s", (input, mediaUrls) => {
+    expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });
+  });
+
+  it("separates every quoted member of a list, bare filenames included", () => {
+    // A bare filename is a reference on its own — `MEDIA:"second.png"` attaches it — so quoting two of them
+    // states two references, not one. Validating a member as if it were unquoted dropped it, and the
+    // fallback then welded the leftover onto its neighbour: `MEDIA:"second.png" "/tmp/first.png"` attached
+    // `/tmp/first.png` and leaked `"second.png"` into the visible reply text, while
+    // `MEDIA:"/tmp/first.png" "second.png"` attached `/tmp/first.png" "second.png`, which exists nowhere. A
+    // list's quote pairs already state where each reference ends, so no member is rebuilt into another.
+    for (const [input, mediaUrls] of [
+      ['MEDIA:"/tmp/first.png" "second.png"', ["/tmp/first.png", "second.png"]],
+      ['MEDIA:"second.png" "/tmp/first.png"', ["second.png", "/tmp/first.png"]],
+      ['MEDIA:"first.png" "second.png"', ["first.png", "second.png"]],
+      ["MEDIA:'/tmp/first.png' 'second.png'", ["/tmp/first.png", "second.png"]],
+      ['MEDIA:"/tmp/a.png" "b.png" "c.png"', ["/tmp/a.png", "b.png", "c.png"]],
+    ] as const) {
+      expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });
+    }
+    // The same two references written on two lines, which is the contract those lists have to match.
+    expectParsedMediaOutputCase('MEDIA:"/tmp/first.png"\nMEDIA:"second.png"', {
+      mediaUrls: ["/tmp/first.png", "second.png"],
+    });
+    // A member that is not a reference of its own stays visible text rather than joining its neighbour.
+    expectParsedMediaOutputCase('MEDIA:"/tmp/first.png" "second"', {
+      mediaUrls: ["/tmp/first.png"],
+      text: '"second"',
+    });
+  });
+
   it("keeps a quoted reference whole when its own value contains that quote", () => {
     // A quoted reference is one whitespace-delimited token, so a quote inside its value never ends the
     // token. Tokenizing on the quote itself cuts the signed URL short and leaks the rest into the
