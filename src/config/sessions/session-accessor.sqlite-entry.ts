@@ -70,17 +70,14 @@ import {
   readSessionEntriesByStatus,
   selectSessionEntryRows,
 } from "./session-accessor.sqlite-status.js";
-import type {
-  CapturedSessionEntryReadSource,
-  SessionEntryListScope,
-  SessionEntryReadScope,
-} from "./session-accessor.types.js";
+import type { SessionEntryListScope, SessionEntryReadScope } from "./session-accessor.types.js";
 import {
   assertCanonicalSessionKeyWrite,
   assertCanonicalSqliteSessionKeysCurrent,
 } from "./session-canonical-key.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
@@ -576,7 +573,16 @@ function buildInboundSessionCreationStamp(ctx: UpdateSessionLastRouteParams["ctx
   return buildSessionCreationStamp(
     ctx?.SessionCreation ?? {
       via: "channel",
-      ...(senderId ? { actor: { type: "human", source: "channel", id: senderId } } : {}),
+      ...(senderId
+        ? {
+            actor: {
+              type: "human",
+              source: "channel",
+              id: senderId,
+              label: ctx?.SenderName?.trim() || undefined,
+            },
+          }
+        : {}),
     },
   );
 }

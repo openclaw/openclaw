@@ -1145,6 +1145,29 @@
   color: inherit;
 }
 
+.chat-activity-group__label.chat-activity-group__label--live {
+  color: var(--text);
+  text-overflow: ellipsis;
+}
+
+@keyframes chat-activity-headline-enter {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-activity-group__label--live {
+    animation: chat-activity-headline-enter 160ms ease-out;
+  }
+}
+
 .chat-work-group__separator {
   width: 100%;
   height: 1px;

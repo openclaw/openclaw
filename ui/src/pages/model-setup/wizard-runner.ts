@@ -313,17 +313,8 @@ export class ModelSetupWizardRunner {
   }
 
   async cancel(options: { settleActiveRequest?: boolean } = {}): Promise<void> {
-    this.pendingSignIn?.window?.close();
-    this.pendingSignIn = undefined;
     const session = this.session;
-    session?.reservedWindow?.close();
-    clearTimeout(session?.externalInputTimer);
-    if (!options.settleActiveRequest) {
-      session?.abortController.abort();
-    }
-    this.session = null;
-    this.authLabel = undefined;
-    this.setState({ phase: "idle" });
+    this.clearSession(!options.settleActiveRequest);
     if (session) {
       await this.cancelSession(session);
     }
@@ -395,11 +386,17 @@ export class ModelSetupWizardRunner {
     if (options.retireOwner) {
       this.retirementGeneration += 1;
     }
+    this.clearSession();
+  }
+
+  private clearSession(abortRequest = true): void {
     this.pendingSignIn?.window?.close();
     this.pendingSignIn = undefined;
     this.session?.reservedWindow?.close();
     clearTimeout(this.session?.externalInputTimer);
-    this.session?.abortController.abort();
+    if (abortRequest) {
+      this.session?.abortController.abort();
+    }
     this.session = null;
     this.authLabel = undefined;
     this.setState({ phase: "idle" });

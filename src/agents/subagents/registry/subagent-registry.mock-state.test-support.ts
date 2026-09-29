@@ -1,6 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import { vi } from "vitest";
-import type { SessionEntry } from "../../../config/sessions.js";
 import type {
   listSessionEntriesCore,
   loadSessionEntry,
@@ -8,7 +7,10 @@ import type {
   SessionEntryReadScope,
 } from "../../../config/sessions/session-accessor.js";
 import type { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import type { captureSessionEntryCurrentRead } from "../../../config/sessions/session-entry-current-runtime.js";
+import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
 import type { SessionEntryReadWorkerOwner } from "../../../config/sessions/session-entry-read-runtime.js";
+import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
@@ -47,6 +49,42 @@ export function createSubagentRegistryMockState() {
     loadSessionEntry: vi.fn<typeof loadSessionEntry>(
       (scope): ReturnType<typeof loadSessionEntry> => mocks.entries[scope.sessionKey],
     ),
+    readSessionCurrent: vi.fn<
+      (scope: Pick<SessionEntryReadScope, "sessionKey">) => SessionEntryCurrentFacts | undefined
+    >((scope): SessionEntryCurrentFacts | undefined => {
+      const entry = mocks.entries[scope.sessionKey];
+      return (
+        entry && {
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+          lifecycleRunId: entry.lifecycleRunId,
+          activeWriterRunId: entry.activeWriterRunId,
+          subagentRecovery: entry.subagentRecovery,
+        }
+      );
+    }),
+    applySessionEntryExactReplacements: vi.fn<typeof applySessionEntryExactReplacements>(
+      async <T>(
+        params: Parameters<typeof applySessionEntryExactReplacements<T>>[0],
+      ): Promise<T> => {
+        const entries = (params.sessionKeys ?? Object.keys(mocks.entries)).flatMap((sessionKey) => {
+          const entry = mocks.entries[sessionKey];
+          return entry ? [{ sessionKey, entry: structuredClone(entry) }] : [];
+        });
+        const selectedKeys = new Set(entries.map(({ sessionKey }) => sessionKey));
+        const operation = await params.update(entries);
+        const replacements = [...(operation.replacements ?? [])].filter(({ sessionKey }) =>
+          selectedKeys.has(sessionKey),
+        );
+        if (replacements.length) {
+          params.assertCommitAllowed?.();
+          for (const { sessionKey, entry } of replacements) {
+            mocks.entries[sessionKey] = entry;
+          }
+        }
+        return operation.result;
+      },
+    ),
     listSessionEntriesCore: vi.fn<typeof listSessionEntriesCore>(
       (): ReturnType<typeof listSessionEntriesCore> =>
         Object.entries(mocks.entries).map(([sessionKey, entry]) => ({ sessionKey, entry })),
@@ -68,24 +106,6 @@ export function createSubagentRegistryMockState() {
         const next = options.replaceEntry ? (patch as SessionEntry) : { ...current, ...patch };
         mocks.entries[scope.sessionKey] = next;
         return next;
-      },
-    ),
-    applySessionEntryExactReplacements: vi.fn(
-      async <T>(
-        params: Parameters<typeof applySessionEntryExactReplacements<T>>[0],
-      ): Promise<T> => {
-        const entries = (params.sessionKeys ?? Object.keys(mocks.entries)).flatMap((sessionKey) => {
-          const entry = mocks.entries[sessionKey];
-          return entry ? [{ sessionKey, entry: structuredClone(entry) }] : [];
-        });
-        const operation = await params.update(entries);
-        params.assertCommitAllowed?.();
-        for (const { sessionKey, entry } of operation.replacements ?? []) {
-          if (mocks.entries[sessionKey]) {
-            mocks.entries[sessionKey] = entry;
-          }
-        }
-        return operation.result;
       },
     ),
     resolveAgentIdFromSessionKey: vi.fn((sessionKey: string) => {
@@ -144,6 +164,17 @@ export function createSubagentRegistryMockState() {
       loadSessionEntry: mocks.loadSessionEntry,
       loadSessionEntryReadOnly: mocks.loadSessionEntry,
       patchSessionEntryCore: mocks.patchSessionEntryCore,
+    },
+    captureSessionEntryCurrentRead: (
+      scope: Parameters<typeof captureSessionEntryCurrentRead>[0],
+      owner: Parameters<typeof captureSessionEntryCurrentRead>[1],
+    ): ReturnType<typeof captureSessionEntryCurrentRead> => {
+      owner.assertCurrent();
+      return {
+        kind: "native",
+        assertSourceCurrent: noop,
+        readCurrent: () => mocks.readSessionCurrent(scope),
+      };
     },
     withSessionEntryReadOnlyInWorker: async <T>(
       scope: SessionEntryReadScope,

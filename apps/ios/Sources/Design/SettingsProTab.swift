@@ -156,6 +156,10 @@ struct SettingsProTab: View {
                     self.refreshNotificationSettings()
                 }
             }
+            .onChange(of: self.appModel.isLocalGatewayFixtureEnabled) { _, _ in
+                // Leaving a fixture must reload the saved registry and credentials before they are editable.
+                self.syncSettingsState()
+            }
             .onChange(of: self.selectedAgentPickerId) { _, newValue in
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 self.appModel.setSelectedAgentId(trimmed.isEmpty ? nil : trimmed)

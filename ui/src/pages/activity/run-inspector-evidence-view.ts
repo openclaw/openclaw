@@ -194,18 +194,14 @@ function renderReceiptDetail(receipt: DecisionReceiptDisplayV1) {
         ${
           receipt.provenance.state === "verified"
             ? html`<dl class="run-inspector__values">
-                  <div>
-                    <dt>${t("activity.runInspector.decisions.durableOwnerLabel")}</dt>
-                    <dd>${renderRunInspectorSafeRef(receipt.provenance.producer)}</dd>
-                  </div>
-                </dl>
-                <p class="run-inspector__reason">
-                  ${t("activity.runInspector.decisions.ownerNote")}
-                </p>`
-            : html`<p class="run-inspector__reason">
-                ${t("activity.runInspector.decisions.ownerNote")}
-              </p>`
+                <div>
+                  <dt>${t("activity.runInspector.decisions.durableOwnerLabel")}</dt>
+                  <dd>${renderRunInspectorSafeRef(receipt.provenance.producer)}</dd>
+                </div>
+              </dl>`
+            : nothing
         }
+        <p class="run-inspector__reason">${t("activity.runInspector.decisions.ownerNote")}</p>
       </section>
       <section aria-labelledby="run-inspector-receipt-evidence">
         <h5 id="run-inspector-receipt-evidence">

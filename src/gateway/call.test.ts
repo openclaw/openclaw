@@ -16,6 +16,7 @@ import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { registerGatewayCallDeadlineTests } from "./call-deadline.test-support.js";
+import { registerGatewayCallDispatchPreparationTests } from "./call-dispatch-preparation.test-support.js";
 import { registerGatewayCallLocalBackendAuthTests } from "./call-local-backend-auth.test-support.js";
 import type { GatewayClientOptions, GatewayClientRequestOptions } from "./client.js";
 import { waitForFast } from "./client.test-support.js";
@@ -2423,58 +2424,23 @@ describe("callGateway error details", () => {
     expect(stopStarted).toBe(true);
   });
 
-  it("does not dispatch a request when its hello observer aborts the connection", async () => {
+  registerGatewayCallDispatchPreparationTests(() => {
     setLocalLoopbackGatewayConfig();
-    const controller = new AbortController();
-    const onSignalAbort = vi.fn();
-    const stop = vi.fn(async () => {});
-    gatewayClientStopAndWait = stop;
-
-    await expect(
-      callGateway({
-        method: "agent",
-        signal: controller.signal,
-        onHelloOk: () => controller.abort(),
-        onSignalAbort,
-      }),
-    ).rejects.toMatchObject({ name: "AbortError" });
-
-    expect(lastRequestOptions).toBeNull();
-    expect(onSignalAbort).not.toHaveBeenCalled();
-    expect(stop).toHaveBeenCalledOnce();
-  });
-
-  it("skips the signal abort hook before the primary request starts", async () => {
-    setLocalLoopbackGatewayConfig();
-
-    const controller = new AbortController();
-    const onSignalAbort = vi.fn(async () => undefined);
-    let startCalled = false;
-    let stopStarted = false;
-
-    gatewayClientStart = () => {
-      startCalled = true;
+    return {
+      call: callGateway,
+      request: () => lastRequestOptions,
+      setRequest: (request) => {
+        gatewayClientRequest = request;
+      },
+      setStart: (start) => {
+        gatewayClientStart = start;
+      },
+      setStop: (stop) => {
+        gatewayClientStopAndWait = stop;
+      },
+      hello: () => lastClientOptions?.onHelloOk?.(makeStubGatewayHello()),
+      close: (code, reason) => lastClientOptions?.onClose?.(code, reason),
     };
-    gatewayClientStopAndWait = async () => {
-      stopStarted = true;
-    };
-
-    const promise = callGateway({
-      method: "agent",
-      expectFinal: true,
-      signal: controller.signal,
-      onSignalAbort,
-    });
-
-    await waitForFast(() => {
-      expect(startCalled).toBe(true);
-    });
-    controller.abort();
-
-    await expect(promise).rejects.toThrow("gateway request aborted for agent");
-    expect(onSignalAbort).not.toHaveBeenCalled();
-    expect(lastRequestOptions).toBeNull();
-    expect(stopStarted).toBe(true);
   });
 
   it("does not inject wrapper timeout defaults into expectFinal requests", async () => {

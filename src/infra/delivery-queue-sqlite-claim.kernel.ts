@@ -76,7 +76,7 @@ export function transitionOwnedDeliveryQueueEntryInDatabase(
 function transitionDeliveryQueueEntryPlatformSendInDatabase(
   database: OpenClawStateDatabase,
   params: PlatformClaimParams,
-  operation: "claim" | "promote" | "dispatch",
+  operation: "claim" | "promote" | "dispatch" | "renew",
   transition: (entry: DeliveryQueueEntryState, now: number) => DeliveryQueueEntryState | undefined,
 ): boolean {
   return runSqliteImmediateTransactionSync(
@@ -168,40 +168,24 @@ export function renewDeliveryQueueEntryPlatformSendLeaseInDatabase(
     claimId: string;
   },
 ): number | undefined {
-  return runSqliteImmediateTransactionSync(
-    database.db,
-    () => {
-      const entry = loadDeliveryQueueEntryInDatabase(
-        database,
-        params.queueName,
-        params.id,
-        "pending",
-      );
-      const now = Date.now();
+  let expiresAt: number | undefined;
+  return transitionDeliveryQueueEntryPlatformSendInDatabase(
+    database,
+    params,
+    "renew",
+    (entry, now) => {
       if (
-        !entry ||
         entry.requiresProducerClaim !== true ||
         !hasLiveDeliveryQueueClaim(entry, params.claimId, now)
       ) {
         return undefined;
       }
-      const expiresAt = now + PLATFORM_SEND_OWNER_LEASE_MS;
-      return upsertDeliveryQueueEntryInDatabase(
-        {
-          queueName: params.queueName,
-          entry: { ...entry, availableAt: expiresAt },
-          updatePendingOnly: true,
-        },
-        database,
-      )
-        ? expiresAt
-        : undefined;
+      expiresAt = now + PLATFORM_SEND_OWNER_LEASE_MS;
+      return { ...entry, availableAt: expiresAt };
     },
-    {
-      databaseLabel: database.path,
-      operationLabel: `renew ${params.queueName} delivery platform send`,
-    },
-  );
+  )
+    ? expiresAt
+    : undefined;
 }
 
 /** Atomically fence the exact unexpired owner at the real provider boundary. */

@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
+import { captureSessionEntryCurrentRead } from "../../../config/sessions/session-entry-current-runtime.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import {
   runWithOwnedSessionTranscriptWrite,
@@ -125,6 +126,11 @@ const { withSessionEntryReadOnlyInWorker: readCanonicalSessionEntry } = await vi
 vi.mock("../../../config/sessions/session-accessor.sqlite-replacement-projection.js", () => ({
   applySessionEntryExactReplacements: mocks.applySessionEntryExactReplacements,
 }));
+vi.mock("../../../config/sessions/session-entry-current-runtime.js", { spy: true });
+const { captureSessionEntryCurrentRead: captureCanonicalSessionEntryCurrent } =
+  await vi.importActual<typeof import("../../../config/sessions/session-entry-current-runtime.js")>(
+    "../../../config/sessions/session-entry-current-runtime.js",
+  );
 
 vi.mock("../../../sessions/session-lifecycle-events.js", () => ({
   emitSessionLifecycleEvent: mocks.emitSessionLifecycleEvent,
@@ -294,8 +300,16 @@ describe("subagent registry seam flow", () => {
           ? mocks.withSessionEntryReadOnlyInWorker(...args)
           : readCanonicalSessionEntry(...args),
       );
+    vi.mocked(captureSessionEntryCurrentRead)
+      .mockReset()
+      .mockImplementation((scope, owner) =>
+        scope.storePath === mocks.resolveStorePath()
+          ? mocks.captureSessionEntryCurrentRead(scope, owner)
+          : captureCanonicalSessionEntryCurrent(scope, owner),
+      );
     mocks.listSessionEntriesCore.mockReset();
     mocks.patchSessionEntryCore.mockReset();
+    mocks.readSessionCurrent.mockReset();
     mocks.applySessionEntryExactReplacements.mockReset();
     mocks.runSubagentAnnounceFlow.mockReset().mockResolvedValue("delivered");
     wakeRequester.mockReset().mockImplementation(async (params) => {
@@ -2770,6 +2784,7 @@ describe("subagent registry seam flow", () => {
           },
           timeoutMs: 10_000,
           assertDispatchCurrent: expect.any(Function),
+          prepareDispatchCurrent: expect.any(Function),
         });
       });
       expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();

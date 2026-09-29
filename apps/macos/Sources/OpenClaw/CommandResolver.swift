@@ -7,13 +7,9 @@ enum CommandResolver {
     static let versionProbeTimeout: TimeInterval = 10
 
     static func gatewayEntrypoint(in root: URL) -> String? {
-        let distEntry = root.appendingPathComponent("dist/index.js").path
-        if FileManager().isReadableFile(atPath: distEntry) { return distEntry }
-        let openclawEntry = root.appendingPathComponent("openclaw.mjs").path
-        if FileManager().isReadableFile(atPath: openclawEntry) { return openclawEntry }
-        let binEntry = root.appendingPathComponent("bin/openclaw.js").path
-        if FileManager().isReadableFile(atPath: binEntry) { return binEntry }
-        return nil
+        ["dist/index.js", "openclaw.mjs", "bin/openclaw.js"]
+            .lazy.map { root.appendingPathComponent($0).path }
+            .first { FileManager().isReadableFile(atPath: $0) }
     }
 
     static func runtimeResolution(searchPaths: [String]?) async -> Result<RuntimeResolution, RuntimeResolutionError> {
@@ -151,35 +147,16 @@ enum CommandResolver {
     }
 
     private static func openclawManagedPaths(home: URL, profile: AppProfile) -> [String] {
-        let bases = [profile.stateDirectoryURL(homeDirectory: home)]
-        var paths: [String] = []
-        for base in bases {
-            let bin = base.appendingPathComponent("bin")
-            let nodeBin = base.appendingPathComponent("tools/node/bin")
-            if FileManager().fileExists(atPath: bin.path) {
-                paths.append(bin.path)
-            }
-            if FileManager().fileExists(atPath: nodeBin.path) {
-                paths.append(nodeBin.path)
-            }
-        }
-        return paths
+        let base = profile.stateDirectoryURL(homeDirectory: home)
+        return ["bin", "tools/node/bin"]
+            .map { base.appendingPathComponent($0).path }
+            .filter { FileManager().fileExists(atPath: $0) }
     }
 
     private static func nodeManagerBinPaths(home: URL) -> [String] {
-        var bins: [String] = []
-
-        // Volta
-        let volta = home.appendingPathComponent(".volta/bin")
-        if FileManager().fileExists(atPath: volta.path) {
-            bins.append(volta.path)
-        }
-
-        // asdf
-        let asdf = home.appendingPathComponent(".asdf/shims")
-        if FileManager().fileExists(atPath: asdf.path) {
-            bins.append(asdf.path)
-        }
+        var bins = [".volta/bin", ".asdf/shims"]
+            .map { home.appendingPathComponent($0).path }
+            .filter { FileManager().fileExists(atPath: $0) }
 
         // fnm
         bins.append(contentsOf: self.versionedNodeBinPaths(

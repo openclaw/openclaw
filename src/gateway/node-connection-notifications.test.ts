@@ -278,6 +278,31 @@ describe("node connection notification routing", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it("does not notify after shutdown interrupts the pairing-state read", async () => {
+    const source = node("new-node");
+    const desk = node("desk", { lastActiveAtMs: 100 });
+    const reading = createDeferred();
+    const pairing = createDeferred<boolean>();
+    const invoke = vi.fn(async () => ({ ok: true }));
+    const registryValue = registry({
+      listConnected: () => [source, desk],
+      isConnectionCurrentPairingState: async () => {
+        reading.resolve();
+        return await pairing.promise;
+      },
+      invoke,
+    });
+
+    schedule(registryValue, source);
+    const delivery = clock.advanceBy(PRIMARY_DELAY_MS);
+    await reading.promise;
+    scheduler.beginClose();
+    pairing.resolve(true);
+    await delivery;
+
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("joins an in-flight delivery during shutdown without scheduling its fallback", async () => {
     const source = node("new-node");
     const desk = node("desk", { lastActiveAtMs: 100 });
