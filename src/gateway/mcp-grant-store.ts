@@ -20,6 +20,8 @@ import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-polic
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import type { ExecMode } from "../infra/exec-approvals.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
@@ -129,6 +131,8 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   runtimeOwnerToken: string;
   /** Exact host admission retained outside the child-visible request context. */
   admittedRunContext?: AdmittedRunContext;
+  /** The minting run's Gateway request scope; the process-owned listener has none of its own. */
+  requestScope?: PluginRuntimeGatewayRequestScope;
   /** Trusted source-turn authority retained only by the host. */
   messageActionTurnCapability?: string;
   /** Original native creator scope, kept outside all child-visible context. */
@@ -262,11 +266,14 @@ export function mintMcpLoopbackClientGrant(
   if (!runtimeOwnerToken) {
     throw new Error("mintMcpLoopbackClientGrant: runtimeOwnerToken is required");
   }
+  const requestScope = getPluginRuntimeGatewayRequestScope();
   const grant: StoredMcpLoopbackClientGrant = {
     token: crypto.randomBytes(32).toString("hex"),
     context: structuredClone({ ...params.context, sessionKey }),
     runtimeOwnerToken,
     ...(params.admittedRunContext ? { admittedRunContext: params.admittedRunContext } : {}),
+    // Minted inside the run's own Gateway request, like in-process tool calls.
+    ...(requestScope ? { requestScope } : {}),
     ...(params.messageActionTurnCapability
       ? { messageActionTurnCapability: params.messageActionTurnCapability }
       : {}),
@@ -470,6 +477,7 @@ export function resolveMcpLoopbackClientGrant(params: {
       context: McpLoopbackRequestContext;
       captureKey: string;
       admittedRunContext: AdmittedRunContext;
+      requestScope?: PluginRuntimeGatewayRequestScope;
       messageActionTurnCapability?: string;
       mintCronRequesterGrant?: (signal?: AbortSignal) => CronCreatorAuthorityGrant;
       cronAuthorityCheck?: () => boolean;
@@ -512,6 +520,7 @@ export function resolveMcpLoopbackClientGrant(params: {
     context: structuredClone(grant.context),
     captureKey: grant.activeCaptureKey,
     admittedRunContext,
+    ...(grant.requestScope ? { requestScope: grant.requestScope } : {}),
     ...(grant.messageActionTurnCapability
       ? { messageActionTurnCapability: grant.messageActionTurnCapability }
       : {}),
