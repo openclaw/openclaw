@@ -355,6 +355,14 @@ static void FwpmStatus(size_t index,const char* operation,DWORD status) {
           static_cast<unsigned long>(status));
   fflush(stderr);
 }
+static void RequireFwpmReadback(size_t index,const char* field,bool matches,
+                                unsigned long long actual,unsigned long long expected) {
+  if(matches)return;
+  fprintf(stderr,"PHASE_E_FWPM_READBACK_MISMATCH:slot:%zu:%s:%llu:%llu\n",
+          index+1,field,actual,expected);
+  fflush(stderr);
+  throw std::string("PHASE_E_FWPM_OWNERSHIP_MISMATCH");
+}
 static std::string FwpmFilterAddFailure(size_t index,DWORD status) {
   return std::string("PHASE_E_FWPM_FILTER_ADD_FAILED:")+std::to_string(index+1)+":"+
          std::to_string(static_cast<unsigned long>(status));
@@ -390,21 +398,40 @@ static bool SecurityDescriptorMatchesSid(const FWP_BYTE_BLOB* blob,PSID expected
   if(!GetAce(dacl,0,&rawAce) || !rawAce)return false;
   auto* ace=static_cast<ACCESS_ALLOWED_ACE*>(rawAce);
   PSID actual=&ace->SidStart;
+  // BFE persists the condition ACE with READ_CONTROL in addition to the
+  // requested match right. Accept only that readback normalization (or the
+  // original form), while retaining a single exact-SID allow ACE.
+  const DWORD storedMask=FWP_ACTRL_MATCH_FILTER|READ_CONTROL;
   return ace->Header.AceType==ACCESS_ALLOWED_ACE_TYPE && ace->Header.AceFlags==0 &&
-         ace->Mask==FWP_ACTRL_MATCH_FILTER && IsValidSid(actual) && EqualSid(actual,expected);
+         (ace->Mask==FWP_ACTRL_MATCH_FILTER || ace->Mask==storedMask) &&
+         IsValidSid(actual) && EqualSid(actual,expected);
 }
 static void VerifyOwnedFilter(const FWPM_FILTER0* filter,const Account& account,size_t index) {
-  if(!filter || !SameGuid(filter->filterKey,SlotFilterKey(index)) || !SameGuid(filter->subLayerKey,kFwpmSublayer) ||
-     !SameGuid(filter->layerKey,FWPM_LAYER_ALE_AUTH_CONNECT_V4) || filter->action.type!=FWP_ACTION_BLOCK ||
-     filter->numFilterConditions!=1 || !SameGuid(filter->filterCondition[0].fieldKey,FWPM_CONDITION_ALE_USER_ID) ||
-     filter->filterCondition[0].matchType!=FWP_MATCH_EQUAL ||
-     filter->filterCondition[0].conditionValue.type!=FWP_SECURITY_DESCRIPTOR_TYPE ||
-     !filter->filterCondition[0].conditionValue.sd)
-    throw std::string("PHASE_E_FWPM_OWNERSHIP_MISMATCH");
+  RequireFwpmReadback(index,"filter",filter!=nullptr,filter?1:0,1);
+  RequireFwpmReadback(index,"filter-key",SameGuid(filter->filterKey,SlotFilterKey(index)),0,1);
+  RequireFwpmReadback(index,"layer-key",SameGuid(filter->layerKey,FWPM_LAYER_ALE_AUTH_CONNECT_V4),0,1);
+  RequireFwpmReadback(index,"sublayer-key",SameGuid(filter->subLayerKey,kFwpmSublayer),0,1);
+  RequireFwpmReadback(index,"action-type",filter->action.type==FWP_ACTION_BLOCK,
+                      filter->action.type,FWP_ACTION_BLOCK);
+  RequireFwpmReadback(index,"condition-count",filter->numFilterConditions==1,
+                      filter->numFilterConditions,1);
+  RequireFwpmReadback(index,"condition-array",filter->filterCondition!=nullptr,
+                      filter->filterCondition?1:0,1);
+  const auto& condition=filter->filterCondition[0];
+  RequireFwpmReadback(index,"condition-field",SameGuid(condition.fieldKey,FWPM_CONDITION_ALE_USER_ID),0,1);
+  RequireFwpmReadback(index,"condition-match-type",condition.matchType==FWP_MATCH_EQUAL,
+                      condition.matchType,FWP_MATCH_EQUAL);
+  RequireFwpmReadback(index,"condition-value-type",condition.conditionValue.type==FWP_SECURITY_DESCRIPTOR_TYPE,
+                      condition.conditionValue.type,FWP_SECURITY_DESCRIPTOR_TYPE);
+  RequireFwpmReadback(index,"security-descriptor-pointer",condition.conditionValue.sd!=nullptr,
+                      condition.conditionValue.sd?1:0,1);
   PSID sid=nullptr; if(!ConvertStringSidToSidW(account.sid.c_str(),&sid))throw std::string("PHASE_E_SID_RESOLUTION_FAILED");
-  bool exact=SecurityDescriptorMatchesSid(filter->filterCondition[0].conditionValue.sd,sid); LocalFree(sid);
-  if(!exact || filter->weight.type!=FWP_UINT8 || filter->weight.uint8!=kFwpmFilterWeight)
-    throw std::string("PHASE_E_FWPM_OWNERSHIP_MISMATCH");
+  bool exact=SecurityDescriptorMatchesSid(condition.conditionValue.sd,sid); LocalFree(sid);
+  RequireFwpmReadback(index,"security-descriptor",exact,exact?1:0,1);
+  RequireFwpmReadback(index,"weight-type",filter->weight.type==FWP_UINT8,
+                      filter->weight.type,FWP_UINT8);
+  RequireFwpmReadback(index,"weight-value",filter->weight.uint8==kFwpmFilterWeight,
+                      filter->weight.uint8,kFwpmFilterWeight);
 }
 static void ReconcileFwpm(const std::vector<Account>& accounts) {
   if(accounts.size()!=8)throw std::string("PHASE_E_FWPM_OWNERSHIP_MISMATCH"); HANDLE engine=nullptr;

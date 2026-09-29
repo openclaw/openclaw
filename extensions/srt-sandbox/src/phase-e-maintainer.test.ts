@@ -188,6 +188,7 @@ describe("Phase E maintainer policy", () => {
     expect(source).toContain("access.grfAccessPermissions=FWP_ACTRL_MATCH_FILTER");
     expect(source).toContain("control&SE_SELF_RELATIVE");
     expect(source).toContain("SecurityDescriptorMatchesSid");
+    expect(source).toContain("FWP_ACTRL_MATCH_FILTER|READ_CONTROL");
     expect(source).not.toContain("conditionValue.type=FWP_SID");
     expect(source).toContain("FwpmFilterGetByKey0");
     expect(source).toContain("VerifyOwnedFilter");
@@ -205,13 +206,34 @@ describe("Phase E maintainer policy", () => {
     expect(source).toContain('FwpmStatus(i,"filter-add",status)');
     expect(source).toContain('FwpmStage(i,"after-filter-add")');
   });
+  it("reports the exact WFP readback field before rejecting ownership", async () => {
+    const source = await import("node:fs/promises").then((fs) =>
+      fs.readFile(new URL("../native/phase-e-maintainer.cc", import.meta.url), "utf8"),
+    );
+    expect(source).toContain('"PHASE_E_FWPM_READBACK_MISMATCH:slot:%zu:%s:%llu:%llu\\n"');
+    for (const field of [
+      "filter-key",
+      "layer-key",
+      "sublayer-key",
+      "action-type",
+      "condition-count",
+      "condition-field",
+      "condition-match-type",
+      "condition-value-type",
+      "security-descriptor",
+      "weight-type",
+      "weight-value",
+    ]) {
+      expect(source).toContain(`RequireFwpmReadback(index,"${field}"`);
+    }
+  });
   it("uses a legal and ownership-verified WFP filter weight", async () => {
     const source = await import("node:fs/promises").then((fs) =>
       fs.readFile(new URL("../native/phase-e-maintainer.cc", import.meta.url), "utf8"),
     );
     expect(source).toContain("constexpr UINT8 kFwpmFilterWeight = 8");
     expect(source).toContain("filter.weight.uint8=kFwpmFilterWeight");
-    expect(source).toContain("filter->weight.uint8!=kFwpmFilterWeight");
+    expect(source).toContain("filter->weight.uint8==kFwpmFilterWeight");
     expect(source).not.toContain("filter.weight.uint8=0x80");
   });
   it("uses one locale-independent SID JSON conversion at native fact boundaries", async () => {
