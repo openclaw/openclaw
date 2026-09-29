@@ -5,6 +5,7 @@ import type { GatewayRequestContext } from "../../gateway/server-methods/types.j
 import { resolveWorkerToolAuthority } from "../../gateway/worker-environments/worker-tool-authority.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -277,6 +278,7 @@ describe("embedded run retry dispatch", () => {
     });
 
     const authority = resolveWorkerToolAuthority({
+      launchToolNames: WORKER_TOOL_NAMES,
       modelRef: { provider: "openai", model: "gpt-5.6-luna" },
       turn: result.preparedAttempt as unknown as SessionPlacementTurnParams,
     });
@@ -294,6 +296,7 @@ describe("embedded run retry dispatch", () => {
     const result = await dispatchExecSession({ sandbox: "required" });
 
     const authority = resolveWorkerToolAuthority({
+      launchToolNames: WORKER_TOOL_NAMES,
       modelRef: { provider: "openai", model: "gpt-5.6-luna" },
       turn: result.preparedAttempt as unknown as SessionPlacementTurnParams,
     });

@@ -13,6 +13,7 @@ import {
   type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { availableWorkerSlots } from "../shared/node-list-parse.js";
 import type { NodeWorkerBundleStatus } from "../shared/node-list-types.js";
 
 type NodeWorkerHostClientId =
@@ -249,6 +250,9 @@ export function resolveNodeWorkerSupervisorProof(
     workerHost: {
       ...declaration.workerHost,
       capacity: { ...declaration.workerHost.capacity },
+      ...(declaration.workerHost.launchToolNames !== undefined
+        ? { launchToolNames: [...declaration.workerHost.launchToolNames] }
+        : {}),
     },
     commands: [...node.commands],
   };
@@ -298,7 +302,7 @@ export function isNodeWorkerSupervisorProofCurrent(
     current.clientId === proof.clientId &&
     current.clientMode === proof.clientMode &&
     current.protocolFeature === proof.protocolFeature &&
-    (!requirements.launchEligibility || current.workerHost.capacity.available > 0) &&
+    (!requirements.launchEligibility || availableWorkerSlots(current.workerHost.capacity) > 0) &&
     (!requirements.environmentSession ||
       current.workerHost.environmentSession === NODE_WORKER_ENVIRONMENT_SESSION_VERSION) &&
     (!requirements.statusWait ||

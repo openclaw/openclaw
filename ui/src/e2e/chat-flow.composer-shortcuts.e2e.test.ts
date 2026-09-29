@@ -224,11 +224,10 @@ suite.define(() => {
           }),
         );
       }, composingDraft);
-      // A ready follow-up proves the composing input rerendered; Stop stays separate.
+      // Stop becoming a follow-up action proves the composing input rerendered the pane.
       await primary.waitFor({ state: "visible" });
       expect(await primary.isEnabled()).toBe(true);
-      await stop.waitFor({ state: "visible" });
-      expect(await stop.isEnabled()).toBe(true);
+      await stop.waitFor({ state: "detached" });
       expect(await composer.inputValue()).toBe(composingDraft);
       expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
       await page.keyboard.press("Escape");

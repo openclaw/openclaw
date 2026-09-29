@@ -78,7 +78,13 @@ export function createApplicationGateway(
     getModelCatalogTarget?: (gatewayUrl: string) => ModelCatalogTarget | undefined;
     clientOptions?: Pick<
       GatewayBrowserClientOptions,
-      "clientName" | "mode" | "platform" | "deviceFamily" | "instanceId" | "scopes"
+      | "clientName"
+      | "mode"
+      | "platform"
+      | "deviceFamily"
+      | "instanceId"
+      | "scopes"
+      | "nativeConnectAuth"
     >;
   } = {},
 ): ApplicationGateway {
@@ -392,6 +398,7 @@ export function createApplicationGateway(
       mode: options.clientOptions?.mode ?? "webchat",
       instanceId: options.clientOptions?.instanceId ?? generateUUID(),
       scopes: options.clientOptions?.scopes,
+      nativeConnectAuth: options.clientOptions?.nativeConnectAuth,
       get modelCatalog() {
         return client === nextClient
           ? metadataObserver.captureTarget(
@@ -472,7 +479,7 @@ export function createApplicationGateway(
         }
         everConnected = true;
         const canvasPluginSurfaceUrl = hello.pluginSurfaceUrls?.canvas?.trim() || null;
-        const canvasLeaseGeneration = canvasSurface.begin(nextClient);
+        const canvasLeaseGeneration = canvasSurface.begin(nextClient, hello.auth);
         setUnavailableDeadline("restartPending");
         setSnapshot({
           client: nextClient,

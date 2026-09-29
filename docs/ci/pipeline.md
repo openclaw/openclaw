@@ -143,6 +143,10 @@ compiler assertions in mixed runtime suites; their cases remain enabled.
 The Node Code Mode executor suite also stays on Node: its warm-worker cleanup
 requires diagnostics-channel delivery to preserve sibling subscribers when a
 callback unsubscribes during publication. Bun can skip the next subscriber.
+The plugin runtime retention proof (`src/plugins/runtime.retention.test.ts`) also
+stays on Node: JavaScriptCore can keep a released successor registry alive past
+forced collections without any retaining path, so its WeakRef checks are
+nondeterministic on Bun.
 The complete fake-timer lane also supports Bun. Control UI keeps its GC-sensitive
 retention proofs (`chat-pane-retained-presentation.test.ts`, `chat-thread.test.ts`,
 and `usage-page-details.test.ts`) on Node and runs the remaining files on Bun.

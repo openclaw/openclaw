@@ -1,4 +1,4 @@
-// Irc plugin module implements send behavior.
+import { randomUUID } from "node:crypto";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -11,7 +11,6 @@ import type { IrcClient } from "./client.js";
 import { connectIrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
 import { normalizeIrcMessagingTarget } from "./normalize.js";
-import { makeIrcMessageId } from "./protocol.js";
 import { getIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -120,7 +119,7 @@ export async function sendIrcMessages(
       client.sendPrivmsg(target, message.text, message.replyTo);
       recordIrcOutboundActivity(account.accountId);
 
-      const messageId = makeIrcMessageId();
+      const messageId = randomUUID();
       const result = {
         messageId,
         target,

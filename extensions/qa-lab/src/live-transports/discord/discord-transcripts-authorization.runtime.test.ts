@@ -15,9 +15,34 @@ import type { DiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function createEnvironment(outputDir: string) {
+  return {
+    configureScenario: vi.fn<DiscordQaScenarioEnvironment["configureScenario"]>(),
+    driverIdentity: { id: "423456789012345678", bot: true },
+    observedMessages: [],
+    outputDir,
+    runtimeEnv: {
+      guildId: "123456789012345678",
+      channelId: "223456789012345678",
+      voiceChannelId: "523456789012345678",
+      driverBotToken: "driver-token",
+      sutBotToken: "sut-token",
+      sutApplicationId: "323456789012345678",
+    },
+    scenario: {
+      id: "discord-transcripts-voice-authorization",
+      timeoutMs: 60_000,
+      title: "Discord transcript capture enforces voice authorization",
+    },
+    sutAccountId: "sut",
+    sutIdentity: { id: "323456789012345678", bot: true },
+  } satisfies DiscordQaScenarioEnvironment;
+}
+
 describe("Discord transcript authorization scenario runner", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("proves visible denial, authorized join/stop, and message cleanup", async () => {
@@ -27,27 +52,7 @@ describe("Discord transcript authorization scenario runner", () => {
       throw new Error("unexpected scenario run kind");
     }
     const configureTranscriptVoiceAccess = vi.fn(async () => {});
-    const environment = {
-      configureScenario: vi.fn(),
-      driverIdentity: { id: "423456789012345678", bot: true },
-      observedMessages: [],
-      outputDir,
-      runtimeEnv: {
-        guildId: "123456789012345678",
-        channelId: "223456789012345678",
-        voiceChannelId: "523456789012345678",
-        driverBotToken: "driver-token",
-        sutBotToken: "sut-token",
-        sutApplicationId: "323456789012345678",
-      },
-      scenario: {
-        id: "discord-transcripts-voice-authorization",
-        timeoutMs: 60_000,
-        title: "Discord transcript capture enforces voice authorization",
-      },
-      sutAccountId: "sut",
-      sutIdentity: { id: "323456789012345678", bot: true },
-    } as unknown as DiscordQaScenarioEnvironment;
+    const environment = createEnvironment(outputDir);
     const testing = discordQaScenarioSupport.testing;
     const send = vi
       .spyOn(testing, "sendChannelMessage")
@@ -149,5 +154,39 @@ describe("Discord transcript authorization scenario runner", () => {
         voiceDisconnected: true,
       },
     });
+  });
+
+  it("does not attest voice disconnect when Discord state reads fail", async () => {
+    vi.useFakeTimers();
+    const outputDir = tempDirs.make("discord-transcript-auth-unconfirmed-");
+    const environment = createEnvironment(outputDir);
+    const run = discordQaTranscriptsVoiceAuthorizationScenario.buildRun("323456789012345678");
+    const testing = discordQaScenarioSupport.testing;
+    vi.spyOn(testing, "getCurrentDiscordVoiceState").mockRejectedValue(
+      new Error("REST unavailable"),
+    );
+    const send = vi
+      .spyOn(testing, "sendChannelMessage")
+      .mockRejectedValue(new Error("REST unavailable"));
+    const result = runDiscordTranscriptsVoiceAuthorizationScenario(environment, {
+      cfg: {},
+      configureTranscriptVoiceAccess: vi.fn(),
+      run,
+      voiceChannel: { id: "523456789012345678", type: 2 },
+    });
+    const rejected = expect(result).rejects.toThrow("did not leave Discord voice channel");
+    await vi.advanceTimersByTimeAsync(20_000);
+    await rejected;
+    const evidence = JSON.parse(
+      await fs.readFile(
+        path.join(outputDir, "discord-transcripts-voice-authorization-evidence.json"),
+        "utf8",
+      ),
+    );
+    expect(evidence.cleanup).toMatchObject({
+      emergencyStopAttempted: true,
+      voiceDisconnected: false,
+    });
+    expect(send).toHaveBeenCalledTimes(2);
   });
 });

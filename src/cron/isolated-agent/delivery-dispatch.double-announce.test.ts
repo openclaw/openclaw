@@ -4154,14 +4154,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     beforeEach(() => {
       harness.resetRunCronIsolatedAgentTurnHarness();
+      loadCronSessionEntryLatestMock.mockImplementation(harness.loadSessionEntryMock);
       harness.mockRunCronFallbackPassthrough();
       harness.dispatchCronDeliveryMock.mockImplementation(dispatchCronDelivery);
-      harness.resolveCronDeliveryPlanMock.mockReturnValue({
-        requested: true,
-        mode: "announce",
-        channel: "telegram",
-        to: "123456",
-      });
+      harness.resolveCronDeliveryPlanMock.mockImplementation(resolveCronDeliveryPlan);
       harness.resolveDeliveryTargetMock.mockResolvedValue(makeResolvedDelivery());
       vi.mocked(deliverOutboundPayloads).mockImplementation(realDeliver);
       vi.stubEnv("OPENCLAW_TEST_FAST", "1");

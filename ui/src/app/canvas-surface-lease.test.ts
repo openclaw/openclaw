@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../api/gateway.ts";
 import { createCanvasSurfaceLease } from "./canvas-surface-lease.runtime.ts";
 
 beforeEach(() => {
@@ -53,6 +54,35 @@ function createLeaseHarness(request: (method: string, params: unknown) => Promis
 }
 
 describe("createCanvasSurfaceLease", () => {
+  it("stops retrying a forbidden renewal until a new lease starts", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValue(
+        new GatewayRequestError({ code: "FORBIDDEN", message: "missing scope: operator.read" }),
+      );
+    const { changes, clock, lease } = createLeaseHarness(request);
+    const helloUrl = "https://canvas.test/__openclaw__/cap/one";
+    lease.start(helloUrl);
+    await flushPromises();
+    await clock.advanceBy(57 * 60_000);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(clock.pendingCount).toBe(0);
+    expect(changes).toEqual([helloUrl]);
+
+    request.mockResolvedValue({
+      surface: "canvas",
+      pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/reconnected" },
+    });
+    lease.stop();
+    lease.start(helloUrl);
+    await flushPromises();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(changes.at(-1)).toBe("https://canvas.test/__openclaw__/cap/reconnected");
+    expect(clock.pendingCount).toBe(1);
+    lease.stop();
+  });
+
   it("seeds from hello, renews immediately, and honors the refreshed expiry", async () => {
     const request = vi
       .fn<(method: string, params: unknown) => Promise<unknown>>()

@@ -1,5 +1,8 @@
 // Loaded after hello so capability renewal does not inflate the startup chunk.
-import { resolveSafeTimeoutDelayMs } from "@openclaw/gateway-client/browser";
+import {
+  GatewayProtocolRequestError,
+  resolveSafeTimeoutDelayMs,
+} from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 const RENEWAL_LEAD_MS = 15_000;
@@ -97,7 +100,12 @@ export function createCanvasSurfaceLease(params: {
             : Math.max(MIN_RENEWAL_DELAY_MS, refreshed.expiresAtMs - Date.now() - RENEWAL_LEAD_MS);
         schedule(delayMs, expectedGeneration);
       })
-      .catch(() => handleFailure(expectedGeneration))
+      .catch((error: unknown) => {
+        if (error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN") {
+          return;
+        }
+        handleFailure(expectedGeneration);
+      })
       .finally(() => {
         if (inFlight?.promise === request) {
           inFlight = null;

@@ -146,20 +146,12 @@ function isSelfClosingTagRaw(raw: string): boolean {
     return false;
   }
   const beforeSlash = trimmed.charAt(trimmed.length - 2);
-  const tagBody = trimmed.slice(0, -1);
-  let hasAttributeSeparator = false;
-  for (const ch of tagBody) {
-    if (isAsciiWhitespace(ch)) {
-      hasAttributeSeparator = true;
-      break;
-    }
-  }
   return (
     !beforeSlash ||
     isAsciiWhitespace(beforeSlash) ||
     beforeSlash === '"' ||
     beforeSlash === "'" ||
-    !hasAttributeSeparator
+    !/[ \n\r\t\f]/.test(trimmed.slice(0, -1))
   );
 }
 

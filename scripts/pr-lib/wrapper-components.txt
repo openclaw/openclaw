@@ -1102,6 +1102,7 @@ src/plugins/plugin-native-reference.ts
 src/plugins/plugin-package-metadata-capture.ts
 src/plugins/plugin-peer-link.ts
 src/plugins/plugin-policy-id.ts
+src/plugins/plugin-provider-request-policy.ts
 src/plugins/plugin-registry-comparison.ts
 src/plugins/plugin-registry-contributions.ts
 src/plugins/plugin-registry-id-normalizer.ts
@@ -1397,6 +1398,7 @@ src/utils/utf8-truncate.ts
 src/utils/zod-parse.ts
 src/version.ts
 src/worker/protocol-record.ts
+src/worker/tool-authority.ts
 test/helpers/temp-dir.ts
 test/test-home-context.mts
 test/test-home-policy.mts

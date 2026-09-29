@@ -263,7 +263,10 @@ describe("command palette paste-only images", () => {
       await palette.updateComplete;
       if (outcome === "oversized" || outcome === "partial") {
         Object.assign(context.gateway.snapshot.hello!, {
-          policy: { attachments: { maxBytes: 65_536, maxImageBytes: 4 } },
+          policy: {
+            maxPayload: 25 * 1024 * 1024,
+            attachments: { maxBytes: 65_536, maxImageBytes: 4 },
+          },
         });
       }
       const state = new CommandPaletteLoadingState({ requestUpdate: () => {} });
