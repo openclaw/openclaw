@@ -161,7 +161,7 @@ export function createGatewaySubagentRuntime(
     let allowOverride = hasRequestScopeClient && canClientUseModelOverride(scope?.client ?? null);
     let allowSyntheticModelOverride = false;
     let policy: PluginSubagentOverridePolicy | undefined;
-    if (overrideRequested && !allowOverride && !hasRequestScopeClient) {
+    if (overrideRequested && !allowOverride) {
       policy = resolveFallbackModelOverridePolicy({
         policies: overridePolicies,
         pluginId: scope?.pluginId,

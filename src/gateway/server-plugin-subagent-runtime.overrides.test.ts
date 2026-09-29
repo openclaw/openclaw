@@ -5,7 +5,10 @@ import {
 } from "../agents/command/model-ref.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  withPluginRuntimeGatewayRequestScope,
+  withPluginRuntimePluginScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   createGatewaySubagentRuntime,
@@ -92,6 +95,65 @@ function run(override: { provider?: string; model?: string }) {
     }),
   );
 }
+
+function runInOperatorWriteRequest(override: { provider?: string; model?: string }) {
+  const context = { getRuntimeConfig: () => config } as GatewayRequestContext;
+  const runtime = createGatewaySubagentRuntime(
+    () => context,
+    resolvePluginSubagentOverridePolicies(config),
+  );
+
+  return withPluginRuntimeGatewayRequestScope(
+    {
+      context,
+      client: {
+        connect: { scopes: ["operator.write"] },
+      } as never,
+      isWebchatConnect: () => false,
+    },
+    () =>
+      withPluginRuntimePluginScope({ pluginId: "override-fixture" }, () =>
+        runtime.run({
+          sessionKey: "agent:worker:subagent:request-override",
+          message: "Use the selected model",
+          ...override,
+        }),
+      ),
+  );
+}
+
+describe("plugin subagent request-scoped override policy", () => {
+  it("allows an allowlisted plugin override inside an operator.write Gateway request", async () => {
+    config.models!.providers!.fixture!.models = [];
+
+    await expect(
+      runInOperatorWriteRequest({ provider: "fixture", model: "literal" }),
+    ).resolves.toMatchObject({ runId: "override-run" });
+
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a non-allowlisted plugin override inside an operator.write Gateway request", async () => {
+    config.models!.providers!.fixture!.models = [];
+
+    await expect(
+      runInOperatorWriteRequest({ provider: "fixture", model: "blocked" }),
+    ).rejects.toThrow(/not allowlisted/u);
+
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a plugin override without allowModelOverride inside an operator.write Gateway request", async () => {
+    config.models!.providers!.fixture!.models = [];
+    config.plugins!.entries!["override-fixture"]!.subagent!.allowModelOverride = false;
+
+    await expect(
+      runInOperatorWriteRequest({ provider: "fixture", model: "literal" }),
+    ).rejects.toThrow(/not trusted/u);
+
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+});
 
 describe("plugin subagent initial override policy", () => {
   it.each([{ provider: "fixture", model: "literal" }, { model: "fixture/literal" }])(
