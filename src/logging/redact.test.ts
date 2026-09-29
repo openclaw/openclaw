@@ -1206,6 +1206,13 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveText(`pass: "${value}"`, { mode: "tools" })).toBe('pass: "opaque…7890"');
     expect(redactSensitiveText(`pass = ${value}`, { mode: "tools" })).toBe("pass = opaque…7890");
     expect(redactSensitiveText(`pass= ${value}`, { mode: "tools" })).toBe("pass= opaque…7890");
+    expect(redactSensitiveText(`pass: ${value}`, { mode: "tools" })).toBe("pass: opaque…7890");
+    expect(redactSensitiveText(`smtp:\n  pass: ${value}\n  user: bot`, { mode: "tools" })).toBe(
+      "smtp:\n  pass: opaque…7890\n  user: bot",
+    );
+    expect(redactSensitiveText(`{ user: bot, pass: ${value} }`, { mode: "tools" })).toBe(
+      "{ user: bot, pass: opaque…7890 }",
+    );
   });
 
   it("masks common config-file secret assignments", () => {
