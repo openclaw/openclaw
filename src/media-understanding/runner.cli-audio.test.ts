@@ -350,6 +350,15 @@ describe("media-understanding CLI audio entry", () => {
       configLanguage: "fr",
       expected: "fr",
     },
+    // No language anywhere leaves {{Language}} unpopulated. applyTemplate substitutes
+    // an empty string rather than dropping the argument, so a flag-style arg pair keeps
+    // its flag and gains an empty value; CLI args stay literal by contract.
+    {
+      source: "unset language",
+      entryLanguage: undefined,
+      configLanguage: undefined,
+      expected: "",
+    },
   ])("applies the configured $source language to CLI templating", async (testCase) => {
     await withAudioFixture("openclaw-cli-language", async ({ ctx, media, cache }) => {
       await runCliEntry({
