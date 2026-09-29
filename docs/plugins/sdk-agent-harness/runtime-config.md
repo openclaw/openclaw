@@ -61,6 +61,31 @@ workspace or skill directories. Existing hosted sessions continue with omitted o
 `openai_hosted` configuration. This selection does not expand the MVP's existing
 tool or media capabilities.
 
+## Agents API HTTP MCP servers
+
+The Agents API harness reads enabled HTTP servers from `mcp.servers` and plugin MCP
+bundles. Set `transport: "streamable-http"`, a `url`, and optional `headers` on each
+server. HTTP connections run from the session's execution environment, including
+the self-hosted executor for private-network services. Native MCP owns discovery
+and execution; OpenClaw does not create another Gateway transport for these tools.
+
+Exact `toolFilter.include` names are forwarded as the native allowlist. Exclusions
+and session tool denials require an explicit include list and are subtracted from
+it. Wildcards, Gateway-managed OAuth, legacy SSE and custom TLS settings are not
+supported. Requester-scoped connections are omitted. Changes to effective MCP
+configuration or credentials require a session reset.
+
+Stdio MCP forwarding remains a deferred implementation gap. The executor's native
+MCP lifecycle will own those processes when support is added.
+
+Harness authors can reuse `loadAgentHarnessMcpConfig` from
+`openclaw/plugin-sdk/agent-harness-runtime` to merge enabled bundle and operator
+definitions with session server overrides. It returns static connection config,
+diagnostics, and the names of omitted requester-scoped servers, without opening
+connections. The same SDK exports `decodeHeaderEnvPlaceholder` for recognizing
+`${NAME}` and `Bearer ${NAME}` header references; the harness resolves the value
+for its own transport.
+
 ## Runtime strictness
 
 By default, OpenClaw uses `auto` provider/model runtime policy: registered

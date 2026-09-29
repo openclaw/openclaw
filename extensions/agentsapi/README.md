@@ -6,6 +6,45 @@ Linux environment. Select it through `agents.defaults.agentRuntime.id` or an age
 
 Multi-user Gateways are not supported by the Agents API MVP.
 
+Configure HTTP MCP servers through the shared `mcp.servers` configuration or an
+enabled plugin's MCP bundle. For example:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "documentation": {
+        "transport": "streamable-http",
+        "url": "https://developers.openai.com/mcp"
+      }
+    }
+  }
+}
+```
+
+The harness forwards these definitions as native Agents API MCP tools. Connections
+originate from the session's execution environment, so a self-hosted executor can
+reach private HTTP services. The Gateway does not open a second MCP connection.
+Configured servers are required: native initialization failures fail the turn.
+HTTP `headers` support explicit values and environment-variable references such as
+`Bearer ${MCP_ACCESS_TOKEN}`. The API receives these credentials to authenticate the
+MCP connection. Gateway OAuth profiles and requester-scoped connections are not
+forwarded. Configure headers for services requiring authentication.
+
+Exact `toolFilter.include` names become the native tool allowlist. Configured
+exclusions and session tool denials are subtracted from that list; exclusions
+without an explicit include list and wildcard filters are rejected. Legacy SSE and
+custom TLS settings are unsupported. Connection/request timeouts and parallel-call
+settings remain controlled by the native API. Changing the effective HTTP MCP
+configuration or credentials requires an OpenClaw session reset; existing native
+sessions are never silently replaced. Sessions without HTTP MCP configuration
+retain their existing bindings.
+
+Stdio MCP forwarding is a deferred implementation gap. Command-based servers are
+not forwarded, and OpenClaw does not start them on the Gateway for this harness.
+The Agents API already supports executor-managed stdio MCP processes; forwarding
+their command, arguments, working directory and environment is future adapter work.
+
 Ordinary conversation attempts run OpenClaw's shared `before_prompt_build` hook,
 including tool-authorized recall and heartbeat prompt contributions. Per-turn
 `prependContext` and `appendContext` are applied on both new and resumed sessions.
