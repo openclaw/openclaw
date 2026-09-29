@@ -3,7 +3,11 @@
  */
 import { describe, expect, it } from "vitest";
 import { mergeAssistantText, type AssistantTextSnapshot } from "./agent-event-assistant-text.js";
-import { capLiveAssistantText } from "./live-chat-projector.js";
+import {
+  attachLiveAssistantItemScope,
+  capLiveAssistantText,
+  projectLiveAssistantBufferDelta,
+} from "./live-chat-projector.js";
 
 const LIVE_CHAT_BUFFER_CHARS = 500_000;
 
@@ -62,6 +66,55 @@ describe("server chat stream text merge", () => {
 
     expect(result).toHaveLength(LIVE_CHAT_BUFFER_CHARS);
     expect(result.endsWith("bbbb")).toBe(true);
+  });
+
+  it("rebases the current item offset when the live cap retires its prefix", () => {
+    const cache = { itemStartOffset: LIVE_CHAT_BUFFER_CHARS };
+    const merged = mergeAssistantText(
+      { text: "x".repeat(LIVE_CHAT_BUFFER_CHARS) },
+      { itemId: "answer", text: "current" },
+      "live",
+    );
+    const capped = capLiveAssistantText(merged, cache);
+    const projected = attachLiveAssistantItemScope(
+      { text: capped, suppress: false },
+      { scope: merged.scope },
+    );
+
+    expect(projected.itemStartOffset).toBe(capped.indexOf("current"));
+    expect(cache.itemStartOffset).toBeUndefined();
+  });
+
+  it("measures the current item offset after suppressing a silent prefix", () => {
+    const merged = mergeAssistantText(
+      mergeAssistantText({ text: "" }, { itemId: "silent", text: "NO_REPLY" }, "live"),
+      { itemId: "commentary", text: "Visible commentary" },
+      "live",
+    );
+    const projected = attachLiveAssistantItemScope(
+      { text: "Visible commentary", suppress: false },
+      { scope: merged.scope },
+    );
+
+    expect(projected).toMatchObject({ itemId: "commentary", itemStartOffset: 0 });
+  });
+
+  it("waits to announce a new item until a paced frame reaches its boundary", () => {
+    const projected = {
+      text: "Previous.\n\nCurrent.",
+      suppress: false,
+      itemId: "current",
+      itemStartOffset: "Previous.\n\n".length,
+    };
+
+    expect(projectLiveAssistantBufferDelta(projected, null, "Previous.")).toEqual({
+      deltaText: "Previous.",
+      replace: true,
+    });
+    expect(projectLiveAssistantBufferDelta(projected, null, projected.text)).toMatchObject({
+      itemId: "current",
+      itemStartOffset: "Previous.\n\n".length,
+    });
   });
 
   it("does not resurrect a discarded scoped prefix after a shorter correction", () => {

@@ -28,6 +28,35 @@ describe("live chat directive projection", () => {
     }
   });
 
+  it("does not reproject a long prior item for every later keyed delta", () => {
+    const regions = vi.spyOn(codeRegions, "findCodeRegions");
+    const ownership = vi.spyOn(codeRegions, "findCodeOwnership");
+    const state = createChatRunState();
+    const prior = `The marker is \`[[reply_to_current]]\`.\n\n${"x".repeat(200_000)}`;
+    try {
+      state.updateBuffer("reply", { itemId: "prior", text: prior });
+      state.resolveBuffer("reply");
+      state.updateBuffer("reply", { itemId: "current", text: "current" });
+      expect(state.resolveBuffer("reply").itemStartOffset).toBe(prior.length + 2);
+      regions.mockClear();
+      ownership.mockClear();
+
+      for (let index = 0; index < 100; index++) {
+        state.updateBuffer("reply", { itemId: "current", delta: "!" });
+        state.resolveBuffer("reply");
+      }
+
+      const parsedChars = [...regions.mock.calls, ...ownership.mock.calls].reduce(
+        (total, [text]) => total + text.length,
+        0,
+      );
+      expect(parsedChars).toBeLessThan(prior.length);
+    } finally {
+      regions.mockRestore();
+      ownership.mockRestore();
+    }
+  });
+
   it.each([
     {
       name: "a closing backtick restores a previously stripped marker",

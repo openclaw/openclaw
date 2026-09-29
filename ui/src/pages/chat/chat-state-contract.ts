@@ -67,6 +67,9 @@ export type ChatState = StreamCausalBoundaryState & {
   providerPolicyNotice?: ProviderPolicyNotice | null;
   /** Producer-cumulative text; visible tails derive from the segment baseline. */
   chatStream: string | null;
+  /** Assistant item that owns the current cumulative chat delta, when identified. */
+  chatStreamItemId?: string;
+  chatStreamItemStartOffset?: number;
   chatStreamStartedAt: number | null;
   chatRunStartup?: ChatRunStartupState | null;
   lastError: string | null;

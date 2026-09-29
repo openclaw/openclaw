@@ -3891,6 +3891,8 @@ public struct ChatDeltaEvent: Codable, Sendable {
     public let state: String
     public let message: AnyCodable?
     public let deltatext: String
+    public let itemid: String?
+    public let itemstartoffset: Int?
     public let replace: Bool?
     public let usage: AnyCodable?
 
@@ -3903,6 +3905,8 @@ public struct ChatDeltaEvent: Codable, Sendable {
         state: String,
         message: AnyCodable? = nil,
         deltatext: String,
+        itemid: String? = nil,
+        itemstartoffset: Int? = nil,
         replace: Bool? = nil,
         usage: AnyCodable? = nil)
     {
@@ -3914,6 +3918,8 @@ public struct ChatDeltaEvent: Codable, Sendable {
         self.state = state
         self.message = message
         self.deltatext = deltatext
+        self.itemid = itemid
+        self.itemstartoffset = itemstartoffset
         self.replace = replace
         self.usage = usage
     }
@@ -3927,6 +3933,8 @@ public struct ChatDeltaEvent: Codable, Sendable {
         case state
         case message
         case deltatext = "deltaText"
+        case itemid = "itemId"
+        case itemstartoffset = "itemStartOffset"
         case replace
         case usage
     }

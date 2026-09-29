@@ -5,9 +5,15 @@ import type { AgentEventPayload } from "../infra/agent-events.js";
 import { mergeAssistantText, type AssistantTextSnapshot } from "./agent-event-assistant-text.js";
 import type { ChatCanvasBlock } from "./chat-display-projection.canvas.js";
 import {
+  attachLiveAssistantItemScope,
   capLiveAssistantText,
   createLiveAssistantTextProjection,
+  projectLiveAssistantBufferDelta,
   projectLiveAssistantBufferedText,
+  refreshLiveItemOffsetCache,
+  type LiveAssistantBufferDelta,
+  type LiveAssistantBufferedProjection,
+  type LiveAssistantDisplayState,
 } from "./live-chat-projector.js";
 import type { ChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
 import { updateChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
@@ -95,15 +101,6 @@ type PendingLiveTextFlush = {
   flush: () => void;
 };
 
-type LiveDisplayState = {
-  projector: ReturnType<typeof createLiveAssistantTextProjection>;
-  current: ReturnType<ReturnType<typeof createLiveAssistantTextProjection>["replace"]>;
-  pendingRawDelta?: string | null;
-  reset?: boolean;
-  unsentDelta: string | null;
-  sentText?: string;
-};
-
 type ChatRunRecord = {
   lastActivityAt: number;
   registrations?: ChatRunEntry[];
@@ -113,7 +110,7 @@ type ChatRunRecord = {
   /** Retire queued connection snapshots when this buffering generation is cleared. */
   liveTextGroup?: AbortController;
   liveTextEpoch?: object;
-  display?: LiveDisplayState;
+  display?: LiveAssistantDisplayState;
   planSnapshot?: ChatRunPlanSnapshot;
   progressSnapshot?: ChatRunProgressSnapshot;
   canvasBlocks?: ChatCanvasBlock[];
@@ -217,15 +214,9 @@ export type ChatRunState = {
   toolEventRecipients: ToolEventRecipientRegistry;
   /** Acquire mutable state and record activity; readers use runs.get. */
   getOrCreate: (runId: string) => ChatRunRecord;
-  resolveBuffer: (
-    runId: string,
-    options?: { final?: boolean },
-  ) => { text: string; suppress: boolean };
+  resolveBuffer: (runId: string, options?: { final?: boolean }) => LiveAssistantBufferedProjection;
   updateBuffer: (runId: string, input: Parameters<typeof mergeAssistantText>[1]) => string;
-  takeBufferDelta: (
-    runId: string,
-    text: string,
-  ) => { deltaText: string; replace?: true } | undefined;
+  takeBufferDelta: (runId: string, text: string) => LiveAssistantBufferDelta | undefined;
   flushPendingText: (runId: string) => void;
   hasAbortMarker: (runId: string) => boolean;
   deleteAbortMarker: (runId: string) => void;
@@ -295,6 +286,7 @@ export function createChatRunState(): ChatRunState {
       input.managedMediaUrls.forEach((url) => urls.add(url));
       if (display && urls.size !== previousSize) {
         display.reset = true;
+        delete display.itemStartOffset;
       }
     }
     const snapshot = mergeAssistantText(
@@ -302,8 +294,9 @@ export function createChatRunState(): ChatRunState {
       input,
       "live",
     );
+    refreshLiveItemOffsetCache(display, record.assistantScope, snapshot.scope, input.replace);
     record.assistantScope = snapshot.scope;
-    const text = capLiveAssistantText(snapshot);
+    const text = capLiveAssistantText(snapshot, display);
     record.rawBuffer = text;
     if (display) {
       display.reset ||= text.length !== snapshot.text.length || input.replace === true;
@@ -320,9 +313,17 @@ export function createChatRunState(): ChatRunState {
     if (!record || record.bufferIsCurrent?.() === false) {
       return projectLiveAssistantBufferedText("");
     }
+    const withAssistantScope = <T extends { text: string; suppress: boolean }>(projected: T) => {
+      return attachLiveAssistantItemScope(projected, {
+        scope: record.assistantScope,
+        managedMediaUrls: record.managedMediaUrls,
+        final: options?.final,
+        cache: record.display,
+      });
+    };
     const rawText = record.rawBuffer;
     if (rawText === undefined) {
-      return projectLiveAssistantBufferedText(record.buffer ?? "");
+      return withAssistantScope(projectLiveAssistantBufferedText(record.buffer ?? ""));
     }
     const createProjector = () =>
       createLiveAssistantTextProjection({
@@ -331,7 +332,7 @@ export function createChatRunState(): ChatRunState {
       });
     // Finalization releases ambiguous tails without changing the live projection.
     if (options?.final) {
-      return createProjector().replace(rawText);
+      return withAssistantScope(createProjector().replace(rawText));
     }
     let display = record.display;
     if (!display) {
@@ -359,6 +360,9 @@ export function createChatRunState(): ChatRunState {
         delta == null
           ? display.projector.replace(rawText)
           : display.projector.append(delta, rawText);
+      if (display.current.delta === null) {
+        delete display.itemStartOffset;
+      }
       display.unsentDelta =
         display.unsentDelta !== null && display.current.delta !== null
           ? display.unsentDelta + display.current.delta
@@ -367,7 +371,7 @@ export function createChatRunState(): ChatRunState {
       delete display.reset;
     }
     record.buffer = display.current.text;
-    return display.current;
+    return withAssistantScope(display.current);
   };
 
   const takeBufferDelta = (runId: string, text: string) => {
@@ -390,11 +394,7 @@ export function createChatRunState(): ChatRunState {
             : null;
     display.sentText = text;
     display.unsentDelta = text === visible ? "" : null;
-    return append === null
-      ? { deltaText: text, replace: true as const }
-      : append
-        ? { deltaText: append }
-        : undefined;
+    return projectLiveAssistantBufferDelta(projected, append, text);
   };
 
   return {

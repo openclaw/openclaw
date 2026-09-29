@@ -73,6 +73,8 @@ function connect(
       message?: unknown;
       data?: { text?: string; delta?: string };
       state?: string;
+      itemId?: string;
+      itemStartOffset?: number;
     };
   }> = [];
   const socket = Object.assign(new EventEmitter(), {
@@ -198,7 +200,12 @@ it("sends append-only wire text while retaining snapshots for observers and late
     const late = connect(clients, "late");
     emit(2, undefined, " world");
     expect(frames.filter((frame) => frame.event === "chat").map((frame) => frame.payload)).toEqual([
-      expect.objectContaining({ message: expect.any(Object), deltaText: "Hello" }),
+      expect.objectContaining({
+        message: expect.any(Object),
+        deltaText: "Hello",
+        itemId: "answer",
+        itemStartOffset: 0,
+      }),
       expect.not.objectContaining({ message: expect.anything() }),
     ]);
     expect(frames.findLast((frame) => frame.event === "agent")?.payload.data).toEqual({
@@ -238,6 +245,55 @@ it("sends append-only wire text while retaining snapshots for observers and late
         .map(({ event, payload }) => ({ event, payload })),
     );
     expect(chatOnly.map(({ seq }) => seq)).toEqual(chatOnly.map((_, index) => index + 1));
+  } finally {
+    handler.dispose();
+    chatRunState.clear();
+  }
+});
+
+it("sends a visible item's boundary after suppressing a silent predecessor", () => {
+  vi.useFakeTimers();
+  const harness = createHarness();
+  const clients = new GatewayClientRegistry();
+  const frames = connect(clients, "silent-prefix-reader");
+  const broadcaster = createGatewayBroadcaster({ clients });
+  harness.broadcast.mockImplementation(broadcaster.broadcast);
+  harness.broadcastToConnIds.mockImplementation(broadcaster.broadcastToConnIds);
+  const { handler, chatRunState } = harness;
+  registerChatRun(
+    chatRunState,
+    "silent-prefix-run",
+    "agent:main:silent-prefix",
+    "silent-prefix-run",
+  );
+  try {
+    emitAgentEvent(
+      handler,
+      "silent-prefix-run",
+      "assistant",
+      { itemId: "silent", text: "NO_REPLY", delta: "NO_REPLY" },
+      { seq: 1 },
+    );
+    chatRunState.flushPendingText("silent-prefix-run");
+    emitAgentEvent(
+      handler,
+      "silent-prefix-run",
+      "assistant",
+      {
+        itemId: "commentary",
+        text: "Visible commentary",
+        delta: "Visible commentary",
+      },
+      { seq: 2 },
+    );
+    chatRunState.flushPendingText("silent-prefix-run");
+
+    expect(frames.findLast((frame) => frame.event === "chat")?.payload).toMatchObject({
+      deltaText: "Visible commentary",
+      itemId: "commentary",
+      itemStartOffset: 0,
+      message: { content: [{ type: "text", text: "Visible commentary" }] },
+    });
   } finally {
     handler.dispose();
     chatRunState.clear();

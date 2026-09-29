@@ -35,6 +35,7 @@ import { appendChatMessageToCache } from "./session-message-cache.ts";
 import {
   latestStreamBoundaryRunId,
   reconcileTerminalStreamBoundary,
+  rolloverChatStream,
 } from "./stream-causal-boundary.ts";
 import {
   appendTerminalAssistantMessage,
@@ -60,6 +61,38 @@ function isPendingLocalChatRun(state: ChatState, runId: string): boolean {
 function normalizeAbortedAssistantMessage(message: unknown): Record<string, unknown> | null {
   const candidate = asRecord(message);
   return candidate?.role === "assistant" && Array.isArray(candidate.content) ? candidate : null;
+}
+
+function rebasePreviousItemStart(
+  previousStream: string | null,
+  previousStart: number | undefined,
+  nextPrefix: string,
+): number | undefined {
+  if (previousStream === null || previousStart === undefined) {
+    return undefined;
+  }
+  const previousItem = previousStream.slice(previousStart);
+  if (!previousItem) {
+    return undefined;
+  }
+  const comparablePrefix = nextPrefix.replace(/(?:\r?\n){1,2}$/u, "");
+  const previousPrefix = previousStream.slice(0, previousStart);
+  if (
+    comparablePrefix.startsWith(previousPrefix) &&
+    comparablePrefix.slice(previousStart).startsWith(previousItem)
+  ) {
+    return previousStart;
+  }
+  for (
+    let retainedStart = comparablePrefix.lastIndexOf(previousItem);
+    retainedStart >= 0;
+    retainedStart = comparablePrefix.lastIndexOf(previousItem, retainedStart - 1)
+  ) {
+    if (retainedStart === 0 || /(?:\r?\n){2}$/u.test(comparablePrefix.slice(0, retainedStart))) {
+      return retainedStart;
+    }
+  }
+  return previousStart === 0 || previousItem.endsWith(comparablePrefix) ? 0 : undefined;
 }
 
 function formatGatewayErrorDetail(payload: ChatEventPayload): string | null {
@@ -364,8 +397,45 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       !isSilentReplyStream(next) &&
       !isAssistantHeartbeatAckForDisplay(payload.message)
     ) {
+      const itemStartOffset =
+        Number.isInteger(payload.itemStartOffset) &&
+        (payload.itemStartOffset ?? -1) >= 0 &&
+        (payload.itemStartOffset ?? Number.POSITIVE_INFINITY) <= next.length
+          ? payload.itemStartOffset
+          : undefined;
+      if (
+        payload.runId &&
+        payload.itemId &&
+        state.chatStreamItemId &&
+        payload.itemId !== state.chatStreamItemId &&
+        itemStartOffset !== undefined
+      ) {
+        const nextPrefix = next.slice(0, itemStartOffset);
+        const rebasedPreviousStart = rebasePreviousItemStart(
+          state.chatStream,
+          state.chatStreamItemStartOffset,
+          nextPrefix,
+        );
+        if (rebasedPreviousStart !== undefined) {
+          state.chatStream = nextPrefix;
+          state.chatStreamItemStartOffset = rebasedPreviousStart;
+        } else if (payload.replace) {
+          state.chatStream = nextPrefix;
+          state.chatStreamItemId = undefined;
+          state.chatStreamItemStartOffset = undefined;
+        }
+        rolloverChatStream(state, { runId: payload.runId });
+      }
       state.chatStream = next;
-      reconcilePersistedAssistantStream(state);
+      if (payload.itemId !== undefined) {
+        state.chatStreamItemId = payload.itemId;
+        state.chatStreamItemStartOffset = itemStartOffset;
+      }
+      reconcilePersistedAssistantStream(
+        state,
+        payload.itemId,
+        itemStartOffset === undefined ? undefined : next.slice(0, itemStartOffset),
+      );
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizedFinalMessage;

@@ -1,3 +1,4 @@
+import { readAssistantStreamSegmentIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
@@ -159,6 +160,16 @@ export function buildChatItems(
   const persistedCanvasIdentities = new Set<string>();
   const normalizedHistory = history.map(safeNormalizeMessage);
   const historyItems = buildMessageItems(history);
+  const persistedCommentaryKeys = new Map<string, string>();
+  for (const [index, message] of history.entries()) {
+    const identity = readAssistantStreamSegmentIdentity(message);
+    if (identity) {
+      persistedCommentaryKeys.set(
+        `${identity.runId ?? ""}\u0000${identity.itemId}`,
+        historyItems[index]!.key,
+      );
+    }
+  }
   let canvasTurn: {
     previews: { preview: CanvasToolPreview; item: (typeof historyItems)[number] }[];
     lastMatchingAssistantIndex: number;
@@ -398,14 +409,30 @@ export function buildChatItems(
     });
   }
   const afterBoundaryBySegment = new Map<ChatStreamSegment, string>();
+  const afterPersistedCommentaryBySegment = new Map<ChatStreamSegment, string>();
+  const latestPersistedCommentaryByRun = new Map<string, string>();
   let latestBoundaryRunId: string | undefined;
   for (const segment of segments) {
+    const segmentRunId = normalizeOptionalString(segment.runId) ?? "";
+    const persistedCommentaryKey = latestPersistedCommentaryByRun.get(segmentRunId);
+    if (persistedCommentaryKey) {
+      afterPersistedCommentaryBySegment.set(segment, persistedCommentaryKey);
+    }
     const afterBoundaryRunId =
       normalizeOptionalString(segment.afterBoundaryRunId) ?? latestBoundaryRunId;
     if (afterBoundaryRunId) {
       afterBoundaryBySegment.set(segment, afterBoundaryRunId);
     }
     latestBoundaryRunId = normalizeOptionalString(segment.boundaryRunId) ?? latestBoundaryRunId;
+    const retiredItemId = normalizeOptionalString(segment.retiredItemId);
+    if (segment.persisted === true && retiredItemId) {
+      const key =
+        persistedCommentaryKeys.get(`${segmentRunId}\u0000${retiredItemId}`) ??
+        persistedCommentaryKeys.get(`\u0000${retiredItemId}`);
+      if (key) {
+        latestPersistedCommentaryByRun.set(segmentRunId, key);
+      }
+    }
   }
   const keyedSegments = segments.filter(streamSegmentHasItemId);
   const indexedSegments = segments.filter(
@@ -466,6 +493,12 @@ export function buildChatItems(
   }
   const appendStreamSegment = (segment: ChatStreamSegment, key: string, text: string) => {
     const afterBoundaryRunId = afterBoundaryBySegment.get(segment);
+    const persistedCommentaryKey = afterPersistedCommentaryBySegment.get(segment);
+    const bounds = resolveProjectionBounds(
+      segment.runId,
+      segment.boundaryRunId,
+      afterBoundaryRunId,
+    );
     projections.push({
       item: {
         kind: "stream",
@@ -476,7 +509,7 @@ export function buildChatItems(
         ...optionalRunIdentity(segment.runId),
         ...optionalBoundaryIdentity(afterBoundaryRunId ?? segment.runId),
       },
-      bounds: resolveProjectionBounds(segment.runId, segment.boundaryRunId, afterBoundaryRunId),
+      bounds: persistedCommentaryKey ? { ...bounds, afterKey: persistedCommentaryKey } : bounds,
     });
   };
   let previousAccumulatedStreamText: string | null = null;

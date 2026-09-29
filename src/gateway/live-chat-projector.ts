@@ -34,8 +34,53 @@ import {
 
 const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
 
+export type LiveAssistantBufferedProjection = {
+  text: string;
+  suppress: boolean;
+  itemId?: string;
+  itemStartOffset?: number;
+};
+
+export type LiveAssistantBufferDelta = {
+  deltaText: string;
+  itemId?: string;
+  itemStartOffset?: number;
+  replace?: true;
+};
+
+export type LiveAssistantItemOffsetCache = { itemStartOffset?: number };
+
+export type LiveAssistantDisplayState = LiveAssistantItemOffsetCache & {
+  projector: ReturnType<typeof createLiveAssistantTextProjection>;
+  current: ReturnType<ReturnType<typeof createLiveAssistantTextProjection>["replace"]>;
+  pendingRawDelta?: string | null;
+  reset?: boolean;
+  unsentDelta: string | null;
+  sentText?: string;
+};
+
+export function refreshLiveItemOffsetCache(
+  cache: LiveAssistantItemOffsetCache | undefined,
+  previousScope: AssistantTextSnapshot["scope"] | undefined,
+  nextScope: AssistantTextSnapshot["scope"] | undefined,
+  replaced = false,
+): void {
+  if (
+    cache &&
+    (nextScope !== previousScope ||
+      nextScope?.prefix !== previousScope?.prefix ||
+      nextScope?.separatorLength !== previousScope?.separatorLength ||
+      replaced)
+  ) {
+    delete cache.itemStartOffset;
+  }
+}
+
 /** Cap live display text without letting later snapshots resurrect the retired prefix. */
-export function capLiveAssistantText(snapshot: AssistantTextSnapshot): string {
+export function capLiveAssistantText(
+  snapshot: AssistantTextSnapshot,
+  itemOffsetCache?: LiveAssistantItemOffsetCache,
+): string {
   const { text, scope } = snapshot;
   const capped =
     text.length > MAX_LIVE_CHAT_BUFFER_CHARS
@@ -43,7 +88,11 @@ export function capLiveAssistantText(snapshot: AssistantTextSnapshot): string {
       : text;
   if (scope) {
     const retired = text.length - capped.length;
-    const retiredAfterPrefix = Math.max(0, retired - scope.prefix.length);
+    if (retired > 0 && itemOffsetCache) {
+      delete itemOffsetCache.itemStartOffset;
+    }
+    const prefixLength = scope.prefix.length;
+    const retiredAfterPrefix = Math.max(0, retired - prefixLength);
     // Retire padding with its prefix, including a cap that cuts through the
     // separator. Later deltas must not recreate or consume those newlines.
     scope.boundaryNewlines =
@@ -51,6 +100,7 @@ export function capLiveAssistantText(snapshot: AssistantTextSnapshot): string {
         ? 0
         : Math.max(0, scope.boundaryNewlines - retiredAfterPrefix);
     scope.separatorLength = Math.max(0, scope.separatorLength - retiredAfterPrefix);
+    // Item offsets are relative to the capped wire projection, not the source buffer.
     scope.prefix = sliceUtf16Safe(scope.prefix, retired);
   }
   return capped;
@@ -69,6 +119,54 @@ export function normalizeLiveAssistantBufferedText(
     options?.final ? normalized : stripPendingLiveAssistantTail(normalized),
     options?.managedMediaUrls ?? [],
   );
+}
+
+export function attachLiveAssistantItemScope<T extends { text: string; suppress: boolean }>(
+  projected: T,
+  options: {
+    scope: AssistantTextSnapshot["scope"] | undefined;
+    managedMediaUrls?: Iterable<string>;
+    final?: boolean;
+    cache?: LiveAssistantItemOffsetCache;
+  },
+): T & Pick<LiveAssistantBufferedProjection, "itemId" | "itemStartOffset"> {
+  const { scope } = options;
+  if (!scope) {
+    return projected;
+  }
+  const projectedPrefixLength =
+    (options.final ? undefined : options.cache?.itemStartOffset) ??
+    projectLiveAssistantBufferedText(
+      normalizeLiveAssistantBufferedText(scope.prefix + "\n".repeat(scope.separatorLength), {
+        managedMediaUrls: options.managedMediaUrls ? [...options.managedMediaUrls] : undefined,
+      }),
+    ).text.length;
+  const itemStartOffset = Math.min(projected.text.length, projectedPrefixLength);
+  if (!options.final && options.cache) {
+    options.cache.itemStartOffset = itemStartOffset;
+  }
+  return { ...projected, itemId: scope.itemId, itemStartOffset };
+}
+
+export function projectLiveAssistantBufferDelta(
+  projected: LiveAssistantBufferedProjection,
+  append: string | null,
+  text: string,
+): LiveAssistantBufferDelta | undefined {
+  if (append === "") {
+    return undefined;
+  }
+  const itemScope =
+    projected.itemId &&
+    projected.itemStartOffset !== undefined &&
+    projected.itemStartOffset <= text.length
+      ? { itemId: projected.itemId, itemStartOffset: projected.itemStartOffset }
+      : {};
+  return {
+    deltaText: append === null ? text : append,
+    ...itemScope,
+    ...(append === null ? { replace: true } : {}),
+  };
 }
 
 function stripPendingLiveAssistantTail(text: string): string {

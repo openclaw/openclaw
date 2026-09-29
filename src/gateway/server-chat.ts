@@ -791,6 +791,7 @@ export function createAgentEventHandler({
       "chat",
       sessionKey,
       agentId,
+      run.assistantScope?.itemId,
       opts?.controlUiVisible ?? true,
     ]);
     const canvasBlocks = run.canvasBlocks;
@@ -801,8 +802,7 @@ export function createAgentEventHandler({
       ...(spawnedBy && { spawnedBy }),
       seq,
       state: "delta" as const,
-      deltaText: broadcastDelta.deltaText,
-      ...(broadcastDelta.replace ? { replace: true as const } : {}),
+      ...broadcastDelta,
       message: appendChatCanvasBlocksToMessage(
         { role: "assistant", content: [{ type: "text", text }], timestamp: now },
         canvasBlocks ?? [],

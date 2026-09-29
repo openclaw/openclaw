@@ -238,7 +238,9 @@ export type ChatStreamSegment = {
   /** Keyed item that consumed this cumulative occurrence; late updates cannot consume another. */
   retiredItemId?: string;
   /** In-flight handoff owned by the retired cumulative prefix, not its live display. */
-  pendingCommentary?: { text: string; prefixLength: number };
+  pendingCommentary?: { text: string; prefixLength: number; replayItemId?: string };
+  /** Earlier visible cumulative prefix preserved while a later commentary occurrence hands off. */
+  pendingCommentaryPrefixFor?: string;
   toolCallId?: string;
   itemId?: string;
 };
