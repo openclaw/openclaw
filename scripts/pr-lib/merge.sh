@@ -602,6 +602,7 @@ merge_run() {
   local MERGE_ADMIN_EVIDENCE="${9:-}" confirmed_admin="${10:-false}" MERGE_PRIOR_CI_PROOF=""
   local MERGE_USE_PRIOR_CI_ADMIN=false
   local MERGE_PRIOR_CI_REST_OBSERVATION=false
+  local MERGE_PRIOR_CI_RECALCULATED=false
   if [ -n "$MERGE_ADMIN_EVIDENCE" ] || [ "$confirmed_admin" = true ]; then
     [ -n "$MERGE_ADMIN_EVIDENCE" ] && [ "$confirmed_admin" = true ] && [ "$auto_merge_requested" = false ] &&
       [ -z "$legacy_directory$refusal_directory" ] && [ "$cancel_auto" = false ] &&
@@ -1032,9 +1033,10 @@ merge_run() {
     merge_outcome_stable "$pr" || return 1
     verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
     # A later main may reuse local objects, never start another lazy/explicit fetch.
+    MERGE_PRIOR_CI_RECALCULATED=false
     GIT_NO_LAZY_FETCH=1 merge_outcome_stable "$pr" true || return 1
-    if [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = true ]; then
-      # Complete REST snapshots read policy/checks too; revalidate live authority after that work.
+    if [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = true ] || [ "$MERGE_PRIOR_CI_RECALCULATED" = true ]; then
+      # Complete REST reads and delayed recalculation need fresh authority before dispatch.
       verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
     fi
     # No awaited operation may replace the operator's bytes after validation.

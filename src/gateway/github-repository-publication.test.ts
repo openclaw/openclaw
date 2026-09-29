@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { deletePersonalGitHubSessionReceipts } from "../state/github-personal-publication-lifecycle.js";
+import { preparePersonalGitHubSessionReceiptDeletion } from "../state/github-personal-publication-lifecycle.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import {
@@ -962,7 +962,17 @@ describe("repository checkpoint GitHub publication", () => {
         assertCustody: () => {},
         assertCurrent: () => {},
       });
-      deletePersonalGitHubSessionReceipts({ agentId: "main", sessionKeys: [SESSION_KEY] });
+      const deleteReceipts = await preparePersonalGitHubSessionReceiptDeletion({
+        agentId: "main",
+        generations: [
+          {
+            sessionKey: SESSION_KEY,
+            sessionId: row.session_id,
+            lifecycleRevision: row.session_lifecycle_revision,
+          },
+        ],
+      });
+      await deleteReceipts();
       expect(execution.ownsExecution()).toBe(false);
       expect(() => execution.recordEffect("push")).toThrow();
       expect(() => execution.recordEffect("push", { headCommit: "e".repeat(40) })).toThrow();

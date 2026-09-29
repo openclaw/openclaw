@@ -548,9 +548,19 @@ query policies run in its consuming frame, including the paired fresh/active
 execution facts. Run draining awaits a fresh observation at each refresh, so a
 successor admitted while a wait settles is not lost. Failed or replaced read
 admission is not an empty descendant set. The obsolete internal synchronous
-descendant-list adapter is removed. The reaper/continuation deletion guards remain
-coupled to the outstanding lifecycle writer migration, not a permanent
-main-thread exception. This changes no schema, retention, or update behavior.
+descendant-list adapter is removed. This changes no schema, retention, or update behavior.
+
+Cron continuation cleanup and retention batches prepare deletion through the
+existing session reclamation worker. The host retains live descendant, media,
+and lifecycle authority; the worker compares the durable descendant rows after
+that grant and before committing. Registry preparation preserves unpublished
+intent and current live objects without treating a stale resident snapshot as
+fresh durable state. Reaper maintenance uses the existing compact subagent
+projection, with a fresh protection check at the worker commit boundary.
+The batch keeps one synchronous transaction and the existing archive,
+publication, rollback, and uncertain-outcome owners. Native harness mutation
+objects remain with their process-held owner. No cross-database atomicity,
+retention change, or new update step is introduced.
 
 Cron retention discovery uses a separate, single-worker maintenance lane within the
 same session database lifecycle owner. Foreground history and exact-entry reads
