@@ -266,6 +266,7 @@ serveOwnedWorkerTasks(
       if (request.kind === "session-store-target") {
         const { readSessionStoreTargetResult } =
           await import("./session-store-target-inventory.js");
+        request.request.env = cloneEnvWithPlatformSemantics(request.request.env);
         const read = readSessionStoreTargetResult(request.request);
         if (!read.ok) {
           const readError = encodeSessionTranscriptWorkerError(read.error);
@@ -279,6 +280,7 @@ serveOwnedWorkerTasks(
       if (request.kind === "session-exact-entries") {
         const { readExactSessionEntriesWithLifecycle } =
           await import("./session-entry-read.worker.js");
+        request.env = cloneEnvWithPlatformSemantics(request.env);
         return await withHistoryDatabase(request.database, request.kind, () =>
           readExactSessionEntriesWithLifecycle(request),
         );
