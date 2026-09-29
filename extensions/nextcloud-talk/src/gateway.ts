@@ -1,4 +1,3 @@
-// Nextcloud Talk plugin module implements gateway behavior.
 import { clearAccountFieldsFromConfigSection } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   createAccountStatusSink,

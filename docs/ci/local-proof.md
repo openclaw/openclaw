@@ -189,8 +189,13 @@ Docker proof wrappers carry the signal and relay their summaries to the runner.
 
 Oxlint keeps configured line caps and exclusions: 700 counted lines for ordinary
 TypeScript, 800 for JavaScript modules, and 1,000 for tests, with the existing
-explicit overrides. Local lint reports errors. CI uses a temporary configuration
-that changes only enabled size-rule severity to warning. SwiftLint likewise
+explicit overrides. Standalone local lint reports errors. In `check:changed`,
+lint reports `max-lines` errors for selected changed files and warnings for
+untouched files included by a broader lint lane. The broad scan still reports
+semantic errors everywhere it runs. Empty or oversized change scopes, changes to
+lint configuration or dependencies, and configurations with inherited limits
+keep strict local enforcement. CI uses a temporary configuration that changes
+only enabled size-rule severity to warning. SwiftLint likewise
 reports native length, nesting, complexity, and count limits as CI warnings;
 semantic lint errors remain blocking.
 
@@ -278,13 +283,12 @@ is not generic compute offload. `.crabbox.yaml` defaults remote proof to
 `blacksmith-testbox`. Its configured workflow hydrates provider and agent
 credentials, so untrusted contributor or fork code must use secretless fork CI
 or sanitized direct AWS Crabbox instead.
-The wrapper uses the bundled Crabbox plugin's binary manager. Testbox requires
-Crabbox 0.67.0 for task-owned SSH teardown, which prevents persistent SSH masters
-from keeping idle Testboxes alive. Other providers and cloud-worker profiles
-retain their 0.56.0 minimum, including supported offline configured binaries.
-Missing or unsupported binaries use a verified managed 0.67.0 release. Testbox
-selection upgrades an older candidate before lease work and refreshes its command
-metadata. The original binary stays untouched. Provider readiness and broker authentication still determine
+The wrapper uses the bundled Crabbox plugin's binary manager. All providers and
+cloud-worker profiles require Crabbox 0.67.0 or newer. This includes task-owned
+Testbox SSH teardown, which prevents persistent SSH masters from keeping idle
+Testboxes alive. Missing or older binaries use a verified managed 0.67.0 release
+before provider discovery or lease work. The original binary stays untouched.
+Provider readiness and broker authentication still determine
 which configured backend can run the proof.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
 the changed gate later reconstructs the exact merge base and synced final tree.

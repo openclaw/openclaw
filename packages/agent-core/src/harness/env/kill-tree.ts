@@ -56,7 +56,7 @@ export function killProcessTree(
 
   if (process.platform === "win32") {
     if (opts?.force === true) {
-      signalProcessTreeWindows(pid, "SIGKILL");
+      void signalProcessTreeWindowsAndWait(pid, "SIGKILL");
       return undefined;
     }
     const graceMs = normalizeGraceMs(opts?.graceMs);
@@ -558,11 +558,7 @@ function signalProcessTreeUnix(
     if (processTree && !verifiedProcessInstanceAlive(entry)) {
       continue;
     }
-    try {
-      process.kill(entry.pid, signal);
-    } catch {
-      // A process may exit between identity verification and signaling.
-    }
+    signalUnixTarget(entry.pid, signal);
   }
 }
 
@@ -622,10 +618,10 @@ function killProcessTreeWindows(pid: number, graceMs: number): void {
     if (!isProcessAlive(pid)) {
       return;
     }
-    signalProcessTreeWindows(pid, "SIGKILL");
+    void signalProcessTreeWindowsAndWait(pid, "SIGKILL");
   };
 
-  signalProcessTreeWindows(pid, "SIGTERM", (code) => {
+  void signalProcessTreeWindowsAndWait(pid, "SIGTERM", (code) => {
     if (code !== null && code !== 0) {
       forceKill();
     }
@@ -633,14 +629,6 @@ function killProcessTreeWindows(pid: number, graceMs: number): void {
 
   graceTimer = setTimeout(forceKill, graceMs);
   graceTimer.unref();
-}
-
-function signalProcessTreeWindows(
-  pid: number,
-  signal: "SIGTERM" | "SIGKILL",
-  onExit?: (code: number | null) => void,
-): void {
-  void signalProcessTreeWindowsAndWait(pid, signal, onExit);
 }
 
 function signalProcessTreeWindowsAndWait(

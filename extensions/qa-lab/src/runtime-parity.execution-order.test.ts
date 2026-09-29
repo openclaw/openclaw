@@ -1,9 +1,9 @@
 // QA Lab tests cover requested runtime execution order and canonical result identity.
 import { describe, expect, it, vi } from "vitest";
+import type { RuntimeId } from "./runtime-id.js";
 import {
   isRuntimeParityResultPass,
   runRuntimeParityScenario,
-  type RuntimeId,
   type RuntimeParityCell,
 } from "./runtime-parity.js";
 

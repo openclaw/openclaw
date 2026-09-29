@@ -94,27 +94,14 @@ class LocationHandler internal constructor(
     locationPreciseEnabled = locationPreciseEnabled,
   )
 
-  /** Reports whether precise GPS-backed location can be requested from Android. */
-  fun hasFineLocationPermission(): Boolean = dataSource.hasFinePermission(appContext)
-
-  /** Reports whether network/coarse location can be requested from Android. */
-  fun hasCoarseLocationPermission(): Boolean = dataSource.hasCoarsePermission(appContext)
-
   /** Handles location.get with foreground, permission, and user precision gates applied. */
   suspend fun handleLocationGet(paramsJson: String?): GatewaySession.InvokeResult {
     if (!isForeground() && !allowsBackgroundLocation()) {
       // Android foreground restrictions and user expectation keep live location tied to the visible app.
-      return GatewaySession.InvokeResult.error(
-        code = "LOCATION_BACKGROUND_UNAVAILABLE",
-        message =
-          "LOCATION_BACKGROUND_UNAVAILABLE: choose Always and grant background location access",
-      )
+      return nodeInvokeError("LOCATION_BACKGROUND_UNAVAILABLE", "choose Always and grant background location access")
     }
     if (!dataSource.hasFinePermission(appContext) && !dataSource.hasCoarsePermission(appContext)) {
-      return GatewaySession.InvokeResult.error(
-        code = "LOCATION_PERMISSION_REQUIRED",
-        message = "LOCATION_PERMISSION_REQUIRED: grant Location permission",
-      )
+      return nodeInvokeError("LOCATION_PERMISSION_REQUIRED", "grant Location permission")
     }
     val (maxAgeMs, timeoutMs, desiredAccuracy) = parseLocationParams(paramsJson)
     try {
@@ -133,10 +120,7 @@ class LocationHandler internal constructor(
         }
       return GatewaySession.InvokeResult.ok(payload.toString())
     } catch (err: TimeoutCancellationException) {
-      return GatewaySession.InvokeResult.error(
-        code = "LOCATION_TIMEOUT",
-        message = "LOCATION_TIMEOUT: no fix in time",
-      )
+      return nodeInvokeError("LOCATION_TIMEOUT", "no fix in time")
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {

@@ -211,6 +211,16 @@ method, when provided, if the runtime or an embedding adapter retires. This clos
 all of that runtime's managers as best-effort cleanup; it cannot identify dependent
 managers or prevent concurrent manager acquisition.
 
+## Browser meeting status ownership
+
+`MeetingPlatformAdapter.createStatusCallSource` accepts an optional
+`liveOwnershipSource`: a JavaScript boolean expression evaluated in the generated
+status script's page scope. Use it when call ownership can change while device
+enumeration, speaker routing, or playback is awaiting completion. A false result
+stops that routing pass, restores matching sources through the session's audio
+cleanup helpers, retires owned bridges, and reports output as unrouted and
+retryable. Omitting the option leaves the generated status source unchanged.
+
 ## Browser meeting participation
 
 The existing `openclaw/plugin-sdk/meeting-runtime` entry point exposes optional

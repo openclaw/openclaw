@@ -3,6 +3,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
+import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
@@ -53,9 +54,7 @@ export function createSqliteWorkerLifecycle({
       createCpuTrackedWorker(options.carrierUrl, {
         resourceLimits: { maxOldGenerationSizeMb: 512 },
         env: resolveNodeCompileCacheEnv(),
-        execArgv: options.carrierUrl.pathname.endsWith(".ts")
-          ? ["--import", import.meta.resolve("tsx/esm")]
-          : [],
+        execArgv: resolveRuntimeWorkerThreadExecArgv(options.carrierUrl),
       }),
     );
     const exited = createDeferredCore();

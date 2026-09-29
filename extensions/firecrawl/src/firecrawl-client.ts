@@ -1,5 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { parseDateStringTimestampMs, parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  asPositiveFiniteNumber,
+  parseDateStringTimestampMs,
+  parseFiniteNumber,
+  resolveIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   ProviderHttpError,
   readProviderJsonObjectResponse,
@@ -441,10 +446,7 @@ export async function runFirecrawlSearch(
       "web_search (firecrawl) needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure plugins.entries.firecrawl.config.webSearch.apiKey.",
     );
   }
-  const count =
-    typeof params.count === "number" && Number.isFinite(params.count)
-      ? Math.max(1, Math.min(100, Math.floor(params.count)))
-      : DEFAULT_SEARCH_COUNT;
+  const count = resolveIntegerOption(params.count, DEFAULT_SEARCH_COUNT, { min: 1, max: 100 });
   const timeoutSeconds = resolveFirecrawlSearchTimeoutSeconds(params.timeoutSeconds);
   const scrapeResults = params.scrapeResults === true;
   const sources = Array.isArray(params.sources) ? params.sources.filter(Boolean) : [];
@@ -650,18 +652,13 @@ export async function runFirecrawlScrape(
   const maxAgeMs = resolveFirecrawlMaxAgeMs(params.cfg, params.maxAgeMs);
   const proxy = params.proxy ?? "auto";
   const storeInCache = params.storeInCache ?? true;
-  const configuredMaxCharsCap = params.cfg?.tools?.web?.fetch?.maxCharsCap;
-  const maxCharsCap =
-    typeof configuredMaxCharsCap === "number" &&
-    Number.isFinite(configuredMaxCharsCap) &&
-    configuredMaxCharsCap > 0
-      ? Math.floor(configuredMaxCharsCap)
-      : DEFAULT_SCRAPE_MAX_CHARS;
-  const requestedMaxChars =
-    typeof params.maxChars === "number" && Number.isFinite(params.maxChars) && params.maxChars > 0
-      ? Math.floor(params.maxChars)
-      : DEFAULT_SCRAPE_MAX_CHARS;
-  const maxChars = Math.min(requestedMaxChars, maxCharsCap);
+  const maxChars = Math.floor(
+    Math.min(
+      asPositiveFiniteNumber(params.maxChars) ?? DEFAULT_SCRAPE_MAX_CHARS,
+      asPositiveFiniteNumber(params.cfg?.tools?.web?.fetch?.maxCharsCap) ??
+        DEFAULT_SCRAPE_MAX_CHARS,
+    ),
+  );
   const endpoint = await resolveEndpoint(baseUrl, "/v2/scrape");
   const payload = await postFirecrawlJson(
     {

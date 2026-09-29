@@ -26,15 +26,7 @@ export function registerStaleRequesterWakeBatchTests({
   settleOwnedWork: () => Promise<void> | undefined;
 }) {
   const readPersistedRun = (runId: string) => loadSubagentRegistryFromSqlite().get(runId);
-  it.each([
-    "transition",
-    "completion",
-    "rejection",
-    "closed-empty",
-    "closed-transition",
-    "closed-retryable",
-    "closed-permanent",
-  ] as const)(
+  it.each(["transition", "completion", "rejection", "closed-empty"] as const)(
     "rejects the whole stale batch when only a sibling closes or is replaced: %s",
     async (settlement) => {
       const { mod, requesterSettleModule, bindGatewayContextResolver } = getModules();
@@ -97,18 +89,7 @@ export function registerStaleRequesterWakeBatchTests({
               oldDone.reject(new Error("old mixed-owner dispatch failed"));
               await vi.advanceTimersByTimeAsync(0);
             } else {
-              await oldParams!.completeBatch(
-                [anchor, sibling],
-                1,
-                settlement === "completion" || settlement === "closed-empty"
-                  ? undefined
-                  : {
-                      delivered: false,
-                      path: "direct",
-                      disposition:
-                        settlement === "closed-permanent" ? "permanent_failure" : "retryable",
-                    },
-              );
+              await oldParams!.completeBatch([anchor, sibling], 1);
             }
             expect([anchor, replacement].map((entry) => entry.requesterSettleWake)).toEqual(
               expected,

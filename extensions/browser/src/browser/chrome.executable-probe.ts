@@ -13,12 +13,17 @@ export function execBrowserProbe(
   args: string[],
   timeoutMs = 1200,
   maxBuffer = 1024 * 1024,
+  extraEnv?: Record<string, string>,
 ): string | null {
   try {
     const output = execFileSync(command, args, {
       timeout: timeoutMs,
       encoding: "utf8",
       maxBuffer,
+      // Probes are diagnostic: capture stdout only and never let child stderr
+      // leak into the caller's stderr (e.g. doctor --json output).
+      stdio: ["ignore", "pipe", "ignore"],
+      ...(extraEnv ? { env: { ...process.env, ...extraEnv } } : {}),
     });
     return normalizeOptionalString(output) ?? null;
   } catch {
@@ -65,7 +70,10 @@ export const WINDOWS_VERSION_DIR_RE = /^\d+(?:\.\d+){1,3}$/;
 
 function readWindowsBrowserVersion(executablePath: string): string | null {
   // Read the inspected executable's authoritative PE metadata. Pass the path as
-  // data so a configured path cannot become part of the PowerShell program.
+  // environment data so a configured path (often containing spaces) can never
+  // become part of the PowerShell program; Windows PowerShell appends any extra
+  // -Command argument to the script text, which fails as a ParserError. The
+  // leaf PowerShell child reuses the documented browser-executable name.
   const configuredSystemRoot = normalizeOptionalString(process.env.SystemRoot);
   const systemRoot =
     configuredSystemRoot && path.win32.isAbsolute(configuredSystemRoot)
@@ -84,10 +92,11 @@ function readWindowsBrowserVersion(executablePath: string): string | null {
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      "[System.Diagnostics.FileVersionInfo]::GetVersionInfo($args[0]).ProductVersion",
-      executablePath,
+      "[System.Diagnostics.FileVersionInfo]::GetVersionInfo($env:OPENCLAW_BROWSER_EXECUTABLE_PATH).ProductVersion",
     ],
     WINDOWS_FILE_METADATA_TIMEOUT_MS,
+    undefined,
+    { OPENCLAW_BROWSER_EXECUTABLE_PATH: executablePath },
   );
   if (metadataVersion) {
     return metadataVersion.replace(/\s+/g, " ").trim();
