@@ -38,12 +38,6 @@ type AzureSpeechProviderConfig = {
   timeoutMs?: number;
 };
 
-type AzureSpeechProviderOverrides = {
-  voice?: string;
-  lang?: string;
-  outputFormat?: string;
-};
-
 function readAzureSpeechEnvApiKey(): string | undefined {
   return (
     trimToUndefined(process.env.AZURE_SPEECH_KEY) ??
@@ -122,9 +116,7 @@ function readAzureSpeechProviderConfig(config: SpeechProviderConfig): AzureSpeec
   };
 }
 
-function readAzureSpeechOverrides(
-  overrides: SpeechProviderOverrides | undefined,
-): AzureSpeechProviderOverrides {
+function readAzureSpeechOverrides(overrides: SpeechProviderOverrides | undefined) {
   return {
     voice: trimToUndefined(overrides?.voice ?? overrides?.voiceId),
     lang: trimToUndefined(overrides?.lang ?? overrides?.languageCode),

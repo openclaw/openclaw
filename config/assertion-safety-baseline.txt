@@ -344,8 +344,7 @@ extensions/discord/src/voice/segment.ts	1
 extensions/duckduckgo/src/config.ts	1
 extensions/duckduckgo/src/ddg-search-provider.ts	1
 extensions/elevenlabs/config-compat.ts	2
-extensions/exa/src/exa-web-search-provider.runtime.ts	5
-extensions/fal/image-generation-provider.ts	1
+extensions/exa/src/exa-web-search-provider.runtime.ts	1
 extensions/fal/video-generation-provider.ts	3
 extensions/feishu/src/accounts.ts	4
 extensions/feishu/src/bitable.ts	1
@@ -621,7 +620,7 @@ extensions/memory-core/src/standing-intents-tool.ts	1
 extensions/memory-core/src/standing-intents.ts	2
 extensions/memory-core/src/tools.ts	2
 extensions/memory-lancedb/doctor-contract-api.ts	1
-extensions/memory-lancedb/embeddings.ts	2
+extensions/memory-lancedb/embeddings.ts	1
 extensions/memory-lancedb/index.ts	8
 extensions/memory-lancedb/lancedb-store.ts	12
 extensions/memory-lancedb/memory-cli.ts	7
@@ -719,7 +718,6 @@ extensions/ollama/src/setup.runtime.ts	1
 extensions/ollama/src/stream-compat.ts	1
 extensions/ollama/src/stream.runtime.ts	6
 extensions/onepassword/index.ts	2
-extensions/onepassword/src/op-client.ts	1
 extensions/openai/embedding-batch.ts	2
 extensions/openai/index.ts	2
 extensions/openai/native-web-search.ts	1
@@ -737,7 +735,7 @@ extensions/openrouter/provider-routing.ts	2
 extensions/openrouter/stream.ts	4
 extensions/openrouter/video-generation-provider.ts	1
 extensions/openrouter/video-model-catalog.ts	1
-extensions/openshell/src/backend.ts	2
+extensions/openshell/src/backend.ts	1
 extensions/parallel/src/parallel-free-web-search-provider.runtime.ts	1
 extensions/parallel/src/parallel-web-search-provider.runtime.ts	1
 extensions/pixverse/video-generation-provider.ts	1
@@ -861,7 +859,6 @@ extensions/qa-lab/web/src/ui-render-utils.ts	1
 extensions/qwen/models.ts	1
 extensions/qwen/stream.ts	3
 extensions/raft/src/accounts.ts	1
-extensions/raft/src/gateway.ts	2
 extensions/raft/src/inbound.ts	1
 extensions/raft/src/setup.ts	2
 extensions/reef/doctor-contract-api.ts	1
@@ -1047,7 +1044,6 @@ extensions/twitch/src/config.ts	6
 extensions/twitch/src/outbound.ts	2
 extensions/twitch/src/resolver.ts	1
 extensions/twitch/src/setup-surface.ts	1
-extensions/twitch/src/status.ts	2
 extensions/twitch/src/token.ts	3
 extensions/twitch/src/twitch-ingress.ts	4
 extensions/venice/models.ts	1

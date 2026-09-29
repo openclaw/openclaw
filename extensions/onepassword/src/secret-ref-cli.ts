@@ -88,29 +88,25 @@ async function inspectSecretRefReadiness(
       }));
   const configuredOpCommand = normalizeOptionalString(params.env.CLAW_1PASSWORD_OP);
   const opCommand = configuredOpCommand ?? "op";
-  const { opBinaryPath, opStatus } = await (async () => {
-    try {
-      const resolvedPath =
-        (await resolveTrustedCli({
-          ...(configuredOpCommand ? { configuredPath: configuredOpCommand } : {}),
-          pathEnv: params.env.PATH,
-        })) ?? null;
-      return {
-        opBinaryPath: resolvedPath,
-        opStatus: resolvedPath ? ("ready" as const) : ("not-found" as const),
-      };
-    } catch {
-      return { opBinaryPath: null, opStatus: "untrusted" as const };
-    }
-  })();
+  let opBinaryPath: string | null = null;
+  let opStatus: SecretRefReadiness["opStatus"];
+  try {
+    opBinaryPath =
+      (await resolveTrustedCli({
+        ...(configuredOpCommand ? { configuredPath: configuredOpCommand } : {}),
+        pathEnv: params.env.PATH,
+      })) ?? null;
+    opStatus = opBinaryPath ? "ready" : "not-found";
+  } catch {
+    opStatus = "untrusted";
+  }
 
-  const tokenFileStatus: SecretRefReadiness["tokenFileStatus"] = (() => {
-    try {
-      return readTokenFile(params.tokenFile) ? "ready" : "missing-or-unsafe";
-    } catch {
-      return "missing-or-unsafe";
-    }
-  })();
+  let tokenFileStatus: SecretRefReadiness["tokenFileStatus"];
+  try {
+    tokenFileStatus = readTokenFile(params.tokenFile) ? "ready" : "missing-or-unsafe";
+  } catch {
+    tokenFileStatus = "missing-or-unsafe";
+  }
   return {
     opCommand,
     opBinaryPath,
