@@ -34,6 +34,7 @@ import {
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
 import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
+import { resolveWorkerRelaunchBase } from "./worker-relaunch-base.js";
 import { registerWorkerSkillAuthoring } from "./worker-skill-authoring.js";
 import { waitForTurnOperation } from "./worker-turn-admission.js";
 import {
@@ -173,6 +174,29 @@ export async function executeWorkerTurn(
       ? contextMessages.slice(0, -1)
       : contextMessages;
   let baseLeafId = admission?.entryId ?? manager.getLeafId();
+  // A shared recorder that already persisted the admission marks a fallback
+  // relaunch: the failed candidate may have committed past that admission, so
+  // the launch base must follow the durable leaf instead of the fenced prefix.
+  if (recorder?.hasPersisted() && admission) {
+    const relaunch = await resolveWorkerRelaunchBase({
+      transcriptTarget,
+      admissionEntryId: admission.entryId,
+      runId: turn.runId,
+      ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
+    });
+    if (relaunch.kind === "self-tool-activity") {
+      // Tool activity is a side effect: replaying the turn would run it twice
+      // and write a second incompatible history, so fallback stops here.
+      const refusal = new WorkerTurnExecutionError(
+        "Cloud worker fallback candidate refused: the failed candidate already committed tool activity for this run",
+      );
+      recordModelFallbackStop(refusal);
+      throw refusal;
+    }
+    if (relaunch.kind === "self-terminal-error") {
+      baseLeafId = relaunch.baseLeafId;
+    }
+  }
 
   assertContextCurrent();
   const credential = await waitForTurnOperation({

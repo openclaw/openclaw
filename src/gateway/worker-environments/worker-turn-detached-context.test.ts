@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
+import { hasRecordedModelFallbackStop } from "../../agents/failover-error.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
@@ -10,6 +12,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import {
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
@@ -730,4 +733,85 @@ describe("worker detached model-context branch parity", () => {
       expect(observed.result.outcome.kind).toBe("rejected");
     },
   );
+
+  it("launches a fallback relaunch on the durable leaf the failed candidate committed", async () => {
+    seedPrevious();
+    const inputRecorder = recorder();
+    await launchProbe({
+      ...request("worker-fallback-stale-base"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    const writer = SessionManager.open(sessionTarget);
+    const failedAssistant = makeAgentAssistantMessage({
+      content: [],
+      timestamp: 4,
+      stopReason: "error",
+    });
+    const committedTailId = writer.appendMessage(
+      attachSessionTranscriptRunId(failedAssistant, "worker-fallback-stale-base"),
+    );
+    const result = await launchProbe({
+      ...request("worker-fallback-stale-base"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    expect(result.launch?.baseLeafId).toBe(committedTailId);
+    expect(result.outcome).toEqual({ kind: "rejected", error: result.deliberateStop });
+  });
+
+  it("stops model fallback when the failed candidate already committed tool activity", async () => {
+    seedPrevious();
+    const inputRecorder = recorder();
+    await launchProbe({
+      ...request("worker-fallback-tool-tail"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    const writer = SessionManager.open(sessionTarget);
+    writer.appendMessage(
+      attachSessionTranscriptRunId(
+        makeTextToolResult("call-1", "scratch", "failed candidate side effect", false, 4),
+        "worker-fallback-tool-tail",
+      ),
+    );
+    writer.appendMessage(
+      attachSessionTranscriptRunId(
+        makeAgentAssistantMessage({ content: [], timestamp: 5, stopReason: "error" }),
+        "worker-fallback-tool-tail",
+      ),
+    );
+    const result = await launchProbe({
+      ...request("worker-fallback-tool-tail"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    expect(result.launch).toBeUndefined();
+    expect(result.credentialCalls).toBe(0);
+    expect(result.tunnelCalls).toBe(0);
+    expect(result.outcome.kind).toBe("rejected");
+    if (result.outcome.kind === "rejected") {
+      expect(hasRecordedModelFallbackStop(result.outcome.error)).toBe(true);
+    }
+  });
+
+  it("keeps the admission-pinned base for a foreign tail after the failed candidate", async () => {
+    seedPrevious();
+    const inputRecorder = recorder();
+    await launchProbe({
+      ...request("worker-fallback-foreign-tail"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    const admission = inputRecorder.getAdmissionReceipt();
+    expect(admission).toBeDefined();
+    const writer = SessionManager.open(sessionTarget);
+    const foreignTailId = writer.appendMessage(
+      attachSessionTranscriptRunId(
+        makeAgentAssistantMessage({ content: [], timestamp: 4, stopReason: "error" }),
+        "a-different-run",
+      ),
+    );
+    expect(foreignTailId).not.toBe(admission?.entryId);
+    const result = await launchProbe({
+      ...request("worker-fallback-foreign-tail"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    expect(result.launch?.baseLeafId).toBe(admission?.entryId);
+  });
 });
