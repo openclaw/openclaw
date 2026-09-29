@@ -474,9 +474,9 @@ export function resolveSqliteTranscriptArchiveDirectory(
 }
 
 /** Validate prepared write identity without resolving or reopening its physical target. */
-export function assertSqliteTranscriptWriteIdentity(
-  scope: Pick<SessionTranscriptWriteScope, "sessionId" | "sessionKey">,
-): asserts scope is { sessionId: string; sessionKey: string } {
+export function assertSqliteTranscriptWriteIdentity<
+  T extends Pick<SessionTranscriptWriteScope, "sessionId" | "sessionKey">,
+>(scope: T): asserts scope is T & { sessionId: string; sessionKey: string } {
   if (typeof scope.sessionId !== "string" || !scope.sessionId) {
     throw new Error(
       `Cannot resolve SQLite transcript scope without a session id: ${scope.sessionKey}`,

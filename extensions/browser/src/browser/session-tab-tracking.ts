@@ -5,6 +5,10 @@ import {
 } from "../browser-runtime-state.js";
 import type { BrowserTabOwnership } from "./client.types.js";
 import {
+  assertBrowserSessionTabAuthority,
+  type BrowserSessionTabAuthority,
+} from "./session-tab-authority.js";
+import {
   clearDurableTabAliases,
   forgetVolatileTabAlias,
   hasDurableTabAlias,
@@ -31,7 +35,6 @@ import {
 } from "./session-tab-process-state.js";
 import type { BrowserSessionTabRoute } from "./session-tab-route.js";
 import {
-  assertBrowserSessionTabAuthority,
   browserSessionTabNativeIdentity,
   browserSessionTabStorageKey,
   compareBrowserSessionTabProfileAliases,
@@ -47,7 +50,6 @@ import {
   withBrowserSessionTabOperation,
   withBrowserSessionTabNativeActivity,
   type BrowserSessionTabRecord,
-  type BrowserSessionTabAuthority,
   type BrowserSessionTabSelection,
 } from "./session-tab-store.js";
 import { selectSessionTabToUntrack } from "./session-tab-untrack-selection.js";

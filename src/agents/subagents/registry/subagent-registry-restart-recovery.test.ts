@@ -118,11 +118,16 @@ describe("subagent registry restart recovery", () => {
     },
   );
 
-  it.each(["yield", "steer", "kill", "queued"] as const)(
-    "abandons recovery when %s takes ownership during the session read",
-    async (owner) => {
+  it.each(
+    (["yield", "steer", "kill", "queued"] as const).flatMap((owner) =>
+      (["initial", "currency"] as const).map((read) => ({ owner, read })),
+    ),
+  )(
+    "abandons recovery when $owner takes ownership during the $read session read",
+    async ({ owner, read }) => {
       const entry = run();
-      mocks.loadSessionEntry.mockImplementationOnce(() => {
+      const readEntry = read === "initial" ? mocks.loadSessionEntry : mocks.readSessionCurrent;
+      readEntry.mockImplementationOnce(() => {
         if (owner === "yield") {
           entry.pauseReason = "sessions_yield";
         }
@@ -138,7 +143,7 @@ describe("subagent registry restart recovery", () => {
         return mocks.entries[childSessionKey];
       });
       expect(await recover(entry)).toEqual({ status: "deferred" });
-      expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
+      expect(mocks.applySessionEntryExactReplacements).not.toHaveBeenCalled();
       expect(dispatchAgent).not.toHaveBeenCalled();
     },
   );
@@ -151,7 +156,7 @@ describe("subagent registry restart recovery", () => {
       suppressSessionEffects: true,
     });
     expect(dispatchAgent).not.toHaveBeenCalled();
-    expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
+    expect(mocks.applySessionEntryExactReplacements).not.toHaveBeenCalled();
     expect(mocks.entries[childSessionKey]).toMatchObject({
       lifecycleRunId: "newer-visible-run",
       abortedLastRun: true,
@@ -201,7 +206,7 @@ describe("subagent registry restart recovery", () => {
       });
       expect(await recover(entry)).toEqual({ status: "ignored" });
       expect(dispatchAgent).not.toHaveBeenCalled();
-      expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
+      expect(mocks.applySessionEntryExactReplacements).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -282,7 +287,7 @@ describe("subagent registry restart recovery", () => {
       }
       expect(await recover(entry)).toEqual({ status: "ignored" });
       expect(dispatchAgent).not.toHaveBeenCalled();
-      expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
+      expect(mocks.applySessionEntryExactReplacements).not.toHaveBeenCalled();
     });
 
     it.each(["session", "visible turn"])(
@@ -307,14 +312,14 @@ describe("subagent registry restart recovery", () => {
         });
         const replacementSessionId =
           replacementKind === "session" ? "replacement-session" : "session-id";
-        mocks.patchSessionEntryCore.mockImplementationOnce(async (_scope, update) => {
+        mocks.applySessionEntryExactReplacements.mockImplementationOnce(async ({ update }) => {
           const replacement = {
             ...mocks.entries[childSessionKey]!,
             sessionId: replacementSessionId,
             lifecycleRunId: "replacement-run",
           };
           mocks.entries[childSessionKey] = replacement;
-          return update({ ...replacement });
+          return (await update([{ sessionKey: childSessionKey, entry: replacement }])).result;
         });
         expect(await recover(entry)).toEqual({ status: "deferred" });
         expect(dispatchAgent).not.toHaveBeenCalled();
@@ -439,7 +444,7 @@ describe("interrupted requester-settle continuation ownership", () => {
       expect(await recover(worker)).toEqual({ status: "handled" });
       expect(worker.execution.outcome).toBeUndefined();
       expect(dispatchAgent).not.toHaveBeenCalled();
-      expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
+      expect(mocks.applySessionEntryExactReplacements).not.toHaveBeenCalled();
     },
   );
 
@@ -525,8 +530,8 @@ describe("interrupted requester-settle continuation ownership", () => {
     if (result.status !== "terminal") {
       throw new Error("missing interruption classification");
     }
-    expect(result.isRecoveryCurrent?.()).toBe(true);
+    expect(await result.isRecoveryCurrent?.()).toBe(true);
     subagentRuns.set(child.runId, child);
-    expect(result.isRecoveryCurrent?.()).toBe(false);
+    expect(await result.isRecoveryCurrent?.()).toBe(false);
   });
 });

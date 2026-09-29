@@ -1,5 +1,5 @@
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 
@@ -19,10 +19,13 @@ export type SessionEntryCacheSnapshot = {
 };
 
 export type SessionSharingEntry = Pick<
-  SessionEntry,
+  InternalSessionEntry,
   | "sessionId"
   | "updatedAt"
   | "lifecycleRevision"
+  | "lifecycleRunId"
+  | "activeWriterRunId"
+  | "subagentRecovery"
   | "archivedAt"
   | "visibility"
   | "incognito"
@@ -34,11 +37,21 @@ export type SessionSharingEntry = Pick<
   | "sessionStartedAt"
 >;
 
-export function projectSessionSharingEntry(entry: SessionEntry): SessionSharingEntry {
+export function projectSessionSharingEntry(entry: InternalSessionEntry): SessionSharingEntry {
   return {
     sessionId: entry.sessionId,
     updatedAt: entry.updatedAt,
     lifecycleRevision: entry.lifecycleRevision,
+    lifecycleRunId: entry.lifecycleRunId,
+    activeWriterRunId: entry.activeWriterRunId,
+    ...(entry.subagentRecovery
+      ? {
+          subagentRecovery: {
+            lastRunId: entry.subagentRecovery.lastRunId,
+            sessionLifecycleRunId: entry.subagentRecovery.sessionLifecycleRunId,
+          },
+        }
+      : {}),
     archivedAt: entry.archivedAt,
     visibility: entry.visibility,
     incognito: entry.incognito,

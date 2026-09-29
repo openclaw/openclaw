@@ -56,6 +56,10 @@ import type {
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type { SessionColdArchive } from "./session-cold-storage-state.js";
+import type {
+  SessionEntryCurrentFacts,
+  SessionEntryCurrentSource,
+} from "./session-entry-current.types.js";
 import type { PublishedSessionTranscriptArchive } from "./session-history-archive-pruning.types.js";
 import type {
   SessionHistoryWorkerRequest,
@@ -304,6 +308,17 @@ type SessionEntryReadWorkerInput = {
   continuation?: CanonicalSessionReaderContinuation;
 };
 
+export type SessionEntryCurrentWorkerInput = Omit<SessionEntryReadWorkerInput, "kind"> & {
+  kind: "session-entry-current";
+  source?: SessionEntryCurrentSource;
+};
+
+export type SessionEntryCurrentWorkerResult = {
+  kind: "session-entry-current";
+  entry: SessionEntryCurrentFacts | undefined;
+  source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
+};
+
 export type SessionDiagnosticTextWorkerInput = {
   kind: "session-diagnostic-text";
   database: { agentId: string; path: string };
@@ -472,6 +487,7 @@ export type SessionHistoryWorkerInput =
   | SessionPendingInputReceiptsWorkerInput
   | SessionEntryListWorkerInput
   | SessionEntryReadWorkerInput
+  | SessionEntryCurrentWorkerInput
   | SessionDiagnosticTextWorkerInput
   | SessionExactEntriesWorkerInput
   | SessionRowFactsWorkerInput
@@ -530,6 +546,7 @@ export type SessionTranscriptWorkerValues = {
   };
   "session-entry-list": SessionEntryListWorkerResult;
   "session-entry-read": SessionEntryReadWorkerResult;
+  "session-entry-current": SessionEntryCurrentWorkerResult;
   "session-diagnostic-text": {
     kind: "session-diagnostic-text";
     text: string | undefined;
@@ -646,6 +663,9 @@ export type SessionHistoryWorkerDatabase = {
       unknown
     >
   >;
+  readEntryCurrent: (
+    input: Omit<SessionEntryCurrentWorkerInput, "kind" | "database">,
+  ) => Promise<SessionEntryCurrentFacts | undefined>;
   readDiagnosticText: (
     input: Omit<SessionDiagnosticTextWorkerInput, "kind" | "database">,
   ) => Promise<string | undefined>;

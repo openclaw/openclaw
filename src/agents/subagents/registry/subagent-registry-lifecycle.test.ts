@@ -77,7 +77,10 @@ import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recover
 import { resolveFinalizedSubagentTaskState } from "./subagent-registry-completion.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
 import { resetSubagentRegistryRuntimeLoadersForTests } from "./subagent-registry-deps.js";
-import { registerDetachedCleanupAuthorityTest } from "./subagent-registry-lifecycle-cleanup.test-support.js";
+import {
+  registerDetachedCleanupAuthorityTest,
+  registerDirectSessionCleanupAuthorityTests,
+} from "./subagent-registry-lifecycle-cleanup.test-support.js";
 import {
   mockBlockedCompletionDeliveryOwner,
   registerPrivateCompletionSettlementTests,
@@ -172,8 +175,8 @@ const internalSessionEffectsMocks = vi.hoisted(() => ({
   removeInternalSessionEffectsSession: vi.fn(async () => {}),
 }));
 
-const sessionReconciliationMocks = vi.hoisted(() => ({
-  loadSubagentSessionEntry: vi.fn(),
+const sessionEntryReadMocks = vi.hoisted(() => ({
+  loadSessionEntryByKey: vi.fn(),
 }));
 
 vi.mock("../completion/subagent-completion-admission.store.js", async (importOriginal) => ({
@@ -202,9 +205,8 @@ vi.mock("../../internal-session-effects.js", () => ({
     internalSessionEffectsMocks.removeInternalSessionEffectsSession,
 }));
 
-vi.mock("./subagent-session-reconciliation.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./subagent-session-reconciliation.js")>()),
-  loadSubagentSessionEntry: sessionReconciliationMocks.loadSubagentSessionEntry,
+vi.mock("../announce/subagent-announce-delivery.runtime.js", () => ({
+  loadSessionEntryByKey: sessionEntryReadMocks.loadSessionEntryByKey,
 }));
 
 vi.mock("../../../runtime.js", () => ({
@@ -558,7 +560,7 @@ describe("subagent registry lifecycle hardening", () => {
     bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockClear();
     bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockResolvedValue(true);
     internalSessionEffectsMocks.removeInternalSessionEffectsSession.mockClear();
-    sessionReconciliationMocks.loadSubagentSessionEntry.mockReset().mockReturnValue({
+    sessionEntryReadMocks.loadSessionEntryByKey.mockReset().mockResolvedValue({
       sessionId: "child-session-id",
       lifecycleRevision: "child-lifecycle-revision",
     });
@@ -1149,27 +1151,14 @@ describe("subagent registry lifecycle hardening", () => {
     }
   });
 
-  it("keeps direct delete cleanup root-admitted until the gateway call settles", async () => {
-    const entry = createRunEntry({ cleanup: "delete", expectsCompletionMessage: false });
-    const runs = new Map([[entry.runId, entry]]);
-    let releaseDelete: (() => void) | undefined;
-    gatewayMocks.callGateway.mockImplementation((opts) => {
-      if (opts.method !== "sessions.delete") {
-        return Promise.resolve({});
-      }
-      return new Promise<Record<string, unknown>>((resolve) => {
-        releaseDelete = () => resolve({});
-      });
-    });
-    const controller = createLifecycleController({ entry, runs });
-
-    await completeRun(controller, entry, { triggerCleanup: true });
-    await waitForLifecycleState(() => expect(releaseDelete).toBeTypeOf("function"));
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
-
-    releaseDelete?.();
-    await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    expect(runs.has(entry.runId)).toBe(false);
+  registerDirectSessionCleanupAuthorityTests({
+    createRunEntry,
+    createLifecycleController,
+    completeRun,
+    gatewayMocks,
+    helperMocks,
+    sessionEntryReadMocks,
+    waitForLifecycleState,
   });
 
   it("retries a cleanup handoff rejected by restart drain", async () => {
@@ -3336,6 +3325,7 @@ describe("subagent registry lifecycle hardening", () => {
           expectedLifecycleRevision: "child-lifecycle-revision",
         },
         timeoutMs: 10_000,
+        prepareDispatchCurrent: expect.any(Function),
         assertDispatchCurrent: expect.any(Function),
       }),
     );
@@ -3347,7 +3337,7 @@ describe("subagent registry lifecycle hardening", () => {
           agentDir: entry.agentDir,
           workspaceDir: entry.workspaceDir,
         },
-        { isCurrent: expect.any(Function) },
+        { isCurrent: expect.any(Function), prepareCurrent: expect.any(Function) },
       ),
     );
     expect(helperMocks.safeRemoveAttachmentsDir).toHaveBeenCalledWith(entry);
@@ -3465,6 +3455,7 @@ describe("subagent registry lifecycle hardening", () => {
           expectedLifecycleRevision: "child-lifecycle-revision",
         },
         timeoutMs: 10_000,
+        prepareDispatchCurrent: expect.any(Function),
         assertDispatchCurrent: expect.any(Function),
       }),
     );
@@ -3733,7 +3724,7 @@ describe("subagent registry lifecycle hardening", () => {
         agentDir: entry.agentDir,
         workspaceDir: entry.workspaceDir,
       },
-      { isCurrent: expect.any(Function) },
+      { isCurrent: expect.any(Function), prepareCurrent: expect.any(Function) },
     );
     expect(persist).toHaveBeenCalled();
   });
@@ -3760,6 +3751,7 @@ describe("subagent registry lifecycle hardening", () => {
       reason: SUBAGENT_ENDED_REASON_COMPLETE,
       sendFarewell: true,
       isCurrent: expect.any(Function),
+      prepareCurrent: expect.any(Function),
     });
   });
 

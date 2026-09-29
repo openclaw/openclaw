@@ -16,12 +16,12 @@ import {
 } from "./subagent-lifecycle-events.js";
 import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
-import { completeTerminalEffects } from "./subagent-registry-lifecycle-cleanup.js";
 import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lifecycle-context.js";
 import {
   freezeRunResultAtCompletion,
   refreshPendingFinalDeliveryPayload,
 } from "./subagent-registry-lifecycle-delivery.js";
+import { completeTerminalEffects } from "./subagent-registry-lifecycle-terminal-effects.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   resolveSubagentRunDeadlineMs,
@@ -114,17 +114,31 @@ export async function completeSubagentRunAttempt(
     if (!entry) {
       return;
     }
+    const currentEntry = entry;
+    const ownerGeneration = currentEntry.generation;
+    const ownerPauseReason = currentEntry.pauseReason;
+    const isCompletionOwnerCurrent = () =>
+      params.runs.get(completeParams.runId) === currentEntry &&
+      currentEntry.generation === ownerGeneration;
     if (
       (completeParams.expectedEntry && entry !== completeParams.expectedEntry) ||
-      completeParams.isRecoveryCurrent?.() === false
+      !isCompletionOwnerCurrent()
     ) {
       return;
     }
-    context.bindTerminalSessionEffects(entry, completeParams.isChildSessionEffectsCurrent);
-    suppressSessionEffects ||= context.shouldSuppressSessionEffects(entry);
+    suppressSessionEffects ||= await context.shouldSuppressSessionEffects(
+      entry,
+      completeParams.sessionEffects,
+    );
+    if (
+      (completeParams.isRecoveryCurrent && !(await completeParams.isRecoveryCurrent())) ||
+      !isCompletionOwnerCurrent() ||
+      currentEntry.pauseReason !== ownerPauseReason
+    ) {
+      return;
+    }
+    context.bindTerminalSessionEffects(entry, completeParams.sessionEffects);
     params.clearPendingLifecycleError(completeParams.runId);
-    const currentEntry = entry;
-    const ownerGeneration = currentEntry.generation;
     entrySnapshot = structuredClone(entry);
     const restoreEntrySnapshot = (snapshot?: SubagentRunRecord) => {
       if (!snapshot) {
@@ -538,11 +552,10 @@ export async function completeSubagentRunAttempt(
       // Native persistence is now the sole terminal commit. Capture must not give
       // an old callback authority over a replacement row or a newer cancellation.
       if (
-        params.runs.get(completeParams.runId) !== currentEntry ||
-        currentEntry.generation !== ownerGeneration ||
+        (completeParams.isRecoveryCurrent && !(await completeParams.isRecoveryCurrent())) ||
+        !isCompletionOwnerCurrent() ||
         currentEntry.execution !== executionBeforeCapture ||
-        currentEntry.pauseReason === "sessions_yield" ||
-        completeParams.isRecoveryCurrent?.() === false
+        currentEntry.pauseReason === "sessions_yield"
       ) {
         return;
       }

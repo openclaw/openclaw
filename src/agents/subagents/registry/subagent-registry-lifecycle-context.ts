@@ -4,7 +4,7 @@ import type { callGateway as defaultCallGateway } from "../../../gateway/call.js
 // This type-only leaf exists solely to keep lifecycle sibling modules from importing the controller.
 // Keeping the controller out of their dependency graph satisfies the architecture cycle gate.
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentRunRecord, SubagentSessionEffects } from "./subagent-registry.types.js";
 
 type CaptureSubagentCompletionReply =
   (typeof import("../announce/subagent-announce.js"))["captureSubagentCompletionReply"];
@@ -38,6 +38,7 @@ export type SubagentLifecycleOptions = {
     sendFarewell?: boolean;
     accountId?: string;
     isCurrent?: () => boolean;
+    prepareCurrent?: () => Promise<boolean>;
   }): Promise<void>;
   emitSubagentProgressEndedForRun(entry: SubagentRunRecord): Promise<void>;
   notifyContextEngineSubagentEnded(
@@ -47,7 +48,7 @@ export type SubagentLifecycleOptions = {
       agentDir?: string;
       workspaceDir?: string;
     },
-    options?: { isCurrent?: () => boolean },
+    options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
   ): Promise<void>;
   retireSupersededRun(runId: string, entry: SubagentRunRecord): Promise<void>;
   resumeSubagentRun(runId: string): void;
@@ -63,13 +64,18 @@ export type SubagentLifecycleOptions = {
 export interface SubagentLifecycleCommonContext {
   readonly options: SubagentLifecycleOptions;
   newerGenerationOwnsSession(entry: SubagentRunRecord): boolean;
-  shouldSuppressSessionEffects(entry: SubagentRunRecord): boolean;
+  shouldSuppressSessionEffects(
+    entry: SubagentRunRecord,
+    prospectiveEffects?: SubagentSessionEffects,
+  ): Promise<boolean>;
+  sessionEffectsHostCurrent(entry: SubagentRunRecord): boolean;
+  getSessionEffects(entry: SubagentRunRecord): SubagentSessionEffects | undefined;
 }
 
 export interface SubagentLifecycleCompletionContext extends SubagentLifecycleCommonContext {
   readonly progressEndedEntries: WeakSet<SubagentRunRecord>;
   acquireTerminalCompletionLock(runId: string): Promise<() => void>;
-  bindTerminalSessionEffects(entry: SubagentRunRecord, isCurrent?: () => boolean): void;
+  bindTerminalSessionEffects(entry: SubagentRunRecord, effects?: SubagentSessionEffects): void;
   bumpCleanupGeneration(entry: SubagentRunRecord): number;
   bumpTerminalGeneration(entry: SubagentRunRecord): number;
   isTerminalCallbackCurrent(runId: string, entry: SubagentRunRecord, generation: number): boolean;

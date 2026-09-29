@@ -1,3 +1,7 @@
+import type {
+  SessionEntryCurrentCheck,
+  SessionEntryCurrentFacts,
+} from "../../../config/sessions/session-entry-current.types.js";
 import type { SubagentEndReason } from "../../../context-engine/types.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
@@ -10,6 +14,13 @@ import type {
   SubagentCompletionDeliveryState,
   SubagentRunReadRecord,
 } from "./subagent-registry-read.types.js";
+
+export type SubagentSessionEffects = {
+  isCurrent(): Promise<boolean>;
+  assertHostCurrent(): void;
+  assertCurrentEntry(this: void, facts: SessionEntryCurrentFacts | undefined): void;
+  nativeCheck?: SessionEntryCurrentCheck;
+};
 
 export type SubagentCompletionRequest = {
   runId: string;
@@ -25,9 +36,9 @@ export type SubagentCompletionRequest = {
   suppressSessionEffects?: boolean;
   recoverInterrupted?: true;
   /** Revalidates orphan ownership after waiting for the terminal completion lock. */
-  isRecoveryCurrent?: () => boolean;
+  isRecoveryCurrent?: () => boolean | Promise<boolean>;
   /** Child effects may be fenced while the recorded result still owes requester delivery. */
-  isChildSessionEffectsCurrent?: () => boolean;
+  sessionEffects?: SubagentSessionEffects;
   completionSnapshot?: { resultText: string | null; capturedAt: number };
   terminalReply?: AgentRunTerminalReplySnapshot;
 };

@@ -148,8 +148,11 @@ export function createInterruptedRecoveryCoordinator(params: {
       const finalized = await params.finalizeRun({
         runId,
         expectedEntry: entry,
-        isRecoveryCurrent: () => isCurrent(runId, entry) && result.isRecoveryCurrent?.() !== false,
-        isChildSessionEffectsCurrent: result.isChildSessionEffectsCurrent,
+        isRecoveryCurrent: async () =>
+          isCurrent(runId, entry) &&
+          (await result.isRecoveryCurrent?.()) !== false &&
+          isCurrent(runId, entry),
+        sessionEffects: result.sessionEffects,
         error: result.error,
         endedAt: result.endedAt,
         suppressSessionEffects: result.suppressSessionEffects,

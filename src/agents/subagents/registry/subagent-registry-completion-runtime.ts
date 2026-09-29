@@ -23,13 +23,13 @@ export function createSubagentRegistryCompletionRuntime(config: {
   async function completeSubagentRunWithRecoveryAttempt(
     params: SubagentCompletionRequest,
     source: string,
-    isCurrent: () => boolean,
+    isCurrent: () => Promise<boolean>,
   ) {
     for (const message of [
       "failed to complete subagent run; retrying completion",
       "failed to complete subagent run after retry; retrying ended cleanup",
     ]) {
-      if (!isCurrent()) {
+      if (!(await isCurrent())) {
         return;
       }
       try {
@@ -43,13 +43,13 @@ export function createSubagentRegistryCompletionRuntime(config: {
           childSessionKey: current?.childSessionKey,
           error,
         });
-        if (!isCurrent()) {
+        if (!(await isCurrent())) {
           return;
         }
       }
     }
 
-    if (!isCurrent()) {
+    if (!(await isCurrent())) {
       return;
     }
     const latest = runs.get(params.runId);
@@ -105,10 +105,12 @@ export function createSubagentRegistryCompletionRuntime(config: {
     }
     const generation = entry.generation;
     const runId = params.runId;
-    const isCurrent = () =>
+    const isCurrent = async () =>
       runs.get(runId) === entry &&
       entry.generation === generation &&
-      params.isRecoveryCurrent?.() !== false;
+      (await params.isRecoveryCurrent?.()) !== false &&
+      runs.get(runId) === entry &&
+      entry.generation === generation;
     const ownedParams = { ...params, expectedEntry: entry, isRecoveryCurrent: isCurrent };
     // Each controller attempt owns its terminal transition, while this outer
     // lease outlives the launch scope and spans retries and fallback cleanup.
@@ -117,7 +119,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
         await completeSubagentRunWithRecoveryAttempt(ownedParams, source, isCurrent);
       }, "subagents:completion");
     } catch (error) {
-      if (!isCurrent()) {
+      if (!(await isCurrent())) {
         return;
       }
       if (!isGatewayRestartDraining()) {
@@ -161,8 +163,8 @@ export function createSubagentRegistryCompletionRuntime(config: {
   async function finalizeInterruptedSubagentRun(params: {
     runId: string;
     expectedEntry?: SubagentRunRecord;
-    isRecoveryCurrent?: () => boolean;
-    isChildSessionEffectsCurrent?: () => boolean;
+    isRecoveryCurrent?: SubagentCompletionRequest["isRecoveryCurrent"];
+    sessionEffects?: SubagentCompletionRequest["sessionEffects"];
     error: string;
     endedAt?: number;
     suppressSessionEffects?: boolean;
@@ -177,10 +179,13 @@ export function createSubagentRegistryCompletionRuntime(config: {
         ? params.endedAt
         : Date.now();
     const entry = runs.get(runId);
+    const generation = entry?.generation;
     if (
       !entry ||
       (params.expectedEntry && entry !== params.expectedEntry) ||
-      params.isRecoveryCurrent?.() === false
+      (params.isRecoveryCurrent && !(await params.isRecoveryCurrent())) ||
+      runs.get(runId) !== entry ||
+      entry.generation !== generation
     ) {
       return 0;
     }
@@ -205,7 +210,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
       triggerCleanup: true,
       recoverInterrupted: true,
       isRecoveryCurrent: params.isRecoveryCurrent,
-      isChildSessionEffectsCurrent: params.isChildSessionEffectsCurrent,
+      sessionEffects: params.sessionEffects,
       suppressSessionEffects: params.suppressSessionEffects,
     };
     try {

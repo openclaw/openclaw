@@ -9,9 +9,12 @@ import {
   getOptionalBrowserStateRuntime,
   setBrowserStateRuntime,
   type BrowserStateRuntime,
-  type BrowserDashboardRegistration,
   type BrowserSessionTabOperationKey,
 } from "../browser-runtime-state.js";
+import {
+  assertBrowserSessionTabAuthority,
+  type BrowserSessionTabAuthority,
+} from "./session-tab-authority.js";
 import {
   clearDurableTabAliases,
   rememberDurableTabAliases,
@@ -116,12 +119,6 @@ export function parseBrowserDashboardStopIntent(
     ? parsed.data
     : undefined;
 }
-
-export type BrowserSessionTabAuthority = {
-  runtime?: BrowserStateRuntime;
-  assertCurrent?: () => void;
-  dashboardRegistration?: BrowserDashboardRegistration;
-};
 
 export async function readBrowserDashboardStopIntent(
   identity: BrowserDashboardIdentity,
@@ -254,14 +251,6 @@ export async function drainBrowserSessionTabStore(runtime: BrowserStateRuntime):
   }
 }
 
-export function assertBrowserSessionTabAuthority(authority: BrowserSessionTabAuthority) {
-  const runtime = authority.runtime ?? getBrowserStateRuntime();
-  if (getOptionalBrowserStateRuntime() !== runtime) {
-    throw new Error("Browser session tab store owner changed");
-  }
-  authority.assertCurrent?.();
-}
-
 export function getBrowserSessionTabStore(authority: BrowserSessionTabAuthority = {}) {
   const runtime = authority.runtime ?? getBrowserStateRuntime();
   const withCurrent = runtime.sessionTabs.withCurrent;
@@ -270,6 +259,7 @@ export function getBrowserSessionTabStore(authority: BrowserSessionTabAuthority 
   }
   return withCurrent({
     assertCurrent: () => assertBrowserSessionTabAuthority({ ...authority, runtime }),
+    sessionEntryCurrent: authority.sessionEntryCurrent,
   });
 }
 

@@ -10,7 +10,12 @@ import {
   resolveAgentIdFromSessionKey,
   resolveSessionStorePathCore,
 } from "../../../config/sessions.js";
-import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import type {
+  SessionEntryCurrentCheck,
+  SessionEntryCurrentFacts,
+} from "../../../config/sessions/session-entry-current.types.js";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { computeBackoff } from "../../../infra/backoff.js";
 import { defaultRuntime } from "../../../runtime.js";
@@ -101,6 +106,8 @@ export async function persistSubagentSessionTiming(
   options?: {
     isCurrentGeneration?: () => boolean;
     assertCommitAllowed?: () => void;
+    assertCurrentEntry?: (entry: SessionEntryCurrentFacts | undefined) => void;
+    sessionEntryCurrent?: SessionEntryCurrentCheck;
   },
 ) {
   const childSessionKey = entry.childSessionKey?.trim();
@@ -125,72 +132,99 @@ export async function persistSubagentSessionTiming(
   const lastRunError = status
     ? resolveSessionRunError(entry.execution.outcome ?? {}, status)
     : undefined;
-  const persisted = await patchSessionEntryCore(
-    { storePath, sessionKey: childSessionKey },
-    (sessionEntry) => {
-      // Recheck under the session-store write lock. A completion may have
-      // waited behind a steer/restart that transferred this session's ownership.
-      if (options?.isCurrentGeneration && !options.isCurrentGeneration()) {
-        return null;
-      }
-      if (status === "killed") {
-        const existingCompletion = resolveCompletionFromSessionEntry(sessionEntry, Date.now(), {
-          notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
-        });
-        if (existingCompletion && existingCompletion.reason !== SUBAGENT_ENDED_REASON_KILLED) {
-          // A provider result already reached durable session state. The kill
-          // marker is provisional and must not erase restart reconciliation evidence
-          // or leave the session looking aborted after that completion won.
-          if (sessionEntry.abortedLastRun !== true) {
-            return null;
-          }
-          const completedEntry = { ...sessionEntry };
-          delete completedEntry.abortedLastRun;
-          return completedEntry;
+  const update = (sessionEntry: InternalSessionEntry) => {
+    if (status === "killed") {
+      const existingCompletion = resolveCompletionFromSessionEntry(sessionEntry, Date.now(), {
+        notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
+      });
+      if (existingCompletion && existingCompletion.reason !== SUBAGENT_ENDED_REASON_KILLED) {
+        // A provider result already reached durable session state. The kill
+        // marker is provisional and must not erase restart reconciliation evidence
+        // or leave the session looking aborted after that completion won.
+        if (sessionEntry.abortedLastRun !== true) {
+          return null;
         }
+        const completedEntry = { ...sessionEntry };
+        delete completedEntry.abortedLastRun;
+        return completedEntry;
       }
-      const next = { ...sessionEntry };
+    }
+    const next = { ...sessionEntry };
 
-      if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
-        next.startedAt = startedAt;
-      } else {
-        delete next.startedAt;
-      }
+    if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
+      next.startedAt = startedAt;
+    } else {
+      delete next.startedAt;
+    }
 
-      if (typeof endedAt === "number" && Number.isFinite(endedAt)) {
-        next.endedAt = endedAt;
-      } else {
-        delete next.endedAt;
-      }
+    if (typeof endedAt === "number" && Number.isFinite(endedAt)) {
+      next.endedAt = endedAt;
+    } else {
+      delete next.endedAt;
+    }
 
-      if (typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
-        next.runtimeMs = runtimeMs;
-      } else {
-        delete next.runtimeMs;
-      }
+    if (typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
+      next.runtimeMs = runtimeMs;
+    } else {
+      delete next.runtimeMs;
+    }
 
-      if (status) {
-        next.status = status;
-      } else {
-        delete next.status;
+    if (status) {
+      next.status = status;
+    } else {
+      delete next.status;
+    }
+    if (lastRunError) {
+      next.lastRunError = lastRunError;
+    } else if (status === "done" || status === "interrupted") {
+      delete next.lastRunError;
+    }
+    if (status && status !== "killed") {
+      delete next.abortedLastRun;
+    }
+    return next;
+  };
+  let selected: InternalSessionEntry | undefined;
+  let suppressed = false;
+  const assertCurrent = () => {
+    if (options?.isCurrentGeneration?.() === false) {
+      suppressed = true;
+      throw new Error("Subagent timing generation changed before persistence");
+    }
+    options?.assertCommitAllowed?.();
+    if (selected) {
+      try {
+        options?.assertCurrentEntry?.(selected);
+      } catch (error) {
+        suppressed = true;
+        throw error;
       }
-      if (lastRunError) {
-        next.lastRunError = lastRunError;
-      } else if (status === "done" || status === "interrupted") {
-        delete next.lastRunError;
+    }
+  };
+  const persisted = await applySessionEntryExactReplacements<InternalSessionEntry | undefined>({
+    agentId,
+    storePath: options?.sessionEntryCurrent?.source.path ?? storePath,
+    sessionKeys: [childSessionKey],
+    activeSessionKey: childSessionKey,
+    assertCommitAllowed: assertCurrent,
+    update: ([row]) => {
+      if (!row) {
+        return { result: undefined };
       }
-      if (status && status !== "killed") {
-        delete next.abortedLastRun;
-      }
-      return next;
+      selected = row.entry;
+      assertCurrent();
+      const next = update(selected);
+      return {
+        result: next ?? selected,
+        ...(next ? { replacements: [{ sessionKey: row.sessionKey, entry: next }] } : {}),
+      };
     },
-    {
-      // A queued completion can lose ownership before commit; abandon its projection quietly.
-      shouldCommit: options?.isCurrentGeneration,
-      assertCommitAllowed: options?.assertCommitAllowed,
-      replaceEntry: true,
-    },
-  );
+  }).catch((error: unknown) => {
+    if (!suppressed) {
+      throw error;
+    }
+    return undefined;
+  });
   if (persisted && lastRunError) {
     await recordGatewaySessionRunFailure({
       target: {
@@ -203,6 +237,7 @@ export async function persistSubagentSessionTiming(
       runId: entry.runId,
       error: entry.execution.outcome?.error,
       assertCommitAllowed: options?.assertCommitAllowed,
+      sessionEntryCurrent: options?.sessionEntryCurrent,
     });
   }
 }

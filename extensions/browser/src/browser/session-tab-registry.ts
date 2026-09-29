@@ -9,6 +9,7 @@ import {
   isBrowserStateRuntimeCurrent,
   readCurrentBrowserState,
 } from "../browser-runtime-state.js";
+import type { BrowserSessionTabAuthority } from "./session-tab-authority.js";
 import {
   type CleanupKind,
   type CloseParams,
@@ -28,7 +29,6 @@ import {
   readBrowserDashboardStopIntents,
   withBrowserSessionTabOperation,
   type BrowserSessionTabRecord,
-  type BrowserSessionTabAuthority,
 } from "./session-tab-store.js";
 import {
   selectStaleTrackedTabs,
@@ -72,9 +72,13 @@ async function performVolatileCleanup(
       : undefined;
   };
   while (true) {
-    if (params.isCurrent?.() === false) {
+    if (params.prepareCurrent && !(await params.prepareCurrent())) {
       return 0;
     }
+    if (!isCleanupCurrent(params)) {
+      return 0;
+    }
+    params.authority?.assertCurrent?.();
     const current = resolveCurrent();
     if (!current) {
       return 0;
@@ -229,6 +233,10 @@ async function prepareTrackedTabCleanup(
 export async function closeTrackedBrowserTabsForSessions(
   input: CloseParams & { sessionKeys: Array<string | undefined>; now?: number },
 ): Promise<number> {
+  if (input.sessionEntryCurrent && typeof input.prepareCurrent !== "function") {
+    input.onWarn?.("browser cleanup unavailable: sessionEntryCurrent requires prepareCurrent");
+    return 0;
+  }
   const params = {
     ...input,
     authority: {
