@@ -64,6 +64,21 @@ function threadStartResult(threadId = "thread-1", serviceTier: string | null = n
   };
 }
 
+function createThreadStartRequest(startResult = threadStartResult) {
+  return vi.fn(async (method: string, _payload?: unknown) => {
+    if (method === "config/read") {
+      return { config: {}, origins: {}, layers: [] };
+    }
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    if (method === "thread/start") {
+      return startResult();
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+}
+
 describe("Codex app-server dynamic tool schema boundary contract", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-schema-contract-"));
@@ -84,18 +99,7 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
       description: parameterFreeTool.description,
       inputSchema: normalizedParameterFreeSchema(),
     };
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createThreadStartRequest();
 
     await startOrResumeThread({
       client: { request } as never,
@@ -139,18 +143,9 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
   it("accepts Codex app-server priority service tier responses", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    const request = vi.fn(async (method: string) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-priority", "priority");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createThreadStartRequest(() =>
+      threadStartResult("thread-priority", "priority"),
+    );
 
     const binding = await startOrResumeThread({
       client: { request } as never,
@@ -168,18 +163,7 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const appServer = createAppServerOptions();
     let nextThreadId = 1;
-    const request = vi.fn(async (method: string) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult(`thread-${nextThreadId++}`);
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createThreadStartRequest(() => threadStartResult(`thread-${nextThreadId++}`));
 
     await startOrResumeThread({
       client: { request } as never,

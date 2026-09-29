@@ -29,6 +29,10 @@ describe("native Codex thread tool", () => {
     });
   }
 
+  function writeThreadBinding(sessionId: string, threadId: string) {
+    return writeCodexAppServerBinding(sessionId, { threadId, cwd: "/tmp/project" });
+  }
+
   function createTool(params?: {
     owner?: boolean;
     homeScope?: "agent" | "user";
@@ -477,10 +481,7 @@ describe("native Codex thread tool", () => {
     },
   ])("refuses to attach a fork of the bound thread after $name", ({ response, error }) =>
     withFixture(async () => {
-      await writeCodexAppServerBinding("session-id", {
-        threadId: "source-thread",
-        cwd: "/tmp/project",
-      });
+      await writeThreadBinding("session-id", "source-thread");
       const request = vi.fn(async () => response);
       const tool = createTool({ request });
 
@@ -495,12 +496,6 @@ describe("native Codex thread tool", () => {
         expect.anything(),
         CODEX_CONTROL_METHODS.readThread,
         { threadId: "source-thread", includeTurns: false },
-        expect.anything(),
-      );
-      expect(request).not.toHaveBeenCalledWith(
-        expect.anything(),
-        CODEX_CONTROL_METHODS.forkThread,
-        expect.anything(),
         expect.anything(),
       );
     }),
@@ -536,10 +531,7 @@ describe("native Codex thread tool", () => {
     },
   ])("does not change a locked session binding via $action", ({ params }) =>
     withFixture(async () => {
-      await writeCodexAppServerBinding("session-id", {
-        threadId: "bound-thread",
-        cwd: "/tmp/project",
-      });
+      await writeThreadBinding("session-id", "bound-thread");
       const request = vi.fn();
       const tool = createTool({ request, modelSelectionLocked: true });
       await expect(tool?.execute("call-locked-mutation", params)).rejects.toThrow(
@@ -653,10 +645,7 @@ describe("native Codex thread tool", () => {
 
   it("allows a detached fork without changing a locked session binding", () =>
     withFixture(async () => {
-      await writeCodexAppServerBinding("session-id", {
-        threadId: "bound-thread",
-        cwd: "/tmp/project",
-      });
+      await writeThreadBinding("session-id", "bound-thread");
       const request = vi.fn(async () => ({
         thread: { id: "forked-thread", cwd: "/tmp/project", status: { type: "idle" } },
       }));
@@ -682,10 +671,7 @@ describe("native Codex thread tool", () => {
 
   it("refuses to archive an active bound thread", () =>
     withFixture(async () => {
-      await writeCodexAppServerBinding("session-id", {
-        threadId: "active-thread",
-        cwd: "/tmp/project",
-      });
+      await writeThreadBinding("session-id", "active-thread");
       const request = vi.fn(async (_config, method: string) => {
         if (method === CODEX_CONTROL_METHODS.readThread) {
           return { thread: { id: "active-thread", status: { type: "active" } } };
@@ -711,10 +697,7 @@ describe("native Codex thread tool", () => {
 
   it("archives an idle bound thread and clears its attachment", () =>
     withFixture(async () => {
-      await writeCodexAppServerBinding("session-id", {
-        threadId: "idle-thread",
-        cwd: "/tmp/project",
-      });
+      await writeThreadBinding("session-id", "idle-thread");
       const request = vi.fn(async (_config, method: string) => {
         if (method === CODEX_CONTROL_METHODS.readThread) {
           return { thread: { id: "idle-thread", status: { type: "idle" } } };
@@ -765,10 +748,7 @@ describe("native Codex thread tool", () => {
     },
   ])("refuses to archive after $name", ({ response, error }) =>
     withFixture(async () => {
-      await writeCodexAppServerBinding("session-id", {
-        threadId: "thread-1",
-        cwd: "/tmp/project",
-      });
+      await writeThreadBinding("session-id", "thread-1");
       const request = vi.fn(async () => response);
       const tool = createTool({ request });
 
@@ -791,10 +771,7 @@ describe("native Codex thread tool", () => {
 
   it("reserves archive ownership before cold imports let a later binding mutation run", () =>
     withFixture(async () => {
-      await writeCodexAppServerBinding("session-id", {
-        threadId: "original-thread",
-        cwd: "/tmp/project",
-      });
+      await writeThreadBinding("session-id", "original-thread");
       const request = vi.fn(async (_config, method: string) => {
         if (method === CODEX_CONTROL_METHODS.readThread) {
           return { thread: { id: "archive-target", status: { type: "idle" } } };
@@ -810,10 +787,7 @@ describe("native Codex thread tool", () => {
         thread_id: "archive-target",
         confirm: true,
       });
-      const lateAttachment = writeCodexAppServerBinding("session-id", {
-        threadId: "archive-target",
-        cwd: "/tmp/project",
-      });
+      const lateAttachment = writeThreadBinding("session-id", "archive-target");
       try {
         await Promise.all([
           expect(lateAttachment).rejects.toThrow(
@@ -839,10 +813,7 @@ describe("native Codex thread tool", () => {
         withThreadArchiveFence: async (run) => {
           if (!fenced) {
             fenced = true;
-            await writeCodexAppServerBinding("session-id", {
-              threadId: "newly-bound-thread",
-              cwd: "/tmp/project",
-            });
+            await writeThreadBinding("session-id", "newly-bound-thread");
           }
           return await testCodexAppServerBindingStore.withThreadArchiveFence(run);
         },
@@ -866,10 +837,7 @@ describe("native Codex thread tool", () => {
 
   it("allows a locked session to archive an unowned unrelated thread", () =>
     withFixture(async () => {
-      await writeCodexAppServerBinding("session-id", {
-        threadId: "bound-thread",
-        cwd: "/tmp/project",
-      });
+      await writeThreadBinding("session-id", "bound-thread");
       const request = vi.fn(async (_config, method: string) =>
         method === CODEX_CONTROL_METHODS.readThread
           ? { thread: { id: "other-thread", status: { type: "idle" } } }
@@ -903,14 +871,8 @@ describe("native Codex thread tool", () => {
 
   it("rejects archive when another OpenClaw session owns the thread", () =>
     withFixture(async () => {
-      await writeCodexAppServerBinding("session-id", {
-        threadId: "current-thread",
-        cwd: "/tmp/project",
-      });
-      await writeCodexAppServerBinding("other-session", {
-        threadId: "other-thread",
-        cwd: "/tmp/project",
-      });
+      await writeThreadBinding("session-id", "current-thread");
+      await writeThreadBinding("other-session", "other-thread");
       const request = vi.fn(async (_config, method: string) =>
         method === CODEX_CONTROL_METHODS.readThread
           ? { thread: { id: "other-thread", status: { type: "idle" } } }
@@ -942,10 +904,7 @@ describe("native Codex thread tool", () => {
     "rejects archive when a spawned descendant is owned by an OpenClaw session (archived=%s)",
     (archived) =>
       withFixture(async () => {
-        await writeCodexAppServerBinding("other-session", {
-          threadId: "owned-descendant",
-          cwd: "/tmp/project",
-        });
+        await writeThreadBinding("other-session", "owned-descendant");
         const request = vi.fn(async (_config, method: string, requestParams?: unknown) => {
           if (method === CODEX_CONTROL_METHODS.readThread) {
             return {

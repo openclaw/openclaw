@@ -530,17 +530,7 @@ describe("codex media understanding provider", () => {
       }
       let settled = false;
       const observed = provider
-        .describeImage({
-          buffer: Buffer.from("image-bytes"),
-          fileName: "image.png",
-          mime: "image/png",
-          provider: "codex",
-          model: "gpt-5.4",
-          timeoutMs: 1_000,
-          signal: caller.signal,
-          cfg: {},
-          agentDir: "/tmp/openclaw-agent",
-        })
+        .describeImage(imageRequest({ timeoutMs: 1_000, signal: caller.signal }))
         .then(
           (value) => {
             settled = true;

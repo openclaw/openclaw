@@ -602,7 +602,7 @@ describe("Codex app-server elicitation bridge", () => {
     );
   });
 
-  it("normalizes missing Computer Use schemas to the empty object schema", async () => {
+  it("normalizes non-object Computer Use schemas to the empty object schema", async () => {
     mockApprovalDecision("plugin:approval-computer-use-schema", "allow-once");
 
     const result = await handleCodexAppServerElicitationRequest({

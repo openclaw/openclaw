@@ -298,57 +298,28 @@ it("disables native user-scope skills only for non-default state directories", a
         {
           cwd: workspace,
           errors: [],
-          skills: [
-            {
-              name: "personal",
-              description: "Personal",
-              path: personalSkillRealPath,
-              scope: "user" as const,
-              enabled: true,
-            },
-            {
-              name: "project",
-              description: "Project",
-              path: projectSkillRealPath,
-              scope: "repo" as const,
-              enabled: true,
-            },
-            {
-              name: "plugin",
-              description: "Plugin",
-              path: pluginSkillRealPath,
-              scope: "user" as const,
-              enabled: true,
-            },
-            {
-              name: "hidden",
-              description: "Hidden",
-              path: hiddenSkillRealPath,
-              scope: "user" as const,
-              enabled: true,
-            },
-            {
-              name: "custom",
-              description: "Custom Codex home",
-              path: customCodexSkillRealPath,
-              scope: "user" as const,
-              enabled: true,
-            },
-            {
-              name: "state-owned",
-              description: "State-owned Codex home",
-              path: stateOwnedCodexSkillRealPath,
-              scope: "user" as const,
-              enabled: true,
-            },
-            {
-              name: "nested",
-              description: "Nested through a SKILL.md directory symlink",
-              path: nestedSymlinkSkillRealPath,
-              scope: "user" as const,
-              enabled: true,
-            },
-          ],
+          skills: (
+            [
+              ["personal", "Personal", personalSkillRealPath, "user"],
+              ["project", "Project", projectSkillRealPath, "repo"],
+              ["plugin", "Plugin", pluginSkillRealPath, "user"],
+              ["hidden", "Hidden", hiddenSkillRealPath, "user"],
+              ["custom", "Custom Codex home", customCodexSkillRealPath, "user"],
+              ["state-owned", "State-owned Codex home", stateOwnedCodexSkillRealPath, "user"],
+              [
+                "nested",
+                "Nested through a SKILL.md directory symlink",
+                nestedSymlinkSkillRealPath,
+                "user",
+              ],
+            ] as const
+          ).map(([name, description, skillPath, scope]) => ({
+            name,
+            description,
+            path: skillPath,
+            scope,
+            enabled: true,
+          })),
         },
       ],
     }));

@@ -78,6 +78,25 @@ function mockCall(mock: ReturnType<typeof vi.fn>, index = 0): unknown[] {
   return call;
 }
 
+// The test owns completion; unexpected requests must stay visible.
+function mockPendingSideQuestionRequests(client: ReturnType<typeof createFakeClient>) {
+  client.request.mockImplementation(async (method: string) => {
+    if (method === "thread/fork") {
+      return threadResult("side-thread");
+    }
+    if (method === "thread/inject_items") {
+      return {};
+    }
+    if (method === "turn/start") {
+      return turnStartResult("turn-1");
+    }
+    if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+      return {};
+    }
+    throw new Error(`unexpected request: ${method}`);
+  });
+}
+
 async function handleClientRequestWhenReady(
   client: ReturnType<typeof createFakeClient>,
   request: Parameters<ReturnType<typeof createFakeClient>["handleRequest"]>[0],
@@ -1536,7 +1555,7 @@ describe("runCodexAppServerSideQuestion", () => {
     }
   });
 
-  it("preserves managed web_search while planning hosted search for Responses side questions", async () => {
+  it("suppresses managed web_search while planning hosted search for Responses side questions", async () => {
     createOpenClawCodingToolsMock.mockImplementation(
       (options: { suppressManagedWebSearch?: boolean }) =>
         options.suppressManagedWebSearch === false
@@ -2751,21 +2770,7 @@ describe("runCodexAppServerSideQuestion", () => {
         : [],
     );
     const client = createFakeClient();
-    client.request.mockImplementation(async (method: string) => {
-      if (method === "thread/fork") {
-        return threadResult("side-thread");
-      }
-      if (method === "thread/inject_items") {
-        return {};
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1");
-      }
-      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
-        return {};
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
+    mockPendingSideQuestionRequests(client);
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     const run = runCodexAppServerSideQuestion(
@@ -2870,21 +2875,7 @@ describe("runCodexAppServerSideQuestion", () => {
         execute: computerExecute,
       },
     ]);
-    client.request.mockImplementation(async (method: string) => {
-      if (method === "thread/fork") {
-        return threadResult("side-thread");
-      }
-      if (method === "thread/inject_items") {
-        return {};
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1");
-      }
-      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
-        return {};
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
+    mockPendingSideQuestionRequests(client);
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     const run = runCodexAppServerSideQuestion(sideParams());
@@ -2983,21 +2974,7 @@ describe("runCodexAppServerSideQuestion", () => {
     const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
       diagnosticEvents.push(event),
     );
-    client.request.mockImplementation(async (method: string) => {
-      if (method === "thread/fork") {
-        return threadResult("side-thread");
-      }
-      if (method === "thread/inject_items") {
-        return {};
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1");
-      }
-      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
-        return {};
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
+    mockPendingSideQuestionRequests(client);
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     const run = runCodexAppServerSideQuestion(
@@ -3484,21 +3461,7 @@ describe("runCodexAppServerSideQuestion", () => {
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
     );
     const client = createFakeClient();
-    client.request.mockImplementation(async (method: string) => {
-      if (method === "thread/fork") {
-        return threadResult("side-thread");
-      }
-      if (method === "thread/inject_items") {
-        return {};
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1");
-      }
-      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
-        return {};
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
+    mockPendingSideQuestionRequests(client);
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     const run = runCodexAppServerSideQuestion(
@@ -3535,21 +3498,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
   it("returns an empty response for side-thread user input requests", async () => {
     const client = createFakeClient();
-    client.request.mockImplementation(async (method: string) => {
-      if (method === "thread/fork") {
-        return threadResult("side-thread");
-      }
-      if (method === "thread/inject_items") {
-        return {};
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1");
-      }
-      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
-        return {};
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
+    mockPendingSideQuestionRequests(client);
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     const run = runCodexAppServerSideQuestion(sideParams());

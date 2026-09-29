@@ -27,6 +27,18 @@ import type { CodexGetAccountResponse, v2 } from "../app-server/protocol.js";
 import { buildCodexMigrationProvider } from "./provider.js";
 import { discoverCodexSource } from "./source.js";
 
+function makeFixtureContext(
+  fixture: Awaited<ReturnType<typeof createCodexFixture>>,
+  options: Omit<Parameters<typeof makeContext>[0], "source" | "stateDir" | "workspaceDir"> = {},
+) {
+  return makeContext({
+    source: fixture.codexHome,
+    stateDir: fixture.stateDir,
+    workspaceDir: fixture.workspaceDir,
+    ...options,
+  });
+}
+
 describe("buildCodexMigrationProvider", () => {
   it("preserves whitespace in nonempty CODEX_HOME values", async () => {
     const root = await createCodexTestRoot();
@@ -61,10 +73,7 @@ describe("buildCodexMigrationProvider", () => {
         ],
       },
     } as MigrationProviderContext["config"];
-    const context = makeContext({
-      source: fixture.codexHome,
-      stateDir: fixture.stateDir,
-      workspaceDir: fixture.workspaceDir,
+    const context = makeFixtureContext(fixture, {
       reportDir,
       config,
       targetAgentId: "research",
@@ -98,10 +107,7 @@ describe("buildCodexMigrationProvider", () => {
     const fixture = await createCodexFixture();
     const provider = buildCodexMigrationProvider();
     const preparation = provider.prepareApply?.(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         itemKinds: ["memory"],
       }),
     );
@@ -118,10 +124,7 @@ describe("buildCodexMigrationProvider", () => {
 
     await expect(
       provider.plan(
-        makeContext({
-          source: fixture.codexHome,
-          stateDir: fixture.stateDir,
-          workspaceDir: fixture.workspaceDir,
+        makeFixtureContext(fixture, {
           itemKinds: ["memory"],
         }),
       ),
@@ -141,10 +144,7 @@ describe("buildCodexMigrationProvider", () => {
 
       await expect(
         provider.plan(
-          makeContext({
-            source: fixture.codexHome,
-            stateDir: fixture.stateDir,
-            workspaceDir: fixture.workspaceDir,
+          makeFixtureContext(fixture, {
             itemKinds: ["memory"],
           }),
         ),
@@ -164,10 +164,7 @@ describe("buildCodexMigrationProvider", () => {
 
       await expect(
         provider.plan(
-          makeContext({
-            source: fixture.codexHome,
-            stateDir: fixture.stateDir,
-            workspaceDir: fixture.workspaceDir,
+          makeFixtureContext(fixture, {
             itemKinds: ["memory"],
           }),
         ),
@@ -186,10 +183,7 @@ describe("buildCodexMigrationProvider", () => {
       const provider = buildCodexMigrationProvider();
 
       const plan = await provider.plan(
-        makeContext({
-          source: fixture.codexHome,
-          stateDir: fixture.stateDir,
-          workspaceDir: fixture.workspaceDir,
+        makeFixtureContext(fixture, {
           itemKinds: ["memory"],
           overwrite: true,
         }),
@@ -207,10 +201,7 @@ describe("buildCodexMigrationProvider", () => {
     const provider = buildCodexMigrationProvider();
 
     const plan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         verifyPluginApps: true,
       }),
     );
@@ -263,10 +254,7 @@ describe("buildCodexMigrationProvider", () => {
     const provider = buildCodexMigrationProvider();
 
     const plan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         verifyPluginApps: true,
       }),
     );
@@ -522,10 +510,7 @@ describe("buildCodexMigrationProvider", () => {
     const provider = buildCodexMigrationProvider();
 
     const plan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         verifyPluginApps: true,
       }),
     );
@@ -574,10 +559,7 @@ describe("buildCodexMigrationProvider", () => {
     const provider = buildCodexMigrationProvider();
 
     const plan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         verifyPluginApps: true,
       }),
     );
@@ -631,23 +613,14 @@ describe("buildCodexMigrationProvider", () => {
     );
     const provider = buildCodexMigrationProvider();
 
-    const skippedPlan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
-      }),
-    );
+    const skippedPlan = await provider.plan(makeFixtureContext(fixture));
     expectRecordFields(findItem(skippedPlan.items, "auth:openai"), {
       kind: "auth",
       status: "skipped",
       sensitive: true,
     });
 
-    const ctx = makeContext({
-      source: fixture.codexHome,
-      stateDir: fixture.stateDir,
-      workspaceDir: fixture.workspaceDir,
+    const ctx = makeFixtureContext(fixture, {
       config: configState,
       runtime: createConfigRuntime(configState),
       reportDir,
@@ -723,10 +696,7 @@ describe("buildCodexMigrationProvider", () => {
       },
     };
     const provider = buildCodexMigrationProvider();
-    const ctx = makeContext({
-      source: fixture.codexHome,
-      stateDir: fixture.stateDir,
-      workspaceDir: fixture.workspaceDir,
+    const ctx = makeFixtureContext(fixture, {
       config: configState,
       runtime: createFailingConfigRuntime(configState),
       reportDir,
@@ -868,10 +838,7 @@ describe("buildCodexMigrationProvider", () => {
       const provider = buildCodexMigrationProvider();
 
       const plan = await provider.plan(
-        makeContext({
-          source: fixture.codexHome,
-          stateDir: fixture.stateDir,
-          workspaceDir: fixture.workspaceDir,
+        makeFixtureContext(fixture, {
           verifyPluginApps: true,
         }),
       );
@@ -919,10 +886,7 @@ describe("buildCodexMigrationProvider", () => {
     const provider = buildCodexMigrationProvider();
 
     const plan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         verifyPluginApps: true,
       }),
     );
@@ -962,13 +926,7 @@ describe("buildCodexMigrationProvider", () => {
     });
     const provider = buildCodexMigrationProvider();
 
-    const plan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
-      }),
-    );
+    const plan = await provider.plan(makeFixtureContext(fixture));
 
     expectRecordFields(findItem(plan.items, "plugin:gmail"), {
       kind: "plugin",
@@ -1005,13 +963,7 @@ describe("buildCodexMigrationProvider", () => {
     });
     const provider = buildCodexMigrationProvider();
 
-    const plan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
-      }),
-    );
+    const plan = await provider.plan(makeFixtureContext(fixture));
 
     expect(plan.items.some((item) => item.id === "plugin:gmail")).toBe(false);
     expect(plan.items.some((item) => item.id === "config:codex-plugins")).toBe(false);
@@ -1068,13 +1020,7 @@ describe("buildCodexMigrationProvider", () => {
       });
       const provider = buildCodexMigrationProvider();
 
-      const plan = await provider.plan(
-        makeContext({
-          source: fixture.codexHome,
-          stateDir: fixture.stateDir,
-          workspaceDir: fixture.workspaceDir,
-        }),
-      );
+      const plan = await provider.plan(makeFixtureContext(fixture));
 
       expect(plan.items.some((item) => item.id === "plugin:gmail")).toBe(false);
       expect(plan.items.some((item) => item.id === "config:codex-plugins")).toBe(false);
@@ -1116,10 +1062,7 @@ describe("buildCodexMigrationProvider", () => {
     const provider = buildCodexMigrationProvider();
 
     const plan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         verifyPluginApps: true,
       }),
     );
@@ -1154,10 +1097,7 @@ describe("buildCodexMigrationProvider", () => {
     const provider = buildCodexMigrationProvider();
 
     const plan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         verifyPluginApps: true,
       }),
     );
@@ -1188,13 +1128,7 @@ describe("buildCodexMigrationProvider", () => {
     });
     const provider = buildCodexMigrationProvider();
 
-    const plan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
-      }),
-    );
+    const plan = await provider.plan(makeFixtureContext(fixture));
 
     expect(plan.items.some((item) => item.id === "plugin:gmail")).toBe(false);
     expect(plan.items.some((item) => item.id === "config:codex-plugins")).toBe(false);
@@ -1235,10 +1169,7 @@ describe("buildCodexMigrationProvider", () => {
     const provider = buildCodexMigrationProvider();
 
     await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         verifyPluginApps: true,
         config: {
           agents: {
@@ -1299,10 +1230,7 @@ describe("buildCodexMigrationProvider", () => {
     const provider = buildCodexMigrationProvider();
 
     const plan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         verifyPluginApps: true,
       }),
     );
@@ -1372,10 +1300,7 @@ describe("buildCodexMigrationProvider", () => {
     const provider = buildCodexMigrationProvider();
 
     const plan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         verifyPluginApps: true,
       }),
     );
@@ -1415,10 +1340,7 @@ describe("buildCodexMigrationProvider", () => {
     const provider = buildCodexMigrationProvider();
 
     const plan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         verifyPluginApps: true,
       }),
     );
@@ -1459,10 +1381,7 @@ describe("buildCodexMigrationProvider", () => {
     const provider = buildCodexMigrationProvider();
 
     const plan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         verifyPluginApps: true,
       }),
     );
@@ -1480,10 +1399,7 @@ describe("buildCodexMigrationProvider", () => {
     const provider = buildCodexMigrationProvider();
 
     const result = await provider.apply(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         reportDir,
       }),
     );
@@ -1571,10 +1487,7 @@ describe("buildCodexMigrationProvider", () => {
       });
 
       const result = await provider.apply(
-        makeContext({
-          source: fixture.codexHome,
-          stateDir: fixture.stateDir,
-          workspaceDir: fixture.workspaceDir,
+        makeFixtureContext(fixture, {
           reportDir,
           config: configState,
         }),
@@ -1657,10 +1570,7 @@ describe("buildCodexMigrationProvider", () => {
     });
 
     const result = await provider.apply(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         config: configState,
       }),
     );
@@ -1715,10 +1625,7 @@ describe("buildCodexMigrationProvider", () => {
     });
 
     const result = await provider.apply(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         config: configState,
       }),
     );
@@ -1780,10 +1687,7 @@ describe("buildCodexMigrationProvider", () => {
     const provider = buildCodexMigrationProvider();
 
     const result = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         config: configState,
       }),
     );
@@ -1825,10 +1729,7 @@ describe("buildCodexMigrationProvider", () => {
     });
 
     const result = await provider.apply(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         config: configState,
         providerOptions: { configPatchMode: "return" },
       }),
@@ -1898,10 +1799,7 @@ describe("buildCodexMigrationProvider", () => {
     });
 
     const result = await provider.apply(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         config: configState,
       }),
     );
@@ -1959,10 +1857,7 @@ describe("buildCodexMigrationProvider", () => {
     });
 
     const result = await provider.apply(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         config: configState,
       }),
     );
@@ -2013,10 +1908,7 @@ describe("buildCodexMigrationProvider", () => {
     });
 
     const result = await provider.apply(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         config: configState,
       }),
     );
@@ -2061,10 +1953,7 @@ describe("buildCodexMigrationProvider", () => {
     });
 
     const result = await provider.apply(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         config: configState,
       }),
     );
@@ -2121,10 +2010,7 @@ describe("buildCodexMigrationProvider", () => {
     });
 
     const result = await provider.apply(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         config: configState,
       }),
     );
@@ -2181,10 +2067,7 @@ describe("buildCodexMigrationProvider", () => {
     });
 
     const result = await provider.apply(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         config: configState,
       }),
     );
@@ -2205,18 +2088,9 @@ describe("buildCodexMigrationProvider", () => {
     await writeFile(path.join(fixture.workspaceDir, "skills", "tweet-helper", "SKILL.md"));
     const provider = buildCodexMigrationProvider();
 
-    const plan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
-      }),
-    );
+    const plan = await provider.plan(makeFixtureContext(fixture));
     const overwritePlan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
+      makeFixtureContext(fixture, {
         overwrite: true,
       }),
     );

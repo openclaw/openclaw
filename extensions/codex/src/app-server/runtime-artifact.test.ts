@@ -462,24 +462,11 @@ describe("Codex app-server runtime artifact", () => {
     ).rejects.toThrow("cannot safely parse NODE_OPTIONS");
   });
 
-  it("allows bounded Node resource and warning options", async () => {
-    await withTempDir("openclaw-codex-runtime-node-options-", async (root) => {
-      const command = path.join(root, "codex");
-      await fs.writeFile(command, "native-v1");
-      const options = startOptions(command, {
-        env: {
-          NODE_OPTIONS:
-            "--max-old-space-size=4096 --no-warnings --disable-warning=ExperimentalWarning",
-        },
-      });
-
-      await expect(captureBinding({ options })).resolves.toMatchObject({
-        binding: { id: expect.stringMatching(/^codex-app-server:v1:/u) },
-      });
-    });
-  });
-
   it.each([
+    [
+      "resource and warning options",
+      "--max-old-space-size=4096 --no-warnings --disable-warning=ExperimentalWarning",
+    ],
     [
       "Discord network workaround",
       "--dns-result-order=ipv4first --no-network-family-autoselection",

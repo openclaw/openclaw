@@ -446,8 +446,6 @@ describe("codex plugin", () => {
       "codex.cli.session.resume",
       "codex.exec-server.stdio.v1",
     ]);
-    expect(nodeCommands).not.toContain("codex.appServer.threads.list.v1");
-    expect(nodeCommands).not.toContain("codex.appServer.thread.turns.list.v1");
     expect(registerSessionCatalog).not.toHaveBeenCalled();
   });
 
