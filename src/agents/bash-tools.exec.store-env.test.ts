@@ -29,8 +29,7 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunnerRegistry: () => null,
 }));
 
-vi.mock("../secrets/egress-proxy/registry.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../secrets/egress-proxy/registry.js")>()),
+vi.mock("../secrets/egress-proxy/registry.js", () => ({
   isSecretEgressProxyActive: () => mocks.egressActive,
   registerSecretEgressProxyProcess: (bindings: unknown) => {
     mocks.proxyBindings.push(bindings);
@@ -290,8 +289,6 @@ describe("exec store environment", () => {
     "applies enabled secret egress only to gateway exec (%s)",
     async (host) => {
       vi.stubEnv("OPENCLAW_SECRET_SENTINELS", "false");
-      vi.stubEnv("NO_PROXY", "internal.example");
-      vi.stubEnv("no_proxy", "internal.example");
       writeEntries([
         { name: "AWS_REGION", value: "us-west-2", kind: "env" },
         {
@@ -312,9 +309,6 @@ describe("exec store environment", () => {
         expect(looksLikeSecretSentinel(env.SERVICE_API_KEY ?? "")).toBe(true);
         expect(resolveSecretSentinel(env.SERVICE_API_KEY ?? "")).toBe("enabled-secret");
         expect(env).toMatchObject(EGRESS_ENV);
-        // The proxy refuses plain HTTP, so loopback servers must stay direct.
-        expect(env.NO_PROXY).toBe("internal.example,localhost,127.0.0.1,::1");
-        expect(env.no_proxy).toBe(env.NO_PROXY);
         const childEnv = mocks.spawnInputs.at(-1)?.env;
         expect(childEnv?.SERVICE_API_KEY).toBe(env.SERVICE_API_KEY);
         expect(JSON.stringify(childEnv)).not.toContain("enabled-secret");

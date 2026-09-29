@@ -29,10 +29,7 @@ import type {
   SecretEgressProcessGrant,
   SecretEgressSentinelBinding,
 } from "../secrets/egress-proxy/proxy-server.js";
-import {
-  applySecretEgressProcessEnv,
-  registerSecretEgressProxyProcess,
-} from "../secrets/egress-proxy/registry.js";
+import { registerSecretEgressProxyProcess } from "../secrets/egress-proxy/registry.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 /**
  * Bash exec runtime.
@@ -846,7 +843,7 @@ export async function runExecProcess({
       return await withoutGatewayToolCallerIdentity(() =>
         supervisor.spawn({
           ...input,
-          ...(grant ? { env: applySecretEgressProcessEnv(input.env, grant) } : {}),
+          ...(grant ? { env: { ...input.env, ...grant.env } } : {}),
           onCancel: () => {
             beginSandboxTermination();
             grant?.revoke();

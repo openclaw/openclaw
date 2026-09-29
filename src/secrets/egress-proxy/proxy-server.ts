@@ -162,8 +162,7 @@ function resolveRegisteredSentinel(params: {
 function swapRequestText(params: {
   value: string;
   urlMode: boolean;
-  host: string;
-  registered: RegisteredProcess;
+  resolveSentinel: (sentinel: string) => string | undefined;
 }): { value: string; substituted: boolean } {
   if (!containsSecretSentinel(params.value)) {
     return { value: params.value, substituted: false };
@@ -172,11 +171,7 @@ function swapRequestText(params: {
   const swapped = params.value.replace(
     new RegExp(SECRET_SENTINEL_PATTERN.source, "g"),
     (sentinel) => {
-      const resolved = resolveRegisteredSentinel({
-        sentinel,
-        host: params.host,
-        registered: params.registered,
-      });
+      const resolved = params.resolveSentinel(sentinel);
       if (resolved === undefined) {
         return sentinel;
       }
@@ -192,8 +187,7 @@ function swapRequestText(params: {
 
 function swapRequestHeaders(params: {
   headers: IncomingHttpHeaders;
-  host: string;
-  registered: RegisteredProcess;
+  resolveSentinel: (sentinel: string) => string | undefined;
 }): {
   headers: IncomingHttpHeaders;
   substituted: boolean;
@@ -204,8 +198,7 @@ function swapRequestHeaders(params: {
     const swapped = swapRequestText({
       value,
       urlMode: false,
-      host: params.host,
-      registered: params.registered,
+      resolveSentinel: params.resolveSentinel,
     });
     substituted ||= swapped.substituted;
     return swapped.value;
@@ -356,6 +349,7 @@ export async function startSecretEgressProxyServer(params: {
     host: string;
     registered: RegisteredProcess;
     upgrade?: UpgradeRequest;
+    allowLoopbackHttp?: boolean;
   }) => {
     ownResource(forward.registered, forward.request);
     ownResource(forward.registered, forward.response);
@@ -374,7 +368,13 @@ export async function startSecretEgressProxyServer(params: {
       return;
     }
     const { host } = forward;
-    if (forward.target.protocol !== "https:") {
+    // Decide from the literal target, never DNS: remote names must not gain
+    // cleartext forwarding just because an answer happens to be loopback.
+    const loopbackHttp =
+      forward.allowLoopbackHttp &&
+      forward.target.protocol === "http:" &&
+      (host === "localhost" || host === "::1" || (net.isIPv4(host) && host.startsWith("127.")));
+    if (forward.target.protocol !== "https:" && !loopbackHttp) {
       audit({
         kind: "refused",
         host,
@@ -392,6 +392,14 @@ export async function startSecretEgressProxyServer(params: {
       return;
     }
 
+    const resolveSentinel = (sentinel: string) => {
+      if (loopbackHttp) {
+        const error = new SecretEgressSubstitutionError("non-https-request");
+        error.message = REFUSAL_BODY.trimEnd();
+        throw error;
+      }
+      return resolveRegisteredSentinel({ sentinel, host, registered: forward.registered });
+    };
     forwardSecretEgressRequest({
       request: forward.request,
       response: forward.response,
@@ -407,14 +415,12 @@ export async function startSecretEgressProxyServer(params: {
         const swappedUrl = swapRequestText({
           value: forward.target.toString(),
           urlMode: true,
-          host,
-          registered: forward.registered,
+          resolveSentinel,
         });
         const target = new URL(swappedUrl.value);
         const swappedHeaders = swapRequestHeaders({
           headers: forward.request.headers,
-          host,
-          registered: forward.registered,
+          resolveSentinel,
         });
         swappedHeaders.headers.host = target.host;
         return {
@@ -429,8 +435,7 @@ export async function startSecretEgressProxyServer(params: {
       releaseResponse: () => {
         forward.registered.resources.delete(forward.response);
       },
-      resolveSentinel: (sentinel) =>
-        resolveRegisteredSentinel({ sentinel, host, registered: forward.registered }),
+      resolveSentinel,
       audit,
     });
   };
@@ -499,7 +504,14 @@ export async function startSecretEgressProxyServer(params: {
       request.resume();
       return;
     }
-    forwardRequest({ request, response, ...parsed, registered: authorization, upgrade });
+    forwardRequest({
+      request,
+      response,
+      ...parsed,
+      registered: authorization,
+      upgrade,
+      allowLoopbackHttp: !upgrade,
+    });
   };
   const proxy = createHttpServer(handleProxyRequest).on("upgrade", (request, _socket, head) =>
     handleUpgradeRequest(handleProxyRequest, request, head),

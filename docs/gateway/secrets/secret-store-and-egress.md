@@ -102,7 +102,6 @@ When enabled, OpenClaw adds these values to Gateway-hosted exec environments:
 
 - `HTTPS_PROXY` and `HTTP_PROXY`, with per-process credentials embedded in the loopback proxy URL
 - `NODE_USE_ENV_PROXY=1`, which makes supported Node.js global `fetch` clients honor `HTTP_PROXY` and `HTTPS_PROXY` without using `NODE_OPTIONS`
-- `NO_PROXY` and `no_proxy`, keeping existing entries and adding `localhost`, `127.0.0.1`, and `::1`, so local servers and test fixtures stay direct because the proxy refuses plain HTTP
 - `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, and `GIT_SSL_CAINFO`, pointing at the Gateway's trusted certificate bundle
 - each team-store `secret` entry as an `oc-sent-v2...end` sentinel; `env` entries keep their existing behavior and precedence
 
@@ -148,7 +147,7 @@ Current limits:
 - Non-443 HTTPS substitution is not a supported compatibility target.
 - Identity-scoped secrets are not supported; only the team store participates.
 - Allowed-host policy is exact-hostname authorization only. It does not validate the resolved IP or prevent an allowed origin from reflecting credentials.
-- Plain HTTP is refused; it is not upgraded or substituted.
+- Plain HTTP is refused except for direct proxy requests to literal loopback destinations (`localhost`, `127.0.0.0/8`, or `::1`). These requests stay under proxy authentication, traffic allowlist, audit, and upload limits. DNS answers do not qualify other hostnames for this exception. Loopback HTTP requests carrying a secret sentinel are still refused; secrets are never substituted onto cleartext HTTP.
 - Automatic shared-store secret egress applies only to Gateway-hosted exec. Sandbox and remote `node` exec receive neither proxy variables nor sentinels, so shared-store `secret` entries are unavailable there. Provider-native harness subprocesses also do not use this proxy. The explicit Crabbox command below grants a configured model credential separately.
 - Background subprocesses retain their original secret snapshot until they exit or are stopped. Changes to stored credentials or destination bindings require a new run and a new command; stop existing commands to revoke their older grants immediately.
 
