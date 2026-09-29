@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { i18n, t } from "../../i18n/index.ts";
 import {
   buildFallbackSlashCommands,
@@ -245,8 +246,8 @@ describe("chat composer suggestion accessibility", () => {
     { name: "direct", sessionKey: "main", rowKey: "main" },
     { name: "global alias", sessionKey: "agent:work:main", rowKey: "global" },
   ])(
-    "opens model-supported thinking arguments after tab-completing /think ($name)",
-    ({ sessionKey, rowKey }) => {
+    "keeps model-supported arguments after tab completion and command refresh ($name)",
+    async ({ sessionKey, rowKey }) => {
       const sessions = createSessionsListResult({
         model: "gpt-5.6-sol",
         modelProvider: "openai",
@@ -263,16 +264,21 @@ describe("chat composer suggestion accessibility", () => {
         { id: "max", label: "max" },
         { id: "ultra", label: "ultra" },
       ];
+      const refresh = createDeferred();
       const { container } = createReactiveDraftHarness({
         sessions,
         sessionKey,
         selectedSession: session,
+        onSlashIntent: () => refresh.promise,
       });
 
       inputDraft(container, "/think");
       keydownComposer(container, "Tab");
 
       expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/think ");
+      refresh.resolve();
+      await refresh.promise;
+      await Promise.resolve();
       expect(
         Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
           (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
@@ -280,6 +286,19 @@ describe("chat composer suggestion accessibility", () => {
       ).toEqual(["default", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
     },
   );
+
+  it("does not reopen dismissed arguments after a command refresh", async () => {
+    const refresh = createDeferred();
+    const { container } = createReactiveDraftHarness({ onSlashIntent: () => refresh.promise });
+    inputDraft(container, "/tools");
+    keydownComposer(container, "Tab");
+    expect(container.querySelector(".slash-menu")).not.toBeNull();
+    keydownComposer(container, "Escape");
+    refresh.resolve();
+    await refresh.promise;
+    await Promise.resolve();
+    expect(container.querySelector(".slash-menu")).toBeNull();
+  });
 
   it("suppresses thinking arguments while the active model is switching", () => {
     const sessions = createSessionsListResult({

@@ -7,7 +7,6 @@ import {
   encodeSessionArchiveContent,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "../config/sessions/archive-compression.js";
-import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-lease.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
@@ -20,7 +19,10 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
-import { transformHistoricalTranscriptEvent } from "./state-migrations.transcript-directives-transform.js";
+import {
+  parseDirectiveMigrationTranscriptEvent,
+  transformHistoricalTranscriptEvent,
+} from "./state-migrations.transcript-directives-transform.js";
 
 export const TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE = 32;
 
@@ -57,14 +59,6 @@ type ArchiveRowPlan = {
   sessionId: string;
 };
 
-function parseTranscriptEvent(raw: string, owner: string): TranscriptEvent {
-  try {
-    return JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`${owner} contains invalid transcript JSON`, { cause: error });
-  }
-}
-
 function transformArchiveContent(
   content: string,
   owner: string,
@@ -82,7 +76,7 @@ function transformArchiveContent(
     if (!line) {
       throw new Error(`${owner} contains a blank JSONL record at line ${index + 1}`);
     }
-    const event = parseTranscriptEvent(line, `${owner}:${index + 1}`);
+    const event = parseDirectiveMigrationTranscriptEvent(line, `${owner}:${index + 1}`);
     const transformed = transformHistoricalTranscriptEvent(event);
     changed ||= transformed.changed;
     return transformed.changed ? JSON.stringify(transformed.event) : line;

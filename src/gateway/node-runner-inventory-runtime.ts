@@ -249,6 +249,9 @@ export function resolveNodeWorkerSupervisorProof(
     workerHost: {
       ...declaration.workerHost,
       capacity: { ...declaration.workerHost.capacity },
+      ...(declaration.workerHost.launchToolNames !== undefined
+        ? { launchToolNames: [...declaration.workerHost.launchToolNames] }
+        : {}),
     },
     commands: [...node.commands],
   };

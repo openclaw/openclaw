@@ -12,13 +12,16 @@ import {
 } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
+import { resolveNodeWorkerLaunchToolNames } from "../../infra/node-runner-inventory.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   completeWorkerLaunchDescriptor,
+  parseWorkerLaunchPlan,
   type WorkerLaunchPlan,
 } from "../../worker/launch-descriptor.js";
 import { roundTripWorkerLaunchDescriptor } from "../../worker/launch-descriptor.test-support.js";
+import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
@@ -28,6 +31,7 @@ import {
   OWNER_EPOCH,
   credential,
   measureLaunchTurn,
+  readLaunchToolNames,
   SESSION_ID,
   SESSION_KEY,
   attachedEnvironment,
@@ -47,6 +51,62 @@ import {
 describe("worker turn execution", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+
+  it.each([false, true])(
+    "launches only supervisor-admitted tools and authorizes the same set (declared: %s)",
+    async (declared) => {
+      await seedActivePlacement();
+      const launchToolNames = resolveNodeWorkerLaunchToolNames({
+        enabled: true,
+        capacity: { total: 1, available: 1 },
+        environmentSession: 1,
+        capturedExecPolicy: true,
+        ...(declared ? { launchToolNames: WORKER_TOOL_NAMES } : {}),
+      });
+      const authorize = vi.spyOn(placements, "authorizeWorkerTurnTools");
+      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async () => {
+        throw new WorkerRunnerCapacityError();
+      });
+      const tunnel: WorkerTunnelHandle = {
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        launchTurn,
+        measureLaunchTurn,
+        readLaunchToolNames: async () => launchToolNames,
+        runWorkspaceCommand: vi.fn(),
+        quiesceWorkspace: vi.fn(),
+        syncWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(),
+        stop: vi.fn(),
+      };
+      const provider = createWorkerSessionTurnPlacementProvider({
+        placements,
+        environments: {
+          ...unusedEnvironments(),
+          get: attachedEnvironment,
+          acquireTurnCredential: async () => credential(),
+          startTunnel: async () => tunnel,
+        },
+      });
+      const input = turn("launch-tool-negotiation");
+      try {
+        await expect(
+          provider.executeTurn({ ...sessionTarget, runId: input.runId }, input, vi.fn()),
+        ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
+        expect(launchTurn).toHaveBeenCalledOnce();
+        const request = launchTurn.mock.calls[0]![0];
+        expect(parseWorkerLaunchPlan(request.plan)).toEqual(request.plan);
+        const allowed = request.plan.assignment.toolAuthority.allowedToolNames;
+        expect(allowed.length).toBeGreaterThan(0);
+        expect(allowed.filter((name) => !launchToolNames.includes(name))).toEqual([]);
+        expect(allowed.includes("presence")).toBe(declared);
+        expect(authorize).toHaveBeenCalledExactlyOnceWith(request.turnClaim, allowed);
+      } finally {
+        authorize.mockRestore();
+        input.preparedRunAdmission.close();
+      }
+    },
+  );
 
   it.each(["current", "cancel"] as const)(
     "waits for execution-start settlement before new-turn work (%s)",
@@ -285,6 +345,7 @@ describe("worker turn execution", () => {
       ownerEpoch: OWNER_EPOCH,
       launchTurn,
       measureLaunchTurn,
+      readLaunchToolNames,
       runWorkspaceCommand: vi.fn(),
       syncWorkspace: vi.fn(),
       stop: vi.fn(),
@@ -365,6 +426,7 @@ describe("worker turn execution", () => {
         ownerEpoch: OWNER_EPOCH,
         launchTurn,
         measureLaunchTurn: measure,
+        readLaunchToolNames,
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
@@ -459,6 +521,7 @@ describe("worker turn execution", () => {
         ownerEpoch: OWNER_EPOCH,
         launchTurn,
         measureLaunchTurn,
+        readLaunchToolNames,
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),

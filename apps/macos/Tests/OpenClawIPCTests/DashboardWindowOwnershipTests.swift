@@ -172,12 +172,12 @@ struct DashboardWindowOwnershipTests {
         #expect(recoveredController !== failureController)
         #expect(recoveredController.window === originalWindow)
         #expect(recoveredController.currentURL.absoluteString ==
-            replacementServer.url("/#token=after").absoluteString)
-        let authScripts = recoveredController._testUserScripts
-            .filter { $0.source.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") }
-        #expect(authScripts.count == 1)
-        #expect(authScripts[0].source.contains("after"))
-        #expect(!authScripts[0].source.contains("before"))
+            replacementServer.url("/").absoluteString)
+        let bootstrap = try await dashboardNativeAuthSnapshot(recoveredController)
+        #expect(bootstrap["nativeConnectAuth"] as? Bool == true)
+        #expect(bootstrap["token"] == nil)
+        #expect(bootstrap["password"] == nil)
+        #expect(recoveredController.auth.token == "after")
 
         await manager._testHandleControlChannelStateChange(.connected)
         #expect(manager._testController() === recoveredController)
@@ -235,12 +235,12 @@ struct DashboardWindowOwnershipTests {
         #expect(manager._testController() === currentController)
         #expect(currentController.window === originalWindow)
         #expect(currentController.currentURL.absoluteString ==
-            currentServer.url("/#token=current").absoluteString)
-        let authScripts = currentController._testUserScripts
-            .filter { $0.source.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") }
-        #expect(authScripts.count == 1)
-        #expect(authScripts[0].source.contains("current"))
-        #expect(!authScripts[0].source.contains("stale"))
+            currentServer.url("/").absoluteString)
+        let bootstrap = try await dashboardNativeAuthSnapshot(currentController)
+        #expect(bootstrap["nativeConnectAuth"] as? Bool == true)
+        #expect(bootstrap["token"] == nil)
+        #expect(bootstrap["password"] == nil)
+        #expect(currentController.auth.token == "current")
     }
 
     @Test func `reopening after credential changes isolates the privileged document`() async throws {
@@ -280,11 +280,11 @@ struct DashboardWindowOwnershipTests {
         #expect(replacement !== controller)
         #expect(replacement.window === originalWindow)
         #expect(replacement._testDashboardWebViewIdentity != originalDocument)
-        let authScripts = replacement._testUserScripts
-            .filter { $0.source.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") }
-        #expect(authScripts.count == 1)
-        #expect(authScripts[0].source.contains("after"))
-        #expect(!authScripts[0].source.contains("before"))
+        let bootstrap = try await dashboardNativeAuthSnapshot(replacement)
+        #expect(bootstrap["nativeConnectAuth"] as? Bool == true)
+        #expect(bootstrap["token"] == nil)
+        #expect(bootstrap["password"] == nil)
+        #expect(replacement.auth.token == "after")
     }
 
     @Test func `replacing a key dashboard transfers keyboard ownership`() async throws {
@@ -384,7 +384,7 @@ struct DashboardWindowOwnershipTests {
         #expect(currentController.window === originalWindow)
         #expect(originalWindow.foregroundRequestCount > backgroundForegroundCount)
         #expect(currentController.currentURL.absoluteString ==
-            currentServer.url("/#token=current").absoluteString)
+            currentServer.url("/").absoluteString)
     }
 
     @Test func `hidden dashboard invalidates stale reopening authority`() async throws {
@@ -441,7 +441,7 @@ struct DashboardWindowOwnershipTests {
         #expect(await gate.numberOfRequests() == 2)
         #expect(replacement.window === originalWindow)
         #expect(replacement.currentURL.absoluteString ==
-            currentServer.url("/#token=current").absoluteString)
+            currentServer.url("/").absoluteString)
     }
 
     @Test func `superseded endpoint failure preserves a newer live dashboard`() async throws {
@@ -487,7 +487,7 @@ struct DashboardWindowOwnershipTests {
         #expect(manager._testController() === currentController)
         #expect(currentController.window === originalWindow)
         #expect(currentController.currentURL.absoluteString ==
-            currentServer.url("/#token=current").absoluteString)
+            currentServer.url("/").absoluteString)
     }
 
     @Test func `window handoff ignores a conflicting target autosave frame`() async throws {
@@ -643,7 +643,7 @@ struct DashboardWindowOwnershipTests {
         let controller = try #require(manager._testController())
         #expect(controller.isWindowOpen)
         #expect(controller.currentURL.absoluteString ==
-            server.url("/#token=shared").absoluteString)
+            server.url("/").absoluteString)
         try await self.expectPresentationProbe(from: probes.stream)
 
         let autosaveName = try #require(controller.window?.frameAutosaveName)
@@ -703,16 +703,13 @@ struct DashboardWindowOwnershipTests {
                 gatewayEntriesProvider: { [Self.primaryGateway] })
             defer { manager.close() }
 
-            if mode == .local {
-                #expect(manager.showConfiguredWindowIfPossible())
-            } else {
-                #expect(!manager.showConfiguredWindowIfPossible())
-                try await manager.show()
-            }
+            // First presentation resolves native readiness even for local mode.
+            #expect(!manager.showConfiguredWindowIfPossible())
+            try await manager.show()
             let controller = try #require(manager._testController())
             #expect(controller.isWindowOpen)
             #expect(controller.currentURL.absoluteString ==
-                server.url("/#token=configured").absoluteString)
+                server.url("/").absoluteString)
             try await self.expectPresentationProbe(from: probes.stream)
         }
     }

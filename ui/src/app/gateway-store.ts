@@ -1,4 +1,5 @@
 import {
+  ConnectErrorDetailCodes,
   gatewayCredentialScope,
   isRetryableGatewayStartupUnavailableError,
   readControlUiBuildMismatchId,
@@ -77,7 +78,13 @@ export function createApplicationGateway(
     getModelCatalogTarget?: (gatewayUrl: string) => ModelCatalogTarget | undefined;
     clientOptions?: Pick<
       GatewayBrowserClientOptions,
-      "clientName" | "mode" | "platform" | "deviceFamily" | "instanceId" | "scopes"
+      | "clientName"
+      | "mode"
+      | "platform"
+      | "deviceFamily"
+      | "instanceId"
+      | "scopes"
+      | "nativeConnectAuth"
     >;
   } = {},
 ): ApplicationGateway {
@@ -391,6 +398,7 @@ export function createApplicationGateway(
       mode: options.clientOptions?.mode ?? "webchat",
       instanceId: options.clientOptions?.instanceId ?? generateUUID(),
       scopes: options.clientOptions?.scopes,
+      nativeConnectAuth: options.clientOptions?.nativeConnectAuth,
       get modelCatalog() {
         return client === nextClient
           ? metadataObserver.captureTarget(
@@ -528,6 +536,9 @@ export function createApplicationGateway(
           return;
         }
         const lastErrorCode = resolveGatewayErrorDetailCode(error) ?? error?.code ?? null;
+        if (lastErrorCode === ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID) {
+          connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
+        }
         // Fresh drain evidence re-arms the deadline: the server still says
         // "restarting", so the amber state stays honest for another window.
         const restartPending = isGatewayRestartUnavailableError(error);

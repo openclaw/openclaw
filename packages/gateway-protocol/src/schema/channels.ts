@@ -365,6 +365,12 @@ export const TalkCatalogParamsSchema = closedObject({
   model: Type.Optional(NonEmptyString),
 });
 
+const TalkCatalogAudioFormatProperties = {
+  encoding: Type.Union([Type.Literal("pcm16"), Type.Literal("g711_ulaw")]),
+  sampleRateHz: Type.Integer({ minimum: 1 }),
+  channels: Type.Integer({ minimum: 1 }),
+};
+
 /** One provider entry in the Talk capability catalog. */
 const TalkCatalogProviderSchema = closedObject({
   id: NonEmptyString,
@@ -380,24 +386,8 @@ const TalkCatalogProviderSchema = closedObject({
   modes: Type.Optional(Type.Array(TalkModeSchema)),
   transports: Type.Optional(Type.Array(TalkTransportSchema)),
   brains: Type.Optional(Type.Array(TalkBrainSchema)),
-  inputAudioFormats: Type.Optional(
-    Type.Array(
-      closedObject({
-        encoding: Type.Union([Type.Literal("pcm16"), Type.Literal("g711_ulaw")]),
-        sampleRateHz: Type.Integer({ minimum: 1 }),
-        channels: Type.Integer({ minimum: 1 }),
-      }),
-    ),
-  ),
-  outputAudioFormats: Type.Optional(
-    Type.Array(
-      closedObject({
-        encoding: Type.Union([Type.Literal("pcm16"), Type.Literal("g711_ulaw")]),
-        sampleRateHz: Type.Integer({ minimum: 1 }),
-        channels: Type.Integer({ minimum: 1 }),
-      }),
-    ),
-  ),
+  inputAudioFormats: Type.Optional(Type.Array(closedObject(TalkCatalogAudioFormatProperties))),
+  outputAudioFormats: Type.Optional(Type.Array(closedObject(TalkCatalogAudioFormatProperties))),
   supportsBrowserSession: Type.Optional(Type.Boolean()),
   supportsBargeIn: Type.Optional(Type.Boolean()),
   supportsToolCalls: Type.Optional(Type.Boolean()),
@@ -518,14 +508,10 @@ export const TalkClientCreateResultSchema = Type.Union([
 ]);
 
 /** Secret-bearing provider fields; extra provider options remain provider-owned. */
-const talkProviderFieldSchemas = {
-  apiKey: Type.Optional(SecretInputSchema),
-};
-
-/** Per-provider Talk config bag. */
-const TalkProviderConfigSchema = Type.Object(talkProviderFieldSchemas, {
-  additionalProperties: true,
-});
+const TalkProviderConfigSchema = Type.Object(
+  { apiKey: Type.Optional(SecretInputSchema) },
+  { additionalProperties: true },
+);
 
 /** Realtime Talk defaults and provider selection stored in config. */
 const TalkRealtimeConfigSchema = closedObject({
@@ -727,16 +713,10 @@ export const ChannelsLogoutParamsSchema = closedObject({
 });
 
 /** Stops one channel account runtime. */
-export const ChannelsStopParamsSchema = closedObject({
-  channel: NonEmptyString,
-  accountId: Type.Optional(Type.String()),
-});
+export const ChannelsStopParamsSchema = closedObject(ChannelsLogoutParamsSchema.properties);
 
 /** Starts one channel account runtime. */
-export const ChannelsStartParamsSchema = closedObject({
-  channel: NonEmptyString,
-  accountId: Type.Optional(Type.String()),
-});
+export const ChannelsStartParamsSchema = closedObject(ChannelsLogoutParamsSchema.properties);
 
 /** Starts browser/web login for a channel account. */
 export const WebLoginStartParamsSchema = closedObject({

@@ -189,9 +189,7 @@ function applyVeniceGeminiToolHistoryCompatibility(
 
 export function createVeniceStreamWrapper(
   baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
-  thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"],
 ): ProviderWrapStreamFnContext["streamFn"] {
-  void thinkingLevel;
   return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload, context, model }) => {
     if (model.provider === "venice" && isVeniceDeepSeekV4ModelId(model.id)) {
       delete payload.thinking;

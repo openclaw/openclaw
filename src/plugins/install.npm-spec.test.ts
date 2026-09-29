@@ -1,5 +1,6 @@
 // Covers npm spec parsing for plugin install inputs.
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1218,6 +1219,58 @@ describe("installPluginFromNpmSpec", () => {
       npmRoot,
       packageName: "@openclaw/voice-call",
     });
+  });
+
+  it("runs managed npm installs with the bundled npm CLI under Bun", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const npmCliPath = path.join(
+      path.dirname(createRequire(import.meta.url).resolve("npm/package.json")),
+      "bin/npm-cli.js",
+    );
+    const execPath = process.execPath;
+    mockNpmViewAndInstall({
+      spec: "@openclaw/voice-call@0.0.1",
+      packageName: "@openclaw/voice-call",
+      version: "0.0.1",
+      pluginId: "voice-call",
+      npmRoot,
+    });
+    const mockNpmCommand = runCommandWithTimeoutMock.getMockImplementation()!;
+    runCommandWithTimeoutMock.mockImplementation((argv: string[], options: unknown) =>
+      mockNpmCommand(
+        argv[0] === execPath && argv[1] === npmCliPath ? ["npm", ...argv.slice(2)] : argv,
+        options,
+      ),
+    );
+    vi.stubGlobal("process", {
+      ...process,
+      versions: { ...process.versions, bun: "1.4.2" },
+    });
+    try {
+      const result = await installPluginFromNpmSpec({
+        spec: "@openclaw/voice-call@0.0.1",
+        npmDir: npmRoot,
+        logger: { info: () => {}, warn: () => {} },
+      });
+      expect(result.ok).toBe(true);
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+        [
+          execPath,
+          npmCliPath,
+          "install",
+          "--omit=dev",
+          "--omit=peer",
+          "--legacy-peer-deps",
+          "--loglevel=error",
+          "--ignore-scripts",
+          "--no-audit",
+          "--no-fund",
+        ],
+        expect.objectContaining({ cwd: expect.any(String) }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("keeps lazy imports from a loaded old npm generation available across updates", async () => {

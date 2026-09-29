@@ -1,4 +1,3 @@
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { putTlonSetting, type PendingApproval, type TlonSettingsStore } from "../settings.js";
 import { normalizeShip } from "../targets.js";
@@ -17,8 +16,6 @@ import {
 
 type TlonApprovalApi = Pick<UrbitSSEClient, "poke" | "scry">;
 
-type ApprovedMessageProcessor = (approval: PendingApproval) => Promise<void>;
-
 export function createTlonApprovalRuntime(params: {
   api: TlonApprovalApi;
   runtime: RuntimeEnv;
@@ -30,7 +27,7 @@ export function createTlonApprovalRuntime(params: {
   getEffectiveDmAllowlist: () => string[];
   setEffectiveDmAllowlist: (ships: string[]) => void;
   getEffectiveOwnerShip: () => string | null;
-  processApprovedMessage: ApprovedMessageProcessor;
+  processApprovedMessage: (approval: PendingApproval) => Promise<void>;
   refreshWatchedChannels: () => Promise<number>;
 }) {
   const {
@@ -177,7 +174,7 @@ export function createTlonApprovalRuntime(params: {
     }
 
     const approvals = getPendingApprovals();
-    const existingIndex = approvals.findIndex(
+    const existing = approvals.find(
       (item) =>
         item.type === approval.type &&
         item.requestingShip === approval.requestingShip &&
@@ -185,8 +182,7 @@ export function createTlonApprovalRuntime(params: {
         (approval.type !== "group" || item.groupFlag === approval.groupFlag),
     );
 
-    if (existingIndex !== -1) {
-      const existing = expectDefined(approvals[existingIndex], "located pending approval index");
+    if (existing) {
       if (approval.originalMessage) {
         existing.originalMessage = approval.originalMessage;
         existing.messagePreview = approval.messagePreview;
