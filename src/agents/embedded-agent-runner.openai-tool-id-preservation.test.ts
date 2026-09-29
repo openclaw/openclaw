@@ -141,31 +141,34 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
     expect(roles).toEqual(["assistant", "toolResult", "user", "assistant", "toolResult", "user"]);
   });
 
-  it("preserves paired tool IDs for an unowned Responses provider", async () => {
-    const id = "call_gateway_0|fc_gateway_0";
-    const result = await sanitize(
-      [
-        castAgentMessage({
-          role: "assistant",
-          content: [
-            {
-              type: "thinking",
-              thinking: "reasoning",
-              thinkingSignature: { id: "rs_1", type: "reasoning" },
-            },
-            { type: "toolCall", id, name: "noop", arguments: {} },
-          ],
-        }),
-        output(id, ""),
-      ],
-      {
-        modelApi: "azure-openai-responses",
-        provider: "custom-compatible",
-        modelId: undefined,
-        sessionManager: makeInMemorySessionManager([]),
-      },
-    );
-    expect(callId(result[0])).toBe(id);
-    expect(result[1]).toMatchObject({ toolCallId: id });
-  });
+  it.each(["openai-responses", "openai-chatgpt-responses", "azure-openai-responses"])(
+    "preserves paired tool IDs for an unowned provider using %s",
+    async (modelApi) => {
+      const id = "call_gateway_0|fc_gateway_0";
+      const result = await sanitize(
+        [
+          castAgentMessage({
+            role: "assistant",
+            content: [
+              {
+                type: "thinking",
+                thinking: "reasoning",
+                thinkingSignature: { id: "rs_1", type: "reasoning" },
+              },
+              { type: "toolCall", id, name: "noop", arguments: {} },
+            ],
+          }),
+          output(id, ""),
+        ],
+        {
+          modelApi,
+          provider: "custom-compatible",
+          modelId: undefined,
+          sessionManager: makeInMemorySessionManager([]),
+        },
+      );
+      expect(callId(result[0])).toBe(id);
+      expect(result[1]).toMatchObject({ toolCallId: id });
+    },
+  );
 });

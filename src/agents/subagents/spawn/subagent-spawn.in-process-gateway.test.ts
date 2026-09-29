@@ -603,6 +603,61 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     expect(transport).not.toHaveBeenCalled();
   });
 
+  it("aborts the accepted child run when registry registration fails", async () => {
+    const gatewayContext = makeGatewayContext();
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    let acceptedChildSessionKey: unknown;
+    subagentSpawnTesting.setDepsForTest({
+      dispatchGatewayMethodInProcess: async <T>(
+        method: string,
+        params: Record<string, unknown>,
+      ) => {
+        requests.push({ method, params });
+        if (method === "agent") {
+          acceptedChildSessionKey = params.sessionKey;
+          return { runId: "gateway-accepted-run", status: "accepted" } as T;
+        }
+        if (method === "chat.abort") {
+          if (
+            params.sessionKey !== acceptedChildSessionKey ||
+            params.runId !== "gateway-accepted-run"
+          ) {
+            throw new Error("Abort must target the accepted child session and run");
+          }
+          return { aborted: true, runIds: [params.runId] } as T;
+        }
+        return {} as T;
+      },
+    });
+    // The registry never takes ownership, which is exactly when the suppressed
+    // gateway CLI row would have been the only record of the accepted run.
+    vi.mocked(persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
+      throw new Error("state db unavailable");
+    });
+
+    const result = await withPluginRuntimeGatewayRequestScope(
+      {
+        context: gatewayContext,
+        client: externalCliClient(),
+        isWebchatConnect: () => false,
+      },
+      () =>
+        spawnSubagentDirect(
+          { task: "orphan me", context: "isolated", lightContext: true },
+          { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+        ),
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error ?? "").toContain("Failed to register subagent run");
+    expect(result.childSessionKey).toEqual(expect.any(String));
+    // No registry row exists, so an unaborted run would execute with no task row at all.
+    expect(requests).toContainEqual({
+      method: "chat.abort",
+      params: { sessionKey: result.childSessionKey, runId: "gateway-accepted-run" },
+    });
+  });
+
   it("does not abort an out-of-process run when registry persistence fails", async () => {
     const gatewayContext = makeGatewayContext();
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];

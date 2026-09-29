@@ -647,6 +647,31 @@ describe("agentCommand compaction transcript rotation", () => {
     },
   );
 
+  it("retains the pending final when delivery fails after compaction failure", async () => {
+    const sessionId = "delivery-failure-after-compaction";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    const text = "reply awaiting restart recovery";
+    state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text }));
+    state.runCliTurnCompactionLifecycleMock.mockRejectedValueOnce(new Error(COMPACTION_ERROR));
+    state.deliverAgentCommandResultMock.mockResolvedValueOnce({ deliverySucceeded: false });
+
+    const result = await agentCommand(discordTurn(sessionId, sessionKey));
+
+    expect(result).toMatchObject({ deliverySucceeded: false });
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
+    expect(findStoredSessionEntry(sessionKey)).toMatchObject({
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text,
+        context: {
+          channel: "discord",
+          to: "discord:dm:123",
+          accountId: "main",
+        },
+      },
+    });
+  });
+
   it.each([
     ["empty payloads", "empty", []],
     ["a silent NO_REPLY payload", "silent", [{ text: "NO_REPLY" }]],

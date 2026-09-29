@@ -33,7 +33,14 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
     prepareProviderExtraParams: vi.fn(() => undefined),
     resolveProviderHookPlugin: vi.fn(() => undefined),
     resolveProviderPluginsForHooks: vi.fn(() => []),
-    resolveProviderRuntimePlugin: vi.fn(() => undefined),
+    resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
+      provider === "github-copilot"
+        ? {
+            buildReplayPolicy: ({ modelId }: { modelId?: string | null }) =>
+              modelId?.includes("claude") ? { dropThinkingBlocks: true } : undefined,
+          }
+        : undefined,
+    ),
     wrapProviderStreamFn: vi.fn(() => undefined),
   };
 });
@@ -677,6 +684,51 @@ describe("sanitizeSessionHistory", () => {
     );
     expect(assistantContent(out)).toEqual([text("visible answer")]);
     expect(assistantContent(out, 3)).toEqual(current);
+  });
+
+  it("preserves latest Copilot thinking and tool continuation while stripping older reasoning", async () => {
+    const current = [
+      thinking("read the file", "reasoning_text"),
+      toolCall("tool_123"),
+      text("Reading the file."),
+    ];
+    const out = await sanitize(
+      [
+        user("first"),
+        assistant([thinking("older reasoning", "reasoning_text")]),
+        user("read the file"),
+        assistant(current, { stopReason: "toolUse" }),
+        toolResult("tool_123"),
+      ],
+      {
+        modelApi: "openai-completions",
+        provider: "github-copilot",
+        modelId: "claude-opus-4.6",
+      },
+    );
+    expect(roles(out)).toEqual(["user", "assistant", "user", "assistant", "toolResult"]);
+    expect(assistantContent(out)).toEqual(omittedReasoning);
+    expect(assistantContent(out, 3)).toEqual(current);
+    expect(out[4]).toMatchObject({ toolCallId: "tool_123", content: [text("ok")] });
+  });
+
+  it.each([
+    { provider: "kimi", modelId: "kimi-for-coding" },
+    { provider: "github-copilot", modelId: "claude-opus-4.6" },
+  ])("preserves unsigned thinking for $provider over Anthropic transport", async (route) => {
+    const content = [thinking("unsigned reasoning"), text("result")];
+    const out = await sanitizeAnthropic([user("analyze"), assistant(content)], {
+      ...route,
+      preserveLatestAssistantThinking: false,
+      policy: makeAnthropicReplayPolicy({
+        preserveNativeAnthropicToolUseIds: false,
+        preserveSignatures: false,
+        dropReasoningFromHistory: false,
+        validateAnthropicTurns: false,
+        allowSyntheticToolResults: false,
+      }),
+    });
+    expect(assistantContent(out)).toEqual(content);
   });
 
   it("keeps regular latest Anthropic thinking replay while preserving older stripped turns", async () => {

@@ -2481,13 +2481,23 @@ describe("slack implicit mention policy", () => {
 
   afterAll(() => storeFixture.cleanup());
 
-  function prepareThreadMessage(eventScope?: SlackEventScope) {
+  function prepareThreadMessage(
+    eventScope?: SlackEventScope,
+    options: Pick<
+      Parameters<typeof createInboundSlackTestContext>[0],
+      "channelsConfig" | "groupPolicy"
+    > = {},
+  ) {
+    const channelsConfig = options.channelsConfig ?? { C123: { requireMention: true } };
     const ctx = createInboundSlackTestContext({
       cfg: {
-        channels: { slack: { enabled: true } },
+        channels: {
+          slack: { enabled: true, channels: channelsConfig, groupPolicy: options.groupPolicy },
+        },
         session: { store: storeFixture.makeTmpStorePath().storePath },
       },
-      channelsConfig: { C123: { requireMention: true } },
+      channelsConfig,
+      groupPolicy: options.groupPolicy,
     });
     ctx.resolveUserName = async () => ({ name: "Alice" });
     return prepareMessageWith(
@@ -2522,6 +2532,36 @@ describe("slack implicit mention policy", () => {
       nowSpy.mockRestore();
     }
   });
+
+  const unauthorizedThreadCases: Array<{
+    authorization: string;
+    options: Pick<
+      Parameters<typeof createInboundSlackTestContext>[0],
+      "channelsConfig" | "groupPolicy"
+    >;
+  }> = [
+    {
+      authorization: "channel",
+      options: {
+        channelsConfig: { C_ALLOWED: { enabled: true, requireMention: true } },
+        groupPolicy: "allowlist" as const,
+      },
+    },
+    {
+      authorization: "sender",
+      options: {
+        channelsConfig: { C123: { requireMention: true, users: ["U_ALLOWED"] } },
+      },
+    },
+  ];
+  it.each(unauthorizedThreadCases)(
+    "rejects a joined thread when $authorization authorization fails",
+    async ({ options }) => {
+      recordSlackThreadParticipation("default", "C123", "1700000000.000000");
+
+      expect(await prepareThreadMessage(undefined, options)).toBeNull();
+    },
+  );
 
   it("does not accept participation recorded in a different enterprise workspace", async () => {
     recordSlackThreadParticipation("default", "C123", "1700000000.000000", {

@@ -312,6 +312,21 @@ describe("AcpSessionManager turn results", () => {
     expect(states.at(-1)).toBe("error");
   });
 
+  it("does not retry a generic Internal error without a resume-required detail code", async () => {
+    const { state } = setupPersistentRuntime();
+    state.runTurn.mockImplementation(async function* () {
+      yield { type: "error" as const, code: "ACP_TURN_FAILED", message: "Internal error" };
+    });
+
+    await expect(state.run()).rejects.toMatchObject({
+      code: "ACP_TURN_FAILED",
+      message: "Internal error",
+    });
+    expect(state.prepareFreshSession).not.toHaveBeenCalled();
+    expect(state.ensureSession).toHaveBeenCalledOnce();
+    expect(state.runTurn).toHaveBeenCalledOnce();
+  });
+
   it.each(["event", "cause"] as const)(
     "discards stale persistent identity for a structured resume-required %s with generic wording",
     async (source) => {

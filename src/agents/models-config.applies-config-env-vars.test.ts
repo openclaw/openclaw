@@ -14,6 +14,15 @@ import * as modelsConfigProviders from "./models-config.providers.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
+const providerRuntimeMocks = vi.hoisted(() => ({
+  normalizeProviderConfigWithPlugin: vi.fn<
+    typeof import("../plugins/provider-runtime.js").normalizeProviderConfigWithPlugin
+  >(() => undefined),
+  resolveProviderConfigApiKeyWithPlugin: vi.fn<
+    typeof import("../plugins/provider-runtime.js").resolveProviderConfigApiKeyWithPlugin
+  >(() => undefined),
+}));
+
 vi.mock("./provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => Object.create(null) as Record<string, string>,
   resolveProviderIdForAuth: (providerId: string) => providerId.trim().toLowerCase(),
@@ -22,8 +31,8 @@ vi.mock("../plugins/provider-external-auth-core.js", () => ({
   createProviderExternalAuthResolver: () => ({ resolveExternalAuthProfilesWithPlugins: () => [] }),
 }));
 vi.mock("../plugins/provider-runtime.js", () => ({
-  normalizeProviderConfigWithPlugin: () => undefined,
-  resolveProviderConfigApiKeyWithPlugin: () => undefined,
+  normalizeProviderConfigWithPlugin: providerRuntimeMocks.normalizeProviderConfigWithPlugin,
+  resolveProviderConfigApiKeyWithPlugin: providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin,
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
 }));
 vi.mock("./model-auth-env-vars.js", () => ({
@@ -44,6 +53,10 @@ vi.mock("./model-auth-env-vars.js", () => ({
 }));
 afterEach(() => {
   vi.restoreAllMocks();
+  providerRuntimeMocks.normalizeProviderConfigWithPlugin.mockReset();
+  providerRuntimeMocks.normalizeProviderConfigWithPlugin.mockReturnValue(undefined);
+  providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin.mockReset();
+  providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin.mockReturnValue(undefined);
 });
 
 function provider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
@@ -79,6 +92,32 @@ async function generate(params: Partial<Parameters<typeof planModelsJsonForTest>
 }
 
 describe("models-config planning", () => {
+  it("does not expose the full registry to provider policy hooks for a scoped snapshot", async () => {
+    providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin.mockReturnValue(
+      "POLICY_ALIAS_API_KEY",
+    );
+    vi.spyOn(modelsConfigProviders, "resolveImplicitProviders").mockResolvedValue({
+      "policy-alias": provider({ baseUrl: "https://policy.example/v1" }),
+    });
+    await generate({
+      pluginMetadataSnapshot: {
+        ...createPluginMetadataSnapshotFixture(),
+        pluginIds: ["owner"],
+      },
+    });
+
+    const normalizeParams = providerRuntimeMocks.normalizeProviderConfigWithPlugin.mock.calls.find(
+      ([params]) => params.provider === "policy-alias",
+    )?.[0];
+    const apiKeyParams = providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin.mock.calls.find(
+      ([params]) => params.provider === "policy-alias",
+    )?.[0];
+    expect(normalizeParams).toBeDefined();
+    expect(apiKeyParams).toBeDefined();
+    expect(normalizeParams?.manifestRegistry).toBeUndefined();
+    expect(apiKeyParams?.manifestRegistry).toBeUndefined();
+  });
+
   it("keeps the implicit catalog when the explicit baseUrl is blank", async () => {
     vi.spyOn(modelsConfigProviders, "resolveImplicitProviders").mockResolvedValue({
       openai: provider(),

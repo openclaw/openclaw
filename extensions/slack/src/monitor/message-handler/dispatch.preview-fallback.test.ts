@@ -1090,6 +1090,22 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(getSlackSessionRuns(prepared.ctx, address)).toEqual([]);
   });
 
+  it.each(["reply_payload_sending", "message_sending"])(
+    "suppresses portable provider previews when %s is registered",
+    async (modifyingHook) => {
+      getGlobalHookRunnerMock.mockReturnValue({
+        hasHooks: vi.fn((hookName: string) => hookName === modifyingHook),
+      });
+
+      await dispatch();
+
+      expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
+      expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+      expect(deliverRepliesMock).toHaveBeenCalledOnce();
+      expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+    },
+  );
+
   it("suppresses native progress cards when a modifying hook is registered", async () => {
     getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn((hookName: string) => hookName === "message_sending"),

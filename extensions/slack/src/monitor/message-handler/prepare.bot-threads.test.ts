@@ -146,7 +146,11 @@ describe("Slack bot-thread mention configuration", () => {
     expect(prepared?.ctxPayload.MessageThreadId).toBe(test.threadTs);
   });
 
-  it("stops the real handler when mention policy changes during root lookup", async () => {
+  it.each([
+    { policy: "mention policy", config: { requireMentionInBotThreads: true } },
+    { policy: "channel access", config: { channels: { C123: { enabled: false } } } },
+    { policy: "sender access", config: { channels: { C123: { users: ["U_ALLOWED"] } } } },
+  ])("stops the real handler when $policy changes during root lookup", async ({ config }) => {
     const test = fixture({ requireMentionInBotThreads: false, historyLimit: 0 }, "default", {
       ackReaction: "eyes",
       ackReactionScope: "all",
@@ -156,7 +160,7 @@ describe("Slack bot-thread mention configuration", () => {
     test.replies.mockImplementation(async () => {
       const next: OpenClawConfig = {
         ...test.ctx.cfg,
-        channels: { slack: { ...test.ctx.cfg.channels?.slack, requireMentionInBotThreads: true } },
+        channels: { slack: { ...test.ctx.cfg.channels?.slack, ...config } },
       };
       setRuntimeConfigSnapshot(next, next);
       return { messages: [{ ts: test.threadTs, text: "Bot root", user: "B1" }] };

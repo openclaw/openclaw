@@ -285,26 +285,46 @@ it("retains the original failed published result before the bounded output tail"
   expect(JSON.stringify(fixture.records)).not.toContain(secret);
 });
 
-it("keeps only safe candidate check proof", () => {
-  const privatePayload = "synthetic-private-command-payload";
-  const checks = candidateCheckNames.map((name) => ({ name, exitCode: 0, durationMs: 12 }));
-  const observed = parseInstalledUpdateResult({
-    status: "ok",
-    mode: "npm",
-    run: { privatePayload },
-    steps: [
-      { name: privatePayload, exitCode: 0, durationMs: 1 },
-      ...checks.map((check) => ({
-        ...check,
-        command: privatePayload,
-        cwd: privatePayload,
-        stdoutTail: privatePayload,
-      })),
-    ],
-  });
-  expect(observed).toEqual({ status: "ok", mode: "npm", steps: checks });
-  expect(JSON.stringify(observed)).not.toContain(privatePayload);
-});
+it.each([
+  { name: "candidate migration continuation", exitCode: 0 },
+  { name: "candidate migration continuation", exitCode: null },
+  { name: "candidate migration continuation", exitCode: undefined },
+  { name: "candidate gateway canary", exitCode: 1 },
+  { name: "candidate doctor lint", exitCode: undefined },
+])(
+  "requires every candidate check and keeps only safe proof ($name exit=$exitCode)",
+  ({ name, exitCode }) => {
+    const privatePayload = "synthetic-private-command-payload";
+    const checks = candidateCheckNames.flatMap((check) =>
+      check === name && exitCode === undefined
+        ? []
+        : [{ name: check, exitCode: check === name ? exitCode : 0, durationMs: 12 }],
+    );
+    const value = {
+      status: "ok",
+      mode: "npm",
+      run: { privatePayload },
+      steps: [
+        { name: privatePayload, exitCode: 0, durationMs: 1 },
+        ...checks.map((check) => ({
+          ...check,
+          command: privatePayload,
+          cwd: privatePayload,
+          stdoutTail: privatePayload,
+        })),
+      ],
+    };
+    if (exitCode !== 0) {
+      expect(() => parseInstalledUpdateResult(value)).toThrow(
+        `Published updater must pass ${name}`,
+      );
+      return;
+    }
+    const observed = parseInstalledUpdateResult(value);
+    expect(observed).toEqual({ status: "ok", mode: "npm", steps: checks });
+    expect(JSON.stringify(observed)).not.toContain(privatePayload);
+  },
+);
 
 it("captures failed installed update progress without changing the ledger or retaining payloads", async () => {
   const ledger = await import("../infra/update-run-ledger.js");

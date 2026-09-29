@@ -783,25 +783,46 @@ describe("active-memory plugin", () => {
     expect(hasInfoLine("active-memory: recall skipped reason=policy-disabled")).toBe(true);
   });
 
-  it("skips recall for inter-session deliveries that reuse the user trigger", async () => {
-    const result = await runPromptBuild(
-      {
-        prompt:
-          "[Inter-session message] sourceSession=agent:main:other sourceTool=sessions_send isUser=false\nHandoff payload",
-      },
-      {
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:main:other",
-          sourceTool: "sessions_send",
+  it.each([
+    {
+      sourceTool: "sessions_send",
+      sourceSessionKey: "agent:main:other",
+      prompt:
+        "[Inter-session message] sourceSession=agent:main:other sourceTool=sessions_send isUser=false\nHandoff payload",
+    },
+    {
+      sourceTool: "subagent_settle",
+      sourceSessionKey: undefined,
+      prompt: "[Subagent Context] subagent_settle\nTask finished",
+    },
+  ])(
+    "skips recall for $sourceTool deliveries that reuse the user trigger",
+    async ({ sourceTool, sourceSessionKey, prompt }) => {
+      const result = await runPromptBuild(
+        { prompt },
+        {
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey,
+            sourceTool,
+          },
         },
-      },
+      );
+
+      expect(result).toBeUndefined();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(hoisted.getActiveMemorySearchManager).not.toHaveBeenCalled();
+      expect(hasInfoLine("active-memory: recall skipped reason=session-ineligible")).toBe(true);
+    },
+  );
+
+  it("still recalls for external-user provenance", async () => {
+    const result = await runPromptBuild(
+      { prompt: "what wings should i order?" },
+      { inputProvenance: { kind: "external_user" } },
     );
 
-    expect(result).toBeUndefined();
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    expect(hoisted.getActiveMemorySearchManager).not.toHaveBeenCalled();
-    expect(hasInfoLine("active-memory: recall skipped reason=session-ineligible")).toBe(true);
+    expectPrependContextContains(result, "lemon pepper wings");
   });
 
   it("does not inject recall that completes after the turn authority closes", async () => {
@@ -1617,6 +1638,39 @@ describe("active-memory plugin", () => {
     ).toBe(true);
     expect(currentActiveMemoryConfig().enabled).toBe(false);
     expect(currentActiveMemoryConfig().agents).toEqual(["main"]);
+  });
+
+  it("uses live runtime config for before_prompt_build enablement", async () => {
+    configFile = {
+      plugins: {
+        entries: {
+          "active-memory": {
+            enabled: true,
+            config: { enabled: false, agents: ["main"] },
+          },
+        },
+      },
+    };
+
+    const result = await runPromptBuild(
+      { prompt: "what wings should i order after a live config disable?" },
+      { sessionKey: "agent:main:live-config-disable" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("does not run deep recall when the live active-memory plugin entry is removed", async () => {
+    configFile = { plugins: { entries: {} } };
+
+    const result = await runPromptBuild(
+      { prompt: "what wings should i order after active memory is removed?" },
+      { sessionKey: "agent:main:live-config-removed" },
+    );
+
+    expectPrependContextContains(result, skippedRecallContext);
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it.each([

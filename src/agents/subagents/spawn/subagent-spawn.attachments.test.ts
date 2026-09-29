@@ -156,11 +156,17 @@ describe("spawnSubagentDirect filename validation", () => {
     expect(result.error).toMatch(/attachments_invalid_name/);
   });
 
-  it("name with newline returns attachments_invalid_name", async () => {
-    const result = await spawnWithName("foo\nbar");
+  it.each([
+    ["newline", "foo\nbar"],
+    ["U+009B C1 CSI", "foo\u009Bbar"],
+    ["U+2028 line separator", "foo\u2028bar"],
+    ["U+202E bidi override", "foo\u202Ebar"],
+  ])("name with %s returns attachments_invalid_name", async (_label, name) => {
+    const result = await spawnWithName(name);
     expect(result.status).toBe("error");
     expect(result.error).toMatch(/attachments_invalid_name/);
-    expect(result.error).not.toContain("foo\nbar");
+    expect(result.error).not.toContain(name);
+    expect(result.error).not.toMatch(/[\u0085\u009B\u2028\u2029\u202E]/);
   });
 
   it("rejects a raw-valid path list whose wrapped prompt exceeds the budget", async () => {

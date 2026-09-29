@@ -388,58 +388,68 @@ describe("readScheduledTaskCommand", () => {
     },
   );
 
-  it.each(["matching wrappers", "conflicting wrappers"] as const)(
-    "reads the actual generated Startup target (%s)",
-    async (kind) => {
-      await withWindowsLauncherFiles(async (env, files) => {
-        files.set(resolveTaskScriptPath(env), "@echo off\r\nnode stale-canonical.js\r\n");
-        const scriptPath = "C:\\Services\\Backup\\gateway.cmd";
-        const otherPath = "C:\\Services\\Other\\gateway.cmd";
-        const startupPaths = resolveStartupEntryPaths(env);
-        const writeLauncher = (extension: "cmd" | "vbs", target: string) => {
-          const startupPath = startupPaths.find((pathname) => pathname.endsWith(`.${extension}`))!;
-          const content =
-            extension === "cmd"
-              ? buildStartupLauncherScript({ scriptPath: target })
+  it.each([
+    "cmd",
+    "current vbs",
+    "legacy vbs",
+    "matching wrappers",
+    "conflicting wrappers",
+  ] as const)("reads the actual generated Startup target (%s)", async (kind) => {
+    await withWindowsLauncherFiles(async (env, files) => {
+      files.set(resolveTaskScriptPath(env), "@echo off\r\nnode stale-canonical.js\r\n");
+      const scriptPath = "C:\\Services\\Backup\\gateway.cmd";
+      const otherPath = "C:\\Services\\Other\\gateway.cmd";
+      const startupPaths = resolveStartupEntryPaths(env);
+      const writeLauncher = (extension: "cmd" | "vbs", target: string) => {
+        const startupPath = startupPaths.find((pathname) => pathname.endsWith(`.${extension}`))!;
+        const content =
+          extension === "cmd"
+            ? buildStartupLauncherScript({ scriptPath: target })
+            : kind === "legacy vbs"
+              ? `CreateObject("WScript.Shell").Run """${target}""", 0, False\r\n`
               : buildHiddenLauncherScript({ scriptPath: target });
-          files.set(startupPath, encodeWindowsLauncherScript({ format: extension, content }));
-        };
+        files.set(startupPath, encodeWindowsLauncherScript({ format: extension, content }));
+      };
+      if (kind === "cmd" || kind.endsWith("wrappers")) {
         writeLauncher("cmd", scriptPath);
+      }
+      if (kind !== "cmd") {
         writeLauncher("vbs", kind === "conflicting wrappers" ? otherPath : scriptPath);
-        spawnSync.mockReturnValue({ status: 1, stdout: "-2147024894", stderr: "" });
-        for (const pathname of [scriptPath, otherPath]) {
-          files.set(
-            pathname,
-            '@echo off\r\n"C:\\Node\\node.exe" "C:\\OtherInstall\\openclaw.mjs" gateway --port 19789\r\n',
-          );
-        }
-        const result = readScheduledTaskCommand(env, {
-          requireEffective: true,
-          requireLoaded: true,
-        });
-        if (kind === "conflicting wrappers") {
-          await expect(result).rejects.toThrow(
-            "Effective Scheduled Task service command could not be inspected.",
-          );
-        } else {
-          await expect(result).resolves.toMatchObject({
-            sourcePath: scriptPath,
-            programArguments: [
-              "C:\\Node\\node.exe",
-              "C:\\OtherInstall\\openclaw.mjs",
-              "gateway",
-              "--port",
-              "19789",
-            ],
-          });
-        }
+      }
+      spawnSync.mockReturnValue({ status: 1, stdout: "-2147024894", stderr: "" });
+      for (const pathname of [scriptPath, otherPath]) {
+        files.set(
+          pathname,
+          '@echo off\r\n"C:\\Node\\node.exe" "C:\\OtherInstall\\openclaw.mjs" gateway --port 19789\r\n',
+        );
+      }
+      const result = readScheduledTaskCommand(env, {
+        requireEffective: true,
+        requireLoaded: true,
       });
-    },
-  );
+      if (kind === "conflicting wrappers") {
+        await expect(result).rejects.toThrow(
+          "Effective Scheduled Task service command could not be inspected.",
+        );
+      } else {
+        await expect(result).resolves.toMatchObject({
+          sourcePath: scriptPath,
+          programArguments: [
+            "C:\\Node\\node.exe",
+            "C:\\OtherInstall\\openclaw.mjs",
+            "gateway",
+            "--port",
+            "19789",
+          ],
+        });
+      }
+    });
+  });
 
   it.each([
     "multiple actions",
     "action arguments",
+    "action changed",
     "root-relative action (backslash)",
     "saved name changed",
     "saved profile changed",
@@ -466,6 +476,16 @@ describe("readScheduledTaskCommand", () => {
       }),
     };
     spawnSync.mockReturnValue(found);
+    if (kind === "action changed") {
+      spawnSync.mockReturnValueOnce(found).mockReturnValue({
+        status: 0,
+        stdout: JSON.stringify({
+          taskPath: "\\OpenClaw Gateway Backup",
+          state: 3,
+          actions: [{ ...action, path: "C:\\Other\\gateway.cmd" }],
+        }),
+      });
+    }
 
     vi.spyOn(fs, "readFile").mockResolvedValue(
       Buffer.from(
