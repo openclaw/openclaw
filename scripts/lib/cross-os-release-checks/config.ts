@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { basename, dirname, resolve, win32 as pathWin32 } from "node:path";
+import { compareReleaseVersions } from "../release-version.mjs";
 import { trimForSummary } from "./shared.ts";
 import { type CrossOsSuite, parseCrossOsSuiteFilter } from "./suite-filter.mjs";
 
@@ -19,10 +20,9 @@ export type PackagedUpgradeTiming = {
   name: "total" | "package-install" | "package-install-omit-optional" | "staged-swap" | "doctor";
   durationMs: number;
 };
-export type PackagedUpgradeFallbackEvidence = {
-  reason: "timeout" | "swap-cleanup";
-  action: "direct-candidate-install";
-};
+export type PackagedUpgradeFallbackEvidence =
+  | { reason: "timeout" | "swap-cleanup"; action: "direct-candidate-install" }
+  | { reason: "unsettled-exit"; action: "retry-update" | "direct-candidate-install" };
 export type LaneResult = {
   status: string;
   error?: string;
@@ -649,6 +649,25 @@ export function isRecoverableWindowsPackagedUpgradeTimeoutError(
     /[/\\]openclaw\.mjs update --tag http:\/\/127\.0\.0\.1:\d+\/openclaw[^/\s]*\.tgz --yes --json(?: --no-restart)? --timeout \d+/u.test(
       message,
     )
+  );
+}
+
+export function isRecoverableWindowsPackagedUpgradeUnsettledExit(
+  result: CommandResult,
+  {
+    baselineVersion,
+    installedVersion,
+    platform = process.platform,
+  }: { baselineVersion: string; installedVersion: string; platform?: NodeJS.Platform },
+) {
+  return (
+    platform === "win32" &&
+    result.exitCode === 13 &&
+    // The shipped defect exits before emitting any JSON or switching the install.
+    result.stdout.trim() === "" &&
+    /\bWarning: Detected unsettled top-level await\b/u.test(result.stderr) &&
+    compareReleaseVersions(baselineVersion, "2026.9.7") === -1 &&
+    installedVersion === baselineVersion
   );
 }
 

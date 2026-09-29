@@ -75,11 +75,21 @@ so preparing an update cannot prune dependencies used by the serving Gateway.
 The candidate's temporary workspace settings are restored before checking for
 source changes; the live checkout's workspace settings are preserved.
 
-For package installs with a managed Gateway service, `openclaw update` targets
-the package root used by that service. If the shell `openclaw` command comes
-from a different install, the updater prints both roots and the managed
-service's Node path, and checks that Node version against the target release's
-`engines.node` requirement before replacing the package.
+For package installs with an owned managed Bun Gateway at a different root,
+`openclaw update` targets the Gateway's package root and leaves the invoking CLI
+installation unchanged. It validates the service's actual Bun executable for
+Bun 1.4+ and WAL-safe `node:sqlite`, and retains its recorded runtime pin through
+service installation and restart. Bun's emulated Node version is never compared
+to the target's `engines.node` requirement. When the updater runs on Node, its
+Node must also pass the target's engine and SQLite checks before package
+replacement, because finalization runs under the updater runtime.
+
+Node services keep the existing routing: a writable owned definition normally
+moves to the invoking CLI installation; Windows, overridden or nonwritable
+definitions, and `--no-restart` retain the service-root route. The selected Node
+must satisfy the target release's `engines.node` requirement. See
+[managed-service updates](/install/updating#recommended-openclaw-update) for
+ownership checks and older-updater limitations.
 
 ## Source-checkout servers (reference script)
 
@@ -394,6 +404,12 @@ bun add -g --trust openclaw@latest
 
 `--trust` allows OpenClaw's lifecycle scripts. The canonical `openclaw update`
 path applies the same OpenClaw-only Bun trust when it owns the install.
+For Bun-owned updates, package-manager probes and installs use the verified
+service Bun when updating a managed service root. Otherwise they use
+`process.execPath` when the updater runs under Bun, with bare `bun` from PATH
+only as the final fallback. A missing or different PATH Bun does not replace
+an explicitly selected executable. Package-manager ownership detection is
+unchanged; locating an installation under `~/.openclaw` does not make it Bun-owned.
 On Windows, the staged updater rejects Bun installs before stopping the Gateway
 because it cannot relocate Bun's binary launchers. Run
 `bun add -g --trust openclaw@<resolved-target-version>` manually, then

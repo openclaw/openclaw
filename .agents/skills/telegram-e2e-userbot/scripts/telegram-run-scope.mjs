@@ -121,9 +121,16 @@ class TelegramRunScope {
     if (!proxy) return Promise.resolve();
     const entry = this.proxies.get(proxy);
     if (!entry) return Promise.resolve();
-    entry.closing ??= Promise.resolve(proxy.close()).then(() => {
-      this.proxies.delete(proxy);
-    });
+    entry.closing ??= Promise.resolve()
+      .then(() => proxy.close())
+      .then((receipt) => {
+        // Native Gateway adapters return a receipt even when teardown failed.
+        // Rejection must retain this consumer and its credential recovery state.
+        if (receipt !== undefined && receipt?.verified !== true) {
+          throw new Error("Telegram consumer cleanup is unconfirmed.");
+        }
+        this.proxies.delete(proxy);
+      });
     return entry.closing;
   }
 

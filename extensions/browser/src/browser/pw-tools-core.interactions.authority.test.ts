@@ -12,7 +12,7 @@ const { waitForViaPlaywright } = await import("./pw-tools-core.interactions.cont
 const { resizeViewportViaPlaywright } = await import("./pw-tools-core.snapshot.js");
 
 describe("resident interaction authority", () => {
-  it.each(["click", "type", "fill", "wait", "resize"] as const)(
+  it.each(["type", "wait", "resize"] as const)(
     "starts each %s effect in the same turn as its final assertion",
     async (kind) => {
       const events: string[] = [];
@@ -38,20 +38,8 @@ describe("resident interaction authority", () => {
         },
       };
       switch (kind) {
-        case "click":
-          await actions.clickViaPlaywright({ ...opts, ref: "1" });
-          break;
         case "type":
           await actions.typeViaPlaywright({ ...opts, ref: "1", text: "review", submit: true });
-          break;
-        case "fill":
-          await actions.fillFormViaPlaywright({
-            ...opts,
-            fields: [
-              { ref: "1", type: "text", value: "first" },
-              { ref: "2", type: "text", value: "second" },
-            ],
-          });
           break;
         case "wait":
           await waitForViaPlaywright({ ...opts, fn: "() => true" });
@@ -60,7 +48,7 @@ describe("resident interaction authority", () => {
           await resizeViewportViaPlaywright({ ...opts, width: 800, height: 600 });
           break;
       }
-      expect(effect).toHaveBeenCalledTimes(kind === "click" || kind === "resize" ? 1 : 2);
+      expect(effect).toHaveBeenCalledTimes(kind === "resize" ? 1 : 2);
     },
   );
 

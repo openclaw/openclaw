@@ -1,6 +1,6 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveGatewayAuthPolicyGeneration } from "../auth-policy.js";
+import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import { GatewayClientRegistry } from "./client-registry.js";
 import { disconnectDisallowedGatewayPolicyClients } from "./ws-origin-policy.js";
 import { holdGatewayPolicyResponse, registerGatewayPolicyResponse } from "./ws-policy-close.js";
@@ -67,6 +67,22 @@ describe("committed browser origin policy", () => {
 
 describe("committed authentication policy", () => {
   it.each([
+    { role: "operator", verifiedIdentity: undefined },
+    { role: "node", verifiedIdentity: "other@example.test" },
+  ])("keeps $role without identity-derived scopes connected across grant edits", (principal) => {
+    const client = {
+      authPolicy: captureGatewayAuthPolicy({}, principal),
+      socket: { close: vi.fn() },
+      invalidated: false,
+    };
+    disconnectDisallowedGatewayPolicyClients([client], {
+      gateway: { auth: { identityScopes: { "other@example.test": ["operator.admin"] } } },
+    });
+    expect(client.invalidated).toBe(false);
+    expect(client.socket.close).not.toHaveBeenCalled();
+  });
+
+  it.each([
     { change: "another identity added", revoked: false },
     { change: "another identity removed", revoked: false },
     { change: "unchanged snapshot", revoked: false },
@@ -89,7 +105,10 @@ describe("committed authentication policy", () => {
     };
     const client = {
       authenticatedUserId: identity,
-      authPolicyGeneration: resolveGatewayAuthPolicyGeneration(initial, identity),
+      authPolicy: captureGatewayAuthPolicy(initial, {
+        role: "operator",
+        verifiedIdentity: identity,
+      }),
       socket: { close: vi.fn() },
       invalidated: false,
     };
@@ -127,7 +146,7 @@ describe("committed authentication policy", () => {
       const identity = "retained@example.test";
       const client = {
         authenticatedUserId: identity,
-        authPolicyGeneration: resolveGatewayAuthPolicyGeneration({}, identity),
+        authPolicy: captureGatewayAuthPolicy({}, { role: "operator", verifiedIdentity: identity }),
         socket: { close: vi.fn() },
         invalidated: false,
       };
@@ -148,9 +167,12 @@ describe("committed authentication policy", () => {
         allowUsers: ["reader@example.test", "writer@example.test"],
       };
       const client = {
-        authPolicyGeneration: resolveGatewayAuthPolicyGeneration({
-          gateway: { auth: { trustedProxy } },
-        }),
+        authPolicy: captureGatewayAuthPolicy(
+          {
+            gateway: { auth: { trustedProxy } },
+          },
+          null,
+        ),
         socket: { close: vi.fn() },
         invalidated: false,
       };
@@ -168,7 +190,6 @@ describe("committed authentication policy", () => {
     { trustedProxies: ["192.0.2.10"] },
     { allowRealIpFallback: true },
     { auth: { allowTailscale: true } },
-    { auth: { identityScopes: { "reader@example.test": ["operator.read"] } } },
     { auth: { trustedProxy: { userHeader: "x-user", allowUsers: ["reader@example.test"] } } },
     { auth: { trustedProxy: { userHeader: "x-user", deviceAutoApprove: { enabled: true } } } },
     {
@@ -181,7 +202,7 @@ describe("committed authentication policy", () => {
     },
   ])("revokes old authority and drains its accepted config response for %j", (gateway) => {
     const writer = {
-      authPolicyGeneration: resolveGatewayAuthPolicyGeneration({}),
+      authPolicy: captureGatewayAuthPolicy({}, null),
       socket: { close: vi.fn() },
       invalidated: false,
     };
@@ -190,7 +211,7 @@ describe("committed authentication policy", () => {
     holdGatewayPolicyResponse(respond);
     const nextConfig = { gateway };
     const fresh = {
-      authPolicyGeneration: resolveGatewayAuthPolicyGeneration(nextConfig),
+      authPolicy: captureGatewayAuthPolicy(nextConfig, null),
       socket: { close: vi.fn() },
     };
     const worker = { socket: { close: vi.fn() } };

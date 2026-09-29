@@ -614,15 +614,6 @@ function readIdempotencyKeyOwner(
   return row ? { eventId: row.event_id, seq: row.seq } : undefined;
 }
 
-function readTranscriptMessageByIdempotencyKey(
-  database: Pick<OpenClawAgentDatabase, "db">,
-  scope: ResolvedTranscriptScope,
-  idempotencyKey: string,
-): { messageId: string; message: unknown } | undefined {
-  const identity = readIdempotencyKeyOwner(database, scope.sessionId, idempotencyKey);
-  return identity ? readTranscriptMessageByIdentity(database, scope, identity) : undefined;
-}
-
 export function readTranscriptMessageByScopedIdempotencyKey(
   database: Pick<OpenClawAgentDatabase, "db">,
   scope: ResolvedTranscriptScope,
@@ -630,7 +621,8 @@ export function readTranscriptMessageByScopedIdempotencyKey(
   lookup: TranscriptMessageAppendOptions<unknown>["idempotencyLookup"],
 ): { messageId: string; message: unknown } | undefined {
   if (lookup !== "scan-assistant") {
-    return readTranscriptMessageByIdempotencyKey(database, scope, idempotencyKey);
+    const identity = readIdempotencyKeyOwner(database, scope.sessionId, idempotencyKey);
+    return identity ? readTranscriptMessageByIdentity(database, scope, identity) : undefined;
   }
   const found = findAssistantTranscriptEventInDatabase(database, scope.sessionId, idempotencyKey);
   if (!found) {

@@ -2383,7 +2383,8 @@ describeLive("gateway live (Codex harness)", () => {
         if (CODEX_HARNESS_SUBAGENT_PROBE) {
           // This reader supports the fixture's local stdio launch, not an
           // arbitrary custom binary or proxy that could select another home.
-          expect(instance.env.OPENCLAW_CODEX_APP_SERVER_BIN?.trim() ?? "").toBe("");
+          // Docker lanes pin the plain PATH `codex` CLI, which shares the fixture home.
+          expect(["", "codex"]).toContain(instance.env.OPENCLAW_CODEX_APP_SERVER_BIN?.trim() ?? "");
           expect(nativeProbeArgs.slice(0, 3)).toEqual(["app-server", "--listen", "stdio://"]);
           expect(
             nativeProbeArgs.slice(3).every((arg, index) => index % 2 === 1 || arg === "-c"),

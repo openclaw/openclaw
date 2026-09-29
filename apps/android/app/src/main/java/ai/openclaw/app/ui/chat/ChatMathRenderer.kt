@@ -21,21 +21,15 @@ import org.json.JSONObject
 
 private const val MATH_WIDTH_BUCKET_PX = 64
 
-internal data class ChatMathRenderKey(
-  val latex: String,
-  val widthBucket: Int,
-  val darkMode: Boolean,
-)
-
 internal data class ChatMathRenderRequest(
-  val key: ChatMathRenderKey,
+  override val source: String,
+  override val widthPx: Int,
+  val darkMode: Boolean,
   val textColor: Int,
   val fontSizePx: Float,
   override val density: Float,
 ) : ChatRichBlockRequest {
   override val kind get() = ChatRichBlockKind.Math
-  override val source get() = key.latex
-  override val widthPx get() = key.widthBucket
 
   override fun payload(id: String): JSONObject =
     JSONObject()
@@ -57,7 +51,9 @@ internal data class ChatMathRenderRequest(
       val boundedWidth = widthPx.coerceAtLeast(1)
       val widthBucket = ((boundedWidth / MATH_WIDTH_BUCKET_PX) * MATH_WIDTH_BUCKET_PX).coerceAtLeast(MATH_WIDTH_BUCKET_PX)
       return ChatMathRenderRequest(
-        key = ChatMathRenderKey(latex = latex, widthBucket = widthBucket, darkMode = darkMode),
+        source = latex,
+        widthPx = widthBucket,
+        darkMode = darkMode,
         textColor = textColor,
         fontSizePx = fontSizePx,
         density = density,

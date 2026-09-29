@@ -23,7 +23,10 @@ import {
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
 } from "../infra/node-commands.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
+import {
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  type NodeWorkerHostDeclaration,
+} from "../infra/node-runner-inventory.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
@@ -580,12 +583,7 @@ describe("gateway/node-registry", () => {
       }),
       { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
     );
-    const publish = (workerHost: {
-      enabled: true;
-      capacity: { total: number; available: number };
-      bundleRetention?: 1;
-      bundleStatus?: 1;
-    }) =>
+    const publish = (workerHost: NodeWorkerHostDeclaration) =>
       updateNodeRunnerInventory({
         registry: nodeRegistry,
         nodeId: "node-1",
@@ -619,10 +617,40 @@ describe("gateway/node-registry", () => {
     });
     expect(runnerStateChanged).not.toHaveBeenCalled();
 
+    expect(publish({ ...retained, capacity: { total: 2, available: 0 }, statusWait: 1 })).toEqual({
+      changed: true,
+    });
+    expect(publish({ ...retained, statusWait: 1, capacity: { available: 0, total: 2 } })).toEqual({
+      changed: false,
+    });
+    expect(runnerStateChanged).toHaveBeenCalledExactlyOnceWith("node-1", {
+      inventoryChanged: true,
+      availabilityChanged: false,
+    });
+    runnerStateChanged.mockClear();
+
     const [proof] = await nodeWorkerSupervisorTransport.listCurrentNodes();
     if (!proof) {
       throw new Error("expected current runner proof");
     }
+    expect(nodeWorkerSupervisorTransport.isCurrent(proof, true)).toBe(false);
+    const idleHost = {
+      ...retained,
+      idleRetention: true as const,
+      capacity: { total: 2, available: 0, reclaimableIdle: 1 },
+    };
+    expect(publish(idleHost)).toEqual({ changed: true });
+    expect(nodeWorkerSupervisorTransport.isCurrent(proof, true)).toBe(true);
+    expect(
+      collectNodeCatalogRuntimeState(nodeRegistry, [
+        { nodeId: "node-1", connId: "conn-1", pairingGeneration: "generation-a" },
+      ]).workerSlotsByNodeId.get("node-1"),
+    ).toEqual(idleHost.capacity);
+    expect(
+      publish({ ...idleHost, capacity: { ...idleHost.capacity, reclaimableIdle: 0 } }),
+    ).toEqual({ changed: true });
+    expect(nodeWorkerSupervisorTransport.isCurrent(proof, true)).toBe(false);
+    runnerStateChanged.mockClear();
     expect(
       nodeWorkerSupervisorTransport.acceptBundleStatus?.(proof, {
         bundleHash: "a".repeat(64),

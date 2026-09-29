@@ -1331,6 +1331,7 @@ openclaw-plugins-page
   gap: 4px;
 }
 .plugin-capability__copy strong {
+  overflow-wrap: anywhere;
   font-size: var(--control-ui-text-sm);
 }
 .plugin-capability__copy > span {
@@ -1558,4 +1559,33 @@ openclaw-plugins-page
 .plugin-metadata__loading > :last-child {
   width: 100%;
   height: 20px;
+}
+
+.plugin-capability__trailing {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+.plugin-connection-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.plugin-connection-status svg {
+  width: 14px;
+  height: 14px;
+  color: var(--ok);
+}
+
+@media (max-width: 560px) {
+  .plugin-capability__trailing {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+  }
 }

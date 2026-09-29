@@ -205,9 +205,9 @@ export function prepareWorkspacePluginRegistries(
                   : basePluginIds !== undefined
                     ? { basePluginIds }
                     : {}),
-            ...(reusableGeneration?.pluginRegistry
-              ? { reusableRegistry: reusableGeneration.pluginRegistry }
-              : {}),
+            // Inbound preparation already admitted this exact context. Let the runtime
+            // planner check selected owners before acquiring another captured registry.
+            ...(baseRegistry ? { reusableRegistry: baseRegistry } : {}),
             config: input.config,
             env: input.env ?? process.env,
             ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
