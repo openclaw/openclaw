@@ -16,10 +16,6 @@ export type DiagnosticSupportBundleContent = {
   bytes: number;
 };
 
-function supportBundleByteLength(content: string): number {
-  return Buffer.byteLength(content, "utf8");
-}
-
 /** Creates a JSON support-bundle file with a safe relative path. */
 export function jsonSupportBundleFile(
   pathName: string,
@@ -63,7 +59,7 @@ export function supportBundleContents(
   return files.map((file) => ({
     path: file.path,
     mediaType: file.mediaType,
-    bytes: supportBundleByteLength(file.content),
+    bytes: Buffer.byteLength(file.content, "utf8"),
   }));
 }
 

@@ -101,11 +101,12 @@ const pendingSessionEntryPublications = resolveGlobalSingleton(
 );
 
 function recordCommittedSessionEntryPublication(
-  database: SessionEntryCacheDatabase,
+  database: SessionEntryCacheDatabase | string,
   sessionKey: string,
   entry: SessionSharingEntry | undefined,
 ): void {
-  const identity = findOpenClawAgentDatabaseIdentity(database)?.identity;
+  const identity =
+    typeof database === "string" ? database : findOpenClawAgentDatabaseIdentity(database)?.identity;
   if (typeof identity !== "string") {
     return;
   }
@@ -387,8 +388,9 @@ export function retainPreparedSessionGenerationFacts(params: {
   return { readCurrent: retained.readGeneration, release: retained.release };
 }
 
-function retainedSharingReads(database: SessionEntryCacheDatabase, sessionKey: string) {
-  const identity = findOpenClawAgentDatabaseIdentity(database)?.identity;
+function retainedSharingReads(database: SessionEntryCacheDatabase | string, sessionKey: string) {
+  const identity =
+    typeof database === "string" ? database : findOpenClawAgentDatabaseIdentity(database)?.identity;
   return typeof identity === "string"
     ? preparedSharingReads.get(`file:${identity}\0${sessionKey}`)
     : undefined;
@@ -472,23 +474,13 @@ export function publishSessionSharingEntryChange(
     publishTrackedCacheUpdate(
       database,
       () => {
-        recordCommittedSessionEntryPublication(database, update.sessionKey, sharingEntry);
-        for (const read of retainedSharingReads(database, update.sessionKey) ?? []) {
-          recordAcquiringSessionEntry(read.acquisition, sharingEntry, previousIdentity);
-          publishRetainedSessionGeneration(
-            read,
-            sharingEntry,
-            sharingEntry !== undefined || facts?.kind === "removed",
-          );
-          const previous = read.facts;
-          read.facts =
-            sharingEntry &&
-            previous?.entry &&
-            previous.entry.sessionId === sharingEntry.sessionId &&
-            previous.entry.lifecycleRevision === sharingEntry.lifecycleRevision
-              ? { entry: sharingEntry, membership: previous.membership }
-              : undefined;
-        }
+        publishRetainedSessionEntryChange(
+          database,
+          update.sessionKey,
+          sharingEntry,
+          previousIdentity,
+          sharingEntry !== undefined || facts?.kind === "removed",
+        );
       },
       !incognito ? () => stageSessionSharingPublication(database, update.sessionKey) : undefined,
     );
@@ -496,6 +488,65 @@ export function publishSessionSharingEntryChange(
   if (incognito && !sharingUnchanged) {
     publishIncognitoSessionEntryChange(database, update);
   }
+}
+
+function publishRetainedSessionEntryChange(
+  database: SessionEntryCacheDatabase | string,
+  sessionKey: string,
+  entry: SessionSharingEntry | undefined,
+  previousIdentity: Pick<SessionSharingEntry, "sessionId" | "lifecycleRevision"> | undefined,
+  known: boolean,
+): void {
+  recordCommittedSessionEntryPublication(database, sessionKey, entry);
+  for (const read of retainedSharingReads(database, sessionKey) ?? []) {
+    recordAcquiringSessionEntry(read.acquisition, entry, previousIdentity);
+    publishRetainedSessionGeneration(read, entry, known);
+    const previous = read.facts;
+    read.facts =
+      entry &&
+      previous?.entry &&
+      previous.entry.sessionId === entry.sessionId &&
+      previous.entry.lifecycleRevision === entry.lifecycleRevision
+        ? { entry, membership: previous.membership }
+        : undefined;
+  }
+}
+
+/** A confirmed worker result invalidates row facts without opening a parent connection. */
+export function publishSessionEntryWorkerInvalidations(
+  params: { agentId: string; storePath: string; databaseIdentity: string },
+  changedKeys: readonly string[],
+  beforePublicNotifications?: () => void,
+): void {
+  const keys = [...new Set(changedKeys)];
+  const changes: SessionRowChange[] = [];
+  for (const sessionKey of keys) {
+    // The commit is confirmed, but this result supplies no complete sharing postimage.
+    publishRetainedSessionEntryChange(
+      params.databaseIdentity,
+      sessionKey,
+      undefined,
+      undefined,
+      false,
+    );
+    const change: SessionRowChange = {
+      agentId: params.agentId,
+      storePath: params.storePath,
+      sessionKey,
+      factsInvalidated: true,
+    };
+    preparedSharingChanges.changes.set(change, undefined);
+    changes.push(change);
+  }
+  if (keys.length > 0) {
+    invalidateOpenClawAgentWritableProjections(params.databaseIdentity, (database) =>
+      sessionEntryCaches.delete(database),
+    );
+    invalidateOpenClawAgentReadOnlyProjections(params.databaseIdentity, (database) =>
+      sessionEntryCaches.delete(database),
+    );
+  }
+  sessionChanges.emitBatch(changes, undefined, beforePublicNotifications);
 }
 
 /** Final-grant custody fences old facts until native settlement, independently of result delivery. */

@@ -517,6 +517,9 @@ Oversized CLI and Blacksmith agent-support families use the existing file
 splitter, preserving complete inventories and their serial resource policy.
 Ordinary self-hosted groups can share the existing promoted 32-class capacity
 across logical classes, and the existing group exchange fills stranded capacity.
+Hybrid initial packing places serial Gateway groups before flexible parallel
+groups, preserving space for repeated stripe families before the final parallel
+repack. Admission still enforces the same family, time, and worker constraints.
 The final 70/130 push/PR caps remain unchanged. Native compact admission allows 90 rows, while hosted admission allows 96. Native tooling bins retain separate
 two-worker child processes and a 300-second test budget. Rows containing the
 partitioned changed-Node planner proof use 150 seconds in both initial packing

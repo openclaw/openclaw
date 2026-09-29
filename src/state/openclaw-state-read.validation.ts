@@ -102,8 +102,19 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.childSessionKey === "string") ||
       (input.command.type === "subagents.runs" &&
         isRecord(input.command.scope) &&
-        ((input.command.scope.kind === "session" &&
-          typeof input.command.scope.sessionKey === "string") ||
+        (input.command.scope.kind === "maintenance" ||
+          (input.command.scope.kind === "session" &&
+            typeof input.command.scope.sessionKey === "string") ||
+          (input.command.scope.kind === "descendants" &&
+            Array.isArray(input.command.scope.sessionKeys) &&
+            input.command.scope.sessionKeys.every((key: unknown) => typeof key === "string") &&
+            Array.isArray(input.command.scope.liveTopology) &&
+            input.command.scope.liveTopology.every(
+              (link: unknown) =>
+                isRecord(link) &&
+                typeof link.childSessionKey === "string" &&
+                typeof link.requesterSessionKey === "string",
+            )) ||
           (input.command.scope.kind === "ids" &&
             Array.isArray(input.command.scope.runIds) &&
             input.command.scope.runIds.every((runId: unknown) => typeof runId === "string")))) ||

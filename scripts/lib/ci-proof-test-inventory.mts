@@ -4957,6 +4957,7 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/commands/config-preflight-snapshot.test.ts",
   "src/commands/configure.gateway-auth.prompt-auth-config.test.ts",
   "src/commands/doctor-config-health-freshness.test.ts",
+  "src/commands/doctor-lint.native-capture.test.ts",
   "src/commands/doctor-sandbox-legacy-registry.test.ts",
   "src/commands/doctor-session-transcript-labels.test.ts",
   "src/commands/doctor-skill-workshop-collection-backups.test.ts",

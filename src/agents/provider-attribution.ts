@@ -148,8 +148,8 @@ function readCompatBoolean(
 
 const OPENCLAW_ATTRIBUTION_PRODUCT = "OpenClaw";
 const OPENCLAW_ATTRIBUTION_ORIGINATOR = "openclaw";
-const OPENROUTER_ATTRIBUTION_CATEGORIES =
-  "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent";
+// OpenRouter honors at most two recognized categories per request and silently drops the rest.
+const OPENROUTER_ATTRIBUTION_CATEGORIES = "personal-agent,cli-agent";
 
 const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 const OPENAI_RESPONSES_APIS = new Set([
@@ -308,7 +308,8 @@ function resolveProviderAttributionPolicy(
       return {
         ...policy,
         docsUrl: "https://openrouter.ai/docs/app-attribution",
-        reviewNote: "Documented app attribution headers. Verified in OpenClaw runtime wrapper.",
+        reviewNote:
+          "Documented app attribution headers. Applied on OpenRouter endpoints regardless of configured provider id.",
         headers: {
           "HTTP-Referer": "https://openclaw.ai",
           "X-OpenRouter-Title": policy.product,
@@ -399,12 +400,6 @@ export function resolveProviderRequestPolicy(
   let attributionProvider: string | undefined;
   if (provider === "openai" && usesVerifiedOpenAIAttributionHost) {
     attributionProvider = "openai";
-  } else if (provider === "openrouter" && policy?.enabledByDefault) {
-    // OpenRouter attribution is documented, but only apply it to known
-    // OpenRouter endpoints or the default (unset) baseUrl path.
-    if (endpointClass === "openrouter" || endpointClass === "default") {
-      attributionProvider = "openrouter";
-    }
   } else if (provider === "xai" && policy?.enabledByDefault) {
     // Default (unset baseUrl) maps to api.x.ai; custom baseUrls are treated as proxies and withheld.
     if (endpointClass === "xai-native" || endpointClass === "default") {
@@ -418,6 +413,14 @@ export function resolveProviderRequestPolicy(
     // The documented identification contract belongs to Go's native endpoint.
     // A custom baseUrl is a proxy and must not inherit OpenClaw attribution.
     attributionProvider = "opencode-go";
+  }
+  // OpenRouter attribution follows the endpoint, so custom provider ids pointed at
+  // openrouter.ai are attributed too; custom proxy baseUrls are withheld.
+  if (
+    !attributionProvider &&
+    (endpointClass === "openrouter" || (provider === "openrouter" && endpointClass === "default"))
+  ) {
+    attributionProvider = "openrouter";
   }
   if (!attributionProvider && endpointClass === "nvidia-native") {
     attributionProvider = "nvidia";

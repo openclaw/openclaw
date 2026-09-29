@@ -13,6 +13,7 @@ import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js"
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
+import { resolveChatAttachmentFrameBudgetBytes } from "../../shared/chat-attachment-frame-budget.js";
 import type { PreparedArtifactDownload } from "../artifact-download-projection.js";
 import { canCreateArtifactDownload, createArtifactDownload } from "../artifact-downloads.js";
 import {
@@ -20,6 +21,7 @@ import {
   resolveManagedOutgoingMediaArtifactDownload,
   resolveManagedOutgoingMediaUrlDownload,
 } from "../managed-image-attachments.js";
+import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
@@ -503,7 +505,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!artifactResponseIsCurrent(found.value, respond)) {
       return;
     }
-    respond(true, {
+    const payload = {
       artifact: toArtifactSummary(artifact),
       ...(artifact.download.mode === "bytes"
         ? { encoding: "base64" as const, data: artifact.data }
@@ -514,6 +516,34 @@ export const artifactsHandlers: GatewayRequestHandlers = {
             ...(managedUrl ? { expiresAt: managedUrl.expiresAt } : {}),
           }
         : {}),
-    });
+    };
+    if (artifact.download.mode === "bytes") {
+      // The shared budget is decoded bytes; large metadata can need more than its reserved slack.
+      const maxBase64Length =
+        4 * Math.floor(resolveChatAttachmentFrameBudgetBytes(MAX_PAYLOAD_BYTES) / 3);
+      const envelopeBytes = Buffer.byteLength(
+        JSON.stringify({
+          type: "res",
+          id: request.req.id,
+          ok: true,
+          payload: { ...payload, data: "" },
+        }),
+      );
+      if (
+        (artifact.data?.length ?? 0) > Math.min(maxBase64Length, MAX_PAYLOAD_BYTES - envelopeBytes)
+      ) {
+        respond(
+          false,
+          undefined,
+          artifactError(
+            "artifact_download_unsupported",
+            'artifact is too large for inline transfer; request transport: "http"',
+            { artifactId: artifact.id },
+          ),
+        );
+        return;
+      }
+    }
+    respond(true, payload);
   },
 };

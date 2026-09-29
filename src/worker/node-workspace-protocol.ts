@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { SpawnResult } from "../process/exec.js";
 import { NodeWorkerWorkspaceTransferInputSchema } from "./node-workspace-transfer-protocol.js";
 import {
+  decodeWorkerRequest,
   WorkerGatewayNamespace,
   workerProtocolIdentifier as identifier,
   workerProtocolObject,
@@ -127,21 +128,14 @@ export type NodeWorkerWorkspaceExecResult = SpawnResult & {
   process?: NodeWorkerWorkspaceProcessResult;
 };
 
-function parseJson(raw?: string | null): unknown {
-  if (!raw || Buffer.byteLength(raw, "utf8") > WORKSPACE_INSPECTION_MAX_BYTES * 2) {
-    throw new Error("INVALID_REQUEST: invalid node worker workspace request");
-  }
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    throw new Error("INVALID_REQUEST: malformed node worker workspace request");
-  }
-}
-
 export function parseNodeWorkerWorkspaceExecInput(
   raw?: string | null,
 ): NodeWorkerWorkspaceExecInput {
-  const value = parseJson(raw);
+  const value = decodeWorkerRequest(
+    raw,
+    WORKSPACE_INSPECTION_MAX_BYTES * 2,
+    "node worker workspace",
+  );
   const parsed = WorkspaceInput.safeParse(value);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];

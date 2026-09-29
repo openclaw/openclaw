@@ -23,6 +23,7 @@ import { registerResolvedAgentDir } from "../agent-dir-registry.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import { getAgentDirResolution } from "../config.js";
 import { projectModelThinkingCompat } from "../model-catalog-lookup.js";
+import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import {
   Agent,
   type AgentMessage,
@@ -190,19 +191,23 @@ function getAttributionHeaders(
   model: Model,
   settingsManager: SettingsManager,
 ): Record<string, string> | undefined {
+  // Transports outside the OpenAI families do not consult the attribution policy,
+  // so forward its OpenRouter header set as caller headers. Like the transport-side
+  // policy, OpenRouter app attribution does not depend on install telemetry.
+  const { attributionProvider, attributionHeaders } = resolveProviderRequestPolicy({
+    provider: model.provider,
+    api: model.api,
+    baseUrl: model.baseUrl,
+  });
+  if (attributionProvider === "openrouter") {
+    return attributionHeaders;
+  }
+
   if (!isInstallTelemetryEnabled(settingsManager)) {
     return undefined;
   }
 
   const baseUrl = model.baseUrl ?? "";
-
-  if (model.provider === "openrouter" || baseUrl.includes("openrouter.ai")) {
-    return {
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories": "cli-agent",
-    };
-  }
 
   if (
     model.provider === "cloudflare-workers-ai" ||

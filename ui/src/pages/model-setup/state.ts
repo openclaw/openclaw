@@ -71,7 +71,7 @@ export type ModelSetupWizardRecovery = {
 
 type ModelSetupWizardPhase =
   | { phase: "idle" }
-  | { phase: "starting"; authChoice: string }
+  | { phase: "starting"; authChoice: string; notice?: string }
   | {
       phase: "step";
       authChoice: string;

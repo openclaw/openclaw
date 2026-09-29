@@ -23,6 +23,7 @@ const mock = vi.hoisted(() => ({
   runTask: vi.fn<RunTask>(),
   closePool: vi.fn<() => Promise<void>>(),
   closeResources: vi.fn<(key?: string) => Promise<void>>(),
+  rotate: vi.fn<() => Promise<void>>(),
   selectSqlite:
     vi.fn<typeof import("../infra/bun-sqlite-library.js").ensureSqliteLibrarySelected>(),
 }));
@@ -49,6 +50,7 @@ export const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     }
     mock.closePool.mockReset().mockResolvedValue();
     mock.closeResources.mockReset().mockResolvedValue();
+    mock.rotate.mockReset().mockResolvedValue();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     cleanup();
@@ -59,10 +61,12 @@ beforeEach(() => {
   mock.runTask.mockReset();
   mock.closePool.mockReset().mockResolvedValue();
   mock.closeResources.mockReset().mockResolvedValue();
+  mock.rotate.mockReset().mockResolvedValue();
   mock.create.mockReset().mockImplementation(() => ({
     runTask: mock.runTask,
     close: mock.closePool,
     closeResources: mock.closeResources,
+    rotate: mock.rotate,
   }));
 });
 

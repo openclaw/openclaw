@@ -289,10 +289,10 @@ internal fun sidebarCatalogSessionCreationEnabled(
   canMutateSessions: Boolean,
 ): Boolean = catalog.canCreateSession && canMutateSessions
 
-internal fun toggleSidebarCatalogExpansion(
-  expandedCatalogIds: List<String>,
-  catalogId: String,
-): List<String> = if (catalogId in expandedCatalogIds) expandedCatalogIds - catalogId else expandedCatalogIds + catalogId
+internal fun toggleSidebarExpansion(
+  ids: List<String>,
+  id: String,
+): List<String> = if (id in ids) ids - id else ids + id
 
 internal fun sidebarCatalogRefreshNeeded(
   catalogAgentId: String?,
@@ -831,7 +831,7 @@ internal fun OpenClawSidebar(
                           null
                         },
                       onClick = {
-                        expandedCatalogIds = toggleSidebarCatalogExpansion(expandedCatalogIds, catalog.id)
+                        expandedCatalogIds = toggleSidebarExpansion(expandedCatalogIds, catalog.id)
                       },
                     )
                     if (section.expanded) {
@@ -846,20 +846,10 @@ internal fun OpenClawSidebar(
                         collapsedWorkspaceIds = collapsedCatalogWorkspaceIds.toSet(),
                         palette = palette,
                         onToggleHost = { stableId ->
-                          collapsedCatalogHostIds =
-                            if (stableId in collapsedCatalogHostIds) {
-                              collapsedCatalogHostIds - stableId
-                            } else {
-                              collapsedCatalogHostIds + stableId
-                            }
+                          collapsedCatalogHostIds = toggleSidebarExpansion(collapsedCatalogHostIds, stableId)
                         },
                         onToggleWorkspace = { stableId ->
-                          collapsedCatalogWorkspaceIds =
-                            if (stableId in collapsedCatalogWorkspaceIds) {
-                              collapsedCatalogWorkspaceIds - stableId
-                            } else {
-                              collapsedCatalogWorkspaceIds + stableId
-                            }
+                          collapsedCatalogWorkspaceIds = toggleSidebarExpansion(collapsedCatalogWorkspaceIds, stableId)
                         },
                         onSelectSession = onSelectCatalogSession,
                         onLoadMore = viewModel::loadMoreSessionCatalog,

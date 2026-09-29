@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { asOptionalRecord, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../infra/gateway-shutdown-budget.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runExec } from "../process/exec.js";
 import type {
   GatewayServiceCommandConfig,
@@ -273,47 +274,61 @@ export async function readLaunchAgentProgramArgumentsFromFile(
       return null;
     }
     const plist = await decodeLaunchdPlistMetadata(contents, options?.timeoutMs);
-    const args = plist?.ProgramArguments;
-    const workingDirectory = plist?.WorkingDirectory;
-    const inlineEnvironment = plist?.EnvironmentVariables;
-    if (
-      !Array.isArray(args) ||
-      !args.every((arg): arg is string => typeof arg === "string") ||
-      (workingDirectory !== undefined && typeof workingDirectory !== "string") ||
-      (inlineEnvironment !== undefined && !isStringRecord(inlineEnvironment))
-    ) {
-      throw new Error("Invalid LaunchAgent command fields");
+    return await resolveLaunchAgentProgramArguments(plist, plistPath, options);
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
     }
-    const layout = resolveGeneratedEnvWrapperLayout(args, options);
-    const fileEnvironment = await readLaunchAgentEnvironmentFile(layout?.envFilePath, options);
-    const effectiveProgramArguments = layout ? args.slice(layout.commandStartIndex) : args;
-    if (options?.requireEffective && !effectiveProgramArguments[0]) {
-      throw new Error("Missing LaunchAgent command");
-    }
-    const environment = { ...inlineEnvironment, ...fileEnvironment };
-    const environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource> = {};
-    // Track source provenance so repair flows can tell inline plist env from the
-    // generated env file and preserve both when they overlap.
-    for (const key of Object.keys(environment)) {
-      environmentValueSources[key] = !Object.hasOwn(fileEnvironment, key)
-        ? "inline"
-        : Object.hasOwn(inlineEnvironment ?? {}, key)
-          ? "inline-and-file"
-          : "file";
-    }
-    return {
-      programArguments: effectiveProgramArguments,
-      ...(workingDirectory ? { workingDirectory } : {}),
-      ...(Object.keys(environment).length > 0 ? { environment } : {}),
-      ...(Object.keys(environmentValueSources).length > 0 ? { environmentValueSources } : {}),
-      sourcePath: plistPath,
-    };
-  } catch {
     if (options?.requireEffective) {
-      throw new Error("Effective LaunchAgent service command could not be inspected.");
+      throw new Error("Effective LaunchAgent service command could not be inspected.", {
+        cause: error,
+      });
     }
     return null;
   }
+}
+
+/** Resolve captured plist metadata through the same generated environment owner as file reads. */
+export async function resolveLaunchAgentProgramArguments(
+  plist: Awaited<ReturnType<typeof decodeLaunchdPlistMetadata>>,
+  plistPath: string,
+  options?: ReadLaunchAgentProgramArgumentsOptions,
+): Promise<GatewayServiceCommandConfig> {
+  const args = plist?.ProgramArguments;
+  const workingDirectory = plist?.WorkingDirectory;
+  const inlineEnvironment = plist?.EnvironmentVariables;
+  if (
+    !Array.isArray(args) ||
+    !args.every((arg): arg is string => typeof arg === "string") ||
+    (workingDirectory !== undefined && typeof workingDirectory !== "string") ||
+    (inlineEnvironment !== undefined && !isStringRecord(inlineEnvironment))
+  ) {
+    throw new Error("Invalid LaunchAgent command fields");
+  }
+  const layout = resolveGeneratedEnvWrapperLayout(args, options);
+  const fileEnvironment = await readLaunchAgentEnvironmentFile(layout?.envFilePath, options);
+  const effectiveProgramArguments = layout ? args.slice(layout.commandStartIndex) : args;
+  if (options?.requireEffective && !effectiveProgramArguments[0]) {
+    throw new Error("Missing LaunchAgent command");
+  }
+  const environment = { ...inlineEnvironment, ...fileEnvironment };
+  const environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource> = {};
+  // Track source provenance so repair flows can tell inline plist env from the
+  // generated env file and preserve both when they overlap.
+  for (const key of Object.keys(environment)) {
+    environmentValueSources[key] = !Object.hasOwn(fileEnvironment, key)
+      ? "inline"
+      : Object.hasOwn(inlineEnvironment ?? {}, key)
+        ? "inline-and-file"
+        : "file";
+  }
+  return {
+    programArguments: effectiveProgramArguments,
+    ...(workingDirectory ? { workingDirectory } : {}),
+    ...(Object.keys(environment).length > 0 ? { environment } : {}),
+    ...(Object.keys(environmentValueSources).length > 0 ? { environmentValueSources } : {}),
+    sourcePath: plistPath,
+  };
 }
 
 export function buildLaunchAgentPlist({
