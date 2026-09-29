@@ -142,7 +142,7 @@ describe("Slack bot-thread mention configuration", () => {
     const test = fixture(slack, accountId);
     const prepared = await test.prepare();
     expect(prepared?.ctxPayload.RawBody).toBe("Continue here");
-    expect(prepared?.requireMention).toBe(false);
+    expect(prepared?.ctxPayload.MentionSource).toBe("none");
     expect(prepared?.ctxPayload.MessageThreadId).toBe(test.threadTs);
   });
 
