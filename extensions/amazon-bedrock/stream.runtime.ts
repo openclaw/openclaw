@@ -80,7 +80,11 @@ import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBedrockRuntimeAuth } from "./aws-credential-refresh.js";
 import {
   resolveBedrockCachePoint,
@@ -106,35 +110,20 @@ type PendingBedrockToolCall = {
   contentIndex: number;
 };
 
-function usesClaudeFable5BedrockContract(model: Model<"bedrock-converse-stream">): boolean {
-  return resolveClaudeFable5ModelIdentity(model) !== undefined;
-}
-
-function usesClaudeOpus5BedrockContract(model: Model<"bedrock-converse-stream">): boolean {
-  return resolveClaudeOpus5ModelIdentity(model) !== undefined;
-}
-
-function usesClaudeSonnet5BedrockContract(model: Model<"bedrock-converse-stream">): boolean {
-  return resolveClaudeSonnet5ModelIdentity(model) !== undefined;
-}
-
 function usesClaudeStreamingRefusalBedrockContract(
   model: Model<"bedrock-converse-stream">,
 ): boolean {
   return (
-    usesClaudeFable5BedrockContract(model) ||
+    resolveClaudeFable5ModelIdentity(model) !== undefined ||
     resolveClaudeMythos5ModelIdentity(model) !== undefined ||
-    usesClaudeOpus5BedrockContract(model) ||
-    usesClaudeSonnet5BedrockContract(model)
+    resolveClaudeOpus5ModelIdentity(model) !== undefined ||
+    resolveClaudeSonnet5ModelIdentity(model) !== undefined
   );
 }
 
 function readBedrockStopDetails(fields: DocumentType | undefined): unknown {
-  if (!fields || typeof fields !== "object" || Array.isArray(fields)) {
-    return undefined;
-  }
-  const record = fields as Record<string, unknown>;
-  return record.stop_details ?? record.stopDetails;
+  const record = asOptionalRecord(fields);
+  return record?.stop_details ?? record?.stopDetails;
 }
 
 function normalizeAdaptiveClaudeToolChoice(
@@ -184,7 +173,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
     const pendingToolCallEnds: PendingBedrockToolCall[] = [];
     const toolArgumentPreviewSchedules: ToolArgumentPreviewSchedules = new WeakMap();
     const redactedReasoningChunks = new Map<number, Uint8Array[]>();
-    const fable5 = usesClaudeFable5BedrockContract(model);
+    const fable5 = resolveClaudeFable5ModelIdentity(model) !== undefined;
     // Claude classifiers may refuse after partial output. Hold every event until
     // messageStop proves the response is safe to expose.
     const refusalBuffer = usesClaudeStreamingRefusalBedrockContract(model)
@@ -200,11 +189,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
     const requestRegion = options.region || getBedrockModelArnRegion(model.id) || configuredRegion;
     const hasConfiguredProfile = hasConfiguredBedrockProfile(options);
     const endpointRegion = getStandardBedrockEndpointRegion(model.baseUrl);
-    const useExplicitEndpoint = shouldUseExplicitBedrockEndpoint(
-      model.baseUrl,
-      requestRegion,
-      hasConfiguredProfile,
-    );
+    const useExplicitEndpoint = !endpointRegion || (!requestRegion && !hasConfiguredProfile);
 
     // Only pin standard AWS Bedrock runtime endpoints when no region/profile is configured.
     // This preserves custom endpoints (VPC/proxy) from #3402 without forcing built-in
@@ -482,7 +467,7 @@ function resolveSimpleBedrockOptions(
     } satisfies BedrockOptions;
   }
   if (!options?.reasoning) {
-    const reasoning = usesClaudeOpus5BedrockContract(model) ? "high" : undefined;
+    const reasoning = resolveClaudeOpus5ModelIdentity(model) !== undefined ? "high" : undefined;
     return {
       ...base,
       ...(reasoning !== undefined || supportsAdaptiveThinking(model)
@@ -803,7 +788,7 @@ function requiresMandatoryAdaptiveThinking(model: Model<"bedrock-converse-stream
     requiresClaudeMandatoryAdaptiveThinking(model) ||
     requiresClaudeMandatoryAdaptiveThinking({ id: profileModelId }) ||
     isClaudeMythosPreviewModelId(resolveClaudeModelIdentity(model)) ||
-    usesClaudeSonnet5BedrockContract(model) ||
+    resolveClaudeSonnet5ModelIdentity(model) !== undefined ||
     resolveClaudeSonnet5ModelIdentity({ id: profileModelId }) !== undefined
   );
 }
@@ -941,8 +926,7 @@ function buildSystemPrompt(
 }
 
 function normalizeToolCallId(id: string): string {
-  const sanitized = id.replace(/[^a-zA-Z0-9_-]/g, "_");
-  return sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
+  return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 }
 
 function createBedrockToolResult(message: ToolResultMessage): ContentBlock.ToolResultMember {
@@ -1285,19 +1269,6 @@ function getStandardBedrockEndpointRegion(baseUrl: string | undefined): string |
   }
 }
 
-function shouldUseExplicitBedrockEndpoint(
-  baseUrl: string,
-  configuredRegion: string | undefined,
-  hasConfiguredProfile: boolean,
-): boolean {
-  const endpointRegion = getStandardBedrockEndpointRegion(baseUrl);
-  if (!endpointRegion) {
-    return true;
-  }
-
-  return !configuredRegion && !hasConfiguredProfile;
-}
-
 function isGovCloudBedrockTarget(
   model: Model<"bedrock-converse-stream">,
   options: BedrockOptions,
@@ -1331,7 +1302,7 @@ function buildAdditionalModelRequestFields(
   if (
     !reasoning ||
     (!model.reasoning &&
-      !usesClaudeFable5BedrockContract(model) &&
+      resolveClaudeFable5ModelIdentity(model) === undefined &&
       !supportsAdaptiveThinking(model))
   ) {
     return undefined;

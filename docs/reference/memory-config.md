@@ -289,6 +289,8 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     }
     ```
 
+    Concurrent embedding requests share an in-flight AWS credential refresh so a batch does not resolve instance-role credentials separately for every chunk. Later requests refresh through the SDK again, picking up rotated profile files and role selections without restarting the Gateway.
+
     | Key                    | Type     | Default                        | Description                     |
     | ---------------------- | -------- | ------------------------------- | -------------------------------- |
     | `model`                | `string` | `amazon.titan-embed-text-v2:0` | Any Bedrock embedding model ID  |

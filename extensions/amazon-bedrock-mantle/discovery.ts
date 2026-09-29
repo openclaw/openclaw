@@ -498,22 +498,3 @@ export async function resolveImplicitMantleProvider(params: {
     models: models.length === 0 ? [] : allModels,
   };
 }
-
-/** Merge an implicit Mantle provider catalog with explicit user config. */
-export function mergeImplicitMantleProvider(params: {
-  existing: ModelProviderConfig | undefined;
-  implicit: ModelProviderConfig;
-}): ModelProviderConfig {
-  const { existing, implicit } = params;
-  if (!existing) {
-    return implicit;
-  }
-  return {
-    ...implicit,
-    ...existing,
-    models:
-      Array.isArray(existing.models) && existing.models.length > 0
-        ? existing.models
-        : implicit.models,
-  };
-}

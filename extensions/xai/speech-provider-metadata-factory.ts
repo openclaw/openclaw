@@ -28,12 +28,6 @@ type XaiTtsProviderConfig = {
   responseFormat?: XaiSpeechResponseFormat;
 };
 
-type XaiTtsProviderOverrides = {
-  voiceId?: string;
-  language?: string;
-  speed?: number;
-};
-
 export const XAI_TTS_FALLBACK_VOICES = ["ara", "eve", "leo", "rex", "sal"] as const;
 
 export function normalizeXaiTtsBaseUrl(baseUrl?: string): string {
@@ -85,18 +79,9 @@ export function resolveXaiSpeechResponseFormat(
 export function xaiSpeechResponseFormatToFileExtension(
   format: XaiSpeechResponseFormat,
 ): ".mp3" | ".pcm" | ".wav" | ".mulaw" | ".alaw" {
-  switch (format) {
-    case "wav":
-      return ".wav";
-    case "pcm":
-      return ".pcm";
-    case "mulaw":
-      return ".mulaw";
-    case "alaw":
-      return ".alaw";
-    default:
-      return ".mp3";
-  }
+  return format === "wav" || format === "pcm" || format === "mulaw" || format === "alaw"
+    ? `.${format}`
+    : ".mp3";
 }
 
 function normalizeXaiSpeechProviderConfig(
@@ -137,7 +122,7 @@ export function readXaiSpeechProviderConfig(config: SpeechProviderConfig): XaiTt
 
 export function readXaiSpeechOverrides(
   overrides: SpeechProviderOverrides | undefined,
-): XaiTtsProviderOverrides {
+): Partial<Pick<XaiTtsProviderConfig, "voiceId" | "language" | "speed">> {
   if (!overrides) {
     return {};
   }

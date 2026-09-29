@@ -15,6 +15,7 @@ import {
   resolveMSTeamsSqliteStateEnv,
   toPluginJsonValue,
   withMSTeamsSqliteMutationLock,
+  type MSTeamsSqliteStateOptions,
 } from "./sqlite-state.js";
 
 type MSTeamsPollVote = {
@@ -226,14 +227,7 @@ export function buildMSTeamsPollCard(params: {
   };
 }
 
-type MSTeamsPollStoreStateOptions = {
-  env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
-  stateDir?: string;
-  storePath?: string;
-};
-
-function createPollStateStore(params?: MSTeamsPollStoreStateOptions) {
+function createPollStateStore(params?: MSTeamsSqliteStateOptions) {
   return getMSTeamsRuntime().state.openKeyedStore<StoredMSTeamsPoll>({
     namespace: MSTEAMS_POLLS_NAMESPACE,
     maxEntries: MSTEAMS_SQLITE_MAX_POLL_ROWS,
@@ -241,7 +235,7 @@ function createPollStateStore(params?: MSTeamsPollStoreStateOptions) {
   });
 }
 
-function createPollVoteBucketStateStore(params?: MSTeamsPollStoreStateOptions) {
+function createPollVoteBucketStateStore(params?: MSTeamsSqliteStateOptions) {
   return getMSTeamsRuntime().state.openKeyedStore<StoredMSTeamsPollVoteBucket>({
     namespace: MSTEAMS_POLL_VOTE_BUCKETS_NAMESPACE,
     maxEntries: MSTEAMS_MAX_POLL_VOTE_BUCKET_ROWS,
@@ -284,9 +278,7 @@ function buildMSTeamsPollVoteBucketKey(pollId: string, bucket: string): string {
   return `${pollDigest}:${bucket}`;
 }
 
-export function createMSTeamsPollStoreState(
-  params?: MSTeamsPollStoreStateOptions,
-): MSTeamsPollStore {
+export function createMSTeamsPollStoreState(params?: MSTeamsSqliteStateOptions): MSTeamsPollStore {
   const pollStore = createPollStateStore(params);
   const voteBucketStore = createPollVoteBucketStateStore(params);
 

@@ -1,7 +1,9 @@
 import type { managedWorktrees } from "../agents/worktrees/service.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { createSessionEntryRevisionGuard } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
 import { createSessionTranscriptOwnerPredicate } from "../config/sessions/session-accessor.sqlite-transcript-write-guard.js";
 import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { captureSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -35,12 +37,15 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
     assertOwnerCurrent();
     const sessionRuntime = await options.loadSessionRuntime();
     assertOwnerCurrent();
-    const { target, entry, workspace } = resolveWorkerPlacementSessionTarget({
+    const resolved = await resolveWorkerPlacementSessionTarget({
       sessionRuntime,
       config: options.getConfig(),
       ...identity,
       errorMessage: `Session ${identity.sessionKey} changed before workspace recovery`,
     });
+    assertOwnerCurrent();
+    resolved.assertCurrent(options.getConfig());
+    const { target, entry, workspace } = resolved;
     if (
       target.agentId !== identity.agentId ||
       target.canonicalKey !== identity.sessionKey ||
@@ -121,6 +126,7 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
         }),
       );
       assertCurrent();
+      resolved.assertCurrent(options.getConfig());
       // A new recovery owns the current target; callbacks cannot select a later route.
       return await withSessionTranscriptWriteAssertion(transcriptTarget, assertCurrent, () =>
         run({
@@ -172,7 +178,8 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
         target: currentTarget,
         entry,
         workspace,
-      } = resolveWorkerPlacementSessionTarget({
+        assertCurrent,
+      } = await resolveWorkerPlacementSessionTarget({
         sessionRuntime: params.sessionRuntime,
         config: params.getConfig(),
         sessionId: params.sessionId,
@@ -181,6 +188,8 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
         expectedTarget: target,
         errorMessage: `Session ${params.sessionKey} changed before cloud worker ${params.action}. Retry.`,
       });
+      params.signal?.throwIfAborted();
+      assertCurrent(params.getConfig());
       if (entry.archivedAt !== undefined) {
         throw new WorkerDispatchTargetChangedError(
           `Session ${params.sessionKey} was archived before cloud worker ${params.action}. Retry.`,
@@ -207,6 +216,7 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
 
 type SessionEntryShape = {
   sessionId?: string;
+  lifecycleRevision?: string;
   archivedAt?: number;
   worktree?: { id?: string };
   repositoryWorkspaceId?: string;
@@ -221,7 +231,7 @@ type SessionTargetShape<Store> = {
 };
 
 /** Keep canonical session identity and its durable workspace owner in one lifecycle fence. */
-export function resolveWorkerPlacementSessionTarget<
+export async function resolveWorkerPlacementSessionTarget<
   Entry extends SessionEntryShape,
   Store extends Record<string, Entry>,
   Target extends SessionTargetShape<Store>,
@@ -250,69 +260,118 @@ export function resolveWorkerPlacementSessionTarget<
   expectedTarget?: Target;
   errorMessage: string;
 }) {
-  const target = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
+  const initialTarget = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
     cfg: params.config,
     key: params.sessionKey,
     agentId: params.agentId,
     clone: false,
     exactRead: true,
   });
-  const entry = params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
-    target.store,
-    target.storeKeys,
+  const initialEntry = params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
+    initialTarget.store,
+    initialTarget.storeKeys,
   );
-  const expected = params.expectedTarget;
+  const initialIdentity = {
+    lifecycleRevision: initialEntry?.lifecycleRevision,
+    archivedAt: initialEntry?.archivedAt,
+    worktreeId: initialEntry?.worktree?.id,
+    repositoryWorkspaceId: initialEntry?.repositoryWorkspaceId,
+  };
+  const prepared = initialIdentity.repositoryWorkspaceId
+    ? await getSessionRepositoryWorkspaceStore().prepare(initialIdentity.repositoryWorkspaceId)
+    : undefined;
+  const expected = params.expectedTarget ?? initialTarget;
   const targetChangedError = () =>
-    expected
+    params.expectedTarget
       ? new WorkerDispatchTargetChangedError(params.errorMessage)
       : new Error(params.errorMessage);
-  if (
-    expected &&
-    (target.storePath !== expected.storePath ||
-      target.canonicalKey !== expected.canonicalKey ||
-      target.agentId !== expected.agentId)
-  ) {
-    throw targetChangedError();
-  }
-  if (!entry || entry.sessionId !== params.sessionId) {
-    throw targetChangedError();
-  }
-  if (entry.repositoryWorkspaceId) {
-    const repository = getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId);
+  const resolveBinding = (config = params.config) => {
+    const target = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
+      cfg: config,
+      key: params.sessionKey,
+      agentId: params.agentId,
+      clone: false,
+      exactRead: true,
+    });
+    const entry = params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
+      target.store,
+      target.storeKeys,
+    );
     if (
-      !repository ||
-      repository.agentId !== target.agentId ||
-      repository.sessionKey !== target.canonicalKey ||
-      entry.worktree
+      target.storePath !== expected.storePath ||
+      target.canonicalKey !== expected.canonicalKey ||
+      target.agentId !== expected.agentId
+    ) {
+      throw targetChangedError();
+    }
+    if (
+      !entry ||
+      entry.sessionId !== params.sessionId ||
+      entry.lifecycleRevision !== initialIdentity.lifecycleRevision ||
+      entry.archivedAt !== initialIdentity.archivedAt ||
+      entry.worktree?.id !== initialIdentity.worktreeId ||
+      entry.repositoryWorkspaceId !== initialIdentity.repositoryWorkspaceId
+    ) {
+      throw targetChangedError();
+    }
+    if (entry.repositoryWorkspaceId) {
+      prepared?.assertSourceCurrent();
+      const repository = prepared?.workspace;
+      if (
+        !repository ||
+        repository.workspaceId !== entry.repositoryWorkspaceId ||
+        repository.agentId !== target.agentId ||
+        repository.sessionKey !== target.canonicalKey ||
+        entry.worktree
+      ) {
+        throw targetChangedError();
+      }
+      return {
+        config,
+        target,
+        entry,
+        worktree: undefined,
+        workspace: { kind: "repository", repository } satisfies WorkerSessionWorkspace,
+      };
+    }
+    const worktree = params.sessionRuntime.managedWorktrees.findLiveByOwner(
+      "session",
+      target.canonicalKey,
+    );
+    if (
+      !entry.worktree?.id ||
+      !worktree ||
+      worktree.id !== entry.worktree.id ||
+      worktree.ownerId !== target.canonicalKey
     ) {
       throw targetChangedError();
     }
     return {
-      config: params.config,
+      config,
       target,
       entry,
-      worktree: undefined,
-      workspace: { kind: "repository", repository } satisfies WorkerSessionWorkspace,
+      worktree,
+      workspace: { kind: "local", path: worktree.path } satisfies WorkerSessionWorkspace,
     };
-  }
-  const worktree = params.sessionRuntime.managedWorktrees.findLiveByOwner(
-    "session",
-    target.canonicalKey,
-  );
-  if (
-    !entry.worktree?.id ||
-    !worktree ||
-    worktree.id !== entry.worktree.id ||
-    worktree.ownerId !== target.canonicalKey
-  ) {
-    throw targetChangedError();
-  }
+  };
+  const resolveCurrent = (config = params.config) => {
+    const selected = resolveBinding(config);
+    if (
+      selected.workspace.kind === "repository" &&
+      prepared?.current()?.revision !== selected.workspace.repository.revision
+    ) {
+      throw targetChangedError();
+    }
+    return selected;
+  };
   return {
-    config: params.config,
-    target,
-    entry,
-    worktree,
-    workspace: { kind: "local", path: worktree.path } satisfies WorkerSessionWorkspace,
+    ...resolveCurrent(),
+    assertBindingCurrent: (config?: OpenClawConfig) => {
+      resolveBinding(config);
+    },
+    assertCurrent: (config?: OpenClawConfig) => {
+      resolveCurrent(config);
+    },
   };
 }
 
@@ -336,6 +395,48 @@ export const loadWorkerPlacementSessionRuntimeModule = createLazyRuntimeModule(a
   };
 });
 
+export async function prepareWorkerPlacementRepositoryManifestRefs(
+  placement: WorkerSessionPlacementIdentity,
+): Promise<() => readonly string[] | null> {
+  const readEntry = () =>
+    loadSessionEntryReadOnly({
+      ...placement,
+      storePath: resolveSessionStorePathForScope(placement),
+    });
+  const entry = readEntry();
+  if (entry?.sessionId !== placement.sessionId) {
+    return () => null;
+  }
+  const prepared = entry.repositoryWorkspaceId
+    ? await getSessionRepositoryWorkspaceStore().prepare(entry.repositoryWorkspaceId)
+    : undefined;
+  return () => {
+    const current = readEntry();
+    if (
+      current?.sessionId !== placement.sessionId ||
+      current.lifecycleRevision !== entry.lifecycleRevision ||
+      current.repositoryWorkspaceId !== entry.repositoryWorkspaceId
+    ) {
+      return null;
+    }
+    if (!prepared) {
+      return [];
+    }
+    try {
+      const repository = prepared.current();
+      // Cumulative exports still need the original checkout manifest after a turn.
+      return repository?.agentId === placement.agentId &&
+        repository.sessionKey === placement.sessionKey &&
+        repository.baseManifestHash
+        ? [repository.baseManifestHash]
+        : null;
+    } catch {
+      // Unsettled or retired repository ownership cannot authorize manifest deletion.
+      return null;
+    }
+  };
+}
+
 export function createWorkerPlacementNodeWorkspaceBindingResolver(options: {
   placements: Pick<WorkerSessionPlacementStore, "get">;
   resolveWorkspace: (identity: WorkerSessionPlacementIdentity) => Promise<WorkerSessionWorkspace>;
@@ -357,6 +458,19 @@ export function createWorkerPlacementNodeWorkspaceBindingResolver(options: {
       sessionKey: placement.sessionKey,
       agentId: placement.agentId,
     });
+    const current = options.placements.get(binding.sessionId);
+    if (
+      current?.state !== placement.state ||
+      current.generation !== placement.generation ||
+      current.environmentId !== binding.environmentId ||
+      current.activeOwnerEpoch !== binding.ownerEpoch ||
+      current.sessionKey !== placement.sessionKey ||
+      current.agentId !== placement.agentId ||
+      current.remoteWorkspaceDir !== placement.remoteWorkspaceDir ||
+      current.workspaceBaseManifestRef !== placement.workspaceBaseManifestRef
+    ) {
+      return undefined;
+    }
     if (
       workspace.kind === "repository" &&
       (!workspace.repository.baseCommit || !workspace.repository.baseManifestHash)

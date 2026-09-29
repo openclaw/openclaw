@@ -19,7 +19,7 @@ import { cronStoreKey } from "../store/key.js";
 import {
   assertCronRunReceiptCurrent,
   CronRunReceiptRevisionError,
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
 import { claimCronRunReceiptInDatabaseForTest } from "../store/run-receipt-store.test-support.js";
@@ -212,7 +212,7 @@ describe("cron runtime row publication", () => {
       expect(reads.rowCounts.jobs).toBeLessThanOrEqual(3);
     } finally {
       reads.restore();
-      finishCronRunReceipt({ handle, status: "superseded", finishedAtMs: now + 1 });
+      await finishCronRunReceiptAsync({ handle, status: "superseded", finishedAtMs: now + 1 });
     }
   });
 

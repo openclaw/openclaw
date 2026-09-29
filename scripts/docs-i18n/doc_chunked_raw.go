@@ -474,9 +474,6 @@ func summarizeDocChunkStructure(text string) docChunkStructure {
 			fenceCount++
 		}
 		for _, match := range docsComponentTagRE.FindAllStringSubmatch(line, -1) {
-			if len(match) < 3 {
-				continue
-			}
 			fullToken := match[0]
 			tagName := match[2]
 			direction := "open"
@@ -561,11 +558,8 @@ func extractProtectedMarkdownLinkLabels(text string) []string {
 }
 
 func isProtectedProductLinkLabel(label, destination string) bool {
-	if isAlwaysProtectedProductName(label) {
-		return true
-	}
-	name, ok := contextualProtectedProductName(label)
-	return ok && destinationMentionsProductName(destination, name)
+	return slices.Contains(alwaysProtectedProductNames, label) ||
+		(slices.Contains(contextualProtectedProductNames, label) && destinationMentionsProductName(destination, label))
 }
 
 type contextualProductDestinationRule struct {

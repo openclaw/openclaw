@@ -313,16 +313,16 @@ describe("SQLite lifecycle cleanup races", () => {
     const target = await seed("maintenance-compare-failed", { updatedAt: 1 }, undefined, {
       sessionKey: "agent:main:subagent:maintenance-compare-failed",
     });
-    const db = database();
     let materializations = 0;
     hooks.after = () => {
       if (++materializations !== 1) {
         return;
       }
-      const entry = { sessionId: target.sessionId, label: "changed", updatedAt: 2 };
-      db.db
-        .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
-        .run(JSON.stringify(entry), entry.updatedAt, target.sessionKey);
+      replaceSessionEntrySync(target, {
+        ...loadSessionEntry(target)!,
+        label: "changed",
+        updatedAt: 2,
+      });
     };
     const result = await applySessionEntryLifecycleMutation({
       storePath,
