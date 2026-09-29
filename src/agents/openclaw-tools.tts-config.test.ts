@@ -180,16 +180,19 @@ describe("createOpenClawTools context wiring", () => {
     expect(onYield).not.toHaveBeenCalled();
   });
 
-  it("uses the isolated cron run key for background media completions", () => {
+  it.each([
+    ["agent:main:cron:daily-media", "agent:main:cron:daily-media:run:run-123"],
+    ["agent:main:qa-channel:default:direct:media-requester", "agent:main:main"],
+  ])("uses the durable run key for background media from %s", (agentSessionKey, runSessionKey) => {
     createTools({
       config: mediaConfig,
-      agentSessionKey: "agent:main:cron:daily-media",
-      runSessionKey: "agent:main:cron:daily-media:run:run-123",
+      agentSessionKey,
+      runSessionKey,
       onYield: vi.fn(),
     });
     for (const factory of [mocks.image, mocks.video, mocks.music]) {
       expect(factory).toHaveBeenCalledWith(
-        expect.objectContaining({ agentSessionKey: "agent:main:cron:daily-media:run:run-123" }),
+        expect.objectContaining({ agentSessionKey: runSessionKey }),
       );
     }
   });
