@@ -6,7 +6,7 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { getRealtimeTranscriptionProvider } from "openclaw/plugin-sdk/realtime-transcription";
+import { getRealtimeTranscriptionProvider } from "openclaw/plugin-sdk/realtime-transcription-runtime";
 import { useAutoCleanupTempDirTracker, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import { CallManager } from "./manager.js";

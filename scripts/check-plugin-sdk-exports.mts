@@ -93,6 +93,11 @@ import type {
 } from "openclaw/plugin-sdk/embedding-provider-runtime-contract";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 import { identityEntryAuthenticationClassifier, meetsIdentifierAuthentication } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import {
+  createRealtimeTranscriptionWebSocketSession,
+  type RealtimeTranscriptionSessionCallbacks,
+  type RealtimeTranscriptionWebSocketSessionOptions,
+} from "openclaw/plugin-sdk/realtime-transcription";
 import type {
   ChannelIngressIdentitySubjectInput,
   IdentifierAuthentication,
@@ -229,6 +234,46 @@ const runtimeStore = createPluginRuntimeStore<PluginRuntime>({
 export const configSchema = buildChannelConfigSchema(
   z.object({ dmPolicy: DmPolicySchema.optional() }),
 );
+
+type AcmeRealtimeEvent = { type: string; text?: string };
+type AcmeRealtimePayload = Parameters<
+  NonNullable<RealtimeTranscriptionWebSocketSessionOptions<AcmeRealtimeEvent>["parseMessage"]>
+>[0];
+
+const parseAcmeRealtimeEvent = (payload: AcmeRealtimePayload): AcmeRealtimeEvent => {
+  const value = JSON.parse(payload.toString()) as unknown;
+  if (!value || typeof value !== "object" || !("type" in value)) {
+    throw new Error("Acme realtime event must be an object with a type.");
+  }
+  const { type, text } = value as { type?: unknown; text?: unknown };
+  if (typeof type !== "string" || (text !== undefined && typeof text !== "string")) {
+    throw new Error("Acme realtime event has invalid fields.");
+  }
+  return { type, ...(text === undefined ? {} : { text }) };
+};
+
+const transcriptionCallbacks: RealtimeTranscriptionSessionCallbacks = {
+  onTranscript: () => {},
+};
+
+export const transcriptionSession =
+  createRealtimeTranscriptionWebSocketSession<AcmeRealtimeEvent>({
+    providerId: "package-consumer",
+    callbacks: transcriptionCallbacks,
+    url: "wss://api.example.com/v1/realtime-transcription",
+    protocols: ["binary"],
+    parseMessage: parseAcmeRealtimeEvent,
+    onMessage: (event, transport) => {
+      if (event.type === "session.created") {
+        transport.markReady();
+        return;
+      }
+      if (event.type === "transcript.final" && typeof event.text === "string") {
+        transcriptionCallbacks.onTranscript?.(event.text);
+      }
+    },
+    sendAudio: () => {},
+  });
 
 declare const plugin: Parameters<typeof defineChannelPluginEntry>[0]["plugin"];
 export default defineChannelPluginEntry({

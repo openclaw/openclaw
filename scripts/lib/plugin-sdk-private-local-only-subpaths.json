@@ -152,7 +152,7 @@
   "qa-runner-runtime",
   "qa-runtime",
   "realtime-bootstrap-context",
-  "realtime-transcription",
+  "realtime-transcription-runtime",
   "realtime-transcription-session",
   "realtime-voice",
   "realtime-voice-activation",
