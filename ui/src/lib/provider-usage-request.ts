@@ -11,12 +11,16 @@ export type ProviderUsageRequestResult = Result<UsageSummary, ProviderUsageReque
 
 export async function requestProviderUsage(
   client: GatewayBrowserClient,
-  opts?: { signal?: AbortSignal },
+  opts?: { signal?: AbortSignal; agentId?: string },
 ): Promise<ProviderUsageRequestResult> {
   try {
+    // usage.status without an agentId resolves the default agent, and this
+    // snapshot overrides the per-agent one from models.authStatus - so the
+    // page would settle on the default agent's quota after a moment.
+    const params = opts?.agentId ? { agentId: opts.agentId } : undefined;
     const summary = opts?.signal
-      ? await client.request<UsageSummary>("usage.status", undefined, { signal: opts.signal })
-      : await client.request<UsageSummary>("usage.status");
+      ? await client.request<UsageSummary>("usage.status", params, { signal: opts.signal })
+      : await client.request<UsageSummary>("usage.status", params);
     return ok<UsageSummary, ProviderUsageRequestFailure>(summary);
   } catch (error) {
     if (opts?.signal?.aborted) {
