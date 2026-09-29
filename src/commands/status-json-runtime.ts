@@ -25,35 +25,42 @@ export async function resolveStatusJsonOutput(params: {
 }) {
   const { scan, opts } = params;
   const inspectionReason = "Local plugin inspection is not collected in online status.";
-  const { securityAudit, usage, health, lastHeartbeat, gatewayService, nodeService } =
-    await resolveStatusRuntimeSnapshot({
-      config: scan.cfg,
-      sourceConfig: scan.sourceConfig,
-      timeoutMs: opts.timeoutMs,
-      gatewayProbeDeadlineMs: opts.gatewayProbeDeadlineMs,
-      ...(opts.agent ? { agentId: opts.agent } : {}),
-      usage: opts.usage,
-      deep: opts.deep,
-      gatewayReachable: scan.gatewayReachable,
-      ...(scan.gatewayProbe?.startupPhase
-        ? { gatewayStartupPhase: scan.gatewayProbe.startupPhase }
-        : {}),
-      ...(scan.gatewayProbe?.error ? { gatewayProbeError: scan.gatewayProbe.error } : {}),
-      includeSecurityAudit: params.includeSecurityAudit && !scan.collection,
-      suppressHealthErrors: params.suppressHealthErrors,
-      ...(scan.collection && opts.usage
-        ? {
-            resolveUsage: async (input: Parameters<typeof resolveStatusUsageSummary>[0]) => {
-              const { readConfigFileSnapshot } = await import("../config/config.js");
-              const snapshot = await readConfigFileSnapshot({
-                observe: false,
-                pluginValidation: "core-only",
-              });
-              return resolveStatusUsageSummary({ ...input, config: snapshot.runtimeConfig });
-            },
-          }
-        : {}),
-    });
+  const {
+    securityAudit,
+    usage,
+    usageSecretDiagnostics,
+    health,
+    lastHeartbeat,
+    gatewayService,
+    nodeService,
+  } = await resolveStatusRuntimeSnapshot({
+    config: scan.cfg,
+    sourceConfig: scan.sourceConfig,
+    timeoutMs: opts.timeoutMs,
+    gatewayProbeDeadlineMs: opts.gatewayProbeDeadlineMs,
+    ...(opts.agent ? { agentId: opts.agent } : {}),
+    usage: opts.usage,
+    deep: opts.deep,
+    gatewayReachable: scan.gatewayReachable,
+    ...(scan.gatewayProbe?.startupPhase
+      ? { gatewayStartupPhase: scan.gatewayProbe.startupPhase }
+      : {}),
+    ...(scan.gatewayProbe?.error ? { gatewayProbeError: scan.gatewayProbe.error } : {}),
+    includeSecurityAudit: params.includeSecurityAudit && !scan.collection,
+    suppressHealthErrors: params.suppressHealthErrors,
+    ...(scan.collection && opts.usage
+      ? {
+          resolveUsage: async (input: Parameters<typeof resolveStatusUsageSummary>[0]) => {
+            const { readConfigFileSnapshot } = await import("../config/config.js");
+            const snapshot = await readConfigFileSnapshot({
+              observe: false,
+              pluginValidation: "core-only",
+            });
+            return resolveStatusUsageSummary({ ...input, config: snapshot.runtimeConfig });
+          },
+        }
+      : {}),
+  });
 
   const payload = buildStatusJsonPayload({
     summary: scan.summary,
@@ -67,7 +74,7 @@ export async function resolveStatusJsonOutput(params: {
     memoryPlugin: scan.memoryPlugin,
     agents: scan.agentStatus,
     configDiagnostics: scan.configDiagnostics,
-    secretDiagnostics: scan.secretDiagnostics,
+    secretDiagnostics: [...scan.secretDiagnostics, ...(usageSecretDiagnostics ?? [])],
     securityAudit:
       params.includeSecurityAudit && scan.collection
         ? { collected: false, reason: inspectionReason }

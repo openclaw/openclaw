@@ -1,5 +1,6 @@
 // Status runtime shared tests cover gateway health, runtime details, and safe status probe fallbacks.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
 import {
   resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealthSafe,
@@ -15,10 +16,19 @@ const mocks = vi.hoisted(() => ({
   getDaemonStatusSummary: vi.fn(),
   getNodeDaemonStatusSummary: vi.fn(),
   resolveModelAuthLabel: vi.fn(),
+  resolveCommandConfigWithSecrets: vi.fn(async ({ config }: { config: unknown }) => ({
+    resolvedConfig: config,
+    effectiveConfig: config,
+    diagnostics: [],
+  })),
 }));
 
 vi.mock("../infra/provider-usage.js", () => ({
   loadProviderUsageSummary: mocks.loadProviderUsageSummary,
+}));
+
+vi.mock("../cli/command-config-resolution.js", () => ({
+  resolveCommandConfigWithSecrets: mocks.resolveCommandConfigWithSecrets,
 }));
 
 vi.mock("../agents/model-auth-label.js", () => ({
@@ -93,6 +103,14 @@ describe("status-runtime-shared", () => {
       expect(usageCall.timeoutMs).toBe(38_000);
       expect(usageCall.config).toEqual({ gateway: {} });
       expect(usageCall.agentDir).toContain("main");
+      expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledWith({
+        config: { gateway: {} },
+        commandName: "status --usage",
+        targetIds: new Set(["models.providers.*.apiKey"]),
+        mode: "read_only_status",
+        agentId: "main",
+        gatewaySecretResolveTimeoutMs: 38_000,
+      });
     } finally {
       clock.mockRestore();
     }
@@ -132,6 +150,105 @@ describe("status-runtime-shared", () => {
       }),
     ).rejects.toThrow("Set agents.defaults.systemAgent.agentId");
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "OpenRouter exec SecretRef",
+      providerId: "openrouter",
+      sourceApiKey: { source: "exec", provider: "default", id: "openrouter-key" },
+      preparedApiKey: "or-secretref-token",
+      baseUrl: "https://openrouter.ai/api/v1",
+    },
+    {
+      name: "Z.AI store SecretRef",
+      providerId: "zai",
+      sourceApiKey: { source: "store", provider: "default", id: "ZAI_API_KEY" },
+      preparedApiKey: "zai-store-secretref-token",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+    },
+  ])(
+    "passes a prepared $name into usage collection",
+    async ({ providerId, sourceApiKey, preparedApiKey, baseUrl }) => {
+      const sourceConfig = {
+        models: {
+          providers: {
+            [providerId]: {
+              baseUrl,
+              api: "openai-completions",
+              apiKey: sourceApiKey,
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const preparedConfig = {
+        ...sourceConfig,
+        models: {
+          providers: {
+            [providerId]: {
+              ...sourceConfig.models?.providers?.[providerId],
+              apiKey: preparedApiKey,
+            },
+          },
+        },
+      } as OpenClawConfig;
+      mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
+        resolvedConfig: preparedConfig,
+        effectiveConfig: preparedConfig,
+        diagnostics: [],
+      });
+
+      await resolveStatusUsageSummary({
+        ...createStatusGatewayProbeBudget(5_000),
+        config: sourceConfig,
+        agentDir: "/tmp/status-agent",
+      });
+
+      expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: preparedConfig,
+          agentDir: "/tmp/status-agent",
+        }),
+      );
+      expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: sourceConfig,
+          commandName: "status --usage",
+          mode: "read_only_status",
+          targetIds: new Set(["models.providers.*.apiKey"]),
+          gatewaySecretResolveTimeoutMs: 5_000,
+        }),
+      );
+    },
+  );
+
+  it("reports usage secret-resolution diagnostics without changing the usage summary", async () => {
+    const diagnostic = "models.providers.zai.apiKey: secret unavailable";
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
+      resolvedConfig: { gateway: {} },
+      effectiveConfig: { gateway: {} },
+      diagnostics: [diagnostic],
+    });
+    const seen: string[] = [];
+
+    await expect(
+      resolveStatusUsageSummary({
+        ...createStatusGatewayProbeBudget(),
+        config: { gateway: {} },
+        agentDir: "/tmp/status-agent",
+        onSecretDiagnostics: (diagnostics) => {
+          seen.push(...diagnostics);
+        },
+      }),
+    ).resolves.toEqual({ providers: [] });
+
+    expect(seen).toEqual([diagnostic]);
+    expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetIds: new Set(["models.providers.*.apiKey"]),
+      }),
+    );
   });
 
   it.each([
@@ -447,6 +564,7 @@ describe("status-runtime-shared", () => {
     ).resolves.toEqual({
       securityAudit: { summary: { critical: 0 }, findings: [] },
       usage: { providers: [] },
+      usageSecretDiagnostics: [],
       health: { ok: true },
       lastHeartbeat: { ok: true },
       gatewayService: { label: "LaunchAgent" },
@@ -487,6 +605,7 @@ describe("status-runtime-shared", () => {
       agentId: "beta",
       timeoutMs: 60_000,
       gatewayProbeDeadlineMs: 60_000,
+      onSecretDiagnostics: expect.any(Function),
     });
   });
 

@@ -68,13 +68,23 @@ export async function statusAllCommand(
     });
 
     if (opts.usage) {
+      const usageSecretDiagnostics: string[] = [];
       const usage = await resolveStatusUsageSummary({
         config: overview.cfg,
         timeoutMs: resolveStatusGatewayProbeTimeoutMs(opts),
         gatewayProbeDeadlineMs: opts.gatewayProbeDeadlineMs,
         ...(opts.agent ? { agentId: opts.agent } : {}),
+        onSecretDiagnostics: (diagnostics) => {
+          usageSecretDiagnostics.push(...diagnostics);
+        },
       });
       lines.push("", ...formatUsageReportLines(usage));
+      if (usageSecretDiagnostics.length > 0) {
+        lines.push("", "Secret diagnostics:");
+        for (const entry of usageSecretDiagnostics) {
+          lines.push(`- ${entry}`);
+        }
+      }
     }
 
     progress.setLabel("Rendering…");

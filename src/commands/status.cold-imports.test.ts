@@ -31,6 +31,7 @@ describe("status cold imports", () => {
     expect(snapshot).toEqual({
       securityAudit: undefined,
       usage: undefined,
+      usageSecretDiagnostics: [],
       health: undefined,
       lastHeartbeat: null,
       gatewayService: { label: "gateway" },

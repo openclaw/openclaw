@@ -9,6 +9,7 @@ import {
 } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
+import { resolveManagedSecretRefRuntimeProviderAuth } from "../agents/model-auth-runtime-config.js";
 import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
@@ -83,6 +84,15 @@ function resolveProviderApiKeyFromConfig(params: {
     })?.apiKey;
     if (key) {
       return key;
+    }
+    // Store and exec SecretRefs stay on the source config. The active runtime
+    // snapshot already holds the resolved provider key that inference uses.
+    const managedKey = resolveManagedSecretRefRuntimeProviderAuth({
+      cfg: params.state.cfg,
+      provider: providerId,
+    })?.apiKey;
+    if (managedKey) {
+      return managedKey;
     }
   }
   return undefined;

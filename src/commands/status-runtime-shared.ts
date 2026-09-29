@@ -222,12 +222,16 @@ export async function resolveStatusRuntimeSnapshot(params: {
     : undefined;
   const resolveUsageSummary = params.resolveUsage ?? resolveStatusUsageSummary;
   const resolveGatewayHealthSummary = params.resolveHealth ?? resolveStatusGatewayHealth;
+  const usageSecretDiagnostics: string[] = [];
   const usage = params.usage
     ? await resolveUsageSummary({
         timeoutMs: resolveStatusGatewayProbeTimeoutMs(params),
         gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
         config: params.config,
         ...(params.agentId ? { agentId: params.agentId } : {}),
+        onSecretDiagnostics: (diagnostics) => {
+          usageSecretDiagnostics.push(...diagnostics);
+        },
       })
     : undefined;
   // JSON status remains nonthrowing, but requested probe failures must stay visible.
@@ -261,6 +265,7 @@ export async function resolveStatusRuntimeSnapshot(params: {
   return {
     securityAudit,
     usage,
+    usageSecretDiagnostics,
     health,
     lastHeartbeat,
     gatewayService,

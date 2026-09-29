@@ -2,6 +2,7 @@
 
 ### Fixes
 
+- Status and Control UI usage now include providers whose API keys are store or exec SecretRefs, including Z.AI, without requiring a plaintext key. (#150173) Thanks @Samay10
 - Developer tooling: split root test typechecks into four serial compiler graphs, preserving test coverage and shared Vitest context while reducing the size of each checker heap.
 
 - Codex: restore background memory narratives and isolated text completions on agent-scoped local runtimes with administrator-managed hooks, preserving managed hooks and existing native-account/proxy routing while keeping ordinary hooks and model tools isolated. (#151658)

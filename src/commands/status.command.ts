@@ -166,6 +166,7 @@ export async function statusCommand(
   const {
     securityAudit,
     usage,
+    usageSecretDiagnostics,
     health,
     lastHeartbeat,
     gatewayService: daemon,
@@ -243,6 +244,8 @@ export async function statusCommand(
   }
 
   const tableWidth = getTerminalTableWidth();
+
+  secretDiagnostics.push(...(usageSecretDiagnostics ?? []));
 
   if (secretDiagnostics.length > 0) {
     // Secret diagnostics are already redacted by the scanner; show them before the main report.

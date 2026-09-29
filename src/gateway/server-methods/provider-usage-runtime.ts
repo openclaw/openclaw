@@ -14,6 +14,7 @@ import {
 } from "../../agents/execution-auth-binding.js";
 import { resolveLegacyInheritedAuthAgentId } from "../../agents/legacy-inherited-auth-dir.js";
 import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
+import { resolveManagedSecretRefRuntimeProviderAuth } from "../../agents/model-auth-runtime-config.js";
 import { resolveUsableCustomProviderApiKey } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
@@ -89,8 +90,14 @@ function resolveDirectApiKeys(
 ): Map<string, ResolvedDirectApiKey> {
   const directApiKeys = new Map<string, ResolvedDirectApiKey>();
   for (const provider of providerIds) {
+    const managed = resolveManagedSecretRefRuntimeProviderAuth({
+      cfg: config,
+      provider,
+    });
+    const managedApiKey = managed?.apiKey;
     const resolved =
       resolveUsableCustomProviderApiKey({ cfg: config, provider, env: process.env }) ??
+      (managed && managedApiKey ? { apiKey: managedApiKey, source: managed.source } : undefined) ??
       resolveEnvApiKey(provider, process.env, { config });
     if (!resolved) {
       continue;

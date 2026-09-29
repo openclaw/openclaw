@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderResolveUsageAuthContext } from "../plugins/types.js";
 
 const resolveProviderUsageAuthWithPluginMock = vi.fn(
@@ -169,6 +171,62 @@ describe("resolveProviderAuths plugin boundary", () => {
       ]);
     });
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("uses a resolved Z.AI store SecretRef without an env or plaintext config key", async () => {
+    const resolvedKey = "zai-store-resolved-key";
+    const runtimeConfig = {
+      models: {
+        providers: {
+          zai: {
+            baseUrl: "https://api.z.ai/api/paas/v4",
+            api: "openai-completions",
+            apiKey: resolvedKey,
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sourceConfig = {
+      models: {
+        providers: {
+          zai: {
+            baseUrl: "https://api.z.ai/api/paas/v4",
+            api: "openai-completions",
+            apiKey: { source: "store", provider: "default", id: "ZAI_API_KEY" },
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+    resolveProviderUsageAuthWithPluginMock.mockImplementationOnce(async (rawParams) => {
+      const params = rawParams as { context: ProviderResolveUsageAuthContext };
+      const apiKey = params.context.resolveApiKeyFromConfigAndStore({
+        providerIds: ["zai", "z-ai"],
+        envDirect: [params.context.env.ZAI_API_KEY, params.context.env.Z_AI_API_KEY],
+      });
+      return apiKey ? { token: apiKey } : null;
+    });
+
+    try {
+      await withTempHome(async (homeDir) => {
+        await expect(
+          resolveProviderAuthsForTest({
+            providers: ["zai"],
+            config: runtimeConfig,
+            env: { HOME: homeDir },
+          }),
+        ).resolves.toEqual([
+          {
+            provider: "zai",
+            token: resolvedKey,
+          },
+        ]);
+      });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("preserves exact plugin auth failures for direct callers", async () => {

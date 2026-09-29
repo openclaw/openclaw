@@ -8,6 +8,7 @@ import {
   saveAuthProfileStore,
   type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -52,7 +53,10 @@ import {
   clearModelAuthStatusUsageCache,
   readProviderUsageStaleWhileRevalidate,
 } from "./models-auth-status-usage-cache.js";
-import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
+import {
+  clearProviderUsageRuntimeSnapshot,
+  getProviderUsageRuntimeSnapshot,
+} from "./provider-usage-runtime.js";
 import { usageHandlers } from "./usage.js";
 
 const config = {
@@ -133,6 +137,8 @@ describe("usage.status provider usage cache", () => {
   });
 
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
+    clearProviderUsageRuntimeSnapshot();
     clearRuntimeAuthProfileStoreSnapshots();
     resetPluginRuntimeStateForTest();
     vi.unstubAllEnvs();
@@ -155,6 +161,54 @@ describe("usage.status provider usage cache", () => {
           : [],
     }));
   }
+
+  it("includes a Z.AI store SecretRef in usage.status credentials", async () => {
+    const resolvedKey = "zai-store-resolved-key";
+    const runtimeConfig = {
+      agents: { list: [{ id: "main", default: true }] },
+      models: {
+        providers: {
+          zai: {
+            baseUrl: "https://api.z.ai/api/paas/v4",
+            api: "openai-completions",
+            apiKey: resolvedKey,
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sourceConfig = {
+      ...runtimeConfig,
+      models: {
+        providers: {
+          zai: {
+            baseUrl: "https://api.z.ai/api/paas/v4",
+            api: "openai-completions",
+            apiKey: { source: "store", provider: "default", id: "ZAI_API_KEY" },
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+    vi.stubEnv("ZAI_API_KEY", "");
+    vi.stubEnv("Z_AI_API_KEY", "");
+    mocks.listProviderUsagePluginDescriptors.mockReturnValue([
+      { provider: "zai", displayName: "Z.AI" },
+    ]);
+
+    const snapshot = getProviderUsageRuntimeSnapshot({ config: runtimeConfig });
+    expect(snapshot.providerIds).toEqual(["zai"]);
+    expect(snapshot.directApiKeys.get("zai")).toMatchObject({ apiKey: resolvedKey });
+
+    await runUsageStatus({ runtimeConfig });
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: runtimeConfig,
+        providers: ["zai"],
+      }),
+    );
+  });
 
   it("loads the cached provider snapshot from the exact runtime config", async () => {
     mockExactConfigProviderUsage();
