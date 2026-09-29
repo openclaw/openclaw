@@ -45,6 +45,13 @@ The new build records its commit, so the next update can finish as already curre
 installation; the update leaves those files intact and reports the process and
 the stop/retry action.
 
+Stopping another Gateway that shares this installation protects its running
+code; it does not migrate that Gateway's separate state. If its older state
+requires migration, run the updated CLI's `doctor --fix` under that service's own
+account, profile, and environment before resuming it. Doctor may restore the
+service itself, so inspect its status before starting it again through its
+service manager.
+
 Source commands launched with `pnpm openclaw` also refuse an automatic rebuild
 while that installation's Gateway is running. Use the installed `openclaw update`
 or `node openclaw.mjs update` from the checkout to reach the updater's managed
@@ -962,7 +969,7 @@ the sentinel.
   <Step title="Sync plugins">
     Against the installed target, syncs plugins to the active channel before restarting the managed service. Dev uses bundled plugins; stable and beta use npm or ClawHub while preserving recorded source choices. A changed plugin snapshot runs fresh Doctor migrations; unchanged plugins do not run another full Doctor pass. The updater then revalidates the service owner, starts the Gateway, and verifies the final snapshot.
 
-    Source targets that support runtime completion also check their generated plugin runtime overlay and SDK aliases before loading plugin configuration. This completes artifacts omitted by an older updater on the first update to such a target; `update repair` performs the same check before Doctor. Exact artifacts remain untouched, including while a Gateway is running. Replacing missing or stale artifacts requires proof that the affected runtime is offline. A Gateway serving a physically separate runtime does not block completion. If service ownership or offline status cannot be verified, completion fails with recovery guidance instead of reporting a successful update. Older targets retain their existing generation behavior. Clean-source and staged-build validation still apply.
+    Source targets that support runtime completion also check their generated plugin runtime overlay and SDK aliases before loading plugin configuration. This completes artifacts omitted by an older updater on the first update to such a target; `update repair` performs the same check before Doctor. Exact artifacts remain untouched, including while a Gateway is running. Replacing missing or stale artifacts requires proof that the selected Gateway's affected runtime is offline. Before publication and each subsequent write, completion also checks discovered managed Gateways and refuses any observed live sibling using overlapping output paths. Stop that sibling through its own service manager or Startup process before retrying. A Gateway serving a physically separate runtime does not block completion. If the selected service's ownership or offline status cannot be verified, completion fails with recovery guidance instead of reporting a successful update. Older targets retain their existing generation behavior. Clean-source and staged-build validation still apply.
 
   </Step>
 </Steps>
