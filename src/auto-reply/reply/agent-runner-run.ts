@@ -13,7 +13,6 @@ import {
   getAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
-import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { hasOutboundReplyContent } from "../../plugin-sdk/reply-payload.js";
 import {
   getGatewayContextResolver,
@@ -40,6 +39,7 @@ import {
   createShouldEmitToolResult,
   isAudioPayload,
 } from "./agent-runner-helpers.js";
+import { deliverPreparedBlockReply } from "./agent-runner-presentation.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
@@ -495,15 +495,7 @@ export async function runReplyAgent(
   const blockReplyPipeline =
     blockStreamingEnabled && (opts?.onPreparedBlockReply || opts?.onBlockReply)
       ? createBlockReplyPipeline({
-          onBlockReply: async (payload, context) => {
-            if (opts.onPreparedBlockReply) {
-              for (const plan of createStructuredOutboundPayloadPlan([payload])) {
-                await opts.onPreparedBlockReply(plan, context);
-              }
-              return;
-            }
-            await opts.onBlockReply?.(payload, context);
-          },
+          onBlockReply: (payload, context) => deliverPreparedBlockReply(opts, payload, context),
           timeoutMs: blockReplyTimeoutMs,
           coalescing: blockReplyCoalescing,
           buffer: createAudioAsVoiceBuffer({ isAudioPayload }),

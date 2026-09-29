@@ -1,4 +1,5 @@
 import type { AcpSessionControlConstraint } from "../acp/runtime/session-meta-control.types.js";
+import type { SessionEntryCurrentSource } from "../config/sessions/session-entry-current.types.js";
 import type {
   SessionStateEventInput,
   SessionStateEventRow,
@@ -14,8 +15,12 @@ export type SessionStateWorkerOperations = {
       onlyIfWatched?: boolean;
       expectedUpstream?: SessionUpstreamLink;
       acpControl?: AcpSessionControlConstraint;
+      sessionEntryCurrentSource?: SessionEntryCurrentSource;
     };
     output: { row?: SessionStateEventRow; notices: SessionStateNotice[] };
   };
-  "sessionState.prune": { input: { now: number }; output: void };
+  "sessionState.prune": {
+    input: { now: number; sessionEntryCurrentSource?: SessionEntryCurrentSource };
+    output: void;
+  };
 };

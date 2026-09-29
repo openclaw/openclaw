@@ -40,11 +40,11 @@ import {
 } from "./update-command-dry-run.js";
 import type { RefuseUpdate } from "./update-command-result.js";
 import type { prepareUpdateCommand } from "./update-command-run.js";
-import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
-import {
-  resolvePackageRuntimePreflight,
-  type ManagedServiceRootRedirect,
-} from "./update-command-service-plan.js";
+import type {
+  ManagedServiceRootRedirect,
+  PreManagedServiceStop,
+} from "./update-command-service-context-types.js";
+import { resolvePackageRuntimePreflight } from "./update-command-service-plan.js";
 import type { resolveUpdateCommandTarget } from "./update-command-target.js";
 
 /** Render prepared preview facts without initializing runtime state. */

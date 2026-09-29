@@ -23,17 +23,31 @@ describe("update run ledger compaction", () => {
     { name: "diagnostic bytes", count: 30, detail: "diagnostic ".repeat(80) },
     { name: "retained phase bytes", count: 0, detail: "🦞".repeat(512) },
   ])(
-    "retains candidate admission, notice custody, restoration proof, and finalization history across the $name bound and database reopen",
+    "retains admission warnings, failure steps, notice custody, and finalization history across the $name bound and database reopen",
     ({ count, detail }) => {
       const options = isolatedOptions();
       const run = createUpdateRun({ trigger: "chat" }, options);
-      const admission = {
-        step: "candidate-admission",
-        status: "completed" as const,
+      const evidence = [
+        "candidate-admission",
+        "warning:update-admission-unsupported-target",
+        "warning:update-admission-fallback",
+        "warning:managed-service-membership",
+        "warning:finalize:plugins:deadline",
+        "global update",
+        "global update (omit optional)",
+        "candidate-doctor-lint",
+      ].map((step) => ({
+        step,
+        status:
+          step.startsWith("global update") || step === "candidate-doctor-lint"
+            ? ("failed" as const)
+            : ("completed" as const),
         startedAtMs: 1_000,
         endedAtMs: 2_000,
-      };
-      recordUpdateRunStep(run.runId, { ...admission, detail }, options);
+      }));
+      for (const step of evidence) {
+        recordUpdateRunStep(run.runId, { ...step, detail }, options);
+      }
       const notices = [
         "notice:ack",
         "notice:activating",
@@ -51,19 +65,20 @@ describe("update run ledger compaction", () => {
       for (let index = 0; index < count; index++) {
         recordUpdateRunStep(
           run.runId,
-          { step: `diagnostic-${index}`, status: "completed", detail },
+          { step: `warning:diagnostic-${index}`, status: "completed", detail },
           options,
         );
       }
       closeOpenClawStateDatabaseForTest();
       const persisted = getUpdateRun(run.runId, options)!;
-      expect(persisted.steps.find((step) => step.step === "candidate-admission")).toMatchObject(
-        admission,
-      );
+      for (const expected of evidence) {
+        expect(persisted.steps.filter((step) => step.step === expected.step)).toEqual([
+          expect.objectContaining(expected),
+        ]);
+      }
       expect(persisted.steps.map((step) => step.step)).toEqual(
         expect.arrayContaining([...UPDATE_RUN_PHASES, ...notices]),
       );
-      expect(persisted.steps.every((step) => step.status === "completed")).toBe(true);
       expect(persisted.steps.length).toBeLessThanOrEqual(128);
       expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
     },

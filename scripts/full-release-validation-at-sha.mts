@@ -66,6 +66,9 @@ export const FULL_RELEASE_WAIT_TIMEOUT_MINUTES = 720;
 export const FULL_RELEASE_GITHUB_POLL_INTERVAL_MS = 2 * 60_000;
 const FULL_RELEASE_PROGRESS_INTERVAL_MS = 15 * 60_000;
 const FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS = [30_000, 60_000, 120_000];
+// A run can wait in the runner queue before its first job uploads the witness.
+const FULL_RELEASE_WITNESS_QUEUE_WAIT_MS = 3 * 60 * 60_000;
+const ACTIVE_RUN_STATUSES = new Set(["requested", "queued", "pending", "waiting", "in_progress"]);
 const RELEASE_DECISION_FILE = "full-release-decision.json";
 const GH_NO_CACHE_HEADER = "Cache-Control: max-age=0";
 const REQUEST_KIND = "openclaw.full-release-dispatch/v1";
@@ -199,8 +202,7 @@ Decision identifies a blocking failure for that child. The release
 branch accepts its final package version or a matching beta prerelease.
 A numeric correction branch also accepts the base package only when its
 published base tag resolves to the exact Validation SHA.
-Exact alpha tags remain supported for Tideclaw. The release profile defaults to
-beta for beta candidates and exact alpha tags, and stable otherwise; pass
+The release profile defaults to beta for beta candidates and stable otherwise; pass
 -f release_profile=full for the broad advisory sweep. Focused retries must use
 one controller rerun_group; the removed release-checks aggregate and the direct
 child's manual qa aggregate are not accepted.`);
@@ -490,6 +492,13 @@ export function parseArgs(argv: string[]) {
   if (Object.hasOwn(args.inputs, "trusted_workflow_json")) {
     throw new Error("SHA-pinned release validation reserves trusted_workflow_json");
   }
+  if (
+    args.targetRef.includes("-alpha.") ||
+    args.targetRef.includes("tideclaw/alpha/") ||
+    args.trustedWorkflowRef.includes("tideclaw/alpha/")
+  ) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const targetContext = parseReleaseContextRef(args.targetRef);
   if (args.targetRef && !targetContext) {
     throw new Error("--target-ref must be a canonical OpenClaw release branch or tag");
@@ -667,7 +676,10 @@ function targetVersionForTarget(
 }
 
 function releaseProfileForVersion(version: string): "beta" | "stable" {
-  return /-(?:alpha|beta)\.[1-9][0-9]*$/u.test(version) ? "beta" : "stable";
+  if (version.includes("-alpha.")) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
+  return /-beta\.[1-9][0-9]*$/u.test(version) ? "beta" : "stable";
 }
 
 export function releaseProfileForTarget(
@@ -1293,8 +1305,10 @@ async function reconcileDispatch(record: DispatchRecord): Promise<DispatchRun> {
     "dispatch=rejected: GitHub rejected the retained request",
   );
   const request = record.request;
-  for (let attempt = 0; attempt <= FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS.length; attempt += 1) {
+  const witnessDeadline = Date.now() + FULL_RELEASE_WITNESS_QUEUE_WAIT_MS;
+  for (let attempt = 0; ; attempt += 1) {
     const runs = readDispatchRuns(request);
+    let queuedRun = "";
     if (runs.length > 0) {
       requireDispatch(
         runs.length === 1,
@@ -1302,11 +1316,13 @@ async function reconcileDispatch(record: DispatchRecord): Promise<DispatchRun> {
       );
       const observed = record.run ?? { id: Number(runs[0]!.id), attempt: 1 };
       assertDispatchRun(runs[0], request, observed);
-      assertDispatchRun(
-        JSON.parse(readGhApi(`repos/${REPOSITORY}/actions/runs/${observed.id}`)),
-        request,
-        observed,
+      const current: unknown = JSON.parse(
+        readGhApi(`repos/${REPOSITORY}/actions/runs/${observed.id}`),
       );
+      assertDispatchRun(current, request, observed);
+      if (isJsonRecord(current) && ACTIVE_RUN_STATUSES.has(stringValue(current.status))) {
+        queuedRun = `${observed.id} (${stringValue(current.status)})`;
+      }
       if (await readDispatchWitness(request, observed)) {
         // Recheck both identity and inventory after the archive read, which can span a rerun.
         assertDispatchRun(
@@ -1320,14 +1336,16 @@ async function reconcileDispatch(record: DispatchRecord): Promise<DispatchRun> {
         return observed;
       }
     }
-    if (attempt < FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS.length) {
-      Atomics.wait(
-        new Int32Array(new SharedArrayBuffer(4)),
-        0,
-        0,
-        FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS[attempt],
-      );
+    let delay = FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS[attempt];
+    if (delay === undefined && queuedRun && Date.now() < witnessDeadline) {
+      // The exact run exists but has not reached the job that uploads its input witness.
+      console.warn(`dispatch=pending-witness: run ${queuedRun} has not uploaded its witness yet`);
+      delay = Math.min(FULL_RELEASE_GITHUB_POLL_INTERVAL_MS, witnessDeadline - Date.now());
     }
+    if (delay === undefined) {
+      break;
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
   }
   throw new Error("Could not determine Full Release Validation run id: discovery exhausted");
 }
@@ -1817,7 +1835,8 @@ async function main() {
   const targetSha = resolveTargetSha(args.sha, args.targetRef);
   preflightTargetShaFetch(targetSha);
   const targetVersion = targetVersionForTarget(targetSha);
-  args.inputs.release_profile ??= releaseProfileForVersion(targetVersion);
+  const targetProfile = releaseProfileForVersion(targetVersion);
+  args.inputs.release_profile ??= targetProfile;
   args.inputs.allow_unreleased_changelog ??= args.targetRef ? "false" : "true";
   const targetContextRef = verifyTargetRef(args.targetRef, targetSha, targetVersion);
   const workflowSha = resolveTrustedWorkflowSha(args.workflowSha, args.trustedWorkflowRef);

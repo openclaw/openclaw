@@ -53,13 +53,8 @@ struct ConnectOptions {
             let arg = args[i]
             if let handler = flagHandlers[arg] {
                 handler(&opts)
-                i += 1
-                continue
-            }
-            if let handler = valueHandlers[arg], let value = CLIArgParsingSupport.nextValue(args, index: &i) {
+            } else if let handler = valueHandlers[arg], let value = CLIArgParsingSupport.nextValue(args, index: &i) {
                 handler(&opts, value)
-                i += 1
-                continue
             }
             i += 1
         }
@@ -276,18 +271,6 @@ func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig) throws 
             remote: config.remotePassword,
             inheritConfigCredentials: !hasExplicitURL),
         mode: resolvedMode)
-}
-
-private func resolvedCredential(
-    _ explicit: String?,
-    mode: String,
-    local: String?,
-    remote: String?,
-    inheritConfigCredentials: Bool = true) -> String?
-{
-    if let explicit, !explicit.isEmpty { return explicit }
-    guard inheritConfigCredentials else { return nil }
-    return mode == "remote" ? remote : local
 }
 
 func makeGatewayConnectOptions(

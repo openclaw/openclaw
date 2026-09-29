@@ -25,9 +25,7 @@ import { createAgentRunSupersededAbortError } from "../../agents/run-termination
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
-import type { BlockReplyContext, ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
@@ -38,6 +36,7 @@ import {
 } from "./agent-runner-cli-dispatch.js";
 import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
+import { deliverPreparedBlockReply } from "./agent-runner-presentation.js";
 import { resolveRunModelHasVision } from "./agent-runner-run-params.js";
 import { prepareCliReplyPayload } from "./cli-reply-payload.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
@@ -57,14 +56,10 @@ export async function runCliFallbackCandidate(
 }> {
   const turn = params.turn;
   const onPreparedBlockReply = turn.opts?.onPreparedBlockReply;
-  const onNativeBlockReply =
+  const onNativeBlockReply: NonNullable<typeof turn.opts>["onBlockReply"] =
     turn.opts?.onBlockReply ??
     (onPreparedBlockReply
-      ? async (payload: ReplyPayload, context?: BlockReplyContext) => {
-          for (const plan of createStructuredOutboundPayloadPlan([payload])) {
-            await onPreparedBlockReply(plan, context);
-          }
-        }
+      ? (payload, context) => deliverPreparedBlockReply({ onPreparedBlockReply }, payload, context)
       : undefined);
   const expectedLifecycleRevision = turn.getActiveSessionEntry()?.lifecycleRevision;
   const selectedModelEntry = findModelInCatalog(

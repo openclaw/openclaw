@@ -796,7 +796,11 @@ describe("cron service ops regressions", () => {
       mutation: "removed",
       reason: "Cron job removed by operator.",
       mutate: async (state: ReturnType<typeof createCronRegressionState>, jobId: string) => {
-        await expect(remove(state, jobId)).resolves.toEqual({ ok: true, removed: true });
+        await expect(remove(state, jobId)).resolves.toEqual({
+          ok: true,
+          removed: true,
+          activeRunCancellationRequested: true,
+        });
       },
       expectRemoved: true,
     },

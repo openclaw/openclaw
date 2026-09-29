@@ -1,7 +1,6 @@
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { sql } from "kysely";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
   SessionTranscriptWriteScope,
@@ -10,6 +9,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
+  getSessionKysely,
   transcriptWriteScopeIsCurrent,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
@@ -40,7 +40,7 @@ export function createSessionTranscriptOwnerPredicate(
     sessionKey: string;
   },
 ): () => boolean {
-  let query = getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "session_nodes">>(database.db)
+  let query = getSessionKysely(database.db)
     .selectFrom("session_nodes")
     .select((eb) => eb.val(1).as("matches"))
     .where("session_key", "=", expected.sessionKey)

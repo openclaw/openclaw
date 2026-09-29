@@ -1,8 +1,6 @@
 import type { RequestListener } from "node:http";
 import { type FetchFunction, type WebClientOptions, WebClient } from "@slack/web-api";
-import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
-import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
@@ -21,7 +19,7 @@ import { resolveSlackAccount } from "../accounts.js";
 import { isSlackAnyNativeApprovalClientEnabled } from "../approval-native-gates.js";
 import {
   resolveSlackLookupClientOptions,
-  resolveSlackProxyDispatcher,
+  resolveSlackMonitorDispatchers,
   resolveSlackWebClientOptions,
 } from "../client-options.js";
 import { createSlackStartupAuthClient, createSlackWebClient } from "../client.js";
@@ -34,6 +32,7 @@ import {
   resolveSlackAppToken,
   resolveSlackBotToken,
 } from "../token.js";
+import { registerSlackApprovalRuntimeContext } from "./approval-runtime-context.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
 import { createSlackMonitorContext, type SlackMonitorContext } from "./context.js";
 import {
@@ -287,8 +286,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const slackCfg = account.config;
   const slashCommand = resolveSlackSlashCommandConfig(opts.slashCommand ?? slackCfg.slashCommand);
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
-  const slackDispatcher = resolveSlackProxyDispatcher();
-  const clientOptions = resolveSlackWebClientOptions({}, slackDispatcher);
+  const slackDispatchers = resolveSlackMonitorDispatchers(slackMode);
+  const clientOptions = resolveSlackWebClientOptions({}, slackDispatchers.webApi);
   const durableIngress = createSlackDurableIngress({
     accountId: account.accountId,
     ...(runtime.log ? { onLog: runtime.log } : {}),
@@ -303,7 +302,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     signingSecret: signingSecret ?? undefined,
     slackWebhookPath,
     clientOptions: clientOptions as Record<string, unknown>,
-    dispatcher: slackDispatcher,
+    dispatcher: slackDispatchers.socketMode,
     wrapReceiver: durableIngress.wrapReceiver,
     onContextIdentity: async (identity) => {
       const current = monitorContextRef.current;
@@ -333,7 +332,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           botId: identity.botId,
         });
       if (adopted && contextInstallationIdentity) {
-        installationState.update(contextInstallationIdentity.kind);
+        installationState.update(
+          contextInstallationIdentity.kind,
+          contextInstallationIdentity.teamId,
+        );
         await installSlackRuntimeForIdentity(contextInstallationIdentity);
       }
       if (
@@ -520,7 +522,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     presenceRequestAbort = new AbortController();
     const options = resolveSlackLookupClientOptions(
       { ...clientOptions, timeout: SLACK_PRESENCE_REQUEST_TIMEOUT_MS },
-      slackDispatcher,
+      slackDispatchers.webApi,
     );
     options.fetch = withSlackPresenceLifecycleSignal(
       options.fetch ?? globalThis.fetch,
@@ -593,23 +595,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       clientOptions,
       installationIdentity: identity,
     });
-    registerChannelRuntimeContext({
+    registerSlackApprovalRuntimeContext({
+      app,
+      config: slackCfg.execApprovals ?? {},
+      resolveClient,
+      identity,
       channelRuntime: opts.channelRuntime,
-      channelId: "slack",
       accountId: account.accountId,
-      capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
-      context: {
-        app,
-        config: slackCfg.execApprovals ?? {},
-        resolveClient,
-        ...(identity.kind === "enterprise"
-          ? {
-              enterprise: {
-                enterpriseId: identity.enterpriseId,
-              },
-            }
-          : {}),
-      },
       abortSignal: opts.abortSignal,
     });
     approvalRuntimeInstalled = true;
@@ -649,7 +641,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         if (!adopted) {
           return false;
         }
-        installationState.update(recoveredInstallationIdentity.kind);
+        installationState.update(
+          recoveredInstallationIdentity.kind,
+          recoveredInstallationIdentity.kind === "workspace"
+            ? recoveredInstallationIdentity.teamId
+            : undefined,
+        );
         await installSlackRuntimeForIdentity(recoveredInstallationIdentity);
         return true;
       } catch (err) {
@@ -679,6 +676,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const installationState = registerSlackInstallationState(
     account.accountId,
     installationIdentity.kind,
+    installationIdentity.kind === "workspace" ? installationIdentity.teamId : undefined,
   );
 
   try {
@@ -822,7 +820,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     unregisterHttpHandler?.();
     await durableIngress.stop();
     await gracefulStopSlackApp(app);
-    await slackDispatcher?.close();
+    await slackDispatchers.close();
   }
 }
 

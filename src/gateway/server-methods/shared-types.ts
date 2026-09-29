@@ -81,6 +81,7 @@ import type { TerminalSessionManager } from "../terminal/session-manager.js";
 import type {
   WorkerPlacementDiskSpaceReader,
   WorkerPlacementRunnerAvailabilityReader,
+  WorkerPlacementRuntimeInstallReader,
   WorkerSessionPlacementReader,
 } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRetirementService } from "../worker-environments/placement-store.js";
@@ -398,6 +399,8 @@ type GatewayResidentBridgeContext = {
   workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
   /** Process-current paired-device runner proof for active placement projection. */
   workerPlacementRunnerAvailabilityReader?: WorkerPlacementRunnerAvailabilityReader;
+  /** Process-local installation progress for the placement's session-host node. */
+  workerPlacementRuntimeInstallReader?: WorkerPlacementRuntimeInstallReader;
   /** Use-time approval authority validation over the live run/worker owners. */
   validateAgentRuntimeApprovalAuthority?: AgentRuntimeApprovalAuthorityValidator;
   /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */
@@ -467,6 +470,8 @@ export type GatewayRequestOptions = {
   methodRegistry?: GatewayMethodRegistryView;
   /** Shared entry/publication precondition; never retained as accepted-run authority. */
   expectedProfileBinding?: import("../expected-profile.js").ExpectedProfileBinding;
+  /** In-process source refresh before handler entry; never retained by the handler. */
+  prepareDispatchCurrent?: () => Promise<void>;
   /** In-process Gateway lifetime guard composed into durable session mutations. */
   sessionMutationCommitGuard?: () => void;
   /** In-process caller lifetime; never serialized into a Gateway request frame. */
@@ -502,7 +507,7 @@ export type SessionMutationAuthorization = {
 /** Normalized method invocation options passed to registered handlers. */
 export type GatewayRequestHandlerOptions = Omit<
   GatewayRequestOptions,
-  "methodRegistry" | "expectedProfileBinding"
+  "methodRegistry" | "expectedProfileBinding" | "prepareDispatchCurrent"
 > & {
   params: Record<string, unknown>;
   sessionMutationAuthorization?: SessionMutationAuthorization;

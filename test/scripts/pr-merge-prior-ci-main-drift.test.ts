@@ -71,16 +71,27 @@ describePosix("prior-CI forward main admission", () => {
       const state = f.state();
       state.observations =
         stage === "settlement"
-          ? [
-              { pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } },
-              { main, pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" } },
-            ]
+          ? [{ pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } }]
           : [{}, {}, {}, {}, { main }];
+      if (stage === "settlement") {
+        state.restObservation = {
+          main,
+          pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" },
+        };
+      }
       f.save(state);
 
       const result = f.adminPriorCi(f.path);
 
       expect(result.status, result.output).toBe(0);
+      if (stage === "settlement") {
+        expect(f.state()).toMatchObject({
+          observationReads: 1,
+          observations: [],
+          restObservation: null,
+          restObservationAppliedAt: 0,
+        });
+      }
       expect(f.state().mutations).toBe(1);
       expect(f.state().restMergePayload).toMatchObject({ sha: f.head, merge_method: "squash" });
       expect(f.record()).toMatchObject({
@@ -100,6 +111,26 @@ describePosix("prior-CI forward main admission", () => {
           ? "Admin landing parent audit matched"
           : "Admin landing parent audit drift",
       );
+    },
+  );
+
+  it.each(["conflict", "empty change"] as const)(
+    "checks first-observation %s composition",
+    (fault) => {
+      const f = preExistingCandidate();
+      const main = f.commit(
+        f.tree(fault === "conflict" ? "conflicting main\n" : "resolved conflict\n"),
+        [f.base],
+      );
+      f.save({ ...f.state(), observations: [{ main }] });
+
+      const result = f.adminPriorCi(f.path);
+
+      expect(result.status, result.output).not.toBe(0);
+      expect(result.output).toContain(
+        fault === "conflict" ? "cannot establish prepared-head merge tree" : "NO NET CHANGE",
+      );
+      expectNoDispatch(f);
     },
   );
 

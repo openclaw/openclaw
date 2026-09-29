@@ -1,4 +1,3 @@
-// Qa Lab plugin module carries Mantis failure artifact diagnostics across CLI boundaries.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 const mantisFailureArtifactPath = Symbol("mantisFailureArtifactPath");

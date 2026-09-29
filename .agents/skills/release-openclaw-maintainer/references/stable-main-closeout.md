@@ -21,7 +21,12 @@ new evidence. Invalid or mismatched assets remain blocking.
    train. For late closeout, do not downgrade an already-started later stable
    train; retain the validator's exact shipped-note and version checks. Run
    `pnpm release:prep` after any root version change, then
-   `pnpm deps:npm-lock:check`.
+   `pnpm deps:npm-lock:check`. `release:prep` requires npm `latest` and `beta`
+   in `scripts/lib/update-compat-inventory.json`. Record the shipped tarball
+   first, following [older updater checks](validation.md#older-updater-checks)
+   (integrity-verified download, `pnpm update:compat:gen`). Expect recorder or
+   bridge-writer failures when the release added post-swap updater imports or a
+   nested bundle directory. Reproduce them with `pnpm build` before pushing.
 3. Resolve the shipped section through `scripts/lib/release-changelog.mjs`
    so historical tags and current split artifacts use the same reader. Make
    `CHANGELOG/YYYY.M.PATCH.md` and its matching contribution record on `main`

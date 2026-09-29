@@ -56,6 +56,17 @@ export function resolveUpdateResultNextAction(params: {
   }
   if (result.status === "error") {
     if (
+      result.reason === "state-migrated-no-rollback" &&
+      result.steps.some((step) => step.name === "database rollback" && step.exitCode !== 0) &&
+      result.recovery?.serviceRestartSafe === true &&
+      result.recovery.service === "healthy"
+    ) {
+      const refusal =
+        result.rollbackOutcome?.reason ??
+        result.steps.findLast((step) => step.name === "database rollback")?.stderrTail;
+      return `Rollback refused: ${refusal ?? "restoring the backup would discard later writes"}. The Gateway is running on the preserved migrated state. Keep the recovery snapshots and run \`${formatCliCommand("openclaw doctor", env)}\` to inspect the remaining repair.`;
+    }
+    if (
       result.reason === "update-failed" &&
       !result.recovery &&
       (result.failedStep?.name === "requested" ||

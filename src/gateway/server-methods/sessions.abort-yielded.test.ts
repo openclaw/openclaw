@@ -219,7 +219,7 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
           }),
         ]);
       } else {
-        expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
+        expect(respond.mock.calls[0]?.slice(0, 2), JSON.stringify(respond.mock.calls[0])).toEqual([
           true,
           { ok: true, abortedRunId: null, status: "aborted" },
         ]);
@@ -239,7 +239,7 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
         expect(acknowledgment.entry).toEqual(replacement);
         return;
       }
-      expect(acknowledgment.entry).toMatchObject({
+      expect(acknowledgment.entry, JSON.stringify(respond.mock.calls[0])).toMatchObject({
         status: "killed",
         abortedLastRun: true,
         lastRunId: parentRunId,
@@ -298,7 +298,7 @@ it("leaves an ownerless session without yielded work unchanged", async () => {
 
 it("does not cancel a yielded parent when Stop only clears a queued follow-up", async () => {
   await seedYieldedParent();
-  expect(markSubagentRunTerminated({ runId: childRunId, reason: "killed" })).toBe(1);
+  expect(await markSubagentRunTerminated({ runId: childRunId, reason: "killed" })).toBe(1);
   const before = loadSessionEntry({ agentId: "main", sessionKey: parentKey });
   const followup = createQueueTestRun({ prompt: "Queued follow-up" });
   followup.run = { ...followup.run, agentId: "main", sessionId: parentId, sessionKey: parentKey };

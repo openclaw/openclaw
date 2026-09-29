@@ -1,7 +1,4 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { WorkerDesktopEndpoint } from "../../plugins/types.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -9,6 +6,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createEnvironmentStoreFixture } from "./placement-test-fixtures.js";
@@ -30,6 +28,7 @@ const DESKTOP: WorkerDesktopEndpoint = {
 };
 
 describe("worker environment runtime refresh", () => {
+  const tempDirs = useStateDatabaseTempDirs();
   let root: string;
   let database: OpenClawStateDatabase;
   let store: WorkerEnvironmentStore;
@@ -47,16 +46,10 @@ describe("worker environment runtime refresh", () => {
   });
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-env-"));
+    root = tempDirs.make("openclaw-worker-env-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     nowMs = 1_000;
     store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
-  });
-
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
   });
 
   const replacement = {

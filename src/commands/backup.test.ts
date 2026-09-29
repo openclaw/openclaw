@@ -22,7 +22,6 @@ import {
   resolveBackupPlanFromDisk,
 } from "./backup-shared.js";
 import {
-  backupVerifyCommandMock,
   createMockTarStream,
   mockStateOnlyBackupPlan,
   resetBackupTempHome,
@@ -77,16 +76,6 @@ describe("backup commands", () => {
     await resetBackupTempHome(tempHome);
     backupWalkMock.mockReset();
     backupWalkMock.mockImplementation(() => createMockTarStream());
-    backupVerifyCommandMock.mockReset();
-    backupVerifyCommandMock.mockResolvedValue({
-      ok: true,
-      archivePath: "/tmp/fake.tar.gz",
-      archiveRoot: "fake",
-      createdAt: new Date().toISOString(),
-      runtimeVersion: "test",
-      assetCount: 1,
-      entryCount: 2,
-    });
   });
 
   afterEach(async () => {

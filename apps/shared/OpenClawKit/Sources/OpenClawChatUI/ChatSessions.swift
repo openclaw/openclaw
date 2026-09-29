@@ -409,17 +409,6 @@ public struct OpenClawChatModelPatchResult: Decodable, Sendable, Equatable {
         case providerOverride
         case modelOverride
         case thinkingLevel
-        case fastMode
-        case effectiveFastMode
-        case verboseLevel
-        case permissionMode
-        case toolOverrides
-    }
-
-    private enum ResolvedKeys: String, CodingKey {
-        case modelProvider
-        case model
-        case thinkingLevel
         case thinkingLevels
         case fastMode
         case effectiveFastMode
@@ -448,41 +437,22 @@ public struct OpenClawChatModelPatchResult: Decodable, Sendable, Equatable {
         let entryToolOverrides = try entry.decodeIfPresent(
             OpenClawChatSessionToolOverrides.self,
             forKey: .toolOverrides)
-        if container.contains(.resolved) {
-            let resolved = try container.nestedContainer(keyedBy: ResolvedKeys.self, forKey: .resolved)
-            self.modelProvider = try resolved.decodeIfPresent(String.self, forKey: .modelProvider)
-                ?? entryModelProvider
-            self.model = try resolved.decodeIfPresent(String.self, forKey: .model)
-                ?? entryModel
-            let resolvedThinkingLevel = try resolved.decodeIfPresent(String.self, forKey: .thinkingLevel)
-            self.thinkingLevel = resolvedThinkingLevel ?? entryThinkingLevel
-            self.thinkingLevels = try resolved.decodeIfPresent(
-                [OpenClawChatThinkingLevelOption].self,
-                forKey: .thinkingLevels)
-            self.fastMode = try resolved.decodeIfPresent(OpenClawChatFastMode.self, forKey: .fastMode)
-                ?? entryFastMode
-            self.effectiveFastMode = try resolved.decodeIfPresent(
-                OpenClawChatFastMode.self,
-                forKey: .effectiveFastMode) ?? entryEffectiveFastMode
-            self.verboseLevel = try resolved.decodeIfPresent(String.self, forKey: .verboseLevel)
-                ?? entryVerboseLevel
-            self.permissionMode = try resolved.decodeIfPresent(
-                OpenClawChatPermissionMode.self,
-                forKey: .permissionMode) ?? entryPermissionMode
-            self.toolOverrides = try resolved.decodeIfPresent(
-                OpenClawChatSessionToolOverrides.self,
-                forKey: .toolOverrides) ?? entryToolOverrides
-        } else {
-            self.modelProvider = entryModelProvider
-            self.model = entryModel
-            self.thinkingLevel = entryThinkingLevel
-            self.thinkingLevels = nil
-            self.fastMode = entryFastMode
-            self.effectiveFastMode = entryEffectiveFastMode
-            self.verboseLevel = entryVerboseLevel
-            self.permissionMode = entryPermissionMode
-            self.toolOverrides = entryToolOverrides
-        }
+        let resolved = try container.contains(.resolved)
+            ? container.nestedContainer(keyedBy: EntryKeys.self, forKey: .resolved) : nil
+        self.modelProvider = try resolved?.decodeIfPresent(String.self, forKey: .modelProvider) ?? entryModelProvider
+        self.model = try resolved?.decodeIfPresent(String.self, forKey: .model) ?? entryModel
+        self.thinkingLevel = try resolved?.decodeIfPresent(String.self, forKey: .thinkingLevel) ?? entryThinkingLevel
+        self.thinkingLevels = try resolved?.decodeIfPresent(
+            [OpenClawChatThinkingLevelOption].self,
+            forKey: .thinkingLevels)
+        self.fastMode = try resolved?.decodeIfPresent(OpenClawChatFastMode.self, forKey: .fastMode) ?? entryFastMode
+        self.effectiveFastMode = try resolved?.decodeIfPresent(
+            OpenClawChatFastMode.self, forKey: .effectiveFastMode) ?? entryEffectiveFastMode
+        self.verboseLevel = try resolved?.decodeIfPresent(String.self, forKey: .verboseLevel) ?? entryVerboseLevel
+        self.permissionMode = try resolved?.decodeIfPresent(
+            OpenClawChatPermissionMode.self, forKey: .permissionMode) ?? entryPermissionMode
+        self.toolOverrides = try resolved?.decodeIfPresent(
+            OpenClawChatSessionToolOverrides.self, forKey: .toolOverrides) ?? entryToolOverrides
     }
 }
 

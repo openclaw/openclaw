@@ -4,8 +4,7 @@ import type {
   PluginHookReplyPayloadSendingContext,
   PluginHookReplyUsageState,
 } from "../../plugins/hook-types.js";
-import { copyReplyPayloadMetadata } from "../reply-payload.js";
-import type { ReplyPayload } from "../reply-payload.js";
+import { copyReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 
 /** Runs plugin hooks that may rewrite or cancel an outbound reply payload. */
@@ -40,6 +39,6 @@ export async function runReplyPayloadSendingHook(
   if (result?.cancel) {
     return null;
   }
-  const payload = (result?.payload as ReplyPayload | undefined) ?? params.payload;
+  const payload = result?.payload ?? params.payload;
   return copyReplyPayloadMetadata(params.payload, payload);
 }

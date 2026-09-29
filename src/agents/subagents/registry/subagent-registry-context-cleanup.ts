@@ -1,5 +1,8 @@
 import { getRuntimeConfig } from "../../../config/config.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
@@ -16,6 +19,11 @@ import {
   resolveSubagentRegistryContextEngine,
 } from "./subagent-registry-deps.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import {
+  assertSubagentRegistryWriteOutcomeKnown,
+  assertSubagentRegistryWriteSourceCurrent,
+  type SubagentRegistryWriteOptions,
+} from "./subagent-registry-persistence.js";
 import type {
   ContextEngineSubagentEndedParams,
   SubagentRunRecord,
@@ -23,6 +31,12 @@ import type {
 
 export function createSubagentRegistryContextCleanup(config: {
   persist: (...runIds: string[]) => void;
+  persistAsyncOrThrow: (
+    context: OpenClawStateWorkerContext,
+    callbacks: Omit<SubagentRegistryWriteOptions, "context"> & { assertCurrent: () => void },
+    ...runIds: string[]
+  ) => Promise<void>;
+  isEndedHookOwnerCurrent: (runId: string, entry: SubagentRunRecord) => boolean;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
   const { persist, warn } = config;
@@ -30,7 +44,7 @@ export function createSubagentRegistryContextCleanup(config: {
 
   async function runContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
-    options?: { isCurrent?: () => boolean },
+    options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
   ): Promise<void> {
     const cfg = getRuntimeConfig();
     const registry = await loadSubagentRegistryPluginRuntimeHandle({
@@ -45,7 +59,7 @@ export function createSubagentRegistryContextCleanup(config: {
       });
       let failure: { error: unknown } | undefined;
       try {
-        if (options?.isCurrent?.() !== false) {
+        if ((await options?.prepareCurrent?.()) !== false && options?.isCurrent?.() !== false) {
           await engine.onSubagentEnded?.(params);
         }
       } catch (error) {
@@ -65,7 +79,7 @@ export function createSubagentRegistryContextCleanup(config: {
   async function tryContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
     warning: string,
-    options?: { isCurrent?: () => boolean },
+    options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
   ): Promise<boolean> {
     try {
       await runContextEngineSubagentEnded(params, options);
@@ -78,7 +92,7 @@ export function createSubagentRegistryContextCleanup(config: {
 
   async function notifyContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
-    options?: { isCurrent?: () => boolean },
+    options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
   ): Promise<void> {
     await tryContextEngineSubagentEnded(
       params,
@@ -142,12 +156,27 @@ export function createSubagentRegistryContextCleanup(config: {
     sendFarewell?: boolean;
     accountId?: string;
     isCurrent?: () => boolean;
+    prepareCurrent?: () => Promise<boolean>;
   }) {
     if (params.entry.endedHookEmittedAt) {
       return;
     }
     // Loading and entering plugin scope are part of the best-effort hook boundary.
     try {
+      const stateContext = captureOpenClawStateWorkerContext();
+      const generation = params.entry.generation;
+      const assertCurrent = () => {
+        assertSubagentRegistryWriteSourceCurrent(stateContext);
+        assertSubagentRegistryWriteOutcomeKnown([params.entry.runId], stateContext.admission);
+        if (
+          params.entry.generation !== generation ||
+          !config.isEndedHookOwnerCurrent(params.entry.runId, params.entry) ||
+          params.isCurrent?.() === false
+        ) {
+          throw new Error("Subagent ended hook lost its original owner");
+        }
+      };
+      assertCurrent();
       const cfg = getRuntimeConfig();
       const registry = await loadSubagentRegistryPluginRuntimeHandle({
         config: cfg,
@@ -155,9 +184,14 @@ export function createSubagentRegistryContextCleanup(config: {
         allowGatewaySubagentBinding: true,
       });
       await withPluginRuntimeRegistryScope(registry, async () => {
-        if (params.entry.endedHookEmittedAt || params.isCurrent?.() === false) {
+        if (
+          (await params.prepareCurrent?.()) === false ||
+          params.entry.endedHookEmittedAt ||
+          params.isCurrent?.() === false
+        ) {
           return;
         }
+        assertCurrent();
         // Plugin loading yields after the terminal lock is released. Resolve the
         // event from the canonical row only after that boundary so an older callback
         // cannot claim the exactly-once hook with a superseded timeout or error.
@@ -178,10 +212,14 @@ export function createSubagentRegistryContextCleanup(config: {
           outcome,
           error,
           inFlightRunIds: endedHookInFlightRunIds,
-          persist,
+          persist: (...runIds) =>
+            config.persistAsyncOrThrow(stateContext, { assertCurrent }, ...runIds),
         });
       });
     } catch (err) {
+      if (hasSqliteWorkerOutcomeUnknown(err)) {
+        throw err;
+      }
       warn("subagent_ended hook failed (best-effort)", { phase: "plugin-runtime", err });
     }
   }

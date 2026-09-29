@@ -4,6 +4,7 @@ import path from "node:path";
 import { vi, type Mock } from "vitest";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
+import { createSubagentPersistenceMock } from "./subagent-test-fixtures.test-helpers.js";
 import { resolveRequesterStoreKey } from "./subagents/announce/subagent-requester-store-key.js";
 import { supportedSpawnModelChoice } from "./subagents/spawn/subagent-spawn.test-helpers.js";
 
@@ -242,6 +243,11 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
     hoisted.notifyEventWaiters,
   );
   vi.mocked(persistence.restoreSubagentRunsFromDisk).mockReturnValue(0);
+  const persistenceMock = createSubagentPersistenceMock(persistence);
+  persistenceMock.onSubagentRegistryPersisted(hoisted.notifyEventWaiters);
+  vi.mocked(persistence.persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
+    persistenceMock.persistSubagentRunsToDiskAsyncOrThrow,
+  );
   // Prepare the async announcement mock before lifecycle assertions start waiting.
   await import("./subagents/announce/subagent-announce.js");
   if (!cachedCreateSessionsSpawnTool) {

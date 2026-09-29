@@ -1,4 +1,3 @@
-import type { ChatSendIntent } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { shouldForwardModelCommandToServer } from "../../../../src/auto-reply/commands-registry.shared.js";
 import { isAbortTrigger } from "../../../../src/auto-reply/reply/abort-trigger-text.js";
 import {
@@ -9,15 +8,14 @@ import { normalizeChatFollowUpModeOverride } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
-import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import { canSubmitBeforeChatHistory, parseSlashCommand } from "../../lib/chat/commands.ts";
 import { extractCompanionCommandQuestion } from "../../lib/chat/companion-question.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
-import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { composeBrowserAnnotationContext } from "./browser-annotation-context.ts";
 import {
@@ -44,7 +42,7 @@ import {
   submittedCommandScopeIsVisible,
   type ChatCommandComposerRecovery,
 } from "./chat-send-composer.ts";
-import type { ChatHost } from "./chat-send-contract.ts";
+import type { ChatHost, ChatSendSubmitOptions } from "./chat-send-contract.ts";
 import { chatOutboxDrainDependencies, deliverChatQueueItem } from "./chat-send-delivery.ts";
 import { sendDetachedCommandMessage } from "./chat-send-detached-command.ts";
 import {
@@ -65,6 +63,7 @@ import {
 import { recordChatSendTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { withChatSubmitGuard, withChatSubmitHandoff } from "./chat-submit-guard.ts";
+import { attachmentBatchRejection } from "./components/chat-attachment-admission.ts";
 import { recordNonTranscriptInputHistory } from "./input-history.ts";
 import {
   captureOutboxPayloadOwner,
@@ -85,22 +84,6 @@ import { scheduleChatScroll } from "./scroll.ts";
 
 registerChatGoalsEnglish();
 registerMcpEnglish();
-
-export type ChatSendSubmitOptions = {
-  asyncQuestionItemId?: string;
-  intent?: ChatSendIntent;
-  attachmentsOverride?: readonly ChatAttachment[];
-  mentionsOverride?: readonly HumanMention[];
-  replyTargetOverride?: ChatHost["chatReplyTarget"];
-  /** Ordinary message admission transfers retry custody, including volatile sends. */
-  onOutboxAdmitted?: () => void;
-  followUpMode?: ControlUiFollowUpMode;
-  /** Only the inline queued-row submit may resume and replace an edited row. */
-  resumeQueuedMessageEditId?: string;
-  restoreDraft?: boolean;
-  /** Lets request-scoped UI actions recover from rejected local commands. */
-  onLocalCommandSendRejected?: () => void;
-};
 
 async function waitForSubmittedRoute(host: ChatHost, sessionKey: string): Promise<boolean> {
   const pending = getPendingChatPickerPatch(host, sessionKey);
@@ -224,6 +207,14 @@ export async function handleSendChat(
         (attachment) => !attachment.browserAnnotation && !attachment.selectionAnnotation,
       )
     : attachmentsToSend;
+  const rejectOversizedAttachments = () => {
+    const error = attachmentBatchRejection(deliveredAttachments, host.hello?.policy);
+    if (error === undefined) {
+      return false;
+    }
+    showToast({ message: error });
+    return true;
+  };
 
   if (!message && !hasAttachments) {
     return undefined;
@@ -307,6 +298,9 @@ export async function handleSendChat(
       const submitKey = chatSubmitKey(host, "detached", message, attachmentsToSend);
       await withChatSubmitGuard(host, submitKey, async () => {
         if (!(await waitForSubmittedRoute(host, submittedSessionKey))) {
+          return;
+        }
+        if (rejectOversizedAttachments()) {
           return;
         }
         const cleared = clearComposer("annotations");
@@ -446,6 +440,10 @@ export async function handleSendChat(
       }
       return undefined;
     }
+  }
+
+  if (rejectOversizedAttachments()) {
+    return undefined;
   }
 
   const { replyTargetOverride = previousReplyTarget } = opts ?? {};

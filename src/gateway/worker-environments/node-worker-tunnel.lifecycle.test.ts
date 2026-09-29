@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { WORKER_RPC_SET_VERSION } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
+import { resolveNodeWorkerLaunchToolNames } from "../../infra/node-runner-inventory.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import type { NodeWorkerSupervisorReceipt } from "../../worker/node-supervisor-protocol.js";
 import {
@@ -70,6 +71,28 @@ function turnClaim() {
 }
 
 describe("node worker tunnel lifetime", () => {
+  it("reads the current destination's launch vocabulary with a legacy fallback while offline", async () => {
+    const nodeTransport = transport();
+    const nodes = await nodeTransport.listCurrentNodes();
+    const node = nodes[0]!;
+    nodeTransport.listCurrentNodes = async () => nodes;
+    let currentTransport: NodeWorkerSupervisorTransport | undefined = nodeTransport;
+    const manager = await createManager(environment(), { getTransport: () => currentTransport });
+    const handle = await manager.start(startRequest());
+    const legacy = resolveNodeWorkerLaunchToolNames(node.workerHost);
+    await expect(handle.readLaunchToolNames()).resolves.toEqual(legacy);
+
+    node.workerHost.launchToolNames = [];
+    await expect(handle.readLaunchToolNames()).resolves.toEqual([]);
+    node.workerHost.launchToolNames = ["read", "presence"];
+    await expect(handle.readLaunchToolNames()).resolves.toEqual(["read", "presence"]);
+
+    nodeTransport.listCurrentNodes = async () => [];
+    await expect(handle.readLaunchToolNames()).resolves.toEqual(legacy);
+    currentTransport = undefined;
+    await expect(handle.readLaunchToolNames()).resolves.toEqual(legacy);
+  });
+
   it("revalidates the exact claim when a same-run replacement launches", async () => {
     const record = environment();
     let currentClaim = turnClaim();
