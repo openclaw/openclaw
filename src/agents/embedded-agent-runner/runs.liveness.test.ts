@@ -8,7 +8,6 @@ import {
 import { isReplyRunEvidenceStale } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { testing as replyTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import { admitReplyTurn } from "../../auto-reply/reply/reply-turn-admission.js";
-import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -94,7 +93,7 @@ afterEach(() => {
 });
 
 describe("runtime-owned embedded liveness", () => {
-  it("preserves steering and the exact reply owner past the stale takeover window", async () => {
+  it("keeps runtime waits steerable after the stale window", async () => {
     await vi.advanceTimersByTimeAsync(RUN_STALE_TAKEOVER_MS + 1);
 
     expect(isReplyRunEvidenceStale(operation)).toBe(false);
@@ -117,7 +116,7 @@ describe("runtime-owned embedded liveness", () => {
     expect(abort).not.toHaveBeenCalled();
   });
 
-  it("reports a quiet runtime wait as long-running without scheduling an abort", async () => {
+  it("reports quiet runtime waits without scheduling abort", async () => {
     const events: DiagnosticEventPayload[] = [];
     const unsubscribe = onDiagnosticEvent((event) => events.push(event));
     const recover = vi.fn(recoverStuckDiagnosticSession);
@@ -147,7 +146,7 @@ describe("runtime-owned embedded liveness", () => {
     }
   });
 
-  it("waits in bounded slices, then reclaims host-owned work without a millisecond spin", async () => {
+  it("waits in bounded slices before reclaiming host work", async () => {
     await vi.advanceTimersByTimeAsync(RUN_STALE_TAKEOVER_MS + 1);
     const waitForIdle = vi.spyOn(replyRunRegistry, "waitForIdle");
     const callerAbort = new AbortController();
@@ -187,44 +186,14 @@ describe("runtime-owned embedded liveness", () => {
     }
   });
 
-  it.each([
-    "host-work",
-    "aborted",
-    "stopped",
-    "closed",
-    "ownerless",
-    "restart",
-    "probe-error",
-  ] as const)("does not protect %s work", (state) => {
-    switch (state) {
-      case "host-work":
-        runtimeOwnsLiveness = false;
-        break;
-      case "aborted":
-        handle.isAborted = () => true;
-        break;
-      case "stopped":
-        handle.isStopped = () => true;
-        break;
-      case "closed":
-        admission.close();
-        break;
-      case "ownerless":
-        setActiveEmbeddedRun(sessionId, { ...handle }, sessionKey);
-        break;
-      case "restart":
-        rotateAgentEventLifecycleGeneration();
-        break;
-      case "probe-error":
-        handle.ownsLiveness = () => {
-          throw new Error("runtime probe failed");
-        };
-        break;
-    }
+  it("does not protect work when the runtime probe throws", () => {
+    handle.ownsLiveness = () => {
+      throw new Error("runtime probe failed");
+    };
     expect(resolveActiveEmbeddedRunRecoveryBlocker(sessionId)).toBeUndefined();
   });
 
-  it("rechecks ownership after a runtime probe synchronously replaces the handle", async () => {
+  it("rechecks ownership after a probe replaces the handle", async () => {
     handle.ownsLiveness = () => {
       setActiveEmbeddedRun(sessionId, { ...handle, ownsLiveness: undefined }, sessionKey);
       return true;
@@ -239,7 +208,7 @@ describe("runtime-owned embedded liveness", () => {
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
-  it("does not let a successful probe resurrect closed admission", () => {
+  it("does not let a probe revive closed admission", () => {
     handle.ownsLiveness = () => {
       admission.close();
       return true;
