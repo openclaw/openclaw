@@ -272,7 +272,7 @@ export function renderDesktopCredentials(options: {
   `;
 }
 
-export function renderDesktopConnection(options: {
+function renderDesktopConnection(options: {
   state: DesktopPanelState;
   controlling: boolean;
   desktopApps: WorkerDesktopAppId[];

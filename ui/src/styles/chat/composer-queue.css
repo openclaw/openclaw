@@ -269,11 +269,6 @@
   white-space: nowrap;
 }
 
-.chat-queue__badge--steered {
-  background: color-mix(in srgb, var(--text) 8%, transparent);
-  color: var(--muted);
-}
-
 .chat-queue__badge--reconnect {
   padding: 1px 4px;
   background: color-mix(in srgb, var(--warn) 12%, transparent);

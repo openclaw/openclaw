@@ -24,25 +24,19 @@ type ModelObservationProjection = NonNullable<ComputerActResult["observation"]> 
 };
 
 function projectComputerActResultMetadata(result: ComputerActResult) {
-  let observation: ModelObservationProjection | undefined = result.observation
+  const observation: ModelObservationProjection | undefined = result.observation
     ? { ...result.observation, ...(result.observation.base64 ? { base64: "[image]" } : {}) }
     : undefined;
-  if (observation?.elements && observation.elements.length > MODEL_OBSERVATION_MAX_ELEMENTS) {
-    observation = {
-      ...observation,
-      elements: observation.elements.slice(0, MODEL_OBSERVATION_MAX_ELEMENTS),
-      truncatedElements: observation.elements.length - MODEL_OBSERVATION_MAX_ELEMENTS,
-    };
-  }
   const details = result.details ? { ...result.details } : undefined;
-  if (
-    details &&
-    Array.isArray(details.elements) &&
-    details.elements.length > MODEL_OBSERVATION_MAX_ELEMENTS
-  ) {
-    const originalLength = details.elements.length;
-    details.elements = details.elements.slice(0, MODEL_OBSERVATION_MAX_ELEMENTS);
-    details.truncatedElements = originalLength - MODEL_OBSERVATION_MAX_ELEMENTS;
+  for (const projection of [observation, details]) {
+    if (
+      Array.isArray(projection?.elements) &&
+      projection.elements.length > MODEL_OBSERVATION_MAX_ELEMENTS
+    ) {
+      const originalLength = projection.elements.length;
+      projection.elements = projection.elements.slice(0, MODEL_OBSERVATION_MAX_ELEMENTS);
+      projection.truncatedElements = originalLength - MODEL_OBSERVATION_MAX_ELEMENTS;
+    }
   }
   return {
     ...result,

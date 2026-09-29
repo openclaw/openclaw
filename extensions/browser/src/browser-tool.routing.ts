@@ -9,10 +9,6 @@ import {
 } from "./browser-tool.runtime.js";
 import { BROWSER_ACTION_TRANSPORT_SLACK_MS } from "./browser/act-policy.js";
 
-export type BrowserNodeTarget = NonNullable<
-  Awaited<ReturnType<typeof resolveBrowserToolNodeTarget>>
->;
-
 export async function resolveBrowserToolNodeTarget(params: {
   requestedNode?: string;
   profile?: string;

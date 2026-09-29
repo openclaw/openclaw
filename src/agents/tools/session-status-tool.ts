@@ -140,49 +140,27 @@ type SessionStatusRouteDetails = {
 const INTERNAL_SESSION_KEY_ORIGIN_PREFIXES = new Set(["main", "cron", "subagent", "acp"]);
 
 function readRouteThreadId(value: unknown): string | number | undefined {
-  if (typeof value === "string" && value.trim()) {
-    return value.trim();
-  }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  return undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : readStringValue(value)?.trim() || undefined;
 }
 
-function compactOriginDetails(
-  params: SessionStatusOriginDetails,
-): SessionStatusOriginDetails | undefined {
+function compactRouteDetails(
+  params: SessionStatusOriginDetails & SessionStatusDeliveryContextDetails,
+) {
+  const provider = readStringValue(params.provider);
+  const channel = readStringValue(params.channel);
+  const to = readStringValue(params.to);
+  const accountId = readStringValue(params.accountId);
   const threadId = readRouteThreadId(params.threadId);
-  const details: SessionStatusOriginDetails = {
-    ...(params.provider ? { provider: params.provider } : {}),
-    ...(params.accountId ? { accountId: params.accountId } : {}),
+  const details = {
+    ...(provider ? { provider } : {}),
+    ...(channel ? { channel } : {}),
+    ...(to ? { to } : {}),
+    ...(accountId ? { accountId } : {}),
     ...(threadId !== undefined ? { threadId } : {}),
   };
   return Object.keys(details).length ? details : undefined;
-}
-
-function compactDeliveryContextDetails(
-  params: SessionStatusDeliveryContextDetails,
-): SessionStatusDeliveryContextDetails | undefined {
-  const threadId = readRouteThreadId(params.threadId);
-  const details: SessionStatusDeliveryContextDetails = {
-    ...(params.channel ? { channel: params.channel } : {}),
-    ...(params.to ? { to: params.to } : {}),
-    ...(params.accountId ? { accountId: params.accountId } : {}),
-    ...(threadId !== undefined ? { threadId } : {}),
-  };
-  return Object.keys(details).length ? details : undefined;
-}
-
-function normalizeStatusDeliveryContext(
-  context?: DeliveryContext,
-): SessionStatusDeliveryContextDetails | undefined {
-  return compactDeliveryContextDetails({
-    channel: readStringValue(context?.channel),
-    to: readStringValue(context?.to),
-    accountId: readStringValue(context?.accountId),
-    threadId: context?.threadId,
-  });
 }
 
 function normalizeActiveDeliveryContext(
@@ -194,7 +172,7 @@ function normalizeActiveDeliveryContext(
   const normalized = normalizeDeliveryContext(context);
   const rawChannel = readStringValue(normalized?.channel) ?? readStringValue(context.channel);
   const channel = rawChannel ? (normalizeMessageChannel(rawChannel) ?? rawChannel) : undefined;
-  return compactDeliveryContextDetails({
+  return compactRouteDetails({
     channel,
     to: readStringValue(normalized?.to) ?? readStringValue(context.to),
     accountId: readStringValue(normalized?.accountId) ?? readStringValue(context.accountId),
@@ -218,14 +196,21 @@ function buildSessionStatusRouteDetails(params: {
   activeDeliveryContext?: DeliveryContext;
   isLiveRunSession?: boolean;
 }): SessionStatusRouteDetails {
-  const origin = compactOriginDetails({
+  const storedOrigin = sessionDeliveryOrigin(params.entry);
+  const origin = compactRouteDetails({
     provider:
-      readStringValue(sessionDeliveryOrigin(params.entry)?.provider) ??
+      readStringValue(storedOrigin?.provider) ??
       inferOriginProviderFromSessionKey(params.sessionKey),
-    accountId: readStringValue(sessionDeliveryOrigin(params.entry)?.accountId),
-    threadId: sessionDeliveryOrigin(params.entry)?.threadId,
+    accountId: storedOrigin?.accountId,
+    threadId: storedOrigin?.threadId,
   });
-  const deliveryContext = normalizeStatusDeliveryContext(deliveryContextFromSession(params.entry));
+  const storedDelivery = deliveryContextFromSession(params.entry);
+  const deliveryContext = compactRouteDetails({
+    channel: storedDelivery?.channel,
+    to: storedDelivery?.to,
+    accountId: storedDelivery?.accountId,
+    threadId: storedDelivery?.threadId,
+  });
   const active = params.isLiveRunSession
     ? normalizeActiveDeliveryContext(params.activeDeliveryContext)
     : undefined;
@@ -374,18 +359,11 @@ export function createSessionStatusTool(opts?: {
         if (!trimmed) {
           return trimmed;
         }
-        if (trimmed.startsWith("agent:")) {
-          const parsed = parseAgentSessionKey(trimmed);
-          if (parsed?.rest === mainKey) {
-            return resolveVisibilityMainSessionKey(sessionAgentId);
-          }
-          return trimmed;
-        }
         // Preserve legacy bare main keys for requester tree checks.
-        if (isLegacyMainVisibilityKey(trimmed)) {
-          return resolveVisibilityMainSessionKey(sessionAgentId);
-        }
-        return trimmed;
+        const isMain = trimmed.startsWith("agent:")
+          ? parseAgentSessionKey(trimmed)?.rest === mainKey
+          : isLegacyMainVisibilityKey(trimmed);
+        return isMain ? resolveVisibilityMainSessionKey(sessionAgentId) : trimmed;
       };
       const accessByTarget = new Map<
         string,
@@ -791,7 +769,6 @@ export function createSessionStatusTool(opts?: {
             ...(providerForCard ? {} : { modelAuthOverride: undefined }),
             includeTranscriptUsage: true,
           });
-          const fullStatusText = statusText;
           const resultOverrideProvider = statusSessionEntry.providerOverride?.trim();
           const resultOverrideModel = statusSessionEntry.modelOverride?.trim();
           const activeRouteRunSessionKey = opts?.runSessionKey?.trim();
@@ -818,9 +795,7 @@ export function createSessionStatusTool(opts?: {
             stateChanges ? formatSessionStateChanges({ stateVersion, stateChanges }) : undefined,
           ].filter((block): block is string => Boolean(block));
           const visibleStatusText =
-            extraBlocks.length > 0
-              ? `${fullStatusText}\n\n${extraBlocks.join("\n\n")}`
-              : fullStatusText;
+            extraBlocks.length > 0 ? `${statusText}\n\n${extraBlocks.join("\n\n")}` : statusText;
           const modelOverrideForResult =
             modelRaw === undefined
               ? undefined

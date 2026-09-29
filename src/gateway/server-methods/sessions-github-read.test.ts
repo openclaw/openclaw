@@ -109,6 +109,7 @@ function createFixture(profile?: ReturnType<typeof ensureProfileForEmail>) {
     getClientConnIds: (filter?: (candidate: GatewayClient) => boolean) =>
       new Set(connected && (!filter || filter(client)) ? [client.connId] : []),
     githubPublicationService: {
+      preparePersonalStatus: vi.fn(async () => undefined),
       sharedStatus,
       latestShared,
       personalStatus,
@@ -282,6 +283,7 @@ describe("publication receipt reads", () => {
         requestId: receipt.result.requestId,
       });
       expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+      expect(fixture.sharedStatus).toHaveBeenCalledOnce();
       expect(fixture.personalStatus).not.toHaveBeenCalled();
     });
   });

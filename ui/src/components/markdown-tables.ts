@@ -1,18 +1,16 @@
 import { html, render } from "lit";
 import type { MarkdownIt } from "markdown-it";
 import { t } from "../i18n/index.ts";
-import { copyToClipboard } from "../lib/clipboard.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
 import { toolIcons } from "./icons-tools.ts";
 import { icons } from "./icons.ts";
+import { copyMarkdownText } from "./markdown-copy.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
 
 const tableShellSelector = ".chat-text .markdown-table[data-table-interactions]";
 const tableViewportSelector = ".markdown-table__viewport";
 const enhancedTableShells = new WeakSet<HTMLElement>();
 const tableOwnerStates = new WeakMap<HTMLElement, TableOwnerState>();
-const tableCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
-const tableCopyAttempts = new WeakMap<HTMLElement, number>();
 
 type TableOwnerState = {
   release: () => void;
@@ -277,32 +275,22 @@ export function handleMarkdownTableInteraction(event: Event): void {
   const copy = target.closest<HTMLElement>(".markdown-table__copy");
   if (copy) {
     const text = markdownTableCopyText(table);
-    const attempt = (tableCopyAttempts.get(copy) ?? 0) + 1;
-    tableCopyAttempts.set(copy, attempt);
-    // A streaming table retains its controls, but only the current payload
-    // may start fallback copying or update their feedback.
-    const isCurrent = () =>
-      copy.isConnected &&
-      table.isConnected &&
-      tableCopyAttempts.get(copy) === attempt &&
-      shell.querySelector("table") === table &&
-      markdownTableCopyText(table) === text;
-    void copyToClipboard(text, isCurrent).then((copied) => {
-      if (!isCurrent()) {
-        return;
-      }
-      copy.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
-      render(copied ? icons.check : icons.copy, copy);
-      clearTimeout(tableCopyResetTimers.get(copy));
-      const resetTimer = setTimeout(
-        () => {
+    copyMarkdownText(
+      copy,
+      text,
+      () =>
+        table.isConnected &&
+        shell.querySelector("table") === table &&
+        markdownTableCopyText(table) === text,
+      (copied) => {
+        if (copied === undefined) {
           render(icons.copy, copy);
           copy.setAttribute("aria-label", t("common.copyTable"));
-          tableCopyResetTimers.delete(copy);
-        },
-        copied ? 1500 : 2000,
-      );
-      tableCopyResetTimers.set(copy, resetTimer);
-    });
+        } else {
+          copy.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
+          render(copied ? icons.check : icons.copy, copy);
+        }
+      },
+    );
   }
 }

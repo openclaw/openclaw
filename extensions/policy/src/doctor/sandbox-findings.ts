@@ -64,15 +64,12 @@ export function sandboxPostureFindings(
 }
 
 function sandboxPostureFindingsForRule(
-  sandboxPolicy: Record<string, unknown> | undefined,
+  sandboxPolicy: Record<string, unknown>,
   policyDocName: string,
   requirementBase: string,
   evidence: PolicyEvidence,
   evidenceFilter: (entry: PolicySandboxPostureEvidence) => boolean,
 ): readonly HealthFinding[] {
-  if (!isRecord(sandboxPolicy)) {
-    return [];
-  }
   return [
     ...sandboxAllowlistFindings(
       sandboxPolicy,
@@ -364,22 +361,11 @@ const CONTAINER_RUNTIME_SOCKET_BASENAMES = new Set([
   "podman.sock",
 ]);
 
-const CONTAINER_RUNTIME_SOCKET_PATHS = new Set([
-  "/run/containerd/containerd.sock",
-  "/run/docker.sock",
-  "/run/podman/podman.sock",
-  "/var/run/docker.sock",
-  "/var/run/podman/podman.sock",
-]);
-
 function bindHostLooksLikeContainerRuntimeSocket(value: string | undefined): boolean {
   if (value === undefined) {
     return false;
   }
   const normalized = value.replaceAll("\\", "/").toLowerCase();
   const basenameLocal = normalized.split("/").at(-1) ?? "";
-  return (
-    CONTAINER_RUNTIME_SOCKET_PATHS.has(normalized) ||
-    CONTAINER_RUNTIME_SOCKET_BASENAMES.has(basenameLocal)
-  );
+  return CONTAINER_RUNTIME_SOCKET_BASENAMES.has(basenameLocal);
 }

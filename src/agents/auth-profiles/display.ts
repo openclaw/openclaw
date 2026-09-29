@@ -13,11 +13,6 @@ export function resolveAuthProfileDisplayLabel(params: {
   profileId: string;
 }): string {
   const { displayName, email } = resolveAuthProfileMetadata(params);
-  if (displayName) {
-    return `${params.profileId} (${displayName})`;
-  }
-  if (email) {
-    return `${params.profileId} (${email})`;
-  }
-  return params.profileId;
+  const label = displayName || email;
+  return label ? `${params.profileId} (${label})` : params.profileId;
 }

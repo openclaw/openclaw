@@ -37,6 +37,7 @@ import { resolveRuntimeServiceVersion } from "../version.js";
 import {
   createGeneratedMediaDeliveryEntry,
   expectCapturedQueueContext,
+  expectRestartSentinelTranscriptBroadcast,
   expectRecordFields,
   mockCallArg,
   lastMockCallArg,
@@ -1236,17 +1237,11 @@ describe("scheduleRestartSentinelWake", () => {
           updateRun ? 2 : 1,
         );
         expect(broadcastToConnIds).toHaveBeenCalledTimes(updateRun ? 2 : 1);
-        expect(broadcastToConnIds).toHaveBeenCalledWith(
-          "session.message",
-          expect.objectContaining({
-            sessionKey,
-            message: expect.objectContaining({
-              role: "assistant",
-              content: [{ type: "text", text: report }],
-            }),
-          }),
+        expectRestartSentinelTranscriptBroadcast(broadcastToConnIds, {
+          sessionKey,
+          report,
           subscribers,
-        );
+        });
         expect(mocks.enqueueDeliveryOnce).not.toHaveBeenCalled();
         if (withContinuation) {
           expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(2);
