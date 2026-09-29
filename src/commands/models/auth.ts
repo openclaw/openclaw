@@ -34,7 +34,6 @@ import { logConfigUpdated } from "../../config/logging.js";
 import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  applyDefaultModel,
   applyProviderAuthConfigPatch,
   pickAuthMethod,
   restorePriorAgentsDefaultsModelUnlessOptIn,
@@ -48,6 +47,7 @@ import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { runProviderPluginAuthMethodUnpersisted } from "../../plugins/provider-auth-method.js";
 import { persistProviderAuthProfilesAfterLogin } from "../../plugins/provider-auth-persistence.js";
 import type { ProviderAuthContext } from "../../plugins/provider-authentication.types.js";
+import { applyPrimaryModel } from "../../plugins/provider-model-primary.js";
 import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
 import {
   resolvePluginSetupProviderCore,
@@ -490,7 +490,7 @@ async function persistProviderAuthResult(params: {
           if (params.setDefault && defaultModel) {
             return profiles.length > 0
               ? applyProviderLoginDefaultModel(next, defaultModel)
-              : applyDefaultModel(next, defaultModel);
+              : applyPrimaryModel(next, defaultModel);
           }
           return next;
         },

@@ -18,6 +18,7 @@ export type CronRunExecutionParams = Pick<
   | "runSessionKey"
   | "usesDetachedRunSession"
   | "workspaceDir"
+  | "cwd"
   | "executionRoot"
   | "timeoutMs"
   | "runTimeoutOverrideMs"

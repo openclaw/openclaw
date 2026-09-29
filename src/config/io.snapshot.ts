@@ -12,7 +12,7 @@ import {
   includeContributionOwnsAgentRoster,
   includeContributionOwnsBindings,
 } from "./agent-roster-provenance.js";
-import { cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
+import { captureConfigReadEnvMutation, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
 import { ConfigIncludeError, ConfigIncludeReadError } from "./includes.js";
 import { createConfigIoContext, type ConfigIoContext } from "./io.context.js";
@@ -72,6 +72,8 @@ import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { captureManagedConfigSnapshotPreparation } from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
+import { createConfigWriteAuthorityGuard } from "./write-authority.js";
+import { captureConfigWriteLockGuard } from "./write-lock.js";
 
 type InternalReadOptions = {
   prepareValidation?: "runtime" | "strict";
@@ -115,8 +117,13 @@ async function readConfigSnapshotWithPreparation(
 ): Promise<ReadConfigFileSnapshotInternalResult> {
   const { deps, configPath, pathResolution } = context;
   const preparation = options.preparation;
-  maybeLoadDotEnvForConfig(deps.env);
-  const envBeforeRead = snapshotEnv(deps.env);
+  const assertReadCurrent = createConfigWriteAuthorityGuard(
+    captureConfigWriteLockGuard(configPath),
+    preparation?.assertCurrent,
+  );
+  assertReadCurrent();
+  captureConfigReadEnvMutation(deps.env, () => maybeLoadDotEnvForConfig(deps.env));
+  let restoreReadEnv: (() => void) | undefined;
   let fallbackRaw: string | null = null;
   let fallbackParsed: unknown = {};
   let fallbackSourceConfig: OpenClawConfig = {};
@@ -253,9 +260,16 @@ async function readConfigSnapshotWithPreparation(
       });
     }
 
-    const readResolution = await deps.measure("config.snapshot.read.env", () =>
-      resolveConfigForRead(resolved, deps.env, deps.lowerPrecedenceEnv),
-    );
+    const readResolution = await deps.measure("config.snapshot.read.env", () => {
+      assertReadCurrent();
+      return captureConfigReadEnvMutation(
+        deps.env,
+        () => resolveConfigForRead(resolved, deps.env, deps.lowerPrecedenceEnv),
+        (restore) => {
+          restoreReadEnv = restore;
+        },
+      );
+    });
     fallbackEnvSnapshotForRestore = readResolution.envSnapshotForRestore;
     const envVarWarnings = readResolution.envWarnings.map((warning) => ({
       path: warning.configPath,
@@ -348,11 +362,8 @@ async function readConfigSnapshotWithPreparation(
           : collect(),
       );
       // Invalid snapshots stay inspectable, but rejected env.vars must not become runtime state.
-      restoreEnvChangesIfUnchanged({
-        env: deps.env,
-        before: envBeforeRead,
-        after: snapshotEnv(deps.env),
-      });
+      assertReadCurrent();
+      restoreReadEnv?.();
       return await finalizeReadConfigSnapshotInternalResult(deps, {
         snapshot: createConfigFileSnapshot({
           ...snapshotSource(),
@@ -403,11 +414,8 @@ async function readConfigSnapshotWithPreparation(
         }),
       );
       if (recovery.raw !== raw) {
-        restoreEnvChangesIfUnchanged({
-          env: deps.env,
-          before: envBeforeRead,
-          after: snapshotEnv(deps.env),
-        });
+        assertReadCurrent();
+        restoreReadEnv?.();
         return await readConfigFileSnapshotInternal(context, {
           preparation,
           prepareValidation: options.prepareValidation,
@@ -446,7 +454,8 @@ async function readConfigSnapshotWithPreparation(
       ),
     );
   } catch (error) {
-    preparation?.assertCurrent();
+    assertReadCurrent();
+    restoreReadEnv?.();
     if (
       findStartupMaintenanceRequiredError(error) ||
       collectNestedErrorCandidates(error).some(

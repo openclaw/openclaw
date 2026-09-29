@@ -1,4 +1,3 @@
-// Qa Lab plugin module validates taxonomy-backed QA scorecard evidence.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -330,26 +329,20 @@ const qaMaturityTaxonomySchema = z
         );
       }
 
-      const seenProfileCategoryIds = new Set<string>();
-      for (const [categoryIndex, categoryId] of profile.categoryIds.entries()) {
-        if (seenProfileCategoryIds.has(categoryId)) {
-          issue(
-            ["profiles", profileIndex, "categoryIds", categoryIndex],
-            `duplicate category id in profile ${profile.id}: ${categoryId}`,
-          );
+      for (const [key, label] of [
+        ["categoryIds", "category id"],
+        ["coverageIds", "coverage ID"],
+      ] as const) {
+        const seenIds = new Set<string>();
+        for (const [index, id] of profile[key].entries()) {
+          if (seenIds.has(id)) {
+            issue(
+              ["profiles", profileIndex, key, index],
+              `duplicate ${label} in profile ${profile.id}: ${id}`,
+            );
+          }
+          seenIds.add(id);
         }
-        seenProfileCategoryIds.add(categoryId);
-      }
-
-      const seenProfileCoverageIds = new Set<string>();
-      for (const [coverageIndex, coverageId] of profile.coverageIds.entries()) {
-        if (seenProfileCoverageIds.has(coverageId)) {
-          issue(
-            ["profiles", profileIndex, "coverageIds", coverageIndex],
-            `duplicate coverage ID in profile ${profile.id}: ${coverageId}`,
-          );
-        }
-        seenProfileCoverageIds.add(coverageId);
       }
     }
 
@@ -427,20 +420,17 @@ const qaMaturityTaxonomySchema = z
     }
 
     for (const [profileIndex, profile] of taxonomy.profiles.entries()) {
-      for (const [categoryIndex, categoryId] of profile.categoryIds.entries()) {
-        if (!categoryIds.has(categoryId)) {
-          issue(
-            ["profiles", profileIndex, "categoryIds", categoryIndex],
-            `profile ${profile.id} references missing category ${categoryId}`,
-          );
-        }
-      }
-      for (const [coverageIndex, coverageId] of profile.coverageIds.entries()) {
-        if (!coverageIdOwners.has(coverageId)) {
-          issue(
-            ["profiles", profileIndex, "coverageIds", coverageIndex],
-            `profile ${profile.id} references missing coverage ID ${coverageId}`,
-          );
+      for (const [key, owners, label] of [
+        ["categoryIds", categoryIds, "category"],
+        ["coverageIds", coverageIdOwners, "coverage ID"],
+      ] as const) {
+        for (const [index, id] of profile[key].entries()) {
+          if (!owners.has(id)) {
+            issue(
+              ["profiles", profileIndex, key, index],
+              `profile ${profile.id} references missing ${label} ${id}`,
+            );
+          }
         }
       }
     }
@@ -550,14 +540,6 @@ export type QaScorecardTaxonomyReport = {
   validationIssueCount: number;
   validationIssues: QaScorecardValidationIssue[];
   categories: QaScorecardCategoryCoverageReport[];
-};
-
-type QaMaturityTaxonomyCategoryIndex = {
-  active: QaMaturityTaxonomySurface[];
-  surfaces: Map<
-    string,
-    { surface: QaMaturityTaxonomySurface; categories: Map<string, QaMaturityTaxonomyCategory> }
-  >;
 };
 
 type MaturityCategoryRef = {
@@ -767,14 +749,9 @@ export function activeQaMaturityTaxonomySurfaces(taxonomy: QaMaturityTaxonomy) {
   return taxonomy.surfaces.filter((surface) => !surface.archived);
 }
 
-function buildQaMaturityTaxonomyCategoryIndex(
-  taxonomy: QaMaturityTaxonomy,
-): QaMaturityTaxonomyCategoryIndex {
+function buildQaMaturityTaxonomyCategoryIndex(taxonomy: QaMaturityTaxonomy) {
   const active = activeQaMaturityTaxonomySurfaces(taxonomy);
-  const surfaces = new Map<
-    string,
-    { surface: QaMaturityTaxonomySurface; categories: Map<string, QaMaturityTaxonomyCategory> }
-  >();
+  const surfaces = new Map<string, { categories: Map<string, QaMaturityTaxonomyCategory> }>();
   for (const surface of active) {
     const categories = new Map<string, QaMaturityTaxonomyCategory>();
     for (const category of surface.categories) {
@@ -783,7 +760,7 @@ function buildQaMaturityTaxonomyCategoryIndex(
       }
       categories.set(category.name, category);
     }
-    surfaces.set(surface.id, { surface, categories });
+    surfaces.set(surface.id, { categories });
   }
   return { active, surfaces };
 }
@@ -934,17 +911,6 @@ function validateQaMaturityScoresAgainstTaxonomy(params: {
     if (surfaceLts.status !== expectedStatus) {
       throw new Error(`${scoresPath}.${surfaceId}.lts.status must be ${expectedStatus}`);
     }
-  }
-
-  for (const surfaceId of taxonomyIndex.surfaces.keys()) {
-    if (!seenSurfaceIds.has(surfaceId)) {
-      throw new Error(`${scoresPath}: missing active taxonomy surface ${surfaceId}`);
-    }
-  }
-  if (params.scores.counts.category_scores !== allScoreCategories.length) {
-    throw new Error(
-      `${scoresPath}.counts.category_scores must match score category count (${allScoreCategories.length})`,
-    );
   }
 
   const rollups = params.scores.rollups;

@@ -1,3 +1,4 @@
+import { availableWorkerSlots } from "../../../../src/shared/node-list-parse.js";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { DraftEnvironment } from "./discovery.ts";
@@ -67,7 +68,9 @@ function unavailableReason(
   if (!environment.workerSlots) {
     return t("newSession.deviceCapacityUnavailable");
   }
-  return environment.workerSlots.available === 0 ? t("newSession.deviceNoSlots") : undefined;
+  return availableWorkerSlots(environment.workerSlots) === 0
+    ? t("newSession.deviceNoSlots")
+    : undefined;
 }
 
 /** One projection owns device presentation, restore eligibility, and submit eligibility. */

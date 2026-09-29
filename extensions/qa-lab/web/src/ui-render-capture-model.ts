@@ -194,9 +194,7 @@ export function buildCaptureViewModel(state: UiState) {
   const selectedFlowIndex =
     selectedEvent == null
       ? -1
-      : selectedFlowEvents.findIndex(
-          (event) => captureEventKey(event) === captureEventKey(selectedEvent),
-        );
+      : selectedFlowEvents.findIndex((event) => captureEventKey(event) === selectedEventKey);
   const previousFlowEvent =
     selectedFlowIndex > 0 ? selectedFlowEvents[selectedFlowIndex - 1] : null;
   const nextFlowEvent =
@@ -281,14 +279,13 @@ export function buildCaptureViewModel(state: UiState) {
           }, new Map()),
         ).map(([, group]) => group);
   const clusterEventBursts = (eventsForGroup: CaptureEventView[]) => {
-    const sorted = [...eventsForGroup].toSorted(
+    const sorted = eventsForGroup.toSorted(
       (left, right) =>
         left.ts - right.ts || captureEventKey(left).localeCompare(captureEventKey(right)),
     );
     const clusters: Array<{
       key: string;
       representative: CaptureEventView;
-      events: CaptureEventView[];
       count: number;
       startTs: number;
       endTs: number;
@@ -309,14 +306,12 @@ export function buildCaptureViewModel(state: UiState) {
         clusters.push({
           key: captureEventKey(event),
           representative: event,
-          events: [event],
           count: 1,
           startTs: event.ts,
           endTs: event.ts,
         });
         continue;
       }
-      previous.events.push(event);
       previous.count += 1;
       previous.endTs = event.ts;
       previous.representative = event;
@@ -415,7 +410,6 @@ export function buildCaptureViewModel(state: UiState) {
     availableHosts,
     activeFilters,
     minTs,
-    maxTs,
     totalSpanMs,
     activeWindowStartPct,
     activeWindowEndPct,
@@ -431,7 +425,6 @@ export function buildCaptureViewModel(state: UiState) {
     topKinds,
     topProviders,
     topModels,
-    selectedFlowId,
     selectedFlowEvents,
     selectedFlowIndex,
     previousFlowEvent,

@@ -564,6 +564,9 @@ async function runDoctorHealthFlowWithResult(
           result: {
             ...doctorResult,
             ...(maintenance?.databaseWrites ? { databaseWrites: maintenance.databaseWrites } : {}),
+            ...(updateResult.capture.fileWrites
+              ? { configFileWrites: updateResult.capture.fileWrites }
+              : {}),
             ...(warnings.length ? { warnings } : {}),
             ...(updateResult.capture.configChanges.length
               ? { configChanges: updateResult.capture.configChanges }

@@ -1,4 +1,3 @@
-// Tlon API module exposes the plugin public contract.
 import crypto from "node:crypto";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -74,10 +73,6 @@ async function releaseUploadResponse(
   } finally {
     await guarded.release();
   }
-}
-
-function getExtensionFromMimeType(mimeType?: string): string {
-  return extensionForMime(mimeType) || ".jpg";
 }
 
 function hasCustomS3Creds(
@@ -171,13 +166,6 @@ function prefixEndpoint(endpoint: string): string {
 
 function sanitizeFileName(fileName: string): string {
   return fileName.split(/[/\\]/).pop() || fileName;
-}
-
-async function getAuthCookie(config: ClientConfig): Promise<string> {
-  return await authenticate(config.shipUrl, await config.getCode(), {
-    ssrfPolicy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(config.dangerouslyAllowPrivateNetwork),
-    beforeRequest: config.assertDirectAdapterHandoff,
-  });
 }
 
 async function scryJson<T>(config: ClientConfig, cookie: string, path: string): Promise<T> {
@@ -293,7 +281,10 @@ export async function uploadFile(
     ...clientConfig,
     shipName: clientConfig.shipName.replace(/^~/, ""),
   };
-  const cookie = await getAuthCookie(config);
+  const cookie = await authenticate(config.shipUrl, await config.getCode(), {
+    ssrfPolicy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(config.dangerouslyAllowPrivateNetwork),
+    beforeRequest: config.assertDirectAdapterHandoff,
+  });
   const privateNetworkPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
     config.dangerouslyAllowPrivateNetwork,
   );
@@ -304,7 +295,7 @@ export async function uploadFile(
   ]);
 
   const contentType = params.contentType || params.blob.type || "application/octet-stream";
-  const extension = getExtensionFromMimeType(contentType);
+  const extension = extensionForMime(contentType) || ".jpg";
   const fileName = sanitizeFileName(params.fileName || `upload${extension}`);
   const fileKey = `${config.shipName}/${Date.now()}-${crypto.randomUUID()}-${fileName}`;
 

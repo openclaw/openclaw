@@ -62,21 +62,14 @@ function armPendingScan(generation: number): void {
 
 function resolveRetryDelayMs(entry: QueuedSessionDelivery, now: number): number {
   const claimDelayMs = Math.max(0, (entry.availableAt ?? 0) - now);
-  const deadlineDelayMs =
-    entry.kind === "agentTurn" && entry.owner?.kind === "subagent_completion"
-      ? Math.max(0, entry.owner.deadlineAt - now)
-      : Number.POSITIVE_INFINITY;
-  if (entry.retryCount <= 0) {
-    return Math.min(claimDelayMs, deadlineDelayMs);
-  }
   if (entry.kind === "agentTurn" && entry.owner?.kind === "subagent_completion") {
-    return Math.min(deadlineDelayMs, claimDelayMs);
+    return Math.min(claimDelayMs, Math.max(0, entry.owner.deadlineAt - now));
+  }
+  if (entry.retryCount <= 0) {
+    return claimDelayMs;
   }
   const attemptedAt = entry.lastAttemptAt ?? entry.enqueuedAt;
-  return Math.min(
-    deadlineDelayMs,
-    Math.max(claimDelayMs, attemptedAt + computeBackoffMs(entry.retryCount) - now),
-  );
+  return Math.max(claimDelayMs, attemptedAt + computeBackoffMs(entry.retryCount) - now);
 }
 
 function armSessionDeliveryId(id: string, delayMs: number, generation: number): void {

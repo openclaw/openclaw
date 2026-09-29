@@ -148,6 +148,35 @@ const withoutReasonCode = withoutField("reasonCode");
 const withoutFailureStage = withoutField("failureStage");
 const withoutDeliveryKind = withoutField("deliveryKind");
 
+function actionTerminalVariants(
+  action: "agent.run" | "tool.action",
+  failures: [status: string, errorCode: string][],
+) {
+  return Type.Union([
+    Type.Intersect([
+      Type.Object({
+        action: Type.Literal(`${action}.started`),
+        status: Type.Literal("started"),
+      }),
+      withoutErrorCode,
+    ]),
+    Type.Intersect([
+      Type.Object({
+        action: Type.Literal(`${action}.finished`),
+        status: Type.Literal("succeeded"),
+      }),
+      withoutErrorCode,
+    ]),
+    ...failures.map(([status, errorCode]) =>
+      Type.Object({
+        action: Type.Literal(`${action}.finished`),
+        status: Type.Literal(status),
+        errorCode: Type.Literal(errorCode),
+      }),
+    ),
+  ]);
+}
+
 const agentRunProperties = {
   eventType: Type.Literal("agent_run"),
   ...commonProperties,
@@ -177,41 +206,11 @@ export const AuditActivityAgentRunV1Schema: TSchema = correlatedObject(
       ]),
     ),
   },
-  Type.Union([
-    Type.Intersect([
-      Type.Object({
-        action: Type.Literal("agent.run.started"),
-        status: Type.Literal("started"),
-      }),
-      withoutErrorCode,
-    ]),
-    Type.Intersect([
-      Type.Object({
-        action: Type.Literal("agent.run.finished"),
-        status: Type.Literal("succeeded"),
-      }),
-      withoutErrorCode,
-    ]),
-    Type.Object({
-      action: Type.Literal("agent.run.finished"),
-      status: Type.Literal("failed"),
-      errorCode: Type.Literal("run_failed"),
-    }),
-    Type.Object({
-      action: Type.Literal("agent.run.finished"),
-      status: Type.Literal("cancelled"),
-      errorCode: Type.Literal("run_cancelled"),
-    }),
-    Type.Object({
-      action: Type.Literal("agent.run.finished"),
-      status: Type.Literal("timed_out"),
-      errorCode: Type.Literal("run_timed_out"),
-    }),
-    Type.Object({
-      action: Type.Literal("agent.run.finished"),
-      status: Type.Literal("blocked"),
-      errorCode: Type.Literal("run_blocked"),
-    }),
+  actionTerminalVariants("agent.run", [
+    ["failed", "run_failed"],
+    ["cancelled", "run_cancelled"],
+    ["timed_out", "run_timed_out"],
+    ["blocked", "run_blocked"],
   ]),
 );
 
@@ -240,46 +239,12 @@ export const AuditActivityToolActionV1Schema: TSchema = correlatedObject(
       ]),
     ),
   },
-  Type.Union([
-    Type.Intersect([
-      Type.Object({
-        action: Type.Literal("tool.action.started"),
-        status: Type.Literal("started"),
-      }),
-      withoutErrorCode,
-    ]),
-    Type.Intersect([
-      Type.Object({
-        action: Type.Literal("tool.action.finished"),
-        status: Type.Literal("succeeded"),
-      }),
-      withoutErrorCode,
-    ]),
-    Type.Object({
-      action: Type.Literal("tool.action.finished"),
-      status: Type.Literal("failed"),
-      errorCode: Type.Literal("tool_failed"),
-    }),
-    Type.Object({
-      action: Type.Literal("tool.action.finished"),
-      status: Type.Literal("cancelled"),
-      errorCode: Type.Literal("tool_cancelled"),
-    }),
-    Type.Object({
-      action: Type.Literal("tool.action.finished"),
-      status: Type.Literal("timed_out"),
-      errorCode: Type.Literal("tool_timed_out"),
-    }),
-    Type.Object({
-      action: Type.Literal("tool.action.finished"),
-      status: Type.Literal("blocked"),
-      errorCode: Type.Literal("tool_blocked"),
-    }),
-    Type.Object({
-      action: Type.Literal("tool.action.finished"),
-      status: Type.Literal("unknown"),
-      errorCode: Type.Literal("tool_outcome_unknown"),
-    }),
+  actionTerminalVariants("tool.action", [
+    ["failed", "tool_failed"],
+    ["cancelled", "tool_cancelled"],
+    ["timed_out", "tool_timed_out"],
+    ["blocked", "tool_blocked"],
+    ["unknown", "tool_outcome_unknown"],
   ]),
 );
 

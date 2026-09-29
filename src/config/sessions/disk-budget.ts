@@ -430,11 +430,7 @@ export async function pruneUnreferencedSessionArtifacts(params: {
   const removableFiles = [
     ...removableStoreFiles.map((file) => ({ kind: "store" as const, file })),
     ...removablePromptBlobFiles.map((file) => ({ kind: "promptBlob" as const, file })),
-  ]
-    .filter((file) => {
-      return !params.excludeCanonicalPaths?.has(file.file.canonicalPath);
-    })
-    .toSorted((a, b) => a.file.mtimeMs - b.file.mtimeMs);
+  ].toSorted((a, b) => a.file.mtimeMs - b.file.mtimeMs);
 
   let removedFiles = 0;
   let freedBytes = 0;

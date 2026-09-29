@@ -235,10 +235,9 @@ describe("captured delivery queue state", () => {
     );
     await fs.mkdir(path.dirname(artifact), { recursive: true });
     await fs.writeFile(artifact, "synthetic audio");
-    const stage = createDeliveryQueueMediaRetention(
+    const stage = await createDeliveryQueueMediaRetention(
       [artifact],
       "outbound-media-stage",
-      undefined,
       undefined,
       context,
     );

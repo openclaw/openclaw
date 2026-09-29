@@ -344,6 +344,15 @@ describe("worker environment protocol schemas", () => {
     const slots = { total: 2, available: 1 };
     expect(Value.Check(WorkerSlotSummarySchema, slots)).toBe(true);
     expect(
+      Value.Check(WorkerSlotSummarySchema, { total: 1, available: 0, reclaimableIdle: 1 }),
+    ).toBe(true);
+    expect(
+      Value.Check(WorkerSlotSummarySchema, { total: 1, available: 1, reclaimableIdle: 1 }),
+    ).toBe(false);
+    expect(
+      Value.Check(WorkerSlotSummarySchema, { total: 4, available: 0, reclaimableIdle: 3 }),
+    ).toBe(false);
+    expect(
       Value.Check(EnvironmentSummarySchema, {
         id: "node:build-mac",
         type: "node",

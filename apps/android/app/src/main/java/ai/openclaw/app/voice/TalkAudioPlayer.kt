@@ -153,15 +153,10 @@ internal class TalkAudioPlayer(
         val totalFrames = bytes.size / 2
         track.play()
         while (track.playState == AudioTrack.PLAYSTATE_PLAYING) {
-          if (track.playbackHeadPosition >= totalFrames) {
-            finished.complete(Unit)
-            break
-          }
+          if (track.playbackHeadPosition >= totalFrames) break
           delay(20)
         }
-        if (!finished.isCompleted) {
-          finished.complete(Unit)
-        }
+        finished.complete(Unit)
         finished.await()
       } finally {
         clear(playback)
