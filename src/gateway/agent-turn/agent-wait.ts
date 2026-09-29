@@ -1,3 +1,4 @@
+import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -15,10 +16,7 @@ export function prepareAgentWaitForTurn(
   params: AgentWaitParams,
 ) {
   const runId = (params.runId ?? "").trim();
-  const timeoutMs =
-    typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-      ? Math.max(0, Math.floor(params.timeoutMs))
-      : 30_000;
+  const timeoutMs = resolveNonNegativeIntegerOption(params.timeoutMs, 30_000);
   const source = resolveAgentWaitSource(context, runId);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const queuedResult = () => {

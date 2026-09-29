@@ -27,11 +27,11 @@ import {
   replaceSessionEntry,
   rollbackAgentHarnessSessionEntryLifecycle,
   rollbackPluginOwnedSessionEntryLifecycle,
-  type SessionAccessScope,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
+import { toSessionAccessScope } from "../../plugin-sdk/session-store-runtime-internal.js";
 import {
   captureSessionInitializationOwner,
   createSessionInitialization,
@@ -68,21 +68,6 @@ const loadAgentCommandRuntime = createLazyRuntimeModule(async () => {
   ]);
   return { command, identity };
 });
-
-function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAccessScope {
-  // Keep plugin runtime parameters aligned with the public SDK wrapper while
-  // avoiding direct exposure of internal accessor-only options.
-  return {
-    sessionKey: params.sessionKey,
-    ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-    ...(params.env !== undefined ? { env: params.env } : {}),
-    ...(params.hydrateSkillPromptRefs !== undefined
-      ? { hydrateSkillPromptRefs: params.hydrateSkillPromptRefs }
-      : {}),
-    ...(params.readConsistency !== undefined ? { readConsistency: params.readConsistency } : {}),
-    ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
-  };
-}
 
 function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | undefined {
   return loadSessionEntryReadOnly(toSessionAccessScope(params));

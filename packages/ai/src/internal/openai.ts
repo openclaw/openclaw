@@ -9,6 +9,7 @@ export * from "../providers/openai-responses-terminal-usage.js";
 export * from "../providers/openai-responses-tool-call-tracker.js";
 export * from "../providers/openai-stop-reason.js";
 export {
+  hasResponsesWebSearchTool,
   projectOpenAITools,
   reconcileOpenAICompletionsToolChoice,
   reconcileOpenAIResponsesToolChoice,
