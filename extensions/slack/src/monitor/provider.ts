@@ -1,8 +1,6 @@
 import type { RequestListener } from "node:http";
 import { type FetchFunction, type WebClientOptions, WebClient } from "@slack/web-api";
-import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
-import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
@@ -34,6 +32,7 @@ import {
   resolveSlackAppToken,
   resolveSlackBotToken,
 } from "../token.js";
+import { registerSlackApprovalRuntimeContext } from "./approval-runtime-context.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
 import { createSlackMonitorContext, type SlackMonitorContext } from "./context.js";
 import {
@@ -596,24 +595,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       clientOptions,
       installationIdentity: identity,
     });
-    registerChannelRuntimeContext({
+    registerSlackApprovalRuntimeContext({
+      app,
+      config: slackCfg.execApprovals ?? {},
+      resolveClient,
+      identity,
       channelRuntime: opts.channelRuntime,
-      channelId: "slack",
       accountId: account.accountId,
-      capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
-      context: {
-        app,
-        config: slackCfg.execApprovals ?? {},
-        resolveClient,
-        ...(identity.kind === "workspace" ? { workspaceTeamId: identity.teamId } : {}),
-        ...(identity.kind === "enterprise"
-          ? {
-              enterprise: {
-                enterpriseId: identity.enterpriseId,
-              },
-            }
-          : {}),
-      },
       abortSignal: opts.abortSignal,
     });
     approvalRuntimeInstalled = true;

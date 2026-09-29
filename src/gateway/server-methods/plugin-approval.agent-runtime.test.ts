@@ -181,7 +181,6 @@ describe("plugin approval signed agent runtime", () => {
           description: "D",
           policySubject: {
             pluginKey: "calendar",
-            appId: "connector_calendar",
             tool: "create_event.raw",
           },
           agentId: "forged-agent",
@@ -224,7 +223,6 @@ describe("plugin approval signed agent runtime", () => {
         pluginId: "codex",
         policySubject: {
           pluginKey: "calendar",
-          appId: "connector_calendar",
           tool: "create_event.raw",
         },
         agentId: "main",
