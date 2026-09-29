@@ -8,7 +8,7 @@ vi.mock("playwright-core", () => ({
 }));
 
 let webRuntime: typeof import("./web-runtime.js");
-let openPage: ReturnType<typeof webRuntime.createQaWebPageOpener>;
+let defaultOpenPage: ReturnType<typeof webRuntime.createQaWebPageOpener>;
 let expectedTeardownErrors: unknown[] = [];
 
 const pageParams = { url: "http://127.0.0.1:3000/chat", channel: "chrome" as const };
@@ -58,7 +58,7 @@ beforeEach(async () => {
   launch.mockReset();
   expectedTeardownErrors = [];
   webRuntime = await import("./web-runtime.js");
-  openPage = webRuntime.createQaWebPageOpener(new Set());
+  defaultOpenPage = webRuntime.createQaWebPageOpener(new Set());
 });
 
 afterEach(async () => {
@@ -88,7 +88,7 @@ describe("QA web acquisition ownership", () => {
     };
     operations[phase].mockRejectedValueOnce(error);
 
-    await expect(openPage(pageParams)).rejects.toBe(error);
+    await expect(defaultOpenPage(pageParams)).rejects.toBe(error);
 
     expect(fixture.closeOrder).toEqual(order);
     await webRuntime.closeQaWebSessions();
@@ -100,7 +100,7 @@ describe("QA web acquisition ownership", () => {
     launch.mockResolvedValue(fixture.browser);
     fixture.page.title.mockRejectedValueOnce(new Error("title unavailable"));
 
-    const opened = await openPage(pageParams);
+    const opened = await defaultOpenPage(pageParams);
 
     expect(opened).toMatchObject({ title: "", url: pageParams.url });
     expect(fixture.context.close).not.toHaveBeenCalled();
@@ -407,7 +407,7 @@ describe("QA web teardown ownership", () => {
       started.resolve();
       return contextClosed.promise;
     });
-    const opened = await openPage(pageParams);
+    const opened = await defaultOpenPage(pageParams);
     const settled = vi.fn();
     const first = webRuntime.closeQaWebSessions([opened.pageId]).then(settled);
     await started.promise;
@@ -443,7 +443,7 @@ describe("QA web teardown ownership", () => {
       return contextClosed.promise;
     });
     fixture.browser.close.mockRejectedValueOnce(browserError);
-    const opened = await openPage(pageParams);
+    const opened = await defaultOpenPage(pageParams);
     const first = webRuntime.closeQaWebSessions([opened.pageId]).catch((error: unknown) => error);
     await started.promise;
     const second = webRuntime.closeQaWebSessions([opened.pageId]).catch((error: unknown) => error);
@@ -542,8 +542,8 @@ describe("QA web teardown ownership", () => {
     expectedTeardownErrors = [failure];
     first.context.close.mockRejectedValueOnce(failure);
     launch.mockResolvedValueOnce(first.browser).mockResolvedValueOnce(second.browser);
-    const firstPage = await openPage(pageParams);
-    const secondPage = await openPage(pageParams);
+    const firstPage = await defaultOpenPage(pageParams);
+    const secondPage = await defaultOpenPage(pageParams);
 
     await expect(
       webRuntime.closeQaWebSessions([firstPage.pageId, secondPage.pageId]),
