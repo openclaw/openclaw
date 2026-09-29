@@ -55,7 +55,7 @@ describe("config IO with deferred plugin migrations", () => {
         command: "openclaw plugins install @example/sample",
       };
       if (change === "stronger") {
-        recordDeferredPluginMigrations({ env, pending: [pending] });
+        await recordDeferredPluginMigrations({ env, pending: [pending] });
       }
       const stronger = { ...pending, configPaths: [["session", "store"]] };
       const ioOptions = {
@@ -73,8 +73,8 @@ describe("config IO with deferred plugin migrations", () => {
             auditOrigin: "doctor",
             skipPluginValidation: true,
             skipRuntimeSnapshotRefresh: true,
-            beforeCommit: () => {
-              recordDeferredPluginMigrations({ env, pending: [stronger] });
+            beforeCommit: async () => {
+              await recordDeferredPluginMigrations({ env, pending: [stronger] });
             },
           },
         )
@@ -119,8 +119,8 @@ describe("config IO with deferred plugin migrations", () => {
           auditOrigin: "doctor",
           skipPluginValidation: true,
           skipRuntimeSnapshotRefresh: true,
-          beforeCommit: () => {
-            recordDeferredPluginMigrations({ env, pending: [stronger] });
+          beforeCommit: async () => {
+            await recordDeferredPluginMigrations({ env, pending: [stronger] });
           },
         },
       );
@@ -154,7 +154,7 @@ describe("config IO with deferred plugin migrations", () => {
       reason: "The configured plugin is not installed.",
       command: "openclaw plugins install @example/sample",
     };
-    recordDeferredPluginMigrations({ env, pending: [pending] });
+    await recordDeferredPluginMigrations({ env, pending: [pending] });
     const stronger = { ...pending, configPaths: [["session", "store"]] };
     const io = createConfigIO({
       env,
@@ -174,7 +174,7 @@ describe("config IO with deferred plugin migrations", () => {
         skipPluginValidation: true,
         skipRuntimeSnapshotRefresh: true,
         preCommitRuntimePreflight: async () => {
-          recordDeferredPluginMigrations({ env, pending: [stronger] });
+          await recordDeferredPluginMigrations({ env, pending: [stronger] });
         },
       },
     }).then(
@@ -249,7 +249,7 @@ describe("config IO with deferred plugin migrations", () => {
     expect(admitted.valid).toBe(true);
     expect(admitted.raw).toBe(JSON.stringify(source));
     expect(fs.existsSync(stateDir)).toBe(false);
-    recordDeferredPluginMigrations({ env, pending: [pending] });
+    await recordDeferredPluginMigrations({ env, pending: [pending] });
     closeOpenClawStateDatabaseForTest();
     const io = createConfigIO({
       env,
@@ -307,7 +307,7 @@ describe("config IO with deferred plugin migrations", () => {
       gateway: { mode: "local", port: 18790 },
     });
 
-    recordDeferredPluginMigrations({ env, pending: [], resolvedPluginIds: ["sample"] });
+    await recordDeferredPluginMigrations({ env, pending: [], resolvedPluginIds: ["sample"] });
     closeOpenClawStateDatabaseForTest();
     expect((await io.readConfigFileSnapshot()).valid).toBe(false);
     await io.writeConfigFile(

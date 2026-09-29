@@ -30,6 +30,7 @@ import {
 import {
   chatHistoryActivityBytes,
   createChatHistoryActivityProjection,
+  createChatHistoryDeltaByteCounter,
 } from "./chat-history-budget.js";
 
 const CHAT_HISTORY_DELTA_MAX_EVENTS = 200;
@@ -135,6 +136,10 @@ function projectChatHistoryDelta(
   const activityMessages: Array<{ messageId: string; message: unknown }> = [];
   // Include array brackets and separators without serializing the whole page.
   let messagesBytes = 2;
+  const envelopeBytes =
+    result.events.length > 1
+      ? createChatHistoryDeltaByteCounter(params.sessionSnapshot)
+      : undefined;
   for (const row of result.events) {
     if (row.messageSeq === undefined) {
       continue;
@@ -183,7 +188,10 @@ function projectChatHistoryDelta(
       return { kind: "reset" };
     }
     if (projected.payload) {
-      messagesBytes += jsonUtf8BytesOrInfinity(projected.payload) + (messages.length > 0 ? 1 : 0);
+      messagesBytes +=
+        (envelopeBytes
+          ? envelopeBytes(projected.payload)
+          : jsonUtf8BytesOrInfinity(projected.payload)) + (messages.length > 0 ? 1 : 0);
       if (messagesBytes > maxBytes) {
         return { kind: "reset" };
       }

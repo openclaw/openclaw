@@ -45,6 +45,9 @@ daemon. For install and product docs, see [lmstudio.ai](https://lmstudio.ai/).
 
     Choose `LM Studio`, then pick a model at the `Default model` prompt.
 
+    The server URL prompt also accepts host shorthand such as `localhost:1234`.
+    Invalid URLs stay in the prompt so you can correct them before model discovery.
+
     On a fresh guided setup, OpenClaw first queries `/api/v1/models` on the
     default or configured LM Studio host. An existing LLM is offered automatically
     only when LM Studio reports tool training and at least 16K of effective
@@ -96,6 +99,10 @@ servers; omit it for unauthenticated servers and OpenClaw stores a local non-sec
 
 This writes `models.providers.lmstudio` and sets the default model to `lmstudio/<custom-model-id>`.
 Providing an API key also writes the `lmstudio:default` auth profile.
+
+Add `--json` for a machine-readable result. Connection, HTTP, and model-selection
+failures return a JSON error with the same recovery guidance as human output and
+exit nonzero without applying the proposed provider configuration.
 
 Interactive setup can additionally prompt for a preferred load context length and applies it across
 the discovered models it saves to config.

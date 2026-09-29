@@ -108,13 +108,6 @@ export function retainSqliteWriteAdmissionService(
   };
 }
 
-/** Native coordinator waits must keep the same worker's current-authority grants serviceable. */
-export function sqliteWriteAdmissionServicesForLocation(
-  location: string,
-): ReadonlySet<() => void> | undefined {
-  return writeAdmissionServices.get(normalizeWriteAdmissionLocation(location));
-}
-
 type SqliteBeginAdmissionDiagnostics = {
   nativeAttempts: number;
   nativeMs: number;
@@ -253,37 +246,6 @@ function logSlowTransactionHold(params: {
   });
 }
 
-/** The lifecycle lock precedes BEGIN, so transaction hold diagnostics cannot see this wait. */
-export function logSlowSqliteCoordinatorWait(
-  elapsedMs: number,
-  options: Pick<SqliteTransactionOptions, "databaseLabel" | "operationLabel">,
-): void {
-  if (!isMainThread || elapsedMs <= 100) {
-    return;
-  }
-  try {
-    // Capture only slow waits, while the synchronous owner's call chain is still on the stack.
-    const trace = new Error();
-    Error.captureStackTrace(trace, logSlowSqliteCoordinatorWait);
-    transactionLogger(undefined).warn("slow SQLite coordinator lock wait", {
-      async: false,
-      caller: trace.stack
-        ?.split("\n")
-        .slice(1, 9)
-        .map((frame) => frame.trim())
-        .join(" <- "),
-      ...transactionDiagnosticLabels(undefined, options),
-      elapsedMs,
-      isMainThread,
-      pid: process.pid,
-      threadId,
-      thresholdMs: 100,
-    });
-  } catch {
-    // Diagnostics cannot abandon an acquired coordinator or replace its admission error.
-  }
-}
-
 function logSlowTransactionStep(params: {
   beginAdmission?: SqliteBeginAdmissionDiagnostics;
   db: DatabaseSync;
@@ -399,11 +361,22 @@ function discardUnsafeConnection(db: TransactionDatabase, error: unknown): void 
   }
 }
 
-function abortImmediateTransaction(db: TransactionDatabase, error: unknown): void {
+function abortImmediateTransaction(
+  db: TransactionDatabase,
+  error: unknown,
+  commitStarted: boolean,
+): void {
   if (db[abortedTransactionSymbol]) {
     return;
   }
   try {
+    // SQLITE_IOERR/FULL can roll back an operation before commit starts. Once
+    // the commit owner runs, no transaction may instead mean a durable COMMIT
+    // followed by a guard failure or rejected Promise: retain conservative fencing.
+    if (!commitStarted && db.isOpen && !db.isTransaction) {
+      discardSqliteTransactionState(db, error);
+      return;
+    }
     db.exec("ROLLBACK");
   } catch {
     // An abandoned transaction must not leak into later writes on this handle.
@@ -447,10 +420,12 @@ function runSqliteTransactionSync<T>(
 
   beginTransaction(db, options, mode);
   const transactionStartedAt = Date.now();
+  let commitStarted = false;
   try {
     const result = operation();
     assertSyncTransactionResult(result);
     assertTransactionUsable(db);
+    commitStarted = true;
     if (options?.withCommit) {
       assertSyncTransactionResult(
         options.withCommit(() => commitImmediateTransaction(db, options)),
@@ -460,7 +435,7 @@ function runSqliteTransactionSync<T>(
     }
     return result;
   } catch (error) {
-    abortImmediateTransaction(db, error);
+    abortImmediateTransaction(db, error, commitStarted);
     assertTransactionUsable(db);
     throw error;
   } finally {

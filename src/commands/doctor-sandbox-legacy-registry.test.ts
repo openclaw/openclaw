@@ -244,15 +244,16 @@ describe("legacy sandbox registry migration", () => {
     const refusal = new Error("migration custody withdrawn");
     const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
     let commits = 0;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation((admit) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "commit" && ++commits === 2) {
-          vi.spyOn(maintenance, "assertAdmission").mockImplementation(() => {
-            throw refusal;
-          });
-        }
-        admit(request, grant);
-      }),
+    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (request.stage === "commit" && ++commits === 2) {
+            vi.spyOn(maintenance, "assertAdmission").mockImplementation(() => {
+              throw refusal;
+            });
+          }
+          admit(request, grant);
+        }, attachment),
     );
     try {
       await expect(maintenance.run(() => migrateLegacySandboxRegistryFiles())).rejects.toBe(
@@ -279,15 +280,16 @@ describe("legacy sandbox registry migration", () => {
     let closed = false;
     let closing: Promise<void> | undefined;
     const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation((admit) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          closing = maintenance.close().then(() => {
-            closed = true;
-          });
-        }
-        admit(request, grant);
-      }),
+    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (request.stage === "commit") {
+            closing = maintenance.close().then(() => {
+              closed = true;
+            });
+          }
+          admit(request, grant);
+        }, attachment),
     );
     const remove = fs.rm.bind(fs);
     vi.spyOn(fs, "rm").mockImplementation(async (pathname, options) => {

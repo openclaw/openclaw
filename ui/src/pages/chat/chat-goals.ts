@@ -8,7 +8,6 @@ import {
   type SessionsGoalUpdateParams,
 } from "../../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalAction, ChatGoalDraft, ChatGoalRecovery } from "../../lib/chat/chat-types.ts";
@@ -29,9 +28,8 @@ import {
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import type { ChatHost } from "./chat-send-contract.ts";
-import { setChatError } from "./chat-send-queue-state.ts";
-import type { ChatSendSubmitOptions } from "./chat-send-submit.ts";
+import { isInitialChatHistoryUnavailable, setChatError } from "./chat-history-state.ts";
+import type { ChatHost, ChatSendSubmitOptions } from "./chat-send-contract.ts";
 import { refreshChatSessionListForTarget } from "./chat-session.ts";
 import { adoptStartedChatRun } from "./run-lifecycle.ts";
 
@@ -272,10 +270,9 @@ async function runGoalOperation(
         { onInvalidate: () => {} },
       );
       const reconcile = observation.captureReconcile();
-      const described = await client.request<{ session?: GatewaySessionRow | null }>(
-        "sessions.describe",
+      const described = await sessions.describe(
         { key: sessionKey, ...(agentId ? { agentId } : {}) },
-        { timeoutMs: GOAL_REQUEST_TIMEOUT_MS },
+        { client, refresh: true, timeoutMs: GOAL_REQUEST_TIMEOUT_MS },
       );
       if (!ownsRecovery()) {
         return false;
@@ -338,10 +335,14 @@ async function runGoalOperation(
     if (!action) {
       return false;
     }
+    // A descriptor can expose Goal actions before history binds their recovery identity.
+    if (!sessionId || isInitialChatHistoryUnavailable(host)) {
+      return rejectGoalOperation(host, t("chat.thread.loading"));
+    }
     const identity = {
       sessionKey,
       ...(agentId ? { agentId } : {}),
-      ...(sessionId ? { sessionId } : {}),
+      sessionId,
       goalId: action.goalId,
       operationId: generateUUID(),
       issuedAtMs: Date.now(),
@@ -465,7 +466,12 @@ async function runGoalOperation(
       }
     }
     if (targetIsCurrent()) {
-      setChatError(host, rejected ? formatUiError(error) : null);
+      setChatError(
+        host,
+        rejected
+          ? formatUiError(error)
+          : `${t("chat.goals.outcomeUnknown")} ${formatUiError(error)}`,
+      );
     }
     return false;
   } finally {

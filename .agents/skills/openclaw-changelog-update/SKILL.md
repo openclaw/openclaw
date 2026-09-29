@@ -101,6 +101,7 @@ of this skill; initial generation must never overwrite them.
    contribution record remains a strict issue/PR requirement. Confirmed runs
    appear as `workflowRuns` in verification output and the manifest, never as
    PR associations or contributor credit.
+   Only GitHub `NOT_FOUND` references confined to contextual commit-body text, absent from subjects, closing references, provenance, and notes/records, and below the highest resolved number may be omitted and reported as manifest `unavailableReferences` without credit.
    - the manifest is the required input to the rewrite, not an after-the-fact
      audit; it contains every referenced PR, eligible contributor credit,
      inline issue context, every direct commit, and an editorial-eligibility

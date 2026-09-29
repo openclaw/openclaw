@@ -1,4 +1,3 @@
-import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -20,6 +19,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../sessions/session-state-events.js";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { sessionDeliveryChannel, type DeliveryContext } from "../utils/delivery-context.read.js";
 import {
   executionIdentity,
@@ -131,6 +131,11 @@ async function agentCommandInternal(
     manifestMetadataSnapshot,
     modelManifestContext,
   } = prepared;
+  const isIncognito =
+    prepared.sessionEntry?.incognito === true || isIncognitoSessionKey(sessionKey);
+  // Provider and persistence errors can include temporary conversation content.
+  const diagnosticError = (error: unknown) =>
+    formatErrorMessage(isIncognito ? "Incognito agent error." : error);
   let lifecycleGeneration = opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(runId);
   let sessionEntry = prepared.sessionEntry,
     runOwnedSessionId = sessionId;
@@ -157,7 +162,7 @@ async function agentCommandInternal(
       runId,
       storePath,
       onError: (error) => {
-        log.warn(`failed to remove model-run SQLite session: ${coerceErrorMessage(error)}`);
+        log.warn(`failed to remove model-run SQLite session: ${diagnosticError(error)}`);
       },
     });
 
@@ -258,7 +263,7 @@ async function agentCommandInternal(
           // A reset starts a fresh transcript. Do not let predecessor repair
           // state leak into it when the old transcript remains unavailable.
           log.warn(
-            `Could not repair predecessor transcript before session reset for ${sessionKey}: ${formatErrorMessage(error)}`,
+            `Could not repair predecessor transcript before session reset for ${sessionKey}: ${diagnosticError(error)}`,
           );
         }
       }
@@ -299,7 +304,7 @@ async function agentCommandInternal(
             throw error;
           }
           log.warn(
-            `delivery preflight failed; continuing model run with requested delivery intent because bestEffortDeliver is enabled: ${coerceErrorMessage(error)}`,
+            `delivery preflight failed; continuing model run with requested delivery intent because bestEffortDeliver is enabled: ${diagnosticError(error)}`,
           );
         }
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
@@ -445,7 +450,6 @@ async function agentCommandInternal(
             sessionAgentId,
             lifecycleGeneration,
             runId,
-            workspaceDir,
             executionWorkspaceDir:
               sessionEntry?.worktree?.canonicalWorkspaceDir ?? cwd ?? workspaceDir,
             watchSkills,
@@ -465,7 +469,7 @@ async function agentCommandInternal(
           }),
         { config: cfg },
       );
-      sessionEntry = embeddedSessionState.sessionEntry;
+      ({ sessionEntry, opts } = embeddedSessionState);
       const { requestedThinkLevel, runContext } = embeddedSessionState;
 
       const modelSelection = await measureAgentStartup(

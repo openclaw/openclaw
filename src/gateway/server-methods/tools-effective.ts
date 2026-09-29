@@ -1,5 +1,3 @@
-// Effective tools methods resolve the tools available to a session by combining
-// bundled tools, MCP tools, plugin policy, model context, and cache state.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -30,11 +28,11 @@ import {
   resolveEffectiveToolInventory,
   acquireEffectiveToolInventoryRuntimeModelContext,
 } from "../../agents/tools-effective-inventory.js";
-import type {
-  EffectiveToolInventoryNotice,
-  EffectiveToolInventoryResult,
-} from "../../agents/tools-effective-inventory.types.js";
-import { buildRuntimeCompatibleMcpToolInventory } from "../../agents/tools-effective-mcp-inventory.js";
+import type { EffectiveToolInventoryResult } from "../../agents/tools-effective-inventory.types.js";
+import {
+  buildMcpCatalogNotices,
+  buildRuntimeCompatibleMcpToolInventory,
+} from "../../agents/tools-effective-mcp-inventory.js";
 import { resolveReplyToMode } from "../../auto-reply/reply/reply-threading.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -53,9 +51,8 @@ import {
 import { getConnectedNodePluginToolsVersion } from "../node-plugin-tool-snapshot.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnly, resolveSessionModelRef } from "../session-utils.js";
-import type { TrustedToolsEffectiveContext } from "./tools-effective.types.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 const defaultToolsEffectiveDependencies = {
   applyFinalEffectiveToolPolicy,
@@ -78,6 +75,10 @@ const defaultToolsEffectiveDependencies = {
   resolveSessionMcpConfigSummary,
   resolveSessionModelRef,
 };
+
+type TrustedToolsEffectiveContext = NonNullable<
+  ReturnType<typeof resolveTrustedToolsEffectiveContext>
+>;
 
 type SessionMcpRuntimeView = Pick<
   NonNullable<ReturnType<typeof peekSessionMcpRuntime>>,
@@ -115,11 +116,7 @@ function optionalCacheString(value: string | undefined | null): string {
   return value?.trim() ?? "";
 }
 
-function buildToolsEffectiveCacheKey(params: {
-  sessionKey: string;
-  context: TrustedToolsEffectiveContext;
-}): string {
-  const context = params.context;
+function buildToolsEffectiveCacheKey(context: TrustedToolsEffectiveContext): string {
   return JSON.stringify({
     v: 1,
     config: context.runtimeConfigCacheKey,
@@ -129,7 +126,7 @@ function buildToolsEffectiveCacheKey(params: {
     // MCP fingerprint/server names intentionally stay out of this key: the MCP
     // layer is applied after the base cache, so warm/stale runtime state alone
     // never invalidates base entries.
-    sessionKey: params.sessionKey,
+    sessionKey: context.sessionKey,
     sessionId: context.sessionId,
     workspaceDir: optionalCacheString(context.workspaceDir),
     agentId: context.agentId,
@@ -158,11 +155,12 @@ function buildToolsEffectiveCacheKey(params: {
   });
 }
 
-function buildMcpConfigSummaryCacheKey(params: {
+function resolveCachedSessionMcpConfigSummary(params: {
   context: TrustedToolsEffectiveContext;
   workspaceDir: string;
-}): string {
-  return JSON.stringify({
+  dependencies: ToolsEffectiveDependencies;
+}): SessionMcpConfigSummary {
+  const key = JSON.stringify({
     v: 1,
     config: params.context.runtimeConfigCacheKey,
     pluginRegistry: params.context.pluginRegistryVersion,
@@ -170,14 +168,6 @@ function buildMcpConfigSummaryCacheKey(params: {
     toolOverrides: params.context.toolOverrides,
     toolDenylist: params.context.capabilityProfile.policy.explicitToolDenylist,
   });
-}
-
-function resolveCachedSessionMcpConfigSummary(params: {
-  context: TrustedToolsEffectiveContext;
-  workspaceDir: string;
-  dependencies: ToolsEffectiveDependencies;
-}): SessionMcpConfigSummary {
-  const key = buildMcpConfigSummaryCacheKey(params);
   const cached = mcpConfigSummaryCache.get(key);
   if (cached) {
     return cached;
@@ -243,12 +233,11 @@ function refreshBaseToolsEffectiveInBackground(
   });
 }
 
-async function resolveCachedBaseToolsEffective(params: {
-  sessionKey: string;
-  context: TrustedToolsEffectiveContext;
-  dependencies: ToolsEffectiveDependencies;
-}): Promise<EffectiveToolInventoryResult> {
-  const key = buildToolsEffectiveCacheKey(params);
+async function resolveCachedBaseToolsEffective(
+  context: TrustedToolsEffectiveContext,
+  dependencies: ToolsEffectiveDependencies,
+): Promise<EffectiveToolInventoryResult> {
+  const key = buildToolsEffectiveCacheKey(context);
   const now = nowForToolsEffectiveCache();
   const cached = toolsEffectiveCache.get(key);
   if (cached) {
@@ -259,11 +248,11 @@ async function resolveCachedBaseToolsEffective(params: {
     if (ageMs < TOOLS_EFFECTIVE_STALE_TTL_MS) {
       // Stale-while-revalidate keeps the tools panel responsive while a new
       // registry/config snapshot is rebuilt in the background.
-      refreshBaseToolsEffectiveInBackground(key, params.context, params.dependencies);
+      refreshBaseToolsEffectiveInBackground(key, context, dependencies);
       return cached.value;
     }
   }
-  return scheduleBaseToolsEffectiveRefresh(key, params.context, params.dependencies);
+  return scheduleBaseToolsEffectiveRefresh(key, context, dependencies);
 }
 
 function resolveRequestedAgentIdOrRespondError(params: {
@@ -288,20 +277,7 @@ function resolveRequestedAgentIdOrRespondError(params: {
   return requestedAgentId;
 }
 
-function appendToolInventoryNotice(
-  base: EffectiveToolInventoryResult,
-  notice: EffectiveToolInventoryNotice,
-): EffectiveToolInventoryResult {
-  return {
-    ...base,
-    notices: [...(base.notices ?? []), notice],
-  };
-}
-
 function formatMcpServerNames(names: readonly string[]): string {
-  if (names.length === 0) {
-    return "configured MCP servers";
-  }
   const visible = names
     .slice(0, 3)
     .map((name) => `"${name}"`)
@@ -309,50 +285,46 @@ function formatMcpServerNames(names: readonly string[]): string {
   return names.length > 3 ? `${visible}, and ${names.length - 3} more MCP servers` : visible;
 }
 
-function mcpDiscoveryNotice(
-  mcpServerNames: string[],
-  reason: "not-connected" | "not-listed" | "stale-config",
-): EffectiveToolInventoryNotice | undefined {
-  if (mcpServerNames.length === 0) {
-    return undefined;
-  }
-  const servers = mcpServerNames.toSorted((a, b) => a.localeCompare(b));
-  const formattedServers = formatMcpServerNames(servers);
-  switch (reason) {
-    case "stale-config":
-      return {
-        id: "mcp-stale-catalog",
-        severity: "info",
-        message: `MCP servers ${formattedServers} changed since the current runtime catalog was discovered. MCP tools will appear here after the next agent run discovers them.`,
-        servers,
-      };
-    case "not-listed":
-      return {
-        id: "mcp-not-yet-listed",
-        severity: "info",
-        message: `MCP servers ${formattedServers} are connected but have not finished listing tools yet. MCP tools will appear here after the session discovers them.`,
-        servers,
-      };
-    case "not-connected":
-      return {
-        id: "mcp-not-yet-connected",
-        severity: "info",
-        message: `MCP servers ${formattedServers} are configured but not connected for this session yet. MCP tools will appear here after an agent run discovers them.`,
-        servers,
-      };
-    default:
-      // Exhaustiveness guard for oxlint's consistent-return rule.
-      return undefined;
-  }
-}
+const MCP_DISCOVERY_NOTICES = {
+  "stale-config": {
+    id: "mcp-stale-catalog",
+    message: (servers: string) =>
+      `MCP servers ${servers} changed since the current runtime catalog was discovered. MCP tools will appear here after the next agent run discovers them.`,
+  },
+  "not-listed": {
+    id: "mcp-not-yet-listed",
+    message: (servers: string) =>
+      `MCP servers ${servers} are connected but have not finished listing tools yet. MCP tools will appear here after the session discovers them.`,
+  },
+  "not-connected": {
+    id: "mcp-not-yet-connected",
+    message: (servers: string) =>
+      `MCP servers ${servers} are configured but not connected for this session yet. MCP tools will appear here after an agent run discovers them.`,
+  },
+};
 
 function maybeAppendMcpNotice(
   base: EffectiveToolInventoryResult,
   mcpServerNames: string[],
-  reason: "not-connected" | "not-listed" | "stale-config",
+  reason: keyof typeof MCP_DISCOVERY_NOTICES,
 ): EffectiveToolInventoryResult {
-  const notice = mcpDiscoveryNotice(mcpServerNames, reason);
-  return notice ? appendToolInventoryNotice(base, notice) : base;
+  if (mcpServerNames.length === 0) {
+    return base;
+  }
+  const servers = mcpServerNames.toSorted((a, b) => a.localeCompare(b));
+  const notice = MCP_DISCOVERY_NOTICES[reason];
+  return {
+    ...base,
+    notices: [
+      ...(base.notices ?? []),
+      {
+        id: notice.id,
+        severity: "info",
+        message: notice.message(formatMcpServerNames(servers)),
+        servers,
+      },
+    ],
+  };
 }
 
 async function resolveBaseToolsEffectiveInventory(
@@ -397,28 +369,11 @@ async function resolveBaseToolsEffectiveInventory(
   }
 }
 
-function filterMcpTools(params: {
-  context: TrustedToolsEffectiveContext;
-  mcpTools: Parameters<typeof applyFinalEffectiveToolPolicy>[0]["bundledTools"];
-  dependencies: ToolsEffectiveDependencies;
-}) {
-  return params.dependencies.applyFinalEffectiveToolPolicy({
-    bundledTools: params.mcpTools,
-    config: params.context.cfg,
-    conversationCapabilityProfile: params.context.capabilityProfile,
-    warn: logWarn,
-  });
-}
-
 async function resolveReadOnlyToolsEffectiveInventory(
   context: TrustedToolsEffectiveContext,
   dependencies: ToolsEffectiveDependencies,
 ): Promise<EffectiveToolInventoryResult> {
-  const base = await resolveCachedBaseToolsEffective({
-    sessionKey: context.sessionKey,
-    context,
-    dependencies,
-  });
+  const base = await resolveCachedBaseToolsEffective(context, dependencies);
   const harness = context.agentHarnessId
     ? dependencies.getRegisteredAgentHarness(context.agentHarnessId)?.harness
     : undefined;
@@ -505,18 +460,24 @@ async function projectMcpCatalog(params: {
   workspaceDir: string;
   dependencies: ToolsEffectiveDependencies;
 }): Promise<EffectiveToolInventoryResult> {
+  const catalogNotices = buildMcpCatalogNotices(params.catalog);
+  const base =
+    catalogNotices.length > 0
+      ? { ...params.base, notices: [...(params.base.notices ?? []), ...catalogNotices] }
+      : params.base;
   const projectedMcpTools = params.dependencies.buildBundleMcpToolsFromCatalog({
     catalog: params.catalog,
     reservedToolNames: params.base.groups.flatMap((group) => group.tools.map((tool) => tool.id)),
     includeSessionDenied: true,
   });
-  const filteredMcpTools = filterMcpTools({
-    context: params.context,
-    mcpTools: projectedMcpTools,
-    dependencies: params.dependencies,
+  const filteredMcpTools = params.dependencies.applyFinalEffectiveToolPolicy({
+    bundledTools: projectedMcpTools,
+    config: params.context.cfg,
+    conversationCapabilityProfile: params.context.capabilityProfile,
+    warn: logWarn,
   });
   if (filteredMcpTools.length === 0) {
-    return params.base;
+    return base;
   }
   const acquired = await params.dependencies.acquireEffectiveToolInventoryRuntimeModelContext({
     cfg: params.context.cfg,
@@ -537,12 +498,12 @@ async function projectMcpCatalog(params: {
         modelApi: runtimeModelContext.modelApi,
         runtimeModel: runtimeModelContext.runtimeModel,
       });
-      const notices = [...(params.base.notices ?? []), ...mcpInventory.notices];
+      const notices = [...(base.notices ?? []), ...mcpInventory.notices];
       if (mcpInventory.entries.length === 0) {
-        return notices.length > 0 ? { ...params.base, notices } : params.base;
+        return notices.length > 0 ? { ...base, notices } : base;
       }
       return {
-        ...params.base,
+        ...base,
         ...(notices.length > 0 ? { notices } : {}),
         groups: [...params.base.groups, ...buildEffectiveToolInventoryGroups(mcpInventory.entries)],
       };
@@ -658,77 +619,57 @@ function resolveTrustedToolsEffectiveContext(params: {
   };
 }
 
-async function handleToolsEffectiveRequest(params: {
-  rawParams: unknown;
-  respond: RespondFn;
-  context: Parameters<GatewayRequestHandlers[string]>[0]["context"];
-  dependencies: ToolsEffectiveDependencies;
-}) {
-  if (
-    !assertValidParams(
-      params.rawParams,
-      validateToolsEffectiveParams,
-      "tools.effective",
-      params.respond,
-    )
-  ) {
-    return;
-  }
-  const cfg = params.context.getRuntimeConfig();
-  const requestedAgentId = resolveRequestedAgentIdOrRespondError({
-    rawAgentId: params.rawParams.agentId,
-    cfg,
-    respond: params.respond,
-    dependencies: params.dependencies,
-  });
-  if (requestedAgentId === null) {
-    return;
-  }
-  const sessionOwner = resolveRequestedSessionAgentId(
-    cfg,
-    params.rawParams.sessionKey,
-    requestedAgentId,
-  );
-  if (!sessionOwner.ok) {
-    params.respond(false, undefined, sessionOwner.error);
-    return;
-  }
-  const trustedContext = resolveTrustedToolsEffectiveContext({
-    sessionKey: params.rawParams.sessionKey,
-    requestedAgentId: sessionOwner.agentId,
-    respond: params.respond,
-    dependencies: params.dependencies,
-  });
-  if (!trustedContext) {
-    return;
-  }
-  try {
-    params.respond(
-      true,
-      await resolveReadOnlyToolsEffectiveInventory(trustedContext, params.dependencies),
-      undefined,
-    );
-  } catch (err) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, `tools.effective failed: ${String(err)}`),
-    );
-  }
-}
-
 export function createToolsEffectiveHandlers(
   dependencies: ToolsEffectiveDependencies = defaultToolsEffectiveDependencies,
 ): GatewayRequestHandlers {
   return {
-    "tools.effective": async ({ params, respond, context }) => {
-      await handleToolsEffectiveRequest({
-        rawParams: params,
-        respond,
-        context,
-        dependencies,
-      });
-    },
+    "tools.effective": defineValidatedGatewayHandler(
+      "tools.effective",
+      validateToolsEffectiveParams,
+      async ({ params, respond, context }) => {
+        const cfg = context.getRuntimeConfig();
+        const requestedAgentId = resolveRequestedAgentIdOrRespondError({
+          rawAgentId: params.agentId,
+          cfg,
+          respond,
+          dependencies,
+        });
+        if (requestedAgentId === null) {
+          return;
+        }
+        const sessionOwner = resolveRequestedSessionAgentId(
+          cfg,
+          params.sessionKey,
+          requestedAgentId,
+        );
+        if (!sessionOwner.ok) {
+          respond(false, undefined, sessionOwner.error);
+          return;
+        }
+        const trustedContext = resolveTrustedToolsEffectiveContext({
+          sessionKey: params.sessionKey,
+          requestedAgentId: sessionOwner.agentId,
+          respond,
+          dependencies,
+        });
+        if (!trustedContext) {
+          return;
+        }
+        try {
+          respond(
+            true,
+            await resolveReadOnlyToolsEffectiveInventory(trustedContext, dependencies),
+            undefined,
+          );
+        } catch (err) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.UNAVAILABLE, `tools.effective failed: ${String(err)}`),
+          );
+        }
+      },
+    ),
   };
 }
 

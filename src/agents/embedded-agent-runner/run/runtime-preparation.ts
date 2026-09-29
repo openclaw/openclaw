@@ -1,6 +1,7 @@
 import { readSourceReplyDeliveryRuntime } from "../../../auto-reply/reply/source-reply-delivery-runtime.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { resolveProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
+import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { resolvePreparedRunAdmission } from "../../admitted-run-context.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { isProfileInCooldown } from "../../auth-profiles.js";
@@ -19,10 +20,7 @@ import {
 import type { AgentRuntimeAuthPlan } from "../../runtime-plan/types.js";
 import { resolveCandidateThinkingLevel } from "../../thinking-runtime.js";
 import { log } from "../logger.js";
-import {
-  createEmbeddedRunStageTracker,
-  formatEmbeddedRunStageSummary,
-} from "./attempt-stage-timing.js";
+import { formatEmbeddedRunStageSummary } from "./attempt-stage-timing.js";
 import {
   createEmbeddedRunAuthController,
   resolveEmbeddedAuthCooldownProbePolicy,
@@ -180,7 +178,7 @@ export async function prepareEmbeddedRunRuntime(input: {
 
   agentHarness = selectHarnessForModel(models.effective);
   pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
-  const authStages = log.isEnabled("trace") ? createEmbeddedRunStageTracker() : undefined;
+  const authStages = log.isEnabled("trace") ? createStageTimingTracker(Date.now) : undefined;
   const preparedAuthPlan = await prepareEmbeddedRunAuthPlan({
     assertCurrent: input.assertCurrent,
     runParams: params,
@@ -573,7 +571,13 @@ export async function prepareEmbeddedRunRuntime(input: {
       authoredContextTokenCap,
       contextWindowInfo,
       outerContextTokenMeta,
-      activePreparedAuthPlan,
+      activePreparedAuthPlan: authState.apiKeyInfo
+        ? {
+            ...activePreparedAuthPlan,
+            selectedAuthMode: authState.apiKeyInfo.mode,
+            selectedAuthFlow: authState.apiKeyInfo.authFlow,
+          }
+        : activePreparedAuthPlan,
       thinkLevel: authState.thinkLevel,
       apiKeyInfo: authState.apiKeyInfo,
       lastProfileId: authState.lastProfileId,

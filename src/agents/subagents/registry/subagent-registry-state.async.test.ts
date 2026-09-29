@@ -1,5 +1,6 @@
 // Real-storage proof that committed and best-effort publications survive read-owner retirement.
 import { AsyncLocalStorage } from "node:async_hooks";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { readSqliteUserVersion } from "../../../infra/sqlite-user-version.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
@@ -24,9 +25,9 @@ import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpe
 import { buildControlledSubagentRunsReadContext } from "./subagent-control-scope.js";
 import {
   clearSubagentRunsReadCacheForTest,
+  createSubagentSessionListReadView,
   getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForRead,
-  getSubagentRunsSnapshotForSessions,
   getSubagentMaintenanceRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListReadSnapshotIdentity,
@@ -67,6 +68,8 @@ function runs(model: string, runId = "one") {
 
 it("reads resident session-list facts without enumerating the process environment", () => {
   persistSubagentRunsToDiskOrThrow(runs("retained"));
+  const prepared = createSubagentSessionListReadView({ env: state.env });
+  const preparedIdentity = prepared.snapshotIdentity();
   const originalEnv = process.env;
   let enumerations = 0;
   let identity: object | undefined;
@@ -86,6 +89,14 @@ it("reads resident session-list facts without enumerating the process environmen
   expect(identity).toBeDefined();
   expect(model).toBe("retained");
   expect(enumerations).toBe(0);
+  const resolutions = vi.spyOn(path, "resolve");
+  let current: object | undefined;
+  for (let index = 0; index < 100; index++) {
+    current = prepared.snapshotIdentity();
+  }
+  expect(current).toBe(preparedIdentity);
+  expect(resolutions).not.toHaveBeenCalled();
+  resolutions.mockRestore();
 });
 
 it.each(["maintenance", "schema"] as const)(
@@ -94,7 +105,14 @@ it.each(["maintenance", "schema"] as const)(
     persistSubagentRunsToDiskOrThrow(runs("retained"));
     const identity = getSubagentSessionListReadSnapshotIdentity();
     const maintenance = createOpenClawDatabaseMaintenanceScope();
-    const bind = () => AsyncLocalStorage.bind(getSubagentSessionListReadSnapshotIdentity);
+    const bind = () => {
+      const prepared = createSubagentSessionListReadView({ env: state.env });
+      expect(prepared.snapshotIdentity()).toBe(identity);
+      return {
+        current: AsyncLocalStorage.bind(() => getSubagentSessionListRunsSnapshotForRead(new Map())),
+        prepared,
+      };
+    };
     const read =
       kind === "maintenance"
         ? maintenance.run(bind)
@@ -103,7 +121,10 @@ it.each(["maintenance", "schema"] as const)(
             bind,
           );
     await maintenance.close();
-    expect(read).toThrow(kind === "maintenance" ? "scope is closed" : "admission has ended");
+    const failure = kind === "maintenance" ? "scope is closed" : "admission has ended";
+    expect(read.current).toThrow(failure);
+    expect(read.prepared.runs).toThrow(failure);
+    await expect(read.prepared.prepare()).rejects.toThrow(failure);
     expect(getSubagentSessionListReadSnapshotIdentity()).toBe(identity);
   },
 );
@@ -138,6 +159,38 @@ function holdFirstCompactRead(
     });
   return { entered: entered.promise, release: release.resolve, read };
 }
+
+it("keeps a newer source publication when a prepared projection read settles", async () => {
+  store.saveSubagentRegistryToSqlite(runs("original"));
+  const prepared = createSubagentSessionListReadView({ env: state.env });
+  const other = await createOpenClawTestState({ scenario: "minimal", applyEnv: false });
+  const gate = holdFirstCompactRead();
+  const pending = prepared.prepare();
+  const outcome = pending.catch((error: unknown) => error);
+  let published: object | undefined;
+  try {
+    await gate.entered;
+    await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
+      persistSubagentRunsToDiskOrThrow(runs("newer source"));
+      published = getSubagentSessionListReadSnapshotIdentity();
+    });
+    expect(prepared.snapshotIdentity()).toBeUndefined();
+    gate.release();
+    expect(await outcome).toMatchObject({
+      message: "Subagent registry database changed during preparation",
+    });
+    await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
+      expect(getSubagentSessionListReadSnapshotIdentity()).toBe(published);
+      expect(getSubagentSessionListRunsSnapshotForRead(new Map()).get("one")?.model).toBe(
+        "newer source",
+      );
+    });
+  } finally {
+    gate.release();
+    await outcome;
+    await other.cleanup();
+  }
+});
 
 it.each(["cancel", "query failure", "cleanup failure"] as const)(
   "lets a current waiter recover only a clean canceled fill (%s)",
@@ -748,12 +801,6 @@ it.each(["best effort", "strict refusal", "strict commit", "atomic commit"])(
         model: refused ? "before" : "after",
         execution: { status: refused ? "running" : "terminal" },
       });
-      expect(
-        getSubagentRunsSnapshotForSessions(new Map(), [entry.childSessionKey]).get("one"),
-      ).toMatchObject({
-        model: refused ? "before" : "after",
-        execution: { status: refused ? "running" : "terminal" },
-      });
       const maintenance = getSubagentMaintenanceRunsSnapshotForRead(new Map()).get("one");
       expect(maintenance?.execution.status).toBe(refused ? "running" : "terminal");
       expect(maintenance?.cleanupCompletedAt).toBe(refused ? undefined : 2);
@@ -789,9 +836,6 @@ it("keeps retired publications with their draining source across source switches
     persistSubagentRunsToDiskOrThrow(runs("after"), ["one"]);
     expect(selectedChild().get("one")?.model).toBe("after");
     expect(getSubagentRunsSnapshotForRead(new Map()).get("one")?.model).toBe("after");
-    expect(
-      getSubagentRunsSnapshotForSessions(new Map(), ["agent:main:subagent:one"]).get("one")?.model,
-    ).toBe("after");
     await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
       expect(selectedChild().has("one")).toBe(false);
       expect(getSubagentRunsSnapshotForRead(new Map()).has("one")).toBe(false);

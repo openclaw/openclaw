@@ -28,7 +28,7 @@ it("updates contextual navigation from its router and retires the subscription o
         }),
         loader: () => loaded.promise,
       }),
-      definePage({ id: "tasks", path: "/tasks", component: () => ({ render: () => "tasks" }) }),
+      definePage({ id: "cron", path: "/cron", component: () => ({ render: () => "cron" }) }),
     ],
   });
   onTestFinished(() => router.stop());
@@ -51,7 +51,7 @@ it("updates contextual navigation from its router and retires the subscription o
   expect(sidebar.querySelector(".sidebar-shell__body")?.textContent).toContain("machine inventory");
   sidebar.remove();
   expect(sidebar.contextualSidebar).toBeUndefined();
-  await router.navigate("tasks", {});
+  await router.navigate("cron", {});
   await router.navigate("systems", {});
   expect(sidebar.contextualSidebar).toBeUndefined();
 });

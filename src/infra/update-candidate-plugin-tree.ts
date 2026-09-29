@@ -2,11 +2,12 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { z } from "zod";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
+import { isPackageActivationControlName } from "./package-update-activation-paths.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import {
@@ -16,53 +17,26 @@ import {
   resolveUpdateCandidatePluginTreeTargets,
   verifyUpdateCandidatePluginTree,
 } from "./update-candidate-plugin-tree-links.js";
+import type {
+  UpdateCandidatePluginEntry,
+  UpdateCandidatePluginTreePlan,
+} from "./update-candidate-plugin-tree-schema.js";
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import {
   readRuntimeModulesManifest,
   relocateRuntimeEntry,
   type RuntimeRelocation,
 } from "./update-runtime-relocation.js";
+import { isGitRuntimeStagingName } from "./update-runtime-staging.js";
 
-const entryFields = {
-  path: z.string(),
-  size: z.number().int().nonnegative(),
-  mode: z.number().int().nonnegative(),
-  dev: z.string(),
-  ino: z.string(),
-};
-const UpdateCandidatePluginEntrySchema = z.discriminatedUnion("kind", [
-  z.object({ ...entryFields, kind: z.literal("directory") }),
-  z.object({
-    ...entryFields,
-    kind: z.literal("file"),
-    birthtimeNs: z.string(),
-    mtimeNs: z.string(),
-    ctimeNs: z.string(),
-  }),
-  z.object({
-    ...entryFields,
-    kind: z.literal("symlink"),
-    link: z.string(),
-    linkType: z.enum(["file", "junction"]),
-  }),
-]);
-type UpdateCandidatePluginEntry = z.infer<typeof UpdateCandidatePluginEntrySchema>;
+export { UpdateCandidatePluginTreePlanSchema } from "./update-candidate-plugin-tree-schema.js";
+export type { UpdateCandidatePluginTreePlan } from "./update-candidate-plugin-tree-schema.js";
 
-export const UpdateCandidatePluginTreePlanSchema = z.object({
-  bytes: z.number().int().nonnegative(),
-  privateRoot: z.string(),
-  candidateRoot: z.string(),
-  copies: z.array(z.tuple([z.string(), z.string()])),
-  entries: z.array(UpdateCandidatePluginEntrySchema),
-  hostLinks: z.array(z.string()),
-  relocations: z.array(z.object({ sourceRoot: z.string(), destinationRoot: z.string() })),
-  aliases: z.array(z.tuple([z.string(), z.string()])),
-  moduleBindings: z.array(z.tuple([z.string(), z.string()])),
-  edges: z.array(z.object({ source: z.string(), target: z.string(), real: z.string() })),
-});
-export type UpdateCandidatePluginTreePlan = z.infer<typeof UpdateCandidatePluginTreePlanSchema>;
-
-async function dependencyOwner(target: string, withinRetainedHost = false): Promise<string> {
+async function dependencyOwner(
+  target: string,
+  withinRetainedHost = false,
+  retainedHost?: { root: string; moduleOnlyRoots: Set<string> },
+): Promise<string> {
   // A pnpm package resolves dependencies beside its package directory. Preserve
   // that Node lookup ancestry, including scoped packages and nested installs.
   const parts = target.split(path.sep);
@@ -74,9 +48,24 @@ async function dependencyOwner(target: string, withinRetainedHost = false): Prom
   if (modules >= 0 && !withinRetainedHost) {
     return parts.slice(0, modules + 1).join(path.sep);
   }
-  let directory = (await fs.stat(target)).isDirectory() ? target : path.dirname(target);
+  const stat = await fs.stat(target);
+  let directory = stat.isDirectory() ? target : path.dirname(target);
   const fallback = target;
   for (;;) {
+    if (directory === retainedHost?.root) {
+      // A retired workspace can leave only ignored modules behind. Other host
+      // contents still belong to the host and must reach the inferred-root refusal.
+      const entries = stat.isDirectory() ? await fs.readdir(target) : [];
+      if (
+        entries.length === 1 &&
+        entries[0] === "node_modules" &&
+        (await fs.lstat(path.join(target, "node_modules"))).isDirectory()
+      ) {
+        retainedHost.moduleOnlyRoots.add(target);
+        return target;
+      }
+      return directory;
+    }
     if (
       await fs.stat(path.join(directory, "package.json")).then(
         () => true,
@@ -118,6 +107,7 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   const privateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
   const candidateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.candidateRoot));
   const scanned = new Set<string>();
+  const staging = new Set<string>();
   const footprints = new Map<string, UpdateCandidatePluginEntry>();
   const edges = new Map<string, { target: string; real: string }>();
   const hosts = new Set<string>();
@@ -125,7 +115,21 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   const stores = new Set<string>();
   const moduleAliases = new Map<string, string>();
   const moduleOwners = new Set<string>();
+  const isRecoveryControl = (file: string) => {
+    for (let current = file; path.dirname(current) !== current; current = path.dirname(current)) {
+      if (
+        moduleOwners.has(path.dirname(current)) &&
+        isPackageActivationControlName(path.basename(current))
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
   const retainedHostRoot = params.retainedHostRoot;
+  const retainedHost = retainedHostRoot
+    ? { root: retainedHostRoot, moduleOnlyRoots: new Set<string>() }
+    : undefined;
   const isOwnedHostEdge = (file: string) =>
     path.basename(file) === "openclaw" && moduleOwners.has(path.dirname(file));
   const lookupRoots = (values: Iterable<string>) =>
@@ -259,6 +263,7 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   }
   async function scan(directory: string): Promise<void> {
     assertUpdateCandidatePluginCopySource(directory, privateRoot);
+    staging.delete(directory);
     if (scanned.has(directory)) {
       return;
     }
@@ -280,15 +285,24 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     if (path.basename(directory) === "node_modules") {
       moduleOwners.add(directory);
     }
-    await discoverHoistedDependencies(directory);
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    // Listing names are only absence hints: retain canonical reads for filesystem aliases.
+    const mayContain = (name: string) =>
+      entries.some(
+        (entry) => entry.name.toLowerCase() === name || /[^\x20-\x7e]|[. ]$/u.test(entry.name),
+      );
+    if (mayContain("package.json")) {
+      await discoverHoistedDependencies(directory);
+    }
     // Read before link discovery, so custom external stores retain their owner.
-    const modules = await readRuntimeModulesManifest(path.join(directory, ".modules.yaml"));
+    const modules = mayContain(".modules.yaml")
+      ? await readRuntimeModulesManifest(path.join(directory, ".modules.yaml"))
+      : null;
     if (typeof modules?.manifest.virtualStoreDir === "string") {
       const store = await fs.realpath(path.resolve(directory, modules.manifest.virtualStoreDir));
       stores.add(store);
       addRoot(store);
     }
-    const entries = await fs.readdir(directory, { withFileTypes: true });
     // Register identities before visiting siblings: a physical module directory
     // may sort before the node_modules alias that establishes its ownership.
     for (const entry of entries) {
@@ -314,11 +328,20 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     }
     for (const entry of entries) {
       const file = path.join(directory, entry.name);
-      if (isOwnedHostEdge(file)) {
+      if (isRecoveryControl(file)) {
+        // Installation control state is not a dependency of the retained code.
+        continue;
+      } else if (isOwnedHostEdge(file)) {
         // The complete-wave owner pass records the authoritative host identity.
         continue;
       } else if (entry.isDirectory()) {
-        await scan(file);
+        if (isGitRuntimeStagingName(entry.name) && !roots.has(file)) {
+          // Transaction links describe their final location. Incidental inventory
+          // must not read candidate or rollback contents as live dependencies.
+          staging.add(file);
+        } else {
+          await scan(file);
+        }
       } else {
         const measured = await measureEntry(file);
         if (measured.kind !== "symlink") {
@@ -412,8 +435,22 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     // Module ownership is a complete-wave fact, independent of root order.
     await refreshHostEdges();
     const storeLookup = lookupRoots(stores);
+    const stagingLookup = lookupRoots(staging);
     let added = false;
-    for (const [file, { real }] of edges) {
+    for (const [file, { real, target }] of edges) {
+      if (isRecoveryControl(file)) {
+        edges.delete(file);
+        continue;
+      }
+      if (isRecoveryControl(real) || isRecoveryControl(target)) {
+        throw new Error("Package recovery state cannot be a runtime dependency.");
+      }
+      const directory = stagingLookup(real);
+      if (directory && staging.delete(directory)) {
+        // Explicit links still demand their source bytes and normal validation.
+        await scan(directory);
+        added = true;
+      }
       if (
         (covered(real) && !(insideHost(real) && isRetainedDependency(real))) ||
         hostRoots.has(real) ||
@@ -429,7 +466,11 @@ export async function prepareUpdateCandidatePluginTrees(params: {
       const retainedDependency = insideHost(real) && isRetainedDependency(real);
       const owner =
         (!retainedDependency ? store : undefined) ??
-        (await dependencyOwner(real, retainedDependency).catch((cause: unknown) => {
+        (await dependencyOwner(
+          real,
+          retainedDependency,
+          isRetainedDependency(real) ? retainedHost : undefined,
+        ).catch((cause: unknown) => {
           throw new Error(`Cannot privately copy plugin dependency ${file} -> ${real}`, { cause });
         }));
       if (excludesInferredRoot(owner)) {
@@ -485,9 +526,27 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   const hostLinks = new Set(
     [...hosts].filter((root) => root !== params.retainedHostRoot).map(projected),
   );
-  const entries = [...footprints.values()].filter(
-    (entry) => !insideHost(entry.path) && copyOwner(entry.path) !== undefined,
-  );
+  const entries = [...footprints.values()].filter((entry) => {
+    if (
+      isRecoveryControl(entry.path) ||
+      insideHost(entry.path) ||
+      copyOwner(entry.path) === undefined
+    ) {
+      return false;
+    }
+    // Owner selection precedes scanning; bind its exception to the actual inventory.
+    const moduleOnlyRoots = retainedHost?.moduleOnlyRoots;
+    if (
+      (moduleOnlyRoots?.has(entry.path) &&
+        (entry.kind !== "directory" ||
+          footprints.get(path.join(entry.path, "node_modules"))?.kind !== "directory")) ||
+      (moduleOnlyRoots?.has(path.dirname(entry.path)) &&
+        (path.basename(entry.path) !== "node_modules" || entry.kind !== "directory"))
+    ) {
+      throw new Error(`Retired workspace changed during runtime retention: ${entry.path}`);
+    }
+    return true;
+  });
   // Full lengths and entry metadata bound copies even when sources have sparse extents.
   const bytes = entries.reduce(
     (total, entry) => total + Math.max(4096, Math.ceil(entry.size / 4096) * 4096),
@@ -520,14 +579,12 @@ export async function copyUpdateCandidatePluginTrees(
   params: {
     targetStateDir: string;
     candidateRoot: string;
-    onProgress?: () => void | Promise<void>;
     onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void;
   },
 ): Promise<void> {
   const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
   const { privateRoot, candidateRoot, copies, hostLinks, relocations, destinationFor } = targets;
   const assertEntry = async (entry: UpdateCandidatePluginEntry) => {
-    await params.onProgress?.();
     assertUpdateCandidatePluginEntryStat(entry, await fs.lstat(entry.path, { bigint: true }));
     if (entry.kind === "symlink" && (await fs.readlink(entry.path)) !== entry.link) {
       throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
@@ -539,39 +596,63 @@ export async function copyUpdateCandidatePluginTrees(
   }
   await fs.mkdir(privateRoot, { recursive: true, mode: 0o700 });
   const destinationRoot = await openRoot(privateRoot);
+  const preparedDirectories = new Set([privateRoot]);
   for (const entry of plan.entries) {
     if (entry.kind === "directory") {
-      await fs.mkdir(destinationFor(entry.path), { recursive: true, mode: entry.mode | 0o700 });
+      const destination = destinationFor(entry.path);
+      await fs.mkdir(destination, { recursive: true, mode: entry.mode | 0o700 });
+      preparedDirectories.add(destination);
     }
   }
+  // File roots and missing-entry repairs can omit their parent directory entries.
+  // Prepare each parent once before admitting concurrent copies.
   for (const entry of plan.entries) {
-    if (entry.kind === "file") {
-      await assertEntry(entry);
-      const destination = destinationFor(entry.path);
-      await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
-      // copyIn owns portable create-only publication; no-replace move needs a
-      // native binding. Recheck the inventory before its private stage is published.
-      await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
-        overwrite: false,
-        // Rehearsal payloads are disposable and never serve as recovery backups.
-        durable: false,
-        maxBytes: entry.size,
-        mode: entry.mode | 0o600,
-        sourceHardlinks: "allow",
-        assertBeforeMutation: () =>
-          assertUpdateCandidatePluginEntryStat(
-            entry,
-            fsSync.lstatSync(entry.path, { bigint: true }),
-          ),
-      });
-      await assertEntry(entry);
+    if (entry.kind !== "directory") {
+      const parent = path.dirname(destinationFor(entry.path));
+      if (!preparedDirectories.has(parent)) {
+        await fs.mkdir(parent, { recursive: true, mode: 0o700 });
+        preparedDirectories.add(parent);
+      }
     }
+  }
+  const copied = await runTasksWithConcurrency({
+    limit: 4,
+    errorMode: "stop",
+    tasks: plan.entries
+      .filter((entry) => entry.kind === "file")
+      .map((entry) => async () => {
+        await assertEntry(entry);
+        const destination = destinationFor(entry.path);
+        // copyIn owns portable create-only publication; no-replace move needs a
+        // native binding. Recheck the inventory before its private stage is published.
+        await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
+          overwrite: false,
+          // Every destination parent is prepared before copies are admitted.
+          mkdir: false,
+          // Rehearsal payloads are disposable and never serve as recovery backups.
+          durable: false,
+          clone: "auto",
+          maxBytes: entry.size,
+          mode: entry.mode | 0o600,
+          sourceHardlinks: "allow",
+          assertBeforeMutation: () =>
+            assertUpdateCandidatePluginEntryStat(
+              entry,
+              fsSync.lstatSync(entry.path, { bigint: true }),
+            ),
+        });
+        await assertEntry(entry);
+      }),
+  });
+  // A failed copy can already have published bytes. Drain every admitted copy
+  // before the caller can clean up, or before any link publication begins.
+  if (copied.hasError) {
+    throw copied.firstError;
   }
   for (const entry of plan.entries) {
     if (entry.kind === "symlink") {
       await assertEntry(entry);
       const destination = destinationFor(entry.path);
-      await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
       await fs.symlink(entry.link, destination, entry.linkType);
     }
   }

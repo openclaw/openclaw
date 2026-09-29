@@ -1,6 +1,6 @@
 import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { formatByteSize } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -20,6 +20,7 @@ import {
 import {
   SQLITE_READONLY_WORKER_MAX_BUFFER,
   readSqliteReadOnlyWorkerValue,
+  sqliteReadOnlyWorkerRequestArgs,
   type SqliteReadOnlyWorkerOptions,
   type SqliteReadOnlyWorkerOutput,
   type SqliteReadOnlyWorkerValue,
@@ -195,16 +196,12 @@ export function resolveSqliteInspectionSignal(signal?: AbortSignal): AbortSignal
     : signal;
 }
 
-function sqliteReadOnlyWorkerRequestArgs(pathname: string, options: SqliteReadOnlyWorkerOptions) {
-  return [
-    options.mode,
-    path.resolve(pathname),
-    ...(options.stagingRoot ? [options.stagingRoot] : []),
-  ];
-}
-
 function sqliteReadOnlyWorkerArgv(pathname: string, options: SqliteReadOnlyWorkerOptions) {
-  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
+  const workerUrl = resolveRuntimeWorkerUrl(
+    options.mode === "content-version"
+      ? runtimeProcessEntrypoints.sqliteSourceRevision
+      : runtimeProcessEntrypoints.sqliteReadOnly,
+  );
   return [
     ...resolveRuntimeWorkerArgv(workerUrl),
     SQLITE_READONLY_CHILD_ARG,
@@ -399,9 +396,12 @@ async function runSqliteAuthProfileWorker(
   }
 }
 
-function runSqliteReadOnlyWorkerOnce(
+export function runSqliteReadOnlyWorkerOnce(
   pathname: string,
   options: SqliteReadOnlyWorkerOptions,
+  launch?: Pick<SqliteReadOnlyWorkerLaunch, "env" | "cwd"> & {
+    deadlineOwnedByCaller?: boolean;
+  },
 ): Promise<SqliteReadOnlyWorkerValue> {
   if (options.mode === "auth-profile-rows") {
     // CLI and bounded readers without a lifecycle owner must join their child before returning.
@@ -422,9 +422,13 @@ function runSqliteReadOnlyWorkerOnce(
       sqliteReadOnlyWorkerArgv(pathname, options),
       {
         encoding: "utf8",
-        env: resolveNodeCompileCacheEnv(),
+        env: launch?.env ?? resolveNodeCompileCacheEnv(),
+        cwd: launch?.cwd,
         maxBuffer: SQLITE_READONLY_WORKER_MAX_BUFFER,
-        timeout: reclaim || isSqliteInspectionDeadlineOwnedByCaller() ? undefined : timeoutMs,
+        timeout:
+          reclaim || (launch?.deadlineOwnedByCaller ?? isSqliteInspectionDeadlineOwnedByCaller())
+            ? undefined
+            : timeoutMs,
         killSignal: "SIGKILL",
       },
       (error, stdout, stderr) => {
@@ -496,11 +500,16 @@ function runSqliteReadOnlyWorkerOnce(
   });
 }
 
-export function runSqliteReadOnlyWorkerSync(pathname: string, stagingRoot: string): string {
+export function runSqliteReadOnlyWorkerSync(
+  pathname: string,
+  stagingRoot: string | undefined,
+  mode: "sync" | "content-version" = "sync",
+): string {
   const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
+  const started = log.isEnabled("trace") ? performance.now() : undefined;
   const result = spawnSync(
     process.execPath,
-    sqliteReadOnlyWorkerArgv(pathname, { mode: "sync", stagingRoot }),
+    sqliteReadOnlyWorkerArgv(pathname, { mode, stagingRoot }),
     {
       encoding: "utf8",
       env: resolveNodeCompileCacheEnv(),
@@ -509,6 +518,9 @@ export function runSqliteReadOnlyWorkerSync(pathname: string, stagingRoot: strin
       killSignal: "SIGKILL",
     },
   );
+  if (started !== undefined) {
+    log.trace(`SQLite read-only snapshot child durationMs=${performance.now() - started}`);
+  }
   const failure = result.error
     ? hasErrnoCode(result.error, "ETIMEDOUT")
       ? sqliteInspectionTimeoutError("read-only snapshot", pathname, timeoutMs, size).message
@@ -517,11 +529,7 @@ export function runSqliteReadOnlyWorkerSync(pathname: string, stagingRoot: strin
       ? undefined
       : `exited with ${result.signal ? `signal ${result.signal}` : `code ${result.status}`}`;
   return readSqliteReadOnlyWorkerValue(
-    {
-      failure,
-      stderr: result.stderr,
-      stdout: result.stdout,
-    },
-    "sync",
+    { failure, stderr: result.stderr, stdout: result.stdout },
+    mode,
   );
 }

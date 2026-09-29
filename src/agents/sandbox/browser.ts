@@ -1,8 +1,3 @@
-/**
- * Sandbox browser container lifecycle.
- *
- * Starts or reuses Chrome/noVNC containers, exposes authenticated CDP/observer URLs, and tracks browser registry state.
- */
 import crypto from "node:crypto";
 import {
   normalizeOptionalLowercaseString,
@@ -364,11 +359,10 @@ async function ensureSandboxBrowserContainer(
     const registry = await readBrowserRegistry();
     const registryEntry = registry.entries.find((entry) => entry.containerName === containerName);
     currentHash = await readDockerContainerLabel(containerName, "openclaw.configHash");
-    hashMismatch = !currentHash || currentHash !== expectedHash;
     if (!currentHash) {
       currentHash = registryEntry?.configHash ?? null;
-      hashMismatch = !currentHash || currentHash !== expectedHash;
     }
+    hashMismatch = !currentHash || currentHash !== expectedHash;
     if (hashMismatch) {
       const lastUsedAtMs = registryEntry?.lastUsedAtMs;
       const isHot =
@@ -396,17 +390,20 @@ async function ensureSandboxBrowserContainer(
     }
   }
 
+  const registryEntry = {
+    containerName,
+    sessionKey: params.scopeKey,
+    workspaceDir: params.workspaceDir,
+    createdAtMs: now,
+    lastUsedAtMs: now,
+    image: browserImage,
+    configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
+  };
   if (params.withWorkspace) {
     // Reserve the mount before allocation; a bridge/port failure must not hide
     // an already-running writer from reconciliation or lifecycle cleanup.
     await updateBrowserRegistry({
-      containerName,
-      sessionKey: params.scopeKey,
-      workspaceDir: params.workspaceDir,
-      createdAtMs: now,
-      lastUsedAtMs: now,
-      image: browserImage,
-      configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
+      ...registryEntry,
       cdpPort: 0,
     });
   }
@@ -505,13 +502,6 @@ async function ensureSandboxBrowserContainer(
     }
   }
 
-  const policyMatches =
-    !existing || isSameSsrFPolicy(existing.bridge.state.resolved.ssrfPolicy, params.ssrfPolicy);
-  const authMatches =
-    !existing ||
-    (existing.authToken === desiredAuthToken && existing.authPassword === desiredAuthPassword);
-  const evaluateMatches =
-    !existing || existing.bridge.state.resolved.evaluateEnabled === desiredEvaluateEnabled;
   const canReuse = Boolean(
     // Managed restart callbacks retain one admitted turn, not a later turn's authority.
     !params.withWorkspace &&
@@ -520,21 +510,17 @@ async function ensureSandboxBrowserContainer(
     existing.containerName === containerName &&
     existingProfile?.cdpPort === mappedCdp &&
     existingProfile?.cdpUrl === cdpUrl &&
-    policyMatches &&
-    authMatches &&
-    evaluateMatches,
+    isSameSsrFPolicy(existing.bridge.state.resolved.ssrfPolicy, params.ssrfPolicy) &&
+    existing.authToken === desiredAuthToken &&
+    existing.authPassword === desiredAuthPassword &&
+    existing.bridge.state.resolved.evaluateEnabled === desiredEvaluateEnabled,
   );
   if (existing && !canReuse) {
     await stopCachedBrowserBridge(params.scopeKey, existing);
   }
 
-  const bridge = canReuse ? (existing?.bridge ?? null) : null;
-
-  const ensureBridge = async () => {
-    if (bridge) {
-      return bridge;
-    }
-
+  let bridge = canReuse ? (existing?.bridge ?? null) : null;
+  if (!bridge) {
     const startTarget = async () => {
       const currentState = await dockerContainerState(containerName);
       if (currentState.exists && !currentState.running) {
@@ -558,7 +544,7 @@ async function ensureSandboxBrowserContainer(
       ? () => (params.withWorkspace ? params.withWorkspace(startTarget) : startTarget())
       : undefined;
 
-    return await startBrowserBridgeServer({
+    bridge = await startBrowserBridgeServer({
       resolved: buildSandboxBrowserResolvedConfig({
         controlPort: 0,
         cdpPort: mappedCdp,
@@ -572,12 +558,8 @@ async function ensureSandboxBrowserContainer(
       onEnsureAttachTarget,
       resolveSandboxNoVncToken: consumeNoVncObserverToken,
     });
-  };
-
-  const resolvedBridge = await ensureBridge();
-  if (!bridge) {
     BROWSER_BRIDGES.set(params.scopeKey, {
-      bridge: resolvedBridge,
+      bridge,
       containerName,
       authToken: desiredAuthToken,
       authPassword: desiredAuthPassword,
@@ -585,30 +567,24 @@ async function ensureSandboxBrowserContainer(
   }
 
   await updateBrowserRegistry({
-    containerName,
-    workspaceDir: params.workspaceDir,
-    sessionKey: params.scopeKey,
-    createdAtMs: now,
-    lastUsedAtMs: now,
-    image: browserImage,
-    configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
+    ...registryEntry,
     cdpPort: mappedCdp,
     noVncPort: mappedNoVnc ?? undefined,
   });
 
   const noVncUrl =
     mappedNoVnc && noVncEnabled
-      ? (() => {
-          const token = issueNoVncObserverToken({
+      ? buildNoVncObserverTokenUrl(
+          bridge.baseUrl,
+          issueNoVncObserverToken({
             noVncPort: mappedNoVnc,
             password: noVncPassword,
-          });
-          return buildNoVncObserverTokenUrl(resolvedBridge.baseUrl, token);
-        })()
+          }),
+        )
       : undefined;
 
   return {
-    bridgeUrl: resolvedBridge.baseUrl,
+    bridgeUrl: bridge.baseUrl,
     noVncUrl,
     containerName,
   };

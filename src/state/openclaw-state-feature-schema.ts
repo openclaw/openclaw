@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -12,15 +13,10 @@ export function createOpenClawStateSchemaEnsurer(params: {
   endMarker?: string;
   operationLabel: string;
 }): (options?: OpenClawStateDatabaseOptions) => void {
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    `\nCREATE TABLE IF NOT EXISTS ${params.table} (\n`,
-  );
-  const endMarker = params.endMarker ?? "\n) STRICT;\n";
-  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start);
-  if (start < 0 || end < start) {
-    throw new Error(`Canonical state schema markers are missing for ${params.table}`);
-  }
-  const schema = OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + endMarker.length);
+  const schema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, params.table, {
+    endMarker: params.endMarker ?? "\n) STRICT;\n",
+    errorMessage: `Canonical state schema markers are missing for ${params.table}`,
+  });
   const ensuredDatabases = new WeakSet<DatabaseSync>();
   return (options = {}) => {
     const database = openOpenClawStateDatabase(options);

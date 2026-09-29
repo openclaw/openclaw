@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
+import type { getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
 import {
   canonicalLobsterLook,
@@ -12,13 +13,7 @@ import { i18n, t } from "../../i18n/index.ts";
 // Page stars must override the shared mini-star rules loaded by lobster-pet-look.
 import "../../styles/lobsterdex.css";
 
-type LobsterdexViewEntry = {
-  firstSeenAt: number | null;
-  name: string | null;
-  shinySeenAt: number | null;
-};
-
-type LobsterdexViewEntries = ReadonlyMap<string, LobsterdexViewEntry>;
+type LobsterdexViewEntries = ReturnType<typeof getLobsterdexEntries>;
 
 export type LobsterdexCopyFeedback = {
   paletteId: LobsterPetPaletteId;

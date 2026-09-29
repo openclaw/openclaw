@@ -182,16 +182,7 @@ function validateIdentityAvatar(
     if (!avatar || isAvatarDataUrl(avatar) || isAvatarHttpUrl(avatar)) {
       continue;
     }
-    if (avatar.startsWith("~")) {
-      issues.push(
-        createIdentityAvatarIssue(
-          source,
-          "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
-        ),
-      );
-      continue;
-    }
-    if (hasAvatarUriScheme(avatar) && !isWindowsAbsolutePath(avatar)) {
+    if (avatar.startsWith("~") || (hasAvatarUriScheme(avatar) && !isWindowsAbsolutePath(avatar))) {
       issues.push(
         createIdentityAvatarIssue(
           source,
@@ -480,21 +471,16 @@ export function validateConfigObjectRaw(
       issues: [{ path: "agents.entries", message: formatDuplicateAgentDirError(duplicates) }],
     };
   }
-  const avatarIssues = validateIdentityAvatar(validatedConfig, opts?.env);
-  if (avatarIssues.length > 0) {
-    return { ok: false, issues: avatarIssues };
-  }
-  const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validatedConfig);
-  if (gatewayTailscaleBindIssues.length > 0) {
-    return { ok: false, issues: gatewayTailscaleBindIssues };
-  }
-  const gatewayTailscaleAuthIssues = validateGatewayTailscaleAuth(validatedConfig);
-  if (gatewayTailscaleAuthIssues.length > 0) {
-    return { ok: false, issues: gatewayTailscaleAuthIssues };
-  }
-  const modelPolicyAllowIssues = collectModelPolicyAllowIssues(validatedConfig);
-  if (modelPolicyAllowIssues.length > 0) {
-    return { ok: false, issues: modelPolicyAllowIssues };
+  for (const validate of [
+    () => validateIdentityAvatar(validatedConfig, opts?.env),
+    () => validateGatewayTailscaleBind(validatedConfig),
+    () => validateGatewayTailscaleAuth(validatedConfig),
+    () => collectModelPolicyAllowIssues(validatedConfig),
+  ]) {
+    const issues = validate();
+    if (issues.length > 0) {
+      return { ok: false, issues };
+    }
   }
   return { ok: true, config: validatedConfig };
 }

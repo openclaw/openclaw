@@ -358,20 +358,14 @@ export function emitAcpRuntimeEvent(
 ) {
   if (params.event.type === "tool_call") {
     emitAcpToolExecutionEvent({
-      runId: params.runId,
-      toolTracker: params.toolTracker,
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+      ...params,
       event: params.event,
     });
   }
   if (!params.auditOnly) {
     emitAgentEvent({
-      runId: params.runId,
+      ...acpRunIdentity(params),
       stream: "acp",
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      ...(params.agentId ? { agentId: params.agentId } : {}),
       data: {
         phase: "runtime_event",
         ...acpRuntimeEventDiagnostics(params.event),

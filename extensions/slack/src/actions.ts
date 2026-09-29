@@ -235,9 +235,7 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
     }
     return getSlackWriteClient(token, { teamId: opts.teamId });
   }
-  return opts.assertDirectAdapterHandoff
-    ? createSlackLookupClient(token, { teamId: opts.teamId }, opts.assertDirectAdapterHandoff)
-    : createSlackLookupClient(token, { teamId: opts.teamId });
+  return createSlackLookupClient(token, { teamId: opts.teamId }, opts.assertDirectAdapterHandoff);
 }
 
 async function resolveBotUserId(client: WebClient) {
@@ -248,47 +246,30 @@ async function resolveBotUserId(client: WebClient) {
   return auth.user_id;
 }
 
-export async function reactSlackMessage(
-  channelId: string,
-  messageId: string,
-  emoji: string,
-  opts: SlackActionClientOpts = {},
-) {
-  const client = await getClient(opts, "write");
-  try {
-    await client.reactions.add({
-      channel: channelId,
-      timestamp: messageId,
-      name: normalizeSlackEmojiName(emoji),
-    });
-  } catch (err) {
-    if (hasSlackPlatformError(err, "already_reacted")) {
-      return;
+function createSlackReactionUpdater(method: "add" | "remove", unchangedError: string) {
+  return async (
+    channelId: string,
+    messageId: string,
+    emoji: string,
+    opts: SlackActionClientOpts = {},
+  ) => {
+    const client = await getClient(opts, "write");
+    try {
+      await client.reactions[method]({
+        channel: channelId,
+        timestamp: messageId,
+        name: normalizeSlackEmojiName(emoji),
+      });
+    } catch (err) {
+      if (!hasSlackPlatformError(err, unchangedError)) {
+        throw err;
+      }
     }
-    throw err;
-  }
+  };
 }
 
-export async function removeSlackReaction(
-  channelId: string,
-  messageId: string,
-  emoji: string,
-  opts: SlackActionClientOpts = {},
-) {
-  const client = await getClient(opts, "write");
-  try {
-    await client.reactions.remove({
-      channel: channelId,
-      timestamp: messageId,
-      name: normalizeSlackEmojiName(emoji),
-    });
-  } catch (err) {
-    if (hasSlackPlatformError(err, "no_reaction")) {
-      return;
-    }
-    throw err;
-  }
-}
+export const reactSlackMessage = createSlackReactionUpdater("add", "already_reacted");
+export const removeSlackReaction = createSlackReactionUpdater("remove", "no_reaction");
 
 export async function removeOwnSlackReactions(
   channelId: string,
@@ -329,8 +310,7 @@ export async function listSlackReactions(
     timestamp: messageId,
     full: true,
   });
-  const message = result.message as SlackMessageSummary | undefined;
-  return message?.reactions ?? [];
+  return result.message?.reactions ?? [];
 }
 
 export async function sendSlackMessage(
@@ -433,7 +413,7 @@ export async function editSlackRenderedMessage(
   try {
     await client.chat.update(update);
   } catch (error) {
-    if (!hasSlackNativeDataBlock(blocks) || !isSlackInvalidBlocksError(error)) {
+    if (!hasNativeData || !isSlackInvalidBlocksError(error)) {
       throw error;
     }
     logVerbose("slack edit: native data block rejected, retrying with text fallback");
@@ -496,15 +476,6 @@ export async function openSlackConversation(userIds: unknown, opts: SlackActionC
   const input = parseSlackConversationOpenInput(userIds, opts.teamId);
   const client = await getClient({ ...opts, teamId: input.teamId }, "write");
   return await openSlackConversationWithClient(client, input);
-}
-
-export async function resolveSlackConversationName(
-  channelId: string,
-  opts: SlackActionClientOpts = {},
-): Promise<string | undefined> {
-  const client = await getClient(opts, "read");
-  const info = await client.conversations.info({ channel: channelId });
-  return info.channel?.name?.trim() || undefined;
 }
 
 export async function readSlackMessages(

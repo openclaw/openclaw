@@ -95,8 +95,8 @@ Run deferred confidence against the exact published beta with
 `package`, or the relevant QA/live group explicitly. Selected children must
 still finish and pass their existing policy; a deferred check is **not run**,
 never passed. Stable, full, soak-enabled, and focused validation retain their
-existing confidence coverage. `main`, alpha, and non-beta targets do not qualify
-for `npm-beta-v1`.
+existing confidence coverage. `main` and non-beta targets do not qualify for
+`npm-beta-v1`.
 
 For a regular final package on its matching release branch or tag, `all` with
 `release_profile=stable` records `coveragePolicy=npm-stable-v1` and uses CI's
@@ -155,7 +155,7 @@ an exhausted pool, and failed attempts do not count as successful proof. Exact
 candidate identity, credential isolation, and lease cleanup remain required.
 
 Package Acceptance Telegram E2E is automatically deferred for every beta-profile
-`all` run without soak, including beta-profile checks of `main` or alpha targets.
+`all` run without soak, including beta-profile checks of `main`.
 The effective `skip_package_telegram_e2e=true` is captured in the inputs and
 summary as **not run**. Soak-enabled runs and explicit `rerun_group=package`
 keep Telegram selected by default. The existing

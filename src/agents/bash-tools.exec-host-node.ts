@@ -24,7 +24,6 @@ import {
   formatExecApprovalContinuationSourceOutput,
 } from "./bash-tools.exec-approval-output.js";
 import {
-  buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
   isExecApprovalRunAbortedError,
   registerExecApprovalRequestForHostOrThrow,
@@ -171,10 +170,8 @@ export async function executeNodeHostCommand(
       ask: hostAsk,
       ...unavailableDecisionRequestParams,
       commandHighlighting: params.commandHighlighting,
-      ...buildExecApprovalRequesterContext({
-        agentId: prepared.agentId,
-        sessionKey: prepared.sessionKey,
-      }),
+      agentId: prepared.agentId,
+      sessionKey: prepared.sessionKey,
       approvalReviewerDeviceIds: params.approvalReviewerDeviceId
         ? [params.approvalReviewerDeviceId]
         : undefined,
@@ -216,19 +213,8 @@ export async function executeNodeHostCommand(
         hostSecurity: current.hostSecurity,
         hostAsk: current.hostAsk,
       });
-      if (current.askFallback === "full") {
-        return {
-          approvedByAsk: true,
-          deniedReason: null,
-          hostSecurity: current.hostSecurity,
-          hostAsk: current.hostAsk,
-          askFallback: current.askFallback,
-          requiresExplicitApproval:
-            currentAnalysis.inlineEvalHit !== null ||
-            currentAnalysis.requiresSecurityAuditSuppressionApproval,
-        };
-      }
       const authorizationSatisfied =
+        current.askFallback === "full" ||
         currentAnalysis.durableApprovalSatisfied ||
         (currentAnalysis.analysisOk && currentAnalysis.allowlistSatisfied);
       return {
@@ -547,7 +533,7 @@ export async function executeNodeHostCommand(
               invoke: buildNodeSystemRunInvoke({
                 target,
                 command: prepared.argv,
-                rawCommand: prepared.transportRawCommand,
+                rawCommand: prepared.rawCommand,
                 cwd: prepared.cwd,
                 agentId: prepared.agentId,
                 sessionKey: prepared.sessionKey,
@@ -651,7 +637,7 @@ export async function executeNodeHostCommand(
   const invoke = buildNodeSystemRunInvoke({
     target,
     command: prepared.argv,
-    rawCommand: prepared.transportRawCommand,
+    rawCommand: prepared.rawCommand,
     cwd: prepared.cwd,
     agentId: prepared.agentId,
     sessionKey: prepared.sessionKey,

@@ -50,7 +50,6 @@ import {
   resolveSubagentAnnounceTimeoutMs,
   runAnnounceDeliveryWithRetry,
   SourceOwnerChangedError,
-  sourceOwnerChangedResult,
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
 import {
@@ -61,17 +60,19 @@ import {
   resolveQueueSettings,
 } from "./subagent-announce-delivery.runtime.js";
 import { createDirectAnnounceResponseClassifier } from "./subagent-announce-direct-response.js";
-import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
+import {
+  sourceOwnerChangedResult,
+  type SubagentAnnounceDeliveryResult,
+} from "./subagent-announce-dispatch.js";
 import {
   resolveCompletionDeliveryOrigins,
   type DeliveryContext,
 } from "./subagent-announce-origin.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
-export async function sendSubagentAnnounceDirectly(params: {
+export type SubagentAnnounceDirectParams = {
   requesterSessionKey: string;
   requesterAgentId?: string;
-  requesterRunTimeoutSeconds?: number;
   targetRequesterSessionKey: string;
   triggerMessage: string;
   internalEvents?: AgentInternalEvent[];
@@ -88,6 +89,7 @@ export async function sendSubagentAnnounceDirectly(params: {
   sourceTool?: string;
   settleWakeSourceSessionKeys?: readonly string[];
   isSourceSessionEffectsAllowed?: () => boolean;
+  /** Additional source guard released by the accepting Gateway or injection owner. */
   isSourceSessionAdmissionAllowed?: () => boolean;
   isCompletionOwnedByRequesterYield?: () => boolean;
   requesterIsSubagent: boolean;
@@ -95,7 +97,11 @@ export async function sendSubagentAnnounceDirectly(params: {
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   signal?: AbortSignal;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
-}): Promise<SubagentAnnounceDeliveryResult> {
+};
+
+export async function sendSubagentAnnounceDirectly(
+  params: SubagentAnnounceDirectParams,
+): Promise<SubagentAnnounceDeliveryResult> {
   if (params.signal?.aborted) {
     return { delivered: false, path: "none" };
   }
@@ -368,7 +374,6 @@ export async function sendSubagentAnnounceDirectly(params: {
     const directAgentParams: Record<string, unknown> = {
       ...(parentOnly ? { expectedExistingSessionId: params.completionRequesterSessionId } : {}),
       sessionKey: canonicalRequesterSessionKey,
-      timeout: params.requesterRunTimeoutSeconds,
       message: params.triggerMessage,
       deliver: shouldDeliverAgentFinal,
       bestEffortDeliver: params.bestEffortDeliver,
@@ -420,22 +425,47 @@ export async function sendSubagentAnnounceDirectly(params: {
               }
               return await runAnnounceAgentCall({
                 agentParams: directAgentParams,
+                // A resumed parent has no inbound channel dispatcher to keep activity visible.
+                typing:
+                  sourceToolId === "subagent_settle" &&
+                  shouldDeliverAgentFinal &&
+                  deliveryTarget.channel &&
+                  deliveryTarget.to
+                    ? {
+                        agentId: requesterAgentId,
+                        runId: params.directIdempotencyKey,
+                        channel: deliveryTarget.channel,
+                        to: deliveryTarget.to,
+                        accountId: deliveryTarget.accountId,
+                        threadId: deliveryTarget.threadId,
+                      }
+                    : undefined,
                 settleWakeSourceSessionKeys: params.settleWakeSourceSessionKeys,
                 ...(parentOnly ? { privateCompletion: true as const } : {}),
                 delegatedToolPolicyHandoff:
-                  isSubagentCompletion &&
-                  trustedCompletionEvent &&
+                  ((isSubagentCompletion && trustedCompletionEvent) ||
+                    (sourceToolId === "subagent_settle" &&
+                      params.settleWakeSourceSessionKeys?.length &&
+                      params.isSourceSessionEffectsAllowed)) &&
                   params.sourceSessionKey &&
                   requesterActivity.sessionId &&
                   params.isSourceSessionEffectsAllowed?.() !== false
                     ? {
                         sourceSessionKey: params.sourceSessionKey,
-                        ...(trustedCompletionEvent.childSessionId
+                        ...(trustedCompletionEvent?.childSessionId
                           ? { sourceSessionId: trustedCompletionEvent.childSessionId }
                           : {}),
                         targetSessionKey: canonicalRequesterSessionKey,
                         targetSessionId: requesterActivity.sessionId,
                         idempotencyKey: params.directIdempotencyKey,
+                        ...(sourceToolId === "subagent_settle" && params.settleWakeSourceSessionKeys
+                          ? {
+                              settleBatch: {
+                                sourceSessionKeys: params.settleWakeSourceSessionKeys,
+                                isCurrent: isCompletionDeliveryAllowed,
+                              },
+                            }
+                          : {}),
                       }
                     : undefined,
                 expectFinal: true,

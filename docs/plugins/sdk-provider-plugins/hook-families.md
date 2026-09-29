@@ -75,6 +75,17 @@ reasoning output so OpenClaw consumes native thought parts without adding
 backends that parse a final JSON/text response can keep the shared
 `google-gemini` tagged contract.
 
+`transformProviderStreamMessages(stream, transformMessage)` from
+`provider-stream-shared` applies a provider-owned mutation to streamed partial
+messages, terminal messages, and `result()`. It preserves the stream and event
+objects, event order, and iterator cancellation and error forwarding; the
+callback must tolerate absent message fields and repeated visits.
+`buildAssistantMessage` from `provider-transport-runtime` constructs native stream
+assistant envelopes with caller-supplied content and usage.
+`stripTrailingAssistantPrefillMessages(payload)` removes trailing assistant
+prefill messages while preserving terminal tool calls. Providers retain their
+own thinking and route predicates.
+
 Some stream helpers stay provider-local on purpose. `@openclaw/anthropic-provider` keeps `wrapAnthropicProviderStream`, `resolveAnthropicBetas`, `resolveAnthropicFastMode`, `resolveAnthropicServiceTier`, and the lower-level Anthropic wrapper builders in its own public `api.ts` / `contract-api.ts` seam because they encode Claude OAuth beta handling and `context1m` gating. The xAI plugin similarly keeps native xAI Responses shaping in its own `wrapStreamFn` (`/fast` aliases, default `tool_stream`, unsupported strict-tool cleanup, xAI-specific reasoning-payload removal).
 
 The same package-root pattern also backs `@openclaw/openai-provider` (provider builders, default-model helpers, realtime provider builders) and `@openclaw/openrouter-provider` (provider builder plus onboarding/config helpers).

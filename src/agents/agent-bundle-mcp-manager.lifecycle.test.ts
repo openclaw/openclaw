@@ -2,11 +2,20 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import {
+  acquireRequesterScopedMcpRuntime,
+  acquireSessionMcpRuntime,
+} from "./agent-bundle-mcp-manager-api.js";
 import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
 import type { SessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
 import {
-  SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS,
+  SESSION_MCP_RUNTIME_MANAGER_KEY,
   type CreateSessionMcpRuntime,
 } from "./agent-bundle-mcp-runtime-shared.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
@@ -67,7 +76,7 @@ function createRuntimeFixture(input: Parameters<CreateSessionMcpRuntime>[0]): Se
 }
 
 function createManager(createRuntime?: CreateSessionMcpRuntime) {
-  const manager = createSessionMcpRuntimeManager({ createRuntime, enableIdleSweepTimer: false });
+  const manager = createSessionMcpRuntimeManager({ createRuntime });
   managers.push(manager);
   return manager;
 }
@@ -225,7 +234,7 @@ describe("MCP manager creation ownership", () => {
   });
 
   it.each(["static", "requester"] as const)(
-    "keeps the native idle timer outside %s requesting turns across disposal",
+    "expires idle %s runtimes outside requesting turns across scheduler replacement and disposal",
     async (entrypoint) => {
       const resolverRegistry = createMcpProofPluginRegistry();
       await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
@@ -235,19 +244,19 @@ describe("MCP manager creation ownership", () => {
           turn: turnContext.getStore(),
           pendingInput: pendingInputContext.getStore(),
         });
-        const timerContexts: ReturnType<typeof readContext>[] = [];
+        const sweepContexts: ReturnType<typeof readContext>[] = [];
         const factoryContexts: ReturnType<typeof readContext>[] = [];
-        const nativeSetInterval = globalThis.setInterval;
-        const intervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((...args) => {
-          if (args[1] === SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS) {
-            timerContexts.push(readContext());
-          }
-          return nativeSetInterval(...args);
-        });
+        const clock = createGatewaySchedulerClock(Date.now());
+        const previousClock = createGatewaySchedulerClock(clock.clock.now());
         const manager = createSessionMcpRuntimeManager({
+          scheduler: createTestGatewayScheduler(previousClock.clock),
           createRuntime(input) {
             factoryContexts.push(readContext());
-            return createRuntimeFixture(input);
+            const runtime = createRuntimeFixture(input);
+            runtime.dispose = vi.fn(async () => {
+              sweepContexts.push(readContext());
+            });
+            return runtime;
           },
         });
         managers.push(manager);
@@ -279,16 +288,263 @@ describe("MCP manager creation ownership", () => {
                     },
                   });
                 }
+                await manager.setScheduler(createTestGatewayScheduler(clock.clock));
                 expect(readContext()).toEqual({ turn, pendingInput });
               }),
             );
             expect(factoryContexts.splice(0)).toEqual([{ turn, pendingInput }]);
-            expect(timerContexts.splice(0)).toEqual([{ turn: undefined, pendingInput: undefined }]);
+            expect(previousClock.armedAtMs).toBeNull();
+            await clock.advanceBy(1_200_000);
+            expect(sweepContexts.splice(0)).toEqual([{ turn: undefined, pendingInput: undefined }]);
+            expect(manager.listRuntimeKeys()).toEqual([]);
+            expect(clock.armedAtMs).toBeNull();
             await manager.disposeAll();
           }
         } finally {
           await manager.disposeAll();
-          intervalSpy.mockRestore();
+        }
+      });
+    },
+  );
+
+  it("keeps idle reclamation on the surviving Gateway when the latest scheduler closes", async () => {
+    const firstClock = createGatewaySchedulerClock(Date.now());
+    const secondClock = createGatewaySchedulerClock(firstClock.clock.now());
+    const firstScheduler = createTestGatewayScheduler(firstClock.clock);
+    const secondScheduler = createTestGatewayScheduler(secondClock.clock);
+    const manager = createSessionMcpRuntimeManager({
+      scheduler: firstScheduler,
+      createRuntime: createRuntimeFixture,
+    });
+    managers.push(manager);
+    const lease = await manager.acquire({
+      ...params,
+      cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } },
+    });
+    try {
+      await manager.setScheduler(secondScheduler);
+      await secondScheduler.stop();
+      await firstClock.advanceBy(120_000);
+      expect(lease.runtime.dispose).not.toHaveBeenCalled();
+
+      lease.releaseLease();
+      await firstClock.advanceBy(60_000);
+      expect(lease.runtime.dispose).toHaveBeenCalledOnce();
+      expect(manager.listRuntimeKeys()).toEqual([]);
+    } finally {
+      lease.releaseLease();
+      await Promise.all([firstScheduler.stop(), secondScheduler.stop()]);
+    }
+  });
+
+  it("resumes CLI acquisition after explicit scheduler binding and Gateway disposal", async () => {
+    const standaloneClock = createGatewaySchedulerClock(Date.now());
+    const gatewayClock = createGatewaySchedulerClock(standaloneClock.clock.now());
+    const standaloneScheduler = createTestGatewayScheduler(standaloneClock.clock);
+    const gatewayScheduler = createTestGatewayScheduler(gatewayClock.clock);
+    const manager = createSessionMcpRuntimeManager({
+      scheduler: gatewayScheduler,
+      createRuntime: createRuntimeFixture,
+    });
+    managers.push(manager);
+    const input = { ...params, cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } } };
+    try {
+      await manager.setScheduler(gatewayScheduler);
+      const gatewayRuntime = await manager.getOrCreate(input);
+      await gatewayScheduler.stop();
+      await standaloneClock.advanceBy(120_000);
+      expect(gatewayRuntime.dispose).not.toHaveBeenCalled();
+
+      await manager.disposeAll();
+      expect(gatewayRuntime.dispose).toHaveBeenCalledOnce();
+      await manager.setScheduler(standaloneScheduler);
+      const standaloneRuntime = await manager.getOrCreate({ ...input, sessionId: "cli-session" });
+      await standaloneClock.advanceBy(60_000);
+      expect(standaloneRuntime.dispose).toHaveBeenCalledOnce();
+      expect(manager.listRuntimeKeys()).toEqual([]);
+    } finally {
+      await Promise.all([standaloneScheduler.stop(), gatewayScheduler.stop()]);
+    }
+  });
+
+  it("joins running idle cleanup before arming the successor scheduler", async () => {
+    const firstClock = createGatewaySchedulerClock(Date.now());
+    const secondClock = createGatewaySchedulerClock(firstClock.clock.now());
+    const firstScheduler = createTestGatewayScheduler(firstClock.clock);
+    const secondScheduler = createTestGatewayScheduler(secondClock.clock);
+    const manager = createSessionMcpRuntimeManager({
+      scheduler: firstScheduler,
+      createRuntime: createRuntimeFixture,
+    });
+    managers.push(manager);
+    const input = { ...params, cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } } };
+    const runtime = await manager.getOrCreate(input);
+    const cleanup = holdDisposal(runtime);
+    const sweep = firstClock.advanceBy(120_000);
+    await cleanup.started;
+    const handoff = manager.setScheduler(secondScheduler);
+    try {
+      const next = await manager.getOrCreate({ ...input, sessionId: "later-session" });
+      expect(secondScheduler.nextWakeAtMs).toBeNull();
+      cleanup.release();
+      await Promise.all([sweep, handoff]);
+      await secondClock.advanceBy(120_000);
+      expect(next.dispose).toHaveBeenCalledOnce();
+      expect(manager.listRuntimeKeys()).toEqual([]);
+    } finally {
+      cleanup.release();
+      await Promise.all([sweep, handoff]);
+      await Promise.all([firstScheduler.stop(), secondScheduler.stop()]);
+    }
+  });
+
+  it.each(
+    ["host-close", "scheduler-stop", "already-stopped", "unbound-stopped"].flatMap((boundary) => [
+      { boundary, entrypoint: "full", acquire: acquireSessionMcpRuntime },
+      { boundary, entrypoint: "requester", acquire: acquireRequesterScopedMcpRuntime },
+    ]),
+  )("rejects $entrypoint acquisition at $boundary", async ({ boundary, acquire }) => {
+    const firstClock = createGatewaySchedulerClock(Date.now());
+    const firstScheduler = createTestGatewayScheduler(firstClock.clock);
+    const nextScheduler = createTestGatewayScheduler();
+    const manager = createSessionMcpRuntimeManager({
+      scheduler: firstScheduler,
+      createRuntime: createRuntimeFixture,
+    });
+    managers.push(manager);
+    const input = { ...params, cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } } };
+    const runtime = await manager.getOrCreate(input);
+    const cleanup = holdDisposal(runtime);
+    const sweep = firstClock.advanceBy(120_000);
+    await cleanup.started;
+    const previous = Reflect.get(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
+    const hadManager = Reflect.has(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
+    Reflect.set(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY, manager);
+    const host = new LegacyPluginSdkResourceHost();
+    host.bindScheduler(nextScheduler);
+    if (boundary === "already-stopped") {
+      await nextScheduler.stop();
+    } else if (boundary === "unbound-stopped") {
+      firstScheduler.beginClose();
+    }
+    const run = () => acquire({ ...input, sessionId: "closed-cli-session" });
+    const acquisition = boundary === "unbound-stopped" ? run() : host.run(run);
+    const refused =
+      boundary === "host-close"
+        ? expect(acquisition).rejects.toThrow("Plugin SDK resource host is closed")
+        : expect(acquisition).rejects.toMatchObject({ name: "AbortError" });
+    try {
+      if (boundary === "host-close") {
+        await host.close();
+      } else if (boundary === "scheduler-stop") {
+        await nextScheduler.stop();
+      }
+      cleanup.release();
+      await Promise.all([sweep, refused]);
+      expect(manager.listRuntimeKeys()).toEqual([]);
+    } finally {
+      cleanup.release();
+      await Promise.allSettled([sweep, acquisition]);
+      await host.close();
+      await Promise.all([firstScheduler.stop(), nextScheduler.stop()]);
+      if (hadManager) {
+        Reflect.set(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY, previous);
+      } else {
+        Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
+      }
+    }
+  });
+
+  it.each(
+    ["host-close", "scheduler-stop", "last-scheduler-stop", "unbound-last-scheduler-stop"].flatMap(
+      (boundary) => [
+        { boundary, entrypoint: "full", acquire: acquireSessionMcpRuntime },
+        { boundary, entrypoint: "requester", acquire: acquireRequesterScopedMcpRuntime },
+      ],
+    ),
+  )(
+    "releases queued $entrypoint acquisition after $boundary",
+    async ({ boundary, entrypoint, acquire }) => {
+      const resolverRegistry = createMcpProofPluginRegistry();
+      await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
+        resolverRegistry.apiFor("test-plugin").registerMcpServerConnectionResolver({
+          serverName: "scoped",
+          resolve: async () => ({ url: "https://mcp.example.test/scoped" }),
+        });
+        const survivorScheduler = createTestGatewayScheduler();
+        const originScheduler = createTestGatewayScheduler();
+        const survivorHost = new LegacyPluginSdkResourceHost();
+        survivorHost.bindScheduler(survivorScheduler);
+        const originHost = new LegacyPluginSdkResourceHost();
+        originHost.bindScheduler(originScheduler);
+        const held = holdFactory();
+        const manager = createSessionMcpRuntimeManager({
+          scheduler: survivorScheduler,
+          createRuntime: held.createRuntime,
+        });
+        managers.push(manager);
+        const previous = Reflect.get(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
+        const hadManager = Reflect.has(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
+        Reflect.set(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY, manager);
+        const input = entrypoint === "requester" ? requesterParams("sender") : params;
+        const acquisition =
+          boundary === "unbound-last-scheduler-stop"
+            ? acquire(input)
+            : originHost.run(() => acquire(input));
+        let rejectionSettled = false;
+        const refused = (
+          boundary === "host-close"
+            ? expect(acquisition).rejects.toThrow("Plugin SDK resource host is closed")
+            : expect(acquisition).rejects.toMatchObject({ name: "AbortError" })
+        ).finally(() => {
+          rejectionSettled = true;
+        });
+        const runtime = await held.started;
+        const closing = boundary.endsWith("last-scheduler-stop")
+          ? holdDisposal(runtime)
+          : undefined;
+        const surviving = closing ? undefined : survivorHost.run(() => acquire(input));
+        let peer: Awaited<typeof surviving>;
+        try {
+          if (closing) {
+            await survivorScheduler.stop();
+          }
+          if (boundary === "host-close") {
+            await originHost.close();
+          } else {
+            await originScheduler.stop();
+          }
+          held.release();
+          if (closing) {
+            await Promise.race([closing.started, acquisition]);
+            expect(runtime.activeLeases).toBe(0);
+            expect(rejectionSettled).toBe(false);
+            closing.release();
+          }
+          await refused;
+          peer = await surviving;
+          if (closing) {
+            expect(runtime.dispose).toHaveBeenCalledOnce();
+            expect(manager.listRuntimeKeys()).toEqual([]);
+          } else {
+            expect(peer?.runtime).toBe(runtime);
+            expect(runtime.activeLeases).toBe(1);
+            expect(runtime.dispose).not.toHaveBeenCalled();
+            expect(survivorScheduler.signal.aborted).toBe(false);
+          }
+        } finally {
+          held.release();
+          closing?.release();
+          await Promise.allSettled([acquisition, surviving]);
+          peer ??= await surviving?.catch(() => undefined);
+          peer?.releaseLease();
+          await Promise.all([originHost.close(), survivorHost.close()]);
+          await Promise.all([originScheduler.stop(), survivorScheduler.stop()]);
+          if (hadManager) {
+            Reflect.set(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY, previous);
+          } else {
+            Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
+          }
         }
       });
     },

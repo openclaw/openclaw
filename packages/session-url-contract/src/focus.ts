@@ -15,12 +15,23 @@ type ControlUiFocusDesktopBuildTarget = {
   session?: string | null;
 };
 
+type ControlUiFocusBrowserTarget = {
+  kind: "browser";
+  sessionKey: string;
+  tab: { profile: string; targetId: string } & (
+    | { target: "host"; node?: never }
+    | { target: "node"; node: string }
+  );
+};
+
 export type ControlUiFocusBuildTarget =
   | ControlUiFocusDashboardTarget
+  | ControlUiFocusBrowserTarget
   | { kind: "terminal" }
   | ControlUiFocusDesktopBuildTarget;
 
 export type ControlUiFocusTarget =
+  | ControlUiFocusBrowserTarget
   | {
       kind: "dashboard";
       route: { pathname: string; search: string; hash: string };
@@ -65,6 +76,29 @@ function decodeFocusValue(segment: string): { ok: true; value: string | null } |
   }
 }
 
+function parseBrowserFocus(search: string): ControlUiFocusBrowserTarget | null {
+  const query = new URLSearchParams(search);
+  const value = (key: string): string | null => {
+    const values = query.getAll(key);
+    const first = values[0];
+    return values.length === 1 && first && first.trim() === first ? first : null;
+  };
+  const sessionKey = value("sessionKey");
+  const target = value("target");
+  const profile = value("profile");
+  const targetId = value("targetId");
+  if (!sessionKey || !profile || !targetId) {
+    return null;
+  }
+  if (target === "host" && !query.has("node")) {
+    return { kind: "browser", sessionKey, tab: { target, profile, targetId } };
+  }
+  const node = value("node");
+  return target === "node" && node
+    ? { kind: "browser", sessionKey, tab: { target, node, profile, targetId } }
+    : null;
+}
+
 export function inferControlUiFocusBasePath(pathname: string): string | null {
   const normalizedPath = normalizePathname(pathname);
   const segments = normalizedPath.split("/").filter(Boolean);
@@ -76,7 +110,7 @@ export function inferControlUiFocusBasePath(pathname: string): string | null {
   }
   const supportsSuffix = (index: number): boolean => {
     const rest = segments.slice(index + 1);
-    if (rest[0] === "terminal") {
+    if (rest[0] === "terminal" || rest[0] === "browser") {
       return rest.length === 1;
     }
     if (rest[0] === "dashboard") {
@@ -127,6 +161,16 @@ export function buildControlUiFocusPath(
 ): string | null {
   const base = normalizeControlUiBasePath(basePath);
   const root = `${base}${FOCUS_SEGMENT}`;
+  if (target.kind === "browser") {
+    const query = new URLSearchParams({
+      sessionKey: target.sessionKey,
+      target: target.tab.target,
+      profile: target.tab.profile,
+      targetId: target.tab.targetId,
+      ...(target.tab.target === "node" ? { node: target.tab.node } : {}),
+    });
+    return `${root}/browser?${query}`;
+  }
   if (target.kind === "terminal") {
     return `${root}/terminal`;
   }
@@ -167,6 +211,12 @@ export function parseControlUiFocusLocation(
   }
   const root = `${resolvedBasePath}${FOCUS_SEGMENT}`;
   const rest = normalizedPath.slice(root.length + 1);
+  if (rest === "browser") {
+    const target = parseBrowserFocus(search);
+    return target
+      ? { status: "valid", basePath: resolvedBasePath, target }
+      : { status: "unsupported", basePath: resolvedBasePath };
+  }
   if (rest === "terminal") {
     return { status: "valid", basePath: resolvedBasePath, target: { kind: "terminal" } };
   }
@@ -190,40 +240,28 @@ export function parseControlUiFocusLocation(
   if (control) {
     index += 1;
   }
-  if (segments.length === index) {
-    return {
-      status: "valid",
-      basePath: resolvedBasePath,
-      target: { kind: "desktop", control, selector: null },
-    };
-  }
-  const selectorKind = segments[index];
-  const encodedValue = segments[index + 1];
-  if (
-    segments.length !== index + 2 ||
-    (selectorKind !== "source" && selectorKind !== "session") ||
-    encodedValue === undefined
-  ) {
-    return { status: "unsupported", basePath: resolvedBasePath };
-  }
-  const decoded = decodeFocusValue(encodedValue);
-  if (!decoded.ok) {
-    return { status: "unsupported", basePath: resolvedBasePath };
-  }
-  if (!decoded.value) {
-    return {
-      status: "valid",
-      basePath: resolvedBasePath,
-      target: { kind: "desktop", control, selector: null },
-    };
+  let selector: Extract<ControlUiFocusTarget, { kind: "desktop" }>["selector"] = null;
+  if (segments.length !== index) {
+    const selectorKind = segments[index];
+    const encodedValue = segments[index + 1];
+    if (
+      segments.length !== index + 2 ||
+      (selectorKind !== "source" && selectorKind !== "session") ||
+      encodedValue === undefined
+    ) {
+      return { status: "unsupported", basePath: resolvedBasePath };
+    }
+    const decoded = decodeFocusValue(encodedValue);
+    if (!decoded.ok) {
+      return { status: "unsupported", basePath: resolvedBasePath };
+    }
+    if (decoded.value) {
+      selector = { kind: selectorKind, value: decoded.value };
+    }
   }
   return {
     status: "valid",
     basePath: resolvedBasePath,
-    target: {
-      kind: "desktop",
-      control,
-      selector: { kind: selectorKind, value: decoded.value },
-    },
+    target: { kind: "desktop", control, selector },
   };
 }

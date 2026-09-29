@@ -13,7 +13,8 @@ import {
   createPolicyAttestation,
   policyDocumentHash,
 } from "../policy-state.js";
-import { evaluatePolicy, registerPolicyDoctorChecks } from "./register.js";
+import { evaluatePolicy } from "./evaluation.js";
+import { registerPolicyDoctorChecks } from "./register.js";
 import {
   workspaceDir,
   cfgWithPolicy,
@@ -841,13 +842,7 @@ describe("registerPolicyDoctorChecks", () => {
     ];
 
     for (const testCase of cases) {
-      const configPath = join(workspaceDir, `${testCase.label.replaceAll(" ", "-")}.jsonc`);
-      await fs.writeFile(configPath, "{}", "utf-8");
-      await fs.writeFile(
-        join(workspaceDir, "policy.jsonc"),
-        JSON.stringify(testCase.policy),
-        "utf-8",
-      );
+      const configPath = await writePolicyFixture(testCase.policy);
       clearHealthChecksForTest();
 
       const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));

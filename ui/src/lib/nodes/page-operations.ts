@@ -8,7 +8,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import type { DevicePairingList } from "../../../../src/gateway/device-pairing-list.types.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
-import { cloneConfigObject, removePathValue, setPathValue } from "../config-form-utils.ts";
+import { removePathValue, setPathValue } from "../config-form-utils.ts";
 import { formatUiError } from "../format-error.ts";
 import { clearDeviceAuthToken, loadOrCreateDeviceIdentity, storeDeviceAuthToken } from "./index.ts";
 
@@ -317,13 +317,7 @@ export async function removeStaleInventoryEntries(
   );
 }
 
-/**
- * Renames one paired device through the shared operator-alias RPC. Returns
- * `null` when the alias landed (the caller's dialog closes) and a displayable
- * message when it did not, so a rejected attempt stays visible and retryable.
- * Successful renames refresh the captured request scope; rejected attempts
- * remain visible in the dialog and in `devicesError`.
- */
+/** Null closes the rename dialog; an error leaves the attempted alias retryable. */
 export async function renameDevice(
   state: DevicesState,
   params: { deviceId: string; label: string },
@@ -392,17 +386,8 @@ function matchesRequestedGrant(value: unknown, requested: string): boolean {
   return typeof value === "string" && value.trim().length > 0 && value.trim() === requested.trim();
 }
 
-/**
- * Parses the raw `device.token.rotate` payload, which reaches this client unvalidated:
- * the browser Gateway client resolves `frame.payload` directly, so the registered result
- * schema never runs here. Only `DeviceTokenRotateResultSchema`'s shapes are accepted —
- * a complete envelope for the requested grant, a token that is absent or a non-empty string,
- * and `tokenDelivery` paired with the secret. Anything else describes a rotation whose
- * outcome is unknown, and both dialogs would lie about it: one claims a credential arrived,
- * the other that the device re-credentials on its own. The old token is dead either way, so
- * the operator gets the error and the recovery step. Gateways released before `tokenDelivery`
- * omit only that field; they still return the rest of the result they rotated.
- */
+// Browser RPC responses are unvalidated. Require the requested grant and a matching
+// delivery/secret pair before presenting either outcome: the old token is already dead.
 function classifyRotationOutcome(
   payload: unknown,
   requested: { deviceId: string; role: string },
@@ -410,10 +395,6 @@ function classifyRotationOutcome(
   const result = isRecord(payload) ? payload : undefined;
   const scopes = result?.scopes;
   const rotatedAtMs = result?.rotatedAtMs;
-  // `scopes` and `rotatedAtMs` are required by the result schema, and the grant has to be the
-  // one this page asked to rotate: a reply naming another device or role says nothing about
-  // this request, so reporting it would tell the operator a credential they still hold was
-  // replaced.
   const identified =
     matchesRequestedGrant(result?.deviceId, requested.deviceId) &&
     matchesRequestedGrant(result?.role, requested.role) &&
@@ -422,26 +403,16 @@ function classifyRotationOutcome(
     typeof rotatedAtMs === "number" &&
     Number.isInteger(rotatedAtMs) &&
     rotatedAtMs >= 0;
-  // An absent token and a present-but-invalid one are different answers: the schema bounds
-  // `token` to a non-empty string, so `token: ""` is a malformed envelope rather than a
-  // rotation that withheld the secret.
+  // An empty token is malformed, not a withheld secret.
   const rawToken = result?.token;
   const token = typeof rawToken === "string" && rawToken.length > 0 ? rawToken : undefined;
   const tokenAbsent = rawToken === undefined;
   const delivery = result?.tokenDelivery;
   if (identified) {
-    if (delivery === undefined) {
-      if (token) {
-        return { delivery: "in-band", token };
-      }
-      if (tokenAbsent) {
-        return { delivery: "withheld-cross-device" };
-      }
-    }
-    if (delivery === "in-band" && token) {
+    if (token && (delivery === undefined || delivery === "in-band")) {
       return { delivery: "in-band", token };
     }
-    if (delivery === "withheld-cross-device" && tokenAbsent) {
+    if (tokenAbsent && (delivery === undefined || delivery === "withheld-cross-device")) {
       return { delivery: "withheld-cross-device" };
     }
   }
@@ -584,7 +555,7 @@ function applyExecApprovalsSnapshot(state: ExecApprovalsState, snapshot: ExecApp
     return;
   }
   if (!state.execApprovalsDirty) {
-    state.execApprovalsForm = cloneConfigObject(snapshot.file);
+    state.execApprovalsForm = structuredClone(snapshot.file);
   }
 }
 
@@ -648,9 +619,7 @@ function mutateExecApprovalsForm(
     state.lastError = "Host-native node approvals are read-only here.";
     return;
   }
-  const base = cloneConfigObject(
-    state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {},
-  );
+  const base = structuredClone(state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {});
   mutate(base);
   state.execApprovalsForm = base;
   state.execApprovalsDirty = true;

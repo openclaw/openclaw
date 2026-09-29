@@ -17,7 +17,6 @@ const FORBIDDEN_CSS_VALUE_PARTS = [
   "@import",
   "expression(",
 ] as const;
-const SAFE_FONT_FAMILY_PUNCTUATION = new Set([",", "'", '"', ".", "_", "-"]);
 
 const MODE_TOKEN_ORDER = [
   "bg",
@@ -94,10 +93,7 @@ export function requireThemeId(value: string) {
 
 export function requireSafeCssValue(value: unknown, label: string) {
   const normalized = normalizeOptionalString(value);
-  if (!normalized) {
-    throw new Error(`Unsupported tweakcn token: ${label}`);
-  }
-  if (normalized.length > MAX_CSS_TOKEN_LENGTH) {
+  if (!normalized || normalized.length > MAX_CSS_TOKEN_LENGTH) {
     throw new Error(`Unsupported tweakcn token: ${label}`);
   }
   const lowered = normalized.toLowerCase();
@@ -125,24 +121,9 @@ export function requireSafeCssValue(value: unknown, label: string) {
   return normalized;
 }
 
-function isSafeFontFamilyCharacter(char: string) {
-  const code = char.charCodeAt(0);
-  return (
-    (code >= 0x30 && code <= 0x39) ||
-    (code >= 0x41 && code <= 0x5a) ||
-    (code >= 0x61 && code <= 0x7a) ||
-    char === " " ||
-    SAFE_FONT_FAMILY_PUNCTUATION.has(char)
-  );
-}
-
 export function requireSafeFontFamilyValue(value: unknown, label: string) {
   const normalized = requireSafeCssValue(value, label);
-  if (
-    normalized.includes("(") ||
-    normalized.includes(")") ||
-    !Array.from(normalized).every(isSafeFontFamilyCharacter)
-  ) {
+  if (/[^A-Za-z0-9 ,'"._-]/.test(normalized)) {
     throw new Error(`Unsupported tweakcn token: ${label}`);
   }
   return normalized;
@@ -153,7 +134,7 @@ export function makeTokenMap(entries: Array<[ModeTokenName, string]>): ThemeToke
 }
 
 function normalizeStoredTokenMap(value: Record<string, unknown> | undefined): ThemeTokenMap | null {
-  if (!value || typeof value !== "object") {
+  if (!value) {
     return null;
   }
   const entries: Array<[ModeTokenName, string]> = [];
@@ -242,10 +223,6 @@ export function syncCustomThemeStyleTag(
   try {
     cssText = buildCustomThemeStyles(theme);
   } catch {
-    style?.remove();
-    return;
-  }
-  if (!cssText) {
     style?.remove();
     return;
   }

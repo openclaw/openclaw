@@ -1,6 +1,7 @@
 /**
  * Codex CLI and app-server bundle MCP projection helpers.
  */
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeConfiguredMcpServers } from "../../config/mcp-config-normalize.js";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -51,34 +52,22 @@ type CodexUserMcpServersProjectionOptions = {
   preparedNativeMcpPolicy?: PreparedNativeMcpPolicy;
 };
 
-function normalizeAgentIds(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter((entry) => isValidAgentId(entry))
-    .map((entry) => normalizeAgentId(entry));
-}
-
-function readCodexProjectionConfig(server: BundleMcpServerConfig): Record<string, unknown> {
-  return isRecord(server.codex) ? server.codex : {};
-}
-
 function isCodexMcpServerAllowedForAgent(
   server: BundleMcpServerConfig,
   options: CodexUserMcpServersProjectionOptions | undefined,
 ): boolean {
-  const codex = readCodexProjectionConfig(server);
+  const codex = isRecord(server.codex) ? server.codex : {};
   if (!Object.hasOwn(codex, "agents")) {
     return true;
   }
-  const agentIds = normalizeAgentIds(codex.agents);
-  if (agentIds.length === 0 || !options?.agentId) {
+  if (!options?.agentId) {
     return false;
   }
-  return agentIds.includes(normalizeAgentId(options.agentId));
+  const agentId = normalizeAgentId(options.agentId);
+  return filterStringEntries(codex.agents).some((entry) => {
+    const candidate = entry.trim();
+    return isValidAgentId(candidate) && normalizeAgentId(candidate) === agentId;
+  });
 }
 
 /**

@@ -1,3 +1,5 @@
+import * as childProcess from "node:child_process";
+import { promisify as promisifyCaptured } from "node:util";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type {
@@ -19,7 +21,7 @@ const boundary = vi.hoisted(() => ({
   admission: vi.fn(),
   authority: vi.fn(),
   scopeAssert: undefined as undefined | (() => void),
-  stateAcquire: vi.fn(),
+  ownerAssert: vi.fn(),
   schemas: vi.fn(),
   lease: vi.fn(),
   step: vi.fn<typeof recordUpdateRunStep>(),
@@ -44,16 +46,26 @@ const boundary = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawn: boundary.native,
-  spawnSync: boundary.native,
-  fork: boundary.native,
-  exec: boundary.native,
-  execSync: boundary.native,
-  execFile: boundary.native,
-  execFileSync: boundary.native,
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const { promisify } = await import("node:util");
+  const guarded = {
+    spawn: vi.fn(actual.spawn).mockImplementation(boundary.native),
+    spawnSync: vi.fn(actual.spawnSync).mockImplementation(boundary.native),
+    fork: vi.fn(actual.fork).mockImplementation(boundary.native),
+    exec: vi.fn(actual.exec).mockImplementation(boundary.native),
+    execSync: vi.fn(actual.execSync).mockImplementation(boundary.native),
+    execFile: vi.fn(actual.execFile).mockImplementation(boundary.native),
+    execFileSync: vi.fn(actual.execFileSync).mockImplementation(boundary.native),
+  };
+  Object.defineProperty(guarded.exec, promisify.custom, {
+    value: vi.fn(promisify(actual.exec)).mockImplementation(boundary.native),
+  });
+  Object.defineProperty(guarded.execFile, promisify.custom, {
+    value: vi.fn(promisify(actual.execFile)).mockImplementation(boundary.native),
+  });
+  return { ...actual, ...guarded, default: { ...actual, ...guarded } };
+});
 vi.mock("../config/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/paths.js")>()),
   isDefaultInstallIdentity: () => true,
@@ -95,17 +107,25 @@ vi.mock("../infra/gateway-owner-lease.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/gateway-owner-lease.js")>()),
   readGatewayOwnerLease: boundary.owner,
 }));
-vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/state-database-coordinator.js")>()),
-  acquireGatewayMaintenanceCoordinator: boundary.gatewayAcquire,
-  acquireStateDatabaseCoordinator: boundary.stateAcquire,
+vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/gateway-lock.js")>()),
+  acquireGatewayLock: boundary.gatewayAcquire,
 }));
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/openclaw-state-db-async-lifecycle.js")>()),
-  createOpenClawDatabaseMaintenanceScope: () => ({
-    run: <T>(operation: () => T) => operation(),
-    close: boundary.close,
-  }),
+  createOpenClawDatabaseMaintenanceScope: () => {
+    let closing: Promise<void> | undefined;
+    return {
+      run: <T>(operation: () => T) => operation(),
+      close: () =>
+        (closing ??= (async () => {
+          await boundary.close();
+        })().catch((error: unknown) => {
+          closing = undefined;
+          throw error;
+        })),
+    };
+  },
 }));
 vi.mock("../state/openclaw-agent-db-lease.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/openclaw-agent-db-lease.js")>()),
@@ -114,10 +134,10 @@ vi.mock("../state/openclaw-agent-db-lease.js", async (importOriginal) => ({
 }));
 vi.mock("../state/openclaw-database-preflight.js", () => ({
   preflightOpenClawDatabaseSchemas: boundary.schemas,
+  assertOpenClawDatabasesReady: async () => {},
 }));
 vi.mock("../cli/update-cli/update-command-service-maintenance.js", () => ({
   maybeStopManagedServiceBeforeMutableUpdate: boundary.stop,
-  maybeResumeWindowsTaskAutoStartAfterPackageUpdate: boundary.resume,
   revalidateManagedGatewayServiceAfterUpdate: boundary.revalidate,
 }));
 vi.mock("../daemon/service.js", () => ({
@@ -162,19 +182,40 @@ vi.mock("../cli/daemon-cli/restart-health.js", async () => ({
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const root = "/synthetic/doctor-install";
+const nativeFunctions = [
+  childProcess.spawn,
+  childProcess.spawnSync,
+  childProcess.fork,
+  childProcess.exec,
+  childProcess.execSync,
+  childProcess.execFile,
+  childProcess.execFileSync,
+  promisifyCaptured(childProcess.exec),
+  promisifyCaptured(childProcess.execFile),
+];
 let stopped: PreManagedServiceStop;
 beforeEach(() => {
   vi.resetAllMocks();
+  for (const native of nativeFunctions) {
+    vi.mocked(native).mockImplementation(boundary.native);
+  }
   boundary.external.mockReturnValue(false);
   boundary.readLeases.mockReturnValue([]);
   boundary.schemas.mockResolvedValue({ indeterminate: [] });
   boundary.scopeAssert = undefined;
   boundary.admission.mockReturnValue({ kind: "recovery", runs: [] });
-  boundary.stateAcquire.mockImplementation(() => ({ release: boundary.release }));
   boundary.gatewayAcquire.mockImplementation(() => ({
     release: boundary.release,
-    createSchemaFenceDelegate: vi.fn(),
+    assertCurrent: (assertPolicy?: () => void) => {
+      boundary.ownerAssert();
+      assertPolicy?.();
+    },
+    run<T>(operation: () => T): T {
+      boundary.ownerAssert();
+      return operation();
+    },
   }));
+  vi.stubEnv("OPENCLAW_PROFILE", "default");
   vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/doctor-state");
   vi.stubEnv("OPENCLAW_CONFIG_PATH", "/synthetic/doctor-state/openclaw.json");
   vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
@@ -200,7 +241,8 @@ beforeEach(() => {
     windowsTaskAutoStartRecovery: {
       suspended: Promise.resolve(true),
       beginMutation: () => {},
-      restore: async () => {},
+      assertRecoveryCurrent: () => {},
+      restore: boundary.resume,
       handoff: () => {},
       complete: boundary.complete,
       interrupted: () => false,
@@ -233,6 +275,10 @@ afterEach(() => {
   try {
     expect(boundary.native).not.toHaveBeenCalled();
   } finally {
+    // Retained runtime owners can outlive this module; restore captured callables in place.
+    for (const native of nativeFunctions) {
+      vi.mocked(native).mockReset();
+    }
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   }

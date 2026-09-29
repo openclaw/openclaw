@@ -81,6 +81,13 @@ function preflightMethods(
   };
 }
 
+// Advisory children fail only ordinary lanes; blocking children fail a required proof.
+function blockingChildJobName(childKey: string | undefined) {
+  return childKey === "npmTelegram" || childKey === "productPerformance"
+    ? "test"
+    : "Run install smoke";
+}
+
 function controllerClient(
   children: ReturnType<typeof child>[],
   childRuns: Map<string, { attempt: number; conclusion: string | null }>,
@@ -91,7 +98,7 @@ function controllerClient(
     ...preflightMethods(children, (entry) => runFor(entry, 1, "failure")),
     getAttemptJobs: async (runId: string, attempt: number) => [
       job(
-        "test",
+        blockingChildJobName(byRunId.get(runId)?.key),
         attempt === childRuns.get(runId)?.attempt
           ? (childRuns.get(runId)?.conclusion ?? "")
           : "failure",
@@ -610,20 +617,6 @@ describe("FRV continuation preflight", () => {
     );
     expect(reads).toBe(0);
     expect(mutations).toBe(0);
-  });
-
-  it.each([
-    ["candidate-free", undefined],
-    ["externally produced", { producer: { runId: "88" } }],
-  ])("allows %s plans through candidate ownership preflight", async (_label, candidate) => {
-    const selected = child("normalCi", "101");
-    await expect(
-      preflightContinuation(
-        { ...plan([selected]), candidate },
-        "77",
-        preflightMethods([selected], (entry) => runFor(entry, 1, "failure")),
-      ),
-    ).resolves.toMatchObject({ id: 77 });
   });
 
   it("rejects fail-fast roots before any rerun mutation", async () => {

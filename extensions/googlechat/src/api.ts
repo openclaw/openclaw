@@ -1,4 +1,3 @@
-// Googlechat API module exposes the plugin public contract.
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
@@ -49,15 +48,6 @@ function resolveGoogleChatMediaTimeoutMs(maxBytes?: number): number {
   return Math.min(GOOGLECHAT_MEDIA_TIMEOUT_GRACE_MS + transferMs, GOOGLECHAT_MEDIA_MAX_TIMEOUT_MS);
 }
 
-async function readGoogleChatJsonResponse<T>(response: Response, label: string): Promise<T> {
-  return readProviderJsonResponse<T>(response, label, {
-    maxBytes: GOOGLECHAT_JSON_RESPONSE_MAX_BYTES,
-    chunkTimeoutMs: GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS,
-    onIdleTimeout: ({ chunkTimeoutMs }) =>
-      new Error(`${label}: response body stalled after ${chunkTimeoutMs}ms`),
-  });
-}
-
 async function readGoogleChatErrorResponse(response: Response, label: string): Promise<string> {
   const text =
     (await readResponseTextSnippet(response, {
@@ -72,18 +62,11 @@ async function readGoogleChatErrorResponse(response: Response, label: string): P
   return redactToolPayloadText(text);
 }
 
-const headersToObject = (headers?: HeadersInit): Record<string, string> =>
-  headers instanceof Headers
-    ? Object.fromEntries(headers.entries())
-    : Array.isArray(headers)
-      ? Object.fromEntries(headers)
-      : headers || {};
-
 async function withGoogleChatResponse<T>(
   params: GoogleChatRequestHooks & {
     account: ResolvedGoogleChatAccount;
     url: string;
-    init?: RequestInit;
+    init?: Pick<RequestInit, "method" | "body"> & { headers?: Record<string, string> };
     auditContext: string;
     errorPrefix?: string;
     timeoutMs?: number;
@@ -113,7 +96,7 @@ async function withGoogleChatResponse<T>(
     init: {
       ...init,
       headers: {
-        ...headersToObject(init?.headers),
+        ...init?.headers,
         Authorization: `Bearer ${token}`,
       },
     },
@@ -144,7 +127,7 @@ async function withGoogleChatResponse<T>(
 async function fetchJson<T>(
   account: ResolvedGoogleChatAccount,
   url: string,
-  init: RequestInit,
+  init: Pick<RequestInit, "method" | "body">,
   hooks?: GoogleChatRequestHooks,
 ): Promise<T> {
   return await withGoogleChatResponse({
@@ -154,46 +137,38 @@ async function fetchJson<T>(
     init: {
       ...init,
       headers: {
-        ...headersToObject(init.headers),
         "Content-Type": "application/json",
       },
     },
     auditContext: "googlechat.api.json",
     handleResponse: async (response) =>
-      await readGoogleChatJsonResponse<T>(response, "Google Chat API request failed"),
+      await readProviderJsonResponse<T>(response, "Google Chat API request failed", {
+        maxBytes: GOOGLECHAT_JSON_RESPONSE_MAX_BYTES,
+        chunkTimeoutMs: GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS,
+        onIdleTimeout: ({ chunkTimeoutMs }) =>
+          new Error(
+            `Google Chat API request failed: response body stalled after ${chunkTimeoutMs}ms`,
+          ),
+      }),
   });
 }
 
-async function fetchOk(
-  account: ResolvedGoogleChatAccount,
-  url: string,
-  init: RequestInit,
-): Promise<void> {
-  await withGoogleChatResponse({
-    account,
-    url,
-    init,
-    auditContext: "googlechat.api.ok",
-    handleResponse: async () => undefined,
-  });
-}
-
-async function fetchBuffer(
-  account: ResolvedGoogleChatAccount,
-  url: string,
-  init?: RequestInit,
-  options?: { maxBytes?: number },
-): Promise<{ buffer: Buffer; contentType?: string }> {
+export async function downloadGoogleChatMedia(params: {
+  account: ResolvedGoogleChatAccount;
+  resourceName: string;
+  maxBytes?: number;
+}): Promise<{ buffer: Buffer; contentType?: string }> {
+  const { account, resourceName, maxBytes: requestedMaxBytes } = params;
+  const url = `${CHAT_API_BASE}/media/${resourceName}?alt=media`;
   return await withGoogleChatResponse({
     account,
     url,
-    init,
     auditContext: "googlechat.api.buffer",
     // Media gets transfer time proportional to its accepted size, while a silent
     // response body is still bounded independently below.
-    timeoutMs: resolveGoogleChatMediaTimeoutMs(options?.maxBytes),
+    timeoutMs: resolveGoogleChatMediaTimeoutMs(requestedMaxBytes),
     handleResponse: async (res) => {
-      const maxBytes = options?.maxBytes ?? GOOGLE_CHAT_MEDIA_RESPONSE_MAX_BYTES;
+      const maxBytes = requestedMaxBytes ?? GOOGLE_CHAT_MEDIA_RESPONSE_MAX_BYTES;
       const lengthHeader = res.headers.get("content-length");
       if (lengthHeader) {
         const length = parseMediaContentLength(lengthHeader);
@@ -308,17 +283,13 @@ export async function deleteGoogleChatMessage(params: {
 }): Promise<void> {
   const { account, messageName } = params;
   const url = `${CHAT_API_BASE}/${messageName}`;
-  await fetchOk(account, url, { method: "DELETE" });
-}
-
-export async function downloadGoogleChatMedia(params: {
-  account: ResolvedGoogleChatAccount;
-  resourceName: string;
-  maxBytes?: number;
-}): Promise<{ buffer: Buffer; contentType?: string }> {
-  const { account, resourceName, maxBytes } = params;
-  const url = `${CHAT_API_BASE}/media/${resourceName}?alt=media`;
-  return await fetchBuffer(account, url, undefined, { maxBytes });
+  await withGoogleChatResponse({
+    account,
+    url,
+    init: { method: "DELETE" },
+    auditContext: "googlechat.api.ok",
+    handleResponse: async () => undefined,
+  });
 }
 
 export async function findGoogleChatDirectMessage(params: {

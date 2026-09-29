@@ -1,11 +1,6 @@
 import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
-/**
- * Sends typed JSON-RPC requests to the Codex app-server with sandbox guard
- * checks, shared-client leasing, and isolated-client shutdown handling.
- */
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-profile.js";
 import type { CodexAppServerClient } from "./client.js";
-import type { CodexAppServerStartOptions } from "./config.js";
 import type {
   CodexAppServerRequestMethod,
   CodexAppServerRequestParams,
@@ -220,17 +215,18 @@ const CODEX_USAGE_DEADLINE_RESERVE_MS =
   CODEX_ACCOUNT_READ_DEADLINE_MARGIN_MS;
 
 /** Reads rate limits and best-effort account identity from one isolated app-server session. */
-export async function readCodexAppServerUsage(options: {
-  timeoutMs: number;
-  signal?: AbortSignal;
-  agentDir?: string;
-  authProfileId?: string;
-  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
-  startOptions?: CodexAppServerStartOptions;
-  preparedAuth?: CodexAppServerClientOptions["preparedAuth"];
-  authRequirement?: CodexAppServerClientOptions["authRequirement"];
-  assertCurrent?: () => void;
-}): Promise<{ rateLimits: JsonValue; accountEmail?: string }> {
+export async function readCodexAppServerUsage(
+  options: Pick<
+    CodexAppServerJsonClientOptions,
+    | "signal"
+    | "agentDir"
+    | "config"
+    | "startOptions"
+    | "preparedAuth"
+    | "authRequirement"
+    | "assertCurrent"
+  > & { timeoutMs: number; authProfileId?: string },
+): Promise<{ rateLimits: JsonValue; accountEmail?: string }> {
   const deadline = performance.now() + options.timeoutMs;
   return await withCodexAppServerJsonClient(
     {
@@ -386,11 +382,9 @@ export async function withCodexAppServerJsonClient<T>(
             activePhase = "prepare";
             observeControlPhase(params.controlObservation, activePhase);
             assertCurrent();
-            const scopedRequest: CodexAppServerScopedRequest = async <R>(request: {
-              method: string;
-              requestParams?: unknown;
-              assertCurrent?: () => void;
-            }) => {
+            const scopedRequest: CodexAppServerScopedRequest = async <R>(
+              request: Parameters<CodexAppServerScopedRequest>[0],
+            ) => {
               activePhase = "prepare";
               observeControlPhase(params.controlObservation, activePhase);
               const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({

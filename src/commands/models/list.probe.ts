@@ -1,4 +1,3 @@
-/** Auth probe planning and execution helpers for model diagnostics. */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -7,7 +6,6 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import pMap from "p-map";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import {
-  type AgentRunResultView,
   agentRunHasVisibleReply,
   extractAgentRunTerminalError,
 } from "../../agents/agent-run-result.js";
@@ -83,24 +81,10 @@ export function redactAuthProbeError(error: string): string {
   return redactStatusSecrets(error);
 }
 
-/** Widened runner call shape for isolated auth probe generations (see setup-inference-core). */
-type ProbeRunEmbeddedAgentParams = Parameters<
-  (typeof import("../../agents/embedded-agent.js"))["runEmbeddedAgent"]
->[0] & {
-  preparedModelRuntimeMode?: "isolated-read-only";
-};
+const embeddedRunnerModuleLoader = createLazyImportLoader(
+  () => import("../../agents/embedded-agent.js"),
+);
 
-type ProbeRunEmbeddedAgent = (
-  params: ProbeRunEmbeddedAgentParams,
-) => ReturnType<(typeof import("../../agents/embedded-agent.js"))["runEmbeddedAgent"]>;
-
-// The probe only calls runEmbeddedAgent; the widened loader type lets the call
-// request the isolated-read-only runtime generation without a call-site cast.
-const embeddedRunnerModuleLoader = createLazyImportLoader<{
-  runEmbeddedAgent: ProbeRunEmbeddedAgent;
-}>(() => import("../../agents/embedded-agent.js"));
-
-/** Normalized probe status bucket for auth/model diagnostics. */
 export type AuthProbeStatus =
   | "ok"
   | "auth"
@@ -121,7 +105,6 @@ export type AuthProbeReasonCode =
   | "ineligible_profile"
   | "no_model";
 
-/** Result for one profile/env/models.json auth probe target. */
 export type AuthProbeResult = {
   provider: string;
   model?: string;
@@ -169,7 +152,6 @@ function buildNoModelProbeResult(target: AuthProbeTarget): AuthProbeResult {
   });
 }
 
-/** Summary for a full auth probe run. */
 export type AuthProbeSummary = {
   startedAt: number;
   finishedAt: number;
@@ -185,7 +167,6 @@ export type AuthProbeSummary = {
   results: AuthProbeResult[];
 };
 
-/** Runtime options controlling provider/profile filtering and probe cost. */
 export type AuthProbeOptions = {
   provider?: string;
   profileIds?: string[];
@@ -214,7 +195,6 @@ const PROBE_STATUS_BY_FAILOVER_REASON = {
   unknown: "unknown",
 } satisfies Record<FailoverReason, AuthProbeStatus>;
 
-/** Maps runtime failover reasons into stable auth probe status buckets. */
 export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProbeStatus {
   return reason
     ? (PROBE_STATUS_BY_FAILOVER_REASON[reason as FailoverReason] ?? "unknown")
@@ -224,19 +204,15 @@ export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProb
 function mapEligibilityReasonToProbeReasonCode(
   reasonCode: AuthProfileEligibilityReasonCode,
 ): AuthProbeReasonCode {
-  if (reasonCode === "missing_credential") {
-    return "missing_credential";
+  switch (reasonCode) {
+    case "missing_credential":
+    case "expired":
+    case "invalid_expires":
+    case "unresolved_ref":
+      return reasonCode;
+    default:
+      return "ineligible_profile";
   }
-  if (reasonCode === "expired") {
-    return "expired";
-  }
-  if (reasonCode === "invalid_expires") {
-    return "invalid_expires";
-  }
-  if (reasonCode === "unresolved_ref") {
-    return "unresolved_ref";
-  }
-  return "ineligible_profile";
 }
 
 function formatMissingCredentialProbeError(reasonCode: AuthProbeReasonCode): string {
@@ -382,7 +358,6 @@ async function maybeResolveUnresolvedRefIssue(params: {
   }
 }
 
-/** Builds probe targets plus preflight failures for missing/invalid credentials. */
 export async function buildProbeTargets(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -719,14 +694,13 @@ export async function buildProbeTargets(params: {
       continue;
     }
 
-    const label = envKey ? "env" : "models.json";
     const source = envKey ? "env" : "models.json";
     const mode = envKey?.source.includes("OAUTH_TOKEN") ? "oauth" : "api_key";
 
     appendTarget({
       provider: providerKey,
       model,
-      label,
+      label: source,
       source,
       mode,
       ...(hasSyntheticLocalAuth && !envKey && !hasUsableModelsJsonKey
@@ -833,7 +807,7 @@ async function probeTarget(params: {
       agentId,
       "models.auth-probe",
     );
-    const runResult = (await work.run(() =>
+    const runResult = await work.run(() =>
       runEmbeddedAgent({
         preparedRunAdmission,
         sessionId: probeSessionTarget.sessionId,
@@ -867,7 +841,7 @@ async function probeTarget(params: {
         ...(isolatedAgentDir ? { preparedModelRuntimeMode: "isolated-read-only" as const } : {}),
         abortSignal: params.abortSignal,
       }),
-    )) as AgentRunResultView;
+    );
     const terminalError = extractAgentRunTerminalError(runResult);
     if (terminalError) {
       const described = describeFailoverError(new Error(terminalError));
@@ -1028,7 +1002,6 @@ export async function withAuthProbeStateOwnership<T>(
   }
 }
 
-/** Runs all auth probes with bounded concurrency and returns a summary. */
 export async function runAuthProbes(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -1083,7 +1056,6 @@ export async function runAuthProbes(params: {
   });
 }
 
-/** Formats probe latency for table output. */
 export function formatProbeLatency(latencyMs?: number | null) {
   if (!latencyMs && latencyMs !== 0) {
     return "-";
@@ -1091,7 +1063,6 @@ export function formatProbeLatency(latencyMs?: number | null) {
   return formatMs(latencyMs);
 }
 
-/** Sorts probe results by provider and display label. */
 export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] {
   return results.toSorted((a, b) => {
     const provider = a.provider.localeCompare(b.provider);
@@ -1104,7 +1075,6 @@ export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] 
   });
 }
 
-/** Produces the terse completion line for auth probe output. */
 export function describeProbeSummary(summary: AuthProbeSummary): string {
   if (summary.totalTargets === 0) {
     return "No probe targets.";

@@ -12,11 +12,13 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { readDeferredPluginMigrationsAsync } from "../../infra/deferred-plugin-migrations.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "../../infra/sqlite-readonly-worker.js";
 import { collectStateDatabasePaths } from "../../infra/update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "../../infra/update-candidate-state.sizes.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import { hasDeferredUpdateModelRetirement } from "../../infra/update-deferred-model-retirement.js";
 import {
   consumeUpdatePostInstallDoctorResult,
@@ -36,6 +38,7 @@ import {
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { buildUpdateDoctorEnv } from "../../infra/update-runner-doctor.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import {
   redactPublicSupportDiagnosticLine,
   redactSupportString,
@@ -52,6 +55,7 @@ import { truncateUtf8Prefix, truncateUtf8Suffix } from "../../utils/utf8-truncat
 import { parseUpdateTimeoutMs, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateCommandAuthority } from "./update-command-authority.js";
 import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import { recordUpdateDatabaseWrites } from "./update-command-database-receipts.js";
 import {
   assertUpdateDoctorChildSucceeded,
   inspectUpdateDoctorChildSupport,
@@ -116,6 +120,8 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   opts?: UpdateCommandOptions;
   /** Only local candidate code may supply its known native Doctor contract. */
   doctorConfigWrites?: true;
+  databaseBackup?: UpdateDatabaseBackup;
+  onDatabaseWriteStep?: (step: UpdateStepResult) => void;
   yes: boolean;
   json: boolean;
   workspaceSuggestions?: boolean;
@@ -217,7 +223,10 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
           },
           input: {
             configInputHash: snapshot.hash,
+            originalRecoveryCapture: run?.originalRecoveryCapture,
             repair: true,
+            databaseGenerations:
+              params.databaseBackup?.migration?.to ?? params.databaseBackup?.sourceGenerations,
             yes: params.yes,
             workspaceSuggestions: params.workspaceSuggestions === true,
             ...(params.phase === "post-plugin" && process.env[POST_CORE_UPDATE_ENV] === "1"
@@ -356,6 +365,17 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     if (doctorSettled) {
       doctorResult ??= await consumeUpdatePostInstallDoctorResult(doctorResultPath);
     }
+    if (params.databaseBackup) {
+      const step: UpdateStepResult = {
+        name: "database migration writes",
+        command: "record Doctor database write fingerprints",
+        cwd: params.root,
+        durationMs: 0,
+        exitCode: 0,
+      };
+      recordUpdateDatabaseWrites(params.databaseBackup, doctorResult?.databaseWrites, step);
+      params.onDatabaseWriteStep?.(step);
+    }
     if (doctorResult?.warnings?.length) {
       params.onWarnings?.(doctorResult.warnings);
     }
@@ -452,21 +472,16 @@ async function validatePostPluginConfigInFreshProcess(params: {
   }
 }
 
-export async function completePostCorePluginUpdate(params: {
-  root: string;
-  runId?: string;
-  opts?: UpdateCommandOptions;
-  doctorConfigWrites?: true;
-  pluginUpdate: PostCorePluginUpdateResult;
-  freshDoctorRequired: boolean;
-  yes: boolean;
-  json: boolean;
-  timeoutMs?: number;
-  nodeRunner?: string;
-  beforeDoctor?: () => Promise<void>;
-  onWarnings?: (warnings: string[]) => void;
-  assertCurrent?: () => void;
-}): Promise<{
+export async function completePostCorePluginUpdate(
+  params: Omit<
+    Parameters<typeof runUpdateFinalizationDoctorInFreshProcess>[0],
+    "phase" | "workspaceSuggestions" | "entryPath" | "onAuthorityRefused"
+  > & {
+    pluginUpdate: PostCorePluginUpdateResult;
+    freshDoctorRequired: boolean;
+    beforeDoctor?: () => Promise<void>;
+  },
+): Promise<{
   pluginUpdate: PostCorePluginUpdateResult;
   configSnapshot: ConfigFileSnapshot;
 }> {
@@ -491,7 +506,12 @@ export async function completePostCorePluginUpdate(params: {
       if (!entryPath) {
         throw new Error("Updated OpenClaw entrypoint not found for post-plugin doctor");
       }
-      if (params.freshDoctorRequired || hasDeferredUpdateModelRetirement()) {
+      const freshDoctorRequired =
+        params.freshDoctorRequired ||
+        hasDeferredUpdateModelRetirement() ||
+        (await readDeferredPluginMigrationsAsync()).length > 0;
+      assertCurrent();
+      if (freshDoctorRequired) {
         await params.beforeDoctor?.();
         const warning = await runUpdateFinalizationDoctorInFreshProcess({
           ...params,

@@ -7,5 +7,7 @@ export type { SessionTranscriptInstance } from "./session-accessor.sqlite-contra
 export { listSessionEntriesByStatus, listSessionTranscriptInstances };
 export {
   findSessionTranscriptArchiveEventReadOnly,
+  readSessionTaskArchivePageReadOnly,
+  verifySessionTranscriptArchivePageBindingReadOnly,
   listSessionTranscriptArchivesReadOnly,
 } from "./session-accessor.sqlite-history.js";

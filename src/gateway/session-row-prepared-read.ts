@@ -1,8 +1,10 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import type { CapturedSessionEntryReadSource } from "../config/sessions/session-accessor.types.js";
 import { withCanonicalSessionValidationDeferral } from "../config/sessions/session-canonical-validation-deferral.js";
+import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import type { PreparedRepositoryWorkspace } from "../state/session-repository-workspaces.js";
+import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import * as records from "./session-row-projection-record.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
@@ -10,8 +12,13 @@ import type { SessionListRowContext } from "./session-utils-contracts.js";
 export type SessionRowPreparationOptions = { includeAncestors?: boolean };
 
 export type SessionRowReadView = {
-  describe(query: records.Lookup, captured?: records.Row): records.MaterializedRow | undefined;
+  describe(
+    query: records.Lookup,
+    captured?: records.Row,
+    repositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null,
+  ): records.MaterializedRow | undefined;
   readSource(row: records.MaterializedRow): CapturedSessionEntryReadSource | undefined;
+  readMembership(query: records.Lookup): ReadonlySet<string> | undefined;
   present(
     record: records.MaterializedRow,
     options?: records.SnapshotOptions,
@@ -24,18 +31,44 @@ export type SessionRowReadView = {
   };
 };
 
+export type PreparedPrivateSessionRepository = {
+  row: records.Row;
+  workspaceId: string;
+  repository: PreparedRepositoryWorkspace;
+};
+
+export function privateSessionRowReadKey(cfg: OpenClawConfig, query: records.Lookup) {
+  const key = resolveStoredSessionKeyForAgentStore({
+    cfg,
+    agentId: query.agentId,
+    sessionKey: query.key,
+  });
+  return isIncognitoSessionKey(key) ? JSON.stringify([query.agentId, key]) : undefined;
+}
+
 export async function withPreparedSessionRows<T>(
-  owner: SessionRowReadView & { isCurrent(row: records.Row): boolean },
+  owner: SessionRowReadView & {
+    isCurrent(row: records.Row): boolean;
+    getPolicyConfig(): OpenClawConfig;
+  },
   isActive: () => boolean,
   queries: (config: OpenClawConfig) => readonly records.Lookup[],
   consume: (read: SessionRowReadView) => T,
+  privateRepositories?: ReadonlyMap<string, PreparedPrivateSessionRepository>,
 ) {
   if (!isActive()) {
     throw new Error("Session row read view is no longer active");
   }
   return withCanonicalSessionValidationDeferral(() => {
     const state = owner.state;
-    return consumePreparedSessionRows(owner, isActive, queries(state.cfg), consume, state);
+    return consumePreparedSessionRows(
+      owner,
+      isActive,
+      queries(state.cfg),
+      consume,
+      state,
+      privateRepositories,
+    );
   });
 }
 
@@ -65,27 +98,35 @@ export async function withReadySessionRows<T>(
 
 /** Private rows belong only to this synchronous consumer, never to the resident roster. */
 function consumePreparedSessionRows<T>(
-  owner: SessionRowReadView & { isCurrent(row: records.Row): boolean },
+  owner: SessionRowReadView & {
+    isCurrent(row: records.Row): boolean;
+    getPolicyConfig(): OpenClawConfig;
+  },
   isActive: () => boolean,
   queries: readonly records.Lookup[],
   consume: (read: SessionRowReadView) => T,
   initialState: SessionRowReadView["state"],
+  privateRepositories: ReadonlyMap<string, PreparedPrivateSessionRepository> | undefined,
 ): T {
   let state = initialState;
   const privateRows = new Map<string, records.MaterializedRow | undefined>();
   const childSelections = new Map<string, records.EntryRow[]>();
-  const privateKey = (query: records.Lookup) => {
-    const key = resolveStoredSessionKeyForAgentStore({
-      cfg: state.cfg,
-      agentId: query.agentId,
-      sessionKey: query.key,
-    });
-    return isIncognitoSessionKey(key) ? JSON.stringify([query.agentId, key]) : undefined;
-  };
+  const privateKey = (query: records.Lookup) => privateSessionRowReadKey(state.cfg, query);
   for (const query of queries) {
     const key = privateKey(query);
     if (key && !privateRows.has(key)) {
-      privateRows.set(key, owner.describe(query));
+      const prepared = privateRepositories?.get(key);
+      const row = prepared
+        ? owner.describe(query, prepared.row, prepared.repository.current() ?? null)
+        : owner.describe(query);
+      if (
+        prepared &&
+        (!records.isCurrentGeneration(prepared.row, row) ||
+          row?.entry?.repositoryWorkspaceId !== prepared.workspaceId)
+      ) {
+        throw new Error("Session repository binding changed while preparing its description");
+      }
+      privateRows.set(key, row);
     }
   }
   for (const row of privateRows.values()) {
@@ -131,6 +172,17 @@ function consumePreparedSessionRows<T>(
       const row = privateRows.get(key);
       return captured && !records.isCurrentGeneration(captured, row) ? undefined : row;
     },
+    readMembership(query) {
+      assertActive();
+      const key = privateKey(query);
+      if (key) {
+        if (!privateRows.has(key)) {
+          throw new Error("Incognito session description was not prepared");
+        }
+        return privateRows.get(key)?.membership;
+      }
+      return owner.readMembership(query);
+    },
     present(record, options) {
       assertActive();
       return owner.present(record, options);
@@ -148,7 +200,7 @@ function consumePreparedSessionRows<T>(
     },
     get state() {
       assertActive();
-      return state;
+      return { ...state, policyConfig: owner.getPolicyConfig() };
     },
   };
   try {

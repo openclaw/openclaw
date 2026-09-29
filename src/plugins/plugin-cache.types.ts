@@ -34,6 +34,7 @@ export interface PluginCache
   retireRegistryLoads?: () => Promise<PluginHostCleanupResult>;
   setupModules: Map<string, PluginModuleLoaderOwner>;
   instances: Set<PluginInstanceResource>;
+  sourceAdmissions?: { invalidate(): void; dispose(): Promise<void> };
   retirement?: Promise<PluginHostCleanupResult>;
   [Symbol.asyncDispose](): Promise<void>;
 }

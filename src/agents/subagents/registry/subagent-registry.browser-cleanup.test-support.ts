@@ -1,20 +1,65 @@
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import * as gatewayWorkAdmission from "../../../process/gateway-work-admission.js";
-import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
+import { observeAsyncWorkScopeRuns } from "../../../shared/async-work-scope.test-support.js";
 import type { SubagentRegistryHarness } from "../../subagent-test-fixtures.test-helpers.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+function createRootAdmissionObservation() {
+  const admitted = new WeakMap<Promise<unknown>, { entered: boolean }>();
+  const admissions = (
+    [
+      "runWithGatewayIndependentRootWorkAdmission",
+      "runWithGatewayIndependentRootWorkContinuation",
+    ] as const
+  ).map((name) => {
+    const original: typeof gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission =
+      gatewayWorkAdmission[name];
+    const observe: typeof original = (run, origin, signal) => {
+      const entry = { entered: false };
+      const result = original(
+        () => {
+          entry.entered = true;
+          return run();
+        },
+        origin,
+        signal,
+      );
+      admitted.set(result, entry);
+      return result;
+    };
+    return vi.spyOn(gatewayWorkAdmission, name).mockImplementation(observe);
+  });
+  return { admitted, admissions, subscribers: 0 };
+}
+
+let rootAdmissionObservation: ReturnType<typeof createRootAdmissionObservation> | undefined;
+
 export function observeRootWork(): (keepObserving?: boolean) => Promise<void> {
-  const observations = [
-    vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission"),
-    vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkContinuation"),
-    // Detached completion resolves its result before this scope drains and releases its root.
-    vi.spyOn(AsyncWorkScope.prototype, "run"),
-  ];
-  const positions = observations.map(() => 0);
+  const rootWork = (rootAdmissionObservation ??= createRootAdmissionObservation());
+  rootWork.subscribers += 1;
+  const { admissions } = rootWork;
+  // Detached completion resolves its result before this scope drains and releases its root.
+  const scopeRuns = observeAsyncWorkScopeRuns();
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    if (--rootWork.subscribers === 0) {
+      for (const admission of admissions) {
+        admission.mockRestore();
+      }
+      rootAdmissionObservation = undefined;
+    }
+    scopeRuns[Symbol.dispose]();
+  };
+  onTestFinished(dispose);
+  const observations = [...admissions, scopeRuns];
+  const positions = observations.map((observation) => observation.mock.results.length);
   return async (keepObserving = false) => {
     const failures: unknown[] = [];
     try {
@@ -34,16 +79,18 @@ export function observeRootWork(): (keepObserving?: boolean) => Promise<void> {
               }
               await result.value;
             } catch (error) {
-              failures.push(error);
+              // A refused admission never owned cleanup; its caller handles that rejection.
+              const admission = rootWork.admitted.get(result.value);
+              if (admission?.entered !== false) {
+                failures.push(error);
+              }
             }
           }
         }
       }
     } finally {
       if (!keepObserving) {
-        for (const observation of observations) {
-          observation.mockRestore();
-        }
+        dispose();
       }
     }
     if (failures.length > 0) {
@@ -83,7 +130,7 @@ export function registerBrowserCleanupBoundaryTests({
           typeof import("../../../plugin-sdk/browser-maintenance.js").closeTrackedBrowserTabsForSessions
         >()
         .mockResolvedValue(1);
-      const surface = { closeTrackedBrowserTabsForSessions };
+      const surface = { supportsSessionEntryCurrent: true, closeTrackedBrowserTabsForSessions };
       const activation = createDeferred<typeof surface>();
       const activationEntered = createDeferred();
       loadBrowserMaintenanceSurface.mockImplementationOnce(() => {
@@ -96,16 +143,16 @@ export function registerBrowserCleanupBoundaryTests({
       const successorRunId = owner === "replacement row" ? runId : "run-browser-activation-new";
 
       try {
-        mod.registerSubagentRun({ runId, childSessionKey, task: "finish browser work" });
+        await mod.registerSubagentRun({ runId, childSessionKey, task: "finish browser work" });
         await activationEntered.promise;
         expect(loadBrowserMaintenanceSurface).toHaveBeenCalledOnce();
         expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
 
         if (owner === "session reset") {
-          mod.prepareSubagentSessionCleanupRevocation(childSessionKey)();
+          (await mod.prepareSubagentSessionCleanupRevocation(childSessionKey))();
         } else if (owner !== "current owner") {
           mockPendingAgentWait();
-          mod.registerSubagentRun({
+          await mod.registerSubagentRun({
             runId: successorRunId,
             childSessionKey,
             task: "continue using the same browser session",
@@ -148,7 +195,7 @@ export function registerBrowserCleanupBoundaryTests({
     });
     const settleRootWork = observeRootWork();
     try {
-      getRegistry().registerSubagentRun({
+      await getRegistry().registerSubagentRun({
         runId: "run-cleanup-warning",
         task: "finish despite cleanup warning",
       });

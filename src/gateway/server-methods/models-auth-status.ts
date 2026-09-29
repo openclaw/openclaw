@@ -1,5 +1,3 @@
-// Model auth status methods report provider credential health, profile expiry,
-// usage windows, cleanup actions, and auth-state refreshes.
 import {
   findNormalizedProviderKey,
   normalizeProviderId,
@@ -83,12 +81,6 @@ function resolveAuthRefreshScope(cfg: OpenClawConfig): {
     providerIds,
     ...(profileIds.length > 0 ? { profileIds } : {}),
   };
-}
-
-async function refreshModelAuthStatusRuntimeState(): Promise<void> {
-  // Durable and CLI auth refresh into the transient prepared owner below. Do not clear the
-  // process-wide warmed auth state for a read; mutations still invalidate it explicitly.
-  await refreshActiveProviderAuthRuntimeSnapshot();
 }
 
 function readProviderParam(params: Record<string, unknown>): string | null {
@@ -486,7 +478,8 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         return;
       }
       if (refreshRequested) {
-        await refreshModelAuthStatusRuntimeState();
+        // Refresh into the transient prepared owner; mutations alone clear warmed auth state.
+        await refreshActiveProviderAuthRuntimeSnapshot();
         cfg = context.getRuntimeConfig();
         scope = resolveScope(cfg);
         if (!scope.ok) {

@@ -311,6 +311,50 @@ describe("Git checkout execution", () => {
     expect(await git(root, "branch", "--show-current")).toBe("feature");
   });
 
+  it.each(["checked-out", "rebase", "bisect"] as const)(
+    "refuses a dev branch reserved by another worktree before stopping the installed gateway: %s",
+    async (reservation) => {
+      await advanceRemote();
+      await git(root, "checkout", "--detach", beforeSha);
+      const mainHolder = path.join(directory, "main-holder");
+      await git(root, "worktree", "add", mainHolder, "main");
+      if (reservation === "rebase") {
+        await git(mainHolder, "commit", "--allow-empty", "-m", "holder commit");
+        const tree = await git(root, "rev-parse", `${beforeSha}^{tree}`);
+        const rebaseBase = await git(
+          root,
+          "commit-tree",
+          tree,
+          "-p",
+          beforeSha,
+          "-m",
+          "rebase base",
+        );
+        await git(root, "update-ref", "refs/heads/rebase-base", rebaseBase);
+        await expect(git(mainHolder, "rebase", "--exec", "false", "rebase-base")).rejects.toThrow();
+      } else if (reservation === "bisect") {
+        for (const subject of ["holder one", "holder two", "holder three"]) {
+          await git(mainHolder, "commit", "--allow-empty", "-m", subject);
+        }
+        await git(mainHolder, "bisect", "start", "HEAD", beforeSha);
+      }
+
+      const result = await update();
+
+      expect(result).toMatchObject({ status: "error", reason: "checkout-failed" });
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({
+          name: "git-activation-branch-check",
+          stdoutTail: null,
+          stderrTail: expect.stringContaining("a Git worktree uses or reserves branch main"),
+        }),
+      );
+      expect(stopped).toBe(false);
+      expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+      await expectRuntime(root, beforeSha);
+    },
+  );
+
   it.each(["missing", "signal", "output-limit-zero", "output-limit-nonzero"] as const)(
     "classifies upstream setup failure without losing recovery: %s",
     async (failure) => {

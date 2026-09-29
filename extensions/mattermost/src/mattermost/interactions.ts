@@ -1,4 +1,3 @@
-// Mattermost plugin module implements interactions behavior.
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
@@ -62,8 +61,6 @@ export type MattermostInteractiveButtonInput = {
   context?: Record<string, unknown>;
 };
 
-// ── Callback URL registry ──────────────────────────────────────────────
-
 const callbackUrls = new Map<string, string>();
 
 export function setInteractionCallbackUrl(accountId: string, url: string): void {
@@ -78,10 +75,6 @@ type InteractionCallbackConfig = Pick<OpenClawConfig, "gateway" | "channels"> & 
 
 export function resolveInteractionCallbackPath(accountId: string): string {
   return `/mattermost/interactions/${accountId}`;
-}
-
-function normalizeCallbackBaseUrl(baseUrl: string): string {
-  return baseUrl.trim().replace(/\/+$/, "");
 }
 
 function headerValue(value: string | string[] | undefined): string | undefined {
@@ -127,7 +120,7 @@ export function computeInteractionCallbackUrl(
     normalizeOptionalString(cfg?.interactions?.callbackBaseUrl) ??
     normalizeOptionalString(cfg?.channels?.mattermost?.interactions?.callbackBaseUrl);
   if (callbackBaseUrl) {
-    return `${normalizeCallbackBaseUrl(callbackBaseUrl)}${path}`;
+    return `${callbackBaseUrl.replace(/\/+$/, "")}${path}`;
   }
   const port = resolveGatewayPort(cfg);
   let host =
@@ -159,7 +152,6 @@ export function resolveInteractionCallbackUrl(
   return computeInteractionCallbackUrl(accountId, cfg);
 }
 
-// ── HMAC token management ──────────────────────────────────────────────
 // Secret is derived from the bot token so it's stable across CLI and gateway processes.
 
 const interactionSecrets = new Map<string, string>();
@@ -218,17 +210,6 @@ function generateInteractionToken(context: Record<string, unknown>, accountId?: 
   return createHmac("sha256", secret).update(payload).digest("hex");
 }
 
-function verifyInteractionToken(
-  context: Record<string, unknown>,
-  token: string,
-  accountId?: string,
-): boolean {
-  const expected = generateInteractionToken(context, accountId);
-  return safeEqualSecret(expected, token);
-}
-
-// ── Button builder helpers ─────────────────────────────────────────────
-
 type MattermostButton = {
   id: string;
   type: "button" | "select";
@@ -246,13 +227,6 @@ type MattermostAttachment = {
   [key: string]: unknown;
 };
 
-/**
- * Build Mattermost `props.attachments` with interactive buttons.
- *
- * Each button includes an HMAC token in its integration context so the
- * callback handler can verify the request originated from a legitimate
- * button click (Mattermost's recommended security pattern).
- */
 /**
  * Sanitize a button ID so Mattermost's action router can match it.
  * Mattermost uses the action ID in the URL path `/api/v4/posts/{id}/actions/{actionId}`
@@ -354,11 +328,8 @@ function sendInteractionResponse(
   res.end(JSON.stringify(body));
 }
 
-// ── HTTP handler ───────────────────────────────────────────────────────
-
 export function createMattermostInteractionHandler(params: {
   client: MattermostClient;
-  botUserId: string;
   accountId: string;
   allowedSourceIps?: string[];
   trustedProxies?: string[];
@@ -404,7 +375,6 @@ export function createMattermostInteractionHandler(params: {
   }
 
   return async (req: IncomingMessage, res: ServerResponse) => {
-    // Only accept POST
     if (req.method !== "POST") {
       res.statusCode = 405;
       res.setHeader("Allow", "POST");
@@ -469,7 +439,6 @@ export function createMattermostInteractionHandler(params: {
       return;
     }
 
-    // Verify HMAC token
     const token = context["_token"];
     if (typeof token !== "string") {
       log?.("mattermost interaction: missing _token in context");
@@ -479,7 +448,7 @@ export function createMattermostInteractionHandler(params: {
 
     // Strip _token before verification (it wasn't in the original context)
     const { _token, ...contextWithoutToken } = context;
-    if (!verifyInteractionToken(contextWithoutToken, token, accountId)) {
+    if (!safeEqualSecret(generateInteractionToken(contextWithoutToken, accountId), token)) {
       log?.("mattermost interaction: invalid _token");
       sendInteractionResponse(res, 403, { error: "Invalid token" });
       return;
@@ -618,7 +587,6 @@ export function createMattermostInteractionHandler(params: {
       log?.(`mattermost interaction: system event dispatch failed: ${String(err)}`);
     }
 
-    // Update the post via API to replace buttons with a completion indicator.
     try {
       await updateMattermostPost(client, payload.post_id, {
         message: originalMessage,
@@ -634,7 +602,6 @@ export function createMattermostInteractionHandler(params: {
       log?.(`mattermost interaction: failed to update post ${payload.post_id}: ${String(err)}`);
     }
 
-    // Respond with empty JSON — the post update is handled above
     sendInteractionResponse(res, 200, {});
 
     // Dispatch a synthetic inbound message so the agent responds to the button click.

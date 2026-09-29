@@ -109,11 +109,11 @@ its proxy, not the development server: stop the server with `process kill`.
 
 ## Child process bridging
 
-After a host exec command finishes, OpenClaw releases its retained service-child
-group before reporting completion. Children left behind by shell backgrounding
-(`&`) are stopped with that group. To continue work across turns, start the
+After a host exec command finishes, OpenClaw releases its retained process
+scope before reporting completion. Children left behind by shell backgrounding
+(`&`) are stopped with that scope. To continue work across turns, start the
 long-running command with `background: true` and use `process` to collect its
-result. Its group stays owned until the command finishes; sandbox runtime
+result. Its scope stays owned until the command finishes; sandbox runtime
 lifetimes remain with the sandbox backend.
 
 When spawning long-running child processes outside the exec/process tools (CLI respawns, gateway helpers), attach the child-process bridge helper so termination signals forward and listeners detach on exit/close. This avoids orphaned processes on systemd and keeps shutdown consistent across platforms.
@@ -147,13 +147,30 @@ and Gateway shutdown wait for the cleanup owner separately; when that owner repo
 uncertainty, they report failure instead of treating the timeout as proof that the
 command has stopped.
 
-For owned POSIX process groups, cleanup also waits for the operating system to
-confirm that the group has disappeared after graceful shutdown. A completed
-command or closed output pipe alone does not establish that its descendants have
-stopped. Forced termination without confirmed cleanup remains uncertain. Local
-TUI shell shutdown uses the same cleanup owner for its own commands.
-Permission-denied group probes still count as present; cleanup continues waiting
-within its original deadline for confirmed disappearance.
+Managed exec and negotiated worker workspace commands on Linux with Node use a dedicated
+child subreaper. It acquires kernel child ownership before launch, adopts orphaned
+descendants, and stops and reaps them even if they create another process group
+or session. Completion requires the kernel to report no remaining children, the
+matching owner receipt, and output drain. It does not depend on group-directed
+signals, a process-table census, or inherited-pipe closure alone.
+
+Portable workers use the native helper supplied by their admitted Node host; the
+portable archive does not acquire native dependencies. Use matching current host
+and worker builds in environments that prohibit process-group signaling. An
+unsupported ownership contract fails before launch instead of downgrading to
+transport-only cleanup. Source installations must build their process helpers; a
+source loader with an independent child reaper cannot share this ownership.
+
+The node journal records Linux descendant extinction separately from older
+lineage receipts. A surviving owner can publish that fact after its host stops.
+After restart, a missing certificate or uncertain owner identity retains the
+physical reservation; restarting is not proof that old descendants stopped.
+Older builds do not reinterpret the new certificate as lineage completion.
+
+macOS and retained Bun process-group owners still require kernel group
+disappearance. Permission-denied probes never prove absence. A completed command
+or closed output pipe alone does not establish that its descendants stopped.
+Local TUI shell shutdown uses the same cleanup owner for its own commands.
 If the host was busy, cleanup processes queued native completion events before
 reporting a timeout.
 
@@ -211,10 +228,10 @@ message alongside `status: "failed"`, so the agent can choose the next action.
 
 ## Examples
 
-Run a long task and poll later:
+Run a task longer than the default 10000 ms yield window and poll later:
 
 ```json
-{ "tool": "exec", "command": "sleep 5 && echo done", "yieldMs": 1000 }
+{ "tool": "exec", "command": "sleep 30 && echo done" }
 ```
 
 ```json

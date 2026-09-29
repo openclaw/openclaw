@@ -85,6 +85,11 @@ function readFiniteNumber(value: unknown): number | undefined {
   return Number.isFinite(number) ? number : undefined;
 }
 
+function readInteger(value: unknown): number | undefined {
+  const number = readFiniteNumber(value);
+  return Number.isInteger(number) ? number : undefined;
+}
+
 function normalizeCallTransport(value: unknown): FaceTimeCallTransport {
   const transport = asRecord(value);
   const base = {
@@ -182,9 +187,7 @@ function collectHandleCandidates(
   seen.add(value);
   const record = asRecord(value);
   for (const [key, nested] of Object.entries(record)) {
-    if (handleValueKeys.has(key)) {
-      collectHandleCandidates(nested, candidates, seen);
-    } else if (nested && typeof nested === "object") {
+    if (handleValueKeys.has(key) || (nested && typeof nested === "object")) {
       collectHandleCandidates(nested, candidates, seen);
     }
   }
@@ -220,25 +223,8 @@ export function normalizeFaceTimeCallEvent(value: unknown): FaceTimeCallStatusEv
   const proxyIdentifier = normalizeOptionalString(data.proxy_identifier);
   const conversationUUID = normalizeOptionalString(data.conversation_uuid);
   const conversationGroupUUID = normalizeOptionalString(data.conversation_group_uuid);
-  const conversationAVMode =
-    typeof data.conversation_av_mode === "number"
-      ? data.conversation_av_mode
-      : typeof data.conversation_av_mode === "string"
-        ? Number(data.conversation_av_mode)
-        : undefined;
-  const conversationResolvedAVMode =
-    typeof data.conversation_resolved_audio_video_mode === "number"
-      ? data.conversation_resolved_audio_video_mode
-      : typeof data.conversation_resolved_audio_video_mode === "string"
-        ? Number(data.conversation_resolved_audio_video_mode)
-        : undefined;
-  const status =
-    typeof data.call_status === "number"
-      ? data.call_status
-      : typeof data.call_status === "string"
-        ? Number(data.call_status)
-        : undefined;
-  if (!callUUID || !Number.isInteger(status)) {
+  const status = readInteger(data.call_status);
+  if (!callUUID || status === undefined) {
     return undefined;
   }
   return {
@@ -252,10 +238,10 @@ export function normalizeFaceTimeCallEvent(value: unknown): FaceTimeCallStatusEv
       conversation_group_uuid: conversationGroupUUID,
       conversation_audio_enabled: data.conversation_audio_enabled === true,
       conversation_video_enabled: data.conversation_video_enabled === true,
-      conversation_av_mode: Number.isInteger(conversationAVMode) ? conversationAVMode : undefined,
-      conversation_resolved_audio_video_mode: Number.isInteger(conversationResolvedAVMode)
-        ? conversationResolvedAVMode
-        : undefined,
+      conversation_av_mode: readInteger(data.conversation_av_mode),
+      conversation_resolved_audio_video_mode: readInteger(
+        data.conversation_resolved_audio_video_mode,
+      ),
       is_outgoing: data.is_outgoing === true,
       has_ended: data.has_ended === true,
       is_sending_audio: data.is_sending_audio === true,

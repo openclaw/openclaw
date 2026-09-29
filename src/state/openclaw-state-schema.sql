@@ -988,6 +988,14 @@ CREATE TABLE IF NOT EXISTS node_worker_launch_cleanup (
   lineage_settled INTEGER CHECK (lineage_settled IS NULL OR lineage_settled = 1)
 ) STRICT;
 
+-- Older readers retain owned-anchor custody: lineage EOF is not this certificate.
+CREATE TABLE IF NOT EXISTS node_worker_launch_process_scopes (
+  launch_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES node_worker_launches(launch_id) ON DELETE CASCADE,
+  scope_kind TEXT NOT NULL CHECK (scope_kind = 'linux-subreaper'),
+  descendants_reaped INTEGER CHECK (descendants_reaped IS NULL OR descendants_reaped = 1)
+) STRICT;
+
 -- Turn receipts have a shorter lifetime than their physical worker owner.
 -- Keeping the launch running preserves capacity and predecessor cleanup semantics.
 CREATE TABLE IF NOT EXISTS node_worker_turns (
@@ -1852,7 +1860,8 @@ CREATE TABLE IF NOT EXISTS worktrees (
   created_at INTEGER NOT NULL,
   last_active_at INTEGER NOT NULL,
   removed_at INTEGER,
-  run_end_cleanup_json TEXT
+  run_end_cleanup_json TEXT,
+  gc_protection_json TEXT
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
@@ -2689,6 +2698,21 @@ CREATE TABLE IF NOT EXISTS claw_mcp_server_refs (
   updated_at_ms INTEGER NOT NULL,
   PRIMARY KEY (agent_id, name)
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS user_profile_identities (
+  provider TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  canonical_login TEXT,
+  created_at INTEGER NOT NULL,
+  authorization_id TEXT,
+  authorization_basis_json TEXT,
+  PRIMARY KEY (provider, subject)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_user_profile_identities_profile_id
+  ON user_profile_identities(profile_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_profile_identities_authorization
+  ON user_profile_identities(authorization_id);
 
 CREATE TABLE IF NOT EXISTS outbound_media_provenance (
   realpath TEXT NOT NULL PRIMARY KEY,

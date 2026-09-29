@@ -8,6 +8,7 @@ import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { subscribeStoredChatOutboxChanges } from "../lib/chat/outbox-store.ts";
 import { createInitialCronState, loadCronStatus } from "../lib/cron/index.ts";
 import { loadCompactCronJobsPage } from "../lib/cron/jobs.ts";
+import { modelAuthEventInvalidates } from "../lib/model-auth-request-state.ts";
 import { loadModelAuthStatus, nextModelAuthStatusRefreshAt } from "../lib/model-auth.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
@@ -51,6 +52,7 @@ export class SidebarAttentionStoreController implements StoreController {
   private loadedAgentScope = { ...this.sources.agentSelection.state };
   private dismissalKey: string | null = null;
   private dismissed: SidebarAttentionDismissals = {};
+  private readonly reviewedOutbox = new Set<string>();
   private loadGeneration = 0;
   private cronRefresh: { generation: number; requested: boolean } | null = null;
   private cronRefreshNeeded = false;
@@ -76,7 +78,7 @@ export class SidebarAttentionStoreController implements StoreController {
           this.load(false);
         } else if (event.event === "config.changed") {
           this.load();
-        } else if (event.event === "chat.metadata.changed") {
+        } else if (modelAuthEventInvalidates(event)) {
           this.load(true, false);
         }
       }),
@@ -106,7 +108,12 @@ export class SidebarAttentionStoreController implements StoreController {
 
   get entries(): readonly SidebarInboxEntry[] {
     return this.buildEntries().filter(
-      (entry) => !entry.dismissal || !isSidebarAttentionDismissed(this.dismissed, entry.dismissal),
+      (entry) =>
+        !entry.dismissal ||
+        (!isSidebarAttentionDismissed(this.dismissed, entry.dismissal) &&
+          !(
+            entry.dismissal.kind === "outbox" && this.reviewedOutbox.has(entry.dismissal.signature)
+          )),
     );
   }
 
@@ -205,7 +212,17 @@ export class SidebarAttentionStoreController implements StoreController {
           Object.assign(item, {
             type: "outbox" as const,
             category: "system" as const,
-            dismissal: null,
+            dismissal: {
+              kind: "outbox" as const,
+              signature: JSON.stringify([
+                gateway.client?.recoveryScope,
+                item.agentId,
+                item.sessionKey,
+                item.id,
+                item.unconfirmed,
+                item.command,
+              ]),
+            },
             requiresAction: true,
             severity: item.unconfirmed ? ("warning" as const) : ("error" as const),
           }),
@@ -487,6 +504,11 @@ export class SidebarAttentionStoreController implements StoreController {
 
   dismiss(dismissal: SidebarAttentionDismissal): void {
     const run = this.sources.overlays.snapshot.updateRun;
+    if (dismissal.kind === "outbox") {
+      // Offline review has no authenticated storage key; retain it through reconnect.
+      this.reviewedOutbox.add(dismissal.signature);
+      this.onChange();
+    }
     if (
       dismissal.kind === "updateAvailable" &&
       run &&

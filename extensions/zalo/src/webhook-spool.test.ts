@@ -1,6 +1,9 @@
 import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 // Zalo tests cover durable webhook admission, replay, recovery, and failure taxonomy.
-import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createChannelIngressMonitor,
+  type ChannelIngressQueue,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { zaloWebhookIngressRuntime } from "./webhook-spool.js";
 import {
@@ -11,6 +14,19 @@ import {
 } from "./webhook-spool.test-support.js";
 
 const { createZaloWebhookIngress } = zaloWebhookIngressRuntime;
+
+vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-outbound")>();
+  return { ...actual, createChannelIngressMonitor: vi.fn(actual.createChannelIngressMonitor) };
+});
+
+function latestMonitor() {
+  const result = vi.mocked(createChannelIngressMonitor).mock.results.at(-1);
+  if (result?.type !== "return") {
+    throw new Error("Expected the Zalo ingress monitor");
+  }
+  return result.value;
+}
 
 function runtime() {
   return { error: vi.fn(), log: vi.fn() };
@@ -298,13 +314,13 @@ describe("Zalo durable webhook ingress", () => {
 
   it("waits for an active delivery before shutdown returns", async () => {
     await withZaloWebhookTestQueue(async (queue) => {
-      let releaseDelivery = () => {};
-      const deliveryGate = new Promise<void>((resolve) => {
-        releaseDelivery = resolve;
-      });
+      vi.useFakeTimers();
+      const adopted = Promise.withResolvers<void>();
+      const deliveryGate = Promise.withResolvers<void>();
       const deliver = vi.fn(async (_update, lifecycle) => {
         await lifecycle.onAdopted();
-        await deliveryGate;
+        adopted.resolve();
+        await deliveryGate.promise;
       });
       const ingress = createZaloWebhookIngress({
         accountId: "default",
@@ -312,32 +328,44 @@ describe("Zalo durable webhook ingress", () => {
         queue,
         deliver,
       });
-      ingress.start();
-      await ingress.accept(rawEvent({ messageId: "active-stop" }));
-      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+      try {
+        ingress.start();
+        await ingress.accept(rawEvent({ messageId: "active-stop" }));
+        await adopted.promise;
+        expect(deliver).toHaveBeenCalledTimes(1);
 
-      let stopped = false;
-      const stopping = ingress.stop().then(() => {
-        stopped = true;
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 50);
-      });
-      expect(stopped).toBe(false);
-      releaseDelivery();
-      await stopping;
-      expect(stopped).toBe(true);
+        let stopped = false;
+        const stopping = ingress.stop().then(() => {
+          stopped = true;
+        });
+        await latestMonitor().waitForPumpIdle();
+        await vi.advanceTimersByTimeAsync(50);
+        expect(stopped).toBe(false);
+        deliveryGate.resolve();
+        await stopping;
+        expect(stopped).toBe(true);
+      } finally {
+        deliveryGate.resolve();
+        try {
+          await ingress.stop();
+        } finally {
+          vi.useRealTimers();
+        }
+      }
     });
   });
 
   it("holds a deferred claim through shutdown until adoption settles", async () => {
     await withZaloWebhookTestQueue(async (queue) => {
+      vi.useFakeTimers();
+      const deferred = Promise.withResolvers<void>();
       let deferredLifecycle:
         | Parameters<Parameters<typeof createZaloWebhookIngress>[0]["deliver"]>[1]
         | undefined;
       const deliver = vi.fn(async (_update, lifecycle) => {
         deferredLifecycle = lifecycle;
         lifecycle.onDeferred();
+        deferred.resolve();
       });
       const ingress = createZaloWebhookIngress({
         accountId: "default",
@@ -345,27 +373,40 @@ describe("Zalo durable webhook ingress", () => {
         queue,
         deliver,
       });
-      ingress.start();
-      await ingress.accept(rawEvent({ messageId: "deferred-stop" }));
-      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
-      expect(await queue.listClaims()).toHaveLength(1);
+      try {
+        ingress.start();
+        await ingress.accept(rawEvent({ messageId: "deferred-stop" }));
+        await deferred.promise;
+        expect(deliver).toHaveBeenCalledTimes(1);
+        expect(await queue.listClaims()).toHaveLength(1);
 
-      let stopped = false;
-      const stopping = ingress.stop().then(() => {
-        stopped = true;
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 50);
-      });
-      expect(stopped).toBe(false);
-      if (!deferredLifecycle) {
-        throw new Error("Zalo delivery did not expose its deferred lifecycle");
+        let stopped = false;
+        const stopping = ingress.stop().then(() => {
+          stopped = true;
+        });
+        await latestMonitor().waitForPumpIdle();
+        await vi.advanceTimersByTimeAsync(50);
+        expect(stopped).toBe(false);
+        if (!deferredLifecycle) {
+          throw new Error("Zalo delivery did not expose its deferred lifecycle");
+        }
+        await deferredLifecycle.onAdopted();
+        deferredLifecycle = undefined;
+        await stopping;
+        expect(stopped).toBe(true);
+        const verdict = await queue.enqueue("deferred-stop", { version: 1, rawEvent: "{}" });
+        expect(verdict.kind).toBe("completed");
+      } finally {
+        try {
+          try {
+            await deferredLifecycle?.onAdopted();
+          } finally {
+            await ingress.stop();
+          }
+        } finally {
+          vi.useRealTimers();
+        }
       }
-      await deferredLifecycle.onAdopted();
-      await stopping;
-      expect(stopped).toBe(true);
-      const verdict = await queue.enqueue("deferred-stop", { version: 1, rawEvent: "{}" });
-      expect(verdict.kind).toBe("completed");
     });
   });
 });

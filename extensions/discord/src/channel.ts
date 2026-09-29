@@ -1,11 +1,19 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   buildLegacyDmAccountAllowlistAdapter,
   createAccountScopedAllowlistNameResolver,
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
+import {
+  buildTokenChannelStatusSummary,
+  PAIRING_APPROVED_MESSAGE,
+  projectCredentialSnapshotFields,
+  resolveConfiguredFromCredentialStatuses,
+} from "openclaw/plugin-sdk/channel-status";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
@@ -33,15 +41,6 @@ import { getDiscordApprovalCapability } from "./approval-native.js";
 import { resolveRequiredDiscordChannelPermissions } from "./audit-core.js";
 import { discordMessageActions } from "./channel-actions.js";
 import {
-  buildTokenChannelStatusSummary,
-  DEFAULT_ACCOUNT_ID,
-  PAIRING_APPROVED_MESSAGE,
-  projectCredentialSnapshotFields,
-  resolveConfiguredFromCredentialStatuses,
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "./channel-api.js";
-import {
   buildDiscordCrossContextPresentation,
   matchDiscordAcpConversation,
   normalizeDiscordAcpConversationId,
@@ -68,6 +67,7 @@ import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
 } from "./group-policy.js";
+import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { withAbortTimeout } from "./monitor/timeouts.js";
 import {
   looksLikeDiscordTargetId,
@@ -105,6 +105,34 @@ const discordMessageAdapter = createChannelMessageAdapterFromOutbound({
     },
   },
 });
+
+async function sendDiscordHeartbeatTyping(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  accountId?: string | null;
+  threadId?: string | number | null;
+  signal?: AbortSignal;
+  assertPlatformSendAuthorized?: () => void;
+}) {
+  const resolvedTo = resolveDiscordAttachedOutboundTarget(params);
+  const target = parseDiscordTarget(resolvedTo, { defaultKind: "channel" });
+  if (!target || target.kind !== "channel") {
+    return;
+  }
+  const { sendTypingDiscord } = await loadDiscordSendModule();
+  const assertCurrent = () => {
+    params.signal?.throwIfAborted();
+    params.assertPlatformSendAuthorized?.();
+  };
+  assertCurrent();
+  await withDiscordRequestAuthority(assertCurrent, () =>
+    sendTypingDiscord(target.id, {
+      cfg: params.cfg,
+      accountId: params.accountId ?? undefined,
+      signal: params.signal,
+    }),
+  );
+}
 
 function startDiscordStartupProbe(params: {
   accountId: string;
@@ -380,19 +408,8 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       },
       conversationBindings: discordConversationBindings,
       heartbeat: {
-        sendTyping: async ({ cfg, to, accountId, threadId }) => {
-          const resolvedTo = resolveDiscordAttachedOutboundTarget({ to, threadId });
-          const target = parseDiscordTarget(resolvedTo, { defaultKind: "channel" });
-          if (!target || target.kind !== "channel") {
-            return;
-          }
-          await (
-            await loadDiscordSendModule()
-          ).sendTypingDiscord(target.id, {
-            cfg,
-            accountId: accountId ?? undefined,
-          });
-        },
+        sendTyping: sendDiscordHeartbeatTyping,
+        sendTypingGuarded: sendDiscordHeartbeatTyping,
       },
       status: createComputedAccountStatusAdapter<ResolvedDiscordAccount, DiscordProbe>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {

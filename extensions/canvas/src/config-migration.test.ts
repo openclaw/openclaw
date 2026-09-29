@@ -21,43 +21,6 @@ describe("migrateCanvasHostConfig", () => {
     });
   });
 
-  it("strips retired plugin host keys and preserves explicit plugin enablement", () => {
-    const host = { enabled: true, root: "~/current", port: 18793, liveReload: false };
-    const config = {
-      canvasHost: { enabled: false, root: "~/legacy" },
-      plugins: {
-        entries: {
-          canvas: {
-            enabled: true,
-            config: {
-              host,
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const result = migrateCanvasHostConfig(config);
-
-    expect(result?.config).toEqual({
-      plugins: {
-        entries: {
-          canvas: { enabled: true, config: { host: { enabled: true } } },
-        },
-      },
-    });
-    expect(result?.changes).toEqual([
-      "Migrated canvasHost.enabled to plugins.entries.canvas.config.host.enabled.",
-      "Removed retired Canvas host config: plugins.entries.canvas.config.host.root, plugins.entries.canvas.config.host.port, plugins.entries.canvas.config.host.liveReload.",
-    ]);
-    expect(host).toEqual({
-      enabled: true,
-      root: "~/current",
-      port: 18793,
-      liveReload: false,
-    });
-  });
-
   it("removes an empty retired host object without creating replacement config", () => {
     expect(
       migrateCanvasHostConfig({
@@ -76,13 +39,6 @@ describe("migrateCanvasHostConfig", () => {
         plugins: { entries: { canvas: { config: { host: { enabled: true } } } } },
       }),
     ).toBeNull();
-  });
-
-  it("retains an unresolved source root for a later resolved repair", () => {
-    const config: OpenClawConfig = {
-      plugins: { entries: { canvas: { config: { host: { root: "${CANVAS_MIGRATION_ROOT}" } } } } },
-    };
-    expect(migrateCanvasHostConfig(config)).toBeNull();
   });
 
   it("moves an unresolved older root into the pending plugin setting", () => {

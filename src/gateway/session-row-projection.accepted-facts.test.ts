@@ -148,7 +148,11 @@ async function withAcceptedSuffix(
     try {
       await projection.ensureMaterialized();
       const query = { agentId: "main", key: keys[1]! };
-      const previous = projection.describe(query)!;
+      const previous = await withReadySessionRows(
+        projection,
+        () => [query],
+        (read) => read.describe(query)!,
+      );
       const count = projection.materializedCount;
       const releases: string[] = [];
       const continuations: SharedArrayBuffer[] = [];
@@ -945,7 +949,13 @@ it("demotes an accepted suffix without rendering it during the bulk drain", asyn
     expect(isColdArchivedSessionRow(cold)).toBe(true);
     expect(cold.pendingDatabaseFacts).toBeUndefined();
     expect(projection.dirtyRowCount).toBe(0);
-    expect(projection.snapshot(query).row?.label).toBe("archived suffix");
+    await withReadySessionRows(
+      projection,
+      () => [query],
+      () => {
+        expect(projection.snapshot(query).row?.label).toBe("archived suffix");
+      },
+    );
   });
 });
 

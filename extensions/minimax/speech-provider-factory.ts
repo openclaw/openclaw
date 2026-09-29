@@ -1,9 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
-// Minimax provider module implements model/runtime integration.
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
+  SpeechDirectiveTokenParseResult,
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
@@ -42,13 +42,9 @@ type MinimaxTtsProviderConfig = {
   pitch?: number;
 };
 
-type MinimaxTtsProviderOverrides = {
-  model?: string;
-  voiceId?: string;
-  speed?: number;
-  vol?: number;
-  pitch?: number;
-};
+type MinimaxTtsProviderOverrides = Partial<
+  Pick<MinimaxTtsProviderConfig, "model" | "voiceId" | "speed" | "vol" | "pitch">
+>;
 
 function resolveConfiguredPortalTtsBaseUrl(cfg: OpenClawConfig | undefined): string | undefined {
   const providers = asOptionalRecord(asOptionalRecord(cfg?.models)?.providers);
@@ -152,20 +148,24 @@ function readMinimaxOverrides(
   if (!overrides) {
     return {};
   }
-  return {
+  const normalized: MinimaxTtsProviderOverrides = {
     model: trimToUndefined(overrides.model),
     voiceId: trimToUndefined(overrides.voiceId),
     speed: normalizeMinimaxSpeed(overrides.speed),
     vol: normalizeMinimaxVolume(overrides.vol),
     pitch: normalizeMinimaxPitch(overrides.pitch),
   };
+  for (const key of ["model", "voiceId", "speed", "vol", "pitch"] as const) {
+    if (normalized[key] === undefined) {
+      delete normalized[key];
+    }
+  }
+  return normalized;
 }
 
-function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
-  handled: boolean;
-  overrides?: SpeechProviderOverrides;
-  warnings?: string[];
-} {
+function parseDirectiveToken(
+  ctx: SpeechDirectiveTokenParseContext,
+): SpeechDirectiveTokenParseResult {
   switch (ctx.key) {
     case "voice":
     case "voiceid":
@@ -241,40 +241,11 @@ export function buildMinimaxSpeechProvider({
         ...(trimToUndefined(talkProviderConfig.baseUrl) == null
           ? {}
           : { baseUrl: normalizeMinimaxTtsBaseUrl(trimToUndefined(talkProviderConfig.baseUrl)) }),
-        ...(trimToUndefined(talkProviderConfig.modelId) == null
-          ? {}
-          : { model: trimToUndefined(talkProviderConfig.modelId) }),
-        ...(trimToUndefined(talkProviderConfig.voiceId) == null
-          ? {}
-          : { voiceId: trimToUndefined(talkProviderConfig.voiceId) }),
-        ...(normalizeMinimaxSpeed(talkProviderConfig.speed) == null
-          ? {}
-          : { speed: normalizeMinimaxSpeed(talkProviderConfig.speed) }),
-        ...(normalizeMinimaxVolume(talkProviderConfig.vol) == null
-          ? {}
-          : { vol: normalizeMinimaxVolume(talkProviderConfig.vol) }),
-        ...(normalizeMinimaxPitch(talkProviderConfig.pitch) == null
-          ? {}
-          : { pitch: normalizeMinimaxPitch(talkProviderConfig.pitch) }),
+        ...readMinimaxOverrides({ ...talkProviderConfig, model: talkProviderConfig.modelId }),
       };
     },
-    resolveTalkOverrides: ({ params }) => ({
-      ...(trimToUndefined(params.voiceId) == null
-        ? {}
-        : { voiceId: trimToUndefined(params.voiceId) }),
-      ...(trimToUndefined(params.modelId) == null
-        ? {}
-        : { model: trimToUndefined(params.modelId) }),
-      ...(normalizeMinimaxSpeed(params.speed) == null
-        ? {}
-        : { speed: normalizeMinimaxSpeed(params.speed) }),
-      ...(normalizeMinimaxVolume(params.vol) == null
-        ? {}
-        : { vol: normalizeMinimaxVolume(params.vol) }),
-      ...(normalizeMinimaxPitch(params.pitch) == null
-        ? {}
-        : { pitch: normalizeMinimaxPitch(params.pitch) }),
-    }),
+    resolveTalkOverrides: ({ params }) =>
+      readMinimaxOverrides({ ...params, model: params.modelId }),
     listVoices: async () => MINIMAX_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
     isConfigured: ({ cfg, providerConfig }) =>
       Boolean(

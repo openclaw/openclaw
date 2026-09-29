@@ -204,7 +204,9 @@
 }
 
 .agent-chat__composer-controls .chat-controls__model-settings {
-  gap: 4px;
+  /* Keep the desktop seam, but honor the compact row's 2px chip rhythm so
+     independent 44px model/effort targets still fit the narrowest composer. */
+  gap: min(4px, var(--chat-composer-chip-gap));
 }
 
 .agent-chat__composer-run-status {
@@ -1217,7 +1219,9 @@
 
   .agent-chat__input .chat-controls__model-menu,
   .agent-chat__input .chat-controls__effort-menu {
-    width: calc(100vw - max(12px, var(--safe-area-left)) - max(12px, var(--safe-area-right)));
+    width: calc(
+      100vw - var(--safe-area-left) - var(--safe-area-right) - 2 * var(--shell-popup-inline-gutter)
+    );
     max-height: min(440px, var(--auto-size-available-height, calc(100dvh - 116px)));
   }
 }
@@ -1700,6 +1704,11 @@ html[dir="rtl"] .chat-attachment-loading > span {
     transform var(--duration-fast) ease;
 }
 
+.chat-attachment-thumb--pasted-text .chat-attachment-remove {
+  opacity: 1;
+  transform: none;
+}
+
 .chat-attachment-thumb:is(:hover, :focus-within) .chat-attachment-remove {
   opacity: 1;
   transform: scale(1);
@@ -1880,11 +1889,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
 .agent-chat__photo-input,
 .agent-chat__camera-input {
   display: none;
-}
-
-.chat-controls__session {
-  min-width: 0;
-  max-width: none;
 }
 
 .chat-controls__model {
@@ -2351,7 +2355,8 @@ html[dir="rtl"] .chat-attachment-loading > span {
   gap: inherit;
   min-width: 0;
   min-height: 32px;
-  flex: 1;
+  /* Long account metadata shrinks before the provider toggle's contents. */
+  flex: 1 0 auto;
   padding: 6px 0;
   border: 0;
   background: transparent;
@@ -2405,6 +2410,16 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
 .chat-controls__model-option-copy > .chat-controls__auth-meta {
   margin-inline-start: 6px;
+}
+
+[data-chat-account-option] .chat-controls__model-option-copy {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+[data-chat-account-option] .chat-controls__auth-meta {
+  max-width: 100%;
+  margin-inline-start: 0;
 }
 
 .chat-controls__provider-settings {
@@ -2477,12 +2492,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   overscroll-behavior: none;
 }
 
-.chat-controls__provider-model-group {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 2px;
-}
-
+.chat-controls__provider-model-group,
 .chat-controls__provider-model-list {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -2506,10 +2516,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   flex-direction: column;
 }
 
-.chat-controls__model-menu[data-chat-model-filtering] .chat-controls__provider-model-group {
-  display: contents;
-}
-
+.chat-controls__model-menu[data-chat-model-filtering] .chat-controls__provider-model-group,
 .chat-controls__model-menu[data-chat-model-filtering] .chat-controls__provider-model-list {
   display: contents;
 }
@@ -2951,7 +2958,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   border: none;
   border-radius: var(--radius-full);
   background: var(--text-strong);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-sm);
 }
 
 .chat-controls__reasoning-range:focus-visible::-webkit-slider-thumb {
@@ -2985,7 +2992,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   border: none;
   border-radius: var(--radius-full);
   background: var(--text-strong);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-sm);
 }
 
 .chat-controls__reasoning-range--inherit::-moz-range-thumb {
@@ -3126,7 +3133,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   height: 14px;
   border-radius: var(--radius-full);
   background: var(--text-strong);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.32);
+  box-shadow: var(--shadow-sm);
   transition: transform var(--duration-fast) var(--ease-out);
 }
 
@@ -3185,20 +3192,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   height: var(--chat-composer-menu-icon);
   color: var(--accent);
   flex: 0 0 auto;
-}
-
-.chat-controls__session select {
-  height: 36px;
-  min-height: 36px;
-  padding: 0 34px 0 12px;
-  width: 100%;
-  max-width: none;
-  border-color: color-mix(in srgb, var(--input) 88%, transparent);
-  border-radius: var(--radius-lg);
-  background-color: color-mix(in srgb, var(--card) 92%, var(--bg-elevated) 8%);
-  font-size: 13px;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 @container chat-composer (max-width: 480px) {
@@ -3468,6 +3461,11 @@ html[dir="rtl"] .chat-attachment-loading > span {
   object-fit: cover;
 }
 
+.agent-chat__welcome-avatar .identity-avatar__text {
+  font-size: 56px;
+  line-height: 1;
+}
+
 /* The 120x120 Clawd canvas stays centered in the existing hero slot. */
 .agent-chat__welcome-clawd {
   width: 128px;
@@ -3493,6 +3491,10 @@ html[dir="rtl"] .chat-attachment-loading > span {
   .agent-chat__welcome-avatar {
     width: 64px;
     height: 64px;
+  }
+
+  .agent-chat__welcome-avatar .identity-avatar__text {
+    font-size: 40px;
   }
 
   .agent-chat__welcome-clawd {
@@ -3675,9 +3677,4 @@ html[dir="rtl"] .chat-attachment-loading > span {
   .agent-chat__suggestion {
     min-height: 44px;
   }
-}
-.chat-talk-voice-picker {
-  flex: 0 1 9rem;
-  min-width: 0;
-  max-width: 9rem;
 }

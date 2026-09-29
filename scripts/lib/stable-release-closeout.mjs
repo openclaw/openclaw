@@ -251,6 +251,17 @@ export function verifyStableMainCloseout(params) {
     (asset) => !isCloseoutEvidenceAsset(asset.name, params.tag),
   );
   const existingManifest = params.existingManifest;
+  if (
+    existingManifest &&
+    ["stableSoakWaiver", "laneWaiver"].some((key) => Object.hasOwn(existingManifest, key))
+  ) {
+    return {
+      errors: [
+        "Historical waiver-bearing closeout receipt replay is unsupported. Preserve the recorded manifest and checksum; a fresh validation run cannot replace their published binding.",
+      ],
+      manifest: null,
+    };
+  }
   let verifiedLinuxSelector = false;
   if (requiresLinuxUpdaterObservation(params)) {
     const observation = params.linuxUpdaterObservation;

@@ -3,6 +3,7 @@
 import { realpathSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import {
   classifyAttachmentBytes,
   type AttachmentClassification,
@@ -16,7 +17,6 @@ import { resolveStateDir } from "../config/paths.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { readFileHandleBounded } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, openLocalFileSafely, type OpenResult } from "../infra/fs-safe.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { buildRandomTempFilePath } from "../infra/temp-download.js";

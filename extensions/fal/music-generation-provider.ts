@@ -1,4 +1,3 @@
-// Fal provider module implements model/runtime integration.
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import {
   downloadGeneratedMusicAsset,
@@ -12,7 +11,7 @@ import {
   postJsonRequest,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveFalHttpRequestConfig } from "./http-config.js";
 
 const DEFAULT_FAL_MUSIC_MODEL = "fal-ai/minimax-music/v2.6";
@@ -83,12 +82,12 @@ function buildFalMusicRequestBody(
 }
 
 function resolveFalMusicMetadata(payload: unknown): Record<string, unknown> | undefined {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+  if (!isRecord(payload)) {
     return undefined;
   }
   const metadata: Record<string, unknown> = {};
   for (const key of ["seed", "tags"]) {
-    const value = (payload as Record<string, unknown>)[key];
+    const value = payload[key];
     if (value !== undefined && value !== null) {
       metadata[key] = value;
     }
@@ -162,10 +161,7 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
           requestFailedMessage: "fal generated music download failed",
           maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
         });
-        const lyrics =
-          typeof payload === "object" && payload && !Array.isArray(payload)
-            ? normalizeOptionalString((payload as Record<string, unknown>).lyrics)
-            : undefined;
+        const lyrics = isRecord(payload) ? normalizeOptionalString(payload.lyrics) : undefined;
         return {
           tracks: [track],
           model,

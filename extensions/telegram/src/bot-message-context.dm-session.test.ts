@@ -1,5 +1,5 @@
 import path from "node:path";
-import { webhookCallback, type Bot } from "grammy";
+import type { Bot } from "grammy";
 import type { Update } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -27,6 +27,7 @@ import {
   normalizeSessionDeliveryState,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -34,10 +35,13 @@ import {
   chat,
   commandMessage,
   createBot,
+  deliverTelegramUpdate,
   groupChat,
   groupCommand,
   harness,
+  photo,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import { resetTelegramTopicNameCacheForTest } from "./runtime.test-support.js";
 
@@ -96,25 +100,16 @@ function bind(
 }
 
 async function receive(bot: Bot, message: NonNullable<Update["message"]>) {
-  await webhookCallback(
-    bot,
-    "std/http",
-  )(
-    new Request("http://localhost/telegram", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        update_id: ++updateId,
-        message: { ...message, entities: message.text?.startsWith("@") ? message.entities : [] },
-      }),
-    }),
-  );
+  await deliverTelegramUpdate(bot, {
+    update_id: ++updateId,
+    message: { ...message, entities: message.text?.startsWith("@") ? message.entities : [] },
+  });
 }
 
 describe("Telegram recorded session destinations", () => {
   it("records a deleted direct session again when the next DM is processed", async () => {
     cfg.session = { ...cfg.session, dmScope: "per-channel-peer" };
-    const bot = createBot(false, true, cfg);
+    const bot = await createBot(false, true, cfg);
     await receive(bot, commandMessage("first turn"));
     await deleteSessionEntry({ storePath, sessionKey: "agent:main:telegram:direct:42001" });
     await receive(bot, commandMessage("hello again"));
@@ -163,7 +158,7 @@ describe("Telegram recorded session destinations", () => {
   ])(
     "persists the deliverable destination for $name",
     async ({ group, thread, key, to, savedThread }) => {
-      const bot = createBot(false, true, cfg, true);
+      const bot = await createBot(false, true, cfg, true);
       await receive(bot, {
         ...commandMessage("remember this destination"),
         chat: group ? groupChat : chat,
@@ -202,7 +197,7 @@ describe("Telegram recorded session destinations", () => {
       const previousFastTest = process.env.OPENCLAW_TEST_FAST;
       vi.stubEnv("OPENCLAW_TEST_FAST", "0");
       try {
-        const bot = createBot(false, true, cfg, isTopic);
+        const bot = await createBot(false, true, cfg, isTopic);
         await harness.state.writeConfig(cfg);
         bind(String(chat.id), targetSessionKey);
         for (const sessionKey of [selectedSessionKey, ...wrongSessionKeys]) {
@@ -258,8 +253,8 @@ describe("Telegram recorded session destinations", () => {
   it("isolates identity-linked senders and recorded destinations across named accounts", async () => {
     cfg.session = { ...cfg.session, identityLinks: { "alice-shared": ["telegram:814912386"] } };
     cfg.channels!.telegram!.accounts = { default: {}, atlas: {}, skynet: {} };
-    const atlas = createBot(false, true, cfg, false, "atlas");
-    const skynet = createBot(false, true, cfg, false, "skynet");
+    const atlas = await createBot(false, true, cfg, false, "atlas");
+    const skynet = await createBot(false, true, cfg, false, "skynet");
     for (const bot of [atlas, skynet]) {
       await receive(bot, {
         ...commandMessage("hello from the linked sender"),
@@ -284,7 +279,7 @@ describe("Telegram recorded session destinations", () => {
   });
 
   it("keeps inbound DMs out of stale cron-run bindings", async () => {
-    const bot = createBot(false, true, cfg);
+    const bot = await createBot(false, true, cfg);
     bind("42001", "agent:youtube:cron:monthly-report:run:closed-run-1");
     await receive(bot, commandMessage("a new live conversation"));
     expect(harness.replySpy.mock.calls[0]?.[0].SessionKey).toBe("agent:main:main");
@@ -301,7 +296,9 @@ describe("Telegram recorded session destinations", () => {
   });
 
   it("admits plugin-bound ambient topics without replacing their channel session", async () => {
-    cfg.channels!.telegram!.groups = { "*": { requireMention: true } };
+    cfg.channels!.telegram!.groups = {
+      "*": { requireMention: true, requireMentionInBotThreads: true },
+    };
     const pluginId = "openclaw-codex-app-server";
     const registry = getActivePluginRegistry();
     if (!registry) {
@@ -318,13 +315,23 @@ describe("Telegram recorded session destinations", () => {
     >(() => ({ handled: true }));
     addTestHook({ registry, pluginId, hookName: "inbound_claim", handler: claim });
     initializeGlobalHookRunner(registry);
-    const bot = createBot(false, true, cfg);
+    const bot = await createBot(false, true, cfg);
     bind("-10042001:topic:99", "plugin-binding:openclaw-codex-app-server:abc123", {
       pluginBindingOwner: "plugin",
       pluginId: "openclaw-codex-app-server",
       pluginRoot: "/tmp/context-plugin",
     });
-    await receive(bot, groupCommand("ambient plugin input"));
+    await receive(bot, {
+      ...groupCommand("ambient plugin input"),
+      reply_to_message: {
+        message_id: 99,
+        date: 1736380700,
+        chat: groupChat,
+        from: telegramBotInfoForTest,
+        forum_topic_created: { name: "Plugin topic", icon_color: 7322096 },
+        reply_to_message: undefined,
+      },
+    });
     expect(claim).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ content: "ambient plugin input" }),
       expect.objectContaining({
@@ -335,6 +342,17 @@ describe("Telegram recorded session destinations", () => {
           conversationId: "-10042001:topic:99",
         }),
       }),
+    );
+    await receive(bot, {
+      ...groupCommand(""),
+      text: undefined,
+      caption: "ambient plugin media",
+      photo,
+    });
+    expect(claim).toHaveBeenCalledTimes(2);
+    expect(claim).toHaveBeenLastCalledWith(
+      expect.objectContaining({ content: expect.stringContaining("ambient plugin media") }),
+      expect.anything(),
     );
     expect(harness.replySpy).not.toHaveBeenCalled();
     expect(
@@ -348,7 +366,7 @@ describe("Telegram recorded session destinations", () => {
 
   it("keeps ordinary bindings mention-gated and preserves their recorded destination", async () => {
     cfg.channels!.telegram!.groups = { "*": { requireMention: true } };
-    const bot = createBot(false, true, cfg);
+    const bot = await createBot(false, true, cfg);
     bind("-10042001:topic:99", "agent:ops:acp:bound");
     await upsertSessionEntry({
       storePath,
@@ -377,7 +395,7 @@ describe("Telegram recorded session destinations", () => {
   });
 
   it("learns reply topic names and restores them after plugin-state reopen", async () => {
-    const bot = createBot(false, true, cfg);
+    const bot = await createBot(false, true, cfg);
     await receive(bot, {
       ...groupCommand("first topic message"),
       reply_to_message: {
@@ -394,9 +412,10 @@ describe("Telegram recorded session destinations", () => {
     });
     await bot.stop();
     resetTelegramTopicNameCacheForTest();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     setTelegramPluginStateRuntimeForTests();
-    const reopened = createBot(false, true, cfg);
+    const reopened = await createBot(false, true, cfg);
     await receive(reopened, groupCommand("next message without service metadata"));
     expect(harness.replySpy).toHaveBeenCalledTimes(2);
     expect(harness.replySpy.mock.calls[1]?.[0]).toMatchObject({

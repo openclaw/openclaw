@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertOperatorModelAllowed,
   readAdmittedRunOperatorAuthority,
@@ -30,7 +30,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { prepareUserProfileSelectionAuthority } from "../../../state/user-channel-identity-operations.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { resolveGatewayAuthPolicyGeneration } from "../../auth-policy.js";
+import { captureGatewayAuthPolicy } from "../../auth-policy.js";
 import { publishOperatorRoleConfigChange } from "../../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
@@ -88,25 +88,27 @@ describe("authenticated request mutation custody", () => {
       };
       setRuntimeConfigSnapshot(committedConfig);
       const client = createOperatorWsClient();
-      client.authPolicyGeneration = resolveGatewayAuthPolicyGeneration(committedConfig);
+      client.authPolicy = captureGatewayAuthPolicy(committedConfig, null);
       client.internal = { operatorRoleActor: { kind: "operator", profileId: profile.id } };
       const context = createDirectChatContext({
         getRuntimeConfig: () => committedConfig,
         getCommittedRuntimeConfig: () => committedConfig,
       });
       context.resolveGatewayContext = () => context;
-      const captures: NonNullable<ReturnType<typeof captureGatewayOperatorRunAuthority>>[] = [];
+      const captures: NonNullable<
+        Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>
+      >[] = [];
       const callbacks: NonNullable<GatewayRequestHandlerOptions["hasCurrentClientAuthority"]>[] =
         [];
       const harness = createDispatchTestHarness({
         buildRequestContext: () => context,
         extraHandlers: {
-          "test.model-ceiling": (options) => {
+          "test.model-ceiling": async (options) => {
             const current = expectDefined(options.hasCurrentClientAuthority, "WS caller guard");
             callbacks.push(current);
             captures.push(
               expectDefined(
-                captureGatewayOperatorRunAuthority({
+                await captureGatewayOperatorRunAuthority({
                   client: options.client,
                   context,
                   hasCurrentClientAuthority: current,
@@ -156,6 +158,8 @@ describe("authenticated request mutation custody", () => {
             originatingChannel: "webchat",
           });
           run.operatorAuthority = operatorAuthority;
+          run.run.provider = modelA.provider;
+          run.run.model = modelA.model;
           return run;
         });
         const fingerprints = runs.map((run) => resolveFollowupRunToolAuthorityFingerprint(run));
@@ -211,6 +215,109 @@ describe("authenticated request mutation custody", () => {
     });
   });
 
+  it("fences stale requests without revoking retained work until its committed grant changes", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const identity = "retained@example.test";
+      const profile = ensureProfileForEmail(identity);
+      let committedConfig: OpenClawConfig = {
+        gateway: {
+          auth: {
+            identityScopes: {
+              [identity]: ["operator.admin"],
+              "other@example.test": ["operator.read"],
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(committedConfig);
+      const client = createOperatorWsClient();
+      client.authenticatedUserId = identity;
+      client.authPolicy = captureGatewayAuthPolicy(committedConfig, {
+        role: "operator",
+        verifiedIdentity: identity,
+      });
+      client.internal = { operatorRoleActor: { kind: "operator", profileId: profile.id } };
+      const context = createDirectChatContext({
+        getRuntimeConfig: () => committedConfig,
+        getCommittedRuntimeConfig: () => committedConfig,
+      });
+      context.resolveGatewayContext = () => context;
+      let captured: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+      let guard: ReturnType<typeof readGatewayRequestMutationAuthority> | undefined;
+      const generation = new SharedGatewaySessionGenerationState({
+        current: undefined,
+        required: null,
+      });
+      const harness = createDispatchTestHarness({
+        buildRequestContext: () => context,
+        getRequiredSharedGatewaySessionGeneration: generation.reader,
+        extraHandlers: {
+          "test.identity-scopes": async (options) => {
+            captured = await captureGatewayOperatorRunAuthority({
+              client: options.client,
+              context,
+              hasCurrentClientAuthority: options.hasCurrentClientAuthority,
+            });
+            guard = readGatewayRequestMutationAuthority(options);
+            options.respond(true, { accepted: true });
+          },
+        },
+      });
+      try {
+        await harness.dispatcher.dispatch(
+          { type: "req", id: "identity-scopes", method: "test.identity-scopes", params: {} },
+          client,
+        );
+        expect(harness.send).toHaveBeenLastCalledWith(
+          expect.objectContaining({ ok: true, payload: { accepted: true } }),
+        );
+        const { authority } = expectDefined(captured, "captured operator source");
+        const mutationGuard = expectDefined(guard, "request mutation guard");
+        assert(mutationGuard.family === "worker");
+
+        committedConfig = structuredClone(committedConfig);
+        committedConfig.gateway!.auth!.identityScopes!["other@example.test"] = ["operator.admin"];
+        setRuntimeConfigSnapshot(committedConfig);
+        publishOperatorRoleConfigChange(context);
+        expect(authority.signal?.aborted).toBe(false);
+        expect(() => authority.assertCurrent()).not.toThrow();
+        expect(() => mutationGuard.assertWorkerCurrent()).not.toThrow();
+        expect(harness.close).not.toHaveBeenCalled();
+
+        committedConfig = structuredClone(committedConfig);
+        committedConfig.gateway!.trustedProxies = ["192.0.2.10"];
+        setRuntimeConfigSnapshot(committedConfig);
+        await harness.dispatcher.dispatch(
+          { type: "req", id: "transport-fenced", method: "test.identity-scopes", params: {} },
+          client,
+        );
+        expect(harness.close).toHaveBeenCalledWith(
+          4001,
+          "client invalidated: gateway-policy-changed",
+        );
+        expect(client).toMatchObject({ sourceInvalidated: false });
+        expect(authority.signal?.aborted).toBe(false);
+        expect(authority.assertCurrent).not.toThrow();
+
+        committedConfig = structuredClone(committedConfig);
+        delete committedConfig.gateway!.auth!.identityScopes![identity];
+        setRuntimeConfigSnapshot(committedConfig);
+        await harness.dispatcher.dispatch(
+          { type: "req", id: "grant-revoked", method: "test.identity-scopes", params: {} },
+          client,
+        );
+        expect(client).toMatchObject({ sourceInvalidated: true });
+        expect(authority.signal?.aborted).toBe(true);
+        expect(() => authority.assertCurrent()).toThrow(/authority is no longer active/);
+        expect(() => mutationGuard.assertWorkerCurrent()).toThrow(
+          /Gateway requester authority changed/,
+        );
+      } finally {
+        captured?.release();
+      }
+    });
+  });
+
   it.each(["commit", "rollback", "revoke all", "policy commit", "policy rollback"] as const)(
     "retains the accepted source through tentative transport fencing until %s",
     async (outcome) => {
@@ -229,27 +336,37 @@ describe("authenticated request mutation custody", () => {
       });
       client.usesSharedGatewayAuth = true;
       client.sharedGatewaySessionGeneration = "generation-a";
-      client.authPolicyGeneration = resolveGatewayAuthPolicyGeneration(committedConfig);
+      client.authPolicy = captureGatewayAuthPolicy(committedConfig, {
+        role: "operator",
+        authMethod: "tailscale",
+      });
       client.connectionSignal = connection.signal;
-      client.internal = { operatorRoleActor: { kind: "operator", profileId: "profile-owner" } };
+      client.internal = {
+        operatorRoleActor: {
+          kind: "operator",
+          profileId: ensureProfileForEmail("transport-owner@example.test").id,
+        },
+      };
       const context = createDirectChatContext({
         getRuntimeConfig: () => getRuntimeConfigSnapshot() ?? committedConfig,
         getCommittedRuntimeConfig: () => committedConfig,
       });
       context.resolveGatewayContext = () => context;
-      let captured: ReturnType<typeof captureGatewayOperatorRunAuthority>;
-      const handler = vi.fn<(options: GatewayRequestHandlerOptions) => void>((options) => {
-        captured = captureGatewayOperatorRunAuthority({
-          client: options.client,
-          context,
-          hasCurrentClientAuthority: options.hasCurrentClientAuthority,
-          sourceAuthority: {
-            assertCurrent: () => access.signal.throwIfAborted(),
-            signal: access.signal,
-          },
-        });
-        options.respond(true, { accepted: true });
-      });
+      let captured: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+      const handler = vi.fn<(options: GatewayRequestHandlerOptions) => Promise<void>>(
+        async (options) => {
+          captured = await captureGatewayOperatorRunAuthority({
+            client: options.client,
+            context,
+            hasCurrentClientAuthority: options.hasCurrentClientAuthority,
+            sourceAuthority: {
+              assertCurrent: () => access.signal.throwIfAborted(),
+              signal: access.signal,
+            },
+          });
+          options.respond(true, { accepted: true });
+        },
+      );
       const harness = createDispatchTestHarness({
         getRequiredSharedGatewaySessionGeneration: generation.reader,
         buildRequestContext: () => context,
@@ -352,7 +469,7 @@ describe("authenticated request mutation custody", () => {
     client.usesSharedGatewayAuth = true;
     client.sharedGatewaySessionGeneration = "generation-a";
     setRuntimeConfigSnapshot({});
-    client.authPolicyGeneration = resolveGatewayAuthPolicyGeneration({});
+    client.authPolicy = captureGatewayAuthPolicy({}, null);
     client.connectionSignal = connection.signal;
     client.authenticatedUserProfile = {
       profileId: "profile-owner",

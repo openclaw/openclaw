@@ -12,21 +12,24 @@ runs:
           exit 1
         fi
 
-        # Built from steipete/bun commit 3ff0efc82217775e04094a1d4402d7c6932ecb24.
+        # Built from steipete/bun commit 6b9148b17a6df4d02776fbf4aeb0c874e2ff955a.
+        # ddfce5d01 plus openclaw/bun#17 and #19 for per-user node shims and private fallback.
+        # WebKit commit 4429d11361a5f1680a9e57884ebc1941c2cc7e48.
+        # Backports WebKit caa5d805b646edc59ca0d12b49a7a574f942dedb.
         bun_dir="$(mktemp -d "$RUNNER_TEMP/openclaw-test-bun.XXXXXX")"
         archive="$bun_dir/bun-linux-x64.gz"
         curl --fail --location --no-progress-meter --show-error \
           --connect-timeout 10 --max-time 300 \
-          --retry 3 --retry-max-time 300 \
+          --retry 3 --retry-all-errors --retry-max-time 300 \
           --output "$archive" \
-          "https://github.com/steipete/bun/releases/download/openclaw-ci-3ff0efc8/bun-linux-x64.gz" \
+          "https://github.com/steipete/bun/releases/download/openclaw-ci-6b9148b1-webkit-4429d113/bun-linux-x64.gz" \
           2> >(sed 's/^Warning: /::warning::/' >&2)
         printf '%s  %s\n' \
-          'c9e611939d84260e411ea594f1f8183ae1c9dcd69bb3a69fb3c3d2e4ec1d64d5' \
+          'ae75b3cc28229212e3a9ce558abfb036db87bb1231d2ea0620d3c4bf39c6b96e' \
           "$archive" | sha256sum --check -
         gzip --decompress --stdout "$archive" > "$bun_dir/bun"
         printf '%s  %s\n' \
-          '205362edf578a6335e7f4ed43803ce680825421520e2bbd329a975d9ce06d4bc' \
+          'f52a888c6402e2f8c32397e6232bb06d4f1933ff07ea32f22abd23ef0f94fdca' \
           "$bun_dir/bun" | sha256sum --check -
         chmod 755 "$bun_dir/bun"
         "$bun_dir/bun" --version

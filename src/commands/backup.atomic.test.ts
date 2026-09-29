@@ -7,7 +7,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import * as directoryDurability from "../infra/directory-durability.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import {
-  backupVerifyCommandMock,
   createMockTarStream,
   mockStateOnlyBackupPlan,
   resetBackupTempHome,
@@ -33,7 +32,6 @@ describe("backupCreateCommand atomic archive write", () => {
   beforeEach(async () => {
     await resetBackupTempHome(tempHome);
     backupWalkMock.mockReset();
-    backupVerifyCommandMock.mockReset();
     sleepMock.mockClear();
   });
 

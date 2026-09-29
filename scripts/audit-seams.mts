@@ -27,11 +27,6 @@ type ImportEntry = {
   specifier: string;
 };
 type OptionalClusterImportEntry = Omit<ImportEntry, "family"> & { cluster: string };
-type ModuleSpecifierVisit = {
-  kind: string;
-  specifierNode: ts.Node;
-  specifier: string;
-};
 const MATCH_QUALITY_RANK = {
   "exact-stem": 0,
   "path-nearby": 1,
@@ -132,43 +127,20 @@ function isProductionLikeFile(relativePath: string) {
   return !isTestLikePath(relativePath);
 }
 
-async function walkCodeFiles(rootDir: string) {
+async function walkCodeFiles(
+  rootDir: string,
+  options: { includeTests?: boolean; ignoreUnreadable?: boolean } = {},
+) {
   const out: string[] = [];
-  async function walk(dir: string): Promise<void> {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.name === "dist" || entry.name === "node_modules") {
-        continue;
-      }
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await walk(fullPath);
-        continue;
-      }
-      if (!entry.isFile() || !isCodeFile(entry.name)) {
-        continue;
-      }
-      const relativePath = normalizePath(fullPath);
-      if (!isProductionLikeFile(relativePath)) {
-        continue;
-      }
-      out.push(fullPath);
-    }
-  }
-  await walk(rootDir);
-  return out.toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
-}
-
-async function walkAllCodeFiles(rootDir: string, options: { includeTests?: boolean } = {}) {
-  const out: string[] = [];
-  const includeTests = options.includeTests === true;
-
   async function walk(dir: string): Promise<void> {
     let entries;
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
+    } catch (error) {
+      if (options.ignoreUnreadable) {
+        return;
+      }
+      throw error;
     }
     for (const entry of entries) {
       if (entry.name === "dist" || entry.name === "node_modules") {
@@ -177,19 +149,15 @@ async function walkAllCodeFiles(rootDir: string, options: { includeTests?: boole
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         await walk(fullPath);
-        continue;
+      } else if (
+        entry.isFile() &&
+        isCodeFile(entry.name) &&
+        (options.includeTests || isProductionLikeFile(normalizePath(fullPath)))
+      ) {
+        out.push(fullPath);
       }
-      if (!entry.isFile() || !isCodeFile(entry.name)) {
-        continue;
-      }
-      const relativePath = normalizePath(fullPath);
-      if (!includeTests && !isProductionLikeFile(relativePath)) {
-        continue;
-      }
-      out.push(fullPath);
     }
   }
-
   await walk(rootDir);
   return out.toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
 }
@@ -228,102 +196,56 @@ function compareImports(left: ImportEntry, right: ImportEntry) {
   );
 }
 
-function collectPluginSdkImports(filePath: string, sourceFile: ts.SourceFile): ImportEntry[] {
-  const entries: ImportEntry[] = [];
-
-  function push(kind: string, specifierNode: ts.Node, specifier: string) {
+function collectFileImports(filePath: string, sourceFile: ts.SourceFile) {
+  const inventory: ImportEntry[] = [];
+  const optionalClusterStaticLeaks: OptionalClusterImportEntry[] = [];
+  visitModuleSpecifiers(sourceFile, ({ kind, specifierNode, specifier }) => {
     const resolvedPath = resolveRelativeSpecifier(specifier, filePath);
-    if (!resolvedPath?.startsWith("src/plugin-sdk/")) {
+    if (!resolvedPath) {
       return;
     }
-    entries.push({
-      family: normalizePluginSdkFamily(resolvedPath),
+    const entry = {
       file: normalizePath(filePath),
       kind,
       line: toLine(sourceFile, specifierNode),
       resolvedPath,
       specifier,
-    });
-  }
-
-  const visit = ({ kind, specifierNode, specifier }: ModuleSpecifierVisit) =>
-    push(kind, specifierNode, specifier);
-  visitModuleSpecifiers(sourceFile, visit);
-  return entries;
+    };
+    if (resolvedPath.startsWith("src/plugin-sdk/")) {
+      inventory.push({ family: normalizePluginSdkFamily(resolvedPath), ...entry });
+    }
+    const cluster = resolveOptionalClusterFromPath(resolvedPath);
+    if (kind !== "dynamic-import" && cluster) {
+      optionalClusterStaticLeaks.push({ cluster, ...entry });
+    }
+  });
+  return { inventory, optionalClusterStaticLeaks };
 }
 
-async function collectCorePluginSdkImports(parser: NativeTypeScriptParser) {
-  const files = await walkCodeFiles(srcRoot);
+async function collectCoreImports(parser: NativeTypeScriptParser) {
   const inventory: ImportEntry[] = [];
-  for (const filePath of files) {
+  const optionalClusterStaticLeaks: OptionalClusterImportEntry[] = [];
+  for (const filePath of await walkCodeFiles(srcRoot)) {
     if (normalizePath(filePath).startsWith("src/plugin-sdk/")) {
       continue;
     }
     const source = await fs.readFile(filePath, "utf8");
     const sourceFile = parser.parseSourceFile(filePath, source);
-    inventory.push(...collectPluginSdkImports(filePath, sourceFile));
+    const imports = collectFileImports(filePath, sourceFile);
+    inventory.push(...imports.inventory);
+    optionalClusterStaticLeaks.push(...imports.optionalClusterStaticLeaks);
   }
-  return inventory.toSorted(compareImports);
-}
-
-function collectOptionalClusterStaticImports(
-  filePath: string,
-  sourceFile: ts.SourceFile,
-): OptionalClusterImportEntry[] {
-  const entries: OptionalClusterImportEntry[] = [];
-
-  function push(kind: string, specifierNode: ts.Node, specifier: string) {
-    if (!specifier.startsWith(".")) {
-      return;
-    }
-    const resolvedPath = resolveRelativeSpecifier(specifier, filePath);
-    if (!resolvedPath) {
-      return;
-    }
-    const cluster = resolveOptionalClusterFromPath(resolvedPath);
-    if (!cluster) {
-      return;
-    }
-    entries.push({
-      cluster,
-      file: normalizePath(filePath),
-      kind,
-      line: toLine(sourceFile, specifierNode),
-      resolvedPath,
-      specifier,
-    });
-  }
-
-  const visit = ({ kind, specifierNode, specifier }: ModuleSpecifierVisit) => {
-    if (kind !== "dynamic-import") {
-      push(kind, specifierNode, specifier);
-    }
+  return {
+    inventory: inventory.toSorted(compareImports),
+    optionalClusterStaticLeaks: optionalClusterStaticLeaks.toSorted(
+      (left, right) =>
+        left.cluster.localeCompare(right.cluster) ||
+        left.file.localeCompare(right.file) ||
+        left.line - right.line ||
+        left.kind.localeCompare(right.kind) ||
+        left.specifier.localeCompare(right.specifier),
+    ),
   };
-  visitModuleSpecifiers(sourceFile, visit);
-  return entries;
-}
-
-async function collectOptionalClusterStaticLeaks(parser: NativeTypeScriptParser) {
-  const files = await walkCodeFiles(srcRoot);
-  const inventory: OptionalClusterImportEntry[] = [];
-  for (const filePath of files) {
-    const relativePath = normalizePath(filePath);
-    if (relativePath.startsWith("src/plugin-sdk/")) {
-      continue;
-    }
-    const source = await fs.readFile(filePath, "utf8");
-    const sourceFile = parser.parseSourceFile(filePath, source);
-    inventory.push(...collectOptionalClusterStaticImports(filePath, sourceFile));
-  }
-  return inventory.toSorted((left, right) => {
-    return (
-      left.cluster.localeCompare(right.cluster) ||
-      left.file.localeCompare(right.file) ||
-      left.line - right.line ||
-      left.kind.localeCompare(right.kind) ||
-      left.specifier.localeCompare(right.specifier)
-    );
-  });
 }
 
 function buildDuplicatedSeamFamilies(inventory: ImportEntry[]) {
@@ -333,8 +255,7 @@ function buildDuplicatedSeamFamilies(inventory: ImportEntry[]) {
     bucket.push(entry);
     grouped.set(entry.family, bucket);
   }
-
-  const duplicated = Object.fromEntries(
+  return Object.fromEntries(
     [...grouped.entries()]
       .map(([family, entries]) => {
         const files = [...new Set(entries.map((entry) => entry.file))].toSorted(compareStrings);
@@ -357,8 +278,6 @@ function buildDuplicatedSeamFamilies(inventory: ImportEntry[]) {
         );
       }),
   );
-
-  return duplicated;
 }
 
 function buildOverlapFiles(inventory: ImportEntry[]) {
@@ -448,24 +367,14 @@ function classifyMissingPackageCluster(params: {
     };
   }
   if (optionalBundledClusterSet.has(params.cluster)) {
-    if (params.cluster === "ui") {
-      return {
-        decision: "optional",
-        reason:
-          "Private UI workspace. Repo-wide CLI/plugin CI should not require UI-only packages.",
-      };
-    }
-    if (params.pluginSdkEntries.length > 0) {
-      return {
-        decision: "optional",
-        reason:
-          "Public plugin-sdk entry exists, but repo-wide default check/build should isolate this optional cluster from the static graph.",
-      };
-    }
     return {
       decision: "optional",
       reason:
-        "Workspace package is intentionally not mirrored into the root dependency set by default CI policy.",
+        params.cluster === "ui"
+          ? "Private UI workspace. Repo-wide CLI/plugin CI should not require UI-only packages."
+          : params.pluginSdkEntries.length > 0
+            ? "Public plugin-sdk entry exists, but repo-wide default check/build should isolate this optional cluster from the static graph."
+            : "Workspace package is intentionally not mirrored into the root dependency set by default CI policy.",
     };
   }
   return {
@@ -575,9 +484,7 @@ function isSubagentProductionPath(relativePath: string) {
   return (
     (relativePath.startsWith("src/agents/") || relativePath.startsWith("src/cron/")) &&
     isProductionLikeFile(relativePath) &&
-    (/subagent|sessions-spawn|acp-spawn/.test(relativePath) ||
-      relativePath === "src/agents/tools/sessions-spawn-tool.ts" ||
-      relativePath === "src/agents/tools/subagents-tool.ts")
+    /subagent|sessions-spawn|acp-spawn/.test(relativePath)
   );
 }
 
@@ -850,7 +757,6 @@ async function buildTestIndex(testFiles: string[]) {
       const baseName = path.basename(stem);
       const source = await readScannableText(filePath);
       return {
-        filePath,
         relativePath,
         stem,
         baseName,
@@ -901,12 +807,11 @@ function findRelatedTests(relativePath: string, testIndex: TestIndexEntry[]): Re
       return [{ file: entry.relativePath, matchQuality: "path-nearby" }];
     }
     const entryDir = path.dirname(entry.relativePath).split(path.sep).join("/");
+    const relativeImportPath = path.posix.relative(entryDir, stem);
     const importPath =
-      path.posix.relative(entryDir, stem) === path.basename(stem)
-        ? `./${path.basename(stem)}`
-        : path.posix.relative(entryDir, stem).startsWith(".")
-          ? path.posix.relative(entryDir, stem)
-          : `./${path.posix.relative(entryDir, stem)}`;
+      relativeImportPath === baseName || !relativeImportPath.startsWith(".")
+        ? `./${relativeImportPath}`
+        : relativeImportPath;
     if (
       hasExecutableImportReference(entry.source, importPath) &&
       !hasModuleMockReference(entry.source, importPath)
@@ -987,9 +892,9 @@ async function buildSeamTestInventory() {
     ...(await walkCodeFiles(extensionsRoot)),
   ].toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
   const testFiles = [
-    ...(await walkAllCodeFiles(srcRoot, { includeTests: true })),
-    ...(await walkAllCodeFiles(extensionsRoot, { includeTests: true })),
-    ...(await walkAllCodeFiles(testRoot, { includeTests: true })),
+    ...(await walkCodeFiles(srcRoot, { includeTests: true, ignoreUnreadable: true })),
+    ...(await walkCodeFiles(extensionsRoot, { includeTests: true, ignoreUnreadable: true })),
+    ...(await walkCodeFiles(testRoot, { includeTests: true, ignoreUnreadable: true })),
   ]
     .filter((filePath) => /\.(test|spec)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(filePath))
     .toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
@@ -1033,8 +938,7 @@ export async function main(argv: string[] = process.argv.slice(2)) {
 
   await collectWorkspacePackagePaths();
   using parser = createNativeTypeScriptParser({ cwd: repoRoot });
-  const inventory = await collectCorePluginSdkImports(parser);
-  const optionalClusterStaticLeaks = await collectOptionalClusterStaticLeaks(parser);
+  const { inventory, optionalClusterStaticLeaks } = await collectCoreImports(parser);
   const staticLeakClusters = new Set(optionalClusterStaticLeaks.map((entry) => entry.cluster));
   const result = {
     duplicatedSeamFamilies: buildDuplicatedSeamFamilies(inventory),

@@ -1,6 +1,5 @@
 // Install fixture mocks before importing the real maintenance owners.
 import "./doctor-health.test-support.js";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
@@ -8,6 +7,7 @@ import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/update-command-service-maintenance.js";
 import { collectSecurityWarnings } from "../commands/doctor-security.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { ServiceInspectionError } from "../daemon/service-inspection-error.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import {
   readExecApprovalsConfigRow,
@@ -15,10 +15,7 @@ import {
   writeExecApprovalsConfigRow,
 } from "../infra/exec-approvals-sqlite.js";
 import { loadExecApprovalsReadOnly } from "../infra/exec-approvals-store.js";
-import {
-  resolveStateDatabaseCoordinatorPath,
-  resolveStateLifecycleRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
+import { tryAcquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import {
   detectLegacyExecApprovals,
   migrateLegacyExecApprovals,
@@ -50,6 +47,12 @@ const { mocks } = await import("./doctor-health.test-support.js");
 type DoctorManagedRepairOutcome =
   | "ready"
   | "clean-repair"
+  | "clean-stopped-repair"
+  | "clean-stopped-probe-failed"
+  | "clean-stopped-probe-timeout"
+  | "clean-stopped-runtime-unknown"
+  | "clean-stopped-owner-unknown"
+  | "clean-stopped-manager-unknown"
   | "clean-inspect"
   | "clean-force-repair"
   | "clean-force-inspect"
@@ -144,7 +147,18 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
         });
         const agentBefore = fs.readFileSync(initial.path);
         const events: string[] = [];
-        let running = outcome !== "update-no-restart-stopped";
+        const initiallyStopped =
+          outcome.startsWith("clean-stopped-") || outcome === "update-no-restart-stopped";
+        const inconclusiveActivation =
+          outcome.startsWith("clean-stopped-") && outcome !== "clean-stopped-repair";
+        const platform =
+          outcome === "clean-stopped-manager-unknown"
+            ? vi.spyOn(process, "platform", "get").mockReturnValue("linux")
+            : undefined;
+        let running = !initiallyStopped;
+        if (initiallyStopped) {
+          releaseOpenClawAgentDatabaseLease(leaseId, { env: state.env });
+        }
         const pid = outcome === "ancestor-blocked" ? process.pid : 4200;
         mocks.resident.mockImplementation(() => (running ? { pid } : undefined));
         const packageRoot = process.cwd();
@@ -182,17 +196,43 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           running = true;
           return { outcome: "completed" as const };
         });
+        const start = vi.fn(async () => {
+          events.push("start");
+          running = true;
+        });
         mocks.service.mockReturnValue({
-          readCommand: async () => command,
+          readCommand: async () => {
+            if (events.includes("repair")) {
+              if (outcome === "clean-stopped-probe-failed") {
+                throw new Error("Synthetic final launcher probe failed");
+              }
+              if (outcome === "clean-stopped-probe-timeout") {
+                throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+              }
+              if (outcome === "clean-stopped-owner-unknown") {
+                return null;
+              }
+            }
+            return command;
+          },
           readRuntime: async () => ({
-            status: running ? "running" : "stopped",
-            systemd: { managerUid: process.getuid?.() ?? 2001 },
+            status:
+              outcome === "clean-stopped-runtime-unknown" && events.includes("repair")
+                ? "unknown"
+                : running
+                  ? "running"
+                  : "stopped",
+            systemd:
+              outcome === "clean-stopped-manager-unknown" && events.includes("repair")
+                ? undefined
+                : { managerUid: process.getuid?.() ?? 2001 },
             ...(running ? { pid } : {}),
           }),
           readLoadState: async () => ({ status: running ? "loaded" : "not-loaded" }),
           isLoaded: async () => running,
           isEnabled: async () => running,
           stop,
+          start,
           restart,
         });
         mocks.runContributions.mockImplementation(async (ctx) => {
@@ -254,28 +294,17 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           }
         });
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-        const expectCoordinatorReleased = () => {
-          const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-            databasePath: resolveOpenClawStateSqlitePath(state.env),
-            runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-            uid: process.getuid?.(),
-          });
-          const peer = spawnSync(process.execPath, [
-            "-e",
-            "const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.argv[1]);db.exec('BEGIN EXCLUSIVE');db.close();",
-            coordinatorPath,
-          ]);
-          expect(peer.status).toBe(0);
+        const expectProcessOwnerReleased = () => {
+          const owner = tryAcquireGatewayStateOwner(resolveOpenClawStateSqlitePath(state.env));
+          expect(owner).not.toBeNull();
+          owner?.release();
         };
         if (outcome === "config-refused") {
-          runtime.exit.mockImplementation(expectCoordinatorReleased);
+          runtime.exit.mockImplementation(expectProcessOwnerReleased);
         }
         try {
           const modernUpdate = outcome.startsWith("update-") && outcome !== "update-legacy";
           if (modernUpdate) {
-            if (!running) {
-              releaseOpenClawAgentDatabaseLease(leaseId, { env: state.env });
-            }
             const parentRestarts = outcome === "update-parent-stopped";
             const prepared = await maybeStopManagedServiceBeforeMutableUpdate({
               updateInstallKind: "package",
@@ -315,6 +344,21 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             expect(fs.readFileSync(initial.path)).toEqual(agentBefore);
             return;
           }
+          if (inconclusiveActivation) {
+            await run;
+            expect(events).toEqual(["repair"]);
+            expect(running).toBe(false);
+            expect(start).not.toHaveBeenCalled();
+            expect(restart).not.toHaveBeenCalled();
+            expect(mocks.waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+            expect(runtime.log).toHaveBeenCalledWith(
+              expect.stringMatching(
+                /Gateway activation skipped.*inconclusive.*gateway status --deep/,
+              ),
+            );
+            expectProcessOwnerReleased();
+            return;
+          }
           if (outcome === "ancestor-blocked") {
             await expect(run).rejects.toThrow("openclaw doctor --fix");
             await expect(run).rejects.toThrow("from a shell outside the gateway service");
@@ -327,14 +371,17 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           }
           if (outcome === "repair-failed") {
             await expect(run).rejects.toThrow("synthetic migration failure");
+          } else if (outcome === "config-refused") {
+            await expect(run).rejects.toThrow("persisted repair state is not ready");
+            expect(runtime.exit).toHaveBeenCalledWith(1);
           } else if (outcome === "store-close-failed") {
             await expect(run).rejects.toThrow("synthetic database close failure");
-            expectCoordinatorReleased();
+            expectProcessOwnerReleased();
           } else if (outcome === "workspace-cleanup-failed") {
             await expect(run).rejects.toThrow(/workspace.*requires migration/);
           } else if (approvalsBlocked) {
             await expect(run).rejects.toThrow(ExecApprovalsMigrationRequiredError);
-            expectCoordinatorReleased();
+            expectProcessOwnerReleased();
           } else if (outcome === "restart-unhealthy") {
             await expect(run).rejects.toThrow("managed Gateway did not become ready");
           } else {
@@ -352,6 +399,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             outcome === "ready" ||
             outcome === "restart-unhealthy" ||
             outcome === "clean-repair" ||
+            outcome === "clean-stopped-repair" ||
             outcome === "clean-force-repair" ||
             outcome === "approvals-migrated" ||
             outcome === "update-legacy";
@@ -359,14 +407,18 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             inspectionOnly
               ? ["repair"]
               : shouldRestart
-                ? ["stop", "repair", "restart"]
+                ? [...(initiallyStopped ? [] : ["stop"]), "repair", "restart"]
                 : ["stop", "repair"],
           );
-          expect(stop).toHaveBeenCalledTimes(inspectionOnly ? 0 : 1);
+          expect(stop).toHaveBeenCalledTimes(inspectionOnly || initiallyStopped ? 0 : 1);
           expect(restart).toHaveBeenCalledTimes(shouldRestart ? 1 : 0);
           if (shouldRestart) {
+            expect(running).toBe(true);
             expect(restart).toHaveBeenCalledWith(
               expect.objectContaining({ preserveDefinition: true }),
+            );
+            expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
+              expect.objectContaining({ requireRunningService: true }),
             );
           }
           if (clean) {
@@ -397,6 +449,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           }
         } finally {
           releaseOpenClawAgentDatabaseLease(leaseId, { env: state.env });
+          platform?.mockRestore();
         }
       });
     },

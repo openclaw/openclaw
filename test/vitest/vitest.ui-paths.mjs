@@ -17,6 +17,7 @@ export const uiNodeDrivenBrowserTestFiles = [
   "ui/src/styles/chat-file-link-presentation.browser.test.ts",
   "ui/src/styles/chat-github-link-presentation.browser.test.ts",
   "ui/src/styles/shimmer.browser.test.ts",
+  "ui/src/styles/forced-colors-indicators.browser.test.ts",
   "ui/src/styles/sr-only.browser.test.ts",
 ];
 
@@ -58,6 +59,7 @@ export function isUiTestTarget(relative) {
 }
 
 export const uiE2eRealGatewayTestFiles = [
+  "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
   "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
   "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",

@@ -19,40 +19,31 @@ import { updateCommand } from "./update-command.js";
 vi.mock("../../infra/container-environment.js", () => ({ isContainerEnvironment: () => false }));
 
 const { fixture } = installFreshUpdateFixture();
-const cases = [
-  { name: "no restart", restart: false, compatible: false, current: false, refresh: true },
-  { name: "replacement", restart: true, compatible: false, current: false, refresh: true },
-  { name: "compatible", restart: true, compatible: true, current: false, refresh: true },
-  {
-    name: "foreign service",
-    restart: true,
-    compatible: false,
-    current: false,
-    refresh: true,
-    owned: false,
-  },
-  { name: "current replacement", restart: true, compatible: false, current: true, refresh: true },
-  {
-    name: "current sealed service",
-    restart: true,
-    compatible: false,
-    current: true,
-    refresh: false,
-  },
-  { name: "current no restart", restart: false, compatible: false, current: true, refresh: true },
-  {
-    name: "current stopped service",
-    restart: true,
-    compatible: false,
-    current: true,
-    refresh: true,
-    running: false,
-  },
-];
-
-it.each(cases.flatMap((entry) => [true, false].map((json) => Object.assign({}, entry, { json }))))(
-  "previews package runtime admission without mutation ($name, json=$json)",
-  async ({ restart, compatible, current, refresh, json, owned = true, running = true }) => {
+it.each([
+  { name: "no restart", restart: false, debugCapture: true },
+  { name: "replacement" },
+  { name: "compatible", compatible: true },
+  { name: "foreign service", owned: false },
+  { name: "current replacement", current: true },
+  { name: "current sealed service", current: true, refresh: false },
+  { name: "current no restart", current: true, restart: false },
+  { name: "current stopped service", current: true, running: false },
+  { name: "text refusal", restart: false, json: false, debugCapture: true },
+])(
+  "previews installed package runtime admission without mutation ($name)",
+  async ({
+    restart = true,
+    compatible = false,
+    current = false,
+    refresh = true,
+    json = true,
+    owned = true,
+    running = true,
+    debugCapture = false,
+  }) => {
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", debugCapture ? "yes" : "0");
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", undefined);
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_REQUIRE", undefined);
     fixture.managedServiceNodeRunner = "/service/node";
     const provisionRuntime = vi
       .spyOn(runtimeRecovery, "resolveTargetNodeRuntime")
@@ -122,6 +113,13 @@ it.each(cases.flatMap((entry) => [true, false].map((json) => Object.assign({}, e
 
     await updateCommand({ ...opts, dryRun: true });
 
+    const captureNotices = vi
+      .mocked(defaultRuntime.error)
+      .mock.calls.filter(
+        ([message]) =>
+          message === "Warning: Debug HTTP capture is disabled during update dry runs.",
+      );
+    expect(captureNotices).toHaveLength(debugCapture ? 1 : 0);
     const preview = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0];
     const notes = json ? JSON.stringify(preview) : log.mock.calls.flat().join("\n");
     const replacement = !compatible && restart && owned && (!current || (running && refresh));
@@ -198,7 +196,9 @@ it.each(cases.flatMap((entry) => [true, false].map((json) => Object.assign({}, e
     expect(fs.readFileSync(path.join(fixture.root, "package.json"))).toEqual(manifest);
 
     if (!current) {
-      await expect(updateCommand({ ...opts, json: true })).rejects.toBeInstanceOf(Error);
+      await expect(
+        updateCommand({ ...opts, json: true, admission: "installed" }),
+      ).rejects.toBeInstanceOf(Error);
       if (compatible || replacement) {
         expect(packageUpdate.stagePackageInstallUpdate).toHaveBeenCalledWith(
           expect.objectContaining({ nodeRunner: replacement ? "/current/node" : "/service/node" }),

@@ -1,4 +1,3 @@
-// Frontmatter helpers parse skill metadata from SKILL.md files.
 import {
   normalizeOptionalString,
   readNonEmptyStringPreservingWhitespace,
@@ -43,13 +42,9 @@ const UV_PACKAGE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._\-[\]=<>!~+,]*$/;
 
 function normalizeSafeBrewFormula(raw: unknown): string | undefined {
   const formula = normalizeOptionalString(raw);
-  if (!formula || formula.startsWith("-") || formula.includes("\\") || formula.includes("..")) {
-    return undefined;
-  }
-  if (!BREW_FORMULA_PATTERN.test(formula)) {
-    return undefined;
-  }
-  return formula;
+  return formula && BREW_FORMULA_PATTERN.test(formula) && !formula.includes("..")
+    ? formula
+    : undefined;
 }
 
 function normalizeSafeNpmSpec(raw: unknown): string | undefined {
@@ -65,13 +60,7 @@ function normalizeSafeNpmSpec(raw: unknown): string | undefined {
 
 function normalizeSafePackageSpec(raw: unknown, pattern: RegExp): string | undefined {
   const value = normalizeOptionalString(raw);
-  if (!value || value.startsWith("-") || value.includes("\\") || value.includes("://")) {
-    return undefined;
-  }
-  if (!pattern.test(value)) {
-    return undefined;
-  }
-  return value;
+  return value && pattern.test(value) ? value : undefined;
 }
 
 function normalizeSafeDownloadUrl(raw: unknown): string | undefined {
@@ -156,23 +145,14 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
     spec.targetDir = raw.targetDir;
   }
 
-  if (spec.kind === "brew" && !spec.formula) {
-    return undefined;
-  }
-  if (spec.kind === "node" && !spec.package) {
-    return undefined;
-  }
-  if (spec.kind === "go" && !spec.module) {
-    return undefined;
-  }
-  if (spec.kind === "uv" && !spec.package) {
-    return undefined;
-  }
-  if (spec.kind === "download" && !spec.url) {
-    return undefined;
-  }
-
-  return spec;
+  const target = {
+    brew: spec.formula,
+    node: spec.package,
+    go: spec.module,
+    uv: spec.package,
+    download: spec.url,
+  }[spec.kind];
+  return target ? spec : undefined;
 }
 
 export function resolveSkillManifestMetadata(

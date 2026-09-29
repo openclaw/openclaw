@@ -5,6 +5,7 @@ import type { UiCommand, UiCommandParams } from "../../../packages/gateway-proto
 import { UiCommandResultSchema } from "../../../packages/gateway-protocol/src/schema/ui-command.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readToolStringParam, ToolInputError } from "./common.js";
+import { withGatewayPersonalToolUser } from "./gateway-caller-context.js";
 import { callInProcessGatewayTool, type InProcessGatewayCaller } from "./in-process-gateway.js";
 
 const ACTIONS = [
@@ -28,6 +29,12 @@ const ACTIONS = [
 const ScreenToolSchema = Type.Object(
   {
     action: Type.String({ enum: [...ACTIONS], description: "Action" }),
+    user: Type.Optional(
+      Type.String({
+        description:
+          "The person's requester_profile.id, required when several people have steered this turn.",
+      }),
+    ),
     sessionKey: Type.Optional(Type.String({ description: "Session. Default: current" })),
     environmentId: Type.Optional(
       Type.String({ description: "Desktop source, or a pending portal's environment ID" }),
@@ -87,14 +94,8 @@ function commandForAction(
     return { kind: "sidebar", visible: action === "sidebar_show" };
   }
   if (
-    action === "terminal_show" ||
-    action === "terminal_hide" ||
-    action === "browser_show" ||
-    action === "browser_hide" ||
-    action === "desktop_show" ||
-    action === "desktop_hide" ||
-    action === "portal_show" ||
-    action === "portal_hide"
+    ACTIONS.some((candidate) => candidate === action) &&
+    (action.endsWith("_show") || action.endsWith("_hide"))
   ) {
     const open = action.endsWith("_show");
     const dock = open ? readDock(params) : undefined;
@@ -135,7 +136,7 @@ export function createScreenTool(opts: ScreenToolOptions = {}): AnyAgentTool {
     label: "Screen",
     name: "screen",
     description:
-      "Drive the requesting user's Control UI. desktop_show opens a native app's remote desktop using environmentId; portal_show opens a running web app's portal using portalId. Both default to the right chat sidebar. desktop_hide/portal_hide hide the view without stopping the app. browser_show/browser_hide toggle the agent Browser panel; terminal_show/terminal_hide toggle Terminal; sidebar_show/sidebar_hide toggle the session list. Also supports split_right/split_down, close_pane, focus, navigate. Optional sessionKey selects the conversation; default current. Only the browser that requested this turn is changed; it must still be connected. This changes presentation only; it does not control application input.",
+      "Drive the requesting user's Control UI. desktop_show opens a native app's remote desktop using environmentId; portal_show opens a running web app's portal using portalId. Both default to the right chat sidebar. desktop_hide/portal_hide hide the view without stopping the app. browser_show/browser_hide toggle the agent Browser panel; terminal_show/terminal_hide toggle Terminal; sidebar_show/sidebar_hide toggle the session list. Also supports split_right/split_down, close_pane, focus, navigate. Optional sessionKey selects the conversation; default current. Only the selected person's requesting browser is changed; it must still be connected. This changes presentation only; it does not control application input.",
     parameters: ScreenToolSchema,
     outputSchema: UiCommandResultSchema,
     requiredClientCaps: [GATEWAY_CLIENT_CAPS.UI_COMMANDS],
@@ -149,7 +150,11 @@ export function createScreenTool(opts: ScreenToolOptions = {}): AnyAgentTool {
           : {}),
         ...(opts.agentId ? { agentId: opts.agentId } : {}),
       };
-      return jsonResult(await gatewayCall("ui.command", payload));
+      return jsonResult(
+        await withGatewayPersonalToolUser(readToolStringParam(params, "user"), () =>
+          gatewayCall("ui.command", payload),
+        ),
+      );
     },
   };
 }

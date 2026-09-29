@@ -12,6 +12,15 @@ import {
   normalizePluginProviderBaseUrl,
 } from "./plugin-metadata-provider-facts.js";
 
+export function hasConfiguredModelProvider(params: {
+  provider: string;
+  config?: OpenClawConfig;
+}): boolean {
+  return (
+    findNormalizedProviderValue(params.config?.models?.providers, params.provider) !== undefined
+  );
+}
+
 /** Limits implicit catalogs to endpoints declared by their provider owner. */
 export function isProviderCatalogSourceAllowed(params: {
   provider: string;
@@ -62,6 +71,7 @@ export const CORE_BUILT_IN_MODEL_APIS = new Set([
   "anthropic-messages",
   "azure-openai-responses",
   "google-generative-ai",
+  "google-interactions",
   "google-vertex",
   "mistral-conversations",
   "openai-chatgpt-responses",
@@ -83,10 +93,7 @@ export function resolveProviderConfigApiOwnerHint(params: {
     return undefined;
   }
   const providerConfig =
-    providers[params.provider] ??
-    Object.entries(providers).find(
-      ([candidateId]) => normalizeProviderId(candidateId) === normalizedProvider,
-    )?.[1];
+    providers[params.provider] ?? findNormalizedProviderValue(providers, normalizedProvider);
   const api =
     typeof providerConfig?.api === "string" ? normalizeProviderId(providerConfig.api) : "";
   if (!api || api === normalizedProvider || CORE_BUILT_IN_MODEL_APIS.has(api)) {

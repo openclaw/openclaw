@@ -5,10 +5,18 @@ import type {
   ResponsesInputItem,
   StreamEvent,
 } from "./mock-openai-contracts.js";
-import { findNamedToolDefinition, hasToolDefinition } from "./mock-openai-directives.js";
+import {
+  findNamedToolDefinition,
+  hasToolErrorOutput,
+  hasDeclaredTool,
+  hasToolDefinition,
+} from "./mock-openai-directives.js";
 import { extractPlannedToolArgs, extractPlannedToolName } from "./mock-openai-events.js";
 import {
+  extractAllRequestTexts,
   extractToolOutput,
+  extractToolOutputValue,
+  extractLatestToolOutput,
   extractToolOutputCallId,
   extractToolOutputStructuredError,
   parseToolOutputJson,
@@ -20,7 +28,7 @@ import {
 
 export const QA_CODE_MODE_TARGET_MARKER = "qa-code-mode-target:";
 
-export function stringifyScenarioToolOutput(value: unknown): string {
+function stringifyScenarioToolOutput(value: unknown): string {
   if (typeof value === "string") {
     return value;
   }
@@ -101,15 +109,17 @@ export function resolveCurrentToolDeclarationSurface(
       ? item.tools
       : [],
   );
-  return additionalTools.length === 0
-    ? body
-    : {
-        ...body,
-        tools: [...(Array.isArray(body.tools) ? body.tools : []), ...additionalTools],
-      };
+  return {
+    ...body,
+    instructions: extractAllRequestTexts(
+      input.filter((item) => item.role === "system" || item.role === "developer"),
+      body,
+    ),
+    tools: [...(Array.isArray(body.tools) ? body.tools : []), ...additionalTools],
+  };
 }
 
-export function findToolCallByCallId(input: ResponsesInputItem[], callId: string) {
+function findToolCallByCallId(input: ResponsesInputItem[], callId: string) {
   return input.toReversed().find((item) => {
     const type = item.type;
     return (type === "function_call" || type === "custom_tool_call") && item.call_id === callId;
@@ -141,7 +151,7 @@ function isGeneratedCodeModeExecCall(toolCall: ResponsesInputItem | undefined) {
   return typeof source === "string" && decodeCodeModeTarget(source) !== null;
 }
 
-export function parseNativeCodeModeOutput(
+function parseNativeCodeModeOutput(
   output: unknown,
 ): { status: "waiting"; cellId: string } | { status: "completed"; value: unknown } | null {
   if (!Array.isArray(output)) {
@@ -178,9 +188,12 @@ export function parseNativeCodeModeOutput(
   return null;
 }
 
-function isGeneratedCodeModeWaitCall(input: ResponsesInputItem[], toolCall: ResponsesInputItem) {
+function findGeneratedCodeModeWaitTarget(
+  input: ResponsesInputItem[],
+  toolCall: ResponsesInputItem,
+) {
   if (toolCall.name !== "wait") {
-    return false;
+    return undefined;
   }
   const args = parseToolCallArguments(toolCall);
   const waitId =
@@ -190,24 +203,29 @@ function isGeneratedCodeModeWaitCall(input: ResponsesInputItem[], toolCall: Resp
         ? args.runId
         : undefined;
   if (!waitId) {
-    return false;
+    return undefined;
   }
-  return input.some((item) => {
+  for (const item of input) {
     if (
       (item.type !== "function_call_output" && item.type !== "custom_tool_call_output") ||
       typeof item.call_id !== "string"
     ) {
-      return false;
+      continue;
     }
     const native = parseNativeCodeModeOutput(item.output);
     const parsed = native ?? parseToolOutputJson(stringifyScenarioToolOutput(item.output));
-    return (
+    if (
       parsed?.status === "waiting" &&
       (("cellId" in parsed && parsed.cellId === waitId) ||
-        ("runId" in parsed && parsed.runId === waitId)) &&
-      isGeneratedCodeModeExecCall(findToolCallByCallId(input, item.call_id))
-    );
-  });
+        ("runId" in parsed && parsed.runId === waitId))
+    ) {
+      const target = findToolCallByCallId(input, item.call_id);
+      if (isGeneratedCodeModeExecCall(target)) {
+        return target;
+      }
+    }
+  }
+  return undefined;
 }
 
 export function readRestartCheckpointProgress(input: ResponsesInputItem[]) {
@@ -224,17 +242,14 @@ export function readRestartCheckpointProgress(input: ResponsesInputItem[]) {
       checkpoints.add(Number(match[1]));
     }
   }
-  const waitCount = input.filter((item) => isGeneratedCodeModeWaitCall(input, item)).length;
+  const waitCount = input.filter((item) => findGeneratedCodeModeWaitTarget(input, item)).length;
   return {
     checkpoints: [...checkpoints].toSorted((left, right) => left - right),
     waitCount,
   };
 }
 
-export function isCodeModeControlToolOutput(
-  body: Record<string, unknown>,
-  input: ResponsesInputItem[],
-) {
+function isCodeModeControlToolOutput(body: Record<string, unknown>, input: ResponsesInputItem[]) {
   if (!hasCodeModeExecSurface(body)) {
     return false;
   }
@@ -245,29 +260,41 @@ export function isCodeModeControlToolOutput(
   const toolCall = findToolCallByCallId(input, toolOutputCallId);
   return (
     isGeneratedCodeModeExecCall(toolCall) ||
-    (toolCall ? isGeneratedCodeModeWaitCall(input, toolCall) : false)
+    Boolean(toolCall && findGeneratedCodeModeWaitTarget(input, toolCall))
   );
 }
 
-export function canCallScenarioTool(body: Record<string, unknown>, name: string) {
+export function canCallScenarioTool(
+  body: Record<string, unknown>,
+  name: string,
+  requireDeclaredTool = false,
+) {
   // The catalog dispatcher owns target lookup and authorization. Its public
   // contract accepts an exact known name without a redundant search round trip.
   return (
-    hasToolDefinition(body, name) ||
-    hasCodeModeExecSurface(body) ||
-    hasToolDefinition(body, "tool_call")
+    (!requireDeclaredTool || hasDeclaredTool(body, name)) &&
+    (hasToolDefinition(body, name) ||
+      hasCodeModeExecSurface(body) ||
+      hasToolDefinition(body, "tool_call"))
   );
 }
 
-export function readScenarioCompletedToolName(toolCall: ResponsesInputItem | undefined) {
-  if (toolCall?.name === "tool_call") {
-    const id = parseToolCallArguments(toolCall)?.id;
+function readScenarioCompletedToolName(
+  toolCall: ResponsesInputItem | undefined,
+  input: ResponsesInputItem[] = [],
+) {
+  const call =
+    toolCall?.name === "wait"
+      ? (findGeneratedCodeModeWaitTarget(input, toolCall) ?? toolCall)
+      : toolCall;
+  if (call?.name === "tool_call") {
+    const id = parseToolCallArguments(call)?.id;
     return typeof id === "string" ? id : undefined;
   }
-  if (toolCall?.name === "exec") {
-    return decodeCodeModeTarget(readGeneratedCodeModeExecSource(toolCall))?.name;
+  if (call?.name === "exec") {
+    return decodeCodeModeTarget(readGeneratedCodeModeExecSource(call))?.name;
   }
-  return toolCall?.name;
+  return call?.name;
 }
 
 export function unwrapScenarioCatalogOutput(
@@ -308,6 +335,54 @@ export function unwrapScenarioCatalogOutput(
         .map((part) => part.text)
         .join("\n")
     : output;
+}
+
+export function readScenarioToolCompletion(
+  toolDeclarationBody: Record<string, unknown>,
+  input: ResponsesInputItem[],
+  allInputText: string,
+) {
+  const rawToolOutput = extractToolOutput(input);
+  const codeModeSurface = resolveCodeModeExecSurface(toolDeclarationBody);
+  const hasCodeModeControlOutput = isCodeModeControlToolOutput(toolDeclarationBody, input);
+  const codeModeControlJson = hasCodeModeControlOutput
+    ? codeModeSurface === "native"
+      ? parseNativeCodeModeOutput(extractToolOutputValue(input))
+      : parseToolOutputJson(rawToolOutput)
+    : null;
+  const toolOutput =
+    codeModeControlJson?.status === "completed" && Object.hasOwn(codeModeControlJson, "value")
+      ? stringifyScenarioToolOutput(codeModeControlJson.value)
+      : codeModeSurface === "native" && hasCodeModeControlOutput
+        ? ""
+        : unwrapScenarioCatalogOutput(input, rawToolOutput);
+  const completedToolCall = findToolCallByCallId(input, extractToolOutputCallId(input));
+  const completedToolName = readScenarioCompletedToolName(completedToolCall, input);
+  const scenarioToolOutput =
+    toolOutput ||
+    (/thread memory check|session memory ranking check|memory tools check|repo contract followthrough check/i.test(
+      allInputText,
+    )
+      ? extractLatestToolOutput(input)
+      : "");
+  const toolJson = parseToolOutputJson(scenarioToolOutput);
+  // Code Mode projects the write's details, without its direct-call confirmation text.
+  const hasCompletedStructuredWrite =
+    completedToolName === "write" &&
+    (!hasCodeModeControlOutput || codeModeControlJson?.status === "completed") &&
+    extractToolOutputStructuredError(input) !== true &&
+    !hasToolErrorOutput(toolJson, "") &&
+    typeof toolJson?.changed === "boolean";
+  return {
+    rawToolOutput,
+    hasCodeModeControlOutput,
+    codeModeControlJson,
+    toolOutput,
+    completedToolName,
+    scenarioToolOutput,
+    toolJson,
+    hasCompletedStructuredWrite,
+  };
 }
 
 function readProgressCommandOutput(input: ResponsesInputItem[], command: string, isPoll = false) {
@@ -356,7 +431,7 @@ function readProgressCommandOutput(input: ResponsesInputItem[], command: string,
       /(?:^|\n\n)Approval required\. I sent approval DMs to the approvers for this account\.$/u.test(
         text,
       ) ||
-      /(?:^|\n\n)Exec approval is required, but no interactive approval client is currently available\.\n\nApprove it from the Web UI or terminal UI[^\n]* Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox\.[^\n]* Then retry the command\. You can usually leave execApprovals\.approvers unset when owner config already identifies the approvers\.$/u.test(
+      /(?:^|\n\n)Exec approval is required, but no interactive approval client is currently available\.\n\nApprove it from the Web UI[^\n]* Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox\.[^\n]* Then retry the command\. You can usually leave execApprovals\.approvers unset when owner config already identifies the approvers\.$/u.test(
         text,
       ) ||
       unknownNotice)
@@ -465,7 +540,11 @@ export function buildScenarioToolCallEvents(
     if (definition?.type === "custom" && typeof args.input === "string") {
       return buildCustomToolCallEventsWithInput(name, args.input, namespace);
     }
-    return buildRawToolCallEventsWithArgs(name, args, namespace);
+    const callArgs =
+      name === "exec" && typeof args.code === "string"
+        ? { title: "Run the QA fixture step", ...args }
+        : args;
+    return buildRawToolCallEventsWithArgs(name, callArgs, namespace);
   }
   const encodedTarget = encodeCodeModeTarget(name, args);
   if (resolveCodeModeExecSurface(body) === "native") {
@@ -486,6 +565,7 @@ export function buildScenarioToolCallEvents(
     );
   }
   return buildRawToolCallEventsWithArgs("exec", {
+    title: "Run the QA fixture step",
     code: [
       `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
       `const targetName = ${JSON.stringify(name)};`,

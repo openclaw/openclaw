@@ -1,11 +1,14 @@
 import { existsSync, lstatSync } from "node:fs";
 import path from "node:path";
 import { pluginContractPatterns } from "../../test/vitest/vitest.contracts-paths.mjs";
+import { tuiPtyTestFiles } from "../../test/vitest/vitest.test-shards.mjs";
 import {
+  controlUiE2eTestGlobs,
   isControlUiSourcePath,
   isPluginControlUiPath,
   isUiBrowserTestFile,
   isUiTestTarget,
+  uiE2eRealGatewayTestFiles,
 } from "../../test/vitest/vitest.ui-paths.mjs";
 import { isBoundaryTestFile } from "../../test/vitest/vitest.unit-paths.mjs";
 import { detectChangedLanes } from "../changed-lanes.mts";
@@ -19,53 +22,67 @@ import {
   CHANNEL_CONTRACT_CONFIG_PATTERNS,
   CONTRACTS_PLUGIN_VITEST_CONFIG,
   E2E_VITEST_CONFIG,
-  findUnmatchedExplicitTestTargets,
-  hasImportGraphConsumers,
   hasImportGraphImpactOnTargets,
   isTestFileTarget,
-  isWorkflowLintConfigPath,
-  resolveControlUiTestConsumers,
+  listRunnableVitestConfigTargets,
   resolveAffectedTestsFromImportGraph,
-  resolveDependencyTestConsumers,
   resolveChangedTestTargetPlan,
   UI_E2E_VITEST_CONFIG,
 } from "../test-projects.test-support.mts";
-import { resolveChangedDependencies } from "./changed-dependencies.mts";
 import { listAvailableExtensionIds } from "./changed-extensions.mts";
-import { isTestOnlyPath } from "./changed-path-facts.mjs";
+import { getChangedPathFacts, isTestOnlyPath } from "./changed-path-facts.mjs";
 import {
-  createNodeTestShardBundles,
+  createChangedExtensionConfigShards,
+  createChangedExtensionConfigShardsForPaths,
+  packChangedExtensionConfigShards,
+  resolveChangedExtensionRoots,
+} from "./ci-extension-test-shards.mts";
+import {
+  canSplitWholeConfigGroup,
+  listNodeTestConfigFiles,
+  listWholeConfigFiles,
+} from "./ci-node-test-inventory.mts";
+import {
+  createUiRealGatewayTestShards,
   createSelectedNodeTestShardBundles,
-  isPolicyTestOwnedPath,
+  packNodeTestGroups,
   nodeTestConfigRequiresCanonicalMetadata,
   resolveCanonicalNodeTestConfig,
   isCanonicalNodeTestConfig,
-  isToolingTestOwnerPath,
-  packNodeTestGroups,
-  resolvePolicyTestTargets,
-  RELEASE_ONLY_TOOLING_CONFIGS,
-  isReleaseOnlyToolingTestFile,
   isRuntimeTestFileIncluded,
+  SOURCE_CHANNEL_TEST_POLICY,
   type NodeTestShardGroup,
+  type RuntimeTestSelection,
 } from "./ci-node-test-plan.mts";
-import { isCiProofTestFile } from "./ci-proof-test-inventory.mts";
+import { isPolicyTestOwnedPath, resolvePolicyTestTargets } from "./ci-policy-test-watch.mts";
 import {
-  DATABASE_WORKER_CONFIG,
-  DATABASE_WORKER_TEST_JOB_FILE_LIMIT,
-  estimateExtensionTestCost,
+  isCiProofTestFile,
+  isPrExemptRuntimeTestFile,
+  isReleaseOnlyRuntimeTestFile,
+  listPrExemptRuntimeTestFiles,
+  PR_PROTECTED_RUNTIME_TEST_FILES,
+} from "./ci-proof-test-inventory.mts";
+import {
+  readCompactGroupTimings,
+  readRepoE2eFileTimings,
+  readToolingFileTimings,
+} from "./ci-test-timings.mts";
+import {
   listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
-  shouldSplitExtensionTestProcesses,
-  splitExtensionTestJobTargets,
 } from "./extension-test-plan.mts";
 import { buildPluginSdkEntrySources, publicPluginSdkEntrypoints } from "./plugin-sdk-entries.mts";
-import { isErasedTypeScriptFileChange } from "./test-selector-source-facts.mts";
 import {
   mergeVitestPretestBuildModes,
   resolveVitestPretestBuildMode,
   type VitestPretestBuildMode,
 } from "./vitest-build-prerequisites.mts";
-import { VITEST_PRETEST_BUILD_SECONDS } from "./vitest-shard-metadata.mts";
+import {
+  createCompactSplitTimingGeneration,
+  estimateVitestTestFileSeconds,
+  estimateVitestToolingFileSeconds,
+  VITEST_PRETEST_BUILD_SECONDS,
+} from "./vitest-shard-metadata.mts";
 
 type ChangedNodeTestShard = {
   checkName: string;
@@ -75,6 +92,7 @@ type ChangedNodeTestShard = {
   includePatterns?: string[];
   planConcurrency?: number;
   predictedSeconds?: number;
+  predictedTestSeconds?: number;
   pretestBuildMode?: VitestPretestBuildMode;
   requiresDist: boolean;
   runner: string;
@@ -82,7 +100,6 @@ type ChangedNodeTestShard = {
   targets?: string[];
   timeoutMinutes?: number;
 };
-type ChangedExtensionConfigShard = ChangedNodeTestShard & { predictedSeconds: number };
 type CwdOptions = { cwd?: string };
 type PlanDiagnostic = (reason: string) => void;
 type ChangedTargetValidation = {
@@ -91,14 +108,86 @@ type ChangedTargetValidation = {
   dedicatedNativeChecks?: { macos: boolean; ios: boolean; android: boolean };
   onFallback?: PlanDiagnostic;
 };
+const BROWSER_EXTENSION_E2E_TEST_FILE =
+  "extensions/browser/chrome-extension/bootstrap.chromium.test.ts";
 
 /** Ordinary UI unit entries retain their unit owner; fixtures and their consumers retain E2E. */
-export function hasUiE2eAffectingChange(changedPaths: string[], options: CwdOptions = {}) {
+export function hasUiE2eAffectingChange(
+  changedPaths: string[],
+  options: CwdOptions & { family?: "control-ui" | "browser-extension" | "real-gateway" } = {},
+) {
   const cwd = options.cwd ?? process.cwd();
+  if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
+    return true;
+  }
+  const relevantPaths = changedPaths.filter(
+    (file) =>
+      !isDocumentationPath(file) &&
+      getChangedPathFacts(file).surface !== "rootGlobal" &&
+      file !== "test/vitest/vitest.shared.config.ts" &&
+      file !== "tsconfig.json",
+  );
+  if (relevantPaths.length === 0) {
+    return false;
+  }
+  if (options.family === "browser-extension") {
+    const workflowInputs = relevantPaths.filter((file) => file.startsWith(".github/"));
+    return (
+      relevantPaths.some((file) => file.startsWith("extensions/browser/chrome-extension/")) ||
+      (workflowInputs.length > 0 && detectChangedScope(workflowInputs).runUiTests) ||
+      hasImportGraphImpactOnTargets(
+        relevantPaths,
+        [
+          BROWSER_EXTENSION_E2E_TEST_FILE,
+          "test/vitest/vitest.e2e.config.ts",
+          "scripts/ensure-playwright-chromium.mts",
+        ],
+        cwd,
+        { tooling: true, resolveAliases: true },
+      )
+    );
+  }
+  if (options.family === "real-gateway") {
+    return (
+      relevantPaths.some(
+        (file) =>
+          !isTestOnlyPath(file) &&
+          (file.startsWith("src/gateway/") || file.startsWith("packages/gateway-protocol/")),
+      ) ||
+      hasImportGraphImpactOnTargets(
+        relevantPaths,
+        [
+          ...uiE2eRealGatewayTestFiles,
+          ...new Set(
+            createUiRealGatewayTestShards([]).flatMap((shard) =>
+              shard.groups.flatMap((group) => group.configs),
+            ),
+          ),
+        ],
+        cwd,
+        { tooling: true, resolveAliases: true },
+      )
+    );
+  }
+  // The extension bootstrap has a separate Chromium job; its source tree is
+  // not a Control UI owner. Shared imports can still select either family.
+  const controlUiPaths = relevantPaths.filter(
+    (file) => !file.startsWith("extensions/browser/chrome-extension/"),
+  );
+  if (controlUiPaths.length === 0 || !detectChangedScope(controlUiPaths).runUiTests) {
+    return hasImportGraphImpactOnTargets(
+      controlUiPaths,
+      (file) =>
+        !isTestOnlyPath(file) &&
+        (isControlUiSourcePath(file) ||
+          file.startsWith("packages/gateway-protocol/") ||
+          file === "src/gateway/control-ui.ts"),
+      cwd,
+      { tooling: true, resolveAliases: true },
+    );
+  }
   if (
-    !Array.isArray(changedPaths) ||
-    changedPaths.length === 0 ||
-    changedPaths.some(
+    relevantPaths.some(
       (file) =>
         !file.startsWith("ui/src/") ||
         !isUiTestTarget(file) ||
@@ -113,38 +202,29 @@ export function hasUiE2eAffectingChange(changedPaths: string[], options: CwdOpti
   }
   // Test entry names are not enough: a fixture or application may import one.
   // Reuse the canonical import graph rather than orphaning that consumer's proof.
-  return hasImportGraphConsumers(changedPaths, cwd, { tooling: true });
+  return hasImportGraphImpactOnTargets(
+    relevantPaths,
+    (file) =>
+      isUiBrowserTestFile(file) ||
+      uiE2eRealGatewayTestFiles.includes(file) ||
+      controlUiE2eTestGlobs.some((pattern) => path.matchesGlob(file, pattern)),
+    cwd,
+    { tooling: true, resolveAliases: true },
+  );
 }
 
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 // Each target runs in its own child process (isolation contract), so bound the
 // serial tail per job; the shard runner overlaps two children at a time.
 const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
-// Share the 45–60s runner setup across more unchanged serial envelopes.
-// Runtime preparation and native-worker file ceilings remain separate admission limits.
-const CHANGED_EXTENSION_JOB_SECONDS = 300;
+const PR_NODE_TEST_SECONDS = 150;
 const MAX_CHANGED_EXTENSION_FALLBACK_JOBS = 50;
 // Memory Core targets perform real SQLite/indexing work. Two concurrent Vitest
 // processes starve each other on 4-vCPU runners and push otherwise healthy
 // integration tests past the global timeout.
 const SERIAL_CHANGED_TARGET_RE = /^extensions\/memory-core\//u;
 const BOUNDARY_NODE_TEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
-const UI_NODE_TEST_CONFIGS = new Set([
-  "test/vitest/vitest.ui.config.ts",
-  "test/vitest/vitest.ui-isolated.config.ts",
-  "test/vitest/vitest.ui-timing.config.ts",
-]);
-let automaticNodeTestConfigs: ReadonlySet<string> | undefined;
-function resolveAutomaticNodeTestConfigs() {
-  return (automaticNodeTestConfigs ??= new Set(
-    createNodeTestShardBundles({
-      compactMode: "pull-request",
-      includeReleaseOnlyPluginShards: false,
-      includeReleaseOnlyRuntimeTests: false,
-      includeProofTests: false,
-    }).flatMap((shard) => shard.groups.flatMap((group) => group.configs)),
-  ));
-}
+const TUI_PTY_ASSERTION_TEST = "src/tui/tui-pty-harness-assertion-test-support.test.ts";
 const publicPluginSdkEntrySources = Object.values(
   buildPluginSdkEntrySources(publicPluginSdkEntrypoints),
 );
@@ -193,10 +273,10 @@ export function hasQaSmokeAffectingChange(changedPaths: string[]) {
   return changedPaths.some((changedPath) => QA_SMOKE_SURFACE_RE.test(changedPath));
 }
 
-// Workspace package specifiers and generated plugin browser entries are not
-// relative graph edges, so retain those inputs explicitly.
+// UI artifacts and their own build/performance policy retain explicit ownership;
+// workspace packages use their direct UI import edges instead of a global fallback.
 const CONTROL_UI_PERFORMANCE_SURFACE_RE =
-  /^(?:ui|packages|patches)\/|^extensions\/[^/]+\/browser(?:\/|$)|^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|node-version\.mjs|tsconfig[^/]*\.json)$|^scripts\/(?:check-control-ui-(?:performance(?:-base)?|precompressed-assets)\.mts|ui\.(?:mts|js)|tsx\.mjs|lib\/ci-changed-node-test-plan\.mts)$|^config\/control-ui-startup-budget-baseline\.json$|^\.github\/(?:workflows\/ci\.yml$|actions\/(?:setup-node-env|setup-pnpm-store-cache)\/)/u;
+  /^ui\/|^extensions\/[^/]+\/browser(?:\/|$)|^tsconfig\.ui\.json$|^scripts\/(?:check-control-ui-(?:performance(?:-base)?|precompressed-assets)\.mts|ui\.(?:mts|js)|lib\/ci-changed-node-test-plan\.mts)$|^config\/control-ui-startup-budget-baseline\.json$|^\.github\/workflows\/ci\.yml$/u;
 
 export function hasControlUiPerformanceAffectingChange(
   changedPaths: string[],
@@ -209,12 +289,11 @@ export function hasControlUiPerformanceAffectingChange(
   return hasImportGraphImpactOnTargets(
     sources,
     (file) =>
-      (file.startsWith("ui/") && !isTestOnlyPath(file)) ||
-      /^scripts\/(?:check-control-ui-(?:performance(?:-base)?|precompressed-assets)\.mts|tsx\.mjs)$/u.test(
-        file,
-      ),
+      (!isTestOnlyPath(file) &&
+        (getChangedPathFacts(file).surface === "ui" || isPluginControlUiPath(file))) ||
+      /^scripts\/check-control-ui-(?:performance(?:-base)?|precompressed-assets)\.mts$/u.test(file),
     options.cwd ?? process.cwd(),
-    { tooling: true },
+    { tooling: true, resolveAliases: true, runtimeOnly: true },
   );
 }
 
@@ -230,10 +309,6 @@ const PROMPT_SNAPSHOT_SURFACE_RE =
 // plugin-sdk agent harness, codex catalog fixtures).
 const PROMPT_SNAPSHOT_ENTRY = "test/helpers/agents/happy-path-prompt-snapshots.ts";
 
-// The fallback planner and chunk-policy owner are part of the gate surface; changes to the
-// gate must not be able to skip the gated lane (#124412).
-const CORE_EXTENSION_IMPACT_SURFACE_RE =
-  /^scripts\/lib\/(?:changed-extensions|ci-changed-node-test-plan|extension-test-plan)\.mts$/u;
 const GLOBAL_NODE_TEST_INPUT_RE =
   /^(?:pnpm-workspace\.yaml|\.npmrc|node-version\.mjs|tsconfig(?:\.[^/]+)?\.json|vitest\.config\.ts|test\/setup(?:\.shared|\.extensions|-openclaw-runtime)?\.ts|test\/vitest\/vitest\.(?:shared\.config|scoped-config|performance-config)\.ts|scripts\/run-vitest\.(?:mjs|mts)|scripts\/test-projects\.mts|scripts\/lib\/vitest-process-env\.mts|\.github\/actions\/(?:setup-node-env|setup-pnpm-store-cache)\/action\.yml)$|^patches\//u;
 
@@ -334,103 +409,151 @@ function isIndependentlyCheckedDocumentation(changedPath: string, cwd: string) {
   return entry === undefined || entry.isFile();
 }
 
-function resolvePreciseChangedTargets(
-  changedPaths: string[],
-  cwd: string,
-  documentationPaths: ReadonlySet<string>,
-  additionalTargets: string[] = [],
-  validation: ChangedTargetValidation = {},
-) {
-  const resolveTargetPlan = (paths: string[]) => {
-    const consumers = resolveAffectedTestsFromImportGraph(paths, cwd, {
-      tooling: true,
-      forceFull: true,
-      resolveAliases: true,
-      runtimeOnly: true,
-    });
-    const plan = resolveChangedTestTargetPlan(paths, {
-      broad: true,
-      combineSiblingWithImportGraph: true,
-      cwd,
-      forceFullImportGraph: true,
-      includeExtensionImpact: false,
-      resolveAliases: true,
-      runtimeOnly: true,
-    });
-    // UI routing can return the source itself; instruction pages are not test targets.
-    return {
-      mode: consumers.length > 0 ? ("targets" as const) : plan.mode,
-      targets: [...new Set([...plan.targets, ...consumers])].filter(
-        (target) =>
-          !documentationPaths.has(target) &&
-          !(consumers.length > 0 && paths.includes(target) && !isTestFileTarget(target)),
-      ),
-    };
-  };
-  const plan =
-    changedPaths.length > 0
-      ? resolveTargetPlan(changedPaths)
-      : { mode: "targets" as const, targets: [] };
-  // Concrete consumers remain selected even when a separate check owns an input.
-  const erasedPaths = new Set<string>();
-  const unresolvedPath = changedPaths.find((changedPath) => {
-    const changedPathPlan = resolveTargetPlan([changedPath]);
-    if (
-      validation.dedicatedCoreTypeChecks === true &&
-      changedPath.startsWith("src/") &&
-      !isTestFileTarget(changedPath) &&
-      changedPathPlan.mode === "targets" &&
-      changedPathPlan.targets.length === 1 &&
-      changedPathPlan.targets[0] === changedPath &&
-      isErasedTypeScriptFileChange(cwd, changedPath, validation.baseRef)
-    ) {
-      erasedPaths.add(changedPath);
-      return false;
-    }
-    const native =
-      changedPathPlan.targets.length === 0 &&
-      validation.dedicatedNativeChecks &&
-      !isToolingTestOwnerPath(changedPath)
-        ? detectChangedScope([changedPath])
-        : undefined;
-    const checkedWithoutNodeTests =
-      documentationPaths.has(changedPath) ||
-      isWorkflowLintConfigPath(changedPath) ||
-      (native &&
-        !native.runNode &&
-        (native.runMacos || native.runIosBuild || native.runAndroid) &&
-        (!native.runMacos || validation.dedicatedNativeChecks?.macos === true) &&
-        (!native.runIosBuild || validation.dedicatedNativeChecks?.ios === true) &&
-        (!native.runAndroid || validation.dedicatedNativeChecks?.android === true));
-    return (
-      changedPathPlan.mode !== "targets" ||
-      changedPathPlan.targets.some((target) => !isTestFileTarget(target)) ||
-      (changedPathPlan.targets.length === 0 && !checkedWithoutNodeTests)
-    );
-  });
-  if (unresolvedPath !== undefined || plan.mode !== "targets") {
-    validation.onFallback?.(
-      unresolvedPath === undefined
-        ? "unresolved changed-path owner"
-        : `unresolved changed-path owner: ${JSON.stringify(unresolvedPath)}`,
-    );
-    return null;
+export function resolveReleaseFastLaneScope(
+  changedPaths: readonly string[] | null,
+  options: CwdOptions = {},
+): { eligible: true } | { eligible: false; reason: string } {
+  if (!changedPaths?.length) {
+    return { eligible: false, reason: "missing changed paths" };
   }
-  const targets = [
+  const globalInput = changedPaths.find((file) => GLOBAL_NODE_TEST_INPUT_RE.test(file));
+  if (globalInput) {
+    return { eligible: false, reason: `global execution or resolution input: ${globalInput}` };
+  }
+  const cwd = options.cwd ?? process.cwd();
+  const outsideScope = changedPaths.find(
+    (file) =>
+      !file.startsWith(".github/workflows/") &&
+      !file.startsWith("scripts/") &&
+      !file.startsWith("test/scripts/") &&
+      !/^\.agents\/skills\/release-[^/]+\//u.test(file) &&
+      file !== "docs/reference/RELEASING.md" &&
+      !isIndependentlyCheckedDocumentation(file, cwd),
+  );
+  return outsideScope === undefined
+    ? { eligible: true }
+    : { eligible: false, reason: `outside the release tooling scope: ${outsideScope}` };
+}
+
+/** The fixed cross-area smoke travels through the same exact-file owners as changed tests. */
+const PR_SMOKE_TEST_FILES = [
+  "test/gateway-rpc-exporters.test.ts",
+  "src/config/io.load-async.test.ts",
+  "src/config/io.compat.test.ts",
+  "src/config/utility-model-separation-migration.io.test.ts",
+  "src/plugins/loader.runtime-registry.test.ts",
+  "test/qa-channel-message-tool-delivery.test.ts",
+];
+const protectedRuntimeTestFiles = new Set(PR_PROTECTED_RUNTIME_TEST_FILES);
+
+/** Resolve owner areas and transitive consumers once, before projecting platform jobs. */
+export function resolveChangedNodeTestTargets(
+  changedPaths: string[],
+  options: CwdOptions & ChangedTargetValidation & RuntimeTestSelection = {},
+): string[] {
+  const cwd = options.cwd ?? process.cwd();
+  const paths = changedPaths.filter((file) => !isIndependentlyCheckedDocumentation(file, cwd));
+  const targetPlan = resolveChangedTestTargetPlan(paths, {
+    cwd,
+    broad: false,
+    boundedOwners: true,
+    combineSiblingWithImportGraph: true,
+    resolveAliases: true,
+    runtimeOnly: true,
+    includeExtensionImpact: false,
+  });
+  if (paths.length > 0 && targetPlan.mode !== "targets") {
+    throw new Error(`Unresolved changed-owner test plan: ${targetPlan.mode}`);
+  }
+  const ownsFile = (file: string) =>
+    targetPlan.ownerAreas?.some((area) => file.startsWith(`${area}/`)) === true;
+  // Dependency and global build inputs reach every runtime area. Keep the
+  // observed regression inventory without restoring the whole runtime suite.
+  const globalProtection = paths.some((file) => getChangedPathFacts(file).surface === "rootGlobal");
+  const affectedProtectedTests = globalProtection
+    ? []
+    : resolveAffectedTestsFromImportGraph(paths, cwd, {
+        tooling: true,
+        forceFull: true,
+        resolveAliases: true,
+        runtimeOnly: true,
+      }).filter((file) => protectedRuntimeTestFiles.has(file));
+  const ownerOptIns = [
+    ...PR_PROTECTED_RUNTIME_TEST_FILES.filter((file) => globalProtection || ownsFile(file)),
+    ...affectedProtectedTests,
+    ...listPrExemptRuntimeTestFiles(cwd).filter(ownsFile),
+  ];
+  const owners = [
     ...new Set([
-      ...plan.targets.filter((target) => !erasedPaths.has(target)),
-      ...additionalTargets,
+      ...targetPlan.targets,
+      ...ownerOptIns,
+      ...paths.filter(
+        (file) =>
+          listRunnableVitestConfigTargets().includes(file) && isCanonicalNodeTestConfig(file),
+      ),
+      ...(paths.some((file) => listRunnableVitestConfigTargets().includes(file))
+        ? ["test/vitest-projects-config.test.ts"]
+        : []),
+      ...resolvePolicyTestTargets(paths),
     ]),
   ];
-  if (
-    targets.some((target) => !isTestFileTarget(target)) ||
-    findUnmatchedExplicitTestTargets(targets, cwd).length > 0
-  ) {
-    validation.onFallback?.("unresolved test target or whole-suite config");
-    return null;
-  }
+  let inventory: string[] | undefined;
+  const allFiles = () =>
+    (inventory ??= listExtensionTestFilesForRoots(
+      ["src", "test", "extensions", "packages", "ui"],
+      cwd,
+    ));
+  const optInTargets = new Set([...paths, ...PR_SMOKE_TEST_FILES, ...ownerOptIns]);
+  const files = owners.flatMap((target) => {
+    if (isTestFileTarget(target)) {
+      optInTargets.add(target);
+      return [target];
+    }
+    if (listRunnableVitestConfigTargets().includes(target)) {
+      // Explicit config owners retain their inventory, while shared config hubs
+      // resolve to the selector/guard owners above rather than all config users.
+      const ownedFiles =
+        path.resolve(cwd) === process.cwd()
+          ? (listNodeTestConfigFiles(target) ??
+            allFiles().filter((file) =>
+              buildVitestRunPlans([file], cwd).some(
+                (plan) =>
+                  resolveCanonicalNodeTestConfig(file, plan.config) === target ||
+                  plan.config === target,
+              ),
+            ))
+          : [];
+      if (paths.includes(target)) {
+        for (const file of ownedFiles) {
+          optInTargets.add(file);
+        }
+      }
+      return ownedFiles;
+    }
+    const entry = lstatSync(path.join(cwd, target), { throwIfNoEntry: false });
+    if (entry?.isDirectory()) {
+      return listExtensionTestFilesForRoots([target], cwd);
+    }
+    // Mapped globs are owner contracts; ordinary source names are not test globs.
+    return target.includes("*") ? allFiles().filter((file) => path.matchesGlob(file, target)) : [];
+  });
+  return [...new Set([...files, ...PR_SMOKE_TEST_FILES])]
+    .filter(
+      (file) =>
+        isTestFileTarget(file) &&
+        !file.endsWith(".live.test.ts") &&
+        (optInTargets.has(file) ||
+          ((options.includePrExemptRuntimeTests !== false || !isPrExemptRuntimeTestFile(file)) &&
+            (options.includeReleaseOnlyRuntimeTests !== false ||
+              !isReleaseOnlyRuntimeTestFile(file)))) &&
+        lstatSync(path.join(cwd, file), { throwIfNoEntry: false })?.isFile(),
+    )
+    .toSorted();
+}
 
-  const targetPlans = targets.map((target) => ({
+function resolvePreciseChangedTargets(targets: readonly string[], cwd: string) {
+  return targets.map((target) => ({
+    target,
     plans: buildVitestRunPlans([target], cwd).map((targetPlan) => {
       const config =
         path.resolve(cwd) === process.cwd()
@@ -440,34 +563,88 @@ function resolvePreciseChangedTargets(
         ? Object.assign({}, targetPlan, { config, includePatterns: [target], forwardedArgs: [] })
         : targetPlan;
     }),
-    target,
   }));
-  const unboundedTarget = targetPlans.find(
-    ({ target, plans }) =>
-      plans.length === 0 ||
-      // E2E's canonical owner uses CLI filters instead of include files.
-      // Named deferred proofs need resolution, but no PR execution envelope.
-      (!isCiProofTestFile(target) &&
-        plans.some(
-          (targetPlan) => !targetPlan.includePatterns && !targetPlan.forwardedArgs.includes(target),
-        )),
-  );
-  if (unboundedTarget) {
-    validation.onFallback?.(
-      `test target expands beyond a bounded file plan: ${unboundedTarget.target} (${unboundedTarget.plans.map((targetPlan) => targetPlan.config).join(", ")})`,
-    );
-    return null;
-  }
-  return targetPlans;
 }
 
 function createChangedTargetShards(
-  targets: string[],
+  targets: NonNullable<ReturnType<typeof resolvePreciseChangedTargets>>,
   names: { checkName: string; shardName: string },
+  rowBudget?: number,
 ) {
-  const targetChunks: string[][] = [];
-  for (let offset = 0; offset < targets.length; offset += CHANGED_NODE_TEST_TARGETS_PER_JOB) {
-    targetChunks.push(targets.slice(offset, offset + CHANGED_NODE_TEST_TARGETS_PER_JOB));
+  const timings = { ...readRepoE2eFileTimings(), ...readToolingFileTimings("blacksmith") };
+  const buildModeOf = (chunk: typeof targets) =>
+    chunk.some(({ plans }) => plans.some((plan) => plan.config === E2E_VITEST_CONFIG))
+      ? "private-qa"
+      : resolveVitestPretestBuildMode([{ includePatterns: chunk.map(({ target }) => target) }]);
+  const targetChunks: (typeof targets)[] = [];
+  if (rowBudget !== undefined) {
+    const byPolicy = new Map<string, { targets: typeof targets; seconds: number; rows: number }>();
+    for (const entry of targets) {
+      const key = JSON.stringify([
+        buildModeOf([entry]),
+        SERIAL_CHANGED_TARGET_RE.test(entry.target),
+      ]);
+      const partition = byPolicy.get(key) ?? { targets: [], seconds: 0, rows: 1 };
+      partition.targets.push(entry);
+      partition.seconds += timings[entry.target] ?? 20;
+      byPolicy.set(key, partition);
+    }
+    const partitions = [...byPolicy.values()];
+    if (partitions.length > rowBudget) {
+      throw new Error(
+        `${partitions.length} execution policies exceed the changed-target row budget of ${rowBudget}`,
+      );
+    }
+    // Highest-averages apportionment preserves at least one row per policy
+    // without spreading build preparation or serial admission across other work.
+    for (let remaining = rowBudget - partitions.length; remaining > 0; remaining -= 1) {
+      const eligible = partitions.filter((partition) => partition.rows < partition.targets.length);
+      if (eligible.length === 0) {
+        break;
+      }
+      const next = eligible.reduce((best, partition) =>
+        partition.seconds / (partition.rows + 1) > best.seconds / (best.rows + 1)
+          ? partition
+          : best,
+      );
+      next.rows += 1;
+    }
+    for (const partition of partitions) {
+      const bins: { targets: typeof targets; seconds: number }[] = Array.from(
+        { length: partition.rows },
+        () => ({ targets: [], seconds: 0 }),
+      );
+      for (const entry of partition.targets.toSorted(
+        (a, b) => (timings[b.target] ?? 20) - (timings[a.target] ?? 20),
+      )) {
+        const bin = bins.reduce((best, candidate) =>
+          candidate.seconds < best.seconds ? candidate : best,
+        );
+        bin.targets.push(entry);
+        bin.seconds += timings[entry.target] ?? 20;
+      }
+      targetChunks.push(...bins.map((bin) => bin.targets));
+    }
+  } else {
+    let pendingChunk: typeof targets = [];
+    let seconds = 0;
+    for (const entry of targets) {
+      const cost = timings[entry.target] ?? 20;
+      if (
+        pendingChunk.length &&
+        (pendingChunk.length >= CHANGED_NODE_TEST_TARGETS_PER_JOB ||
+          seconds + cost > PR_NODE_TEST_SECONDS)
+      ) {
+        targetChunks.push(pendingChunk);
+        pendingChunk = [];
+        seconds = 0;
+      }
+      pendingChunk.push(entry);
+      seconds += cost;
+    }
+    if (pendingChunk.length) {
+      targetChunks.push(pendingChunk);
+    }
   }
   return targetChunks.map((chunk, index) => {
     const suffix = targetChunks.length === 1 ? "" : `-${index + 1}`;
@@ -477,182 +654,204 @@ function createChangedTargetShards(
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
       shardName: `${names.shardName}${suffix}`,
-      targets: chunk,
+      targets: chunk.map(({ target }) => target),
+      predictedSeconds: Math.ceil(
+        chunk.reduce((sum, { target }) => sum + (timings[target] ?? 20), 0),
+      ),
     };
-    const pretestBuildMode = resolveVitestPretestBuildMode([{ includePatterns: chunk }]);
+    const pretestBuildMode = buildModeOf(chunk);
     if (pretestBuildMode) {
       shard.pretestBuildMode = pretestBuildMode;
     }
-    if (chunk.some((target) => SERIAL_CHANGED_TARGET_RE.test(target))) {
+    if (chunk.some(({ target }) => SERIAL_CHANGED_TARGET_RE.test(target))) {
       shard.planConcurrency = 1;
     }
     return shard;
   });
 }
 
-function resolveChangedExtensionRoots(changedPaths: string[]) {
-  return [
-    ...new Set(
-      changedPaths.flatMap((changedPath) => {
-        const [, extensionId] = changedPath.split("/");
-        return extensionId ? [`extensions/${extensionId}`] : [];
+/** Narrow canonical envelopes without changing their workers, routing, or isolation. */
+function boundChangedNodeRows(
+  shards: ChangedNodeTestShard[],
+  selectedTargets: readonly string[],
+  runnerBackend?: string,
+  cwd = process.cwd(),
+): ChangedNodeTestShard[] {
+  const profile = runnerBackend === "github" ? "github" : "blacksmith";
+  const fileTimings = { ...readRepoE2eFileTimings(), ...readToolingFileTimings(profile) };
+  const groupTimings = readCompactGroupTimings(profile);
+  const selected = new Set(selectedTargets);
+  return shards.flatMap((shard) => {
+    if (!shard.groups) {
+      const files = shard.includePatterns;
+      const testSeconds = (row: ChangedNodeTestShard) =>
+        row.predictedSeconds === undefined
+          ? undefined
+          : Math.max(
+              0,
+              row.predictedSeconds -
+                (row.pretestBuildMode ? VITEST_PRETEST_BUILD_SECONDS[row.pretestBuildMode] : 0),
+            );
+      if (
+        !shard.requiresDist &&
+        (testSeconds(shard) ?? 0) > PR_NODE_TEST_SECONDS &&
+        files &&
+        files.length > 1 &&
+        files.every((file) => getChangedPathFacts(file).surface === "extension")
+      ) {
+        const split = (targets: string[]): ReturnType<typeof createChangedExtensionConfigShards> =>
+          createChangedExtensionConfigShards(resolveChangedExtensionRoots(targets), {
+            cwd,
+            targets: new Set(targets),
+          }).flatMap((row) => {
+            const selectedFiles = row.includePatterns;
+            if (
+              testSeconds(row)! <= PR_NODE_TEST_SECONDS ||
+              !selectedFiles ||
+              selectedFiles.length < 2
+            ) {
+              return [row];
+            }
+            const middle = Math.ceil(selectedFiles.length / 2);
+            return split(selectedFiles.slice(0, middle)).concat(split(selectedFiles.slice(middle)));
+          });
+        return split(files).map((row, index) =>
+          Object.assign({}, row, {
+            checkName: `${shard.checkName}-${index + 1}`,
+            shardName: `${shard.shardName}-${index + 1}`,
+            predictedTestSeconds: testSeconds(row),
+          }),
+        );
+      }
+      return [shard];
+    }
+    const canonicalTestSeconds = shard.predictedTestSeconds ?? shard.predictedSeconds;
+    if (canonicalTestSeconds === undefined || canonicalTestSeconds <= PR_NODE_TEST_SECONDS) {
+      return [shard];
+    }
+    const pieces = shard.groups.flatMap((group) => {
+      // Static boundary guards are fixed correctness gates, outside runtime selection.
+      if (group.configs.includes(BOUNDARY_NODE_TEST_CONFIG)) {
+        return [{ group, seconds: 0 }];
+      }
+      const estimatedGroup =
+        groupTimings[group.timing_key ?? group.shard_name] ??
+        groupTimings[group.shard_name] ??
+        shard.predictedSeconds;
+      const atomic =
+        group.requiresDist ||
+        group.configs.length > 1 ||
+        !canSplitWholeConfigGroup(group.shard_name);
+      const files =
+        (atomic
+          ? (group.includePatterns ??
+            group.configs.flatMap((config) => listNodeTestConfigFiles(config) ?? []))
+          : group.includePatterns?.filter((file) => selected.has(file))) ??
+        selectedTargets.filter((file) =>
+          buildVitestRunPlans([file]).some((plan) =>
+            group.configs.includes(
+              resolveCanonicalNodeTestConfig(file, plan.config) ?? plan.config,
+            ),
+          ),
+        );
+      if (files.length === 0) {
+        return atomic ? [{ group, seconds: estimatedGroup ?? canonicalTestSeconds }] : [];
+      }
+      // Retain a conservative share of the original envelope when file timings
+      // are absent. These are admission estimates; the replay reports cold wall separately.
+      const originalCount =
+        listWholeConfigFiles(group.shard_name)?.length ??
+        group.configs.reduce(
+          (count, config) => count + (listNodeTestConfigFiles(config)?.length ?? 0),
+          0,
+        );
+      const groupFileSeconds = originalCount > 0 ? (estimatedGroup ?? 0) / originalCount : 0;
+      const costOf = (file: string) =>
+        Math.max(
+          groupFileSeconds,
+          fileTimings[file] ??
+            (group.configs[0] === "test/vitest/vitest.tooling.config.ts"
+              ? estimateVitestToolingFileSeconds(file)
+              : estimateVitestTestFileSeconds(file)),
+        );
+      // An atomic group keeps its complete process owner, but does not make
+      // unrelated groups in the same canonical row indivisible.
+      if (atomic) {
+        return [{ group, seconds: Math.ceil(files.reduce((sum, file) => sum + costOf(file), 0)) }];
+      }
+      const chunks: string[][] = [];
+      let chunk: string[] = [];
+      let seconds = 0;
+      for (const file of files) {
+        const cost = costOf(file);
+        if (chunk.length && seconds + cost > PR_NODE_TEST_SECONDS) {
+          chunks.push(chunk);
+          chunk = [];
+          seconds = 0;
+        }
+        chunk.push(file);
+        seconds += cost;
+      }
+      if (chunk.length) {
+        chunks.push(chunk);
+      }
+      const { timingKeys } = createCompactSplitTimingGeneration({
+        configs: group.configs,
+        env: group.env,
+        parentShardName: `changed-${group.shard_name}`,
+        stripes: chunks,
+      });
+      return chunks.map((includePatterns, index) => ({
+        group: { ...group, includePatterns, timing_key: timingKeys[index] },
+        seconds: Math.ceil(includePatterns.reduce((sum, file) => sum + costOf(file), 0)),
+      }));
+    });
+    const testSeconds = (entries: readonly (typeof pieces)[number][]) => {
+      const slots = Array.from({ length: shard.planConcurrency ?? 1 }, () => 0);
+      for (const entry of entries) {
+        const slot = slots.indexOf(Math.min(...slots));
+        slots[slot]! += entry.seconds;
+      }
+      return Math.ceil(Math.max(...slots));
+    };
+    const bins = packNodeTestGroups(
+      pieces,
+      (bin, piece) =>
+        ((shard.planConcurrency ?? 1) === 1 ||
+          bin.every((entry) => entry.group.shard_name !== piece.group.shard_name)) &&
+        testSeconds([...bin, piece]) <= PR_NODE_TEST_SECONDS,
+      true,
+    );
+    return bins.map((bin, index) =>
+      Object.assign({}, shard, {
+        checkName: bins.length === 1 ? shard.checkName : `${shard.checkName}-${index + 1}`,
+        shardName: bins.length === 1 ? shard.shardName : `${shard.shardName}-${index + 1}`,
+        groups: bin.map(({ group }) => group),
+        requiresDist: bin.some(({ group }) => group.requiresDist),
+        pretestBuildMode: mergeVitestPretestBuildModes([
+          shard.pretestBuildMode,
+          ...bin.map(({ group }) => group.pretestBuildMode),
+        ]),
+        predictedSeconds: bin.reduce((seconds, piece) => seconds + piece.seconds, 0),
+        predictedTestSeconds: testSeconds(bin),
       }),
-    ),
-  ];
-}
-
-function createChangedExtensionConfigShards(
-  extensionRoots: string[],
-  options: CwdOptions & { fullConfigInventory?: boolean; targets?: ReadonlySet<string> } = {},
-): ChangedExtensionConfigShard[] {
-  const selectedRoots = new Set(extensionRoots);
-  const rootsByConfig = new Map<string, string[]>();
-  for (const root of extensionRoots) {
-    const config = resolveExtensionTestConfig(root);
-    rootsByConfig.set(config, [...(rootsByConfig.get(config) ?? []), root]);
-  }
-  const filesByConfig = new Map<string, string[]>();
-  for (const file of rootsByConfig.size > 0
-    ? listExtensionTestFilesForRoots(["extensions"], options.cwd)
-    : []) {
-    const config = resolveExtensionTestConfig(file);
-    filesByConfig.set(config, [...(filesByConfig.get(config) ?? []), file]);
-    const root = file.split("/").slice(0, 2).join("/");
-    if (selectedRoots.has(root)) {
-      const roots = rootsByConfig.get(config) ?? [];
-      if (!roots.includes(root)) {
-        rootsByConfig.set(config, [...roots, root]);
-      }
-    }
-  }
-  const plans: Array<{
-    config: string;
-    env?: Record<string, string>;
-    includePatterns?: string[];
-    pretestBuildMode?: VitestPretestBuildMode;
-    predictedSeconds: number;
-  }> = [...rootsByConfig].flatMap(([config, roots]) => {
-    const splitProcesses =
-      options.targets !== undefined || shouldSplitExtensionTestProcesses(config);
-    const testFiles = (filesByConfig.get(config) ?? []).filter(
-      (file) =>
-        !isCiProofTestFile(file) &&
-        (!options.targets || options.targets.has(file)) &&
-        (!splitProcesses ||
-          options.fullConfigInventory ||
-          roots.some((root) => file.startsWith(`${root}/`))),
     );
-    if (options.targets && testFiles.length === 0) {
-      return [];
-    }
-    const buildModes = new Map(
-      (splitProcesses ? testFiles : []).map((file) => [
-        file,
-        resolveVitestPretestBuildMode([{ includePatterns: [file] }]),
-      ]),
-    );
-    const configBuildMode = splitProcesses
-      ? undefined
-      : resolveVitestPretestBuildMode([{ configs: [config] }]);
-    let chunks = testFiles.length > 0 ? splitExtensionTestJobTargets(config, testFiles) : [roots];
-    if (
-      splitProcesses &&
-      chunks.filter((files) => files.some((file) => buildModes.get(file))).length > 1
-    ) {
-      // Explicit scopes follow the prerequisite owner even after files migrate configs.
-      // Keep build consumers together before reapplying every job/process file bound.
-      const runtimeFiles: string[] = [];
-      const otherFiles: string[] = [];
-      for (const file of testFiles) {
-        const target = buildModes.get(file) ? runtimeFiles : otherFiles;
-        target.push(file);
-      }
-      chunks = [runtimeFiles, otherFiles]
-        .filter((files) => files.length > 0)
-        .flatMap((files) => splitExtensionTestJobTargets(config, files));
-    }
-    const partitionSeconds = Math.ceil(
-      estimateExtensionTestCost(config, testFiles.length, testFiles) / chunks.length,
-    );
-    return chunks.map((includePatterns, index) =>
-      Object.assign(
-        {
-          config,
-          pretestBuildMode: splitProcesses
-            ? mergeVitestPretestBuildModes(includePatterns.map((file) => buildModes.get(file)))
-            : configBuildMode,
-          predictedSeconds: splitProcesses
-            ? estimateExtensionTestCost(config, includePatterns.length, includePatterns)
-            : partitionSeconds,
-        },
-        splitProcesses
-          ? { includePatterns }
-          : chunks.length > 1
-            ? {
-                // Counts size jobs only. Vitest owns the complete config inventory,
-                // including unrelated plugin roots, excludes and untracked tests.
-                env: {
-                  OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify([
-                    `--shard=${index + 1}/${chunks.length}`,
-                  ]),
-                },
-              }
-            : {},
-      ),
-    );
-  });
-  return plans.map(
-    ({ config, env, includePatterns, pretestBuildMode, predictedSeconds }, index) => {
-      const suffix = plans.length === 1 ? "" : `-${index + 1}`;
-      const shard: ChangedExtensionConfigShard = {
-        checkName: `checks-node-changed-extensions-config${suffix}`,
-        configs: [config],
-        // No plans overlap in this row, so CI can scale the single process's worker budget.
-        planConcurrency: 1,
-        predictedSeconds,
-        requiresDist: false,
-        runner: DEFAULT_NODE_TEST_RUNNER,
-        shardName: `changed-extensions-config${suffix}`,
-      };
-      if (pretestBuildMode) {
-        shard.pretestBuildMode = pretestBuildMode;
-        shard.predictedSeconds = predictedSeconds + VITEST_PRETEST_BUILD_SECONDS[pretestBuildMode];
-      }
-      if (includePatterns) {
-        shard.includePatterns = includePatterns;
-      }
-      if (env) {
-        shard.env = env;
-      }
-      return shard;
-    },
-  );
-}
-
-function createChangedExtensionConfigShardsForPaths(changedPaths: string[], cwd: string) {
-  const relevantPaths = changedPaths.filter(
-    (changedPath) =>
-      changedPath.startsWith("extensions/") &&
-      !isPluginControlUiPath(changedPath) &&
-      (existsSync(path.join(cwd, changedPath)) || !isTestFileTarget(changedPath)),
-  );
-  const roots = resolveChangedExtensionRoots(relevantPaths);
-  return createChangedExtensionConfigShards(roots, {
-    cwd,
-    targets: new Set(listExtensionTestFilesForRoots(roots, cwd)),
   });
 }
 
 /**
- * True when core or fallback-gate changes can affect extension consumers beyond
+ * True when core or shared runtime changes can affect extension consumers beyond
  * the changed extension paths.
  */
 export function hasCoreExtensionImpact(changedPaths: string[], options: CwdOptions = {}) {
+  // Planner policy has its own selector/guard tests. Running every plugin for
+  // a planner edit adds no runtime-consumer coverage; hourly/release plans
+  // and the complete-inventory planner assertions retain that proof.
   if (
     changedPaths.some(
       (changedPath) =>
-        CORE_EXTENSION_IMPACT_SURFACE_RE.test(changedPath) ||
-        GLOBAL_NODE_TEST_INPUT_RE.test(changedPath),
+        GLOBAL_NODE_TEST_INPUT_RE.test(changedPath) ||
+        getChangedPathFacts(changedPath).surface === "rootGlobal",
     )
   ) {
     return true;
@@ -679,15 +878,15 @@ export function hasCoreExtensionImpact(changedPaths: string[], options: CwdOptio
  */
 export function createChangedExtensionFallbackShards(
   changedPaths: string[],
-  options: CwdOptions = {},
+  options: CwdOptions & RuntimeTestSelection = {},
 ): ChangedNodeTestShard[] {
   const cwd = options.cwd ?? process.cwd();
   const shards = hasCoreExtensionImpact(changedPaths, { cwd })
     ? createChangedExtensionConfigShards(
         listAvailableExtensionIds(cwd).map((extensionId) => `extensions/${extensionId}`),
-        { fullConfigInventory: true, cwd },
+        { ...options, changedPaths, fullConfigInventory: true, cwd },
       )
-    : createChangedExtensionConfigShardsForPaths(changedPaths, cwd);
+    : createChangedExtensionConfigShardsForPaths(changedPaths, cwd, { ...options, changedPaths });
   const jobs = packChangedExtensionConfigShards(shards);
   if (jobs.length > MAX_CHANGED_EXTENSION_FALLBACK_JOBS) {
     throw new Error(
@@ -697,77 +896,25 @@ export function createChangedExtensionFallbackShards(
   return jobs;
 }
 
-function packChangedExtensionConfigShards(
-  shards: ChangedExtensionConfigShard[],
-): ChangedNodeTestShard[] {
-  const workerFileCounts = new Map(
-    shards.map((shard) => [
-      shard,
-      shard.configs.includes(DATABASE_WORKER_CONFIG) ? (shard.includePatterns?.length ?? 0) : 0,
-    ]),
-  );
-  const bins = packNodeTestGroups(
-    shards.toSorted(
-      (a, b) => b.predictedSeconds - a.predictedSeconds || a.shardName.localeCompare(b.shardName),
-    ),
-    // Each envelope retains its own child process. Share only the checkout;
-    // runtime preparation stays separate from other configs' readers.
-    (bin, shard) =>
-      // Count the effective config, including files migrated from other plugins.
-      bin.reduce(
-        (count, entry) => count + (workerFileCounts.get(entry) ?? 0),
-        workerFileCounts.get(shard) ?? 0,
-      ) <= DATABASE_WORKER_TEST_JOB_FILE_LIMIT &&
-      !shard.pretestBuildMode &&
-      bin.every(
-        (entry) =>
-          !entry.pretestBuildMode &&
-          entry.runner === shard.runner &&
-          entry.requiresDist === shard.requiresDist,
-      ) &&
-      bin.reduce((seconds, entry) => seconds + entry.predictedSeconds, shard.predictedSeconds) <=
-        CHANGED_EXTENSION_JOB_SECONDS,
-    true,
-  );
-  // Singleton objects keep their full metadata and original relative order.
-  return bins
-    .toSorted((a, b) => shards.indexOf(a[0]) - shards.indexOf(b[0]))
-    .map((bin, index) =>
-      bin.length === 1
-        ? bin[0]
-        : {
-            checkName: `checks-node-changed-extensions-bundle-${index + 1}`,
-            configs: [],
-            groups: bin.map((shard) => ({
-              configs: shard.configs,
-              ...(shard.env ? { env: shard.env } : {}),
-              ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
-              requiresDist: shard.requiresDist,
-              runner: shard.runner,
-              shard_name: shard.shardName,
-            })),
-            planConcurrency: 1,
-            predictedSeconds: bin.reduce((seconds, shard) => seconds + shard.predictedSeconds, 0),
-            requiresDist: bin[0].requiresDist,
-            runner: bin[0].runner,
-            shardName: `changed-extensions-bundle-${index + 1}`,
-          },
-    );
-}
-
 /**
  * Builds bounded PR jobs from precise changed-test targets.
- * Null means the caller must fail safe to the compact full-suite plan.
+ * Missing input is an error for the caller; changed inputs never widen to a full suite.
  */
 export function createChangedNodeTestShards(
   changedPaths: string[],
   options: CwdOptions &
     ChangedTargetValidation & {
       runnerBackend?: string;
+      compactNodeJobCap?: number;
+      releaseFastLane?: boolean;
       includeReleaseOnlyToolingShards?: boolean;
       includeReleaseOnlyRuntimeTests?: boolean;
+      includePrExemptRuntimeTests?: boolean;
       dedicatedContractShards?: readonly { task: string; includePatterns: readonly string[] }[];
+      dedicatedBuildArtifacts?: boolean;
       dedicatedUiE2e?: boolean;
+      dedicatedUiTests?: boolean;
+      selectedTestTargets?: readonly string[];
       dedicatedMaxLinesRatchet?: boolean;
     } = {},
 ): ChangedNodeTestShard[] | null {
@@ -780,375 +927,55 @@ export function createChangedNodeTestShards(
     return fallback("missing changed paths");
   }
 
-  // These inputs change execution or module resolution for every project.
-  // Ordinary helpers, package sources, and tooling leaves use their consumers.
-  const globalInput = changedPaths.find((file) => GLOBAL_NODE_TEST_INPUT_RE.test(file));
-  if (globalInput) {
-    return fallback(`global execution or resolution input: ${globalInput}`);
-  }
-
-  const dependencyPaths = new Set(
-    changedPaths.filter(
-      (file) =>
-        file === "pnpm-lock.yaml" ||
-        file === "package.json" ||
-        /^(?:packages|extensions)\/[^/]+\/package\.json$|^ui\/package\.json$/u.test(file),
-    ),
-  );
-  const dependencyChange =
-    dependencyPaths.size > 0
-      ? resolveChangedDependencies({ cwd, baseRef: options.baseRef, changedPaths })
-      : { importers: [] };
-  if (dependencyChange.globalReason) {
-    return fallback(dependencyChange.globalReason);
-  }
-  const pluginMetadataPaths = new Set(dependencyChange.pluginMetadataPaths ?? []);
-  const dependencyConsumers = resolveDependencyTestConsumers(dependencyChange.importers, cwd, {
-    runtimeOnly: true,
-    importerBindings: dependencyChange.importerBindings,
-  });
-  if (dependencyConsumers.unresolved.length > 0) {
-    return fallback(
-      `unresolved dependency usage: ${dependencyConsumers.unresolved
-        .map(({ root, dependency }) => `${root}:${dependency}`)
-        .join(", ")}`,
-    );
-  }
-
-  // Packing changes and their policy guard need the complete compact plan on
-  // Blacksmith while preserving hosted targeting and its registration footprint.
   if (
-    options.runnerBackend !== "github" &&
     changedPaths.some(
       (file) =>
-        file === "config/ci-test-timings.json" ||
-        file === "scripts/lib/ci-node-test-plan.mts" ||
-        file === "scripts/lib/ci-measured-compact-packing.mts" ||
-        file === "scripts/lib/ci-test-timings.mts" ||
-        file === "scripts/lib/vitest-shard-metadata.mts" ||
-        file === "test/scripts/ci-node-test-plan.test.ts",
+        file !== file.trim() ||
+        file.includes("\\") ||
+        path.posix.normalize(file) !== file ||
+        path.isAbsolute(file) ||
+        file.startsWith("../"),
     )
   ) {
-    return fallback("compact packing policy requires full-plan proof");
+    return fallback("invalid changed path");
   }
 
-  const livePaths: string[] = [];
-  const resolutionPaths: string[] = [];
-  const documentationPaths = new Set<string>();
-  for (const changedPath of changedPaths) {
-    const live = existsSync(path.join(cwd, changedPath));
-    const documentation = isIndependentlyCheckedDocumentation(changedPath, cwd);
-    if (
-      documentation ||
-      (dependencyPaths.has(changedPath) && !pluginMetadataPaths.has(changedPath))
-    ) {
-      documentationPaths.add(changedPath);
-    }
-    if (live) {
-      livePaths.push(changedPath);
-    } else if (!isTestFileTarget(changedPath) && !documentation) {
-      // Deleted source cannot be import-graphed; deleted tests retain boundary coverage.
-      return fallback(`deleted or missing source: ${changedPath}`);
-    }
-    if (live || documentation) {
-      // Preserve input order and resolve even deleted docs before crediting an empty plan.
-      resolutionPaths.push(changedPath);
-    }
+  const selectedTargets =
+    options.selectedTestTargets ?? resolveChangedNodeTestTargets(changedPaths, options);
+  const livePaths = changedPaths.filter((file) => existsSync(path.join(cwd, file)));
+  const policyTargets = new Set(resolvePolicyTestTargets(changedPaths));
+  const resolvedTargetPlans = resolvePreciseChangedTargets(selectedTargets, cwd);
+  if (resolvedTargetPlans.some(({ plans }) => plans.length === 0)) {
+    return fallback("selected test lacks an executable owner");
   }
-  for (const source of dependencyConsumers.sources) {
-    if (!resolutionPaths.includes(source)) {
-      resolutionPaths.push(source);
-    }
-  }
-
-  // A plugin manifest or opaque plugin entry can lack static importers. Its
-  // package remains the bounded owner; it does not select unrelated plugins.
-  const extensionFallbackPaths = resolutionPaths.filter(
-    (file) =>
-      file.startsWith("extensions/") &&
-      !isPluginControlUiPath(file) &&
-      !documentationPaths.has(file) &&
-      !isTestFileTarget(file) &&
-      (pluginMetadataPaths.has(file) ||
-        file.endsWith("/openclaw.plugin.json") ||
-        resolveAffectedTestsFromImportGraph([file], cwd, {
-          tooling: true,
-          forceFull: true,
-          resolveAliases: true,
-          runtimeOnly: true,
-        }).length === 0),
-  );
-  const extensionFallbackRoots = resolveChangedExtensionRoots(extensionFallbackPaths);
-
-  // Policy watches can name extension-owned files (such as a bundled manifest)
-  // that host suites scan without importing, so an extension path a watch names
-  // stays eligible alongside the plugin control-UI paths.
-  const policyTargetsByPath = new Map(
-    resolutionPaths
-      .filter((changedPath) => !documentationPaths.has(changedPath))
-      .map((changedPath) => [changedPath, resolvePolicyTestTargets([changedPath])] as const)
-      .filter(
-        ([changedPath, policyTargets]) =>
-          !changedPath.startsWith("extensions/") ||
-          isPluginControlUiPath(changedPath) ||
-          policyTargets.length > 0,
-      ),
-  );
-  const policyTargets = [...new Set([...policyTargetsByPath.values()].flat())];
-  const completeOwnerTargets = new Set(
-    [...policyTargetsByPath.keys()].flatMap((changedPath) =>
-      resolvePolicyTestTargets([changedPath], { completeOwnersOnly: true }),
-    ),
-  );
-  const regularPaths = resolutionPaths.filter(
-    (changedPath) =>
-      !documentationPaths.has(changedPath) &&
-      !extensionFallbackPaths.includes(changedPath) &&
-      // The emitted ratchet checks this data against the exact tested merge tree.
-      !(
-        options.dedicatedMaxLinesRatchet === true && changedPath === "config/max-lines-baseline.txt"
-      ) &&
-      !isPolicyTestOwnedPath(changedPath),
-  );
-  const directConfigPaths = regularPaths.filter((file) =>
-    /^test\/vitest\/vitest\.[^/]+\.config\.ts$/u.test(file),
-  );
-  const configInputs = [
-    ...new Set([
-      ...resolutionPaths.filter((file) => !documentationPaths.has(file)),
-      ...dependencyConsumers.sources,
-    ]),
-  ];
-  const graphOptions = { tooling: true, resolveAliases: true, runtimeOnly: true };
-  const inspectConfigConsumers =
-    configInputs.length > 0 &&
-    (!configInputs.every(isTestFileTarget) ||
-      hasImportGraphConsumers(configInputs, cwd, graphOptions));
-  const configCandidates = inspectConfigConsumers ? [...resolveAutomaticNodeTestConfigs()] : [];
-  const affectedConfigs =
-    configCandidates.length &&
-    hasImportGraphImpactOnTargets(configInputs, configCandidates, cwd, graphOptions)
-      ? configCandidates.filter((config) =>
-          hasImportGraphImpactOnTargets(configInputs, [config], cwd, graphOptions),
-        )
-      : [];
-  const configPaths = [...new Set([...directConfigPaths, ...affectedConfigs])];
-  if (
-    changedPaths.every((file) => documentationPaths.has(file)) &&
-    dependencyConsumers.tests.length === 0 &&
-    dependencyConsumers.sources.length === 0 &&
-    configPaths.length === 0
-  ) {
-    return [];
-  }
-  const configOwnedInputs = configPaths.length
-    ? configInputs.filter(
-        (file) =>
-          directConfigPaths.includes(file) ||
-          hasImportGraphImpactOnTargets([file], configPaths, cwd, graphOptions),
-      )
-    : [];
-  if (configPaths.length && path.resolve(cwd) !== process.cwd()) {
-    return fallback("changed Vitest configs lack canonical checkout metadata");
-  }
-  const configCanonicalShards = configPaths.length
-    ? createNodeTestShardBundles({
-        changedPaths,
-        includeReleaseOnlyPluginShards: false,
-        includeReleaseOnlyToolingShards: options.includeReleaseOnlyToolingShards,
-        includeReleaseOnlyRuntimeTests: options.includeReleaseOnlyRuntimeTests,
-        includeProofTests: false,
-        compactMode: "pull-request",
-        runnerBackend: options.runnerBackend,
-      })
-    : [];
-  if (
-    configPaths.some(
-      (config) =>
-        !configCanonicalShards.some((shard) =>
-          shard.groups.some((group) => group.configs.includes(config)),
-        ),
-    )
-  ) {
-    return fallback("changed Vitest config lacks an automatic suite owner");
-  }
-  // Import graphs find config readers, while the canonical suite inventory owns
-  // the implicit config-to-test edge and its process/runtime policy.
-  const configGuardTargets = configPaths.length
-    ? [
-        ...new Set([
-          ...resolveAffectedTestsFromImportGraph([...configPaths, ...configOwnedInputs], cwd, {
-            tooling: true,
-            resolveAliases: true,
-            runtimeOnly: true,
-            forceFull: true,
-          }),
-          ...resolveChangedTestTargetPlan([...configPaths, ...configOwnedInputs], {
-            cwd,
-            broad: false,
-          }).targets.filter(isTestFileTarget),
-        ]),
-      ]
-    : [];
-
-  // UI source targets intentionally name an area rather than individual tests.
-  // Keep that area's complete canonical rows, including their process policies;
-  // browser and E2E coverage must already have their dedicated workflow owners.
-  const uiPaths =
-    options.dedicatedUiE2e &&
-    path.resolve(cwd) === process.cwd() &&
-    regularPaths.some(
-      (file) =>
-        isControlUiSourcePath(file) && !isTestFileTarget(file) && !documentationPaths.has(file),
-    )
-      ? regularPaths.filter((file) => isControlUiSourcePath(file) && !documentationPaths.has(file))
-      : [];
-  const uiCanonicalShards = uiPaths.length
-    ? createNodeTestShardBundles({
-        changedPaths,
-        includeReleaseOnlyPluginShards: false,
-        includeReleaseOnlyToolingShards: true,
-        includeReleaseOnlyRuntimeTests: options.includeReleaseOnlyRuntimeTests,
-        compactMode: "pull-request",
-        runnerBackend: options.runnerBackend,
-      })
-    : [];
-  const uiConsumerPlans = (uiPaths.length ? resolveControlUiTestConsumers(uiPaths, cwd) : []).map(
-    (target) => ({ target, plans: buildVitestRunPlans([target], cwd) }),
-  );
-  if (
-    uiConsumerPlans.some(({ plans }) => plans.length === 0) ||
-    findUnmatchedExplicitTestTargets(
-      uiConsumerPlans.map(({ target }) => target),
-      cwd,
-    ).length > 0
-  ) {
-    return fallback("unresolved UI host consumer");
-  }
-  // General E2E consumers retain their separate owners outside the Node matrix.
-  const uiConsumers = new Set(
-    uiConsumerPlans
-      .filter(({ plans }) => !plans.every((plan) => plan.config === E2E_VITEST_CONFIG))
-      .map(({ target }) => target),
-  );
-  const uiShards = uiCanonicalShards.flatMap((shard) => {
-    const groups = shard.groups.filter((group) =>
-      group.configs.some((config) => UI_NODE_TEST_CONFIGS.has(config)),
-    );
-    return groups.length
-      ? [
-          Object.assign({}, shard, {
-            groups,
-            configs: [],
-            checkName: `checks-node-changed-ui-${shard.shardName}`,
-            shardName: `changed-ui-${shard.shardName}`,
-          }),
-        ]
-      : [];
-  });
-  const configShards = configCanonicalShards.flatMap((shard) => {
-    const groups = shard.groups.flatMap((group) => {
-      const configs = group.configs.filter(
-        (config) =>
-          configPaths.includes(config) &&
-          !uiShards.some((uiShard) =>
-            uiShard.groups.some((uiGroup) => uiGroup.configs.includes(config)),
-          ),
-      );
-      return configs.length ? [{ ...group, configs }] : [];
-    });
-    return groups.length
-      ? [
-          {
-            ...shard,
-            groups,
-            configs: [],
-            requiresDist: groups.some((group) => group.requiresDist),
-            pretestBuildMode: mergeVitestPretestBuildModes(
-              groups.map((group) => group.pretestBuildMode),
-            ),
-            checkName: `checks-node-changed-config-${shard.shardName}`,
-            shardName: `changed-config-${shard.shardName}`,
-          },
-        ]
-      : [];
-  });
-  const wholeOwnerShards = [...uiShards, ...configShards];
-  const resolvedTargetPlans = resolvePreciseChangedTargets(
-    regularPaths.filter((file) => !uiPaths.includes(file) && !configOwnedInputs.includes(file)),
-    cwd,
-    documentationPaths,
-    [
-      ...policyTargets,
-      ...dependencyConsumers.tests,
-      ...resolveAffectedTestsFromImportGraph([...pluginMetadataPaths], cwd, {
-        tooling: true,
-        forceFull: true,
-        resolveAliases: true,
-        runtimeOnly: true,
-      }),
-      ...configGuardTargets,
-      // Host consumers use the same exact-file owner as other precise targets;
-      // a packed tooling neighbor is not part of the UI area contract.
-      ...uiConsumers,
-      // Plugin changes normally select only extension suites. This host-owned
-      // proof also exercises the real Copilot entrypoint and manifest discovery.
-      ...(resolutionPaths.some((changedPath) => changedPath.startsWith("extensions/copilot/"))
-        ? ["src/agents/prepared-model-runtime.copilot.integration.test.ts"]
-        : []),
-    ],
-    options,
-  );
-  if (resolvedTargetPlans === null) {
-    return null;
-  }
-  if (
-    resolvedTargetPlans.length === 0 &&
-    wholeOwnerShards.length === 0 &&
-    extensionFallbackRoots.length === 0 &&
-    regularPaths.length > 0 &&
-    changedPaths.every((file) => livePaths.includes(file) || documentationPaths.has(file))
-  ) {
-    return [];
-  }
-  const targetPlans = resolvedTargetPlans.filter(
-    ({ target, plans }) =>
-      (uiConsumers.has(target) ||
-        changedPaths.includes(target) ||
-        options.includeReleaseOnlyToolingShards !== false ||
-        changedPaths.some(isToolingTestOwnerPath) ||
-        completeOwnerTargets.has(target) ||
-        (!isReleaseOnlyToolingTestFile(target) &&
-          !plans.every((plan) => RELEASE_ONLY_TOOLING_CONFIGS.has(plan.config)))) &&
-      !plans.every(({ config }) =>
-        wholeOwnerShards.some((shard) =>
-          shard.groups?.some(
-            (group) =>
-              group.configs.includes(config) &&
-              (!group.includePatterns ||
-                group.includePatterns.some((pattern) => path.matchesGlob(target, pattern))),
-          ),
-        ),
-      ),
-  );
+  const targetPlans = resolvedTargetPlans;
   // Resolve every changed source first, then defer only named complete proofs.
   // Filtering inputs earlier would hide an unresolved companion or helper.
   const runtimeSelection = {
-    changedPaths: livePaths,
+    changedPaths: [...livePaths, ...selectedTargets],
     includeReleaseOnlyRuntimeTests: options.includeReleaseOnlyRuntimeTests,
+    includePrExemptRuntimeTests: options.includePrExemptRuntimeTests,
   };
-  const changedBuildArtifacts = hasBuildArtifactAffectingChange(changedPaths);
+  const changedBuildArtifacts =
+    options.dedicatedBuildArtifacts === true && hasBuildArtifactAffectingChange(changedPaths);
   const prTargetPlans: typeof targetPlans = [];
   for (const entry of targetPlans) {
     const { target, plans } = entry;
-    if (isCiProofTestFile(target) || !isRuntimeTestFileIncluded(target, runtimeSelection, cwd)) {
+    if (
+      isCiProofTestFile(target) ||
+      (options.dedicatedBuildArtifacts === false && tuiPtyTestFiles.includes(target)) ||
+      (!PR_SMOKE_TEST_FILES.includes(target) &&
+        !policyTargets.has(target) &&
+        !isRuntimeTestFileIncluded(target, runtimeSelection, cwd))
+    ) {
       continue;
     }
-    const separateExecution =
-      plans.every(
-        (plan) => plan.config === E2E_VITEST_CONFIG || plan.config === UI_E2E_VITEST_CONFIG,
-      ) || isUiBrowserTestFile(target);
-    if (!changedPaths.includes(target) && separateExecution) {
+    if (
+      (options.dedicatedUiTests && isUiTestTarget(target)) ||
+      (options.dedicatedUiE2e &&
+        (target === BROWSER_EXTENSION_E2E_TEST_FILE ||
+          plans.every((plan) => plan.config === UI_E2E_VITEST_CONFIG)))
+    ) {
       continue;
     }
     const separateContract = plans.some(
@@ -1161,13 +988,20 @@ export function createChangedNodeTestShards(
       plans.some((plan) => plan.config === resolveExtensionTestConfig(target));
     const uncoveredChannels =
       !changedBuildArtifacts &&
-      plans.every((plan) => plan.config === "test/vitest/vitest.channels.config.ts");
+      plans.every((plan) => plan.config === SOURCE_CHANNEL_TEST_POLICY.config);
     if (
       changedPaths.includes(target) ||
       path.resolve(cwd) !== process.cwd() ||
       separateContract ||
       extensionOwner ||
       uncoveredChannels ||
+      (options.dedicatedBuildArtifacts === false && target === TUI_PTY_ASSERTION_TEST) ||
+      plans.every(
+        (plan) =>
+          !nodeTestConfigRequiresCanonicalMetadata(plan.config) &&
+          ((plan.includePatterns?.length === 1 && plan.includePatterns[0] === target) ||
+            (plan.forwardedArgs.length === 1 && plan.forwardedArgs[0] === target)),
+      ) ||
       plans.every((plan) => resolveCanonicalNodeTestConfig(target, plan.config))
     ) {
       prTargetPlans.push(entry);
@@ -1184,16 +1018,22 @@ export function createChangedNodeTestShards(
   }
   const canonicalTargets = prTargetPlans
     .filter(({ target }) => !target.startsWith("extensions/"))
+    // The PTY artifact descriptor only admits process proofs. Its source assertion
+    // helper keeps the exact-file TUI config without requiring the built CLI.
+    .filter(
+      ({ target }) =>
+        options.dedicatedBuildArtifacts !== false || target !== TUI_PTY_ASSERTION_TEST,
+    )
     .filter(
       ({ plans }) =>
         plans.every((plan) => plan.includePatterns) &&
-        plans.every((plan) => isCanonicalNodeTestConfig(plan.config)) &&
         plans.every(
           (plan) =>
             plan.config !== BOUNDARY_NODE_TEST_CONFIG && plan.config !== "ui/vitest.config.ts",
         ) &&
         (prTargetPlans.length > 96 ||
-          plans.some(({ config }) => nodeTestConfigRequiresCanonicalMetadata(config))),
+          plans.some(({ config }) => nodeTestConfigRequiresCanonicalMetadata(config))) &&
+        plans.every((plan) => isCanonicalNodeTestConfig(plan.config)),
     )
     .map(({ target }) => target);
   // Canonical shard inventories describe this checkout, never a caller's
@@ -1203,7 +1043,9 @@ export function createChangedNodeTestShards(
       ? createSelectedNodeTestShardBundles(canonicalTargets, {
           runnerBackend: options.runnerBackend,
           onFallback: options.onFallback,
-          ...runtimeSelection,
+          // These exact targets already passed deferral above, including explicit policy watches.
+          includeReleaseOnlyRuntimeTests: true,
+          includePrExemptRuntimeTests: true,
         })
       : null
     : [];
@@ -1211,18 +1053,36 @@ export function createChangedNodeTestShards(
     return fallback("test targets lack canonical shard metadata");
   }
   const artifactBoundaryOwned =
-    changedBuildArtifacts ||
-    canonicalShards.some((shard) => shard.requiresDist) ||
-    configShards.some((shard) => shard.requiresDist);
-  const configBoundaryOwned = configShards.some((shard) =>
-    shard.groups.some((group) => group.configs.includes(BOUNDARY_NODE_TEST_CONFIG)),
+    changedBuildArtifacts || canonicalShards.some((shard) => shard.requiresDist);
+  const boundaryShards = artifactBoundaryOwned ? [] : [createBoundaryShard()];
+  const channelTargets = new Set(
+    options.dedicatedBuildArtifacts === false
+      ? prTargetPlans
+          .filter(({ plans }) =>
+            plans.every((plan) => plan.config === SOURCE_CHANNEL_TEST_POLICY.config),
+          )
+          .map(({ target }) => target)
+      : [],
   );
-  const boundaryShards =
-    artifactBoundaryOwned || configBoundaryOwned ? [] : [createBoundaryShard()];
+  const channelShards: ChangedNodeTestShard[] =
+    !artifactBoundaryOwned && channelTargets.size > 0
+      ? [
+          {
+            checkName: "checks-node-changed-channels",
+            configs: [SOURCE_CHANNEL_TEST_POLICY.config],
+            includePatterns: [...channelTargets],
+            env: { ...SOURCE_CHANNEL_TEST_POLICY.env },
+            requiresDist: false,
+            runner: DEFAULT_NODE_TEST_RUNNER,
+            shardName: "changed-channels",
+          },
+        ]
+      : [];
   // CI supplies the suite owners it emits. Validate every changed path first,
   // then subtract covered plans; local runs and unselected owners keep their targets.
   const targets = prTargetPlans
     .filter(({ target }) => !canonicalTargets.includes(target))
+    .filter(({ target }) => !channelTargets.has(target))
     .filter(
       ({ target, plans }) =>
         !target.startsWith("extensions/") ||
@@ -1257,16 +1117,11 @@ export function createChangedNodeTestShards(
                 )))
           );
         }),
-    )
-    .map(({ target }) => target);
+    );
 
-  const shards = [
-    ...uiShards,
-    ...configShards,
+  const otherShards = [
+    ...channelShards,
     ...canonicalShards.map((shard) => Object.assign({}, shard, { configs: [] })),
-    ...packChangedExtensionConfigShards(
-      createChangedExtensionConfigShardsForPaths(extensionFallbackPaths, cwd),
-    ),
     ...packChangedExtensionConfigShards(
       createChangedExtensionConfigShards(
         resolveChangedExtensionRoots(
@@ -1275,35 +1130,44 @@ export function createChangedNodeTestShards(
               ({ target, plans }) =>
                 target.startsWith("extensions/") &&
                 !isPluginControlUiPath(target) &&
-                plans.every((plan) => plan.includePatterns) &&
-                !extensionFallbackRoots.some((root) => target.startsWith(`${root}/`)),
+                plans.every((plan) => plan.includePatterns),
             )
             .map(({ target }) => target),
         ),
         {
           cwd,
-          targets: new Set(
-            prTargetPlans
-              .map(({ target }) => target)
-              .filter(
-                (target) => !extensionFallbackRoots.some((root) => target.startsWith(`${root}/`)),
-              ),
-          ),
+          targets: new Set(prTargetPlans.map(({ target }) => target)),
         },
       ),
     ),
-    // Native browser files run in checks-ui, including precise changed-file plans.
-    ...createChangedTargetShards(
-      targets.filter((target) => !isUiBrowserTestFile(target)),
-      {
-        checkName: "checks-node-changed",
-        shardName: "changed",
-      },
-    ),
+  ];
+  // Native browser files run in checks-ui, including precise changed-file plans.
+  const changedTargets = targets.filter(({ target }) => !isUiBrowserTestFile(target));
+  const names = { checkName: "checks-node-changed", shardName: "changed" };
+  const shards = [
+    ...otherShards,
+    ...createChangedTargetShards(changedTargets, names),
     ...boundaryShards,
   ];
   // Covered source targets keep build-artifacts ownership even with no Node rows.
-  return shards.length > 0 || targets.length < resolvedTargetPlans.length
-    ? shards
-    : fallback("no executable Node owner");
+  const bounded = boundChangedNodeRows(shards, selectedTargets, options.runnerBackend, cwd);
+  // Time-based splitting must not make an admitted owner plan exceed the matrix
+  // budget. Retain its compact rows, including plugin work, without widening scope.
+  const cap = options.compactNodeJobCap;
+  if (cap === undefined || bounded.filter((shard) => !shard.requiresDist).length <= cap) {
+    return bounded;
+  }
+  const otherNonDistRows = [...otherShards, ...boundaryShards].filter(
+    (shard) => !shard.requiresDist,
+  ).length;
+  if (shards.filter((shard) => !shard.requiresDist).length <= cap || otherNonDistRows >= cap) {
+    return shards;
+  }
+  // Only target chunks may grow to fit the remaining rows; all other owners
+  // keep their compact execution envelopes and the workflow owns final admission.
+  return [
+    ...otherShards,
+    ...createChangedTargetShards(changedTargets, names, cap - otherNonDistRows),
+    ...boundaryShards,
+  ];
 }

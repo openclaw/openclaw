@@ -50,18 +50,11 @@ type InputSourceLimits = {
 export type InputFileLimits = InputSourceLimits & { maxChars: number; pdf: InputPdfLimits };
 
 /** Optional config shape accepted by input_file limit resolution. */
-export type InputFileLimitsConfig = {
-  allowUrl?: boolean;
+export type InputFileLimitsConfig = Partial<
+  Omit<InputFileLimits, "allowedMimes" | "pdf" | "urlAllowlist">
+> & {
   allowedMimes?: string[];
-  maxBytes?: number;
-  maxChars?: number;
-  maxRedirects?: number;
-  timeoutMs?: number;
-  pdf?: {
-    maxPages?: number;
-    maxPixels?: number;
-    minTextChars?: number;
-  };
+  pdf?: Partial<InputPdfLimits>;
 };
 
 /** Resolved input_image limits with normalized MIME allowlist and URL fetch controls. */
@@ -81,19 +74,7 @@ export type InputImageSource =
     };
 
 /** Supported input_file source variants before text/PDF extraction. */
-type InputFileSource =
-  | {
-      type: "base64";
-      data: string;
-      mediaType?: string;
-      filename?: string;
-    }
-  | {
-      type: "url";
-      url: string;
-      mediaType?: string;
-      filename?: string;
-    };
+type InputFileSource = InputImageSource & { filename?: string };
 
 /** Guarded URL fetch result before final MIME allowlist validation. */
 type InputFetchResult = {

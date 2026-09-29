@@ -47,6 +47,15 @@ type DirectAnnounceResponseContext = {
   ) => Promise<SubagentAnnounceDeliveryResult | undefined>;
 };
 
+function missingVisibleReplyResult(): SubagentAnnounceDeliveryResult {
+  return {
+    delivered: false,
+    path: "direct",
+    reason: "visible_reply_missing",
+    error: "completion agent did not produce a visible reply",
+  };
+}
+
 /** Reuses prepared facts; only the existing text-delivery owner may perform a send. */
 export function createDirectAnnounceResponseClassifier(context: DirectAnnounceResponseContext) {
   const {
@@ -199,10 +208,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         hasCompletionSideEffect
       ) {
         return {
-          delivered: false,
-          path: "direct",
-          reason: "visible_reply_missing",
-          error: "completion agent did not produce a visible reply",
+          ...missingVisibleReplyResult(),
           disposition: "permanent_failure",
         };
       }
@@ -215,12 +221,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
           hasRequiredSubagentNoOutputCompletion)
       ) {
         if (hasSuccessfulTrustedSubagentNoOutputCompletion) {
-          return {
-            delivered: false,
-            path: "direct",
-            reason: "visible_reply_missing",
-            error: "completion agent did not produce a visible reply",
-          };
+          return missingVisibleReplyResult();
         }
         const missingDelivery: SubagentAnnounceDeliveryResult = {
           delivered: false,
@@ -264,12 +265,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
                 !hasCompletionSideEffect &&
                 !acceptsIntentionalSilentCompletion))))
       ) {
-        return {
-          delivered: false,
-          path: "direct",
-          reason: "visible_reply_missing",
-          error: "completion agent did not produce a visible reply",
-        };
+        return missingVisibleReplyResult();
       }
       const requesterVisibleFinalCommitted =
         !params.requesterIsSubagent &&
@@ -298,12 +294,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
           return textDelivery;
         }
         if (hasSuccessfulTrustedSubagentNoOutputCompletion && !hasCompletionSideEffect) {
-          return {
-            delivered: false,
-            path: "direct",
-            reason: "visible_reply_missing",
-            error: "completion agent did not produce a visible reply",
-          };
+          return missingVisibleReplyResult();
         }
         return finishClassification();
       });

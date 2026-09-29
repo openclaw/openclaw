@@ -1,18 +1,16 @@
 import { note } from "../../packages/terminal-core/src/note.js";
+import { readResolvedDeferredPluginMigrationWarnings } from "../infra/deferred-plugin-migration-warnings.js";
 import {
   UPDATE_ACTIVATION_TIMEOUT_REASON,
   UPDATE_ENVIRONMENT_FAILURE_REASONS,
 } from "../shared/update-outcome.js";
 
-/** Startup and proven-pristine preflights do not need a public ledger snapshot. */
-export async function noteStaleUpdateRuns(options: {
-  migrateState?: boolean;
-  requireStartupMigrationCheckpoint?: boolean;
-  skipPristineStartupStateMigrations?: boolean;
-}): Promise<void> {
-  if (options.requireStartupMigrationCheckpoint || options.skipPristineStartupStateMigrations) {
-    return;
-  }
+/** Report unfinished or failed update work during Doctor diagnostics. */
+export async function noteStaleUpdateRuns(
+  options: {
+    migrateState?: boolean;
+  } = {},
+): Promise<void> {
   const [
     { staleUpdateRunGuidance },
     { listUpdateRunsAsync },
@@ -72,27 +70,16 @@ export async function noteStaleUpdateRuns(options: {
     ) {
       note(`Update ${latest.runId}: ${renderUpdateRunReport(latest).markdown}`, "Update history");
     }
-    let warningSteps = latest.steps;
-    const migrationWarning =
-      /^Plugin "([^"]+)" (?:state migration is pending|data\/settings upgrade is unfinished):/u;
-    if (warningSteps.some((step) => step.detail && migrationWarning.test(step.detail))) {
-      const { readDeferredPluginMigrationCompletionsAsync } =
-        await import("../infra/deferred-plugin-migrations.js");
-      const completions = new Map(
-        (await readDeferredPluginMigrationCompletionsAsync()).map(({ pluginId, completedAtMs }) => [
-          pluginId,
-          completedAtMs,
-        ]),
+    const resolvedWarnings = await readResolvedDeferredPluginMigrationWarnings(
+      latest.steps.map((step) => step.detail),
+    );
+    const warningSteps = latest.steps.filter((step) => {
+      const completedAtMs = step.detail ? resolvedWarnings.get(step.detail) : undefined;
+      return (
+        completedAtMs === undefined ||
+        completedAtMs < (step.endedAtMs ?? latest.finishedAtMs ?? latest.createdAtMs)
       );
-      warningSteps = warningSteps.filter((step) => {
-        const pluginId = step.detail && migrationWarning.exec(step.detail)?.[1];
-        const completedAtMs = pluginId ? completions.get(pluginId) : undefined;
-        return (
-          completedAtMs === undefined ||
-          completedAtMs < (step.endedAtMs ?? latest.finishedAtMs ?? latest.createdAtMs)
-        );
-      });
-    }
+    });
     const warnings = updateRunWarningMessages(warningSteps);
     if (warnings.length) {
       note(

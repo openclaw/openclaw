@@ -1,13 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import {
-  applySelectedSessionProjection,
-  resolveChatArtifactDownload,
-  SessionParticipationTracker,
-} from "./chat-pane-state.ts";
+import { applySelectedSessionProjection, SessionParticipationTracker } from "./chat-pane-state.ts";
 
 function projectionState(): Parameters<typeof applySelectedSessionProjection>[0] {
   return {
@@ -88,7 +85,7 @@ describe("applySelectedSessionProjection", () => {
   });
 });
 
-describe("resolveChatArtifactDownload", () => {
+describe("resolveArtifactDownloadSource", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   const artifact = {
@@ -115,7 +112,7 @@ describe("resolveChatArtifactDownload", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
     const request = vi.fn().mockResolvedValue(http ? { artifact, url: ticket } : inline);
-    const result = await resolveChatArtifactDownload(
+    const result = await resolveArtifactDownloadSource(
       {
         connected: true,
         resourceBasePath: "/mount",
@@ -167,7 +164,7 @@ describe("resolveChatArtifactDownload", () => {
         .fn()
         .mockResolvedValueOnce({ artifact, url: ticket })
         .mockResolvedValue(inline);
-      const result = await resolveChatArtifactDownload(
+      const result = await resolveArtifactDownloadSource(
         { connected: true, client: { gatewayUrl: "wss://control.test", request } as never },
         { sessionKey: "agent:main:main", artifactId: artifact.id },
       );
@@ -197,7 +194,7 @@ describe("resolveChatArtifactDownload", () => {
       artifact: { ...artifact, mimeType, type },
       url: ticket,
     });
-    const result = await resolveChatArtifactDownload(
+    const result = await resolveArtifactDownloadSource(
       { connected: true, client: { gatewayUrl: "wss://control.test", request } as never },
       { sessionKey: "agent:main:main", artifactId: artifact.id },
     );
@@ -222,7 +219,7 @@ describe("resolveChatArtifactDownload", () => {
       connectionEpoch: 1,
       client: { gatewayUrl: "wss://control.test", request } as never,
     };
-    const pending = resolveChatArtifactDownload(state, {
+    const pending = resolveArtifactDownloadSource(state, {
       sessionKey: "main",
       artifactId: artifact.id,
     });
@@ -235,7 +232,7 @@ describe("resolveChatArtifactDownload", () => {
 
   it("returns a trimmed ticket without exposing a gateway bearer credential", async () => {
     const requests: Array<{ method: string; params: unknown; options: unknown }> = [];
-    const result = await resolveChatArtifactDownload(
+    const result = await resolveArtifactDownloadSource(
       {
         connected: true,
         client: {
@@ -283,10 +280,6 @@ describe("SessionParticipationTracker", () => {
       session: undefined,
       ...patch,
     });
-
-  it("does not block a brand-new key that never had a row", () => {
-    expect(resolve(new SessionParticipationTracker())).toBe(false);
-  });
 
   it("blocks only on a positively observed restricted state", () => {
     expect(

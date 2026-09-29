@@ -1,4 +1,3 @@
-// Openrouter provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
@@ -16,7 +15,11 @@ import {
   resolveProviderOperationTimeoutMs,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveOpenRouterGenerationRequestContext } from "./generation-request-context.js";
 
 const DEFAULT_OPENROUTER_MUSIC_MODEL = "google/lyria-3-pro-preview";
@@ -89,23 +92,10 @@ function buildOpenRouterMessageContent(
 }
 
 function readDeltaAudio(part: unknown): { data?: string; transcript?: string } | undefined {
-  if (!isRecord(part)) {
-    return undefined;
-  }
-  const choices = part.choices;
-  if (!Array.isArray(choices)) {
-    return undefined;
-  }
-  const first = choices[0];
-  if (!isRecord(first)) {
-    return undefined;
-  }
-  const delta = first.delta;
-  if (!isRecord(delta)) {
-    return undefined;
-  }
-  const audio = delta.audio;
-  if (!isRecord(audio)) {
+  const choices = asOptionalRecord(part)?.choices;
+  const first = Array.isArray(choices) ? asOptionalRecord(choices[0]) : undefined;
+  const audio = asOptionalRecord(asOptionalRecord(first?.delta)?.audio);
+  if (!audio) {
     return undefined;
   }
   return {

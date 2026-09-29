@@ -1,4 +1,3 @@
-// Google plugin module implements vertex adc behavior.
 import { gunzipSync } from "node:zlib";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -328,20 +327,6 @@ async function resolveGoogleVertexAccessTokenViaGoogleAuth(
   return normalized;
 }
 
-/**
- * Resolve `Authorization: Bearer ...` headers for Google Vertex calls.
- *
- * We try the hand-rolled `authorized_user` refresh path first (preserves the
- * existing fetchImpl test seam and the OpenClaw upstream behaviour); when the
- * configured ADC source is anything other than `authorized_user` (the common
- * production cases on GKE: Workload Identity, Workload Identity Federation,
- * service-account JSON keys), we hand off to `google-auth-library` which
- * understands all of those natively.
- *
- * Note: the function is still named `...AuthorizedUserHeaders` to avoid a
- * symbol rename across the existing patch surface; the docstring above is
- * the truth, the name is legacy.
- */
 export async function resolveGoogleVertexAuthorizedUserHeaders(
   fetchImpl?: typeof fetch,
 ): Promise<Record<string, string>> {

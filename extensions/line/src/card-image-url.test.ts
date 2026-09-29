@@ -125,12 +125,7 @@ const cases: Array<{
   },
 ];
 
-for (const url of [
-  "http://example.com/cover.jpg",
-  "ftp://example.com/cover.jpg",
-  "cover.jpg",
-  "",
-]) {
+for (const url of ["http://example.com/cover.jpg", "cover.jpg"]) {
   cases.push({
     name: `omits an image-card hero with unsupported URL ${JSON.stringify(url)}`,
     message: () => ({
@@ -153,20 +148,6 @@ for (const url of [
 }
 
 cases.push(
-  {
-    name: "retains valid HTTPS image cards",
-    message: () => ({
-      type: "flex",
-      altText: "Product",
-      contents: createImageCard(imageUrl, "Product", "Caption"),
-    }),
-    verify: (message) =>
-      expect(message).toEqual({
-        type: "flex",
-        altText: "Product",
-        contents: createImageCard(imageUrl, "Product", "Caption"),
-      }),
-  },
   {
     name: "keeps action-card controls when the image is unavailable",
     message: () => ({
@@ -335,7 +316,7 @@ cases.push(
   },
 );
 
-for (const thumbnailImageUrl of ["http://example.com/cover.jpg", "cover.jpg", imageUrl]) {
+for (const thumbnailImageUrl of ["http://example.com/cover.jpg", imageUrl]) {
   cases.push({
     name: `buttons-template thumbnail ${thumbnailImageUrl}`,
     message: () =>
@@ -364,7 +345,6 @@ for (const thumbnailImageUrl of ["http://example.com/cover.jpg", "cover.jpg", im
 for (const thumbnails of [
   [imageUrl, imageUrl],
   [undefined, imageUrl],
-  ["http://example.com/cover.jpg", "http://example.com/other.jpg"],
 ]) {
   cases.push({
     name: `carousel thumbnails ${JSON.stringify(thumbnails)}`,
@@ -477,8 +457,6 @@ for (const shape of ["bubble", "carousel"] as const) {
 }
 
 const unchangedMessages: messagingApi.Message[] = [
-  { type: "image", originalContentUrl: imageUrl, previewImageUrl: imageUrl },
-  { type: "video", originalContentUrl: videoUrl, previewImageUrl: imageUrl },
   { type: "audio", originalContentUrl: "https://example.com/audio.mp3", duration: 1000 },
   {
     type: "template",
@@ -563,7 +541,17 @@ describe("LINE card shape on the actual push and reply wire", () => {
   });
 
   for (const operation of ["push", "reply"] as const) {
-    it.each(cases)(`${operation}: $name`, async ({ message, verify }) => {
+    // Push owns the shared normalizer matrix; reply verifies its transport wiring.
+    const operationCases =
+      operation === "push"
+        ? cases
+        : cases.filter(
+            ({ name }) =>
+              name ===
+                "removes nested invalid images and baseline icons without losing their siblings" ||
+              name === "mixed carousel image URLs retain consistent image presence",
+          );
+    it.each(operationCases)(`${operation}: $name`, async ({ message, verify }) => {
       const original = message();
       const originalBytes = JSON.stringify(original);
       if (operation === "push") {

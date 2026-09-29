@@ -6,6 +6,7 @@ import type {
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   sanitizeWizardStepForClient,
   WizardSession,
@@ -46,6 +47,11 @@ export type ChatWizardAnswerResult = ChatWizardResult & {
   userHistoryText: string;
 };
 
+type HostedSetupWizard = (
+  prompter: WizardPrompter,
+  beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+) => Promise<void | HostedSetupCompletion>;
+
 export type ChatWizardHostDependencies = {
   runChannelSetupWizard?: (
     channel: string,
@@ -53,23 +59,10 @@ export type ChatWizardHostDependencies = {
     beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
     assertPersistentEffectCurrent?: () => void,
   ) => Promise<void | HostedSetupCompletion>;
-  runSkillsSetupWizard?: (
-    prompter: WizardPrompter,
-    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-  ) => Promise<void | HostedSetupCompletion>;
-  runSearchSetupWizard?: (
-    prompter: WizardPrompter,
-    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-  ) => Promise<void | HostedSetupCompletion>;
-  runGatewaySetupWizard?: (
-    prompter: WizardPrompter,
-    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-  ) => Promise<void | HostedSetupCompletion>;
-  runMemoryImportWizard?: (
-    prompter: WizardPrompter,
-    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-    onProviderOutcome: (outcome: MemoryImportProviderOutcome) => void,
-  ) => Promise<HostedMemoryImportOutcome>;
+  runSkillsSetupWizard?: HostedSetupWizard;
+  runSearchSetupWizard?: HostedSetupWizard;
+  runGatewaySetupWizard?: HostedSetupWizard;
+  runMemoryImportWizard?: HostedRuntime["runHostedMemoryImport"];
   appendAuditEntry?: typeof import("./audit.js").appendSystemAgentAuditEntry;
 };
 
@@ -88,11 +81,24 @@ type ActiveWizardBridge = {
 
 const log = createSubsystemLogger("system-agent/chat-wizard-host");
 const WIZARD_CANCEL_HINT = "Say `cancel` to stop this setup.";
-let hostedRuntimePromise: Promise<HostedRuntime> | undefined;
-
-function loadHostedRuntime(): Promise<HostedRuntime> {
-  return (hostedRuntimePromise ??= import("./hosted-setup.runtime.js"));
-}
+const HOSTED_SETUP = {
+  skills: {
+    label: "skills",
+    dependency: "runSkillsSetupWizard",
+    runtime: "runHostedSkillsSetup",
+  },
+  search: {
+    label: "web search",
+    dependency: "runSearchSetupWizard",
+    runtime: "runHostedSearchSetup",
+  },
+  gateway: {
+    label: "gateway",
+    dependency: "runGatewaySetupWizard",
+    runtime: "runHostedGatewaySetup",
+  },
+} as const;
+const loadHostedRuntime = createLazyRuntimeModule(() => import("./hosted-setup.runtime.js"));
 
 function formatWizardOptions(step: WizardStep): string[] {
   return (step.options ?? []).map((option, index) => {
@@ -380,47 +386,19 @@ export class ChatWizardHost {
     });
   }
 
-  async startSkills(): Promise<ChatWizardResult> {
-    const run = this.options.dependencies?.runSkillsSetupWizard;
-    return await this.start({
-      kind: "skills",
-      label: "skills",
-      run: async (prompter) =>
-        run
-          ? await run(prompter, this.options.beforePersistentApply)
-          : await (
-              await loadHostedRuntime()
-            ).runHostedSkillsSetup(prompter, this.options.beforePersistentApply),
-    });
-  }
-
-  async startSearch(): Promise<ChatWizardResult> {
-    const run = this.options.dependencies?.runSearchSetupWizard;
-    return await this.start({
-      kind: "search",
-      label: "web search",
-      run: async (prompter) =>
-        run
-          ? await run(prompter, this.options.beforePersistentApply)
-          : await (
-              await loadHostedRuntime()
-            ).runHostedSearchSetup(prompter, this.options.beforePersistentApply),
-    });
-  }
-
-  async startGateway(): Promise<ChatWizardResult> {
-    const run = this.options.dependencies?.runGatewaySetupWizard;
+  async startSetup(kind: keyof typeof HOSTED_SETUP): Promise<ChatWizardResult> {
+    const setup = HOSTED_SETUP[kind];
+    const run = this.options.dependencies?.[setup.dependency];
     const result = await this.start({
-      kind: "gateway",
-      label: "gateway",
+      kind,
+      label: setup.label,
       run: async (prompter) =>
-        run
-          ? await run(prompter, this.options.beforePersistentApply)
-          : await (
-              await loadHostedRuntime()
-            ).runHostedGatewaySetup(prompter, this.options.beforePersistentApply),
+        await (run ?? (await loadHostedRuntime())[setup.runtime])(
+          prompter,
+          this.options.beforePersistentApply,
+        ),
     });
-    if (this.options.surface !== "gateway" || !this.bridge) {
+    if (kind !== "gateway" || this.options.surface !== "gateway" || !this.bridge) {
       return result;
     }
     const warning = [
@@ -438,15 +416,11 @@ export class ChatWizardHost {
       label: "memory import",
       memoryImportProviders: providers,
       run: async (prompter) =>
-        run
-          ? await run(prompter, this.options.beforePersistentApply, (value) =>
-              providers.push(value),
-            )
-          : await (
-              await loadHostedRuntime()
-            ).runHostedMemoryImport(prompter, this.options.beforePersistentApply, (value) =>
-              providers.push(value),
-            ),
+        await (run ?? (await loadHostedRuntime()).runHostedMemoryImport)(
+          prompter,
+          this.options.beforePersistentApply,
+          (value) => providers.push(value),
+        ),
     });
   }
 

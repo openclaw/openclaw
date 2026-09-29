@@ -1,4 +1,5 @@
 import path from "node:path";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import {
   readPersistedMediaFacts,
@@ -78,22 +79,8 @@ function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
   return completedTurnStarts.at(-PRESERVE_RECENT_COMPLETED_TURNS) ?? -1;
 }
 
-function resolveMessageMediaFacts(message: AgentMessage): MediaFact[] {
-  const runtimeMedia = readRuntimePromptMediaFacts(message);
-  if (runtimeMedia) {
-    return runtimeMedia;
-  }
-  return readPersistedMediaFacts(message) ?? [];
-}
-
 function wasStructurallyMediaPruned(message: AgentMessage): boolean {
-  const meta = Reflect.get(message, "__openclaw");
-  return (
-    Boolean(meta) &&
-    typeof meta === "object" &&
-    !Array.isArray(meta) &&
-    (meta as Record<string, unknown>).mediaImagePruned === true
-  );
+  return asNonArrayRecord(Reflect.get(message, "__openclaw")).mediaImagePruned === true;
 }
 
 function replaceLegacyFactlessMediaText(text: string): string {
@@ -201,11 +188,7 @@ function cloneMessageWithContent(
     stripLegacyMediaContextFields(clone);
   }
   if (dropImageMetadata) {
-    const meta = clone["__openclaw"];
-    const nextMeta =
-      meta && typeof meta === "object" && !Array.isArray(meta)
-        ? { ...(meta as Record<string, unknown>) }
-        : {};
+    const nextMeta = { ...asNonArrayRecord(clone["__openclaw"]) };
     delete nextMeta.mediaImageBlockFactIndexes;
     delete nextMeta.mediaImageLayout;
     if (dropMedia) {
@@ -234,9 +217,18 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
     if (!message || (message.role !== "user" && message.role !== "toolResult")) {
       continue;
     }
-    const media = message.role === "user" ? resolveMessageMediaFacts(message) : [];
+    const media =
+      message.role === "user"
+        ? (readRuntimePromptMediaFacts(message) ?? readPersistedMediaFacts(message) ?? [])
+        : [];
     const hasOwnedMedia = media.length > 0;
     const structuredMediaWasPruned = wasStructurallyMediaPruned(message);
+    const pruneText = (text: string) =>
+      hasOwnedMedia
+        ? replaceOwnedMediaProjection(text, media)
+        : structuredMediaWasPruned
+          ? text
+          : replaceLegacyFactlessMediaText(text);
 
     // Materialize blank marked turns here so this earlier boundary still prunes stale paths.
     const lateMediaProjection =
@@ -253,11 +245,7 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
       : message.content;
 
     if (typeof content === "string") {
-      const nextText = hasOwnedMedia
-        ? replaceOwnedMediaProjection(content, media)
-        : structuredMediaWasPruned
-          ? content
-          : replaceLegacyFactlessMediaText(content);
+      const nextText = pruneText(content);
       if (nextText !== message.content || hasOwnedMedia) {
         prunedMessages ??= messages.slice();
         prunedMessages[i] = cloneMessageWithContent(message, nextText, hasOwnedMedia);
@@ -280,11 +268,7 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
       const block = content[index];
       let nextBlock: (typeof content)[number] | undefined;
       if (block?.type === "text" && typeof block.text === "string") {
-        const text = hasOwnedMedia
-          ? replaceOwnedMediaProjection(block.text, media)
-          : structuredMediaWasPruned
-            ? block.text
-            : replaceLegacyFactlessMediaText(block.text);
+        const text = pruneText(block.text);
         if (text !== block.text) {
           nextBlock = { ...block, text };
         }

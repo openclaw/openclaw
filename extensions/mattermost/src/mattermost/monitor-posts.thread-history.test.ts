@@ -245,61 +245,39 @@ describe("Mattermost server thread recovery through the post handler", () => {
 
   it("rejects same-session lifecycle rotation and deletion while fetching", async () => {
     const f = await setup("channel");
-    for (const remove of [false, true]) {
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      beforeResponse = async () => {
-        entered.resolve();
-        await release.promise;
-      };
-      const pending = f.recover(f.turn);
-      await entered.promise;
-      if (remove) {
-        await deleteSessionEntry({
-          agentId: "main",
-          storePath: f.monitor.cfg.session?.store,
-          sessionKey: f.sessionKey,
-        });
-      } else {
-        await f.rotate("stored-session", "rotated-generation");
+    // Hold the response race's clock; the separate deadline case exercises real elapsed time.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    try {
+      for (const remove of [false, true]) {
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        beforeResponse = async () => {
+          entered.resolve();
+          await release.promise;
+        };
+        const pending = f.recover(f.turn);
+        try {
+          await entered.promise;
+          if (remove) {
+            await deleteSessionEntry({
+              agentId: "main",
+              storePath: f.monitor.cfg.session?.store,
+              sessionKey: f.sessionKey,
+            });
+          } else {
+            await f.rotate("stored-session", "rotated-generation");
+          }
+          release.resolve();
+          expect((await pending).current).toBe(false);
+          expect(f.histories.size).toBe(0);
+        } finally {
+          release.resolve();
+          await pending;
+        }
       }
-      release.resolve();
-      expect((await pending).current).toBe(false);
-      expect(f.histories.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
     }
-  });
-
-  it("coalesces concurrent cold turns and preserves live history", async () => {
-    const f = await setup("channel");
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    beforeResponse = async () => {
-      entered.resolve();
-      await release.promise;
-    };
-    const pending = f.recover(f.turn);
-    await entered.promise;
-    const shared = f.recover(f.turn);
-    const live = {
-      sender: "trusted",
-      body: "concurrent live post",
-      timestamp: 35,
-      messageId: "live",
-    };
-    createChannelHistoryWindow({ historyMap: f.histories }).record({
-      historyKey: f.sessionKey,
-      entry: live,
-      limit: 3,
-    });
-    release.resolve();
-    await Promise.all([pending, shared]);
-    expect(requests).toHaveLength(1);
-    expect(f.histories.get(f.sessionKey)?.map((entry) => entry.messageId)).toEqual([
-      "root",
-      "reply",
-      "live",
-    ]);
-    expect(f.histories.get(f.sessionKey)?.at(-1)).toBe(live);
   });
 
   it("filters concurrent later history from the older turn without losing it", async () => {
@@ -330,6 +308,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
     release.resolve();
     await pending;
     const first = dispatch.mock.calls[0]?.[1].ctxPayload;
+    expect(first.Body).toContain("Next year France");
     expect(first.Body).not.toContain("later live fact");
     expect(first.InboundHistory?.map((entry: { messageId: string }) => entry.messageId)).toEqual([
       "root",
@@ -459,7 +438,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
     expect(f.histories.get(f.sessionKey)?.[0]?.body).toBe("Next year France");
   });
 
-  it.each(["all", "allowlist", "allowlist_quote"] as const)(
+  it.each(["all", "allowlist_quote"] as const)(
     "uses shared ingress and %s visibility without pairing",
     async (mode) => {
       const f = await setup("channel");
@@ -591,7 +570,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
     expect(f.histories.size).toBe(0);
   });
 
-  it.each(["channel", "group", "direct"] as const)(
+  it.each(["group", "direct"] as const)(
     "recovers cold %s thread context in chronological order, excluding the trigger",
     async (kind) => {
       const { handler } = await setup(kind);

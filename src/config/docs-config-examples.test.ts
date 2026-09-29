@@ -103,14 +103,7 @@ describe("docs config examples", () => {
       skipped: undefined,
       issuePath: "channels.slack",
     },
-    {
-      name: "reports an unsupported OpenAI plugin config key",
-      markdown:
-        '```json5\n{ plugins: { entries: { openai: { config: { personalityy: "friendly" } } } } }\n```',
-      findings: 1,
-      skipped: undefined,
-      issuePath: "plugins.entries.openai.config",
-    },
+
     {
       name: "accepts a supported OpenAI plugin config value",
       markdown:

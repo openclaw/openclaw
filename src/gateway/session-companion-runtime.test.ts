@@ -23,7 +23,8 @@ import * as hydration from "../config/sessions/session-transcript-hydration.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
@@ -88,6 +89,7 @@ describe("Side chat with a published Gateway runtime", () => {
         },
       };
       const companion = createSessionCompanion({
+        scheduler: createTestGatewayScheduler(),
         getConfig: () => cfg,
         contextReader: defaultSessionCompanionContextReader,
         sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },

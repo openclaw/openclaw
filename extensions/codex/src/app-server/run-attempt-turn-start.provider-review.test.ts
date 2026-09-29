@@ -16,7 +16,7 @@ vi.mock("./attempt-results.js", () => ({
   buildCodexTurnStartFailureResult: vi.fn(),
   isInvalidCodexImagePayloadError: () => recovery.kind === "image",
 }));
-vi.mock("./attempt-startup.js", () => ({
+vi.mock("./thread-lifecycle-errors.js", () => ({
   isCodexContextRestartSelectionChangedError: () => false,
 }));
 vi.mock("./run-attempt-lifecycle.js", () => ({
@@ -29,7 +29,7 @@ vi.mock("./run-attempt-state.js", () => ({
   shouldUseFreshCodexThreadAfterContextEngineOverflow: () => recovery.kind === "overflow",
 }));
 vi.mock("./session-binding.js", () => ({ assertCodexBindingMayBeReplaced: vi.fn() }));
-vi.mock("./transcript-mirror.js", () => ({
+vi.mock("./user-prompt-message.js", () => ({
   buildCodexUserPromptMessage: () => ({ role: "user", content: "reviewed continuation" }),
 }));
 vi.mock("./usage-limit-error.js", () => ({

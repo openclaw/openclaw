@@ -62,13 +62,6 @@ export function requireSessionMutationAccess(
   return false;
 }
 
-export function sessionRowAgentId(
-  session: Pick<SessionActionRow, "key" | "agentId">,
-  scope: SidebarSessionMutationScope,
-): string {
-  return resolveUiSessionRowAgentId(session, scope.selectedAgentId);
-}
-
 /**
  * Refresh each owning agent once after deferred mutations. Rows determine the
  * agent because mutations route by session key; stale scopes and failed reads
@@ -79,7 +72,9 @@ async function refreshSessionsAfterBatch(
   scope: SidebarSessionMutationScope,
   rows: readonly SessionActionRow[],
 ): Promise<SidebarSessionMutationResult> {
-  const agentIds = [...new Set(rows.map((row) => sessionRowAgentId(row, scope)))];
+  const agentIds = [
+    ...new Set(rows.map((row) => resolveUiSessionRowAgentId(row, scope.selectedAgentId))),
+  ];
   const refreshSidebar = host.sidebarSessionStatusFilter() !== "active";
   for (const agentId of agentIds) {
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
@@ -140,7 +135,7 @@ export async function patchSessionRows(
     const params: SessionsPatchManyParams = {
       targets: chunkRows.map((row) => ({
         key: row.key,
-        agentId: sessionRowAgentId(row, scope),
+        agentId: resolveUiSessionRowAgentId(row, scope.selectedAgentId),
         ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
       })),
       patch,
@@ -220,13 +215,13 @@ export async function setSessionInvolvement(
   if (!host.sessionData.isSessionMutationScopeCurrent(scope) || !session.sessionId) {
     return;
   }
-  const agentId = sessionRowAgentId(session, scope);
-  const access = readSessionMethodAccess(scope.gateway.snapshot, {
-    method: "sessions.setInvolvement",
-    requiredScope: "operator.read",
-  });
-  if (!access.allowed) {
-    host.sessionData.publishSessionMutationError(scope, access.reason);
+  const agentId = resolveUiSessionRowAgentId(session, scope.selectedAgentId);
+  if (
+    !requireSessionMutationAccess(host, scope, {
+      method: "sessions.setInvolvement",
+      requiredScope: "operator.read",
+    })
+  ) {
     return;
   }
   try {

@@ -1,9 +1,20 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { Type } from "typebox";
 import { afterEach, expect } from "vitest";
 import type { QaMockOpenAiServerOptions } from "./server-options.js";
 import { startQaMockOpenAiServer } from "./server.js";
 
 export type MockServer = { baseUrl: string };
+
+export const guestCodeModeExecTool = {
+  name: "exec",
+  description: "Run JavaScript in OpenClaw.",
+  parameters: Type.Object({
+    title: Type.String({ minLength: 1, maxLength: 120, pattern: "\\S" }),
+    code: Type.String(),
+    restartSafe: Type.Optional(Type.Boolean()),
+  }),
+};
 
 export const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
@@ -160,4 +171,62 @@ export function makeUserInput(text: string) {
 
 export function makeToolOutputWithCallId(callId: string, output: unknown) {
   return { type: "function_call_output" as const, call_id: callId, output };
+}
+
+export type AnthropicResponse = Record<string, unknown> & {
+  content: Array<Record<string, unknown>>;
+};
+
+export const ANTHROPIC_GUEST_CODE_MODE_TOOLS = [
+  {
+    name: "exec",
+    input_schema: guestCodeModeExecTool.parameters,
+  },
+  {
+    name: "wait",
+    input_schema: {
+      type: "object",
+      properties: { runId: { type: "string" } },
+      required: ["runId"],
+    },
+  },
+] as const;
+
+export async function expectAnthropicMessagesJson(
+  server: MockServer,
+  body: Record<string, unknown>,
+): Promise<AnthropicResponse> {
+  const response = requireRecord(
+    await (
+      await expectOk(
+        postJson(server, "/v1/messages", {
+          model: "claude-opus-4-8",
+          max_tokens: 256,
+          ...body,
+        }),
+      )
+    ).json(),
+    "Anthropic response",
+  );
+  return {
+    ...response,
+    content: requireArray(response.content, "Anthropic content").map((item) =>
+      requireRecord(item, "Anthropic content block"),
+    ),
+  };
+}
+
+export async function readDebugRequest(server: MockServer) {
+  return requireRecord(await getJson(server, "/debug/last-request"), "debug request");
+}
+
+export function makeAnthropicUserText(text: string) {
+  return { role: "user" as const, content: [{ type: "text" as const, text }] };
+}
+
+export function makeAnthropicToolResult(toolUseId: unknown, content: string) {
+  return {
+    role: "user" as const,
+    content: [{ type: "tool_result" as const, tool_use_id: toolUseId as string, content }],
+  };
 }

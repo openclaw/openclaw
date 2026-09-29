@@ -18,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
+import { writeSessionIngestionState } from "./dreaming-ingestion-state.js";
 import {
   clearMemoryCoreWorkspaceNamespace,
   SESSION_BACKFILL_REWIND_NAMESPACE,
@@ -29,12 +30,7 @@ import {
   resetSessionBackfillIngestionState,
   rewindSessionBackfillIngestionState,
 } from "./session-backfill-lifecycle.js";
-import {
-  executeSessionBackfill,
-  executeSessionBackfillBatch,
-  runSessionBackfill,
-} from "./session-backfill.js";
-import { writeSessionIngestionState } from "./session-ingestion.js";
+import { executeSessionBackfillBatch, runSessionBackfill } from "./session-backfill.js";
 import {
   readShortTermRecallEntries,
   recordGroundedShortTermCandidates,
@@ -133,10 +129,6 @@ afterEach(() => {
 });
 
 describe("runSessionBackfill", () => {
-  it("keeps CLI draining separate from the single-batch executor", () => {
-    expect(runSessionBackfill).not.toBe(executeSessionBackfill);
-  });
-
   it("keeps REM preview mode mutually exclusive with apply", async () => {
     const workspaceDir = await createIsolatedWorkspace("rem-apply-");
 

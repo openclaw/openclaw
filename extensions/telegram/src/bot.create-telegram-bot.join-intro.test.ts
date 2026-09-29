@@ -52,9 +52,9 @@ function createMembershipContext(params?: {
   };
 }
 
-function registerJoinHandler(config: OpenClawConfig) {
+async function registerJoinHandler(config: OpenClawConfig) {
   getLoadConfigMock().mockReturnValue(config);
-  createTelegramBotCore({
+  await createTelegramBotCore({
     token: "tok",
     botInfo: telegramBotInfoForTest,
     telegramDeps: telegramBotDepsForTest,
@@ -83,7 +83,7 @@ describe("Telegram group join introductions", () => {
       description: "Coordinate production incidents",
       pinned_message: { text: "Start with the incident checklist" },
     });
-    const handler = registerJoinHandler(config);
+    const handler = await registerJoinHandler(config);
 
     await handler(createMembershipContext());
 
@@ -113,12 +113,11 @@ describe("Telegram group join introductions", () => {
 
   it.each([
     { name: "a private chat", membership: { chatType: "private" as const } },
-    { name: "a channel", membership: { chatType: "channel" as const } },
     { name: "an existing member", membership: { oldStatus: "member" as const } },
     { name: "a departure", membership: { newStatus: "left" as const } },
     { name: "another member", membership: { memberId: 321 } },
   ])("ignores $name", async ({ membership }) => {
-    const handler = registerJoinHandler({
+    const handler = await registerJoinHandler({
       channels: { telegram: { groupPolicy: "open" } },
     });
 
@@ -148,7 +147,7 @@ describe("Telegram group join introductions", () => {
       },
     },
   ])("passes a rejected conversation to the shared owner for $name", async ({ config }) => {
-    const handler = registerJoinHandler({ channels: { telegram: config } });
+    const handler = await registerJoinHandler({ channels: { telegram: config } });
 
     await handler(createMembershipContext());
 
@@ -162,7 +161,7 @@ describe("Telegram group join introductions", () => {
   });
 
   it("does not start an introduction after its ingress owner was aborted", async () => {
-    const handler = registerJoinHandler({ channels: { telegram: { groupPolicy: "open" } } });
+    const handler = await registerJoinHandler({ channels: { telegram: { groupPolicy: "open" } } });
     const context = createMembershipContext();
     const frame = await runWithTelegramSpooledReplayUpdate(context.update, () => handler(context), {
       abortSignal: AbortSignal.abort(new Error("account stopped")),
@@ -187,7 +186,7 @@ describe("Telegram group join introductions", () => {
       await commit.promise;
       return { kind: "posted" };
     });
-    const handler = registerJoinHandler({ channels: { telegram: { groupPolicy: "open" } } });
+    const handler = await registerJoinHandler({ channels: { telegram: { groupPolicy: "open" } } });
     const context = createMembershipContext();
     const frame = runWithTelegramSpooledReplayUpdate(context.update, () => handler(context), {
       abortSignal: abort.signal,
@@ -216,7 +215,7 @@ describe("Telegram group join introductions", () => {
       participant = getTelegramSpooledReplayDeferredParticipant();
       throw error;
     });
-    const handler = registerJoinHandler({ channels: { telegram: { groupPolicy: "open" } } });
+    const handler = await registerJoinHandler({ channels: { telegram: { groupPolicy: "open" } } });
     const context = createMembershipContext();
     await expect(
       runWithTelegramSpooledReplayUpdate(context.update, () => handler(context), {

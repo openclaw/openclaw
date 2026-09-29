@@ -1,4 +1,3 @@
-// Public facade for plugin-scoped SQLite blob storage.
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   MAX_PLUGIN_BLOB_BYTES_PER_ENTRY,
@@ -44,13 +43,6 @@ type BlobStoreOptionSignature = {
   maxBytesPerNamespace: number;
   overflowPolicy: PluginBlobOverflowPolicy;
   defaultTtlMs?: number;
-};
-
-type PreparedBlob = {
-  key: string;
-  bytes: Uint8Array;
-  metadataJson: string;
-  ttlMs?: number;
 };
 
 function invalidInput(
@@ -126,7 +118,7 @@ function prepareBlob(params: {
   maxBytesPerEntry: number;
   defaultTtlMs?: number;
   opts?: { ttlMs?: number };
-}): PreparedBlob {
+}) {
   const key = validateKey(params.key, "register");
   if (!(params.bytes instanceof Uint8Array)) {
     throw invalidInput("plugin blob bytes must be a Uint8Array");
@@ -188,78 +180,53 @@ function createPluginBlobStoreInternal<TMetadata>(
     defaultTtlMs,
   });
 
-  const writeParams = (blob: PreparedBlob) => ({
-    pluginId,
-    namespace,
-    key: blob.key,
-    bytes: blob.bytes,
-    metadataJson: blob.metadataJson,
+  const scope = { pluginId, namespace, ...(env ? { env } : {}) };
+  const prepareWrite = (
+    key: string,
+    bytes: Uint8Array,
+    metadata: TMetadata,
+    opts?: { ttlMs?: number },
+  ) => ({
+    ...scope,
+    ...prepareBlob({ key, bytes, metadata, maxBytesPerEntry, defaultTtlMs, opts }),
     maxEntries,
     maxBytesPerNamespace,
     overflowPolicy,
-    ...(blob.ttlMs !== undefined ? { ttlMs: blob.ttlMs } : {}),
-    ...(env ? { env } : {}),
   });
 
   return {
     async register(key, bytes, metadata, opts) {
-      const blob = prepareBlob({
-        key,
-        bytes,
-        metadata,
-        maxBytesPerEntry,
-        defaultTtlMs,
-        opts,
-      });
-      await registerPluginBlobInWorker(writeParams(blob));
+      await registerPluginBlobInWorker(prepareWrite(key, bytes, metadata, opts));
     },
     async registerIfAbsent(key, bytes, metadata, opts) {
-      const blob = prepareBlob({
-        key,
-        bytes,
-        metadata,
-        maxBytesPerEntry,
-        defaultTtlMs,
-        opts,
-      });
-      return registerPluginBlobIfAbsentInWorker(writeParams(blob));
+      return registerPluginBlobIfAbsentInWorker(prepareWrite(key, bytes, metadata, opts));
     },
     async lookup(key) {
       return lookupPluginBlobInWorker<TMetadata>({
-        pluginId,
-        namespace,
+        ...scope,
         key: validateKey(key, "lookup"),
-        ...(env ? { env } : {}),
       });
     },
     async entries() {
-      return listPluginBlobsInWorker<TMetadata>({ pluginId, namespace, ...(env ? { env } : {}) });
+      return listPluginBlobsInWorker<TMetadata>(scope);
     },
     async delete(key) {
       return deletePluginBlobInWorker({
-        pluginId,
-        namespace,
+        ...scope,
         key: validateKey(key, "delete"),
-        ...(env ? { env } : {}),
       });
     },
     async deleteExpiredKey(key) {
       return deleteExpiredPluginBlobKeyInWorker<TMetadata>({
-        pluginId,
-        namespace,
+        ...scope,
         key: validateKey(key, "sweep"),
-        ...(env ? { env } : {}),
       });
     },
     async deleteExpired() {
-      return deleteExpiredPluginBlobsInWorker<TMetadata>({
-        pluginId,
-        namespace,
-        ...(env ? { env } : {}),
-      });
+      return deleteExpiredPluginBlobsInWorker<TMetadata>(scope);
     },
     async clear() {
-      await clearPluginBlobsInWorker({ pluginId, namespace, ...(env ? { env } : {}) });
+      await clearPluginBlobsInWorker(scope);
     },
   };
 }

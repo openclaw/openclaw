@@ -398,7 +398,8 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
     timeoutMs: string | undefined,
     onBeforeReap?: (pid: number | undefined) => void,
   ) {
-    const { OPENCLAW_TSGO_TIMEOUT_MS: _unset, ...baseEnv } = process.env;
+    const { OPENCLAW_TSGO_TIMEOUT_MS: _unset, ...inheritedEnv } = process.env;
+    const baseEnv = { ...inheritedEnv, OPENCLAW_CI_STATIC_EVIDENCE: "1" };
     try {
       return spawnSync(
         process.execPath,
@@ -461,6 +462,7 @@ child.once("message", () => process.exit(0));
       ).toBe(true);
       expect.soft(result.status).toBe(1);
       expect.soft(result.stderr).toContain("EPROCESSGROUP_CLEANUP_FAILED");
+      expect.soft(result.stdout).not.toContain("[ci-static:tsgo:");
       expect
         .soft(liveBeforeTeardown, "compiler descendants must be absent before fixture teardown")
         .toEqual([]);
@@ -526,6 +528,7 @@ child.once("message", () => process.exit(0));
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("killed the tsgo process tree");
+    expect(result.stdout).not.toContain("[ci-static:tsgo:");
     // Printing the message is not the contract; the tree actually being gone is.
     expect(observedBeforeReap.pid).toBeDefined();
     expect(observedBeforeReap.error).toMatchObject({ code: "ESRCH" });
@@ -655,12 +658,12 @@ syncBuiltinESMExports();
   // regression that matters: without saturation Node collapses the delay to 1ms and
   // would kill this sleeping child immediately.
   it.each([
-    { bound: undefined, name: "the disabled watchdog", body: "#!/bin/sh\nsleep 2\nexit 0\n" },
+    { bound: undefined, name: "the disabled watchdog", body: "#!/bin/sh\nsleep 0.25\nexit 0\n" },
     { bound: "30000", name: "an explicit bound", body: "#!/bin/sh\nexit 0\n" },
     {
       bound: "2147483648",
       name: "an override past Node's timer ceiling",
-      body: "#!/bin/sh\nsleep 1\nexit 0\n",
+      body: "#!/bin/sh\nsleep 0.25\nexit 0\n",
     },
   ])(
     "leaves a completing tsgo alone under $name",

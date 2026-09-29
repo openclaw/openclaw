@@ -20,16 +20,22 @@ it("leaves startup failure handling intact when an update removed the recovery m
   expect(runtime.exit).not.toHaveBeenCalled();
 });
 
-it("preserves failures from a successfully loaded triage command", async () => {
+it.each(["completed", "failed"] as const)("preserves %s triage outcomes", async (outcome) => {
   const failure = new Error("triage command failed");
   vi.doMock("../../commands/triage-failure.js", () => ({
     triageAfterFailure: async () => {
-      throw failure;
+      if (outcome === "failed") {
+        throw failure;
+      }
+      return "completed";
     },
   }));
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-  await expect(triageGatewayStartupFailure(runtime, new Error("startup failed"))).rejects.toBe(
-    failure,
-  );
+  const result = triageGatewayStartupFailure(runtime, new Error("startup failed"));
+  if (outcome === "failed") {
+    await expect(result).rejects.toBe(failure);
+  } else {
+    await expect(result).resolves.toBe("completed");
+  }
   expect(runtime.error).not.toHaveBeenCalled();
 });

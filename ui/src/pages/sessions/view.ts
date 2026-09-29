@@ -7,14 +7,12 @@ import { html, nothing } from "lit";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
-  SessionRunStatus,
-  FastMode,
   SessionsListResult,
 } from "../../api/types.ts";
 import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
 import { renderCapacityMeter } from "../../components/capacity-meter.ts";
-import "../../styles/sessions.css";
 import { icons } from "../../components/icons.ts";
+import "../../styles/sessions.css";
 import {
   renderSettingsPage,
   renderSettingsSegmented,
@@ -47,6 +45,7 @@ import {
   UNGROUPED_ID,
 } from "../../lib/sessions/grouping.ts";
 import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
+import type { SessionPatch } from "../../lib/sessions/patch.ts";
 import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
@@ -54,6 +53,7 @@ import {
 import { formatSessionArchiveReason } from "../../lib/sessions/session-archive-reason.ts";
 import { parseAgentSessionKey, parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
 import { renderCategoryCell } from "./category-cell.ts";
+import { renderSessionStatusBadge } from "./session-status.ts";
 import {
   renderSessionsAdvancedFilters,
   type SessionsAdvancedFiltersProps,
@@ -92,23 +92,7 @@ export type SessionsProps = {
   onRefresh: () => void;
   onStatusFilterChange: (statusFilter: SessionArchivedFilter) => void;
   onDeleteAllArchived: () => void;
-  onPatch: (
-    key: string,
-    patch: {
-      label?: string | null;
-      icon?: string | null;
-      color?: string | null;
-      category?: string | null;
-      archived?: boolean;
-      pinned?: boolean;
-      unread?: boolean;
-      thinkingLevel?: string | null;
-      fastMode?: FastMode | null;
-      verboseLevel?: string | null;
-      reasoningLevel?: string | null;
-    },
-    options?: { sessionScope?: boolean },
-  ) => void;
+  onPatch: (key: string, patch: SessionPatch, options?: { sessionScope?: boolean }) => void;
   onToggleSelect: (key: string) => void;
   onSelectPage: (keys: string[]) => void;
   onDeselectPage: (keys: string[]) => void;
@@ -171,48 +155,6 @@ function buildSessionLevelOptions(
           ? t("sessionsView.offExplicit")
           : t(`sessionsView.${value}`),
   }));
-}
-
-const SESSION_RUN_STATUS_LABELS = {
-  queued: "sessionsView.statusQueued",
-  running: "sessionsView.statusRunning",
-  done: "sessionsView.statusDone",
-  failed: "sessionsView.statusFailed",
-  killed: "sessionsView.statusKilled",
-  timeout: "sessionsView.statusTimeout",
-} as const satisfies Record<SessionRunStatus, string>;
-
-function formatSessionRunStatus(status: SessionRunStatus): string {
-  return t(SESSION_RUN_STATUS_LABELS[status] ?? "sessionsView.statusUnknown");
-}
-
-function renderSessionStatusBadge(row: GatewaySessionRow) {
-  const active = isSessionRunActive(row);
-  const idle = row.hasActiveRun === false && (!row.status || row.status === "running");
-  const label =
-    row.status === "queued"
-      ? t("sessionsView.statusQueued")
-      : active
-        ? t("sessionsView.statusLive")
-        : idle
-          ? t("sessionsView.statusIdle")
-          : row.status
-            ? formatSessionRunStatus(row.status)
-            : t("sessionsView.statusUnknown");
-  const kind =
-    row.status === "queued"
-      ? "warn"
-      : active || row.status === "done"
-        ? "ok"
-        : idle || !row.status
-          ? "muted"
-          : "danger";
-  const title = `${t("sessionsView.status")}: ${label}`;
-  return html`
-    <openclaw-tooltip .content=${title}>
-      ${renderSettingsStatus({ kind, label })}
-    </openclaw-tooltip>
-  `;
 }
 
 const SESSION_KIND_ICONS = {
@@ -349,11 +291,6 @@ function renderSkeletonRows(columnCount: number) {
   );
 }
 
-function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
-  const start = page * pageSize;
-  return rows.slice(start, start + pageSize);
-}
-
 function hasActiveFilters(props: SessionsProps): boolean {
   return (
     normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
@@ -387,11 +324,10 @@ function renderSessionGoalStatus(goal: GatewaySessionRow["goal"]) {
   `;
 }
 
-function sessionDetailItems(params: {
-  row: GatewaySessionRow;
-  updated: string;
-}): Array<{ label: string; value: string }> {
-  const { row, updated } = params;
+function sessionDetailItems(
+  row: GatewaySessionRow,
+  updated: string,
+): Array<{ label: string; value: string }> {
   const details: Array<{ label: string; value: string }> = [
     { label: t("sessionsView.key"), value: row.key },
     { label: t("sessionsView.kind"), value: resolveSessionDisplayKind(row) },
@@ -577,68 +513,8 @@ function renderOverrideSelect(params: {
 
 export function renderSessions(props: SessionsProps) {
   const rawRows = props.result?.sessions ?? [];
-  const direction = props.sortDir === "asc" ? 1 : -1;
-  const sorted = rawRows.toSorted((a, b) => {
-    const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
-    if (pinnedDiff !== 0) {
-      return pinnedDiff;
-    }
-    const diff =
-      props.sortColumn === "kind"
-        ? resolveSessionDisplayKind(a).localeCompare(resolveSessionDisplayKind(b))
-        : props.sortColumn === "key"
-          ? a.key.localeCompare(b.key)
-          : props.sortColumn === "updated"
-            ? (a.updatedAt ?? 0) - (b.updatedAt ?? 0)
-            : (a.totalTokens ?? a.inputTokens ?? a.outputTokens ?? 0) -
-              (b.totalTokens ?? b.inputTokens ?? b.outputTokens ?? 0);
-    return diff * direction;
-  });
-  const totalRows = sorted.length;
-  const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
-  const page = Math.min(props.page, totalPages - 1);
-  const groups =
-    props.groupBy !== "none"
-      ? groupSessionRows({
-          rows: sorted,
-          mode: props.groupBy,
-          knownCategories: props.knownCategories,
-        })
-      : null;
-  const displayRows = groups ? groups.flatMap((group) => group.rows) : sorted;
-  const paginated = paginateRows(displayRows, page, props.pageSize);
-  const emptyBecauseFiltered = rawRows.length === 0 && hasActiveFilters(props);
-  const liveCount = rawRows.filter((row) => isSessionRunActive(row)).length;
+  const liveCount = rawRows.filter(isSessionRunActive).length;
   const archivedCount = rawRows.filter((row) => row.archived === true).length;
-  const emptyMessage =
-    props.statusFilter === "archived"
-      ? t("sessionsView.noArchivedSessions")
-      : props.statusFilter === "active"
-        ? t("sessionsView.noActiveSessions")
-        : t("sessionsView.noSessions");
-
-  const sortHeader = (
-    col: "key" | "kind" | "updated" | "tokens",
-    label: string,
-    extraClass = "",
-  ) => {
-    const isActive = props.sortColumn === col;
-    const nextDir = isActive && props.sortDir === "asc" ? ("desc" as const) : ("asc" as const);
-    return html`
-      <th
-        class=${extraClass}
-        data-sortable
-        data-sort-dir=${isActive ? props.sortDir : ""}
-        aria-sort=${isActive ? (props.sortDir === "asc" ? "ascending" : "descending") : nothing}
-        @click=${() => props.onSortChange(col, isActive ? nextDir : "desc")}
-      >
-        <button class="data-table-sort-button" type="button">
-          ${label}
-          <span class="data-table-sort-icon" aria-hidden="true">${icons.arrowUpDown}</span>
-        </button>
-      </th>
-    `;
-  };
 
   const sessionsTitle = html`
     ${t("sessionsView.title")}
@@ -689,40 +565,75 @@ export function renderSessions(props: SessionsProps) {
         title: sessionsTitle,
         actions: refreshAction,
       },
-      renderSessionsTable(props, {
-        paginated,
-        groups,
-        emptyBecauseFiltered,
-        emptyMessage,
-        totalRows,
-        totalPages,
-        page,
-        sortHeader,
-      }),
+      renderSessionsTable(props),
     ),
   ];
   return renderSettingsPage(children, { wide: true });
 }
 
-type SessionsTableContext = {
-  paginated: GatewaySessionRow[];
-  groups: SessionRowGroup[] | null;
-  emptyBecauseFiltered: boolean;
-  emptyMessage: string;
-  totalRows: number;
-  totalPages: number;
-  page: number;
-  sortHeader: (
+function renderSessionsTable(props: SessionsProps) {
+  const rawRows = props.result?.sessions ?? [];
+  const direction = props.sortDir === "asc" ? 1 : -1;
+  const sorted = rawRows.toSorted((a, b) => {
+    const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
+    if (pinnedDiff !== 0) {
+      return pinnedDiff;
+    }
+    const diff =
+      props.sortColumn === "kind"
+        ? resolveSessionDisplayKind(a).localeCompare(resolveSessionDisplayKind(b))
+        : props.sortColumn === "key"
+          ? a.key.localeCompare(b.key)
+          : props.sortColumn === "updated"
+            ? (a.updatedAt ?? 0) - (b.updatedAt ?? 0)
+            : (a.totalTokens ?? a.inputTokens ?? a.outputTokens ?? 0) -
+              (b.totalTokens ?? b.inputTokens ?? b.outputTokens ?? 0);
+    return diff * direction;
+  });
+  const totalRows = sorted.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
+  const page = Math.min(props.page, totalPages - 1);
+  const groups =
+    props.groupBy !== "none"
+      ? groupSessionRows({
+          rows: sorted,
+          mode: props.groupBy,
+          knownCategories: props.knownCategories,
+        })
+      : null;
+  const displayRows = groups ? groups.flatMap((group) => group.rows) : sorted;
+  const paginated = displayRows.slice(page * props.pageSize, (page + 1) * props.pageSize);
+  const emptyBecauseFiltered = rawRows.length === 0 && hasActiveFilters(props);
+  const emptyMessage =
+    props.statusFilter === "archived"
+      ? t("sessionsView.noArchivedSessions")
+      : props.statusFilter === "active"
+        ? t("sessionsView.noActiveSessions")
+        : t("sessionsView.noSessions");
+
+  const sortHeader = (
     col: "key" | "kind" | "updated" | "tokens",
     label: string,
-    extraClass?: string,
-  ) => unknown;
-};
+    extraClass = "",
+  ) => {
+    const isActive = props.sortColumn === col;
+    const nextDir = isActive && props.sortDir === "asc" ? ("desc" as const) : ("asc" as const);
+    return html`
+      <th
+        class=${extraClass}
+        data-sortable
+        data-sort-dir=${isActive ? props.sortDir : ""}
+        aria-sort=${isActive ? (props.sortDir === "asc" ? "ascending" : "descending") : nothing}
+        @click=${() => props.onSortChange(col, isActive ? nextDir : "desc")}
+      >
+        <button class="data-table-sort-button" type="button">
+          ${label}
+          <span class="data-table-sort-icon" aria-hidden="true">${icons.arrowUpDown}</span>
+        </button>
+      </th>
+    `;
+  };
 
-function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
-  const { paginated, groups, emptyBecauseFiltered, emptyMessage, totalRows, totalPages, page } =
-    ctx;
-  const sortHeader = ctx.sortHeader;
   const emptyStateMessage = emptyBecauseFiltered
     ? t("sessionsView.noSessionsMatchFilters")
     : emptyMessage;
@@ -1170,10 +1081,6 @@ function renderSessionDetailsRow(params: {
   const labelDisabledReason = props.labelDisabledReason?.(row);
   const rawThinking = row.thinkingLevel ?? "";
   const thinking = rawThinking ? normalizeThinkingOptionValue(rawThinking) : "";
-  const thinkLevels = withCurrentLabeledOption(
-    resolveThinkLevelOptions(row, props.result?.defaults),
-    thinking,
-  );
   const fastMode =
     row.fastMode === "auto"
       ? "auto"
@@ -1182,24 +1089,37 @@ function renderSessionDetailsRow(params: {
         : row.fastMode === false
           ? "off"
           : "";
-  const fastLevels = withCurrentLabeledOption(
-    buildSessionLevelOptions(FAST_LEVEL_VALUES),
-    fastMode,
-  );
-  const verbose = row.verboseLevel ?? "";
-  const verboseLevels = withCurrentLabeledOption(
-    buildSessionLevelOptions(VERBOSE_LEVEL_VALUES, true),
-    verbose,
-  );
-  const reasoning = row.reasoningLevel ?? "";
-  const reasoningLevels = withCurrentLabeledOption(
-    buildSessionLevelOptions(REASONING_LEVELS),
-    reasoning,
-  );
-  const sessionDetails = sessionDetailItems({
-    row,
-    updated,
-  });
+  const overrides: Array<
+    Omit<Parameters<typeof renderOverrideSelect>[0], "disabled" | "disabledReason">
+  > = [
+    {
+      label: t("sessionsView.thinking"),
+      current: thinking,
+      options: resolveThinkLevelOptions(row, props.result?.defaults),
+      onChange: (value) => props.onPatch(row.key, { thinkingLevel: value || null }),
+    },
+    {
+      label: t("sessionsView.fast"),
+      current: fastMode,
+      options: buildSessionLevelOptions(FAST_LEVEL_VALUES),
+      onChange: (value) =>
+        props.onPatch(row.key, {
+          fastMode: value === "" ? null : value === "auto" ? "auto" : value === "on",
+        }),
+    },
+    {
+      label: t("sessionsView.verbose"),
+      current: row.verboseLevel ?? "",
+      options: buildSessionLevelOptions(VERBOSE_LEVEL_VALUES, true),
+      onChange: (value) => props.onPatch(row.key, { verboseLevel: value || null }),
+    },
+    {
+      label: t("sessionsView.reasoning"),
+      current: row.reasoningLevel ?? "",
+      options: buildSessionLevelOptions(REASONING_LEVELS),
+      onChange: (value) => props.onPatch(row.key, { reasoningLevel: value || null }),
+    },
+  ];
 
   return html`<tr id=${detailsId} class="session-details-row">
     <td colspan=${sessionsTableColumnCount(props)}>
@@ -1238,46 +1158,19 @@ function renderSessionDetailsRow(params: {
                 }}
               />
             </label>
-            ${renderOverrideSelect({
-              label: t("sessionsView.thinking"),
-              disabled: props.loading || Boolean(props.patchAdminDisabledReason),
-              disabledReason: props.patchAdminDisabledReason,
-              options: thinkLevels,
-              current: thinking,
-              onChange: (value) => props.onPatch(row.key, { thinkingLevel: value || null }),
-            })}
-            ${renderOverrideSelect({
-              label: t("sessionsView.fast"),
-              disabled: props.loading || Boolean(props.patchAdminDisabledReason),
-              disabledReason: props.patchAdminDisabledReason,
-              options: fastLevels,
-              current: fastMode,
-              onChange: (value) =>
-                props.onPatch(row.key, {
-                  fastMode: value === "" ? null : value === "auto" ? "auto" : value === "on",
-                }),
-            })}
-            ${renderOverrideSelect({
-              label: t("sessionsView.verbose"),
-              disabled: props.loading || Boolean(props.patchAdminDisabledReason),
-              disabledReason: props.patchAdminDisabledReason,
-              options: verboseLevels,
-              current: verbose,
-              onChange: (value) => props.onPatch(row.key, { verboseLevel: value || null }),
-            })}
-            ${renderOverrideSelect({
-              label: t("sessionsView.reasoning"),
-              disabled: props.loading || Boolean(props.patchAdminDisabledReason),
-              disabledReason: props.patchAdminDisabledReason,
-              options: reasoningLevels,
-              current: reasoning,
-              onChange: (value) => props.onPatch(row.key, { reasoningLevel: value || null }),
-            })}
+            ${overrides.map((override) =>
+              renderOverrideSelect({
+                ...override,
+                options: withCurrentLabeledOption(override.options, override.current),
+                disabled: props.loading || Boolean(props.patchAdminDisabledReason),
+                disabledReason: props.patchAdminDisabledReason,
+              }),
+            )}
           </div>
         </div>
 
         <div class="session-details-grid">
-          ${sessionDetails.map(
+          ${sessionDetailItems(row, updated).map(
             (item) => html`
               <div class="session-detail-stat">
                 <div class="session-detail-stat__label">${item.label}</div>

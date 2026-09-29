@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import {
   CodexInferenceAuthorizationError,
@@ -17,6 +17,16 @@ import type { CodexConfigReadResponse } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
 
 const clients: ReturnType<typeof createClientHarness>[] = [];
+beforeEach(() => {
+  // Each case declares its transport; developer CA/proxy settings must not select a different path.
+  for (const key of ["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "REQUEST_METHOD"]) {
+    vi.stubEnv(key, undefined);
+  }
+  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) {
+    vi.stubEnv(key, undefined);
+    vi.stubEnv(key.toLowerCase(), undefined);
+  }
+});
 afterEach(() => {
   for (const entry of clients.splice(0)) {
     entry.client.close();
@@ -46,6 +56,7 @@ async function prepare(
   h: ReturnType<typeof harness>,
   type: string,
   snapshot: CodexConfigReadResponse = { config: {}, origins: {} },
+  oauth = false,
 ) {
   const index = h.writes.length;
   const pending = prepareThread(h.client, snapshot);
@@ -56,7 +67,33 @@ async function prepare(
   if (!prepared) {
     throw new Error("expected an owned route");
   }
-  expect(prepared.config).toEqual({ openai_base_url: prepared.route.baseUrl });
+  if (!oauth) {
+    expect(prepared.config).toEqual({ openai_base_url: prepared.route.baseUrl });
+  } else {
+    expect(prepared.config).toEqual({
+      model_provider: "openclaw_token_sharing",
+      model_providers: {
+        openclaw_token_sharing: {
+          name: "OpenClaw subscription sharing",
+          base_url: prepared.route.baseUrl,
+          wire_api: "responses",
+          requires_openai_auth: true,
+          supports_websockets: false,
+        },
+      },
+    });
+    expect(() =>
+      assertCodexInferenceRouteConfig(
+        h.client,
+        prepared.route,
+        prepared.config,
+        "openclaw_token_sharing",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertCodexInferenceRouteConfig(h.client, prepared.route, prepared.config, "openai"),
+    ).toThrow();
+  }
   return prepared.route;
 }
 
@@ -401,6 +438,24 @@ describe("managed inference route ownership", () => {
     },
   );
 
+  it("fails closed for host OAuth on native backend and custom provider configurations", async () => {
+    const h = harness();
+    ownCodexInferenceClient(h.client, {}, { resolve: vi.fn() });
+    const configs: CodexConfigReadResponse["config"][] = [
+      { openai_base_url: "https://chatgpt.com/backend-api/codex" },
+      { openai_base_url: "https://models.example.com/v1" },
+      { model_provider: "bedrock" },
+      { features: { respect_system_proxy: true } },
+    ];
+    for (const config of configs) {
+      await expect(prepareThread(h.client, { config, origins: {} })).rejects.toThrow(
+        "public Responses",
+      );
+    }
+    expect(h.writes).toEqual([]);
+    const route = await prepare(h, "apiKey", undefined, true);
+    expect(route.upstream).toBe("https://api.openai.com/v1");
+  });
   it("leaves unowned native clients completely untouched", async () => {
     const h = harness();
     expect(await prepareThread(h.client)).toBeUndefined();
@@ -631,11 +686,6 @@ describe("managed inference route ownership", () => {
   ])(
     "qualifies both native and relay proxy routing ($supported): $env",
     async ({ env, supported }) => {
-      for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) {
-        vi.stubEnv(key, undefined);
-        vi.stubEnv(key.toLowerCase(), undefined);
-      }
-      vi.stubEnv("REQUEST_METHOD", undefined);
       for (const [key, value] of Object.entries(env)) {
         vi.stubEnv(key, value);
       }

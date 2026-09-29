@@ -23,6 +23,7 @@ import {
   CodexManagedHooksOnlyError,
 } from "./native-hook-relay.js";
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
+import { isCodexResponsesOAuth } from "./responses-oauth.js";
 import { prewarmCodexAttemptClient } from "./run-attempt-client-prewarm.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
 import {
@@ -147,13 +148,6 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
           : {}),
         ...(startupAuthProfileId ? { authProfileId: startupAuthProfileId } : {}),
       };
-  const activeSessionId = params.sessionId;
-  const activeSessionFile = params.sessionFile;
-  const buildActiveRunAttemptParams = (): EmbeddedRunAttemptParams => ({
-    ...runtimeParams,
-    sessionId: activeSessionId,
-    sessionFile: activeSessionFile,
-  });
   const startupAuthAccountCacheKey = usesSupervisionConnection
     ? undefined
     : startupPreparedAuth?.kind === "api-key"
@@ -309,7 +303,9 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   let nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
   // The bound thread owns its established search policy, not the daemon's current
   // provider defaults. Explicit OpenClaw policy changes still pass the lifecycle checks.
-  if (
+  if (isCodexResponsesOAuth(startupPreparedAuth)) {
+    nativeProviderWebSearchSupport = "supported";
+  } else if (
     webSearchPlan.kind !== "native-hosted" ||
     supervisedSearchFingerprint ===
       fingerprintJsonObject(resolveCodexWebSearchPlan({ disableTools: true }).threadConfig)
@@ -360,10 +356,6 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     connection,
     preparedAuthBinding,
     runtimeParams,
-    activeSessionId,
-    activeSessionFile,
-    buildActiveRunAttemptParams,
-    attemptAuthProfileStore,
     effectiveContextWindowInfo,
     effectiveContextTokenBudget,
     effectiveRuntimeProviderId,

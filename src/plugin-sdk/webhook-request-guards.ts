@@ -263,17 +263,7 @@ export function beginWebhookRequestPipelineOrReject(params: {
   /** Response body returned when the in-flight guard rejects. */
   inFlightLimitMessage?: string;
 }): { ok: true; release: () => void } | { ok: false } {
-  if (
-    !applyBasicWebhookRequestGuards({
-      req: params.req,
-      res: params.res,
-      allowMethods: params.allowMethods,
-      rateLimiter: params.rateLimiter,
-      rateLimitKey: params.rateLimitKey,
-      nowMs: params.nowMs,
-      requireJsonContentType: params.requireJsonContentType,
-    })
-  ) {
+  if (!applyBasicWebhookRequestGuards(params)) {
     return { ok: false };
   }
 
@@ -346,11 +336,7 @@ export async function readWebhookBodyOrReject(params: {
   /** Response body for invalid request bodies. */
   invalidBodyMessage?: string;
 }): Promise<{ ok: true; value: string } | { ok: false }> {
-  const limits = resolveWebhookBodyReadLimits({
-    maxBytes: params.maxBytes,
-    timeoutMs: params.timeoutMs,
-    profile: params.profile,
-  });
+  const limits = resolveWebhookBodyReadLimits(params);
 
   try {
     const raw = await readRequestBodyWithLimit(params.req, {
@@ -359,19 +345,13 @@ export async function readWebhookBodyOrReject(params: {
     });
     return { ok: true, value: raw };
   } catch (error) {
-    if (isRequestBodyLimitError(error)) {
-      return respondWebhookBodyReadError({
-        req: params.req,
-        res: params.res,
-        code: error.code,
-        invalidMessage: params.invalidBodyMessage,
-      });
-    }
+    const limited = isRequestBodyLimitError(error);
     return respondWebhookBodyReadError({
       req: params.req,
       res: params.res,
-      code: "INVALID_BODY",
-      invalidMessage: params.invalidBodyMessage ?? formatErrorMessage(error),
+      code: limited ? error.code : "INVALID_BODY",
+      invalidMessage:
+        params.invalidBodyMessage ?? (limited ? undefined : formatErrorMessage(error)),
     });
   }
 }
@@ -395,11 +375,7 @@ export async function readJsonWebhookBodyOrReject(params: {
   /** Response status for malformed JSON. */
   invalidJsonStatusCode?: number;
 }): Promise<{ ok: true; value: unknown } | { ok: false }> {
-  const limits = resolveWebhookBodyReadLimits({
-    maxBytes: params.maxBytes,
-    timeoutMs: params.timeoutMs,
-    profile: params.profile,
-  });
+  const limits = resolveWebhookBodyReadLimits(params);
   const body = await readJsonBodyWithLimit(params.req, {
     maxBytes: limits.maxBytes,
     timeoutMs: limits.timeoutMs,

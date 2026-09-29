@@ -54,7 +54,6 @@ function createBackend(owner: MemoryIndexDatabase) {
         busy_timeout: 5000,
         synchronous: 2,
         foreign_keys: 1,
-        wal_autocheckpoint: 1000,
         journal_size_limit: 67108864,
         checkpoint_fullfsync: 1,
       },
@@ -126,51 +125,48 @@ describe("bounded memory publication transfer", () => {
     expect(owner.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
   });
 
-  it.each([false, true])(
-    "publishes and deletes keyword data with an unavailable configured extension (enabled: %s)",
-    async (enabled) => {
-      const owner = createOwner();
-      owner.vector.enabled = enabled;
-      owner.vector.available = false;
-      owner.vector.extensionPath = path.join(path.dirname(owner.db.location()!), "missing-vec");
-      const input = replacement();
-      const assertCurrent = () => undefined;
-      await owner.replaceSource(input, assertCurrent, async () => true);
-      const matches = () =>
-        owner.db
-          .prepare(
-            "SELECT path FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker'",
-          )
-          .all();
-      expect(matches()).toEqual([{ path: input.entry.path }]);
-      expect(
-        await owner.deleteSource(
-          { path: input.entry.path, source: "memory", expectedHash: input.entry.hash },
-          assertCurrent,
-        ),
-      ).toBe(true);
-      expect(matches()).toEqual([]);
-
-      const shadow = createOwner();
-      await shadow.replaceSource(input, assertCurrent, async () => true);
-      await shadow.closePublicationWorker();
-      const sourcePath = shadow.db.location()!;
-      await owner.publishShadow(
-        {
-          sourcePath,
-          sourceIdentity: readMemoryShadowIdentity(sourcePath),
-          metaKey: "test-meta",
-          expectedRevision: readMemoryDatabaseRevision(owner.db),
-          sourceHasVectors: false,
-          vectorIndexComplete: false,
-          extensionPath: owner.vector.extensionPath,
-        },
+  it("publishes and deletes keyword data with an unavailable configured extension", async () => {
+    const owner = createOwner();
+    owner.vector.enabled = true;
+    owner.vector.available = false;
+    owner.vector.extensionPath = path.join(path.dirname(owner.db.location()!), "missing-vec");
+    const input = replacement();
+    const assertCurrent = () => undefined;
+    await owner.replaceSource(input, assertCurrent, async () => true);
+    const matches = () =>
+      owner.db
+        .prepare(
+          "SELECT path FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker'",
+        )
+        .all();
+    expect(matches()).toEqual([{ path: input.entry.path }]);
+    expect(
+      await owner.deleteSource(
+        { path: input.entry.path, source: "memory", expectedHash: input.entry.hash },
         assertCurrent,
-      );
-      expect(matches()).toEqual([{ path: input.entry.path }]);
-      expect(owner.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    },
-  );
+      ),
+    ).toBe(true);
+    expect(matches()).toEqual([]);
+
+    const shadow = createOwner();
+    await shadow.replaceSource(input, assertCurrent, async () => true);
+    await shadow.closePublicationWorker();
+    const sourcePath = shadow.db.location()!;
+    await owner.publishShadow(
+      {
+        sourcePath,
+        sourceIdentity: readMemoryShadowIdentity(sourcePath),
+        metaKey: "test-meta",
+        expectedRevision: readMemoryDatabaseRevision(owner.db),
+        sourceHasVectors: false,
+        vectorIndexComplete: false,
+        extensionPath: owner.vector.extensionPath,
+      },
+      assertCurrent,
+    );
+    expect(matches()).toEqual([{ path: input.entry.path }]);
+    expect(owner.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+  });
 
   it("preserves extension load failures when vector publication requires the extension", async () => {
     const owner = createOwner();

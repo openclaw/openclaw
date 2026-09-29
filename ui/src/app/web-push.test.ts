@@ -101,7 +101,6 @@ function notificationPreferences(approvalRequested: boolean): WebPushNotificatio
       agentQuestion: false,
       humanMentioned: false,
       scheduledTaskFailed: false,
-      backgroundTaskFailed: false,
     },
     detailLevel: "private",
     quietHours: { enabled: false, startMinute: 1_320, endMinute: 420, timeZone: "UTC" },

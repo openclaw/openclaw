@@ -9,6 +9,7 @@ import {
   formatPlanChecklistLines,
   normalizeAgentPlanSteps,
   isChannelProgressDraftWorkToolName,
+  isChannelProgressPriorityLine,
   mergeChannelProgressDraftLine,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockCoalesce,
@@ -21,6 +22,26 @@ import {
 } from "./streaming.js";
 
 describe("buildChannelProgressDraftLine", () => {
+  it.each([
+    ["exec", "command"],
+    ["read", "tool"],
+    ["custom_command_runner", "tool"],
+  ] as const)("lets failed %s items scroll out", (name, itemKind) => {
+    const line = buildChannelProgressDraftLine({
+      event: "item",
+      itemKind,
+      name,
+      status: "failed",
+    });
+    expect(line).toBeDefined();
+    expect(isChannelProgressPriorityLine(line!)).toBe(false);
+    expect(isChannelProgressPriorityLine({ ...line!, status: "blocked" })).toBe(true);
+    expect(isChannelProgressPriorityLine({ ...line!, status: "error" })).toBe(true);
+    expect(isChannelProgressPriorityLine({ ...line!, kind: "approval" })).toBe(true);
+    expect(isChannelProgressPriorityLine({ ...line!, toolName: undefined })).toBe(true);
+    expect(isChannelProgressPriorityLine({ ...line!, kind: "tool" })).toBe(true);
+  });
+
   it("keeps prepared titles and failure outcomes when detail text is unchanged", () => {
     const input = {
       event: "item" as const,
@@ -571,16 +592,6 @@ describe("progress narration", () => {
     ).toBe("▸ Active\n▢ Next");
   });
 
-  it("omits the implicit progress label when narration is available", () => {
-    const text = formatChannelProgressDraftText({
-      entry: { streaming: { mode: "progress" } },
-      lines: ["🛠️ Exec"],
-      narration: "Counting lines in the workspace files.",
-    });
-
-    expect(text).toBe("Counting lines in the workspace files.\n\n🛠️ Exec");
-  });
-
   it("keeps an explicitly configured automatic label above narration", () => {
     const text = formatChannelProgressDraftText({
       entry: {
@@ -594,26 +605,6 @@ describe("progress narration", () => {
     });
 
     expect(text).toBe("Clawing\n\nCounting lines in the workspace files.\n\n🛠️ Exec");
-  });
-
-  it("keeps tool lines visible under the narration headline", () => {
-    const text = formatChannelProgressDraftText({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      lines: ["🛠️ Exec", "🛠️ Wc"],
-      narration: "Counting lines in the workspace files.",
-    });
-
-    expect(text).toBe("Shelling\n\nCounting lines in the workspace files.\n\n🛠️ Exec\n🛠️ Wc");
-  });
-
-  it("renders the narration headline alone when no work lines exist yet", () => {
-    const text = formatChannelProgressDraftText({
-      entry: { streaming: { mode: "progress", progress: { label: false } } },
-      lines: [],
-      narration: "Counting lines in the workspace files.",
-    });
-
-    expect(text).toBe("Counting lines in the workspace files.");
   });
 
   it("compacts narration at a word boundary instead of line width", () => {

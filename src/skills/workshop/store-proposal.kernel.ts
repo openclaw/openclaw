@@ -9,9 +9,11 @@ import { appendSkillProposalEvent, type NewSkillProposalEvent } from "./store-sq
 import {
   insertProposal,
   parseSkillProposalRow,
+  readStoredProposalInDatabase,
   updateProposal,
   type StoredSkillProposal,
 } from "./store-sqlite-record.js";
+import { skillProposalRollbackValues } from "./store-sqlite-rollback.js";
 import type { SkillWorkshopDatabase } from "./store-sqlite-schema.js";
 import type { SkillProposalEvent, SkillProposalRecord, SkillProposalRollback } from "./types.js";
 
@@ -38,6 +40,7 @@ export type ImportLegacySkillProposalInput = {
 export type ListStoredSkillProposalsInput = {
   agentId?: string;
   kind?: SkillProposalRecord["kind"];
+  status?: SkillProposalRecord["status"];
 };
 
 export function createSkillProposalInDatabase(
@@ -80,20 +83,14 @@ export function updateSkillProposalRecordInDatabase(
 ): SkillProposalEvent | undefined {
   assertProposalId(params.record.id);
   const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
-  const current = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely
-      .selectFrom("skill_workshop_proposals")
-      .selectAll()
-      .where("proposal_id", "=", params.record.id),
-  );
-  if (!current || !parseSkillProposalRow(current)) {
+  const current = readStoredProposalInDatabase(db, params.record.id);
+  if (!current) {
     throw new Error(`Skill proposal not found: ${params.record.id}`);
   }
   // Recovery only visits pending proposals. A dismissal must not strand
   // a partial install, including when its rollback metadata is damaged.
   if (
-    current.status === "pending" &&
+    current.row.status === "pending" &&
     (params.record.status === "rejected" || params.record.status === "quarantined") &&
     executeSqliteQueryTakeFirstSync(
       db,
@@ -115,7 +112,7 @@ export function updateSkillProposalRecordInDatabase(
         .where("proposal_id", "=", params.record.id),
     );
   }
-  updateProposal(db, current, params.record, params.ownerAgentId);
+  updateProposal(db, current.row, params.record, params.ownerAgentId);
   return params.event ? appendSkillProposalEvent(db, params.event) : undefined;
 }
 
@@ -127,6 +124,9 @@ export function listStoredSkillProposalsInDatabase(
   let query = kysely.selectFrom("skill_workshop_proposals").selectAll();
   if (scope.kind) {
     query = query.where("kind", "=", scope.kind);
+  }
+  if (scope.status) {
+    query = query.where("status", "=", scope.status);
   }
   if (scope.agentId) {
     query = query.where("owner_agent_id", "=", scope.agentId);
@@ -177,14 +177,7 @@ export function importLegacySkillProposalInDatabase(
         .insertInto("skill_workshop_proposal_rollbacks")
         .values({
           proposal_id: params.record.id,
-          written_at: params.rollback.writtenAt,
-          target_skill_file: params.rollback.targetSkillFile,
-          action: params.rollback.action,
-          previous_content_hash: params.rollback.previousContentHash ?? null,
-          previous_content: params.rollback.previousContent ?? null,
-          support_files_json: params.rollback.supportFiles
-            ? JSON.stringify(params.rollback.supportFiles)
-            : null,
+          ...skillProposalRollbackValues(params.rollback),
         })
         .onConflict((conflict) => conflict.column("proposal_id").doNothing()),
     );

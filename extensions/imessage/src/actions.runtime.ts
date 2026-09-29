@@ -471,5 +471,3 @@ export const imessageActionsRuntime = {
     );
   },
 };
-
-export type IMessageActionsRuntime = typeof imessageActionsRuntime;

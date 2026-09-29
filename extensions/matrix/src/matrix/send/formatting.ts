@@ -1,5 +1,4 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-// Matrix helper module supports formatting behavior.
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   markdownToMatrixBody,
@@ -17,27 +16,6 @@ import {
   type MatrixTextContent,
   type MatrixTextMsgType,
 } from "./types.js";
-
-async function renderMatrixFormattedContent(params: {
-  client: MatrixClient;
-  markdown?: string | null;
-  preparedBody?: string;
-  includeMentions?: boolean;
-  tableMode?: MarkdownTableMode;
-}): Promise<{ body: string; html?: string; mentions?: MatrixMentions }> {
-  const markdown = params.markdown ?? "";
-  const body = params.preparedBody ?? markdownToMatrixBody(markdown);
-  if (params.includeMentions === false) {
-    const html = markdownToMatrixHtml(markdown, { tableMode: params.tableMode }).trimEnd();
-    return { body, html: html || undefined };
-  }
-  const { html, mentions } = await renderMarkdownToMatrixHtmlWithMentions({
-    markdown,
-    client: params.client,
-    tableMode: params.tableMode,
-  });
-  return { body, html, mentions };
-}
 
 export function buildTextContent(
   body: string,
@@ -61,7 +39,14 @@ export async function enrichMatrixFormattedContent(params: {
   includeMentions?: boolean;
   tableMode?: MarkdownTableMode;
 }): Promise<void> {
-  const { body, html, mentions } = await renderMatrixFormattedContent(params);
+  const markdown = params.markdown ?? "";
+  const body = params.preparedBody ?? markdownToMatrixBody(markdown);
+  const { html, mentions } = await (params.includeMentions === false
+    ? {
+        html: markdownToMatrixHtml(markdown, { tableMode: params.tableMode }).trimEnd(),
+        mentions: undefined,
+      }
+    : renderMarkdownToMatrixHtmlWithMentions({ ...params, markdown }));
   params.content.body = body || params.content.body;
   if (mentions) {
     params.content["m.mentions"] = mentions;
@@ -128,7 +113,7 @@ export function diffMatrixMentions(
   return delta;
 }
 
-export function resolveMatrixMsgType(contentType?: string, _fileName?: string): MatrixMediaMsgType {
+export function resolveMatrixMsgType(contentType?: string): MatrixMediaMsgType {
   const kind = getMatrixRuntime().media.mediaKindFromMime(contentType ?? "");
   switch (kind) {
     case "image":

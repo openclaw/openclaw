@@ -10,6 +10,7 @@ import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { WorkerTaskOptions, WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
@@ -17,10 +18,8 @@ import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.pa
 import { resolveStateDir } from "../state-dir.js";
 import { loadSessionEntryReadOnlyInScope } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import type {
-  CapturedSessionEntryReadSource,
-  SessionAccessScope,
-} from "./session-accessor.types.js";
+import type { SessionAccessScope } from "./session-accessor.types.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import {
   sessionHistoryCleanupError,
   unwrapSessionTranscriptWorkerReply,
@@ -39,6 +38,7 @@ import {
   historyClearTimeout,
   historyLane,
   pruneHistoryDatabases,
+  refreshDatabaseWorkerPressureSubscription,
   releaseRetiredDatabaseCustody,
   rotateDatabaseWorkers,
   type HistoryDatabaseResource,
@@ -51,8 +51,63 @@ import type {
   SessionHistoryWorkerInput,
   SessionRowPresenceWorkerInput,
 } from "./session-transcript-worker.types.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 export type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
+
+const log = createSubsystemLogger("sessions/history-worker");
+const historyPrewarms = new WeakMap<
+  HistoryDatabaseResource,
+  { promise: Promise<void>; pending: boolean; retiredSequence: number }
+>();
+
+export function isSessionHistoryWorkerCold(): boolean {
+  return historyLane.pending === 0 && historyLane.nativeSequence <= historyLane.retiredSequence;
+}
+
+/** Reuse normal reader custody; repeated warmups never refresh the idle deadline. */
+export async function prewarmSessionHistoryWorker(
+  options: OpenClawAgentDatabaseOptions,
+): Promise<void> {
+  try {
+    const resource = acquireHistoryDatabaseResource(options);
+    const existing = historyPrewarms.get(resource);
+    if (
+      existing &&
+      (existing.pending ||
+        (!historyLane.rotation &&
+          existing.retiredSequence === historyLane.retiredSequence &&
+          resource.nativeSequences.has(historyLane)))
+    ) {
+      return await existing.promise;
+    }
+    const completion = createDeferredCore();
+    const prewarm = {
+      promise: completion.promise,
+      pending: true,
+      retiredSequence: historyLane.retiredSequence,
+    };
+    historyPrewarms.set(resource, prewarm);
+    void withSessionHistoryWorkerDatabase(options, (owner) =>
+      owner.prewarm({
+        env: captureSessionTranscriptStorageEnvironment(options.env ?? process.env),
+      }),
+    ).then(
+      () => {
+        prewarm.pending = false;
+        completion.resolve();
+      },
+      (error: unknown) => {
+        historyPrewarms.delete(resource);
+        log.debug(`Session history worker prewarm failed: ${String(error)}`);
+        completion.resolve();
+      },
+    );
+    await completion.promise;
+  } catch (error) {
+    log.debug(`Session history worker prewarm failed: ${String(error)}`);
+  }
+}
 
 type SessionCostUsageWorkerOptions = Pick<
   WorkerTaskOptions<UsageCostWorkerInput>,
@@ -125,6 +180,7 @@ export function retainSessionHistoryWorkerDatabase(
   historyClearTimeout(lane.idleTimer);
   lane.pending++;
   owned.pending++;
+  refreshDatabaseWorkerPressureSubscription();
   let countsReleased = false;
   let releaseFinished = false;
   const releaseCleanup: SessionDatabaseCleanup = { run: async () => release() };
@@ -202,7 +258,9 @@ export function retainSessionHistoryWorkerDatabase(
         if (
           typeof received !== "boolean" &&
           !Array.isArray(received) &&
-          received.kind === "session-entry-read" &&
+          (received.kind === "session-entry-read" ||
+            received.kind === "session-entry-current" ||
+            received.kind === "session-diagnostic-text") &&
           received.source
         ) {
           const source = received.source;
@@ -417,6 +475,7 @@ export async function withSessionCostUsageWorkerDatabases<T>(
     }
     historyClearTimeout(lane.idleTimer);
     lane.pending++;
+    refreshDatabaseWorkerPressureSubscription();
     const hostEffects = new Set<Promise<WorkerTaskResponse>>();
     const onRequest = runOptions.onRequest;
     let sequence = 0;

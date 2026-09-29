@@ -4,6 +4,7 @@ import { render } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import {
   beginChatMetadataPublication,
   subscribeChatMetadata,
@@ -11,6 +12,7 @@ import {
 import {
   beginModelCatalogRead,
   invalidateModelCatalogCache,
+  modelCatalogEventInvalidation,
   publishModelCatalogResult,
 } from "../../lib/model-catalog-cache.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
@@ -138,7 +140,7 @@ describe("chat pane composer controls", () => {
     },
   );
 
-  it("keeps current models interactive while the direct catalog revalidates", async () => {
+  it("keeps current models interactive after sign-in while the replacement catalog is held", async () => {
     const startup = createDeferred<unknown>();
     const catalog = createDeferred<unknown>();
     const client = createTestGatewayClient(
@@ -168,7 +170,12 @@ describe("chat pane composer controls", () => {
       }),
     ).toBe(true);
     await refreshChatModelCatalogOnDemand(host);
-    invalidateModelCatalogCache(client, scope);
+    invalidateChatMetadataStore(
+      client,
+      undefined,
+      undefined,
+      modelCatalogEventInvalidation({ event: "config.changed" }),
+    );
     const refresh = refreshPageChat(host, {
       awaitHistory: true,
       deferBranches: true,

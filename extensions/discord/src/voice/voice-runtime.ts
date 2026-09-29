@@ -5,6 +5,7 @@ import type { APIVoiceState, Client } from "../internal/discord.js";
 import { formatMention } from "../mentions.js";
 import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
 import { resolveDiscordVoiceEnabled } from "./config.js";
+import type { DiscordVoiceListenerManager } from "./listener-contract.js";
 import { DiscordVoiceMembershipTracker } from "./membership.js";
 import { resolveDiscordVoiceAccess, resolveDiscordVoiceAccessTarget } from "./owner-access.js";
 import {
@@ -59,7 +60,7 @@ type CaptureJoinOrigin = {
   isResidencyUnchanged: () => boolean;
 };
 
-export class DiscordVoiceManager {
+export class DiscordVoiceManager implements DiscordVoiceListenerManager {
   private sessions = new Map<string, VoiceSessionEntry>();
   private readonly guildLifecycles = new Map<string, VoiceGuildLifecycle>();
   private nextGuildGeneration = 0;
@@ -142,7 +143,6 @@ export class DiscordVoiceManager {
       speakerContext,
     });
     this.following = new DiscordVoiceFollowing({
-      accountId: params.accountId,
       allowedChannels: this.allowedChannels,
       autoJoinChannels: this.autoJoinChannels,
       botUserId: () => this.botUserId,
@@ -636,7 +636,7 @@ export class DiscordVoiceManager {
   }
 
   private resolveAutoJoinTarget(guildId: string): VoiceChannelResidency | undefined {
-    return this.autoJoinChannels.toReversed().find((entry) => entry.guildId === guildId.trim());
+    return this.autoJoinChannels.findLast((entry) => entry.guildId === guildId.trim());
   }
 
   private countHumanParticipants(target: { guildId: string; channelId: string }): number | null {

@@ -39,6 +39,13 @@ function replaceNodePluginTools(
   });
 }
 
+const remoteEcho: NodePluginToolDescriptor = {
+  pluginId: "remote-demo",
+  name: "remote_echo",
+  description: "Echo through a remote node",
+  command: "remote.echo",
+};
+
 function createCodeModeHarness(tools: AnyAgentTool[]) {
   const catalogRef = createToolSearchCatalogRef();
   const config = { tools: { codeMode: { enabled: true, timeoutMs: 120_000 } } } as never;
@@ -199,52 +206,10 @@ describe("createNodePluginTools", () => {
     expect(JSON.stringify(guest.value)).not.toContain("privateState");
   });
 
-  it("forwards the caller abort signal to node gateway invocations", async () => {
-    replaceNodePluginTools({
-      nodeId: "node-1",
-      tools: [
-        {
-          pluginId: "remote-demo",
-          name: "remote_echo",
-          description: "Echo through a remote node",
-          command: "remote.echo",
-        },
-      ],
-    });
-    vi.mocked(callGatewayTool).mockResolvedValueOnce({ payload: { ok: true } });
-    const controller = new AbortController();
-    const tool = expectDefined(
-      createNodePluginTools({})[0],
-      "createNodePluginTools({})[0] test invariant",
-    );
-
-    await tool.execute("call-cancellable", { text: "ping" }, controller.signal);
-
-    expect(callGatewayTool).toHaveBeenCalledWith(
-      "node.invoke",
-      { timeoutMs: 35_000 },
-      {
-        nodeId: "node-1",
-        command: "remote.echo",
-        params: { text: "ping" },
-        timeoutMs: 30_000,
-        idempotencyKey: "call-cancellable",
-      },
-      { scopes: ["operator.write"], signal: controller.signal },
-    );
-  });
-
   it("propagates caller cancellation through node gateway invocations", async () => {
     replaceNodePluginTools({
       nodeId: "node-1",
-      tools: [
-        {
-          pluginId: "remote-demo",
-          name: "remote_echo",
-          description: "Echo through a remote node",
-          command: "remote.echo",
-        },
-      ],
+      tools: [remoteEcho],
     });
     vi.mocked(callGatewayTool).mockImplementationOnce(async (_method, _opts, _params, extra) => {
       extra?.signal?.throwIfAborted();
@@ -642,50 +607,16 @@ describe("createNodePluginTools", () => {
     );
   });
 
-  it("disambiguates node tools that collide with existing tool names", () => {
-    replaceNodePluginTools({
-      nodeId: "node-1",
-      tools: [
-        {
-          pluginId: "remote-demo",
-          name: "remote_echo",
-          description: "Echo through a remote node",
-          command: "remote.echo",
-        },
-      ],
-    });
-
-    expect(
-      createNodePluginTools({ existingToolNames: new Set(["remote_echo"]) }).map(
-        (tool) => tool.name,
-      ),
-    ).toEqual(["node_1_remote_echo"]);
-  });
-
   it("disambiguates matching tool names from different nodes", async () => {
     replaceNodePluginTools({
       nodeId: "node-a",
       displayName: "Node A",
-      tools: [
-        {
-          pluginId: "remote-demo",
-          name: "remote_echo",
-          description: "Echo through a remote node",
-          command: "remote.echo",
-        },
-      ],
+      tools: [remoteEcho],
     });
     replaceNodePluginTools({
       nodeId: "node-b",
       displayName: "Node B",
-      tools: [
-        {
-          pluginId: "remote-demo",
-          name: "remote_echo",
-          description: "Echo through a remote node",
-          command: "remote.echo",
-        },
-      ],
+      tools: [remoteEcho],
     });
     vi.mocked(callGatewayTool).mockResolvedValueOnce({
       payload: { ok: true, node: "b" },
@@ -721,14 +652,7 @@ describe("createNodePluginTools", () => {
       for (const nodeId of ["node-a", "node-b"]) {
         replaceNodePluginTools({
           nodeId,
-          tools: [
-            {
-              pluginId: "remote-demo",
-              name: "remote_echo",
-              description: "Echo through a remote node",
-              command: "remote.echo",
-            },
-          ],
+          tools: [remoteEcho],
         });
       }
 
@@ -748,14 +672,7 @@ describe("createNodePluginTools", () => {
   it("keeps numeric node fragments provider-safe", () => {
     replaceNodePluginTools({
       nodeId: "123",
-      tools: [
-        {
-          pluginId: "remote-demo",
-          name: "remote_echo",
-          description: "Echo through a remote node",
-          command: "remote.echo",
-        },
-      ],
+      tools: [remoteEcho],
     });
 
     expect(
@@ -769,14 +686,7 @@ describe("createNodePluginTools", () => {
     for (const nodeId of ["node-a", "node_a"]) {
       replaceNodePluginTools({
         nodeId,
-        tools: [
-          {
-            pluginId: "remote-demo",
-            name: "remote_echo",
-            description: "Echo through a remote node",
-            command: "remote.echo",
-          },
-        ],
+        tools: [remoteEcho],
       });
     }
 
@@ -791,14 +701,7 @@ describe("createNodePluginTools", () => {
     for (const nodeId of ["node-a", "node-b"]) {
       replaceNodePluginTools({
         nodeId,
-        tools: [
-          {
-            pluginId: "remote-demo",
-            name: longName,
-            description: "Echo through a remote node",
-            command: "remote.echo",
-          },
-        ],
+        tools: [{ ...remoteEcho, name: longName }],
       });
     }
 
@@ -815,12 +718,7 @@ describe("createNodePluginTools", () => {
       replaceNodePluginTools({
         nodeId: "node-1",
         tools: [
-          {
-            pluginId: "remote-demo",
-            name: "remote_echo",
-            description: "Echo through a remote node",
-            command: "remote.echo",
-          },
+          remoteEcho,
           {
             pluginId: "remote-demo",
             name: "remote_status",

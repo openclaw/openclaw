@@ -42,22 +42,16 @@ const SESSION_GROUP_MODE_LABELS = {
   date: "sessionsView.groupByDate",
 } as const satisfies Record<SessionsGroupBy, string>;
 
-function groupModeLabel(mode: SessionsGroupBy): string {
-  return t(SESSION_GROUP_MODE_LABELS[mode] ?? SESSION_GROUP_MODE_LABELS.none);
-}
-
 function renderFilterToggle(params: {
   name: string;
   checked: boolean;
   label: string;
   title: string;
-  extraClass?: string;
   onChange: (checked: boolean) => void;
 }) {
   const className = [
     "session-filter-check",
     "session-filter-toggle",
-    params.extraClass ?? "",
     params.checked ? "session-filter-check--active" : "",
   ]
     .filter(Boolean)
@@ -191,7 +185,7 @@ export function renderSessionsAdvancedFilters(props: SessionsAdvancedFiltersProp
             ).map(
               (mode) => html`
                 <option value=${mode} ?selected=${props.groupBy === mode}>
-                  ${groupModeLabel(mode)}
+                  ${t(SESSION_GROUP_MODE_LABELS[mode])}
                 </option>
               `,
             )}

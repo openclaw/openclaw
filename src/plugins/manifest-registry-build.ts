@@ -49,6 +49,7 @@ import {
 } from "./plugin-cache-files.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
+import { groupPluginRecords } from "./record-groups.js";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;
@@ -68,16 +69,10 @@ function rejectCaseFoldedIdCollisions(
   records: readonly PluginManifestRecord[],
   diagnostics: PluginDiagnostic[],
 ): PluginManifestRecord[] {
-  const recordsByPolicyId = new Map<string, PluginManifestRecord[]>();
-  for (const record of records) {
-    const policyId = normalizePluginPolicyId(record.id);
-    const matches = recordsByPolicyId.get(policyId) ?? [];
-    matches.push(record);
-    recordsByPolicyId.set(policyId, matches);
-  }
-
   const rejected = new Set<PluginManifestRecord>();
-  for (const [policyId, matches] of recordsByPolicyId) {
+  for (const [policyId, matches] of groupPluginRecords(records, (record) =>
+    normalizePluginPolicyId(record.id),
+  )) {
     const declaredIds = [...new Set(matches.map((record) => record.id))].toSorted();
     if (declaredIds.length < 2) {
       continue;
@@ -304,6 +299,7 @@ export function buildPluginManifestRegistry(
       Number(left.origin === "config" || left.configSelected === true),
   );
   const seenIds = new Map<string, SeenIdEntry>();
+  const manifestWarnings = new Map<string, string[]>();
   const reportedExplicitOverrides = new Set<string>();
   const currentHostVersion = resolveCompatibilityHostVersion(env);
   const explicitConfiguredFileSources = new Set(
@@ -371,6 +367,9 @@ export function buildPluginManifestRegistry(
       });
       continue;
     }
+    if ("warnings" in manifestRes && manifestRes.warnings) {
+      manifestWarnings.set(manifestRes.manifestPath, manifestRes.warnings);
+    }
     const manifest = manifestRes.manifest;
     const effectivePluginId = candidate.effectivePluginId ?? manifest.id;
     if (candidate.origin !== "bundled") {
@@ -423,6 +422,7 @@ export function buildPluginManifestRegistry(
       ) {
         diagnostics.push({
           level: "warn",
+          configDisposition: "preserve",
           pluginId: effectivePluginId,
           source: packageManifestSource,
           message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${currentHostVersion}; skipping load (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")`,
@@ -582,10 +582,17 @@ export function buildPluginManifestRegistry(
   const records = [...seenIds.values()].map(({ record }) => record);
   const plugins = rejectCaseFoldedIdCollisions(records, diagnostics);
   for (const record of plugins) {
+    for (const warning of manifestWarnings.get(record.manifestPath) ?? []) {
+      diagnostics.push({
+        level: "warn",
+        pluginId: sanitizeForLog(record.id),
+        source: sanitizeForLog(record.manifestPath),
+        message: sanitizeForLog(warning),
+      });
+    }
     pushNonBundledChannelConfigDescriptorDiagnostic({ record, diagnostics, normalized });
   }
-  const registry = { plugins, diagnostics: dedupePluginDiagnostics(diagnostics, discovered) };
-  return registry;
+  return { plugins, diagnostics: dedupePluginDiagnostics(diagnostics, discovered) };
 }
 
 /** Load manifest metadata from the bundled/source plugin tree without consulting operator state. */

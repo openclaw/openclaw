@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { acquireOpenClawStateDatabaseFileExclusion } from "../state/openclaw-state-db-cache.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -80,20 +79,12 @@ it("leaves missing databases absent and legacy layouts unmigrated", async () => 
     db.exec("CREATE TABLE legacy_marker(value TEXT); PRAGMA user_version = 1;");
     db.close();
     const before = await fs.readFile(databasePath);
-    const exclusion = await acquireOpenClawStateDatabaseFileExclusion(databasePath);
-    try {
-      await exclusion.runWithSourceReads(async (assertCurrent) => {
-        expect(
-          await withArtifactPreservingStateReads(() =>
-            loadCronJobsStoreWithConfigJobsReadOnly(storePath, state.env),
-          ),
-        ).toEqual(empty);
-        assertCurrent();
-        expect(await fs.readFile(databasePath)).toEqual(before);
-      });
-    } finally {
-      exclusion.release();
-    }
+    expect(
+      await withArtifactPreservingStateReads(() =>
+        loadCronJobsStoreWithConfigJobsReadOnly(storePath, state.env),
+      ),
+    ).toEqual(empty);
+    expect(await fs.readFile(databasePath)).toEqual(before);
     expect(await loadCronJobsStoreWithConfigJobsReadOnly(storePath, state.env)).toEqual(empty);
     expect(await fs.readFile(databasePath)).toEqual(before);
   });

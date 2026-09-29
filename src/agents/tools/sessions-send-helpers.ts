@@ -1,8 +1,3 @@
-/**
- * sessions_send helper logic.
- *
- * Resolves announcement targets, channel/session routing metadata, and ping-pong guard prompt text.
- */
 import {
   getChannelPlugin,
   normalizeChannelId as normalizeAnyChannelId,
@@ -11,7 +6,6 @@ import { resolveSessionConversationRef } from "../../channels/plugins/session-co
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import { parseSessionDeliveryRoute } from "../../sessions/session-key-utils.js";
 import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./sessions-send-tokens.js";
-export { isNonDeliverableSessionsReply } from "./sessions-send-tokens.js";
 
 export type AnnounceTarget = {
   channel: string;
@@ -20,7 +14,6 @@ export type AnnounceTarget = {
   threadId?: string; // Forum topic/thread ID
 };
 
-/** Resolves a session key into the channel target used for source-reply announcements. */
 export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget | null {
   const parsed = resolveSessionConversationRef(sessionKey);
   if (!parsed) {
@@ -72,7 +65,6 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
 function buildAgentSessionLines(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
-  targetSessionKey: string;
   targetChannel?: string;
 }): string[] {
   return [
@@ -88,20 +80,16 @@ function buildAgentSessionLines(params: {
   ].filter((line): line is string => Boolean(line));
 }
 
-/** Builds the initial prompt context for a sessions_send agent-to-agent request. */
 export function buildAgentToAgentMessageContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
-  targetSessionKey: string;
 }) {
   return ["Agent-to-agent message context:", ...buildAgentSessionLines(params)].join("\n");
 }
 
-/** Builds the bounded ping-pong reply prompt for the current A2A participant. */
 export function buildAgentToAgentReplyContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
-  targetSessionKey: string;
   targetChannel?: string;
   currentRole: "requester" | "target";
   turn: number;
@@ -118,11 +106,9 @@ export function buildAgentToAgentReplyContext(params: {
   ].join("\n");
 }
 
-/** Builds the final announce prompt that decides whether to post back to the target channel. */
 export function buildAgentToAgentAnnounceContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
-  targetSessionKey: string;
   targetChannel?: string;
   originalMessage: string;
   roundOneReply?: string;

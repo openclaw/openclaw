@@ -25,7 +25,7 @@ type ReplyRunKey = string;
 
 type ReplyBackendKind = "embedded" | "cli";
 
-type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
+export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
 export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
 
@@ -53,6 +53,8 @@ export type ReplyBackendQueueMessageOptions = {
   abortSignal?: AbortSignal;
   /** Releases arrival ordering once the runtime has actually accepted this queue item. */
   onQueueAccepted?: (accepted: boolean) => void;
+  /** Releases per-input custody after commit, cancellation, or terminal rejection. */
+  onQueueSettled?: () => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Prepared channel turn to merge only at transcript persistence. */
@@ -60,10 +62,14 @@ export type ReplyBackendQueueMessageOptions = {
 };
 
 export type ReplyMessageInjectionOptions = ReplyBackendQueueMessageOptions & {
+  /** Host-observed audio fact; an owner must preserve its dynamic tool context before accepting. */
+  inboundAudio?: boolean;
   /** User-authorized controls retain sender authority but are not answers to pending questions. */
   allowPendingUserInputAnswer?: false;
   /** Consumed by reply ownership and never forwarded to the active backend. */
   toolAuthorityOverlay?: ReplyToolAuthorityOverlay;
+  /** Accepted sender facts when the ingress owner already prepared route-specific authority. */
+  personalToolParticipant?: ReplyTurnParticipantInput;
   /** Composed into V2's final admission assertion after asynchronous preparation. */
   assertCurrent?: () => void;
 };
@@ -106,10 +112,38 @@ export type ReplyToolAuthorityOverlay = Readonly<{
   toolBindings?: Readonly<Record<string, unknown>>;
 }>;
 
+type ReplyTurnParticipantInput = Pick<
+  ReplyToolAuthorityOverlay,
+  "operatorAuthority" | "senderId" | "senderName" | "gatewayUiCommandTarget"
+>;
+
 export type ReplyToolAuthoritySnapshot = Readonly<{
+  personalToolOwner?: ReplyTurnParticipantInput;
+  /** Selection admitted before runtime fallback or hooks choose a concrete model. */
+  requestedRoute?: ReplyToolAuthorityRoute;
   fingerprint(route?: ReplyToolAuthorityRoute): string;
   project: (overlay: ReplyToolAuthorityOverlay, route: ReplyToolAuthorityRoute) => string;
 }>;
+
+export type ReplyTurnParticipant = Readonly<{
+  profileId: string;
+  senderId: string;
+  name: string;
+  /** Host-issued source; independent children acquire their own custody before turn close. */
+  operatorAuthority: AdmittedRunOperatorAuthority;
+  gatewayUiCommandTarget?: GatewayUiCommandTarget;
+  assertCurrent: () => void;
+}>;
+
+export type ReplyTurnParticipants = {
+  accept(participant: ReplyTurnParticipantInput): void;
+  resolve(
+    this: void,
+    user?: string,
+    options?: { allowTurnOwner?: () => boolean },
+  ): ReplyTurnParticipant | undefined;
+  close(): void;
+};
 
 export type ReplyBackendQueueMessageResult = {
   /** Input is non-replayable, but its delivery or commitment could not be confirmed. */
@@ -184,11 +218,37 @@ export type ReplyBackendHandle = {
   isCompacting?: () => boolean;
 };
 
-export const replyMessageInjectionTargetOperation = Symbol("replyMessageInjectionTargetOperation");
+export type ReplyMessageInjectionResolution =
+  | {
+      reason: ReplyMessageInjectionRejectionReason;
+      errorMessage?: string;
+      backend?: ReplyBackendHandle;
+      cancelPendingUserInput?: ReplyBackendHandle["cancelPendingUserInput"];
+    }
+  | {
+      backend: ReplyBackendHandle;
+      injection: ReplyBackendMessageInjection;
+    };
+
+/** An adapter over one existing execution owner; it never acquires another run slot. */
+type ReplyMessageInjectionOwner = {
+  acceptParticipant?(participant: ReplyTurnParticipantInput): void;
+  projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
+  resolve(params: {
+    options?: ReplyBackendQueueMessageOptions;
+    inboundAudio?: boolean;
+    allowPendingUserInputAnswer?: false;
+    assertCurrent?: () => void;
+  }): ReplyMessageInjectionResolution;
+  recordAccepted(options?: { inboundAudio?: boolean }): void;
+  abort(): boolean;
+};
+
+export const replyMessageInjectionTargetOwner = Symbol("replyMessageInjectionTargetOwner");
 export type ReplyMessageInjectionTarget = {
-  readonly [replyMessageInjectionTargetOperation]: ReplyOperation;
+  readonly [replyMessageInjectionTargetOwner]: ReplyMessageInjectionOwner;
   readonly runId?: string;
-  /** Channel source-turn identity of the owning run (see the registry's `sourceTurnByKey`). */
+  /** Original source input retained by the captured execution owner. */
   readonly sourceTurnId?: string;
 };
 
@@ -202,6 +262,7 @@ export type ReplyMessageInjectionRejectionReason =
   | "not_running"
   | "stale_run"
   | "injection_unavailable"
+  | "audio_input_unsupported"
   | ReplyBackendQueueMessageMismatch
   | "runtime_rejected";
 
@@ -213,7 +274,7 @@ export type ReplyMessageInjectionOutcome =
   | { status: "rejected"; reason: ReplyMessageInjectionRejectionReason; errorMessage?: string };
 
 export type ReplyMessageInjectionAttempt = {
-  /** Native run identity captured with the opaque operation target. */
+  /** Native run identity captured with the opaque execution owner. */
   targetRunId: string | undefined;
   /** Settles once the runtime accepts or rejects ownership of this exact message. */
   acceptance: Promise<boolean>;
@@ -228,8 +289,6 @@ export type ReplyBackendQueueMessageMismatch =
   | "source_reply_delivery_mode_mismatch"
   | "reply_expectation_mismatch"
   | "task_suggestion_delivery_mode_mismatch";
-
-/** Prevents steering a turn into a run that cannot preserve its model-facing input. */
 
 export type ReplyOperationPhase =
   | "queued"
@@ -261,6 +320,7 @@ type ReplyOperationResult =
   | { kind: "aborted"; code: ReplyOperationAbortCode };
 
 export type ReplyOperation = {
+  readonly personalToolParticipants?: ReplyTurnParticipants;
   readonly key: ReplyRunKey;
   readonly sessionId: string;
   /** Captured logical owner for session activity, including raw global keys. */
@@ -287,6 +347,10 @@ export type ReplyOperation = {
   readonly acceptedSteeredInboundAudio: boolean;
   /** Immutable tool authority accepted by the active backend for steered user turns. */
   readonly toolAuthorityFingerprint?: string;
+  /** Initial selected model; a concrete attempt must not replace user intent. */
+  readonly requestedToolAuthorityRoute?: ReplyToolAuthorityRoute;
+  /** Current candidate proven automatic by the fallback owner; identity marks its attempt. */
+  readonly automaticFallbackRoute?: ReplyToolAuthorityRoute;
   /** Concrete provider/model route currently selected for this operation. */
   readonly toolAuthorityRoute?: ReplyToolAuthorityRoute;
   readonly phase: ReplyOperationPhase;
@@ -322,6 +386,7 @@ export type ReplyOperation = {
   markAcceptedSteeredInboundAudio(): void;
   /** Freeze the complete caller policy before a concrete backend attempt attaches. */
   bindToolAuthoritySnapshot(snapshot: ReplyToolAuthoritySnapshot): void;
+  setAutomaticFallbackRoute(route: ReplyToolAuthorityRoute | undefined): void;
   /** Project an inbound turn through the current concrete route; settled owners fail closed. */
   projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
   /** Prepare fingerprint and projection together for the final concrete attempt route. */

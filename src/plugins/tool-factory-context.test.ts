@@ -7,6 +7,7 @@ import {
 } from "../agents/tools/gateway-caller-context.js";
 import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRegistry } from "./registry.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import { createPluginToolFactoryContext } from "./tool-factory-context.js";
@@ -44,6 +45,115 @@ function continuation(isCurrent: () => boolean) {
     accountId: "original-account",
   };
 }
+
+describe("plugin tool declaration membership", () => {
+  it("prepares detached, ordered, case-sensitive declarations once per record", () => {
+    const builder = createTestPluginRegistry(createPluginRuntimeMock());
+    const names = [" beta ", "Alpha", "beta", " ", "alpha"];
+    const readNames = vi.fn(() => names);
+    const record = createPluginRecord({
+      id: "probe",
+      contracts: {
+        get tools() {
+          return readNames();
+        },
+      },
+    });
+    builder.registry.plugins.push(record);
+    const api = builder.createApi(record, { config: {}, registrationMode: "full" });
+    expect(readNames).not.toHaveBeenCalled();
+
+    api.registerTool(() => null, { names: [" beta ", "Alpha", "beta"] });
+    names.splice(0, names.length, "new_tool");
+    api.registerTool(() => null);
+    api.registerTool(() => null, { name: "alpha" });
+    api.registerTool(() => null, { names: ["new_tool", "BETA"] });
+
+    expect(builder.registry.tools.map((entry) => entry.names)).toEqual([
+      ["beta", "Alpha"],
+      [],
+      ["alpha"],
+    ]);
+    expect(record.toolNames).toEqual(["beta", "Alpha", "alpha"]);
+    expect(builder.registry.tools.map((entry) => Array.from(entry.declaredNames ?? []))).toEqual([
+      ["beta", "Alpha", "alpha"],
+      ["beta", "Alpha", "alpha"],
+      ["beta", "Alpha", "alpha"],
+    ]);
+    expect(builder.registry.diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
+      "plugin must declare contracts.tools for: new_tool, BETA",
+    ]);
+    expect(readNames).toHaveBeenCalledOnce();
+
+    const replacement = createPluginRecord({ id: "probe", contracts: { tools: ["new_tool"] } });
+    builder.registry.plugins[0] = replacement;
+    builder
+      .createApi(replacement, { config: {}, registrationMode: "full" })
+      .registerTool(() => null, { name: "new_tool" });
+    expect(builder.registry.tools.at(-1)?.names).toEqual(["new_tool"]);
+    expect(Array.from(builder.registry.tools.at(-1)?.declaredNames ?? [])).toEqual(["new_tool"]);
+    expect(readNames).toHaveBeenCalledOnce();
+  });
+
+  it.each([undefined, []])("retains empty declarations before factory validation (%j)", (names) => {
+    const builder = createTestPluginRegistry(createPluginRuntimeMock());
+    const readNames = vi.fn(() => names);
+    const record = createPluginRecord({
+      id: "empty",
+      contracts: {
+        get tools() {
+          return readNames();
+        },
+      },
+    });
+    builder.registry.plugins.push(record);
+    const api = builder.createApi(record, { config: {}, registrationMode: "full" });
+    const readFactory = vi.fn(() => {
+      throw new Error("factory must not be read");
+    });
+    for (let index = 0; index < 2; index += 1) {
+      api.registerTool({
+        contextVersion: 2,
+        get create() {
+          return readFactory();
+        },
+      });
+    }
+    expect(builder.registry.tools).toEqual([]);
+    expect(builder.registry.diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
+      "plugin must declare contracts.tools before registering agent tools",
+      "plugin must declare contracts.tools before registering agent tools",
+    ]);
+    expect(readFactory).not.toHaveBeenCalled();
+    expect(readNames).toHaveBeenCalledOnce();
+  });
+
+  it("does not retain an incomplete declaration preparation after an accessor throws", () => {
+    const builder = createTestPluginRegistry(createPluginRuntimeMock());
+    const failure = new Error("declaration read failed");
+    const readNames = vi
+      .fn<() => string[]>()
+      .mockImplementationOnce(() => {
+        throw failure;
+      })
+      .mockReturnValue(["probe"]);
+    const record = createPluginRecord({
+      id: "probe",
+      contracts: {
+        get tools() {
+          return readNames();
+        },
+      },
+    });
+    builder.registry.plugins.push(record);
+    const api = builder.createApi(record, { config: {}, registrationMode: "full" });
+    expect(() => api.registerTool(() => null, { name: "probe" })).toThrow(failure);
+    api.registerTool(() => null, { name: "probe" });
+    expect(builder.registry.tools.map((entry) => entry.names)).toEqual([["probe"]]);
+    expect(builder.registry.diagnostics).toEqual([]);
+    expect(readNames).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe("versioned plugin tool authority", () => {
   it("requires a final-effect assertion in the versioned context type", () => {

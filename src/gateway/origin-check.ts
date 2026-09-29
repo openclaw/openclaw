@@ -5,7 +5,9 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getHeader } from "./http-header-value.js";
 import {
   isLocalDirectRequest,
   isLoopbackHost,
@@ -13,6 +15,16 @@ import {
   normalizeHostHeader,
   resolveHostName,
 } from "./net.js";
+import type { GatewayWsBrowserOrigin } from "./server/client-identity-types.js";
+
+export function checkGatewayWsBrowserOrigin(origin: GatewayWsBrowserOrigin, cfg: OpenClawConfig) {
+  return checkBrowserOrigin({
+    ...origin,
+    allowedOrigins: resolveControlUiAllowedOrigins(cfg),
+    allowHostHeaderOriginFallback:
+      cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
+  });
+}
 
 type OriginCheckResult =
   | {
@@ -29,20 +41,16 @@ type BrowserOriginPolicy = {
   allowHostHeaderOriginFallback?: boolean;
 };
 
-function headerValue(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
-
 /** Gather the canonical Gateway browser-origin policy inputs for one HTTP request. */
 export function resolveBrowserOriginPolicy(params: {
   req: IncomingMessage;
   cfg?: OpenClawConfig;
 }): BrowserOriginPolicy {
   return {
-    requestHost: headerValue(params.req.headers.host),
-    origin: headerValue(params.req.headers.origin),
-    fetchSite: headerValue(params.req.headers["sec-fetch-site"]),
-    allowedOrigins: params.cfg?.gateway?.controlUi?.allowedOrigins,
+    requestHost: getHeader(params.req, "host"),
+    origin: getHeader(params.req, "origin"),
+    fetchSite: getHeader(params.req, "sec-fetch-site"),
+    allowedOrigins: resolveControlUiAllowedOrigins(params.cfg),
     allowHostHeaderOriginFallback:
       params.cfg?.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
   };

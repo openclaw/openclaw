@@ -7,22 +7,14 @@ import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view
 import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
+import type { agentRosterCards } from "../../lib/agents/roster-activity.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import "../../styles/agents-home.css";
 
 registerAgentsHomeEnglish();
 
-type AgentCard = {
-  id: string;
-  name: string;
-  role?: string;
-  model?: string;
-  avatar: string | null;
-  textAvatar: string | null;
-  activeNow: boolean;
-  lastActiveAt: number;
-  preview?: string | null;
+type AgentCard = Omit<ReturnType<typeof agentRosterCards>[number], "mainKey" | "unreadCount"> & {
   target: { href: string; options: ApplicationNavigationOptions };
 };
 

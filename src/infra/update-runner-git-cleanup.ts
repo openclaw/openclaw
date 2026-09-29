@@ -1,16 +1,12 @@
 import fs from "node:fs/promises";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { formatUpdateCleanupCommand } from "./update-maintenance.js";
 import { MAX_LOG_CHARS, runStep } from "./update-runner-command.js";
-import type { CommandRunner, RunStepOptions } from "./update-runner-types.js";
+import type { StepFactory } from "./update-runner-git-commands.js";
+import type { CommandRunner } from "./update-runner-types.js";
 
 const PREFLIGHT_CLEANUP_TIMEOUT_MS = 60_000;
-
-async function removePathRecursive(target: string) {
-  await fs
-    .rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
-    .catch(() => {});
-}
 
 async function repairPreflightCleanup(worktreeDir: string, preflightRoot: string) {
   try {
@@ -23,10 +19,18 @@ async function repairPreflightCleanup(worktreeDir: string, preflightRoot: string
 }
 
 export async function cleanupGitPreflight(
-  options: RunStepOptions,
+  params: { gitRoot: string; step: StepFactory; runCommand: CommandRunner },
   worktreeDir: string,
   preflightRoot: string,
 ) {
+  const options = {
+    ...params.step(
+      "preflight-cleanup",
+      ["git", "-C", params.gitRoot, "worktree", "remove", "--force", "--force", worktreeDir],
+      params.gitRoot,
+    ),
+    runCommand: params.runCommand,
+  };
   // Cancellation ends candidate work, not cleanup of the worktree and its Git metadata.
   // Keep cleanup commands in the owned process tree with their existing bounded budget.
   const cleanupSignal = new AbortController().signal;
@@ -67,8 +71,15 @@ export async function cleanupGitPreflight(
   }
   await runCleanupCommand(["git", "-C", options.cwd, "worktree", "prune"], {
     cwd: options.cwd,
-  }).catch(() => null);
-  await removePathRecursive(preflightRoot);
+  }).catch((error: unknown) => {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    return null;
+  });
+  await fs
+    .rm(preflightRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
+    .catch(() => {});
   options.progress?.onStepComplete?.({
     ...removeStep,
     index: options.stepIndex,

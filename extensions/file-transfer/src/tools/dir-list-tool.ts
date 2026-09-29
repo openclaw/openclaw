@@ -1,8 +1,6 @@
-// File Transfer plugin module implements dir list tool behavior.
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
-import { appendFileTransferAudit } from "../shared/audit.js";
 import { readClampedInt } from "../shared/params.js";
 import {
   DIR_LIST_DEFAULT_MAX_ENTRIES,
@@ -89,7 +87,7 @@ export function createDirListTool(): AnyAgentTool {
           ? params.pageToken.trim()
           : undefined;
 
-      const { nodeId, nodeDisplayName, payload, startedAt } = await invokeNodeToolPayload({
+      const { audit, payload } = await invokeNodeToolPayload({
         node,
         params,
         command: "dir.list",
@@ -110,14 +108,9 @@ export function createDirListTool(): AnyAgentTool {
       const nextPageToken =
         typeof payload.nextPageToken === "string" ? payload.nextPageToken : undefined;
 
-      await appendFileTransferAudit({
-        op: "dir.list",
-        nodeId,
-        nodeDisplayName,
-        requestedPath: dirPath,
+      await audit({
         canonicalPath,
         decision: "allowed",
-        durationMs: Date.now() - startedAt,
       });
 
       return {

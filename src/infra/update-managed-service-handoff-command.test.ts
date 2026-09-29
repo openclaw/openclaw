@@ -107,6 +107,7 @@ async function startHandoffAndReadCommand(params: {
   channel: "beta" | "extended-stable";
   tag?: string;
   acceptCapabilities?: boolean;
+  admission?: "auto" | "installed";
   reapplyLocalOverrides?: boolean;
   devTarget?: DevUpdateTarget;
   env?: NodeJS.ProcessEnv;
@@ -128,6 +129,7 @@ async function startHandoffAndReadCommand(params: {
     channel: params.channel,
     ...(params.tag ? { tag: params.tag } : {}),
     ...(params.acceptCapabilities ? { acceptCapabilities: true } : {}),
+    admission: params.admission,
     ...(params.reapplyLocalOverrides ? { reapplyLocalOverrides: true } : {}),
     parentPid: process.pid,
     execPath: "/usr/local/bin/node",
@@ -169,12 +171,13 @@ async function startHandoffAndReadCommand(params: {
 
 describe("managed service update handoff command", () => {
   it.each([
-    { writable: false, signal: null },
-    { writable: true, signal: null },
-    { writable: true, signal: "SIGKILL" },
+    { writable: false, signal: null, code: 0, receipt: false },
+    { writable: true, signal: null, code: 0, receipt: true },
+    { writable: true, signal: "SIGKILL", code: null, receipt: true },
+    { writable: true, signal: null, code: 143, receipt: false },
   ])(
-    "admits writable=$writable system updates and joins helper settlement (signal=$signal)",
-    async ({ writable, signal }) => {
+    "admits writable=$writable system updates and joins helper settlement (code=$code, signal=$signal, receipt=$receipt)",
+    async ({ writable, signal, code, receipt }) => {
       const root = systemRoots.make("openclaw-system-update-");
       const unitName = "openclaw-custom.service";
       vi.mocked(findSystemdGatewayInstallation).mockResolvedValue({
@@ -238,12 +241,16 @@ describe("managed service update handoff command", () => {
       const settled = vi.fn();
       const observed = barrier?.then(settled, settled);
       const child = await spawned.promise;
-      Object.assign(child, { exitCode: signal ? null : 0, signalCode: signal });
-      child.emit("exit", signal ? null : 0, signal);
+      // Model the helper's completion receipt independently of its exit code.
+      if (receipt) {
+        child.stdout.write("system-update-settled\n");
+      }
+      Object.assign(child, { exitCode: code, signalCode: signal });
+      child.emit("exit", code, signal);
       await Promise.resolve();
       expect(settled).not.toHaveBeenCalled();
-      child.emit("close", signal ? null : 0, signal);
-      if (signal) {
+      child.emit("close", code, signal);
+      if (signal || !receipt) {
         await expect(barrier).rejects.toThrow("settlement could not be confirmed");
       } else {
         await expect(barrier).resolves.toBeUndefined();
@@ -507,6 +514,17 @@ describe("managed service update handoff command", () => {
       const result = await startHandoffAndReadCommand({ channel: "beta", reapplyLocalOverrides });
       expect(result.commandArgv?.includes("--reapply-local-overrides")).toBe(reapplyLocalOverrides);
       expect(result.command.includes("--reapply-local-overrides")).toBe(reapplyLocalOverrides);
+    },
+  );
+
+  it.each(["auto", "installed"] as const)(
+    "preserves %s admission through the detached CLI command",
+    async (admission) => {
+      const result = await startHandoffAndReadCommand({ channel: "beta", admission });
+      const flagIndex = result.commandArgv?.indexOf("--admission") ?? -1;
+      expect(flagIndex).toBeGreaterThan(0);
+      expect(result.commandArgv?.[flagIndex + 1]).toBe(admission);
+      expect(result.command).toContain(`--admission ${admission}`);
     },
   );
 

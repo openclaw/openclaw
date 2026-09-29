@@ -19,7 +19,7 @@ import type {
 
 const {
   listAccountIds: listFeishuAccountIds,
-  resolveDefaultAccountId,
+  resolveDefaultAccountId: resolveDefaultFeishuAccountId,
   resolveAccountConfig: resolveMergedFeishuAccountConfig,
 } = createAccountListHelpers<FeishuConfig>("feishu", {
   allowUnlistedDefaultAccount: true,
@@ -31,21 +31,17 @@ const {
   },
 });
 
-export { listFeishuAccountIds };
+export { listFeishuAccountIds, resolveDefaultFeishuAccountId };
 
 type FeishuCredentialResolutionMode = "inspect" | "strict";
 type FeishuResolvedSecretRef = NonNullable<ReturnType<typeof coerceSecretRef>>;
-
-function formatSecretRefLabel(ref: FeishuResolvedSecretRef): string {
-  return `${ref.source}:${ref.provider}:${ref.id}`;
-}
 
 export class FeishuSecretRefUnavailableError extends Error {
   path: string;
 
   constructor(path: string, ref: FeishuResolvedSecretRef) {
     super(
-      `${path}: unresolved SecretRef "${formatSecretRefLabel(ref)}". ` +
+      `${path}: unresolved SecretRef "${ref.source}:${ref.provider}:${ref.id}". ` +
         "Resolve this command against an active gateway runtime snapshot before reading it.",
     );
     this.name = "FeishuSecretRefUnavailableError";
@@ -147,9 +143,6 @@ function resolveFeishuEventSecrets(
   };
 }
 
-/**
- * Resolve the default account selection and its source.
- */
 export function resolveDefaultFeishuAccountSelection(cfg: ClawdbotConfig): {
   accountId: string;
   source: FeishuDefaultAccountSelectionSource;
@@ -177,17 +170,10 @@ export function resolveDefaultFeishuAccountSelection(cfg: ClawdbotConfig): {
 }
 
 /**
- * Resolve the default account ID.
- */
-export function resolveDefaultFeishuAccountId(cfg: ClawdbotConfig): string {
-  return resolveDefaultAccountId(cfg);
-}
-
-/**
  * Merge top-level config with account-specific config.
  * Account-specific fields override top-level fields.
  */
-function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): FeishuConfig {
+export function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): FeishuConfig {
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
   const merged = resolveMergedFeishuAccountConfig(cfg, accountId);
   const topTools = feishuCfg?.tools;
@@ -206,9 +192,6 @@ function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): Feish
   return merged;
 }
 
-/**
- * Resolve Feishu credentials from a config.
- */
 export function resolveFeishuCredentials(
   cfg?: FeishuConfig,
   options?: { mode?: FeishuCredentialResolutionMode; rootConfig?: ClawdbotConfig },
@@ -311,9 +294,6 @@ export function resolveFeishuRuntimeAccount(
   });
 }
 
-/**
- * List all enabled and configured accounts.
- */
 export function listEnabledFeishuAccounts(cfg: ClawdbotConfig): ResolvedFeishuAccount[] {
   return listFeishuAccountIds(cfg)
     .map((accountId) => resolveFeishuAccount({ cfg, accountId }))

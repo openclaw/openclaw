@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
@@ -10,13 +11,17 @@ import {
   makeAgentUserMessage,
 } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { setActiveNodeContext } from "../../infra/active-node-context.js";
+import { setActiveNodeContexts } from "../../infra/active-node-context.js";
+import { resolveNodeWorkerLaunchToolNames } from "../../infra/node-runner-inventory.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   completeWorkerLaunchDescriptor,
+  parseWorkerLaunchPlan,
   type WorkerLaunchPlan,
 } from "../../worker/launch-descriptor.js";
 import { roundTripWorkerLaunchDescriptor } from "../../worker/launch-descriptor.test-support.js";
+import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
@@ -26,6 +31,7 @@ import {
   OWNER_EPOCH,
   credential,
   measureLaunchTurn,
+  readLaunchToolNames,
   SESSION_ID,
   SESSION_KEY,
   attachedEnvironment,
@@ -46,10 +52,66 @@ describe("worker turn execution", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
 
+  it.each([false, true])(
+    "launches only supervisor-admitted tools and authorizes the same set (declared: %s)",
+    async (declared) => {
+      await seedActivePlacement();
+      const launchToolNames = resolveNodeWorkerLaunchToolNames({
+        enabled: true,
+        capacity: { total: 1, available: 1 },
+        environmentSession: 1,
+        capturedExecPolicy: true,
+        ...(declared ? { launchToolNames: WORKER_TOOL_NAMES } : {}),
+      });
+      const authorize = vi.spyOn(placements, "authorizeWorkerTurnTools");
+      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async () => {
+        throw new WorkerRunnerCapacityError();
+      });
+      const tunnel: WorkerTunnelHandle = {
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        launchTurn,
+        measureLaunchTurn,
+        readLaunchToolNames: async () => launchToolNames,
+        runWorkspaceCommand: vi.fn(),
+        quiesceWorkspace: vi.fn(),
+        syncWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(),
+        stop: vi.fn(),
+      };
+      const provider = createWorkerSessionTurnPlacementProvider({
+        placements,
+        environments: {
+          ...unusedEnvironments(),
+          get: attachedEnvironment,
+          acquireTurnCredential: async () => credential(),
+          startTunnel: async () => tunnel,
+        },
+      });
+      const input = turn("launch-tool-negotiation");
+      try {
+        await expect(
+          provider.executeTurn({ ...sessionTarget, runId: input.runId }, input, vi.fn()),
+        ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
+        expect(launchTurn).toHaveBeenCalledOnce();
+        const request = launchTurn.mock.calls[0]![0];
+        expect(parseWorkerLaunchPlan(request.plan)).toEqual(request.plan);
+        const allowed = request.plan.assignment.toolAuthority.allowedToolNames;
+        expect(allowed.length).toBeGreaterThan(0);
+        expect(allowed.filter((name) => !launchToolNames.includes(name))).toEqual([]);
+        expect(allowed.includes("presence")).toBe(declared);
+        expect(authorize).toHaveBeenCalledExactlyOnceWith(request.turnClaim, allowed);
+      } finally {
+        authorize.mockRestore();
+        input.preparedRunAdmission.close();
+      }
+    },
+  );
+
   it.each(["current", "cancel"] as const)(
     "waits for execution-start settlement before new-turn work (%s)",
     async (change) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const input = turn(`execution-start-${change}`);
       const abort = new AbortController();
       const entered = createDeferred();
@@ -126,7 +188,7 @@ describe("worker turn execution", () => {
   it.each(["current", "cancel", "run", "phase", "claim", "session"] as const)(
     "checks %s ownership after writable transcript hydration before acquiring credentials",
     async (change) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const source = SessionManager.open(sessionTarget);
       source.appendMessage(
         makeAgentUserMessage({ content: "Preserve 🦞\nexact history", timestamp: 1 }),
@@ -141,39 +203,15 @@ describe("worker turn execution", () => {
       const hydration = vi
         .spyOn(SessionManager, "openAsync")
         .mockImplementationOnce(async (...args) => {
-          const native = requireNodeSqlite();
-          const probes =
-            change === "current"
-              ? [
-                  vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-                  vi.spyOn(native.DatabaseSync.prototype, "exec"),
-                  ...(["get", "all", "run", "iterate"] as const).map((method) =>
-                    vi.spyOn(native.StatementSync.prototype, method),
-                  ),
-                ]
-              : [];
+          requireNodeSqlite();
+          const probes = change === "current" ? observeMainThreadSql() : undefined;
           let manager: SessionManager;
           try {
-            if (probes.length) {
-              // Calibrate every statement method without starting session work.
-              const calibration = new native.DatabaseSync(":memory:");
-              try {
-                calibration.exec("CREATE TABLE calibration (value INTEGER)");
-                calibration.prepare("INSERT INTO calibration VALUES (?)").run(1);
-                const read = calibration.prepare("SELECT value FROM calibration");
-                read.get();
-                read.all();
-                expect([...read.iterate()]).toHaveLength(1);
-                expect(probes.every((probe) => probe.mock.calls.length > 0)).toBe(true);
-              } finally {
-                calibration.close();
-              }
-              probes.forEach((probe) => probe.mockClear());
-            }
+            probes?.calibrate();
             manager = await open(...args);
-            expect(probes.map((probe) => probe.mock.calls.length)).toEqual(probes.map(() => 0));
+            probes?.expectIdle();
           } finally {
-            probes.forEach((probe) => probe.mockRestore());
+            probes?.restore();
           }
           expect(manager.getPersistedEntries()).toEqual(before);
           entered.resolve();
@@ -227,15 +265,13 @@ describe("worker turn execution", () => {
         expect(acquireTurnCredential).not.toHaveBeenCalled();
         const placement = placements.get(SESSION_ID);
         const claim = placement && projectWorkerSessionTurnClaim(placement);
-        if (!claim) {
-          throw new Error("expected admitted worker claim");
-        }
+        assert(claim, "expected admitted worker claim");
         if (change === "cancel") {
           abort.abort(new Error("fixture cancelled"));
         } else if (change === "run") {
           current = false;
         } else if (change === "claim") {
-          placements.releaseTurn(claim);
+          await placements.releaseTurn(claim);
         } else if (change === "session") {
           await patchSessionEntryCore(sessionTarget, () => ({ sessionId: "replacement-session" }));
         }
@@ -263,7 +299,7 @@ describe("worker turn execution", () => {
   );
 
   it("settles the committed terminal result when execution is cancelled during hydration", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const abort = new AbortController();
     const input = turn("terminal-hydration");
     const entered = createDeferred();
@@ -309,20 +345,21 @@ describe("worker turn execution", () => {
       ownerEpoch: OWNER_EPOCH,
       launchTurn,
       measureLaunchTurn,
+      readLaunchToolNames,
       runWorkspaceCommand: vi.fn(),
       syncWorkspace: vi.fn(),
       stop: vi.fn(),
       quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
       reconcileWorkspace: async (request) => {
-        if (request.source.kind !== "local") {
-          throw new Error("expected local workspace");
-        }
+        assert(request.source.kind === "local", "expected local workspace");
         request.source.journal.commit(MANIFEST_REF);
         return {
           manifestRef: MANIFEST_REF,
           changed: false,
           verifyStable: async () => {},
           verifyLocalStable: async () => {},
+          publishStagedResult: async () => {},
+          discardPreparedStagedResult: async () => {},
         };
       },
     };
@@ -373,7 +410,7 @@ describe("worker turn execution", () => {
   it.each(["current", "cancel", "claim", "session"] as const)(
     "revalidates %s authority after node context preparation before measuring a launch",
     async (change) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const input = turn(`node-context-${change}`);
       const abort = new AbortController();
       const entered = createDeferred();
@@ -389,21 +426,22 @@ describe("worker turn execution", () => {
         ownerEpoch: OWNER_EPOCH,
         launchTurn,
         measureLaunchTurn: measure,
+        readLaunchToolNames,
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
         stop: vi.fn(),
       };
-      setActiveNodeContext(
-        { nodeId: "fixture-node" },
+      setActiveNodeContexts([
         {
+          nodeId: "fixture-node",
           prepare: async () => {
             entered.resolve();
             await release.promise;
           },
         },
-      );
+      ]);
       const provider = createWorkerSessionTurnPlacementProvider({
         placements,
         environments: {
@@ -431,13 +469,11 @@ describe("worker turn execution", () => {
         expect(measure).not.toHaveBeenCalled();
         const placement = placements.get(SESSION_ID);
         const claim = placement && projectWorkerSessionTurnClaim(placement);
-        if (!claim) {
-          throw new Error("expected admitted worker claim");
-        }
+        assert(claim, "expected admitted worker claim");
         if (change === "cancel") {
           abort.abort(new Error("cancel during node context preparation"));
         } else if (change === "claim") {
-          placements.releaseTurn(claim);
+          await placements.releaseTurn(claim);
         } else if (change === "session") {
           await patchSessionEntryCore(sessionTarget, () => ({ sessionId: "replacement-session" }));
         }
@@ -455,7 +491,7 @@ describe("worker turn execution", () => {
       } finally {
         release.resolve();
         await operation;
-        setActiveNodeContext(null);
+        setActiveNodeContexts([]);
         input.preparedRunAdmission.close();
       }
     },
@@ -469,7 +505,7 @@ describe("worker turn execution", () => {
   )(
     "honors configured worker Ultra effort $expected in mode $mode with scheduled tools",
     async (testCase) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       let descriptor: WorkerLaunchPlan | undefined;
       const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
         descriptor = roundTripWorkerLaunchDescriptor(
@@ -485,6 +521,7 @@ describe("worker turn execution", () => {
         ownerEpoch: OWNER_EPOCH,
         launchTurn,
         measureLaunchTurn,
+        readLaunchToolNames,
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
@@ -566,7 +603,7 @@ describe("worker turn execution", () => {
   ])(
     "fences a stale worker receipt %j while a current receipt proceeds to execution",
     async (...protocolFeatures) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const oldEnvironment = attachedEnvironment();
       const currentReceipt = oldEnvironment.bootstrapReceipt;
       oldEnvironment.bootstrapReceipt = {

@@ -4,10 +4,15 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildFullReleaseCandidateRequest,
-  fullReleaseCandidateArtifactName,
+  candidateRequestSha256,
+  canonicalFullReleaseCandidateRequestJson,
   validateFullReleaseCandidateBinding,
   validateFullReleaseCandidateRequest,
 } from "../../scripts/full-release-candidate-contract.mjs";
+import {
+  candidateArtifactJsonFromBinding,
+  resolveCandidateBinding,
+} from "../../scripts/lib/full-release-candidate-reuse.mjs";
 import {
   canonicalTestJson,
   canonicalTestSha256,
@@ -61,13 +66,6 @@ function replaceBindingRequest(
 }
 
 describe("full release candidate contract", () => {
-  it("uses the canonical request digest directly in the evidence artifact name", () => {
-    const requestSha256 = "a".repeat(64);
-    expect(fullReleaseCandidateArtifactName(requestSha256)).toBe(
-      `full-release-candidate-v2-${requestSha256}`,
-    );
-  });
-
   it("canonicalizes equivalent request inputs and expands effective policy", () => {
     const request = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput());
     const reordered = Object.fromEntries(
@@ -108,6 +106,68 @@ describe("full release candidate contract", () => {
       "openclaw@latest",
     ]);
     expect(canonicalTestSha256(request)).toBe(canonicalTestSha256(reordered));
+  });
+
+  it("preserves retired scenario evidence while rejecting new preparation", () => {
+    const retainedManifest = fullReleaseCandidateManifestFixture();
+    const request = retainedManifest.request;
+    request.upgradeSurvivorScenarios = ["base", "msteams-polls"];
+    retainedManifest.requestSha256 = canonicalTestSha256(request);
+    expect(candidateRequestSha256(request)).toBe(
+      "e8e6a45882970d37d5884b8b1cc640a571d7278a21717b3591fdc970b5086b07",
+    );
+    expect(canonicalFullReleaseCandidateRequestJson(request)).toBe(canonicalTestJson(request));
+    const binding = fullReleaseCandidateBindingFixture();
+    binding.request = request;
+    binding.requestSha256 = retainedManifest.requestSha256;
+    binding.manifestSha256 = canonicalTestSha256(retainedManifest);
+    binding.evidenceArtifact.name = `full-release-candidate-v2-${binding.requestSha256}`;
+    expect(validateFullReleaseCandidateBinding(binding)).toEqual(binding);
+    expect(() => validateFullReleaseCandidateRequest(request)).toThrow(
+      "invalid published upgrade survivor scenario",
+    );
+    expect(() =>
+      buildFullReleaseCandidateRequest(
+        fullReleaseCandidateRequestInput({ upgradeSurvivorScenarios: "msteams-polls" }),
+      ),
+    ).toThrow("invalid published upgrade survivor scenario");
+    expect(runManifestContract(retainedManifest).stderr).toContain(
+      "invalid published upgrade survivor scenario",
+    );
+    for (const source of ["freshBinding", "reusedBinding"]) {
+      expect(() => resolveCandidateBinding({ [source]: binding, request, required: true })).toThrow(
+        "invalid published upgrade survivor scenario",
+      );
+    }
+  });
+
+  it("validates retained v1 request and manifest digests without rewriting them", () => {
+    const currentManifest = fullReleaseCandidateManifestFixture();
+    const { packagePublished: _packagePublished, ...requestFields } = currentManifest.request;
+    const request = {
+      ...requestFields,
+      schema: "openclaw.full-release-candidate-request/v1" as const,
+    };
+    const requestSha256 = canonicalTestSha256(request);
+    const retainedManifest = { ...currentManifest, request, requestSha256 };
+    const currentBinding = fullReleaseCandidateBindingFixture();
+    const binding = {
+      ...currentBinding,
+      request,
+      requestSha256,
+      evidenceArtifact: {
+        ...currentBinding.evidenceArtifact,
+        name: `full-release-candidate-v2-${requestSha256}`,
+      },
+      manifestSha256: canonicalTestSha256(retainedManifest),
+    };
+
+    expect(validateFullReleaseCandidateBinding(binding)).toEqual(binding);
+    expect(candidateRequestSha256(request)).toBe(requestSha256);
+    expect(() => validateFullReleaseCandidateRequest(request)).toThrow("schema is invalid");
+    expect(() => candidateArtifactJsonFromBinding(binding)).toThrow(
+      "retained v1 candidate evidence cannot supply package provenance",
+    );
   });
 
   it.each([
@@ -163,14 +223,6 @@ describe("full release candidate contract", () => {
         contractVersions: { ...request.contractVersions, sharedImage: 2 },
       }),
     ).toThrow("contract versions are invalid");
-  });
-
-  it("validates one canonical binding across the request, plan, producer, and artifacts", () => {
-    const value = manifest();
-    const binding = fullReleaseCandidateBindingFixture();
-    expect(validateFullReleaseCandidateBinding(binding)).toEqual(binding);
-    expect(binding.request).toEqual(value.request);
-    expect(binding.manifestSha256).toBe(canonicalTestSha256(value));
   });
 
   it("runs request, manifest, and binding commands through their subprocess boundary", () => {

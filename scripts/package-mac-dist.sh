@@ -10,10 +10,12 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
+source "$ROOT_DIR/scripts/lib/mac-signing-identity.sh"
 source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
 RECOVERY_DIR="$ROOT_DIR/dist/macos-notarization-recovery"
 RECOVERY_HELPER="$ROOT_DIR/scripts/lib/mac-notarization-recovery.py"
 RESUME_NOTARIZATION=0
+CHECKPOINT_ONLY=0
 RECOVERY_READY=0
 RESTORED_APP_DIR=""
 
@@ -32,7 +34,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 case "${1:-}" in
   --resume-notarization) RESUME_NOTARIZATION=1; shift ;;
-  --help) echo "Usage: scripts/package-mac-dist.sh [--resume-notarization]"; exit 0 ;;
+  --checkpoint-only) CHECKPOINT_ONLY=1; shift ;;
+  --help) echo "Usage: scripts/package-mac-dist.sh [--checkpoint-only | --resume-notarization]"; exit 0 ;;
 esac
 if [[ "$#" -ne 0 ]]; then
   echo "Error: unexpected packaging argument: $1" >&2
@@ -49,6 +52,10 @@ BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
 BUILD_CONFIG="${BUILD_CONFIG:-release}"
 APP_VERSION_INPUT="${APP_VERSION:-}"
+if [[ "$CHECKPOINT_ONLY" == "1" && "$BUILD_CONFIG" != "release" ]]; then
+  echo "Error: --checkpoint-only requires BUILD_CONFIG=release, including smoke builds." >&2
+  exit 1
+fi
 
 # Default to universal binary for distribution builds (supports both Apple Silicon and Intel Macs)
 export BUILD_ARCHS="${BUILD_ARCHS:-all}"
@@ -187,10 +194,17 @@ if [[ "$RESUME_NOTARIZATION" == "1" ]]; then
   ditto -x -k "$RECOVERY_DIR/app.zip" "$RESTORED_APP_DIR"
   APP="$RESTORED_APP_DIR/OpenClaw.app"
   /usr/bin/codesign --verify --deep --strict "$APP"
-  if [[ -n "${EXPECTED_DEVELOPER_TEAM_ID:-}" ]]; then
+  if [[ "${SKIP_NOTARIZE:-0}" != "1" && -n "${EXPECTED_DEVELOPER_TEAM_ID:-}" ]]; then
     /usr/bin/codesign --verify --strict -R="anchor apple generic and certificate leaf[subject.OU] = \"${EXPECTED_DEVELOPER_TEAM_ID}\"" "$APP"
   fi
 else
+  # A smoke request must be deterministic even on a host with release certificates.
+  # Preserve explicit identities so the signed-app notarization guard still applies.
+  if [[ "${SKIP_NOTARIZE:-0}" == "1" && "${ALLOW_ADHOC_SIGNING:-0}" == "1" && -z "${SIGN_IDENTITY:-}" ]]; then
+    SIGN_IDENTITY="-"
+  fi
+  SIGN_IDENTITY="$(resolve_mac_signing_identity)"
+  export SIGN_IDENTITY
   "$ROOT_DIR/scripts/package-mac-app.sh"
 fi
 if [[ ! -d "$APP" ]]; then
@@ -268,10 +282,19 @@ copy_dsym_to_tmp() {
 }
 
 if [[ "$SKIP_NOTARIZE" == "1" ]]; then
+  if [[ "${ALLOW_ADHOC_SIGNING:-0}" != "1" && "${SIGN_IDENTITY:-}" != "-" ]]; then
+    echo "Error: SKIP_NOTARIZE=1 is only allowed for explicit ad-hoc smoke builds." >&2
+    exit 1
+  fi
+  # Drain codesign output so a match cannot cause SIGPIPE under pipefail.
+  if ! /usr/bin/codesign --display --verbose=4 "$APP" 2>&1 | grep -Fx 'Signature=adhoc' >/dev/null; then
+    echo "Error: skipping notarization requires an ad-hoc signed smoke app." >&2
+    exit 1
+  fi
   NOTARIZE=0
 fi
 if [[ "$RESUME_NOTARIZATION" == "1" ]]; then
-  if [[ "$NOTARIZE" != "1" || "$BUILD_CONFIG" != "release" || "$VERSION" != "$APP_VERSION_INPUT" || "$BUNDLE_VERSION" != "$APP_BUILD" ]]; then
+  if [[ "$BUILD_CONFIG" != "release" || "$VERSION" != "$APP_VERSION_INPUT" || "$BUNDLE_VERSION" != "$APP_BUILD" ]]; then
     echo "Error: resumed app does not match the signed release checkpoint." >&2
     exit 1
   fi
@@ -369,50 +392,69 @@ elif [[ "$SKIP_DSYM" != "1" ]]; then
   fi
 fi
 
-if [[ "$NOTARIZE" == "1" ]]; then
-  echo "📦 Notary zip: $NOTARY_ZIP"
-  if [[ "$RESUME_NOTARIZATION" == "0" ]]; then
-    mkdir "$RECOVERY_DIR"
-    ditto -c -k --sequesterRsrc --keepParent "$APP" "$NOTARY_ZIP"
-    if [[ "$SKIP_DSYM" != "1" ]]; then
-      cp "$DSYM_ZIP" "$RECOVERY_DIR/symbols.zip"
+RETAINED_DMG="$RECOVERY_DIR/app.dmg"
+if [[ "$SKIP_DMG" != "1" ]]; then
+  echo "💿 DMG: $DMG"
+  if [[ "$RESUME_NOTARIZATION" == "1" ]]; then
+    # Checkpoints are source-bound: older, partial checkpoints use their producer's script.
+    /usr/bin/codesign --verify --strict "$RETAINED_DMG"
+    if [[ "$NOTARIZE" == "1" && -n "${EXPECTED_DEVELOPER_TEAM_ID:-}" ]]; then
+      /usr/bin/codesign --verify --strict -R="anchor apple generic and certificate leaf[subject.OU] = \"${EXPECTED_DEVELOPER_TEAM_ID}\"" "$RETAINED_DMG"
     fi
-    python3 "$RECOVERY_HELPER" init "$RECOVERY_DIR" "$(git -C "$ROOT_DIR" rev-parse HEAD)" "$VERSION" "$BUNDLE_VERSION" "$SKIP_DMG" "$SKIP_DSYM"
-    RECOVERY_READY=1
+    audit_retained_dmg_async_frames "$RETAINED_DMG"
+  else
+    DMG_SIGN_IDENTITY="${SIGN_IDENTITY:-}"
+    if [[ "$NOTARIZE" == "0" ]]; then
+      DMG_SIGN_IDENTITY="-"
+    fi
+    if [[ -z "$DMG_SIGN_IDENTITY" ]]; then
+      echo "Error: set SIGN_IDENTITY to sign the distribution DMG before checkpointing." >&2
+      exit 1
+    fi
+    "$ROOT_DIR/scripts/create-dmg.sh" "$APP" "$DMG"
+    echo "🔏 Signing DMG: $DMG"
+    if [[ "$DMG_SIGN_IDENTITY" == "-" ]]; then
+      /usr/bin/codesign --force --sign - --timestamp=none "$DMG"
+    else
+      /usr/bin/codesign --force --sign "$DMG_SIGN_IDENTITY" --timestamp "$DMG"
+    fi
   fi
+else
+  echo "💿 Skipping DMG (SKIP_DMG=1)"
+fi
+
+if [[ "$RESUME_NOTARIZATION" == "0" && ( "$NOTARIZE" == "1" || "$CHECKPOINT_ONLY" == "1" ) ]]; then
+  echo "📦 Notary zip: $NOTARY_ZIP"
+  mkdir "$RECOVERY_DIR"
+  ditto -c -k --sequesterRsrc --keepParent "$APP" "$NOTARY_ZIP"
+  if [[ "$SKIP_DSYM" != "1" ]]; then
+    cp "$DSYM_ZIP" "$RECOVERY_DIR/symbols.zip"
+  fi
+  if [[ "$SKIP_DMG" != "1" ]]; then
+    mv "$DMG" "$RETAINED_DMG"
+  fi
+  python3 "$RECOVERY_HELPER" init "$RECOVERY_DIR" "$(git -C "$ROOT_DIR" rev-parse HEAD)" "$VERSION" "$BUNDLE_VERSION" "$SKIP_DMG" "$SKIP_DSYM"
+  RECOVERY_READY=1
+fi
+
+if [[ "$CHECKPOINT_ONLY" == "1" ]]; then
+  echo "✅ Signed packaging checkpoint ready: $RECOVERY_DIR"
+  exit 0
+fi
+
+if [[ "$NOTARIZE" == "1" ]]; then
   STAPLE_APP_PATH="$APP" "$ROOT_DIR/scripts/notarize-mac-artifact.sh" --submission-file "$RECOVERY_DIR/app-submission.json" "$NOTARY_ZIP"
+  if [[ "$SKIP_DMG" != "1" ]]; then
+    "$ROOT_DIR/scripts/notarize-mac-artifact.sh" --submission-file "$RECOVERY_DIR/dmg-submission.json" "$RETAINED_DMG"
+  fi
+fi
+if [[ "$RECOVERY_READY" == "1" && "$SKIP_DMG" != "1" ]]; then
+  cp "$RETAINED_DMG" "$DMG"
 fi
 
 echo "📦 Zip: $ZIP"
 rm -f "$ZIP"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
-
-if [[ "$SKIP_DMG" != "1" ]]; then
-  echo "💿 DMG: $DMG"
-  if [[ "$NOTARIZE" == "1" ]]; then
-    RETAINED_DMG="$RECOVERY_DIR/app.dmg"
-    if [[ ! -f "$RETAINED_DMG" ]]; then
-      "$ROOT_DIR/scripts/create-dmg.sh" "$APP" "$DMG"
-      if [[ -n "${SIGN_IDENTITY:-}" ]]; then
-        echo "🔏 Signing DMG: $DMG"
-        /usr/bin/codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG"
-      fi
-      mv "$DMG" "$RETAINED_DMG"
-    else
-      /usr/bin/codesign --verify --strict "$RETAINED_DMG"
-      if [[ -n "${EXPECTED_DEVELOPER_TEAM_ID:-}" ]]; then
-        /usr/bin/codesign --verify --strict -R="anchor apple generic and certificate leaf[subject.OU] = \"${EXPECTED_DEVELOPER_TEAM_ID}\"" "$RETAINED_DMG"
-      fi
-      audit_retained_dmg_async_frames "$RETAINED_DMG"
-    fi
-    "$ROOT_DIR/scripts/notarize-mac-artifact.sh" --submission-file "$RECOVERY_DIR/dmg-submission.json" "$RETAINED_DMG"
-    cp "$RETAINED_DMG" "$DMG"
-  else
-    "$ROOT_DIR/scripts/create-dmg.sh" "$APP" "$DMG"
-  fi
-else
-  echo "💿 Skipping DMG (SKIP_DMG=1)"
-fi
 
 if [[ -n "$RESTORED_APP_DIR" ]]; then
   rm -rf "$ROOT_DIR/dist/OpenClaw.app"

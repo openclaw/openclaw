@@ -1,36 +1,32 @@
-import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   captureAgentHarnessCompletionCustody,
-  createAgentHarnessTaskEventSink,
-  createAgentHarnessTaskRuntime,
-  deliverAgentHarnessTaskCompletion,
-} from "openclaw/plugin-sdk/agent-harness-task-runtime";
+  createAgentHarnessCompletionEventSink,
+  deliverAgentHarnessCompletion,
+} from "openclaw/plugin-sdk/agent-harness-completion";
+import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { interruptCodexTurnAndWaitBestEffort } from "./attempt-client-cleanup.js";
 import {
   claimCodexAppServerLiveThread,
   hasCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
-  type CodexAppServerLiveThreadOwnership,
 } from "./client-runtime.js";
+import type { CodexAppServerLiveThreadOwnership } from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
 import type {
   MonitorOptions,
   NativeSubagentMonitorClient,
   NativeSubagentMonitorRuntime,
   NativeModelToolInputRequest,
-  NativeModelMapping,
   NativeModelSourceCapture,
   NativeModelSourceRequest,
+  ParentRegistrationHandle,
 } from "./native-subagent-monitor-types.js";
 import type { NativeParentRegistration } from "./native-subagent-parent-owner.js";
 
 type NativeMonitor = {
-  registerParent(params: NativeParentRegistration): {
-    bindTurn: (turnId: string, mapping?: NativeModelMapping) => void;
-    unregister: () => Promise<void>;
-  };
-  retireParent(parentThreadId: string): void;
+  registerParent(params: NativeParentRegistration): Promise<ParentRegistrationHandle>;
+  retireParent(parentThreadId: string): Promise<void>;
   captureModelSource(
     request: NativeModelSourceRequest,
   ): Promise<NativeModelSourceCapture | undefined>;
@@ -46,10 +42,9 @@ type NativeMonitorConstructor = new (
 ) => NativeMonitor;
 
 export const defaultNativeSubagentMonitorRuntime: NativeSubagentMonitorRuntime = {
+  deliverAgentHarnessCompletion,
   captureAgentHarnessCompletionCustody,
-  createAgentHarnessTaskEventSink,
-  createAgentHarnessTaskRuntime,
-  deliverAgentHarnessTaskCompletion,
+  createAgentHarnessCompletionEventSink,
 };
 
 export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorConstructor>(
@@ -57,7 +52,7 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
 ) {
   const monitors = new WeakMap<CodexAppServerClient, NativeMonitor>();
 
-  function registerMonitor({
+  async function registerMonitor({
     client,
     runtime,
     retainClient,
@@ -67,10 +62,7 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
     Pick<MonitorOptions, "retainClient" | "retainParentThread"> & {
       client: CodexAppServerClient;
       runtime?: NativeSubagentMonitorRuntime;
-    }): {
-    bindTurn: (turnId: string, mapping?: NativeModelMapping) => void;
-    unregister: () => Promise<void>;
-  } {
+    }): Promise<ParentRegistrationHandle> {
     let monitor = monitors.get(client);
     if (!monitor) {
       // Native start/completion can race; serialize each child so only its
@@ -181,8 +173,7 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
       }
       return monitor.prepareModelInput(request);
     },
-    retireParent: (client: CodexAppServerClient, parentThreadId: string): void => {
-      monitors.get(client)?.retireParent(parentThreadId);
-    },
+    retireParent: (client: CodexAppServerClient, parentThreadId: string): Promise<void> =>
+      monitors.get(client)?.retireParent(parentThreadId) ?? Promise.resolve(),
   };
 }

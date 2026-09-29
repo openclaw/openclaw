@@ -216,9 +216,7 @@ extension OpenClawChatViewModel {
               !modelID.isEmpty
         else { return nil }
         if let separator = modelID.firstIndex(of: "/"), separator != modelID.startIndex {
-            let embeddedProvider = String(modelID[..<separator])
-            let model = String(modelID[modelID.index(after: separator)...])
-            return "\(embeddedProvider)/\(model)"
+            return modelID
         }
         guard let provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines),
               !provider.isEmpty
@@ -382,7 +380,7 @@ extension OpenClawChatViewModel {
         self.updateCurrentSessionVerboseLevel(next, sessionKey: sessionKey)
         self.nextVerboseSelectionRequestID &+= 1
         let verboseRequestID = self.nextVerboseSelectionRequestID
-        let requestedPreference = VerbosePreferenceState(
+        let requestedPreference = PreferenceState(
             level: next ?? self.preferredVerboseLevel,
             isExplicit: !clearsOverride)
         self.verbosePreferenceRequests[verboseRequestID] = .pending(requestedPreference)
@@ -404,7 +402,7 @@ extension OpenClawChatViewModel {
                     requestID: requestID,
                     target: target,
                     verboseLevelOverride: .some(accepted))
-                self.verbosePreferenceRequests[verboseRequestID] = .succeeded(VerbosePreferenceState(
+                self.verbosePreferenceRequests[verboseRequestID] = .succeeded(PreferenceState(
                     level: accepted ?? requestedPreference.level,
                     isExplicit: !clearsOverride))
                 self.reconcileVerbosePreferenceRequests()
@@ -429,13 +427,9 @@ extension OpenClawChatViewModel {
     }
 
     private func reconcileVerbosePreferenceRequests() {
-        let resolved = self.verbosePreferenceRequests.keys.sorted(by: >).compactMap { requestID
-            -> VerbosePreferenceState? in
-            switch self.verbosePreferenceRequests[requestID] {
-            case let .pending(state), let .succeeded(state): state
-            case .failed, .none: nil
-            }
-        }.first ?? self.confirmedVerbosePreference
+        let resolved = self.verbosePreferenceRequests.keys.sorted(by: >)
+            .compactMap { self.verbosePreferenceRequests[$0]?.state }
+            .first ?? self.confirmedVerbosePreference
         if resolved.level != self.preferredVerboseLevel {
             self.preferredVerboseLevel = resolved.level
             self.onVerboseLevelChanged?(resolved.level)
@@ -590,7 +584,7 @@ extension OpenClawChatViewModel {
             verboseLevel: recordedVerboseLevel)
     }
 
-    private func modelControlState(for target: ModelPatchTarget, originalSessionKey: String)
+    func modelControlState(for target: ModelPatchTarget, originalSessionKey: String)
         -> (key: String, exactMatchOnly: Bool)?
     {
         if target == self.currentModelPatchTarget() {

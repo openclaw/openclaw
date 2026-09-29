@@ -20,7 +20,6 @@ import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
 import { handleAcpDispatchTailAfterReset } from "./dispatch-from-config.acp-tail.js";
 import { createDispatchBlockReplyHandler } from "./dispatch-from-config.block-reply.js";
 import { flushDispatchDeferredFinalText } from "./dispatch-from-config.deferred-final.js";
-import type { InternalReplyResolverOptions } from "./dispatch-from-config.events.js";
 import {
   hasAskUserPayload,
   prepareReplyPayloadForSideEffects as preparePayload,
@@ -122,6 +121,16 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
         getDispatchAbortSignal(),
         () =>
           state.traceReplyPhase("reply.run_reply_resolver", async () => {
+            const toolProgressOptions = {
+              forwardWhenSourceDeliverySuppressed: true,
+              requiresToolSummaryVisibility: true,
+              waitForDirectBlockReplyDelivery: true,
+            };
+            const toolLifecycleOptions = {
+              ...toolProgressOptions,
+              allowWhenToolSummariesHidden:
+                params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
+            };
             const result = await replyResolver(
               ctx,
               {
@@ -130,19 +139,17 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 sourceReplyDeliveryMode: state.sourceReplyDeliveryMode,
                 sessionPromptSourceReplyDeliveryMode: state.sessionStableSourceReplyDeliveryMode,
                 ...state.sourceReplyDeliveryRuntimeOptions,
-                ...({
-                  mediaNormalizationOwner: state.isInternalWebchatTurn ? "gateway" : undefined,
-                  onPendingContinuation: (settlement) => {
-                    pendingContinuation = true;
-                    pendingContinuationSettlement ??= settlement;
-                  },
-                  onSessionMetadataChanges: notifySessionMetadataChanges,
-                  onSessionPrepared: state.notePreparedSession,
-                  onRunVerbosityResolved: (settings) => {
-                    state.noteRunVerbosity(settings);
-                    params.replyOptions?.onRunVerbosityResolved?.(settings);
-                  },
-                } satisfies InternalReplyResolverOptions),
+                mediaNormalizationOwner: state.isInternalWebchatTurn ? "gateway" : undefined,
+                onPendingContinuation: (settlement) => {
+                  pendingContinuation = true;
+                  pendingContinuationSettlement ??= settlement;
+                },
+                onSessionMetadataChanges: notifySessionMetadataChanges,
+                onSessionPrepared: state.notePreparedSession,
+                onRunVerbosityResolved: (settings) => {
+                  state.noteRunVerbosity(settings);
+                  params.replyOptions?.onRunVerbosityResolved?.(settings);
+                },
                 onObservedReplyDelivery: state.markObservedReplyDelivery,
                 typingPolicy: typing.typingPolicy,
                 suppressTyping: typing.suppressTyping,
@@ -188,11 +195,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 },
                 onBlockReplyQueued: wrapProgressCallback(params.replyOptions?.onBlockReplyQueued),
                 onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart, {
-                  allowWhenToolSummariesHidden:
-                    params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
-                  forwardWhenSourceDeliverySuppressed: true,
-                  requiresToolSummaryVisibility: true,
-                  waitForDirectBlockReplyDelivery: true,
+                  ...toolLifecycleOptions,
                   onForward: async () => {
                     // Commentary precedes the tool that follows it.
                     await flushPendingCommentaryProgress();
@@ -205,25 +208,18 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   params.replyOptions?.commentaryProgressEnabled,
                 reasoningPayloadsEnabled,
                 commentaryPayloadsEnabled,
-                onCommandOutput: wrapProgressCallback(params.replyOptions?.onCommandOutput, {
-                  forwardWhenSourceDeliverySuppressed: true,
-                  requiresToolSummaryVisibility: true,
-                  waitForDirectBlockReplyDelivery: true,
-                }),
-                onCompactionStart: wrapProgressCallback(params.replyOptions?.onCompactionStart, {
-                  allowWhenToolSummariesHidden:
-                    params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
-                  forwardWhenSourceDeliverySuppressed: true,
-                  requiresToolSummaryVisibility: true,
-                  waitForDirectBlockReplyDelivery: true,
-                }),
-                onCompactionEnd: wrapProgressCallback(params.replyOptions?.onCompactionEnd, {
-                  allowWhenToolSummariesHidden:
-                    params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
-                  forwardWhenSourceDeliverySuppressed: true,
-                  requiresToolSummaryVisibility: true,
-                  waitForDirectBlockReplyDelivery: true,
-                }),
+                onCommandOutput: wrapProgressCallback(
+                  params.replyOptions?.onCommandOutput,
+                  toolProgressOptions,
+                ),
+                onCompactionStart: wrapProgressCallback(
+                  params.replyOptions?.onCompactionStart,
+                  toolLifecycleOptions,
+                ),
+                onCompactionEnd: wrapProgressCallback(
+                  params.replyOptions?.onCompactionEnd,
+                  toolLifecycleOptions,
+                ),
                 onToolResult: (payload) => {
                   if (state.replyOperationRunState.heartbeat) {
                     return Promise.resolve();

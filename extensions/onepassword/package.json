@@ -3,9 +3,6 @@
   "version": "2026.9.6",
   "description": "1Password SecretRef resolver and audited agent secrets broker for OpenClaw",
   "type": "module",
-  "dependencies": {
-    "@openclaw/fs-safe": "0.18.2"
-  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

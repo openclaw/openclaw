@@ -26,6 +26,7 @@ import {
   executeWorkerInference,
   type WorkerInferenceExecutionParams,
 } from "./inference-runtime.js";
+import * as workerTurnOwners from "./placement-turn-claim-events.js";
 
 type Deps = {
   applyStreamPolicy: typeof extraParamsRuntime.applyExtraParamsToAgent;
@@ -282,6 +283,9 @@ export function setup(
     return { effectiveExtraParams: {}, nativeWebSearchAllowedByToolPolicy: undefined };
   });
   const releaseRuntime = vi.fn(async () => {});
+  const readPromptCacheContext = vi
+    .spyOn(workerTurnOwners, "readWorkerTurnPromptCacheContext")
+    .mockReturnValue({ boundaryCount: 0 });
   const acquireRuntimeLease = vi.fn<Deps["acquireRuntimeLease"]>(async (runtimeParams) => {
     scope.agentDir = runtimeParams.agentDir;
     const leased = { ...preparedModelRuntime, agentDir: runtimeParams.agentDir };
@@ -339,6 +343,7 @@ export function setup(
     acquireRuntimeLease,
     prepareModel,
     releaseRuntime,
+    readPromptCacheContext,
     resolveAuthSelection,
     scope,
     stream,

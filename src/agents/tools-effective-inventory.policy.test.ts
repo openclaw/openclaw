@@ -17,6 +17,22 @@ function messagingAgentConfig(tools: OpenClawConfig["tools"] = {}): OpenClawConf
   };
 }
 
+function excludedByMessagingProfile(id: string) {
+  return {
+    id,
+    status: "excluded",
+    reasons: [
+      {
+        kind: "profile",
+        label: "messaging profile",
+        source: "agents.entries.assistant.tools.profile",
+        profile: "messaging",
+      },
+    ],
+    alsoAllowPath: "agents.entries.assistant.tools.alsoAllow",
+  };
+}
+
 describe("tool access diagnostics", () => {
   beforeEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -36,19 +52,7 @@ describe("tool access diagnostics", () => {
         { profile: "messaging", source: "agents.entries.assistant.tools.profile", active: true },
       ],
       tools: [
-        ...["exec", "process"].map((id) => ({
-          id,
-          status: "excluded",
-          reasons: [
-            {
-              kind: "profile",
-              label: "messaging profile",
-              source: "agents.entries.assistant.tools.profile",
-              profile: "messaging",
-            },
-          ],
-          alsoAllowPath: "agents.entries.assistant.tools.alsoAllow",
-        })),
+        ...["exec", "process"].map(excludedByMessagingProfile),
         { id: "session_status", status: "allowed", reasons: [] },
       ],
     });
@@ -149,19 +153,9 @@ describe("tool access diagnostics", () => {
       source: "tools.profile",
       active: false,
     });
-    expect(before.toolAccess?.tools.find((tool) => tool.id === "exec")).toEqual({
-      id: "exec",
-      status: "excluded",
-      reasons: [
-        {
-          kind: "profile",
-          label: "messaging profile",
-          source: "agents.entries.assistant.tools.profile",
-          profile: "messaging",
-        },
-      ],
-      alsoAllowPath: "agents.entries.assistant.tools.alsoAllow",
-    });
+    expect(before.toolAccess?.tools.find((tool) => tool.id === "exec")).toEqual(
+      excludedByMessagingProfile("exec"),
+    );
 
     const after = inventory({
       tools: { profile: "full" },

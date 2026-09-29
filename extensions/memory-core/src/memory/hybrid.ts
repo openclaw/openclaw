@@ -30,37 +30,23 @@ export type HybridSearchResult<TSource extends HybridSource = HybridSource> = {
   provenance?: MemoryEntryProvenance;
 };
 
-type HybridVectorResult<TSource extends HybridSource = HybridSource> = {
+type HybridCandidate<TSource extends HybridSource = HybridSource> = Omit<
+  HybridSearchResult<TSource>,
+  "score" | "vectorScore" | "textScore"
+> & {
   id: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  source: TSource;
-  snippet: string;
-  vectorScore: number;
-  importance?: number;
-  triggers?: string;
-  projectKey?: string;
   exactPathSpecificity?: ExactPathSpecificity;
-  provenance?: MemoryEntryProvenance;
 };
 
-type HybridKeywordResult<TSource extends HybridSource = HybridSource> = {
-  id: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  source: TSource;
-  snippet: string;
+type HybridVectorResult<TSource extends HybridSource = HybridSource> = HybridCandidate<TSource> & {
+  vectorScore: number;
+};
+
+type HybridKeywordResult<TSource extends HybridSource = HybridSource> = HybridCandidate<TSource> & {
   textScore: number;
   hasBodyMatch?: boolean;
-  importance?: number;
-  triggers?: string;
-  projectKey?: string;
   rankingScore?: number;
   pathScore?: number;
-  exactPathSpecificity?: ExactPathSpecificity;
-  provenance?: MemoryEntryProvenance;
 };
 
 export { buildFtsQuery } from "./keyword-query.js";
@@ -88,13 +74,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
 }): Promise<HybridSearchResult<TSource>[]> {
   const byId = new Map<
     string,
-    {
-      id: string;
-      path: string;
-      startLine: number;
-      endLine: number;
-      source: TSource;
-      snippet: string;
+    HybridCandidate<TSource> & {
       vectorScore: number;
       textScore: number;
       rankingScore: number;
@@ -103,10 +83,6 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
       hasBodyMatch: boolean;
       hasVector: boolean;
       hasKeyword: boolean;
-      importance?: number;
-      triggers?: string;
-      projectKey?: string;
-      provenance?: MemoryEntryProvenance;
     }
   >();
 

@@ -8,6 +8,7 @@ import type {
   ProviderRuntimeModel,
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { findNormalizedProviderValue } from "openclaw/plugin-sdk/provider-auth";
 import {
   createMoonshotThinkingWrapper,
   DEFAULT_CONTEXT_TOKENS,
@@ -50,20 +51,7 @@ export function resolveConfiguredOllamaProviderConfig(params: {
     return undefined;
   }
   const providers = params.config?.models?.providers;
-  if (!providers) {
-    return undefined;
-  }
-  const direct = providers[providerId];
-  if (direct) {
-    return direct;
-  }
-  const normalized = normalizeProviderId(providerId);
-  for (const [candidateId, candidate] of Object.entries(providers)) {
-    if (normalizeProviderId(candidateId) === normalized) {
-      return candidate;
-    }
-  }
-  return undefined;
+  return providers?.[providerId] ?? findNormalizedProviderValue(providers, providerId);
 }
 
 export function isOllamaCompatProvider(model: {
@@ -216,7 +204,6 @@ export function createConfiguredOllamaCompatStreamWrapper(
 ): StreamFn | undefined {
   let streamFn = ctx.streamFn;
   const model = ctx.model;
-  let injectNumCtx = false;
   const isNativeOllamaTransport = model?.api === "ollama";
 
   if (model) {
@@ -231,12 +218,8 @@ export function createConfiguredOllamaCompatStreamWrapper(
         providerId,
       })
     ) {
-      injectNumCtx = true;
+      streamFn = wrapOllamaCompatNumCtx(streamFn, resolveOllamaNumCtx(model));
     }
-  }
-
-  if (injectNumCtx && model) {
-    streamFn = wrapOllamaCompatNumCtx(streamFn, resolveOllamaNumCtx(model));
   }
 
   const nativeMax = supportsNativeOllamaMax(model, ctx.provider);

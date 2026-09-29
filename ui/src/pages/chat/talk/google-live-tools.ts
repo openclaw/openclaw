@@ -9,7 +9,6 @@ import {
   type RealtimeTalkTransportContext,
 } from "./shared.ts";
 
-const GOOGLE_LIVE_MAX_PENDING_TOOL_CALLS = 1_024;
 const GOOGLE_LIVE_MAX_TOOL_CALL_IDS = 1_024;
 
 type GoogleLivePendingToolCall = {
@@ -30,8 +29,6 @@ type GoogleLiveToolOwnerOptions = {
   failConnection: (detail: string) => void;
   isDescribeViewActive: () => boolean;
   sendResult: (callId: string, name: string, result: unknown) => void;
-  sendControlSpeechMessage: (message: string) => void;
-  stopOutputForSuppressedControl: (result: unknown) => void;
 };
 
 export class GoogleLiveToolOwner {
@@ -73,10 +70,6 @@ export class GoogleLiveToolOwner {
     // duplicate, so the session fails closed when lifetime ownership is full.
     if (this.seenCallIds.size >= GOOGLE_LIVE_MAX_TOOL_CALL_IDS) {
       this.options.failConnection("Google Live tool-call session limit exceeded");
-      return;
-    }
-    if (this.pendingCalls.size >= GOOGLE_LIVE_MAX_PENDING_TOOL_CALLS) {
-      this.options.failConnection("Google Live pending tool-call limit exceeded");
       return;
     }
     this.seenCallIds.add(callId);
@@ -134,7 +127,8 @@ export class GoogleLiveToolOwner {
   }
 
   private async runAgentTool(name: string, callId: string, args: unknown): Promise<void> {
-    const abortController = this.startExecution(callId);
+    const abortController = new AbortController();
+    this.abortControllers.set(callId, abortController);
     try {
       const params = {
         ctx: this.createActiveContext(),
@@ -187,16 +181,6 @@ export class GoogleLiveToolOwner {
             ctx.callbacks.onStatus?.(status, detail);
           }
         },
-        onTranscript: (entry) => {
-          if (!this.options.isClosed()) {
-            ctx.callbacks.onTranscript?.(entry);
-          }
-        },
-        onTalkEvent: (event) => {
-          if (!this.options.isClosed()) {
-            ctx.callbacks.onTalkEvent?.(event);
-          }
-        },
       },
     };
   }
@@ -214,12 +198,6 @@ export class GoogleLiveToolOwner {
     }
     this.pendingCalls.delete(callId);
     return true;
-  }
-
-  private startExecution(callId: string): AbortController {
-    const abortController = new AbortController();
-    this.abortControllers.set(callId, abortController);
-    return abortController;
   }
 
   private finishExecution(callId: string, abortController: AbortController): void {

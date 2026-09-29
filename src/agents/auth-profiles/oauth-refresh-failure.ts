@@ -8,11 +8,6 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-/**
- * OAuth refresh failure classification and operator hints.
- * Parses provider/reason codes from refresh failures and formats safe login
- * commands without trusting raw provider text.
- */
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
 import { formatProviderLoginCommand } from "../../shared/provider-login-command.js";
 import { formatRedactedOAuthRefreshError } from "./oauth-refresh-error-format.js";
@@ -194,13 +189,12 @@ function createOAuthRefreshUserFacingCause(cause: unknown): unknown {
   return cause;
 }
 
-/** Refresh failure that preserves a redacted refreshed store and credential. */
+/** Refresh failure with a redacted public cause and private refreshed store. */
 export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
   override readonly profileId: string;
   readonly code?: string;
   readonly lockPath?: string;
   readonly #refreshedStore: AuthProfileStore;
-  readonly #credential: OAuthCredential;
 
   constructor(params: {
     credential: OAuthCredential;
@@ -236,7 +230,6 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
         : undefined,
     });
     this.name = "OAuthManagerRefreshError";
-    this.#credential = params.credential;
     this.profileId = params.profileId;
     this.#refreshedStore = params.refreshedStore;
     if (isSettledOAuthRefreshFailure(params.cause)) {
@@ -259,10 +252,6 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
 
   getRefreshedStore(): AuthProfileStore {
     return this.#refreshedStore;
-  }
-
-  getCredential(): OAuthCredential {
-    return this.#credential;
   }
 
   toJSON(): { name: string; message: string; profileId: string; provider: string } {
@@ -409,41 +398,25 @@ export function classifyOAuthRefreshFailureReason(
   message: string,
 ): OAuthRefreshFailureReason | null {
   const lower = message.toLowerCase();
-  if (lower.includes("refresh_token_reused")) {
-    return "refresh_token_reused";
-  }
-  if (lower.includes("refresh_token_expired")) {
-    return "expired";
-  }
-  if (lower.includes("invalid_grant")) {
-    return "invalid_grant";
-  }
-  if (lower.includes("token_invalidated")) {
-    return "token_invalidated";
-  }
-  if (
-    lower.includes("sign_in_again") ||
-    lower.includes("signing in again") ||
-    lower.includes("sign in again") ||
-    lower.includes("log in again")
-  ) {
-    return "sign_in_again";
-  }
-  if (lower.includes("invalid_refresh_token") || lower.includes("invalid refresh token")) {
-    return "invalid_refresh_token";
-  }
-  if (lower.includes("expired or revoked") || lower.includes("revoked")) {
-    return "revoked";
-  }
-  if (isClaudeCliExpiredOAuthMessage(message)) {
-    // The claude subprocess emits "401 Invalid authentication credentials"
-    // when its stored OAuth token has expired.  Map this to "revoked" so the
-    // caller surfaces the targeted re-auth hint rather than the generic login
-    // failure copy.
-    return "revoked";
-  }
-  return null;
+  return (
+    OAUTH_REFRESH_REASON_SIGNALS.find(([, signals]) =>
+      signals.some((signal) => lower.includes(signal)),
+    )?.[0] ?? (isClaudeCliExpiredOAuthMessage(message) ? "revoked" : null)
+  );
 }
+
+// Specific provider codes take precedence over generic recovery guidance in the same message.
+const OAUTH_REFRESH_REASON_SIGNALS: ReadonlyArray<
+  readonly [OAuthRefreshFailureReason, readonly string[]]
+> = [
+  ["refresh_token_reused", ["refresh_token_reused"]],
+  ["expired", ["refresh_token_expired"]],
+  ["invalid_grant", ["invalid_grant"]],
+  ["token_invalidated", ["token_invalidated"]],
+  ["sign_in_again", ["sign_in_again", "signing in again", "sign in again", "log in again"]],
+  ["invalid_refresh_token", ["invalid_refresh_token", "invalid refresh token"]],
+  ["revoked", ["revoked"]],
+];
 
 /** Classify provider/reason from a user-facing OAuth refresh failure message. */
 export function classifyOAuthRefreshFailure(message: string): OAuthRefreshFailure | null {
@@ -515,25 +488,22 @@ export function buildOAuthRefreshFailureLoginCommand(
   const sanitizedProfileId = sanitizeOAuthRefreshFailureProfileId(options?.profileId);
   const agentId = options?.agentId ? sanitizeForLog(options.agentId).trim() : undefined;
   const agentOption = agentId ? ` --agent ${quoteShellArg(agentId)}` : "";
-  if (sanitizedProvider === "claude-cli") {
-    // claude-cli is not a standalone provider id; it is the Anthropic provider
-    // accessed via the CLI auth method. Refresh the local Claude CLI session
-    // first, then re-register that auth method with OpenClaw.
-    const claudeLoginCommand = formatCliCommand("claude auth login");
-    const openclawLoginCommand = formatCliCommand(
-      sanitizedProfileId
-        ? `openclaw models auth login --provider anthropic --method cli --profile-id ${quoteShellArg(sanitizedProfileId)}${agentOption}`
-        : `openclaw models auth login --provider anthropic --method cli${agentOption}`,
-    );
-    return `${claudeLoginCommand} && ${openclawLoginCommand}`;
-  }
-  return sanitizedProvider
-    ? formatCliCommand(
-        sanitizedProfileId
-          ? `openclaw models auth login --provider ${sanitizedProvider} --profile-id ${quoteShellArg(sanitizedProfileId)}${agentOption}`
-          : `openclaw models auth login --provider ${sanitizedProvider}${agentOption}`,
-      )
-    : formatCliCommand(`openclaw models auth login${agentOption}`);
+  const profileOption = sanitizedProfileId
+    ? ` --profile-id ${quoteShellArg(sanitizedProfileId)}`
+    : "";
+  // Claude CLI refreshes its session before OpenClaw registers the Anthropic CLI method.
+  const providerOption =
+    sanitizedProvider === "claude-cli"
+      ? " --provider anthropic --method cli"
+      : sanitizedProvider
+        ? ` --provider ${sanitizedProvider}`
+        : "";
+  const command = formatCliCommand(
+    `openclaw models auth login${providerOption}${sanitizedProvider ? profileOption : ""}${agentOption}`,
+  );
+  return sanitizedProvider === "claude-cli"
+    ? `${formatCliCommand("claude auth login")} && ${command}`
+    : command;
 }
 
 /** Build operator guidance for an active profile cooldown or disable window. */

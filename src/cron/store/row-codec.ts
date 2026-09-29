@@ -153,7 +153,7 @@ function decodeCronJobConfig(jobJson: Record<string, unknown>): Record<string, u
   return delivery ? { ...jobJson, delivery } : jobJson;
 }
 
-function rowToCronJob(
+export function rowToCronJob(
   row: Pick<CronJobReadRow, "job_id" | "state_json" | "runtime_updated_at_ms" | "updated_at">,
   jobJson: Record<string, unknown>,
 ): CronStoredJob | null {
@@ -288,6 +288,29 @@ export function readCronJobsFingerprint(db: DatabaseSync, storeKey: string): str
       .where("store_key", "=", storeKey),
   ).rows;
   return fingerprintCronJobRows(rows);
+}
+
+/** Binds a scheduler snapshot before its in-memory pacing and catch-up adjustments. */
+export function fingerprintCronRuntimeRows(rows: readonly CronJobReadRow[]): string {
+  const ordered = rows
+    .map(({ job_id, state_json, runtime_updated_at_ms, updated_at, schedule_identity }) => ({
+      job_id,
+      state_json,
+      runtime_updated_at_ms,
+      updated_at,
+      schedule_identity,
+    }))
+    .toSorted((left, right) => Buffer.compare(Buffer.from(left.job_id), Buffer.from(right.job_id)));
+  return sha256Hex(JSON.stringify(ordered));
+}
+
+/** Capture both row owners together; Doctor's definition-only token stays unchanged. */
+export function readCronStoreFingerprints(db: DatabaseSync, storeKey: string) {
+  const rows = loadCronRows(db, storeKey);
+  return {
+    jobsFingerprint: fingerprintCronJobRows(rows),
+    runtimeFingerprint: fingerprintCronRuntimeRows(rows),
+  };
 }
 
 /** Materializes retired ownership within the caller's write transaction. */

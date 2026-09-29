@@ -15,10 +15,13 @@ import {
   assertConfigDraftCurrent,
   type ConfigSubmittedDraft,
   applyConfigSnapshot,
-  formatConfigMutationError,
   serializeFormForSubmit,
   type ConfigWriteAck,
 } from "./config-draft-model.ts";
+import {
+  configMutationFailure,
+  isDefinitiveConfigMutationRejection,
+} from "./config-mutation-error.ts";
 import {
   beginConfigRead,
   currentConfigRead,
@@ -31,6 +34,7 @@ import {
   type ConfigGatewayClient,
   type LoadConfigOptions,
   type RuntimeConfigState,
+  type RuntimeConfigGateway,
 } from "./config-state-model.ts";
 
 export async function refreshDraft(
@@ -59,56 +63,6 @@ export async function refreshDraft(
     publish();
   }
   reconcileAppliedRefresh();
-}
-
-// Publication and read-recovery outcomes outrank nested pre-write conflict text.
-function configMutationFailure(
-  state: RuntimeConfigState,
-  error: unknown,
-  submittedRaw?: string | null,
-) {
-  let message =
-    submittedRaw !== undefined
-      ? formatConfigMutationError(error, submittedRaw)
-      : formatUiError(error);
-  const details =
-    error instanceof GatewayRequestError && isRecord(error.details) ? error.details : null;
-  const hasRecoveryOutcome =
-    details && (details.publication === "partial" || details.publication === "complete");
-  if (hasRecoveryOutcome) {
-    if (details.rollbackStatus !== "restored") {
-      if (typeof details.configPath === "string") {
-        message = t(
-          details.rollbackStatus === "not-restored"
-            ? "configView.recoveryNotRestored"
-            : "configView.recoveryUnknown",
-          { path: details.configPath },
-        );
-        if (typeof details.recoveryBackupPath === "string") {
-          message += "\n" + t("configView.recoveryBackup", { path: details.recoveryBackupPath });
-        }
-      }
-      state.configRecoveryError = message;
-    }
-    return { status: "error" as const, message };
-  }
-  return {
-    status: message.includes("config changed since last load")
-      ? ("conflict" as const)
-      : ("error" as const),
-    message,
-  };
-}
-
-function isDefinitiveConfigMutationRejection(err: unknown): boolean {
-  if (!(err instanceof GatewayRequestError)) {
-    return false;
-  }
-  const details = isRecord(err.details) ? err.details : null;
-  if (details && (details.publication === "partial" || details.publication === "complete")) {
-    return details.rollbackStatus === "restored";
-  }
-  return err.gatewayCode === ErrorCodes.INVALID_REQUEST || err.gatewayCode === ErrorCodes.FORBIDDEN;
 }
 
 export type ConfigPatchOptions = {
@@ -182,6 +136,28 @@ export type ConfigWriteCoordinator = {
     options?: RuntimeConfigExternalMutationOptions<T>,
   ) => Promise<RuntimeConfigExternalMutationResult<T>>;
   dispose: () => void;
+};
+
+export type ConfigWriteCoordinatorContext = {
+  state: RuntimeConfigState;
+  gateway: RuntimeConfigGateway;
+  publish: () => void;
+  run: <T>(task: () => Promise<T>, loadKey?: "config" | "schema") => Promise<T>;
+  mutate: (task: () => void) => void;
+  resetLoads: () => void;
+  resetConfigLoad: () => void;
+  refreshConnectionState: (
+    beforeApplySnapshot?: () => void,
+    preservePendingChanges?: boolean,
+  ) => Promise<boolean>;
+  canCallConfigMethod: (
+    method: ConfigMethod,
+    options?: { requireAdvertisement?: boolean },
+  ) => boolean;
+  cancelAppliedRefresh: () => void;
+  reconcileAppliedRefresh: () => void;
+  disposeAppliedRefresh: () => void;
+  isDisposed: () => boolean;
 };
 
 export async function executeConfigExternalMutation<T>(
@@ -358,6 +334,7 @@ async function readConfig(
   if (
     !options.draftWrites?.hasUnacknowledgedDraftWrite() &&
     state.configAutoSaveStatus !== "conflict" &&
+    state.configAutoSaveStatus !== "rejected" &&
     (!options.background || state.configAutoSaveStatus !== "error")
   ) {
     state.lastError = null;
@@ -373,6 +350,7 @@ async function readConfig(
     if (res.writeError) {
       const outcome = configMutationFailure(state, new GatewayRequestError(res.writeError));
       state.lastError = outcome.message;
+      state.configAutoSaveStatus = "error";
       return failure(outcome.message);
     }
     if (state.configRecoveryError !== null && (!res.exists || !res.valid)) {
@@ -395,7 +373,11 @@ async function readConfig(
       !state.configFormDirty &&
       !options.draftWrites?.hasUnacknowledgedDraftWrite()
     ) {
-      if (state.configAutoSaveStatus === "error" || state.configAutoSaveStatus === "conflict") {
+      if (
+        state.configAutoSaveStatus === "error" ||
+        state.configAutoSaveStatus === "conflict" ||
+        state.configAutoSaveStatus === "rejected"
+      ) {
         state.configAutoSaveStatus = "idle";
       }
       state.lastError = null;
@@ -407,7 +389,10 @@ async function readConfig(
     }
     const outcome = configMutationFailure(state, error);
     state.lastError = outcome.message;
-    if (options.draftWrites?.hasUnacknowledgedDraftWrite()) {
+    if (
+      state.configAutoSaveStatus === "rejected" ||
+      options.draftWrites?.hasUnacknowledgedDraftWrite()
+    ) {
       state.configAutoSaveStatus = "error";
     }
     return failure(outcome.message);
@@ -434,22 +419,21 @@ export async function loadConfigSchema(state: RuntimeConfigState) {
     if (!isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
       return;
     }
-    applyConfigSchema(state, res);
+    state.configSchema = res.schema ?? null;
+    state.configUiHints = res.uiHints ?? {};
+    state.configSchemaVersion = res.version ?? null;
   } catch (err) {
     if (isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
       state.lastError = formatUiError(err);
+      if (state.configAutoSaveStatus === "rejected") {
+        state.configAutoSaveStatus = "error";
+      }
     }
   } finally {
     if (isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
       state.configSchemaLoading = false;
     }
   }
-}
-
-function applyConfigSchema(state: RuntimeConfigState, res: ConfigSchemaResponse) {
-  state.configSchema = res.schema ?? null;
-  state.configUiHints = res.uiHints ?? {};
-  state.configSchemaVersion = res.version ?? null;
 }
 
 export type ConfigSubmission = ConfigSubmittedDraft & {
@@ -503,9 +487,7 @@ export async function submitConfigDraft(
     const baseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash;
     if (!baseHash) {
       state.lastError = "Config hash missing; reload and retry.";
-      if (mode === "auto") {
-        state.configAutoSaveStatus = "error";
-      }
+      state.configAutoSaveStatus = "error";
       return false;
     }
     if (!canDispatch()) {
@@ -717,7 +699,9 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
   const isCurrent = () => isCurrentConfigConnection(state, client, connectionEpoch);
-  state.lastError = null;
+  if (state.configAutoSaveStatus !== "rejected") {
+    state.lastError = null;
+  }
   state.chatError = null;
   const publishFailure = async (error: string, path?: string | null) => {
     if (!isCurrent()) {
@@ -731,6 +715,9 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
     }
     if (isCurrent()) {
       state.lastError = formatUiExternalText(message);
+      if (state.configAutoSaveStatus === "rejected") {
+        state.configAutoSaveStatus = "error";
+      }
       showToast({ message: state.lastError });
     }
   };

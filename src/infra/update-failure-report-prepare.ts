@@ -4,6 +4,7 @@ import path from "node:path";
 import { valid as validSemver } from "semver";
 import { resolveStateDir } from "../config/paths.js";
 import {
+  redactPublicSupportConfigKey,
   redactPublicSupportDiagnosticLine,
   redactPublicSupportVersion,
   redactSupportDiagnosticLine,
@@ -45,8 +46,9 @@ import {
 } from "./update-run-report.js";
 import { updateRunStepKey } from "./update-run-step-key.js";
 import { isFailedUpdateStep, updateRunWarningMessages } from "./update-run-step.js";
-import type { UpdateRunResult, UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
 import { resolvePublicUpdateStepId } from "./update-step-identity.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const UPDATE_REPORT_BODY_MAX_BYTES = 16_000;
 const UPDATE_REPORT_FIELD_MAX_BYTES = 512;
@@ -124,18 +126,6 @@ function sanitizeFactIdentifier(value: string, context: UpdateFailureReportConte
     (/^(?:[\p{L}\p{N}-]+\.)+[\p{L}][\p{L}\p{N}-]*(?::\d+)?$/u.test(value) && !validSemver(value))
     ? "[redacted-host]"
     : sanitizeReportField(value, context);
-}
-
-function sanitizeFactConfigKey(value: string): string {
-  // Validation paths can contain operator-defined record keys at any depth.
-  const anchor =
-    /^(mcp\.servers|models\.providers|plugins\.entries|skills\.entries|auth\.profiles|cron\.jobs|agents\.list|hooks\.internal\.entries|engines\.node)(?:\.|$)/u.exec(
-      value,
-    )?.[1] ??
-    /^(agents|auth|channels|commands|cron|engines|gateway|hooks|mcp|messages|models|plugins|session|skills|stateDir|tools)(?:\.|$)/u.exec(
-      value,
-    )?.[1];
-  return anchor ? (value === anchor ? anchor : `${anchor}.*`) : "[redacted-key]";
 }
 
 type ReportedFailedStep = Pick<
@@ -318,7 +308,9 @@ async function renderBoundedDiagnostics(
               ...(await projectPublicUpdateFailureIdentifiers(fact)),
               ...(fact.location ? { location: fact.location } : {}),
               ...(fact.destination ? { destination: fact.destination } : {}),
-              ...(fact.affectedKey ? { affectedKey: sanitizeFactConfigKey(fact.affectedKey) } : {}),
+              ...(fact.affectedKey
+                ? { affectedKey: redactPublicSupportConfigKey(fact.affectedKey) }
+                : {}),
               ...(fact.message
                 ? {
                     message:

@@ -24,6 +24,7 @@ import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
 import { chatContextFromIMessageTarget } from "./chat-context.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import { resolveAuthorizedIMessageActionReference } from "./message-action-reference.js";
+import { normalizeIMessageMessageId } from "./message-guid.js";
 import { describeIMessageMessageTool } from "./message-tool-api.js";
 import {
   findLatestIMessageEntryForChat,
@@ -151,8 +152,8 @@ async function rememberOutboundBridgeMessage(params: {
   messageId?: string;
   chatGuid: string;
 }): Promise<void> {
-  const messageId = params.messageId?.trim();
-  if (!messageId || messageId === "ok" || messageId === "unknown") {
+  const messageId = normalizeIMessageMessageId(params.messageId);
+  if (!messageId) {
     return;
   }
   await rememberIMessageReplyCache({
@@ -164,13 +165,7 @@ async function rememberOutboundBridgeMessage(params: {
   });
 }
 
-/**
- * Read messageId from the action params, falling back to the most recent
- * inbound in the same chat when the caller omitted it. The natural intent
- * for "react with 👍" or "tapback the last message" is the message that
- * just arrived in the current conversation; making the agent re-quote a
- * message id every time is friction the cache already has the answer for.
- */
+/** An omitted action reference targets the most recent inbound in the same chat. */
 function readMessageIdWithChatFallback(
   params: Record<string, unknown>,
   chatContext: IMessageChatContext & { accountId: string },
@@ -183,9 +178,6 @@ function readMessageIdWithChatFallback(
   if (latest?.messageId) {
     return latest.messageId;
   }
-  // Surface the same error the strict readMessageId would have, so the
-  // agent gets a clear "you must supply messageId" signal when there is
-  // also no cached message to fall back to.
   return readStringParam(params, "messageId", { required: true });
 }
 
@@ -205,56 +197,45 @@ async function resolveChatGuid(params: {
   };
 }): Promise<string> {
   const target = resolveIMessageActionTarget(params);
-  if (target) {
-    if (target.kind === "chat_guid") {
-      return target.chatGuid;
-    }
-    if (target.kind === "chat_id" || target.kind === "chat_identifier") {
-      const resolved = await params.runtime.resolveChatGuidForTarget({
-        target,
-        options: params.options,
-        conversationReadOrigin: params.conversationReadOrigin,
-      });
-      if (resolved) {
-        return resolved;
-      }
-      throw new Error(
-        `iMessage ${params.action} failed: chatGuid not found for ${formatUnresolvedTarget(target)}.`,
-      );
-    }
-    if (target.kind === "handle") {
-      // A bare phone/email is a valid chat scope for direct messages —
-      // Messages addresses DMs as `iMessage;-;<handle>` / `SMS;-;<handle>`.
-      // Promote it to chat_identifier so resolveChatGuidForTarget (which
-      // only accepts chat_id / chat_identifier kinds) can look it up.
-      const synthesizedIdentifier = `${target.service === "sms" ? "SMS" : "iMessage"};-;${target.to}`;
-      const resolved = await params.runtime.resolveChatGuidForTarget({
-        target: { kind: "chat_identifier", chatIdentifier: synthesizedIdentifier },
-        options: params.options,
-        conversationReadOrigin: params.conversationReadOrigin,
-      });
-      if (resolved) {
-        return resolved;
-      }
-      // Per-action fallback policy:
-      //  - send / reply / sendWithEffect / sendAttachment: fine to send to
-      //    a synthesized DM identifier; Messages will register the chat.
-      //  - react / edit / unsend: these mutate an existing message that
-      //    must already exist in the chat. If we have no registered chat
-      //    we have no message to act on, and synthesizing the identifier
-      //    just produces a confusing CLI failure.
-      if (params.action === "react" || params.action === "edit" || params.action === "unsend") {
-        throw new Error(
-          `iMessage ${params.action} requires a known chat. ` +
-            `No registered chat for the supplied target; send a message first or pass an explicit chatGuid.`,
-        );
-      }
-      return synthesizedIdentifier;
-    }
+  if (!target) {
+    throw new Error(
+      `iMessage ${params.action} requires chatGuid, chatId, chatIdentifier, or a chat target.`,
+    );
   }
-  throw new Error(
-    `iMessage ${params.action} requires chatGuid, chatId, chatIdentifier, or a chat target.`,
-  );
+  if (target.kind === "chat_guid") {
+    return target.chatGuid;
+  }
+  // Messages identifies direct chats by service and handle; resolve all other
+  // target shapes through the same account-scoped chat lookup.
+  const synthesizedIdentifier =
+    target.kind === "handle"
+      ? `${target.service === "sms" ? "SMS" : "iMessage"};-;${target.to}`
+      : "";
+  const lookupTarget =
+    target.kind === "handle"
+      ? { kind: "chat_identifier" as const, chatIdentifier: synthesizedIdentifier }
+      : target;
+  const resolved = await params.runtime.resolveChatGuidForTarget({
+    target: lookupTarget,
+    options: params.options,
+    conversationReadOrigin: params.conversationReadOrigin,
+  });
+  if (resolved) {
+    return resolved;
+  }
+  if (target.kind !== "handle") {
+    throw new Error(
+      `iMessage ${params.action} failed: chatGuid not found for ${formatUnresolvedTarget(target)}.`,
+    );
+  }
+  // Sends may create a DM; mutations require a registered chat and message.
+  if (params.action === "react" || params.action === "edit" || params.action === "unsend") {
+    throw new Error(
+      `iMessage ${params.action} requires a known chat. ` +
+        `No registered chat for the supplied target; send a message first or pass an explicit chatGuid.`,
+    );
+  }
+  return synthesizedIdentifier;
 }
 
 function formatUnresolvedTarget(
@@ -338,7 +319,7 @@ type ReplyAttachmentSpec = { kind: "buffer"; buffer: Uint8Array; filename: strin
 // likely calling handleAction directly in a test); fail loudly instead.
 function extractReplyAttachment(
   params: Record<string, unknown>,
-): { spec: ReplyAttachmentSpec; sourceParam: string } | { spec: null; bypassParam: string } | null {
+): { spec: ReplyAttachmentSpec } | { spec: null; bypassParam: string } | null {
   const buffer = readStringParam(params, "buffer");
   if (buffer) {
     const filename = readStringParam(params, "filename") ?? "attachment.bin";
@@ -348,7 +329,6 @@ function extractReplyAttachment(
         buffer: decodeBase64Buffer(params, "reply attachment"),
         filename,
       },
-      sourceParam: "buffer",
     };
   }
   for (const name of REPLY_ATTACHMENT_PATH_PARAM_NAMES) {
@@ -359,58 +339,39 @@ function extractReplyAttachment(
   return null;
 }
 
-// Whitelist of expressive-send effect IDs the bridge accepts. Restricting
-// to a fixed set lets us return a clear error for typos ("invisible_ink"
-// vs "invisibleink") instead of silently forwarding gibberish to the
-// bridge and surfacing an opaque CLI failure.
-const KNOWN_EFFECT_IDS: ReadonlySet<string> = new Set([
-  "com.apple.MobileSMS.expressivesend.impact",
-  "com.apple.MobileSMS.expressivesend.loud",
-  "com.apple.MobileSMS.expressivesend.gentle",
-  "com.apple.MobileSMS.expressivesend.invisibleink",
-  "com.apple.MobileSMS.expressivesend.confetti",
-  "com.apple.MobileSMS.expressivesend.lasers",
-  "com.apple.MobileSMS.expressivesend.fireworks",
-  "com.apple.MobileSMS.expressivesend.balloon",
-  "com.apple.MobileSMS.expressivesend.heart",
-  "com.apple.messages.effect.CKEchoEffect",
-  "com.apple.messages.effect.CKHappyBirthdayEffect",
-  "com.apple.messages.effect.CKShootingStarEffect",
-  "com.apple.messages.effect.CKSparklesEffect",
-  "com.apple.messages.effect.CKSpotlightEffect",
-]);
+const EFFECT_ALIASES: Record<string, string> = {
+  slam: "com.apple.MobileSMS.expressivesend.impact",
+  impact: "com.apple.MobileSMS.expressivesend.impact",
+  loud: "com.apple.MobileSMS.expressivesend.loud",
+  gentle: "com.apple.MobileSMS.expressivesend.gentle",
+  "invisible-ink": "com.apple.MobileSMS.expressivesend.invisibleink",
+  invisibleink: "com.apple.MobileSMS.expressivesend.invisibleink",
+  confetti: "com.apple.MobileSMS.expressivesend.confetti",
+  lasers: "com.apple.MobileSMS.expressivesend.lasers",
+  fireworks: "com.apple.MobileSMS.expressivesend.fireworks",
+  balloons: "com.apple.MobileSMS.expressivesend.balloon",
+  balloon: "com.apple.MobileSMS.expressivesend.balloon",
+  heart: "com.apple.MobileSMS.expressivesend.heart",
+  // Background screen effects (com.apple.messages.effect.CK*Effect).
+  // The error message below advertises these short names, so they must
+  // map to the canonical CKEffect identifier — without this, agents
+  // that follow our own guidance get "unknown effect" thrown back.
+  echo: "com.apple.messages.effect.CKEchoEffect",
+  happybirthday: "com.apple.messages.effect.CKHappyBirthdayEffect",
+  "happy-birthday": "com.apple.messages.effect.CKHappyBirthdayEffect",
+  shootingstar: "com.apple.messages.effect.CKShootingStarEffect",
+  "shooting-star": "com.apple.messages.effect.CKShootingStarEffect",
+  sparkles: "com.apple.messages.effect.CKSparklesEffect",
+  spotlight: "com.apple.messages.effect.CKSpotlightEffect",
+};
+const KNOWN_EFFECT_IDS = new Set(Object.values(EFFECT_ALIASES));
 
 function effectIdFromParam(raw?: string): string | undefined {
   const value = normalizeOptionalLowercaseString(raw);
   if (!value) {
     return undefined;
   }
-  const aliases: Record<string, string> = {
-    slam: "com.apple.MobileSMS.expressivesend.impact",
-    impact: "com.apple.MobileSMS.expressivesend.impact",
-    loud: "com.apple.MobileSMS.expressivesend.loud",
-    gentle: "com.apple.MobileSMS.expressivesend.gentle",
-    "invisible-ink": "com.apple.MobileSMS.expressivesend.invisibleink",
-    invisibleink: "com.apple.MobileSMS.expressivesend.invisibleink",
-    confetti: "com.apple.MobileSMS.expressivesend.confetti",
-    lasers: "com.apple.MobileSMS.expressivesend.lasers",
-    fireworks: "com.apple.MobileSMS.expressivesend.fireworks",
-    balloons: "com.apple.MobileSMS.expressivesend.balloon",
-    balloon: "com.apple.MobileSMS.expressivesend.balloon",
-    heart: "com.apple.MobileSMS.expressivesend.heart",
-    // Background screen effects (com.apple.messages.effect.CK*Effect).
-    // The error message below advertises these short names, so they must
-    // map to the canonical CKEffect identifier — without this, agents
-    // that follow our own guidance get "unknown effect" thrown back.
-    echo: "com.apple.messages.effect.CKEchoEffect",
-    happybirthday: "com.apple.messages.effect.CKHappyBirthdayEffect",
-    "happy-birthday": "com.apple.messages.effect.CKHappyBirthdayEffect",
-    shootingstar: "com.apple.messages.effect.CKShootingStarEffect",
-    "shooting-star": "com.apple.messages.effect.CKShootingStarEffect",
-    sparkles: "com.apple.messages.effect.CKSparklesEffect",
-    spotlight: "com.apple.messages.effect.CKSpotlightEffect",
-  };
-  const resolved = aliases[value] ?? raw;
+  const resolved = EFFECT_ALIASES[value] ?? raw;
   if (typeof resolved === "string" && KNOWN_EFFECT_IDS.has(resolved)) {
     return resolved;
   }
@@ -571,8 +532,9 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       });
     };
 
+    await assertPrivateApiEnabled();
+
     if (action === "react") {
-      await assertPrivateApiEnabled();
       const { emoji, remove, isEmpty } = readReactionParams(params, {
         removeErrorMessage: "Emoji is required to remove an iMessage reaction.",
       });
@@ -598,7 +560,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
           messageId: reference.messageId,
           reaction: kind,
           remove: remove || undefined,
-          partIndex: typeof partIndex === "number" ? partIndex : undefined,
+          partIndex,
           options: { ...opts, chatGuid: reference.chatGuid },
         });
       }
@@ -606,7 +568,6 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "edit") {
-      await assertPrivateApiEnabled();
       const text =
         readStringParam(params, "text") ??
         readStringParam(params, "newText") ??
@@ -621,28 +582,26 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         chatGuid: reference.chatGuid,
         messageId: reference.messageId,
         text,
-        backwardsCompatMessage: backwardsCompatMessage ?? undefined,
-        partIndex: typeof partIndex === "number" ? partIndex : undefined,
+        backwardsCompatMessage,
+        partIndex,
         options: { ...opts, chatGuid: reference.chatGuid },
       });
       return jsonResult({ ok: true, edited: reference.messageId });
     }
 
     if (action === "unsend") {
-      await assertPrivateApiEnabled();
       const partIndex = readNonNegativeIntegerParam(params, "partIndex");
       const reference = await messageReference({ requireFromMe: true });
       await runtime.unsendMessage({
         chatGuid: reference.chatGuid,
         messageId: reference.messageId,
-        partIndex: typeof partIndex === "number" ? partIndex : undefined,
+        partIndex,
         options: { ...opts, chatGuid: reference.chatGuid },
       });
       return jsonResult({ ok: true, unsent: reference.messageId });
     }
 
     if (action === "reply") {
-      await assertPrivateApiEnabled();
       const text = readMessageText(params);
       if (!text) {
         throw new Error("iMessage reply requires text or message.");
@@ -678,7 +637,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         chatGuid: reference.chatGuid,
         text,
         replyToMessageId: reference.messageId,
-        partIndex: typeof partIndex === "number" ? partIndex : undefined,
+        partIndex,
         attachment: attachment?.spec ?? undefined,
         options: { ...opts, chatGuid: reference.chatGuid },
       });
@@ -691,7 +650,6 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "sendWithEffect") {
-      await assertPrivateApiEnabled();
       const text = readMessageText(params);
       const effectId = effectIdFromParam(
         readStringParam(params, "effectId") ?? readStringParam(params, "effect"),
@@ -715,7 +673,6 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "renameGroup") {
-      await assertPrivateApiEnabled();
       const displayName = readStringParam(params, "displayName") ?? readStringParam(params, "name");
       if (!displayName) {
         throw new Error("iMessage renameGroup requires displayName or name.");
@@ -730,7 +687,6 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "setGroupIcon") {
-      await assertPrivateApiEnabled();
       const filename =
         readStringParam(params, "filename") ?? readStringParam(params, "name") ?? "icon.png";
       const resolvedChatGuid = await chatGuid();
@@ -744,7 +700,6 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "addParticipant" || action === "removeParticipant") {
-      await assertPrivateApiEnabled();
       const address = readStringParam(params, "address") ?? readStringParam(params, "participant");
       if (!address) {
         throw new Error(`iMessage ${action} requires address or participant.`);
@@ -763,7 +718,6 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "leaveGroup") {
-      await assertPrivateApiEnabled();
       const resolvedChatGuid = await chatGuid();
       await runtime.leaveGroup({
         chatGuid: resolvedChatGuid,
@@ -773,7 +727,6 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "sendAttachment" || action === "upload-file") {
-      await assertPrivateApiEnabled();
       const filename = readStringParam(params, "filename", { required: true });
       const asVoice = readBooleanParam(params, "asVoice");
       const resolvedChatGuid = await chatGuid();
@@ -793,7 +746,6 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "poll") {
-      await assertPrivateApiEnabled();
       if (privateApiStatus?.selectors?.pollPayloadMessage !== true) {
         await probePrivateApiStatus(true);
       }
@@ -824,7 +776,6 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "poll-vote") {
-      await assertPrivateApiEnabled();
       if (
         privateApiStatus?.selectors?.pollVoteMessage !== true ||
         !imessageRpcSupportsMethod(privateApiStatus, "poll.vote")

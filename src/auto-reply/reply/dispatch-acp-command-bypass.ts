@@ -27,17 +27,8 @@ export function shouldBypassAcpDispatchForCommand(
     return allowTextCommands;
   }
 
-  if (!candidate.startsWith("!")) {
+  if (!candidate.startsWith("!") || !ctx.CommandAuthorized || !isCommandEnabled(cfg, "bash")) {
     return false;
   }
-
-  if (!ctx.CommandAuthorized) {
-    return false;
-  }
-
-  if (!isCommandEnabled(cfg, "bash")) {
-    return false;
-  }
-
   return allowTextCommands;
 }

@@ -1,4 +1,3 @@
-// QA Lab WhatsApp live domain contracts.
 import type {
   WhatsAppQaDriverObservedMessage,
   WhatsAppQaDriverSession,
@@ -67,7 +66,6 @@ export type WhatsAppQaMessageScenarioContext = {
   sutPhoneE164: string;
   target: string;
   targetKind: "dm" | "group";
-  waitForReady: () => Promise<void>;
 };
 
 type WhatsAppQaResolvedScenarioTarget =

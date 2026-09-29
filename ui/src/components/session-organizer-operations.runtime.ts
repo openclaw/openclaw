@@ -5,6 +5,7 @@ import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-s
 import { formatUiError } from "../lib/format-error.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { resolveSessionRenamePatch } from "../lib/session-rename.ts";
+import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import {
   formatPreservedWorktreeConfirmation,
   formatPreservedWorktreesNotice,
@@ -23,7 +24,6 @@ import type { SessionMenuAction } from "./session-menu.ts";
 import {
   patchSessionRows,
   requireSessionMutationAccess,
-  sessionRowAgentId,
 } from "./session-organizer-batch-mutations.ts";
 import type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
 import { rememberSessionGroup, type SessionGroupActionHost } from "./session-organizer-catalog.ts";
@@ -58,7 +58,7 @@ export async function patchSession(
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
   }
-  const agentId = sessionRowAgentId(session, scope);
+  const agentId = resolveUiSessionRowAgentId(session, scope.selectedAgentId);
   const requestParams = {
     key: session.key,
     ...patch,
@@ -129,25 +129,6 @@ export async function patchSession(
     host.sessionData.publishSessionMutationError(scope, error);
     return "failed";
   }
-}
-
-export async function patchSessions(
-  host: SessionOrganizerControllerHost,
-  rows: readonly SidebarRecentSession[],
-  patch: SidebarSessionPatch,
-  scope: SidebarSessionMutationScope,
-): Promise<SidebarSessionMutationResult> {
-  if (!scope) {
-    return "stale";
-  }
-  if (rows.length === 0) {
-    return "completed";
-  }
-  const successful = await patchSessionRows(host, rows, patch, scope);
-  if (!successful) {
-    return host.sessionData.isSessionMutationScopeCurrent(scope) ? "failed" : "stale";
-  }
-  return successful.length === rows.length ? "completed" : "failed";
 }
 
 export async function archiveSessionWithUndo(
@@ -356,7 +337,7 @@ export async function deleteSessionsBatch(
   }
   const requests = rows.map((row) => ({
     key: row.key,
-    agentId: sessionRowAgentId(row, scope),
+    agentId: resolveUiSessionRowAgentId(row, scope.selectedAgentId),
     deleteTranscript: true,
     ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
     ...(row.archived === true ? { archivedOnly: true } : {}),
@@ -406,10 +387,10 @@ export async function runBatchSessionAction(
 ): Promise<void> {
   switch (action.kind) {
     case "toggle-unread":
-      await patchSessions(host, rows, { unread: !allUnread }, scope);
+      await patchSessionRows(host, rows, { unread: !allUnread }, scope);
       break;
     case "move-to-group":
-      await patchSessions(
+      await patchSessionRows(
         host,
         rows.filter((row) => (row.category ?? null) !== action.category),
         { category: action.category },
@@ -470,7 +451,7 @@ export async function assignSessionOwner(
     return;
   }
   const assigned = await scope.sessions.assignOwner(session.key, owner, {
-    agentId: sessionRowAgentId(session, scope),
+    agentId: resolveUiSessionRowAgentId(session, scope.selectedAgentId),
   });
   if (
     host.sessionData.isSessionMutationScopeCurrent(scope) &&
@@ -498,9 +479,14 @@ export async function createSessionGroup(
   // The Gateway checks the identities captured with the action. A bounded
   // roster can page them out or replace a key, so it cannot authorize the move.
   if (sessions.length > 0) {
-    return sessions.length === 1
-      ? patchSession(host, sessions[0]!, { category: name }, scope)
-      : patchSessions(host, sessions, { category: name }, scope);
+    if (sessions.length === 1) {
+      return patchSession(host, sessions[0]!, { category: name }, scope);
+    }
+    const successful = await patchSessionRows(host, sessions, { category: name }, scope);
+    if (!successful) {
+      return host.sessionData.isSessionMutationScopeCurrent(scope) ? "failed" : "stale";
+    }
+    return successful.length === sessions.length ? "completed" : "failed";
   }
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
@@ -546,7 +532,7 @@ export async function forkSession(
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
-  const agentId = sessionRowAgentId(session, scope);
+  const agentId = resolveUiSessionRowAgentId(session, scope.selectedAgentId);
   const createParams = {
     parentSessionKey: session.key,
     fork: true,
@@ -608,7 +594,7 @@ export async function stopCloudWorker(
     return;
   }
   try {
-    const agentId = sessionRowAgentId(session, scope);
+    const agentId = resolveUiSessionRowAgentId(session, scope.selectedAgentId);
     await requestCloudWorkerStop(
       scope.client,
       {
@@ -654,7 +640,7 @@ export async function deleteSession(
   if (!confirmed) {
     return;
   }
-  const agentId = sessionRowAgentId(session, scope);
+  const agentId = resolveUiSessionRowAgentId(session, scope.selectedAgentId);
   const deleteParams = {
     agentId,
     deleteTranscript: true,

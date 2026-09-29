@@ -474,7 +474,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     promptEnvelopeBase,
     prefixedBodyBase,
     sessionEntry,
-    getSessionEntry: () => sessionEntry,
     isMainSession,
     inboundUserContextPromptJoiner,
     getInboundContext: () => ({ activeGoalContext, inboundUserContext }),

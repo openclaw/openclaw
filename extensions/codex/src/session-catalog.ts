@@ -11,8 +11,8 @@ import type {
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
 import { resolveCodexCatalogCreateSession } from "./session-catalog-create.js";
 import {
-  currentCodexCatalogListDiagnostics,
   createCodexCatalogListScope,
+  startCodexCatalogListTiming,
 } from "./session-catalog-diagnostics.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
 import {
@@ -102,16 +102,11 @@ function toGenericCatalogHost(
     ...(host.pending ? { pending: true } : {}),
     ...(host.nodeId ? { nodeId: host.nodeId } : {}),
     sessions: host.sessions.map((session) => {
-      const continuableStatus =
-        !session.archived && (session.status === "idle" || session.status === "notLoaded");
-      const canContinue =
-        (local || host.canContinueCodex === true) &&
-        continuableStatus &&
-        isInteractiveThreadSource(session.source);
-      const canArchive = local && continuableStatus && isInteractiveThreadSource(session.source);
-      const canOpenTerminal =
-        isInteractiveThreadSource(session.source) &&
-        (local ? localTerminalAvailable : host.canOpenTerminalCodex === true);
+      const interactive = isInteractiveThreadSource(session.source);
+      const continuable =
+        interactive &&
+        !session.archived &&
+        (session.status === "idle" || session.status === "notLoaded");
       const name = session.name ?? session.fallbackName;
       return {
         threadId: session.threadId,
@@ -128,9 +123,10 @@ function toGenericCatalogHost(
         ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
         archived: session.archived,
         ...(session.sessionKey ? { sessionKey: session.sessionKey } : {}),
-        canContinue,
-        canArchive,
-        canOpenTerminal,
+        canContinue: (local || host.canContinueCodex === true) && continuable,
+        canArchive: local && continuable,
+        canOpenTerminal:
+          interactive && (local ? localTerminalAvailable : host.canOpenTerminalCodex === true),
       };
     }),
     ...(host.nextCursor ? { nextCursor: host.nextCursor } : {}),
@@ -226,8 +222,7 @@ function catalogHostMapper(
   localHomes: readonly CodexCatalogHome[],
 ) {
   return (host: CodexSessionCatalogHost): SessionCatalogHost => {
-    const diagnostics = currentCodexCatalogListDiagnostics();
-    const started = diagnostics ? performance.now() : 0;
+    const finishTiming = startCodexCatalogListTiming("mappingMs");
     try {
       const localSourceAvailable =
         localTerminalAvailable &&
@@ -242,10 +237,7 @@ function catalogHostMapper(
             : host.canStartTerminal === true,
       };
     } finally {
-      if (diagnostics && !diagnostics.closed) {
-        diagnostics.fields.mappingMs =
-          (diagnostics.fields.mappingMs ?? 0) + performance.now() - started;
-      }
+      finishTiming();
     }
   };
 }

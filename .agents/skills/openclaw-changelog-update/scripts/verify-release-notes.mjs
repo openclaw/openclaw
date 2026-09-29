@@ -129,65 +129,44 @@ export function parseArgs(argv) {
     shippedRefs: [],
     writeLedger: false,
   };
+  const booleanOptions = new Map([
+    ["--help", "help"],
+    ["--check-github", "checkGithub"],
+    ["--json", "json"],
+    ["--no-github-snapshot", "noGithubSnapshot"],
+    ["--refresh-github-snapshot", "refreshGithubSnapshot"],
+    ["--write-ledger", "writeLedger"],
+  ]);
+  const valueOptions = new Map([
+    ["--base", "base"],
+    ["--target", "target"],
+    ["--version", "version"],
+    ["--release-tag", "releaseTags"],
+    ["--release-provenance", "releaseProvenance"],
+    ["--shipped-ref", "shippedRefs"],
+    ["--github-snapshot", "githubSnapshotPath"],
+    ["--main-ref", "mainRef"],
+    ["--manifest", "manifestPath"],
+    ["--seed-ref", "seedRef"],
+  ]);
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--help") {
-      options.help = true;
+    const booleanKey = booleanOptions.get(arg);
+    if (booleanKey) {
+      options[booleanKey] = true;
       continue;
     }
-    if (
-      arg === "--check-github" ||
-      arg === "--json" ||
-      arg === "--no-github-snapshot" ||
-      arg === "--refresh-github-snapshot" ||
-      arg === "--write-ledger"
-    ) {
-      options[
-        arg === "--check-github"
-          ? "checkGithub"
-          : arg === "--write-ledger"
-            ? "writeLedger"
-            : arg === "--no-github-snapshot"
-              ? "noGithubSnapshot"
-              : arg === "--refresh-github-snapshot"
-                ? "refreshGithubSnapshot"
-                : "json"
-      ] = true;
-      continue;
-    }
-    if (
-      arg === "--base" ||
-      arg === "--target" ||
-      arg === "--version" ||
-      arg === "--release-tag" ||
-      arg === "--release-provenance" ||
-      arg === "--shipped-ref" ||
-      arg === "--github-snapshot" ||
-      arg === "--main-ref" ||
-      arg === "--manifest" ||
-      arg === "--seed-ref"
-    ) {
+    const valueKey = valueOptions.get(arg);
+    if (valueKey) {
       const value = argv[index + 1];
       if (!value || value.startsWith("--")) {
         fail(`missing value for ${arg}`);
       }
-      if (arg === "--release-tag") {
-        options.releaseTags.push(value);
-      } else if (arg === "--release-provenance") {
-        options.releaseProvenance.push(value);
-      } else if (arg === "--shipped-ref") {
-        options.shippedRefs.push(value);
-      } else if (arg === "--manifest") {
-        options.manifestPath = value;
-      } else if (arg === "--github-snapshot") {
-        options.githubSnapshotPath = value;
-      } else if (arg === "--main-ref") {
-        options.mainRef = value;
-      } else if (arg === "--seed-ref") {
-        options.seedRef = value;
+      if (Array.isArray(options[valueKey])) {
+        options[valueKey].push(value);
       } else {
-        options[arg.slice(2)] = value;
+        options[valueKey] = value;
       }
       index += 1;
       continue;
@@ -894,12 +873,8 @@ export function withoutExcludedContributionRecords(record, excludedReferences) {
   return filtered;
 }
 
-function contributionRecordReferences(record) {
-  return [...record.pullRequests.keys()];
-}
-
 function contributionRecordMetadataReferences(record) {
-  const references = contributionRecordReferences(record);
+  const references = [...record.pullRequests.keys()];
   for (const entry of record.pullRequests.values()) {
     appendReferences(references, entry.references);
   }
@@ -1265,35 +1240,15 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   const coauthorsByReference = new Map();
   const activeCommits = [];
   for (const commit of commits.values()) {
-    if (commit.isRevert && isActive(commit.hash)) {
-      const coauthorEmails = [...commit.body.matchAll(/^Co-authored-by:\s*.+?<([^>\s]+)>$/gim)].map(
-        (match) => match[1],
-      );
-      activeCommits.push({
-        authorEmail: commit.authorEmail,
-        authorHandle: githubHandleFromNoreply(commit.authorEmail),
-        authorName: commit.authorName,
-        body: commit.body,
-        closingReferences: [],
-        committedAt: commit.committedAt,
-        coauthors: coauthorEmails.map(githubHandleFromNoreply).filter(isEligibleHandle),
-        coauthorEmails,
-        hash: commit.hash,
-        isRevert: true,
-        pullRequests: [],
-        references: [],
-        subject: commit.subject,
-      });
-      continue;
-    }
-    if (commit.isRevert) {
-      continue;
-    }
-    const uniqueReferences = [...new Set(referencesIn(`${commit.subject}\n${commit.body}`))];
+    const uniqueReferences = commit.isRevert
+      ? []
+      : [...new Set(referencesIn(`${commit.subject}\n${commit.body}`))];
     if (!isActive(commit.hash)) {
-      revertedCommitHashes.add(commit.hash);
-      for (const number of uniqueReferences) {
-        revertedReferences.add(number);
+      if (!commit.isRevert) {
+        revertedCommitHashes.add(commit.hash);
+        for (const number of uniqueReferences) {
+          revertedReferences.add(number);
+        }
       }
       continue;
     }
@@ -1306,12 +1261,14 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
       authorHandle: githubHandleFromNoreply(commit.authorEmail),
       authorName: commit.authorName,
       body: commit.body,
-      closingReferences: closingReferencesIn(`${commit.subject}\n${commit.body}`),
+      closingReferences: commit.isRevert
+        ? []
+        : closingReferencesIn(`${commit.subject}\n${commit.body}`),
       committedAt: commit.committedAt,
       coauthors,
       coauthorEmails,
       hash: commit.hash,
-      isRevert: false,
+      isRevert: commit.isRevert,
       pullRequests: [],
       references: uniqueReferences,
       subject: commit.subject,
@@ -1540,7 +1497,7 @@ function graphql(query) {
     try {
       const response = githubApi(["graphql", "-f", `query=${query}`]);
       if (response?.data && typeof response.data === "object") {
-        return response.data;
+        return response;
       }
       const errors = Array.isArray(response?.errors)
         ? response.errors.map((error) => error?.message).filter(Boolean)
@@ -1616,7 +1573,7 @@ function resolveAssociatedPullRequests(commitHashes, targetTimestamp, history) {
           }`,
       )
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const { data } = graphql(`query { ${fields} }`);
     for (let offset = 0; offset < chunk.length; offset += 1) {
       appendPullRequests(chunk[offset], data[`c${index + offset}`]?.object?.associatedPullRequests);
     }
@@ -1642,7 +1599,7 @@ function resolveAssociatedPullRequests(commitHashes, targetTimestamp, history) {
           }`,
       )
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const { data } = graphql(`query { ${fields} }`);
     for (let offset = 0; offset < chunk.length; offset += 1) {
       appendPullRequests(
         chunk[offset].commitHash,
@@ -1689,7 +1646,7 @@ function resolveIssueRelationshipPages(nodes) {
         }`;
       })
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const { data } = graphql(`query { ${fields} }`);
     for (let offset = 0; offset < chunk.length; offset += 1) {
       const item = chunk[offset];
       const node = nodes.get(item.number);
@@ -1756,8 +1713,66 @@ function resolveSourceWorkflowRuns(source, nodes, requiredReferences) {
   return runs;
 }
 
+export function githubNotFoundReferences(response, numbers) {
+  const errors = Array.isArray(response.errors) ? response.errors : [];
+  return numbers.filter((number) =>
+    errors.some(
+      (error) =>
+        error?.type === "NOT_FOUND" &&
+        Array.isArray(error.path) &&
+        error.path.length === 2 &&
+        error.path[0] === `n${number}` &&
+        error.path[1] === "issueOrPullRequest",
+    ),
+  );
+}
+
+export function classifyUnavailableContextualReferences({
+  unresolved,
+  notFound,
+  activeCommits,
+  protectedReferences,
+  highestResolved,
+}) {
+  const required = new Set(protectedReferences);
+  const bodyCommits = new Map();
+  for (const commit of activeCommits) {
+    for (const number of [
+      ...referencesIn(commit.subject),
+      ...closingReferencesIn(`${commit.subject}\n${commit.body}`),
+    ]) {
+      required.add(number);
+    }
+    for (const number of referencesIn(commit.body)) {
+      const commits = bodyCommits.get(number) ?? new Set();
+      commits.add(commit.hash.slice(0, 12));
+      bodyCommits.set(number, commits);
+    }
+  }
+  const unavailable = [];
+  const stillUnresolved = [];
+  for (const number of unresolved) {
+    if (
+      notFound.has(number) &&
+      !required.has(number) &&
+      number < highestResolved &&
+      bodyCommits.has(number)
+    ) {
+      unavailable.push({
+        number,
+        commits: [...bodyCommits.get(number)].toSorted((a, b) => (a === b ? 0 : a < b ? -1 : 1)),
+      });
+    } else {
+      stillUnresolved.push(number);
+    }
+  }
+  unavailable.sort((a, b) => a.number - b.number);
+  return { unavailable, stillUnresolved };
+}
+
 function resolveReferences(numbers) {
   const nodes = new Map();
+  const notFound = new Set();
   // GitHub's issue-number argument is GraphQL Int; Actions run IDs can exceed it.
   const issueNumbers = numbers.filter((number) => number <= 2147483647);
   for (let index = 0; index < issueNumbers.length; index += 40) {
@@ -1792,19 +1807,22 @@ function resolveReferences(numbers) {
         }`,
       )
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const response = graphql(`query { ${fields} }`);
+    for (const number of githubNotFoundReferences(response, chunk)) {
+      notFound.add(number);
+    }
     for (const number of chunk) {
-      const node = data[`n${number}`]?.issueOrPullRequest;
+      const node = response.data[`n${number}`]?.issueOrPullRequest;
       if (node) {
         nodes.set(number, node);
       }
     }
   }
-  return resolveIssueRelationshipPages(nodes);
+  return { nodes: resolveIssueRelationshipPages(nodes), notFound };
 }
 
 // A vanished GitHub PR is recoverable only when a prior exact-SHA ledger
-// covered its exact merge-title commit; every other unresolved ref stays fatal.
+// covered its exact merge-title commit.
 export function recoverUnavailablePullRequests({
   numbers,
   nodes,
@@ -1904,7 +1922,7 @@ function resolveGitHubHandles(handles) {
           `u${index + offset}: user(login: ${JSON.stringify(handle)}) { __typename login }`,
       )
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const { data } = graphql(`query { ${fields} }`);
     for (let offset = 0; offset < chunk.length; offset += 1) {
       const user = data[`u${index + offset}`];
       if (user?.__typename === "User" && isEligibleHandle(user.login)) {
@@ -1936,7 +1954,7 @@ function resolveDirectCommitAuthors(commits) {
           }`,
       )
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const { data } = graphql(`query { ${fields} }`);
     for (let offset = 0; offset < chunk.length; offset += 1) {
       const author = data[`c${index + offset}`]?.object?.author?.user;
       if (author?.login && isEligibleHandle(author.login)) {
@@ -1969,7 +1987,7 @@ function resolveCommitCoauthors(commits) {
           }`,
       )
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const { data } = graphql(`query { ${fields} }`);
     for (let offset = 0; offset < chunk.length; offset += 1) {
       const coauthorEmails = new Set(
         chunk[offset].coauthorEmails.map((email) => email.toLowerCase()),
@@ -2009,32 +2027,17 @@ function thanksFor(node, coauthorHandles) {
   if (node.author?.__typename === "User" && isEligibleHandle(node.author.login)) {
     handles.push(node.author.login);
   }
-  for (const handle of coauthorHandles) {
-    if (!handles.some((candidate) => candidate.toLowerCase() === handle.toLowerCase())) {
-      handles.push(handle);
-    }
-  }
+  appendUnique(handles, coauthorHandles);
   return handles;
 }
 
 function addHandles(handles, additions) {
-  for (const handle of additions) {
-    if (!isEligibleHandle(handle)) {
-      continue;
-    }
-    if (!handles.some((candidate) => candidate.toLowerCase() === handle.toLowerCase())) {
-      handles.push(handle);
-    }
-  }
+  appendUnique(handles, [...additions].filter(isEligibleHandle));
   return handles;
 }
 
 function titleReferences(entries) {
   return [...new Set(entries.flatMap((entry) => referencesIn(entry.title)))];
-}
-
-function releaseTitle(title) {
-  return title;
 }
 
 function withSentenceEnding(value) {
@@ -2236,7 +2239,7 @@ export function ledgerFor(
       .filter(Boolean);
     return {
       number,
-      title: releaseTitle(node.title.replace(/\s+/g, " ").trim()),
+      title: node.title.replace(/\s+/g, " ").trim(),
       type: node.__typename,
       mergedAt: node.mergedAt,
       closingIssuesReferences: node.closingIssuesReferences,
@@ -2540,6 +2543,7 @@ function manifestFor(options, source, ledger, directCommitRecords) {
     version: options.version,
     shippedBaselines: source.shippedBaselines,
     workflowRuns: source.workflowRuns,
+    unavailableReferences: source.unavailableReferences,
     source: {
       references: ledger.entries.length,
       ...ledger.provenance,
@@ -2688,6 +2692,7 @@ function main() {
     const seedSection = sectionFor(seedSource.record ?? seedSource.section, options.version);
     priorRecord = contributionRecordFor(seedSection);
   }
+  const priorRecordReferences = contributionRecordMetadataReferences(priorRecord);
   priorRecord = withoutExcludedContributionRecords(priorRecord, excludedRecordedReferences);
   const recordedReferences = contributionRecordMetadataReferences(priorRecord);
   const revertedRecordedReferences = recordedReferences.filter((number) =>
@@ -2704,12 +2709,15 @@ function main() {
   appendReferences(references, noteReferences);
   appendReferences(references, effectiveRenderedRecordReferences);
   appendReferences(references, recordedReferences);
-  let nodes = resolveReferences(references);
+  let { nodes } = resolveReferences(references);
+  let highestResolved = Math.max(0, ...nodes.keys());
   const legacyIssuePullRequests = [...legacyIssuesByPullRequest(priorRecord, nodes).keys()].filter(
     (number) => !shippedExclusions.pullRequests.has(number),
   );
   appendReferences(references, legacyIssuePullRequests);
-  nodes = resolveReferences(references);
+  const resolution = resolveReferences(references);
+  nodes = resolution.nodes;
+  highestResolved = Math.max(highestResolved, ...nodes.keys());
   const recoveredPullRequests = recoverUnavailablePullRequests({
     numbers: references,
     nodes,
@@ -2726,6 +2734,36 @@ function main() {
   source.workflowRuns = workflowRuns;
   const workflowRunIds = new Set(workflowRuns.map((workflowRun) => workflowRun.id));
   references = references.filter((number) => !workflowRunIds.has(number));
+  const { unavailable } = classifyUnavailableContextualReferences({
+    unresolved: references.filter((number) => !nodes.has(number)),
+    notFound: resolution.notFound,
+    activeCommits: source.activeCommits,
+    protectedReferences: new Set([
+      ...noteReferences,
+      ...renderedRecordReferences,
+      ...priorRecordReferences,
+      ...contributionRecordMetadataReferences(committedRecord),
+      ...legacyIssuePullRequests,
+      ...source.pullRequests,
+      ...[...source.provenanceOverrides.values()].flat(),
+    ]),
+    highestResolved,
+  });
+  source.unavailableReferences = unavailable;
+  const unavailableNumbers = new Set(unavailable.map((reference) => reference.number));
+  references = references.filter((number) => !unavailableNumbers.has(number));
+  source.references = source.references.filter((number) => !unavailableNumbers.has(number));
+  for (const commit of source.activeCommits) {
+    commit.references = commit.references.filter((number) => !unavailableNumbers.has(number));
+  }
+  for (const number of unavailableNumbers) {
+    source.coauthorsByReference.delete(number);
+  }
+  if (unavailable.length > 0) {
+    process.stderr.write(
+      `unavailable contextual references (GitHub NOT_FOUND): ${unavailable.map(({ number }) => `#${number}`).join(", ")}\n`,
+    );
+  }
   const unresolvedSourceReferences = references.filter((number) => !nodes.has(number));
   if (unresolvedSourceReferences.length > 0) {
     fail(
@@ -2745,7 +2783,7 @@ function main() {
   const resolvedReferences = [...references];
   appendReferences(resolvedReferences, titleReferenceNumbers);
   appendReferences(resolvedReferences, closingIssueNumbers);
-  nodes = resolveReferences(resolvedReferences);
+  ({ nodes } = resolveReferences(resolvedReferences));
   for (const [number, node] of recoveredPullRequests) {
     if (!nodes.has(number)) {
       nodes.set(number, node);
@@ -2863,10 +2901,8 @@ function main() {
       );
     }
   }
-  if (errors.length === 0) {
-    if (options.writeLedger) {
-      writeReleaseChangelog({ rootDir, version: options.version, section: candidateChangelog });
-    }
+  if (errors.length === 0 && options.writeLedger) {
+    writeReleaseChangelog({ rootDir, version: options.version, section: candidateChangelog });
   }
 
   const result = {

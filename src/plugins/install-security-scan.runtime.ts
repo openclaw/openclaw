@@ -1,6 +1,7 @@
 // Runtime bridge for plugin install security scanning.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -97,32 +98,38 @@ type InstalledPackageScanRoot = {
   realPath: string;
 };
 
-function failOversizedInstallPolicyWarning(params: {
+function formatInstallPolicyFailure(params: {
   result: Awaited<ReturnType<typeof runInstallPolicy>>;
   targetName: string;
   targetType: "skill" | "plugin";
 }): InstallSecurityScanResult | undefined {
-  if (!params.result?.warning) {
-    return undefined;
+  if (params.result?.warning) {
+    const notice = formatInstallPolicyNotice({
+      decision: "warn",
+      findings: params.result.findings,
+      guidance: INSTALL_POLICY_REVIEW_GUIDANCE,
+      reason: params.result.warning.reason,
+      targetName: params.targetName,
+      targetType: params.targetType,
+    });
+    if (notice.length > MAX_INSTALL_POLICY_NOTICE_CHARS) {
+      return {
+        blocked: {
+          code: "security_scan_failed",
+          reason:
+            "install policy failed closed: policy review exceeds the 4,000-character display limit; reduce or coalesce the reason and findings",
+        },
+      };
+    }
   }
-  const notice = formatInstallPolicyNotice({
-    decision: "warn",
-    findings: params.result.findings,
-    guidance: INSTALL_POLICY_REVIEW_GUIDANCE,
-    reason: params.result.warning.reason,
-    targetName: params.targetName,
-    targetType: params.targetType,
-  });
-  if (notice.length <= MAX_INSTALL_POLICY_NOTICE_CHARS) {
-    return undefined;
-  }
-  return {
-    blocked: {
-      code: "security_scan_failed",
-      reason:
-        "install policy failed closed: policy review exceeds the 4,000-character display limit; reduce or coalesce the reason and findings",
-    },
-  };
+  return params.result?.blocked
+    ? formatBlockedInstallPolicyResult({
+        blocked: params.result.blocked,
+        findings: params.result.findings,
+        targetName: params.targetName,
+        targetType: params.targetType,
+      })
+    : undefined;
 }
 
 function formatBlockedInstallPolicyResult(params: {
@@ -280,12 +287,7 @@ async function inspectNodeModulesSymlinkTarget(params: {
 }
 
 function readPositiveIntegerEnv(name: string, fallback: number): number {
-  const rawValue = process.env[name];
-  if (!rawValue) {
-    return fallback;
-  }
-  const parsedValue = parseStrictPositiveInteger(rawValue);
-  return parsedValue ?? fallback;
+  return parseStrictPositiveInteger(process.env[name]) ?? fallback;
 }
 
 function resolvePackageTraversalLimits(): PackageTraversalLimits {
@@ -477,67 +479,39 @@ async function validatePackageDependencyBoundaries(params: {
   const rootDir = params.rootDir;
   const rootRealPath = await fs.realpath(rootDir).catch(() => rootDir);
   const trustedHostOpenClawRootRealPath = await resolveTrustedHostOpenClawRootRealPath();
-  const queue: Array<{ depth: number; dir: string }> = [{ depth: 0, dir: rootDir }];
-  const visitedDirectories = new Set<string>();
-  let queueIndex = 0;
-
-  while (queueIndex < queue.length) {
-    const current = queue[queueIndex];
-    queueIndex += 1;
-    if (!current) {
-      continue;
-    }
-
-    if (current.depth > limits.maxDepth) {
-      throw new Error(
-        `dependency boundary scan exceeded max depth (${limits.maxDepth}) at ${current.dir}`,
-      );
-    }
-
-    const currentDir = current.dir;
-    const currentRealPath = await fs.realpath(currentDir).catch(() => currentDir);
-    if (visitedDirectories.has(currentRealPath)) {
-      continue;
-    }
-    visitedDirectories.add(currentRealPath);
-    if (visitedDirectories.size > limits.maxDirectories) {
-      throw new Error(
-        `dependency boundary scan exceeded max directories (${limits.maxDirectories}) under ${rootDir}`,
-      );
-    }
-
-    let entries: Array<{
-      name: string;
-      isDirectory(): boolean;
-      isSymbolicLink(): boolean;
-    }>;
-    try {
-      entries = await fs.readdir(currentDir, { encoding: "utf8", withFileTypes: true });
-    } catch (error) {
-      throw new Error(`dependency boundary scan could not read ${currentDir}: ${String(error)}`, {
-        cause: error,
-      });
-    }
-
-    for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-      const nextPath = path.join(currentDir, entry.name);
-      const relativeNextPath = path.relative(rootDir, nextPath) || entry.name;
-      if (entry.isSymbolicLink()) {
-        if (pathContainsNodeModulesSegment(relativeNextPath)) {
-          await inspectNodeModulesSymlinkTarget({
+  let directories = 1;
+  const { failedDirs } = await walkDirectory(rootDir, {
+    symlinks: "include",
+    include: (entry) =>
+      entry.kind === "symlink" && pathContainsNodeModulesSegment(entry.relativePath)
+        ? inspectNodeModulesSymlinkTarget({
             allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
             rootRealPath,
-            symlinkPath: nextPath,
-            symlinkRelativePath: relativeNextPath,
+            symlinkPath: entry.path,
+            symlinkRelativePath: entry.relativePath,
             trustedHostOpenClawRootRealPath,
-          });
-        }
-        continue;
+          }).then(() => false)
+        : false,
+    descend: (entry) => {
+      if (entry.depth > limits.maxDepth) {
+        throw new Error(
+          `dependency boundary scan exceeded max depth (${limits.maxDepth}) at ${entry.path}`,
+        );
       }
-      if (entry.isDirectory()) {
-        queue.push({ depth: current.depth + 1, dir: nextPath });
+      if (++directories > limits.maxDirectories) {
+        throw new Error(
+          `dependency boundary scan exceeded max directories (${limits.maxDirectories}) under ${rootDir}`,
+        );
       }
-    }
+      return true;
+    },
+  });
+  if (failedDirs.length > 0) {
+    const failure = failedDirs[0]!;
+    throw new Error(
+      `dependency boundary scan could not read ${failure.path}: ${String(failure.error)}`,
+      { cause: failure.error },
+    );
   }
 }
 
@@ -751,21 +725,13 @@ async function runOperatorInstallPolicy(
   };
 
   const result = await evaluatePolicy();
-  const presentationFailure = failOversizedInstallPolicyWarning({
+  const policyFailure = formatInstallPolicyFailure({
     result,
     targetName: params.targetName,
     targetType: params.targetType,
   });
-  if (presentationFailure) {
-    return presentationFailure;
-  }
-  if (result?.blocked) {
-    return formatBlockedInstallPolicyResult({
-      blocked: result.blocked,
-      findings: result.findings,
-      targetName: params.targetName,
-      targetType: params.targetType,
-    });
+  if (policyFailure) {
+    return policyFailure;
   }
   if (!result?.warning) {
     logPolicyResult(result);
@@ -800,21 +766,13 @@ async function runOperatorInstallPolicy(
   });
   if (acknowledgement.status === "approved") {
     const reevaluated = await evaluatePolicy();
-    const reevaluatedPresentationFailure = failOversizedInstallPolicyWarning({
+    const reevaluatedFailure = formatInstallPolicyFailure({
       result: reevaluated,
       targetName: params.targetName,
       targetType: params.targetType,
     });
-    if (reevaluatedPresentationFailure) {
-      return reevaluatedPresentationFailure;
-    }
-    if (reevaluated?.blocked) {
-      return formatBlockedInstallPolicyResult({
-        blocked: reevaluated.blocked,
-        findings: reevaluated.findings,
-        targetName: params.targetName,
-        targetType: params.targetType,
-      });
+    if (reevaluatedFailure) {
+      return reevaluatedFailure;
     }
     if (reevaluated?.warning) {
       const warningUnchanged = reevaluated.warning.fingerprint === result.warning.fingerprint;

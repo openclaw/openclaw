@@ -372,9 +372,7 @@ class OpenClawA2UIHost extends LitElement {
     globalThis.openclawA2UI = api;
     this.addEventListener("a2uiaction", (evt) => this.#handleA2UIAction(evt));
     this.#statusListener = (evt) => this.#handleActionStatus(evt);
-    for (const eventName of ["openclaw:a2ui-action-status"]) {
-      globalThis.addEventListener(eventName, this.#statusListener);
-    }
+    globalThis.addEventListener("openclaw:a2ui-action-status", this.#statusListener);
     this.#syncSurfaces();
     const bootMessages = globalThis.openclawA2UIBoot?.messages;
     if (Array.isArray(bootMessages)) {
@@ -385,15 +383,9 @@ class OpenClawA2UIHost extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     if (this.#statusListener) {
-      for (const eventName of ["openclaw:a2ui-action-status"]) {
-        globalThis.removeEventListener(eventName, this.#statusListener);
-      }
+      globalThis.removeEventListener("openclaw:a2ui-action-status", this.#statusListener);
       this.#statusListener = null;
     }
-  }
-
-  #makeActionId() {
-    return createSecureActionId();
   }
 
   #setToast(text, kind = "ok", timeoutMs = 1400) {
@@ -483,7 +475,7 @@ class OpenClawA2UIHost extends LitElement {
       }
     }
 
-    const actionId = this.#makeActionId();
+    const actionId = createSecureActionId();
     if (!actionId) {
       this.#setToast("Secure action identifiers unavailable", "error", 4500);
       return;

@@ -1,8 +1,3 @@
-/**
- * Channel allowFrom policy helpers.
- *
- * Merges DM/group allowlists and checks normalized sender entries.
- */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
 /**

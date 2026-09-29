@@ -45,6 +45,10 @@ export function renderModelPicker(params: ModelPickerParams) {
     ...params.options.map((option) => ({ ...option, description: option.detail })),
     ...(params.custom ? [{ value: customValue, label: params.custom.label }] : []),
   ];
+  const selectedIndex = options.findIndex((option) => option.value === params.value);
+  if (selectedIndex > 0) {
+    options.unshift(...options.splice(selectedIndex, 1));
+  }
   return html`
     <div class="model-picker">
       ${renderPicker({

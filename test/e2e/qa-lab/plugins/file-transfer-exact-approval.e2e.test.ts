@@ -136,13 +136,25 @@ describe("file-transfer exact approval transport", () => {
           fileTransferPlugin.register?.(api);
         },
       });
-      expect(registry.registry.nodeInvokePolicies).toEqual([
-        expect.objectContaining({
+      expect(
+        registry.registry.nodeInvokePolicies.map(({ pluginId, policy }) => ({
+          pluginId,
+          commands: policy.commands,
+        })),
+      ).toEqual([
+        { pluginId: "file-transfer", commands: ["workspace.memory"] },
+        { pluginId: "file-transfer", commands: ["workspace.skills"] },
+        {
           pluginId: "file-transfer",
-          policy: expect.objectContaining({
-            commands: [FILE_FETCH_COMMAND, "file.stat", "dir.list", "dir.fetch", "file.write"],
-          }),
-        }),
+          commands: [
+            FILE_FETCH_COMMAND,
+            "file.stat",
+            "dir.list",
+            "dir.fetch",
+            "file.write",
+            "file.create",
+          ],
+        },
       ]);
       setActivePluginRegistry(
         registry.registry,

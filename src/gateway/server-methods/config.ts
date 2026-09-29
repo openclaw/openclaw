@@ -1,4 +1,3 @@
-// Config gateway methods: validation, redaction, secrets, reload planning.
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -153,11 +152,6 @@ function requireConfigBaseHash(
     return false;
   }
   return true;
-}
-
-function readConfigPatchReplacePaths(params: unknown): Set<string> {
-  const rawPaths = (params as { replacePaths?: unknown }).replacePaths;
-  return normalizeConfigPatchReplacePaths(Array.isArray(rawPaths) ? rawPaths : undefined);
 }
 
 function collectDestructiveArrayPatchPaths(params: {
@@ -326,14 +320,11 @@ function arrayPreservesBaseEntries(base: unknown[], merged: unknown[]): boolean 
 }
 
 function collectDestructiveIdKeyedArrayEntryPatchPaths(params: {
-  base: unknown[];
+  base: Array<Record<string, unknown> & { id: string }>;
   patch: unknown[];
   merged: unknown[];
   path: string;
 }): string[] {
-  if (!isConfigPatchIdKeyedArray(params.base)) {
-    return [];
-  }
   const baseById = new Map(params.base.map((entry) => [entry.id, entry]));
   const mergedById = new Map(
     params.merged.filter(isConfigPatchObjectWithStringId).map((entry) => [entry.id, entry]),
@@ -400,26 +391,6 @@ async function readConfigWriteSnapshotOrRespond(
   return result;
 }
 
-function parseRawConfigOrRespond(
-  params: unknown,
-  requestName: string,
-  respond: RespondFn,
-): string | null {
-  const rawValue = (params as { raw?: unknown }).raw;
-  if (typeof rawValue !== "string") {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `invalid ${requestName} params: raw (string) required`,
-      ),
-    );
-    return null;
-  }
-  return rawValue;
-}
-
 function hasOwnRecordValue(value: unknown, key: string): boolean {
   return isRecord(value) && Object.hasOwn(value, key);
 }
@@ -476,16 +447,11 @@ function stripBundledProviderRuntimeDefaults(params: {
 }
 
 function parseValidateConfigFromRawOrRespond(
-  params: unknown,
-  requestName: string,
+  rawValue: string,
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   respond: RespondFn,
   modelIdNormalizationPolicies?: Parameters<typeof normalizeSubmittedConfigModelRefs>[1],
 ): { config: OpenClawConfig; writeConfig: OpenClawConfig; schema: ConfigSchemaResponse } | null {
-  const rawValue = parseRawConfigOrRespond(params, requestName, respond);
-  if (!rawValue) {
-    return null;
-  }
   const parsedRes = parseConfigJson5(rawValue);
   if (!parsedRes.ok) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
@@ -562,7 +528,6 @@ function rejectDroppedAgentRosterEntries(params: {
   return true;
 }
 
-/** Shared normalize -> raw-validate -> plugin-validate pipeline for submitted configs; responds on failure. */
 function validateSubmittedConfigOrRespond(params: {
   candidate: unknown;
   modelIdNormalizationPolicies: Parameters<typeof normalizeSubmittedConfigModelRefs>[1];
@@ -998,8 +963,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const { snapshot, writeOptions } = writeSnapshot;
     const parsed = parseValidateConfigFromRawOrRespond(
-      params,
-      "config.set",
+      params.raw,
       snapshot,
       respond,
       writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies,
@@ -1079,28 +1043,12 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const rawValue = (params as { raw?: unknown }).raw;
-    if (typeof rawValue !== "string") {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "invalid config.patch params: raw (string) required",
-        ),
-      );
-      return;
-    }
-    const parsedRes = parseConfigJson5(rawValue);
+    const parsedRes = parseConfigJson5(params.raw);
     if (!parsedRes.ok) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
       return;
     }
-    if (
-      !parsedRes.parsed ||
-      typeof parsedRes.parsed !== "object" ||
-      Array.isArray(parsedRes.parsed)
-    ) {
+    if (!isRecord(parsedRes.parsed)) {
       respond(
         false,
         undefined,
@@ -1123,7 +1071,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const replacePaths = readConfigPatchReplacePaths(params);
+    const replacePaths = normalizeConfigPatchReplacePaths(params.replacePaths);
     try {
       assertNoDuplicateConfigPatchIds({
         patch: normalizedPatch,
@@ -1242,8 +1190,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const { snapshot, writeOptions } = writeSnapshot;
     const parsed = parseValidateConfigFromRawOrRespond(
-      params,
-      "config.apply",
+      params.raw,
       snapshot,
       respond,
       writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies,

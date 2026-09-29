@@ -1,4 +1,3 @@
-// Codex plugin module implements apply behavior.
 import path from "node:path";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -40,7 +39,7 @@ import {
 } from "../app-server/config.js";
 import { ensureCodexPluginActivation } from "../app-server/plugin-activation.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
-import { isOpenAiCuratedMarketplace } from "../app-server/plugin-inventory.js";
+import { isOpenAiCuratedMarketplaceName } from "../app-server/plugin-inventory.js";
 import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import {
@@ -48,7 +47,7 @@ import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "../app-server/shared-client.js";
-import { codexPluginActivationReportState, sanitizeAppsNeedingAuth } from "./apply-report.js";
+import { codexPluginActivationReportState } from "./apply-report.js";
 import {
   createCodexAuthItemApplier,
   resolveCodexConfigPatchMode,
@@ -82,10 +81,6 @@ class CodexPluginConfigConflictError extends Error {
     super(reason);
     this.name = "CodexPluginConfigConflictError";
   }
-}
-
-function shouldReturnCodexPluginConfigPatch(ctx: MigrationProviderContext): boolean {
-  return resolveCodexConfigPatchMode(ctx) === "return";
 }
 
 export function prepareTargetCodexAppServer(
@@ -134,7 +129,6 @@ export async function applyCodexMigrationPlan(params: {
       : plan.source;
   const authSource: CodexAuthSource = {
     codexHome,
-    authPath: path.join(codexHome, "auth.json"),
     modelsCachePath: path.join(codexHome, "models_cache.json"),
   };
   const runtime = withCachedMigrationConfigRuntime(
@@ -242,7 +236,11 @@ async function applyCodexPluginInstallItem(
         reason: CODEX_PLUGIN_AUTH_REQUIRED_REASON,
         details: {
           ...baseDetails,
-          appsNeedingAuth: sanitizeAppsNeedingAuth(result.installResponse?.appsNeedingAuth ?? []),
+          appsNeedingAuth: (result.installResponse?.appsNeedingAuth ?? []).map(({ id, name }) => ({
+            id,
+            name,
+            needsAuth: true,
+          })),
         },
       };
     }
@@ -265,7 +263,7 @@ async function applyCodexPluginInstallItem(
       details: baseDetails,
     };
   } catch (error) {
-    if (isCodexPluginInventoryLoadError(error)) {
+    if (coerceErrorMessage(error).includes("codex app-server plugin/list timed out")) {
       return {
         ...item,
         status: "warning",
@@ -289,11 +287,6 @@ async function applyCodexPluginInstallItem(
       },
     };
   }
-}
-
-function isCodexPluginInventoryLoadError(error: unknown): boolean {
-  const message = coerceErrorMessage(error);
-  return message.includes("codex app-server plugin/list timed out");
 }
 
 function resolveTargetCodexAppServer(ctx: MigrationProviderContext) {
@@ -325,7 +318,11 @@ async function requestTargetCodexAppServerJson(params: {
       ...params,
       timeoutMs: remainingMs,
     });
-    if (lastResponse.marketplaces.some(isOpenAiCuratedMarketplace)) {
+    if (
+      lastResponse.marketplaces.some((marketplace) =>
+        isOpenAiCuratedMarketplaceName(marketplace.name),
+      )
+    ) {
       return lastResponse;
     }
     if (Date.now() >= discoveryDeadline) {
@@ -345,10 +342,7 @@ function targetCodexMarketplaceDiscoveryTimeoutMs(env: NodeJS.ProcessEnv = proce
   const configured = parseStrictNonNegativeInteger(
     env[TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV],
   );
-  if (configured !== undefined) {
-    return configured;
-  }
-  return TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_MS;
+  return configured ?? TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_MS;
 }
 
 function isCodexPluginLoadWarningItem(item: MigrationItem): boolean {
@@ -391,14 +385,14 @@ async function applyCodexPluginConfigItem(
   item: MigrationItem,
   appliedItems: readonly MigrationItem[],
 ): Promise<MigrationItem> {
-  const incompletePluginItems = appliedItems.filter(
+  const hasIncompletePlugin = appliedItems.some(
     (candidate) =>
       candidate.kind === "plugin" &&
       candidate.action === "install" &&
-      readCodexPluginPolicy(candidate) !== undefined &&
+      readCodexPluginMigrationConfigEntry(candidate, true) !== undefined &&
       !isCodexPluginConfigTerminal(candidate),
   );
-  if (incompletePluginItems.length > 0) {
+  if (hasIncompletePlugin) {
     return {
       ...item,
       status: "warning",
@@ -414,7 +408,7 @@ async function applyCodexPluginConfigItem(
       deferredCompletion: true,
     };
   }
-  const returnPatch = shouldReturnCodexPluginConfigPatch(ctx);
+  const returnPatch = resolveCodexConfigPatchMode(ctx) === "return";
   const configApi = resolveMigrationConfigRuntime(ctx);
   const currentConfig = returnPatch
     ? ctx.config

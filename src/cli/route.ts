@@ -24,26 +24,22 @@ function resolveRoutedCliLogLevel(argv: string[]): LogLevel | null | undefined {
     if (!arg || arg === FLAG_TERMINATOR) {
       break;
     }
+    let value: string | undefined;
     if (arg === LOG_LEVEL_FLAG) {
-      const value = args[index + 1];
+      value = args[++index];
       if (!isValueToken(value)) {
         return null;
       }
-      const parsed = tryParseLogLevel(value);
-      if (!parsed) {
-        return null;
-      }
-      logLevel = parsed;
-      index += 1;
+    } else if (arg.startsWith(LOG_LEVEL_EQUALS_PREFIX)) {
+      value = arg.slice(LOG_LEVEL_EQUALS_PREFIX.length);
+    } else {
       continue;
     }
-    if (arg.startsWith(LOG_LEVEL_EQUALS_PREFIX)) {
-      const parsed = tryParseLogLevel(arg.slice(LOG_LEVEL_EQUALS_PREFIX.length));
-      if (!parsed) {
-        return null;
-      }
-      logLevel = parsed;
+    const parsed = tryParseLogLevel(value);
+    if (!parsed) {
+      return null;
     }
+    logLevel = parsed;
   }
 
   return logLevel;

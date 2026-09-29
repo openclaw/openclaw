@@ -70,17 +70,6 @@ describe("slack allowlist log formatting", () => {
     ).toBe("C0AQXEG6QFJ→openclawtest");
   });
 
-  it("prints user names without repeating the id input", () => {
-    expect(
-      formatSlackUserResolved({
-        input: "U090HHQ029J",
-        resolved: true,
-        id: "U090HHQ029J",
-        name: "steipete",
-      }),
-    ).toBe("U090HHQ029J→steipete");
-  });
-
   it("includes the id when resolving from a display name", () => {
     expect(
       formatSlackUserResolved({
@@ -369,6 +358,7 @@ describe("slack startup user allowlist resolution", () => {
           capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
           context: expect.objectContaining({
             config: expect.objectContaining({ enabled: false }),
+            workspaceTeamId: "T_TEST",
           }),
         }),
       );

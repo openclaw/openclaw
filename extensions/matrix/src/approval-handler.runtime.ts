@@ -114,10 +114,6 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
   return { accountId, context };
 }
 
-function normalizePendingMessageIds(entry: PendingMessage): string[] {
-  return normalizeUniqueStringEntries(entry.platformMessageIds);
-}
-
 function normalizeReactionTargetRef(params: ReactionTargetRef): ReactionTargetRef | null {
   const accountId = normalizeAccountId(params.accountId);
   const roomId = params.roomId.trim();
@@ -386,11 +382,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
     },
   },
   presentation: {
-    buildPendingPayload: ({ view, nowMs }) =>
-      buildPendingApprovalContent({
-        view,
-        nowMs,
-      }),
+    buildPendingPayload: buildPendingApprovalContent,
     buildResolvedResult: ({ view }) => ({
       kind: "update",
       payload: buildResolvedApprovalText(view),
@@ -424,17 +416,18 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       const sendSingleTextMessage =
         resolved.context.deps?.sendSingleTextMessage ?? sendSingleTextMessageMatrix;
       const reactMessage = resolved.context.deps?.reactMessage ?? reactMatrixMessage;
+      const sendOptions = {
+        cfg: cfg as CoreConfig,
+        accountId: resolved.accountId,
+        client: resolved.context.client,
+        threadId: preparedTarget.threadId,
+        extraContent: pendingPayload.extraContent,
+      };
       let result;
       try {
         result = await retryMatrixApprovalDelivery(
           async () =>
-            await sendSingleTextMessage(preparedTarget.to, pendingPayload.text, {
-              cfg: cfg as CoreConfig,
-              accountId: resolved.accountId,
-              client: resolved.context.client,
-              threadId: preparedTarget.threadId,
-              extraContent: pendingPayload.extraContent,
-            }),
+            await sendSingleTextMessage(preparedTarget.to, pendingPayload.text, sendOptions),
           { shouldRetry: (error) => !isSingleMatrixMessageLimitError(error) },
         );
       } catch (error) {
@@ -443,14 +436,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         }
         const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageMatrix;
         result = await retryMatrixApprovalDelivery(
-          async () =>
-            await sendMessage(preparedTarget.to, pendingPayload.text, {
-              cfg: cfg as CoreConfig,
-              accountId: resolved.accountId,
-              client: resolved.context.client,
-              threadId: preparedTarget.threadId,
-              extraContent: pendingPayload.extraContent,
-            }),
+          async () => await sendMessage(preparedTarget.to, pendingPayload.text, sendOptions),
         );
       }
       const receiptMessageIds = listMessageReceiptPlatformIds(result.receipt);
@@ -495,13 +481,14 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       }
       const editMessage = resolved.context.deps?.editMessage ?? editMatrixMessage;
       const deleteMessage = resolved.context.deps?.deleteMessage ?? deleteMatrixMessage;
-      const [primaryMessageId, ...staleMessageIds] = normalizePendingMessageIds(entry);
+      const [primaryMessageId, ...staleMessageIds] = normalizeUniqueStringEntries(
+        entry.platformMessageIds,
+      );
       if (!primaryMessageId) {
         return;
       }
-      const text = payload;
       await Promise.allSettled([
-        editMessage(entry.roomId, primaryMessageId, text, {
+        editMessage(entry.roomId, primaryMessageId, payload, {
           cfg: cfg as CoreConfig,
           accountId: resolved.accountId,
           client: resolved.context.client,
@@ -523,7 +510,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       }
       const deleteMessage = resolved.context.deps?.deleteMessage ?? deleteMatrixMessage;
       await Promise.allSettled(
-        normalizePendingMessageIds(entry).map(async (messageId) => {
+        normalizeUniqueStringEntries(entry.platformMessageIds).map(async (messageId) => {
           await deleteMessage(entry.roomId, messageId, {
             cfg: cfg as CoreConfig,
             accountId: resolved.accountId,

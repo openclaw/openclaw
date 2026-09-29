@@ -23,18 +23,6 @@ function renderTab(tab: BoardTab, activeTabId: string, hoverTabId: string): Temp
   `;
 }
 
-function renderOverflowTab(tab: BoardTab): TemplateResult {
-  return html`
-    <wa-dropdown-item
-      class="board-tabs__overflow-item"
-      value=${tab.tabId}
-      data-board-tab-id=${tab.tabId}
-    >
-      ${tab.title}
-    </wa-dropdown-item>
-  `;
-}
-
 export function renderBoardTabs(options: {
   tabs: readonly BoardTab[];
   activeTabId: string;
@@ -81,7 +69,17 @@ export function renderBoardTabs(options: {
                 >
                   •••
                 </button>
-                ${overflow.map((tab) => renderOverflowTab(tab))}
+                ${overflow.map(
+                  (tab) => html`
+                    <wa-dropdown-item
+                      class="board-tabs__overflow-item"
+                      value=${tab.tabId}
+                      data-board-tab-id=${tab.tabId}
+                    >
+                      ${tab.title}
+                    </wa-dropdown-item>
+                  `,
+                )}
               </wa-dropdown>
             `
           : nothing

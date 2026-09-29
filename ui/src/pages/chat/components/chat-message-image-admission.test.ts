@@ -57,6 +57,7 @@ afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 const imageResponse = () => new Response("png", { headers: { "Content-Type": "image/png" } });
@@ -64,6 +65,43 @@ const imageResponse = () => new Response("png", { headers: { "Content-Type": "im
 function draw(images: ImageBlock[], options: ImageRenderOptions = {}) {
   render(renderMessageImages(images, { onRequestUpdate, ...options }), container);
 }
+
+it("replaces failed remote images with an unavailable card while preserving local recovery", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json({ available: true })),
+  );
+  const remote = { url: "https://images.example.test/missing.png", alt: "Remote image" };
+  const local = { url: `/tmp/${crypto.randomUUID()}.png`, alt: "Local image" };
+  draw([remote, local]);
+  intersections[0]!();
+  intersections[1]!();
+  await vi.advanceTimersByTimeAsync(0);
+
+  const localImage = container.querySelector<HTMLImageElement>('img[alt="Local image"]')!;
+  expect(localImage).not.toBeNull();
+  localImage.dispatchEvent(new Event("error"));
+  expect(container.querySelector('img[alt="Local image"]')).toBe(localImage);
+  expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
+
+  const remoteImage = container.querySelector<HTMLImageElement>('img[alt="Remote image"]')!;
+  expect(remoteImage.getAttribute("src")).toBe(remote.url);
+  remoteImage.dispatchEvent(new Event("error"));
+  expect(container.querySelector('img[alt="Remote image"]')).toBeNull();
+  const card = container.querySelector(
+    ".chat-image-frame--compact .chat-assistant-attachment-card",
+  );
+  expect(card?.textContent).toContain("Could not load this image. Try again.");
+  expect(container.querySelector('img[alt="Local image"]')).toBe(localImage);
+
+  const replacement = { ...remote, url: "https://images.example.test/replacement.png" };
+  draw([replacement, local]);
+  intersections.at(-1)!();
+  expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
+  expect(container.querySelector('img[alt="Remote image"]')?.getAttribute("src")).toBe(
+    replacement.url,
+  );
+});
 
 it.each(["assistant", "managed", "omitted"] as const)(
   "defers offscreen %s image reads and shares acquisition after admission",
@@ -98,6 +136,123 @@ it.each(["assistant", "managed", "omitted"] as const)(
     expect(container.querySelectorAll("img")).toHaveLength(2);
   },
 );
+
+it.each(["assistant", "managed"] as const)(
+  "remounts a loaded %s image immediately without repeating viewport admission",
+  async (kind) => {
+    const source =
+      kind === "assistant"
+        ? `/tmp/${crypto.randomUUID()}.png`
+        : `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const fetch = vi.fn(async () =>
+      kind === "assistant"
+        ? Response.json({
+            available: true,
+            mediaTicket: "scroll-ticket",
+            mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
+          })
+        : imageResponse(),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const images = [{ url: source, alt: "Loaded screenshot" }];
+    draw(images);
+    intersections[0]!();
+    await vi.advanceTimersByTimeAsync(0);
+    const loaded = container.querySelector("img")!;
+    Object.defineProperties(loaded, { naturalWidth: { value: 20 }, complete: { value: true } });
+    loaded.dispatchEvent(new Event("load"));
+    const src = loaded.getAttribute("src");
+    render(nothing, container);
+    draw(images);
+    expect(container.querySelector(".chat-image-skeleton")).toBeNull();
+    expect(container.querySelector("img")?.getAttribute("src")).toBe(src);
+    if (kind === "assistant") {
+      expect(container.querySelector("img")).toBe(loaded);
+    }
+    expect(fetch).toHaveBeenCalledOnce();
+  },
+);
+
+it("restores a native image when its retained Lit root reconnects without another render", async () => {
+  const source = `/tmp/${crypto.randomUUID()}.png`;
+  const fetch = vi.fn(async () =>
+    Response.json({
+      available: true,
+      mediaTicket: "reconnect-ticket",
+      mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
+    }),
+  );
+  vi.stubGlobal("fetch", fetch);
+  const root = render(
+    renderMessageImages([{ url: source, fileName: "Screenshot.png" }], { onRequestUpdate }),
+    container,
+  );
+  intersections[0]!();
+  await vi.advanceTimersByTimeAsync(0);
+  const loaded = container.querySelector("img")!;
+  Object.defineProperties(loaded, { naturalWidth: { value: 20 }, complete: { value: true } });
+  loaded.dispatchEvent(new Event("load"));
+  root.setConnected(false);
+  expect(loaded.parentNode).toBeNull();
+  root.setConnected(true);
+  expect(container.querySelector("img")).toBe(loaded);
+  expect(container.querySelector(".chat-image-skeleton")).toBeNull();
+  expect(fetch).toHaveBeenCalledOnce();
+});
+
+it.each([
+  "authToken",
+  "sessionKey",
+  "agentId",
+  "connectionEpoch",
+  "resourceBasePath",
+  "policyKey",
+  "expiry",
+] as const)("does not reuse a detached native image after %s changes", async (change) => {
+  const source = `/tmp/${crypto.randomUUID()}.png`;
+  const fetch = vi.fn(async () =>
+    Response.json({
+      available: true,
+      mediaTicket: "scoped-ticket",
+      mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
+    }),
+  );
+  vi.stubGlobal("fetch", fetch);
+  const images = [{ url: source, fileName: "Screenshot.png" }];
+  const options: ImageRenderOptions = {
+    authToken: "before",
+    sessionKey: "before",
+    agentId: "before",
+    connectionEpoch: 1,
+    resourceBasePath: "/before",
+    policyKey: "before",
+  };
+  draw(images, options);
+  intersections[0]!();
+  await vi.advanceTimersByTimeAsync(0);
+  const loaded = container.querySelector("img")!;
+  Object.defineProperties(loaded, { naturalWidth: { value: 20 }, complete: { value: true } });
+  loaded.dispatchEvent(new Event("load"));
+  const removeListener = vi.spyOn(loaded, "removeEventListener");
+  render(nothing, container);
+  expect(loaded.parentNode).toBeNull();
+  expect(removeListener).toHaveBeenCalledWith("load", expect.any(Function));
+  expect(removeListener).toHaveBeenCalledWith("error", expect.any(Function));
+  if (change === "expiry") {
+    await vi.advanceTimersByTimeAsync(300_001);
+  } else if (change === "connectionEpoch") {
+    options.connectionEpoch = 2;
+  } else {
+    options[change] = "after";
+  }
+  draw(images, options);
+  expect(container.querySelector("img")).toBeNull();
+  expect(fetch).toHaveBeenCalledOnce();
+  intersections.at(-1)!();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(container.querySelector("img")).not.toBe(loaded);
+  expect(fetch).toHaveBeenCalledTimes(2);
+});
 
 it("admits on focus without replacing the pending control or opening an empty preview", async () => {
   const metadata = createDeferred<Response>();

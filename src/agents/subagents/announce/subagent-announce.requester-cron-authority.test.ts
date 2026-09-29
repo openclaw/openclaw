@@ -1,6 +1,7 @@
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { CronJob } from "../../../cron/types.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
+import { createRequesterInitialTransferFixture } from "../registry/subagent-registry-requester-yield.test-support.js";
 import {
   registryRuntimeMock,
   wakeParams,
@@ -10,6 +11,35 @@ import {
   deliverSpy,
   makeSettledChild,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
+
+vi.mock("../../../gateway/session-sharing-preparation.js", () => ({
+  prepareSessionMutationFacts: async (params: { agentId: string; sessionKey: string }) => {
+    let active = true;
+    const target = {
+      agentId: params.agentId,
+      canonicalKey: params.sessionKey,
+      storeKey: params.sessionKey,
+      storeKeys: [params.sessionKey],
+      storePath: "/synthetic/requester.sqlite",
+    };
+    return {
+      storageTarget: target,
+      bindCreation: vi.fn(),
+      readCurrent: () => {
+        if (!active) {
+          throw new Error("Requester session facts retired");
+        }
+        return {
+          target: { ...target, entry: { sessionId: "sess-main", updatedAt: 1 } },
+          membership: new Set(),
+        };
+      },
+      release: () => {
+        active = false;
+      },
+    };
+  },
+}));
 
 const { maybeWakeRequesterAfterAllChildrenSettled } =
   await import("./subagent-announce.requester-settle-wake.js");
@@ -50,6 +80,7 @@ describe("requester continuation automation management", () => {
         requesterSettleWake: undefined,
       });
       const runs = new Map([[child.runId, child]]);
+      const transfer = createRequesterInitialTransferFixture(runs, () => {});
       registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
       const original = createTestAdmittedRunContext(sourceRunId).operationalRunInstance;
       const originalAuthority = claimAgentRunDelegatedAuthority(original);
@@ -71,16 +102,16 @@ describe("requester continuation automation management", () => {
           { agentId: "main", sessionKey: REQUESTER, approvalAuthority: originalAuthority },
           async () => {
             expect(
-              markRequesterTurnYieldedInRuns({
+              await markRequesterTurnYieldedInRuns({
                 requesterSessionKey: REQUESTER,
                 requesterAgentId: "main",
                 requesterTurnRunId: sourceRunId,
                 runs,
-                persistOrThrow: () => {},
+                transfer,
               }),
             ).toBe(1);
             expect(
-              settleRequesterTurnAfterSessionSpawns({
+              await settleRequesterTurnAfterSessionSpawns({
                 requesterSessionKey: REQUESTER,
                 requesterAgentId: "main",
                 requesterTurnRunId: sourceRunId,
@@ -93,7 +124,7 @@ describe("requester continuation automation management", () => {
                   },
                 ],
                 runs,
-                persistOrThrow: () => {},
+                transfer,
                 schedule: () => {},
               }),
             ).toBe(true);

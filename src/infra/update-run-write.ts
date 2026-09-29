@@ -13,10 +13,10 @@ import {
   type UpdateRunRecord,
   type UpdateRunStep,
 } from "./update-run-record.js";
+import type { UpdateRunResult } from "./update-run-result.js";
 import { updateRunStepKey } from "./update-run-step-key.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
-import type { UpdateRunResult } from "./update-runner-types.js";
 
 const schemaStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf("CREATE TABLE IF NOT EXISTS update_runs (");
 const schemaEndMarker = "ON update_runs(status, created_at_ms DESC, run_id);";
@@ -43,6 +43,18 @@ export function upsertStep(record: UpdateRunRecord, input: UpdateRunStep): void 
       throw new Error("Update run retained steps exceed the step limit");
     }
     record.steps.splice(disposable, 1);
+  }
+}
+
+export function applyUpdateRunStep(
+  record: UpdateRunRecord,
+  { reason, ...step }: UpdateRunStep & { reason?: string },
+): void {
+  if (record.status === "running") {
+    upsertStep(record, step);
+    if (reason !== undefined) {
+      record.reason = reason;
+    }
   }
 }
 

@@ -1,4 +1,3 @@
-// Together provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import {
   downloadGeneratedVideoAsset,
@@ -185,11 +184,11 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
           );
         }
         const input = req.inputImages[0];
-        const value = normalizeOptionalString(input.url)
-          ? normalizeOptionalString(input.url)
-          : input.buffer
+        const value =
+          normalizeOptionalString(input.url) ??
+          (input.buffer
             ? toImageDataUrl({ ...input, buffer: input.buffer, defaultMimeType: "image/png" })
-            : undefined;
+            : undefined);
         if (!value) {
           throw new Error("Together reference image is missing image data.");
         }

@@ -2,10 +2,15 @@
 const currentModuleUrl = import.meta.url;
 
 export const updateExecutorNativeEntrypoints = {
-  coordinator: {
+  artifact: {
     currentModuleUrl,
-    sourceWorkerName: "../../infra/state-database-coordinator",
-    distWorkerPath: "infra/state-database-coordinator.js",
+    sourceWorkerName: "update-command-artifact",
+    distWorkerPath: "cli/update-cli/update-command-artifact.js",
+  },
+  commandCleanup: {
+    currentModuleUrl,
+    sourceWorkerName: "../../process/exec-result",
+    distWorkerPath: "process/exec-result.js",
   },
   signalExitBarrier: {
     currentModuleUrl,
@@ -26,6 +31,16 @@ export const updateExecutorNativeEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "update-command-run",
     distWorkerPath: "cli/update-cli/update-command-run.js",
+  },
+  candidateStepWriter: {
+    currentModuleUrl,
+    sourceWorkerName: "../../infra/update-run-write.async",
+    distWorkerPath: "infra/update-run-write.async.js",
+  },
+  executionGuards: {
+    currentModuleUrl,
+    sourceWorkerName: "update-command-execution-guards",
+    distWorkerPath: "cli/update-cli/update-command-execution-guards.js",
   },
   commandTarget: {
     currentModuleUrl,

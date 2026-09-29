@@ -10,15 +10,7 @@ type InstallCommandResult = {
 
 // Prefer explicit error lines, then the last useful line, to keep CLI failures compact.
 function summarizeInstallOutput(text: string): string | undefined {
-  const raw = text.trim();
-  if (!raw) {
-    return undefined;
-  }
-  const lines = normalizeStringEntries(raw.split("\n"));
-  if (lines.length === 0) {
-    return undefined;
-  }
-
+  const lines = normalizeStringEntries(text.trim().split("\n"));
   const preferred =
     lines.find((line) => /^error\b/i.test(line)) ??
     lines.find((line) => /\b(err!|error:|failed)\b/i.test(line)) ??

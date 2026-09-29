@@ -1,7 +1,8 @@
 #!/usr/bin/env -S node --import tsx
 // Regenerates ui/config/control-ui-boot-modules.json: the measured module set
-// shared shell and route-specific boot flows load lazily. Builds without the
-// previous boot groups, then captures ready routes against the mocked Gateway.
+// shared shell and route-specific boot flows load lazily, plus requested dynamic
+// entry points. Builds without the previous boot groups, then captures ready
+// routes against the mocked Gateway.
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -9,7 +10,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { build } from "vite";
-import { controlUiBootManifestKey, controlUiCodeSplitting } from "../config/control-ui-chunking.ts";
+import {
+  controlUiBootManifestKey,
+  createControlUiCodeSplitting,
+} from "../config/control-ui-chunking.ts";
 import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
@@ -121,10 +125,22 @@ function manifestKeysForChunks(chunkPaths: Iterable<string>, distDir: string): s
   return [...keys].toSorted();
 }
 
+function partitionBootKeys(routes: Record<"new" | "chat", Set<string>>) {
+  const shared = new Set([...routes.new].filter((key) => routes.chat.has(key)));
+  const sorted = (keys: Iterable<string>) =>
+    [...keys].toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+  return {
+    shared: sorted(shared),
+    new: sorted([...routes.new].filter((key) => !shared.has(key))),
+    chat: sorted([...routes.chat].filter((key) => !shared.has(key))),
+  };
+}
+
 async function main(): Promise<void> {
   const distDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-control-ui-boot-"));
   try {
     const config = controlUiViteConfig({ outDir: distDir });
+    const dynamicEntries = new Map<string, string>();
     await build({
       ...config,
       configFile: false,
@@ -134,48 +150,56 @@ async function main(): Promise<void> {
         {
           name: "control-ui-measure-boot-dependencies",
           outputOptions(options) {
-            // The old boot group would keep stale modules in fetched chunks,
+            // Old JavaScript and CSS boot groups would keep stale modules in fetched chunks,
             // feeding them back into every regenerated manifest.
             return {
               ...options,
-              codeSplitting: {
-                ...controlUiCodeSplitting,
-                groups: controlUiCodeSplitting.groups.filter(
-                  (group) =>
-                    typeof group.name !== "string" || !group.name.startsWith("control-ui-boot"),
-                ),
-              },
+              codeSplitting: createControlUiCodeSplitting({ includeBootGroups: false }),
             };
+          },
+          generateBundle(_options, bundle) {
+            for (const chunk of Object.values(bundle)) {
+              if (chunk.type === "chunk" && chunk.isDynamicEntry && chunk.facadeModuleId) {
+                dynamicEntries.set(
+                  `/${chunk.fileName}`,
+                  controlUiBootManifestKey(chunk.facadeModuleId),
+                );
+              }
+            }
           },
         },
       ],
     });
     const server = await serveDist(distDir);
     try {
-      const routes = {} as Record<"new" | "chat", Set<string>>;
+      const routes = { new: new Set<string>(), chat: new Set<string>() };
+      const routeEntries = { new: new Set<string>(), chat: new Set<string>() };
       for (const route of ["new", "chat"] as const) {
         const chunks = await collectBootChunkPaths(server.baseUrl, distDir, route);
         routes[route] = new Set(manifestKeysForChunks(chunks, distDir));
+        for (const chunk of chunks) {
+          const entry = dynamicEntries.get(chunk);
+          if (entry) {
+            routeEntries[route].add(entry);
+          }
+        }
         if (routes[route].size < 100) {
           throw new Error(
             `Boot capture looks truncated: ${route} recorded only ${routes[route].size} modules`,
           );
         }
         console.log(
-          `control-ui-boot-manifest: ${route}: ${chunks.size} chunks, ${routes[route].size} modules`,
+          `control-ui-boot-manifest: ${route}: ${chunks.size} chunks, ${routes[route].size} modules, ${routeEntries[route].size} dynamic entries`,
         );
       }
-      const shared = new Set([...routes.new].filter((key) => routes.chat.has(key)));
-      const sorted = (keys: Iterable<string>) =>
-        [...keys].toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+      const modules = partitionBootKeys(routes);
       const manifest = {
-        shared: sorted(shared),
-        new: sorted([...routes.new].filter((key) => !shared.has(key))),
-        chat: sorted([...routes.chat].filter((key) => !shared.has(key))),
+        ...modules,
+        entries: partitionBootKeys(routeEntries),
       };
       fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 1)}\n`);
       console.log(
-        `control-ui-boot-manifest: ${Object.entries(manifest)
+        `control-ui-boot-manifest: ${Object.entries(modules)
           .map(([name, keys]) => `${name}: ${keys.length}`)
           .join(", ")} -> ${path.relative(repoRoot, manifestPath)}`,
       );

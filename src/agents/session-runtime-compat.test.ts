@@ -106,10 +106,10 @@ describe("resolveManualCompactionCliTarget", () => {
     cliBackendsTesting.resetDepsForTest();
   });
 
-  it("recovers an implicit CLI runtime from its unique compatible binding", () => {
+  it.each(["anthropic", "claude-cli"])("recovers an implicit CLI runtime for %s", (provider) => {
     expect(
       resolveManualCompactionCliTarget({
-        provider: "anthropic",
+        provider,
         entry: {
           cliSessionBindings: {
             "claude-cli": { sessionId: "native-claude-session" },
@@ -123,7 +123,7 @@ describe("resolveManualCompactionCliTarget", () => {
     });
   });
 
-  it("uses setup metadata when the runtime registry is scoped elsewhere", () => {
+  it.each(["anthropic", "claude-cli"])("uses setup metadata for %s", (provider) => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],
       resolvePluginSetupCliBackend: ({ backend }) =>
@@ -141,7 +141,7 @@ describe("resolveManualCompactionCliTarget", () => {
     });
     expect(
       resolveManualCompactionCliTarget({
-        provider: "anthropic",
+        provider,
         cfg: {} as OpenClawConfig,
         entry: {
           cliSessionBindings: {

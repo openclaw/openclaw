@@ -1,50 +1,7 @@
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-type MatrixQaAuthStage = "m.login.dummy" | "m.login.registration_token";
-
-type MatrixQaSendMessageContent = {
-  body: string;
-  format?: "org.matrix.custom.html";
-  formatted_body?: string;
-  "m.new_content"?: MatrixQaSendMessageContent;
-  "m.mentions"?: {
-    user_ids?: string[];
-  };
-  "m.relates_to"?:
-    | {
-        rel_type: "m.thread";
-        event_id: string;
-        is_falling_back: true;
-        "m.in_reply_to": {
-          event_id: string;
-        };
-      }
-    | {
-        rel_type: "m.replace";
-        event_id: string;
-      };
-  msgtype: "m.text";
-};
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 
 type MatrixQaMediaMessageType = "m.audio" | "m.file" | "m.image" | "m.video";
-
-type MatrixQaSendMediaMessageContent = Omit<MatrixQaSendMessageContent, "msgtype"> & {
-  filename?: string;
-  info?: {
-    mimetype?: string;
-    size?: number;
-  };
-  msgtype: MatrixQaMediaMessageType;
-  url: string;
-};
-
-type MatrixQaSendReactionContent = {
-  "m.relates_to": {
-    event_id: string;
-    key: string;
-    rel_type: "m.annotation";
-  };
-};
 
 export type MatrixQaUiaaResponse = {
   completed?: string[];
@@ -78,10 +35,7 @@ function buildMatrixReplacementRelation(targetEventId: string) {
   };
 }
 
-export function buildMatrixReactionRelation(
-  messageId: string,
-  emoji: string,
-): MatrixQaSendReactionContent {
+export function buildMatrixReactionRelation(messageId: string, emoji: string) {
   const normalizedMessageId = messageId.trim();
   const normalizedEmoji = emoji.trim();
   if (!normalizedMessageId) {
@@ -92,35 +46,16 @@ export function buildMatrixReactionRelation(
   }
   return {
     "m.relates_to": {
-      rel_type: "m.annotation",
+      rel_type: "m.annotation" as const,
       event_id: normalizedMessageId,
       key: normalizedEmoji,
     },
   };
 }
 
-function escapeMatrixHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (char) => {
-    switch (char) {
-      case "&":
-        return "&amp;";
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      case '"':
-        return "&quot;";
-      case "'":
-        return "&#39;";
-      default:
-        return char;
-    }
-  });
-}
-
 function buildMatrixMentionLink(userId: string) {
   const href = `https://matrix.to/#/${encodeURIComponent(userId)}`;
-  const label = escapeMatrixHtml(userId);
+  const label = escapeHtml(userId);
   return `<a href="${href}">${label}</a>`;
 }
 
@@ -129,7 +64,7 @@ export function buildMatrixQaMessageContent(params: {
   mentionUserIds?: string[];
   replyToEventId?: string;
   threadRootEventId?: string;
-}): MatrixQaSendMessageContent {
+}) {
   const body = params.body;
   const uniqueMentionUserIds = uniqueStrings(params.mentionUserIds?.filter(Boolean) ?? []);
   const formattedParts: string[] = [];
@@ -137,26 +72,20 @@ export function buildMatrixQaMessageContent(params: {
   let usedFormattedMention = false;
 
   while (cursor < body.length) {
-    let matchedUserId: string | null = null;
-    for (const userId of uniqueMentionUserIds) {
-      if (body.startsWith(userId, cursor)) {
-        matchedUserId = userId;
-        break;
-      }
-    }
+    const matchedUserId = uniqueMentionUserIds.find((userId) => body.startsWith(userId, cursor));
     if (matchedUserId) {
       formattedParts.push(buildMatrixMentionLink(matchedUserId));
       cursor += matchedUserId.length;
       usedFormattedMention = true;
       continue;
     }
-    formattedParts.push(escapeMatrixHtml(body[cursor] ?? ""));
+    formattedParts.push(escapeHtml(body[cursor] ?? ""));
     cursor += 1;
   }
 
   return {
     body,
-    msgtype: "m.text",
+    msgtype: "m.text" as const,
     ...(usedFormattedMention
       ? {
           format: "org.matrix.custom.html" as const,
@@ -176,14 +105,14 @@ export function buildMatrixQaReplacementMessageContent(params: {
   body: string;
   mentionUserIds?: string[];
   targetEventId: string;
-}): MatrixQaSendMessageContent {
+}) {
   const newContent = buildMatrixQaMessageContent({
     body: params.body,
     mentionUserIds: params.mentionUserIds,
   });
   return {
     body: `* ${params.body}`,
-    msgtype: "m.text",
+    msgtype: "m.text" as const,
     "m.new_content": newContent,
     ...buildMatrixReplacementRelation(params.targetEventId),
   };
@@ -215,7 +144,7 @@ export function buildMatrixQaMediaMessageContent(params: {
   size: number;
   threadRootEventId?: string;
   url: string;
-}): MatrixQaSendMediaMessageContent {
+}) {
   const normalizedBody = params.body?.trim() || params.fileName?.trim() || "(file)";
   const content = buildMatrixQaMessageContent({
     body: normalizedBody,
@@ -247,27 +176,15 @@ export function resolveNextRegistrationAuth(params: {
     throw new Error("Matrix registration UIAA response did not include a session id.");
   }
 
-  const completed = new Set(
-    (params.response.completed ?? []).filter(
-      (stage): stage is MatrixQaAuthStage =>
-        stage === "m.login.dummy" || stage === "m.login.registration_token",
-    ),
-  );
-  const supportedStages = new Set<MatrixQaAuthStage>([
-    "m.login.registration_token",
-    "m.login.dummy",
-  ]);
+  const completed = new Set(params.response.completed ?? []);
+  const supportedStages = new Set(["m.login.registration_token", "m.login.dummy"]);
 
   for (const flow of params.response.flows ?? []) {
     const flowStages = flow.stages ?? [];
-    if (
-      flowStages.length === 0 ||
-      flowStages.some((stage) => !supportedStages.has(stage as MatrixQaAuthStage))
-    ) {
+    if (flowStages.length === 0 || flowStages.some((stage) => !supportedStages.has(stage))) {
       continue;
     }
-    const stages = flowStages as MatrixQaAuthStage[];
-    const nextStage = stages.find((stage) => !completed.has(stage));
+    const nextStage = flowStages.find((stage) => !completed.has(stage));
     if (!nextStage) {
       continue;
     }

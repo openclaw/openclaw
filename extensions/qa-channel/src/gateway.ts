@@ -1,10 +1,9 @@
-// Qa Channel plugin module implements gateway behavior.
+import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { pollQaBus } from "./bus-client.js";
 import { handleQaInbound } from "./inbound.js";
-import type { ChannelGatewayContext } from "./runtime-api.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
 export async function startQaGatewayAccount(

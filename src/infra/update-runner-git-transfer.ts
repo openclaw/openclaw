@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { tryReadDiskSpace } from "./disk-space.js";
 import { hasErrnoCode } from "./errno.js";
 import { openLocalFileSafely, type OpenResult } from "./fs-safe.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
 import { classifyPartialCloneGitFailure } from "./update-runner-git-target.js";
-import type { RunStepOptions, UpdateStepResult } from "./update-runner-types.js";
+import type { RunStepOptions } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const LARGE_CANDIDATE_PACK_WARNING_BYTES = 256 * 1024 * 1024;
 
@@ -310,6 +312,9 @@ export async function prepareGitCandidateTransfer(params: {
           await fs.unlink(keepPath);
         }
       } catch (error) {
+        if (hasCommandProcessCleanupError(error)) {
+          throw error;
+        }
         const warning: UpdateStepResult = {
           name: "git-update-pack-cleanup",
           command: "release retained Git update pack",

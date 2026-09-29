@@ -41,13 +41,9 @@ function cacheResolvedSystemBin(cache: Map<string, string>, name: string, candid
   pruneMapToMaxSize(cache, RESOLVED_BIN_CACHE_LIMIT);
 }
 
-function defaultIsExecutable(filePath: string): boolean {
+function isExecutable(filePath: string): boolean {
   try {
-    if (process.platform === "win32") {
-      fs.accessSync(filePath, fs.constants.R_OK);
-    } else {
-      fs.accessSync(filePath, fs.constants.X_OK);
-    }
+    fs.accessSync(filePath, process.platform === "win32" ? fs.constants.R_OK : fs.constants.X_OK);
     return true;
   } catch {
     return false;
@@ -70,8 +66,6 @@ function collectWindowsProgramFilesToolDirs(programFilesRoot: string): string[] 
   }
   return dirs;
 }
-
-const isExecutableFn: (filePath: string) => boolean = defaultIsExecutable;
 
 /**
  * Build the trusted-dir list for Windows. Only system-managed directories
@@ -192,19 +186,12 @@ export function resolveSystemBin(
   const hasExt = isWin && path.win32.extname(name).length > 0;
 
   for (const dir of dirs) {
-    if (isWin && !hasExt) {
-      for (const ext of WIN_PATHEXT) {
-        const candidate = path.win32.join(dir, name + ext);
-        if (isExecutableFn(candidate)) {
-          if (!hasExtra) {
-            cacheResolvedSystemBin(cache, name, candidate);
-          }
-          return candidate;
-        }
-      }
-    } else {
-      const candidate = path.join(dir, name);
-      if (isExecutableFn(candidate)) {
+    const candidates =
+      isWin && !hasExt
+        ? WIN_PATHEXT.map((ext) => path.win32.join(dir, name + ext))
+        : [path.join(dir, name)];
+    for (const candidate of candidates) {
+      if (isExecutable(candidate)) {
         if (!hasExtra) {
           cacheResolvedSystemBin(cache, name, candidate);
         }

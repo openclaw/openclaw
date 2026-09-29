@@ -1,11 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { prepareCliRunModelAuthority } from "../agents/cli-runner/run-admission.js";
+import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
 import { resolveBundledStaticCatalogModel } from "../agents/embedded-agent-runner/model.static-catalog.js";
 import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
+import { ProviderAuthError } from "../agents/model-auth-runtime-shared.js";
+import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as attachmentProcessor from "../media/attachment-processor.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 import { createSessionCompanion } from "./session-companion.js";
 
@@ -18,6 +26,17 @@ const runEmbeddedAgent = vi.hoisted(() =>
 );
 
 const resolveModelAsync = vi.hoisted(() => vi.fn());
+const resolveApiKeyForProviderCore = vi.hoisted(() => vi.fn());
+const resolveSelection = vi.hoisted(() =>
+  vi.fn(() => ({ provider: "test", modelId: "model-a" }) as { provider: string; modelId: string }),
+);
+const { prepareCliRunContext, executePreparedCliRun } = vi.hoisted(() => ({
+  prepareCliRunContext: vi.fn(async (params: RunCliAgentParams) => ({
+    params,
+    preparedBackend: {},
+  })),
+  executePreparedCliRun: vi.fn(async () => ({ text: "The session is fixing a bug." })),
+}));
 
 const { appendMessage, admitWrite, loadEntry, removeSession } = vi.hoisted(() => ({
   appendMessage: vi.fn<(message: unknown) => void>(),
@@ -64,11 +83,15 @@ vi.mock("../agents/sessions/index.js", () => ({
   },
 }));
 vi.mock("../agents/simple-completion-runtime.js", () => ({
-  resolveSimpleCompletionSelectionForAgent: () => ({ provider: "test", modelId: "model-a" }),
+  resolveSimpleCompletionSelectionForAgent: resolveSelection,
 }));
+vi.mock("../agents/cli-runner/prepare.runtime.js", () => ({ prepareCliRunContext }));
+vi.mock("../agents/cli-runner/execute.runtime.js", () => ({ executePreparedCliRun }));
+vi.mock("../agents/model-auth-provider.js", () => ({ resolveApiKeyForProviderCore }));
 
 function createCompanion(cfg: OpenClawConfig = {}) {
   return createSessionCompanion({
+    scheduler: createTestGatewayScheduler(),
     getConfig: () => cfg,
     contextReader: {
       currentSessionId: () => "session-1",
@@ -95,6 +118,11 @@ const question = {
 describe("session companion embedded invocation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveApiKeyForProviderCore
+      .mockReset()
+      .mockRejectedValue(
+        new ProviderAuthError("missing-provider-auth", "anthropic", "No API key found"),
+      );
     resolveModelAsync.mockReset().mockResolvedValue({ model: { input: ["text", "image"] } });
     appendMessage.mockReset();
     admitWrite.mockReset().mockImplementation(async (_manager, write) => write());
@@ -103,6 +131,44 @@ describe("session companion embedded invocation", () => {
     runEmbeddedAgent.mockReset().mockResolvedValue({
       meta: { durationMs: 1, finalAssistantVisibleText: "The session is reading a file." },
     });
+  });
+
+  it("passes a selected-text comment to the model without persisting it as a file", async () => {
+    const companion = createCompanion();
+    const respond = vi.fn();
+    try {
+      await sessionCompanionHandlers["sessions.companion.ask"]!({
+        params: {
+          sessionKey: question.sessionKey,
+          question: "What changed?",
+          selectionContext: "Selected text:\n<untrusted passage>\n\nUser comment:\nCheck this.",
+        },
+        client: { connId: "selection-connection" },
+        context: { sessionCompanion: companion, getRuntimeConfig: () => ({}) },
+        respond,
+      } as never);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ answer: expect.any(String) }),
+      );
+      expect(runEmbeddedAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: expect.stringContaining("&lt;untrusted passage&gt;"),
+          images: undefined,
+        }),
+      );
+      expect(runEmbeddedAgent.mock.calls[0]?.[0].prompt).toContain("User comment:\nCheck this.");
+      expect(
+        companion.state({ sessionKey: question.sessionKey, agentId: "main" }).exchanges,
+      ).toEqual([
+        { question: "What changed?", answer: expect.any(String), ts: expect.any(Number) },
+      ]);
+      await companion.ask({ ...question, question: "What next?" });
+      expect(runEmbeddedAgent.mock.calls[1]?.[0].prompt).toBe("What next?");
+      expect(JSON.stringify(appendMessage.mock.calls)).not.toContain("Check this.");
+    } finally {
+      companion.dispose();
+    }
   });
 
   it.each([0, 2_000_001])(
@@ -139,6 +205,75 @@ describe("session companion embedded invocation", () => {
           }),
         );
       } finally {
+        companion.dispose();
+      }
+    },
+  );
+
+  it.each(["preparation", "dispatch", "accepted"] as const)(
+    "rechecks the original RPC image policy until model admission (%s)",
+    async (phase) => {
+      const cfg: OpenClawConfig = {};
+      let committed: OpenClawConfig = cfg;
+      const disable = () => {
+        committed = { gateway: { uploads: { enabled: false } } };
+      };
+      const companion = createCompanion(cfg);
+      const respond = vi.fn();
+      const prepare = attachmentProcessor.prepareMediaAttachment;
+      const preparation = vi.spyOn(attachmentProcessor, "prepareMediaAttachment");
+      if (phase === "preparation") {
+        preparation.mockImplementationOnce(async (...args) => {
+          const result = await prepare(...args);
+          disable();
+          return result;
+        });
+      } else if (phase === "dispatch") {
+        admitWrite.mockImplementationOnce(async (_manager, write) => {
+          write();
+          disable();
+        });
+      } else {
+        runEmbeddedAgent.mockImplementationOnce(async () => {
+          disable();
+          return { meta: { durationMs: 1, finalAssistantVisibleText: "Accepted image answer" } };
+        });
+      }
+      try {
+        await sessionCompanionHandlers["sessions.companion.ask"]!({
+          params: {
+            sessionKey: question.sessionKey,
+            question: "Describe the image",
+            attachments: [{ mimeType: "image/png", content: imageBase64 }],
+          },
+          client: { connId: "late-policy-image" },
+          context: {
+            sessionCompanion: companion,
+            getRuntimeConfig: () => cfg,
+            getCommittedRuntimeConfig: () => committed,
+          },
+          respond,
+        } as never);
+        if (phase === "accepted") {
+          expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ answer: "Accepted image answer" }),
+          );
+        } else {
+          expect(runEmbeddedAgent).not.toHaveBeenCalled();
+          expect(respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: "FORBIDDEN",
+              details: { code: "UPLOADS_DISABLED" },
+            }),
+          );
+          expect(companion.state(question).exchanges).toEqual([]);
+        }
+      } finally {
+        preparation.mockRestore();
         companion.dispose();
       }
     },
@@ -295,6 +430,85 @@ describe("session companion embedded invocation", () => {
         surface.cleanup();
       }
     } finally {
+      companion.dispose();
+    }
+  });
+
+  it("answers through the primary model's CLI runtime when no provider API key exists", async () => {
+    // Subscription-only install: the primary runs on claude-cli and the
+    // automatic utility model is derived from the same provider.
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: "/tmp/companion-test",
+          model: "anthropic/claude-opus-4-6",
+          models: { "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } } },
+        },
+      },
+    };
+    resolveSelection.mockReturnValueOnce({ provider: "anthropic", modelId: "claude-haiku-4-5" });
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+      ],
+    });
+    const companion = createCompanion(cfg);
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "companion-reader",
+      scopes: ["operator.read"],
+      assertCurrent: () => {},
+      modelPolicy: prepareOperatorModelPolicy({
+        cfg,
+        policy: { sourceAgent: "main", allow: ["anthropic/claude-haiku-4-5"] },
+        manifestPlugins: [],
+      }),
+    });
+    prepareCliRunContext.mockImplementationOnce(async (params) => ({
+      params: prepareCliRunModelAuthority(params),
+      preparedBackend: {},
+    }));
+    try {
+      await expect(companion.ask({ ...question, operatorAuthority })).resolves.toMatchObject({
+        answer: "The session is fixing a bug.",
+      });
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(appendMessage).not.toHaveBeenCalled();
+      expect(prepareCliRunContext).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "claude-cli",
+          model: "claude-haiku-4-5",
+          requesterModel: { provider: "anthropic", model: "claude-haiku-4-5" },
+          executionMode: "side-question",
+          disableTools: true,
+          sessionKey: preparedTarget.sessionKey,
+          prompt: expect.stringContaining("What is it doing?"),
+          extraSystemPrompt: expect.stringContaining("read-only Side chat assistant"),
+        }),
+      );
+      expect(executePreparedCliRun).toHaveBeenCalledOnce();
+      resolveApiKeyForProviderCore.mockResolvedValue({ apiKey: "synthetic-key", mode: "api-key" });
+      resolveSelection.mockReturnValueOnce({ provider: "anthropic", modelId: "claude-haiku-4-5" });
+      await expect(
+        companion.ask({
+          ...question,
+          attachments: [{ mimeType: "image/png", content: imageBase64 }],
+        }),
+      ).resolves.toMatchObject({ answer: "The session is reading a file." });
+      expect(runEmbeddedAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          images: [expect.objectContaining({ type: "image" })],
+          toolsAllow: ["read", "sessions_history", "sessions_search"],
+        }),
+      );
+      expect(removeSession).toHaveBeenCalledWith(preparedTarget, undefined);
+    } finally {
+      cliBackendsTesting.resetDepsForTest();
       companion.dispose();
     }
   });

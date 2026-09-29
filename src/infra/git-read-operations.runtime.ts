@@ -1,6 +1,7 @@
 import { readRepositoryBranches } from "../agents/worktrees/branches.runtime.js";
 import {
   readCheckoutGitContext,
+  readCheckoutGitRevision,
   readPullRequestBranchFacts,
 } from "../gateway/control-ui-session-prs-git.runtime.js";
 import {
@@ -13,6 +14,8 @@ export async function executeGitReadOperation(
   operation: GitReadOperation,
 ): Promise<GitReadOperationResult> {
   switch (operation.type) {
+    case "checkout.revision":
+      return readCheckoutGitRevision(operation.input);
     case "checkout.context":
       return await readCheckoutGitContext(operation.input.root);
     case "checkout.diff":

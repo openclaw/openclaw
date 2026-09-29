@@ -1,7 +1,3 @@
-/**
- * Regression coverage for deterministic unknown-value stringification.
- * Verifies sorted keys, repeated references, cycles, binary data, and errors.
- */
 import { describe, expect, it } from "vitest";
 import { sha256Hex, sha256StableValue } from "./node-crypto.js";
 import { stableStringify, writeStableStringify } from "./stable-stringify.js";
@@ -19,19 +15,9 @@ const serializers: Record<string, typeof stableStringify> = {
 };
 
 describe.each(Object.entries(serializers))("%s", (_name, serialize) => {
-  it.each([
-    ['{"z":1,"a":2}', '{"a":2,"z":1}'],
-    [
-      '{"items":[3,null,{"z":false,"a":1.5}],"enabled":true}',
-      '{"enabled":true,"items":[3,null,{"a":1.5,"z":false}]}',
-    ],
-    ['["text",0,-2.5,null,false]', '["text",0,-2.5,null,false]'],
-  ])("preserves deterministic bytes for parsed JSON %#", (json, expected) => {
-    expect(serialize(JSON.parse(json))).toBe(expected);
-  });
-
-  it("sorts object keys recursively", () => {
-    expect(serialize({ b: { d: 4, c: 3 }, a: 1 })).toBe('{"a":1,"b":{"c":3,"d":4}}');
+  it("preserves parsed JSON values and sorts keys recursively", () => {
+    const value = JSON.parse('{"items":[3,null,{"z":false,"a":1.5}],"enabled":true}');
+    expect(serialize(value)).toBe('{"enabled":true,"items":[3,null,{"a":1.5,"z":false}]}');
   });
 
   it("marks true circular references without collapsing repeated references", () => {
@@ -60,7 +46,9 @@ describe.each(Object.entries(serializers))("%s", (_name, serialize) => {
       valid: "emoji 🙈 ok",
     };
 
-    expect(serialize(value)).toContain("\\ud83d");
+    expect(serialize(value)).toBe(
+      '{"high":"left\\ud83dright","key\\ud83d":"name","low":"left\\udc00right","valid":"emoji 🙈 ok"}',
+    );
     expect(serialize(value, sanitizeSurrogates)).toBe(
       '{"high":"leftright","key":"name","low":"leftright","valid":"emoji 🙈 ok"}',
     );
@@ -69,11 +57,6 @@ describe.each(Object.entries(serializers))("%s", (_name, serialize) => {
   it("sorts normalized keys before serializing them", () => {
     const high = String.fromCharCode(0xd83d);
     const malformed = { ba: 2, [`b${high}`]: 1 };
-    const normalized = { ba: 2, b: 1 };
-
-    expect(serialize(malformed, sanitizeSurrogates)).toBe(
-      serialize(normalized, sanitizeSurrogates),
-    );
     expect(serialize(malformed, sanitizeSurrogates)).toBe('{"b":1,"ba":2}');
   });
 

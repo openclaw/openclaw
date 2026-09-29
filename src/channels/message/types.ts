@@ -1,8 +1,3 @@
-/**
- * Channel message adapter and durability types.
- *
- * Defines receipts, live-message state, send contexts, and adapter capability contracts.
- */
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -187,6 +182,7 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   replyToMode?: ReplyToMode;
   threadId?: string | number | null;
   silent?: boolean;
+  /** Live cancellation signal; check before each physical send and after awaited preparation. */
   signal?: AbortSignal;
   gatewayClientScopes?: readonly string[];
   /** @internal Opaque durable intent id for exact provider-side send reconciliation. */
@@ -214,6 +210,7 @@ export type ChannelMessageSendMediaContext<TConfig = OpenClawConfig> =
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
     audioAsVoice?: boolean;
     gifPlayback?: boolean;
+    /** Send image, GIF, or video as document to avoid channel compression. */
     forceDocument?: boolean;
   };
 
@@ -413,9 +410,7 @@ export const livePreviewFinalizerCapabilities = [
 export type LivePreviewFinalizerCapability = (typeof livePreviewFinalizerCapabilities)[number];
 
 /** Capability map for preview finalization behavior. */
-export type LivePreviewFinalizerCapabilityMap = Partial<
-  Record<LivePreviewFinalizerCapability, boolean>
->;
+type LivePreviewFinalizerCapabilityMap = Partial<Record<LivePreviewFinalizerCapability, boolean>>;
 
 /** Adapter shape for finalizing live previews. */
 type ChannelMessageLiveFinalizerAdapterShape = {

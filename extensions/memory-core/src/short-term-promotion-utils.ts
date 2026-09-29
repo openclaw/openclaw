@@ -1,8 +1,12 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS } from "openclaw/plugin-sdk/memory-core-host-status";
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeUniqueTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { deriveConceptTags, MAX_CONCEPT_TAGS } from "./concept-vocabulary.js";
 import type {
@@ -11,6 +15,8 @@ import type {
   ShortTermRecallStore,
 } from "./short-term-promotion-types.js";
 
+const GENERIC_DAY_HEADING_RE =
+  /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
 const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
 const SHORT_TERM_SESSION_CORPUS_RE =
@@ -65,12 +71,62 @@ export function toFiniteScore(value: unknown, fallback: number): number {
   return num;
 }
 
-export function normalizeSnippet(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return "";
+export function isGenericDailyHeading(heading: string): boolean {
+  const normalized = heading.trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return true;
   }
-  return trimmed.replace(/\s+/g, " ");
+  const lower = normalized.toLowerCase();
+  if (lower === "today" || lower === "yesterday" || lower === "tomorrow") {
+    return true;
+  }
+  if (lower === "morning" || lower === "afternoon" || lower === "evening" || lower === "night") {
+    return true;
+  }
+  return GENERIC_DAY_HEADING_RE.test(normalized);
+}
+
+export function normalizeSnippet(raw: string): string {
+  return raw.trim().replace(/\s+/g, " ");
+}
+
+const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
+
+function resolvePromotedSnippetCharLimit(maxTokens: number): number {
+  const tokenLimit = toFiniteNonNegativeInt(
+    maxTokens,
+    DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+  );
+  // This is an inexpensive display-size guard, not a tokenizer contract.
+  return tokenLimit * PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE;
+}
+
+function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
+  const limit = resolvePromotedSnippetCharLimit(maxTokens);
+  if (limit === 0 || snippet.length <= limit) {
+    return snippet;
+  }
+  const hardLimit = truncateUtf16Safe(snippet, limit);
+  const sentenceBoundary = Math.max(
+    hardLimit.lastIndexOf(". "),
+    hardLimit.lastIndexOf("! "),
+    hardLimit.lastIndexOf("? "),
+  );
+  const wordBoundary = hardLimit.lastIndexOf(" ");
+  const cutAt =
+    sentenceBoundary >= Math.floor(limit * 0.55)
+      ? sentenceBoundary + 1
+      : wordBoundary >= Math.floor(limit * 0.65)
+        ? wordBoundary
+        : limit;
+  return `${hardLimit.slice(0, cutAt).trimEnd()}...`;
+}
+
+export function formatPromotedSnippetForMemory(rawSnippet: string, maxTokens: number): string {
+  const normalized = normalizeSnippet(rawSnippet || "(no snippet captured)")
+    .replace(/^[-*+] +/, "")
+    .trim();
+  return truncatePromotedSnippet(normalized || "(no snippet captured)", maxTokens);
 }
 
 function normalizeProjectKeyList(value: unknown): string | undefined {
@@ -261,21 +317,13 @@ export function mergeRecentDistinct(
   nextValue: string,
   limit: number,
 ): string[] {
-  const seen = new Set<string>();
-  const next = existing.filter((value): value is string => {
-    if (typeof value !== "string" || value.length === 0 || seen.has(value)) {
-      return false;
-    }
-    seen.add(value);
-    return true;
-  });
+  const next = [
+    ...new Set(existing.filter((value) => typeof value === "string" && value.length > 0)),
+  ];
   if (nextValue && !next.includes(nextValue)) {
     next.push(nextValue);
   }
-  if (next.length <= limit) {
-    return next;
-  }
-  return next.slice(next.length - limit);
+  return next.length <= limit ? next : next.slice(next.length - limit);
 }
 
 export function normalizeIsoDay(isoLike: string): string | null {
@@ -284,26 +332,6 @@ export function normalizeIsoDay(isoLike: string): string | null {
   }
   const match = isoLike.trim().match(/^(\d{4}-\d{2}-\d{2})/);
   return match?.[1] ?? null;
-}
-
-function normalizeDistinctStrings(values: unknown[], limit: number): string[] {
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-  for (const value of values) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const trimmed = value.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    normalized.push(trimmed);
-    if (normalized.length >= limit) {
-      break;
-    }
-  }
-  return normalized;
 }
 
 export function totalSignalCountForEntry(entry: {
@@ -374,10 +402,10 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
       }
       const snippet = truncateShortTermSnippet(fullSnippet);
       const queryHashes = Array.isArray(entry.queryHashes)
-        ? normalizeDistinctStrings(entry.queryHashes, MAX_QUERY_HASHES)
+        ? normalizeUniqueTrimmedStringList(entry.queryHashes).slice(0, MAX_QUERY_HASHES)
         : [];
       const storedUserQueryHashes = Array.isArray(entry.userQueryHashes)
-        ? normalizeDistinctStrings(entry.userQueryHashes, MAX_QUERY_HASHES)
+        ? normalizeUniqueTrimmedStringList(entry.userQueryHashes).slice(0, MAX_QUERY_HASHES)
         : undefined;
       // Legacy rows did not retain query provenance. Rows containing only recall
       // signals are unambiguous, so preserve their earned diversity; mixed rows
@@ -391,12 +419,11 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
             .filter((valueLocal): valueLocal is string => valueLocal !== null)
         : [];
       const conceptTags = Array.isArray(entry.conceptTags)
-        ? normalizeDistinctStrings(
+        ? normalizeUniqueTrimmedStringList(
             entry.conceptTags.map((tag) =>
               typeof tag === "string" ? normalizeLowercaseStringOrEmpty(tag) : tag,
             ),
-            MAX_CONCEPT_TAGS,
-          )
+          ).slice(0, MAX_CONCEPT_TAGS)
         : deriveConceptTags({ path: entryPath, snippet: fullSnippet });
       const provenanceRaw =
         entry.provenance && typeof entry.provenance === "object"
@@ -530,7 +557,7 @@ export function toFinitePositive(value: unknown, fallback: number): number {
   return num;
 }
 
-export function toFiniteNonNegativeInt(value: unknown, fallback: number): number {
+export function toFiniteNonNegativeInt(value: unknown, fallback = 0): number {
   const num = Number(value);
   if (!Number.isFinite(num)) {
     return fallback;
@@ -605,29 +632,21 @@ export function normalizeMemoryPathForWorkspace(workspaceDir: string, rawPath: s
   return normalized;
 }
 
-export function toNonNegativeInt(value: unknown): number {
-  const num = Number(value);
-  if (!Number.isFinite(num)) {
-    return 0;
-  }
-  return Math.max(0, Math.floor(num));
-}
-
 export function parseEntryRangeFromKey(
   key: string,
   fallbackStartLine: unknown,
   fallbackEndLine: unknown,
 ): { startLine: number; endLine: number } {
-  const startLine = toNonNegativeInt(fallbackStartLine);
-  const endLine = toNonNegativeInt(fallbackEndLine);
+  const startLine = toFiniteNonNegativeInt(fallbackStartLine);
+  const endLine = toFiniteNonNegativeInt(fallbackEndLine);
   if (startLine > 0 && endLine > 0) {
     return { startLine, endLine };
   }
   const match = key.match(/:(\d+):(\d+)$/);
   if (match) {
     return {
-      startLine: Math.max(1, toNonNegativeInt(match[1])),
-      endLine: Math.max(1, toNonNegativeInt(match[2])),
+      startLine: Math.max(1, toFiniteNonNegativeInt(match[1])),
+      endLine: Math.max(1, toFiniteNonNegativeInt(match[2])),
     };
   }
   return { startLine: 1, endLine: 1 };

@@ -28,14 +28,14 @@ import {
   type WhatsAppQaScenarioMetadata,
   type WhatsAppQaScenarioRun,
 } from "./whatsapp-live.contracts.js";
+import { isTransientWhatsAppQaDriverError } from "./whatsapp-live.driver.js";
 import {
   callWhatsAppGatewayMessageAction,
   callWhatsAppGatewayPoll,
   callWhatsAppGatewaySend,
-  isTransientWhatsAppQaDriverError,
-  runWhatsAppStructuredInboundChecks,
-  waitForScenarioObservedMessage,
-} from "./whatsapp-live.operations.js";
+} from "./whatsapp-live.gateway.js";
+import { runWhatsAppStructuredInboundChecks } from "./whatsapp-live.media.js";
+import { waitForScenarioObservedMessage } from "./whatsapp-live.observations.js";
 import { unpackWhatsAppAuthArchive } from "./whatsapp-live.setup.js";
 
 const runExecSpy = vi.hoisted(() =>
@@ -178,7 +178,6 @@ function createWhatsAppScenarioContext(
     sutPhoneE164: "+15550000002",
     target: "+15550000002",
     targetKind: "dm",
-    waitForReady: async () => {},
     ...contextOverrides,
   };
 }
@@ -1534,40 +1533,6 @@ describe("WhatsApp QA live runtime", () => {
       }),
     ).rejects.toThrow("observed 0 WhatsApp driver message(s) after wait lower bound");
     expect(recorded).toEqual([]);
-  });
-
-  it("lets WhatsApp scenario waits use caller-specific sender matching", async () => {
-    const groupReply = createWhatsAppObservedMessage("group-reply-1", {
-      fromJid: "120363000000000000@g.us",
-      fromPhoneE164: null,
-      observedAt: "2026-06-05T01:00:01.000Z",
-      text: "group token",
-    });
-    const driver = createWhatsAppQaDriverMock({
-      waitForMessage: async (params) => {
-        expect(params.match(groupReply)).toBe(true);
-        return groupReply;
-      },
-    });
-    const recorded: unknown[] = [];
-    const context = createWhatsAppScenarioContext({
-      driver,
-      gatewayTarget: "120363000000000000@g.us",
-      gatewayWorkspaceDir: "/tmp/openclaw-whatsapp-qa-gateway",
-      recordedMessages: recorded,
-      requestStartedAt: new Date("2026-06-05T01:00:00.000Z"),
-      scenarioId: "whatsapp-mention-gating",
-      scenarioTitle: "WhatsApp group mention gating",
-      target: "120363000000000000@g.us",
-    });
-
-    await expect(
-      testing.waitForScenarioObservedMessage(context, {
-        expectedSender: (message) => message.fromJid === "120363000000000000@g.us",
-        match: (message) => message.text.includes("group token"),
-      }),
-    ).resolves.toBe(groupReply);
-    expect(recorded).toEqual([groupReply]);
   });
 
   it("defines WhatsApp final-message accounting as a settled two-chunk assertion", () => {

@@ -4,6 +4,7 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import type { ChannelStatusIssue } from "../../channels/plugins/types.core.js";
 import type { ProgressReporter } from "../../cli/progress.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
@@ -29,6 +30,7 @@ import {
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import type { buildWorkspaceSkillReadiness } from "../../skills/discovery/status.js";
 import { formatDeliveryQueueHealthLine } from "../health-format.js";
+import { countActiveStatusAgents } from "../status-overview-values.js";
 import type {
   resolveStatusGatewayHealthSafe,
   StatusGatewayDiagnosticsResult,
@@ -53,14 +55,6 @@ type ConfigSnapshotLike = {
 
 type PortUsageLike = Pick<PortUsage, "listeners" | "port" | "status" | "hints">;
 
-type ChannelIssueLike = {
-  channel: string;
-  accountId: string;
-  kind: string;
-  message: string;
-  fix?: string;
-};
-
 type DeliveryDiagnosticsLike = {
   summary?: {
     byType?: Record<string, number>;
@@ -83,12 +77,6 @@ type AgentStatusLike = {
 };
 
 const AGENT_ACTIVITY_SOFT_WARNING_MS = 30 * 60_000;
-
-function countRecentAgentSessions(agentStatus: AgentStatusLike, thresholdMs: number): number {
-  return agentStatus.agents.filter(
-    (agent) => agent.lastActiveAgeMs != null && agent.lastActiveAgeMs <= thresholdMs,
-  ).length;
-}
 
 function countGatewayListenerPids(portUsage: PortUsageLike): number {
   const pids = new Set<number>();
@@ -131,7 +119,6 @@ function latestDeliveryEventAgeMs(snapshot: DeliveryDiagnosticsLike): number | n
   return latestTs > 0 ? Date.now() - latestTs : null;
 }
 
-/** Appends config, gateway, channel, delivery, and log diagnostics to the status-all report. */
 export async function appendStatusAllDiagnosis(params: {
   lines: string[];
   progress: ProgressReporter;
@@ -153,7 +140,7 @@ export async function appendStatusAllDiagnosis(params: {
   skillReadiness: ReturnType<typeof buildWorkspaceSkillReadiness> | null;
   pluginCompatibility: PluginCompatibilityNotice[];
   channelsStatus: unknown;
-  channelIssues: ChannelIssueLike[];
+  channelIssues: ChannelStatusIssue[];
   deliveryDiagnostics: StatusGatewayDiagnosticsResult | null;
   exporterDiagnostics: StatusGatewayDiagnosticsResult | null;
   agentStatus?: AgentStatusLike;
@@ -311,10 +298,10 @@ export async function appendStatusAllDiagnosis(params: {
   }
 
   if (params.agentStatus) {
-    const recentSessions = countRecentAgentSessions(
-      params.agentStatus,
-      AGENT_ACTIVITY_SOFT_WARNING_MS,
-    );
+    const recentSessions = countActiveStatusAgents({
+      agentStatus: params.agentStatus,
+      activeThresholdMs: AGENT_ACTIVITY_SOFT_WARNING_MS,
+    });
     const hasKnownSessions = params.agentStatus.totalSessions > 0;
     const shouldWarn = hasKnownSessions && recentSessions === 0;
     emitCheck(

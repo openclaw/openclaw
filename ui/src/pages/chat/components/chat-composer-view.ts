@@ -1,11 +1,10 @@
 import "../../../styles/chat/composer-surface.css";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
-import type { GatewaySessionRow } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
 import { t } from "../../../i18n/index.ts";
@@ -13,12 +12,13 @@ import { detectTextDirection } from "../../../lib/text-direction.ts";
 import "../../../styles/chat/composer-context-strip.css";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import { insertComposerDictation } from "../composer-dictation.ts";
+import { renderChatAttachmentInputs } from "./chat-attachment-inputs.ts";
 import {
   handleChatAttachmentPaste,
   renderAttachmentPreview,
   renderAttachmentReadStatus,
-  renderChatAttachmentInputs,
 } from "./chat-attachments.ts";
+import { renderContextNotice } from "./chat-composer-context.ts";
 import type { ChatRunControlsProps } from "./chat-composer-controls.ts";
 import {
   renderChatAbortAction,
@@ -29,6 +29,7 @@ import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import type { GoalComposerController } from "./chat-composer-goal-mode.ts";
 import { renderChatGoal, renderChatGoalRecovery } from "./chat-composer-goal.ts";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.ts";
+import type { resolveComposerMenus } from "./chat-composer-menus.ts";
 import { renderChatComposerPlusMenu } from "./chat-composer-plus-menu.ts";
 import { renderComposerQuestionDock } from "./chat-composer-question.ts";
 import { renderChatQueue } from "./chat-composer-queue.ts";
@@ -50,6 +51,8 @@ import {
   type ComposerRunStatus,
 } from "./chat-composer-status.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
+import { isPastedTextAttachment } from "./chat-pasted-text.ts";
+import { renderChatPermissionPicker } from "./chat-permission-picker.ts";
 import {
   handleChatComposerDropdownShow,
   markPointerOpenedChatComposerDropdown,
@@ -63,18 +66,13 @@ type ChatComposerViewContext = {
   state: ChatComposerState;
   canCompose: boolean;
   showAbortableUi: boolean;
-  activeSession: GatewaySessionRow | undefined;
   visibleDraft: string;
-  contextNotice: TemplateResult | typeof nothing;
-  composerControls: TemplateResult | typeof nothing;
-  composerLeadControl: TemplateResult | typeof nothing;
   runStatusAnnouncement: string;
   composerRunStatus: ComposerRunStatus | null | undefined;
   requestUpdate: () => void;
   sendShortcut: "enter" | "modifier-enter";
   questionPanelProps: ReturnType<typeof createGatewayQuestionPanelProps> | null;
   showComposer: boolean;
-  placeholder: string;
   handleKeyDown: (event: KeyboardEvent) => void;
   handleBeforeInput: (event: InputEvent) => void;
   handleInput: (event: InputEvent) => void;
@@ -84,21 +82,43 @@ type ChatComposerViewContext = {
   handleBlur: (event: FocusEvent) => void;
   dictation: ComposerDictationController | undefined;
   runControlsProps: ChatRunControlsProps;
-  mirrorCameraPreview: boolean;
-  slashMenuVisible: boolean;
-  skillMenuVisible: boolean;
-  mentionMenuVisible: boolean;
-  emojiMenuVisible: boolean;
+  menus: ReturnType<typeof resolveComposerMenus>;
   mentionMenuHost: HumanMentionMenuHost;
   mentionError: string | null;
   skillMenuHost: SkillMenuHost;
   slashMenuHost: SlashMenuHost;
-  activeSlashMenuOptionId: string | null;
-  activeSlashMenuOptionLabel: string;
-  slashMenuListboxId: string;
-  slashMenuAnnouncementId: string;
   goalComposer: GoalComposerController;
 };
+
+export function renderChatComposerQueue(props: ChatComposerProps, showAbortableUi: boolean) {
+  return renderChatQueue({
+    queue: props.queue,
+    displayQueue: props.displayQueue,
+    offline: props.offline,
+    canAbort: showAbortableUi,
+    canRemoveServerQueued: props.connected && props.canSend && !props.submitDisabledReason,
+    onQueueRetry:
+      props.connected && props.canSend && !props.submitDisabledReason
+        ? props.onQueueRetry
+        : undefined,
+    onQueueSteer:
+      props.connected && props.canSend && !props.submitDisabledReason
+        ? props.onQueueSteer
+        : undefined,
+    // Reordering is local bookkeeping, so it stays available while offline —
+    // exactly when a queue is long enough to need it.
+    onQueueMove: props.onQueueMove,
+    onQueueEdit: props.queuedEdit?.onEdit,
+    onQueueEditChange: props.queuedEdit?.onEditChange,
+    onQueueEditSubmit: props.queuedEdit?.onEditSubmit,
+    onQueueEditCancel: props.queuedEdit?.onCancel,
+    editingId: props.queuedEdit?.editingId ?? null,
+    editingText: props.queuedEdit?.editingText,
+    editingMentions: props.queuedEdit?.editingMentions,
+    editingSource: props.queuedEdit?.source,
+    onQueueRemove: props.onQueueRemove,
+  });
+}
 
 export function renderChatComposerView(context: ChatComposerViewContext) {
   const {
@@ -106,18 +126,13 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     state,
     canCompose,
     showAbortableUi,
-    activeSession,
     visibleDraft,
-    contextNotice,
-    composerControls,
-    composerLeadControl,
     runStatusAnnouncement,
     composerRunStatus,
     requestUpdate,
     sendShortcut,
     questionPanelProps,
     showComposer,
-    placeholder,
     handleKeyDown,
     handleBeforeInput,
     handleInput,
@@ -127,21 +142,41 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     handleBlur,
     dictation,
     runControlsProps,
-    mirrorCameraPreview,
-    slashMenuVisible,
-    skillMenuVisible,
-    mentionMenuVisible,
-    emojiMenuVisible,
+    menus,
     mentionMenuHost,
     mentionError,
     skillMenuHost,
     slashMenuHost,
-    activeSlashMenuOptionId,
-    activeSlashMenuOptionLabel,
-    slashMenuListboxId,
-    slashMenuAnnouncementId,
     goalComposer,
   } = context;
+  const {
+    slashMenuVisible,
+    skillMenuVisible,
+    mentionMenuVisible,
+    menuVisible,
+    activeMenuOptionId: activeSlashMenuOptionId,
+    activeMenuOptionLabel: activeSlashMenuOptionLabel,
+    menuListboxId: slashMenuListboxId,
+  } = menus;
+  const activeSession = props.selectedSession;
+  const contextNotice = renderContextNotice(
+    activeSession,
+    props.sessions?.defaults?.contextTokens ?? null,
+    { messages: props.messages, providerUsage: props.providerUsage },
+  );
+  const composerControls = props.composerControls ?? nothing;
+  const composerLeadControl = props.permissionPicker
+    ? renderChatPermissionPicker(props.permissionPicker)
+    : nothing;
+  const placeholder = goalComposer.active
+    ? t("chat.goals.objectivePlaceholder")
+    : (props.attachments ?? []).some((attachment) => !isPastedTextAttachment(attachment))
+      ? t("chat.composer.placeholderWithAttachments")
+      : t("chat.composer.placeholder", { name: props.assistantName || "agent" });
+  const mirrorCameraPreview =
+    props.realtimeTalkVideoStream?.getVideoTracks?.()[0]?.getSettings?.().facingMode !==
+    "environment";
+  const slashMenuAnnouncementId = paneDomId(props.paneId, "slash-active-announcement");
   const disabledBanner = props.disabledBanner
     ? html`
         <div
@@ -215,16 +250,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   const composerAlerts = showComposerInput
     ? html`
         ${renderChatVoiceStatus({
-          status:
-            props.realtimeTalkCameraError || props.realtimeTalkVoice?.error
-              ? "error"
-              : props.realtimeTalkStatus,
-          detail: props.realtimeTalkVoice?.error ?? props.realtimeTalkDetail,
+          status: props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus,
+          detail: props.realtimeTalkDetail,
           onUseSystemDefaultMicrophone: props.onUseSystemDefaultMicrophone,
-          onDismissError:
-            props.realtimeTalkCameraError || props.realtimeTalkVoice?.error
-              ? undefined
-              : props.onDismissRealtimeTalkError,
+          onDismissError: props.realtimeTalkCameraError
+            ? undefined
+            : props.onDismissRealtimeTalkError,
         })}
         ${
           props.realtimeTalkInputNotice
@@ -319,36 +350,16 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           aria-hidden="true"
         ></div>`
       : nothing;
-  const queue = renderChatQueue({
-    queue: props.queue,
-    displayQueue: props.displayQueue,
-    offline: props.offline,
-    canAbort: showAbortableUi,
-    onQueueRetry:
-      props.connected && props.canSend && !props.submitDisabledReason
-        ? props.onQueueRetry
-        : undefined,
-    onQueueSteer:
-      props.connected && props.canSend && !props.submitDisabledReason
-        ? props.onQueueSteer
-        : undefined,
-    // Reordering is local bookkeeping, so it stays available while offline —
-    // exactly when a queue is long enough to need it.
-    onQueueMove: props.onQueueMove,
-    onQueueEdit: props.queuedEdit?.onEdit,
-    onQueueEditChange: props.queuedEdit?.onEditChange,
-    onQueueEditSubmit: props.queuedEdit?.onEditSubmit,
-    onQueueEditCancel: props.queuedEdit?.onCancel,
-    editingId: props.queuedEdit?.editingId ?? null,
-    editingText: props.queuedEdit?.editingText,
-    editingMentions: props.queuedEdit?.editingMentions,
-    editingSource: props.queuedEdit?.source,
-    onQueueRemove: props.onQueueRemove,
-  });
+  const queue = renderChatComposerQueue(props, showAbortableUi);
   const goalCard = activeSession?.goal
     ? html`<div class="agent-chat__goal-float">
         ${renderChatGoal(state, activeSession.goal, {
-          canAct: props.connected && props.canSend && !props.goalRecovery,
+          canAct:
+            props.connected &&
+            props.canSend &&
+            !props.submitDisabledReason &&
+            Boolean(props.currentSessionId) &&
+            !props.goalRecovery,
           onGoalAction: props.onGoalAction,
           onGoalEdit: props.onGoalSubmit ? (goal) => goalComposer.begin(goal) : undefined,
           requestUpdate,
@@ -377,12 +388,13 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           ? html`<div
               class="agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar ${
                 props.offline ? "agent-chat__input--offline" : ""
-              }${dictation?.active ? " agent-chat__input--dictating" : ""}"
+              }${dictation?.active ? " agent-chat__input--dictating" : ""}${
+                !canCompose ? " agent-chat__input--disabled" : ""
+              }"
               aria-busy=${props.disabledReasonBusy ? "true" : "false"}
               @wa-show=${handleChatComposerDropdownShow}
               @wa-after-show=${restorePointerOpenedChatComposerTrigger}
               @openclaw-composer-dismiss-invocations=${() => {
-                state.slashMenuOpen = false;
                 resetSlashMenuState(state);
                 resetSkillMenuState(state);
                 state.mentionMenu.close();
@@ -454,7 +466,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 ${renderAttachmentPreview(props)}
                 ${renderAttachmentReadStatus(props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0)}
                 ${renderComposerDictationStatus(dictation)}
-                ${renderChatAttachmentInputs({ ...props, disabled: !canCompose })}
+                ${renderChatAttachmentInputs({
+                  ...props,
+                  disabled: !canCompose,
+                  cameraActive: showComposer && props.cameraActive !== false,
+                })}
                 ${
                   props.realtimeTalkVideoStream
                     ? html`
@@ -506,16 +522,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     ?disabled=${!canCompose}
                     ?readonly=${dictation?.locksComposer === true || goalComposer.pending}
                     aria-autocomplete="list"
-                    aria-controls=${ifDefined(
-                      slashMenuVisible || skillMenuVisible || mentionMenuVisible || emojiMenuVisible
-                        ? slashMenuListboxId
-                        : undefined,
-                    )}
-                    aria-haspopup=${ifDefined(
-                      slashMenuVisible || skillMenuVisible || mentionMenuVisible || emojiMenuVisible
-                        ? "listbox"
-                        : undefined,
-                    )}
+                    aria-controls=${ifDefined(menuVisible ? slashMenuListboxId : undefined)}
+                    aria-haspopup=${ifDefined(menuVisible ? "listbox" : undefined)}
                     aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
                     aria-describedby=${`${slashMenuAnnouncementId}${
                       props.disabledReason ? ` ${disabledReasonId}` : ""

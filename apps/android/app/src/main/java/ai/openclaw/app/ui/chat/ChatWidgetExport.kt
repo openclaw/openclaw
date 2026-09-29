@@ -1,11 +1,11 @@
 package ai.openclaw.app.ui.chat
 
-import android.app.Activity
+import ai.openclaw.app.takeCodePoints
+import ai.openclaw.app.takeUtf8Bytes
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
-import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -239,35 +239,3 @@ private suspend fun saveChatWidgetImage(
     throw error
   }
 }
-
-private fun String.takeCodePoints(limit: Int): String {
-  val count = codePointCount(0, length)
-  if (count <= limit) return this
-  return substring(0, offsetByCodePoints(0, limit))
-}
-
-private fun String.takeUtf8Bytes(limit: Int): String {
-  var end = 0
-  var byteCount = 0
-  while (end < length) {
-    val codePoint = codePointAt(end)
-    val codePointByteCount =
-      when {
-        codePoint <= 0x7f -> 1
-        codePoint <= 0x7ff -> 2
-        codePoint <= 0xffff -> 3
-        else -> 4
-      }
-    if (byteCount + codePointByteCount > limit) break
-    byteCount += codePointByteCount
-    end += Character.charCount(codePoint)
-  }
-  return substring(0, end)
-}
-
-private tailrec fun Context.findActivity(): Activity? =
-  when (this) {
-    is Activity -> this
-    is ContextWrapper -> baseContext.findActivity()
-    else -> null
-  }

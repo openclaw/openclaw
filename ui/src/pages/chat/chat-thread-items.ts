@@ -3,13 +3,13 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import type { ChatItem, ChatQueueItem, ToolCard } from "../../lib/chat/chat-types.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import {
   canvasPreviewsMatch,
   readCanvasContentPreview,
-  stripMessageDisplayMetadataText,
   normalizeRoleForGrouping,
   normalizeMessage,
 } from "../../lib/chat/message-normalizer.ts";
@@ -92,7 +92,24 @@ type ChatMessagePreview = {
   timestamp: number | null;
 };
 
+const chatMessagePreviews = new WeakMap<object, ChatMessagePreview | null>();
+
 export function extractChatMessagePreview(toolMessage: unknown): ChatMessagePreview | null {
+  const message = asRecord(toolMessage);
+  if (!message) {
+    return null;
+  }
+  const cached = chatMessagePreviews.get(message);
+  if (cached !== undefined) {
+    return cached;
+  }
+  // A negative result also belongs to this immutable message snapshot.
+  const preview = readChatMessagePreview(message);
+  chatMessagePreviews.set(message, preview);
+  return preview;
+}
+
+function readChatMessagePreview(toolMessage: Record<string, unknown>): ChatMessagePreview | null {
   if (!safeNormalizeMessage(toolMessage)) {
     return null;
   }
@@ -260,13 +277,7 @@ export function findCanvasInsertionIndex(
 }
 
 function resolveMessageToolUseId(message: Record<string, unknown>): string | undefined {
-  for (const field of ["tool_call_id", "toolCallId", "tool_use_id", "toolUseId"] as const) {
-    const value = message[field];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
+  return resolveToolUseId({ ...message, id: undefined });
 }
 
 export function resolveToolBlockId(
@@ -420,7 +431,7 @@ export function hasRenderableNormalizedMessage(
 }
 
 export function sanitizeStreamText(text: string): string {
-  const stripped = stripMessageDisplayMetadataText(text);
+  const stripped = stripInboundMetadata(text);
   return stripped.trim().length > 0 ? stripped : "";
 }
 

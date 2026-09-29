@@ -1,4 +1,3 @@
-// Protocol Gen Kotlin script supports OpenClaw repository automation.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,18 +8,7 @@ import {
 } from "../packages/gateway-protocol/src/version.js";
 import { listCoreGatewayMethodNames } from "../src/gateway/methods/core-method-policy.js";
 import { extractGatewayEventNames } from "./check-protocol-event-coverage.mts";
-
-type JsonSchema = {
-  type?: string | string[];
-  const?: boolean | number | string | null;
-  properties?: Record<string, JsonSchema>;
-  required?: string[];
-  items?: JsonSchema;
-  enum?: Array<boolean | number | string | null>;
-  patternProperties?: Record<string, JsonSchema>;
-  anyOf?: JsonSchema[];
-  oneOf?: JsonSchema[];
-};
+import { type JsonSchema, schemaSignature } from "./lib/protocol-codegen-schema.js";
 
 type EnumSpec = {
   name: string;
@@ -38,7 +26,7 @@ const constantsOutputPath = path.join(
   repoRoot,
   "apps/android/app/src/main/java/ai/openclaw/app/protocol/OpenClawProtocolConstants.kt",
 );
-const protocolSchemas = ProtocolSchemas as unknown as Record<string, JsonSchema>;
+const protocolSchemas = ProtocolSchemas as Record<string, JsonSchema>;
 
 const schemaNames = new Map<string, string>([
   ["ErrorShape", "GatewayProtocolError"],
@@ -192,25 +180,6 @@ function lowerCamel(value: string): string {
   return name[0]!.toLowerCase() + name.slice(1);
 }
 
-function stableJson(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(stableJson);
-  }
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.keys(record)
-        .toSorted()
-        .map((key) => [key, stableJson(record[key])]),
-    );
-  }
-  return value;
-}
-
-function schemaSignature(schema: JsonSchema): string {
-  return JSON.stringify(stableJson(schema));
-}
-
 function literalValue(schema: JsonSchema): boolean | number | string | null | undefined {
   if ("const" in schema) {
     return schema.const;
@@ -221,9 +190,6 @@ function literalValue(schema: JsonSchema): boolean | number | string | null | un
 function kotlinLiteral(value: boolean | number | string | null): string {
   if (typeof value === "string") {
     return JSON.stringify(value);
-  }
-  if (value === null) {
-    return "null";
   }
   return String(value);
 }
@@ -331,28 +297,26 @@ function emitWireModels(): string[] {
     }
     const required = new Set(schema.required ?? []);
     const variant = unionVariants.get(schemaSignature(schema));
-    const properties = Object.entries(schema.properties)
+    const fields = Object.entries(schema.properties)
       .filter(([wireName]) => wireName !== variant?.discriminator)
-      .map(([wireName, propertySchema]) => {
+      .flatMap(([wireName, propertySchema]) => {
         const propertyName = lowerCamel(wireName);
         const type = kotlinType(propertySchema, `${name}${upperCamel(wireName)}`);
         const literal = literalValue(propertySchema);
         const optional = !required.has(wireName);
         const useLiteralDefault =
           literal !== undefined && (optional || typeof literal !== "boolean");
-        return {
-          annotation:
-            propertyName === wireName ? [] : [`  @SerialName(${JSON.stringify(wireName)})`],
-          declaration: `  val ${propertyName}: ${type}${optional ? "?" : ""}${
+        const lines = [
+          `  val ${propertyName}: ${type}${optional ? "?" : ""}${
             useLiteralDefault ? ` = ${kotlinLiteral(literal)}` : optional ? " = null" : ""
           },`,
-        };
+        ];
+        if (propertyName !== wireName) {
+          lines.unshift(`  @SerialName(${JSON.stringify(wireName)})`);
+        }
+        return lines;
       });
-    const fields: string[] = [];
-    for (const property of properties) {
-      fields.push(...property.annotation, property.declaration);
-    }
-    if (properties.length === 0 && variant) {
+    if (fields.length === 0 && variant) {
       return [
         `@SerialName(${JSON.stringify(variant.literal)})`,
         "@Serializable",

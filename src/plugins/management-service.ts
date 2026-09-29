@@ -24,6 +24,7 @@ import {
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
 import { resolvePluginCredentialDescriptors } from "./credential-descriptors.js";
+import { inspectPluginCredentialValue } from "./credential-inspection.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import {
   emptyInstalledPluginComponents,
@@ -33,7 +34,10 @@ import {
   createInstalledPluginEnabledPredicate,
   isInstalledPluginEnabled,
 } from "./installed-plugin-index.js";
-import { readInstalledPluginOverview } from "./installed-plugin-overview.js";
+import {
+  projectPluginOverviewCapabilities,
+  readInstalledPluginOverview,
+} from "./installed-plugin-overview.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import {
   type ManagedPluginIconSource,
@@ -53,13 +57,14 @@ import {
   normalizeFeaturedAt,
   firstPluginError,
   compareCatalogEntries,
-  deriveLegacyPluginCategory,
+  projectPluginCatalogCategoryFacts,
   resolveInstalledPluginPresentation,
   resolveInstalledHostedOfficialEntry,
   resolveOfficialEntryById,
 } from "./management-catalog.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import { readPluginMcpAuthStatus } from "./mcp-auth-status.js";
 import {
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalPluginCatalogEntries,
@@ -313,8 +318,6 @@ export const listManagedPlugins = withManagedPluginCache(
       const configError = setup.mode === "invalid" ? setup.error : undefined;
       const error = firstPluginError(pluginDiagnostics, record.pluginId) ?? configError;
       const kind = normalizeKinds(manifest?.kind);
-      const categories = manifest?.categories;
-      const legacyCategory = deriveLegacyPluginCategory(manifest);
       // Only externally installed plugins (tracked install record, non-bundled) can be removed.
       const removable = record.origin !== "bundled" && Boolean(installOwner);
       const hostedListingAuthoritative =
@@ -341,6 +344,7 @@ export const listManagedPlugins = withManagedPluginCache(
         }),
         removable,
       };
+      Object.assign(plugin, projectPluginCatalogCategoryFacts(manifest, enabled));
       if (record.packageName) {
         plugin.packageName = record.packageName;
       }
@@ -396,12 +400,11 @@ export const listManagedPlugins = withManagedPluginCache(
       if (error) {
         plugin.error = error;
       }
-      if (legacyCategory) {
-        plugin.category = legacyCategory;
-      }
-      if (categories?.length) {
-        plugin.categories = [...categories];
-      } else if (record.origin !== "bundled" && installRecord?.source === "clawhub") {
+      if (
+        !plugin.categories?.length &&
+        record.origin !== "bundled" &&
+        installRecord?.source === "clawhub"
+      ) {
         const name = normalizeOptionalString(installRecord.clawhubPackage);
         const version = normalizeOptionalString(installRecord.version);
         if (name && version) {
@@ -511,6 +514,7 @@ export const listManagedPlugins = withManagedPluginCache(
         id: pluginId,
         name: resolveOfficialExternalPluginLabel(entry),
         ...(packageName ? { packageName } : {}),
+        ...(clawhub ? { clawhubPackage: clawhub.name } : {}),
         ...(description ? { description } : {}),
         ...(version ? { version } : {}),
         ...(kind ? { kind } : {}),
@@ -620,6 +624,9 @@ export const inspectManagedPlugin = withManagedPluginCache(
           `Plugin package "${installOwner}" has incomplete manifest metadata.`,
         );
       }
+      const mcpAuth = enabled
+        ? await readPluginMcpAuthStatus({ config: params.config, pluginId, metadata })
+        : undefined;
       return {
         ok: true,
         plugin: {
@@ -640,7 +647,23 @@ export const inspectManagedPlugin = withManagedPluginCache(
         declared,
         components: projectInstalledPluginComponents({ manifest, declared }),
         overview: readInstalledPluginOverview(manifest),
-        credentials: manifest ? resolvePluginCredentialDescriptors(manifest) : [],
+        credentials: manifest
+          ? resolvePluginCredentialDescriptors(manifest).map((descriptor) => {
+              const credential = inspectPluginCredentialValue(params.config, descriptor, env);
+              // Public inspection carries presence only. Private values and reference
+              // identifiers remain behind the administrator credential editor.
+              const status: NonNullable<ManagedPluginInspection["credentials"]>[number]["status"] =
+                credential.kind === "reference"
+                  ? credential.unresolved
+                    ? "unresolved"
+                    : "configured"
+                  : credential.kind === "literal" || credential.kind === "environment"
+                    ? "configured"
+                    : credential.kind;
+              return Object.assign({}, descriptor, { status });
+            })
+          : [],
+        ...(mcpAuth ? { mcpAuth } : {}),
         reviewToken: computeDeclaredSurfaceHash(declared),
         ...(trust ? { trust } : {}),
       };
@@ -687,6 +710,9 @@ export const inspectManagedPlugin = withManagedPluginCache(
       },
       ...summary,
       components: emptyInstalledPluginComponents(),
+      overview: {
+        capabilities: projectPluginOverviewCapabilities(summary.declared, manifest?.uiCapabilities),
+      },
       reviewToken: computeDeclaredSurfaceHash(summary.declared),
     };
   },

@@ -105,7 +105,7 @@ export function createProgressState(
       draftState.answerLane.stream?.updatePreview(
         renderTelegramProgressDraftPreview(options.snapshot, {
           toolProgress: progressCompositor.previewToolProgressEnabled,
-          richMessages: config.telegramCfg.richMessages === true,
+          richMessages: config.richMessages,
           maxLines: resolveChannelProgressDraftMaxLines(config.telegramCfg),
           maxLineChars: resolveChannelProgressDraftMaxLineChars(config.telegramCfg),
         }),

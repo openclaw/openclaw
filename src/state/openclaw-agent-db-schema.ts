@@ -85,6 +85,11 @@ import {
   withLegacySessionParticipantsSchema,
 } from "./openclaw-agent-participants-migration.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { migrateSessionEntrySnapshotsInTransaction } from "./openclaw-agent-session-snapshots-migration.js";
+import {
+  SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION,
+  withoutSessionEntrySnapshotsSchema,
+} from "./openclaw-agent-session-snapshots-schema.js";
 import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
 import { migrateDeployedTranscriptFtsRowsInTransaction } from "./openclaw-agent-transcript-fts-schema.js";
 import { migrateTranscriptPayloadStorageInTransaction } from "./openclaw-agent-transcript-payload-migration.js";
@@ -128,6 +133,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
   diagnostics?: SqliteIntegrityDiagnostics,
   verification?: OpenClawAgentIntegrityVerification,
   reuseRuntimeIntegrity = false,
+  runtimeAdmission = false,
 ): SqliteIntegrityOperation<boolean> {
   database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   const userVersion = readSqliteUserVersion(database);
@@ -149,6 +155,13 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     hasPendingCurrentVersionAgentDatabaseMigration(database);
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
     const startedAt = performance.now();
+    const reuseIntegrity =
+      reuseRuntimeIntegrity ||
+      canReuseOpenClawAgentIntegrityVerification(
+        pathname,
+        verification,
+        migrationPending || hasPendingCurrentVersionMigration,
+      );
     const rebuiltIndexes = yield* verifyAndRepairCanonicalSqliteIndexSteps(
       database,
       pathname,
@@ -158,13 +171,20 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
         validateAfterRepair: () =>
           assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname }),
         diagnostics,
-        reuseIntegrity:
-          reuseRuntimeIntegrity ||
-          canReuseOpenClawAgentIntegrityVerification(
-            pathname,
-            verification,
-            migrationPending || hasPendingCurrentVersionMigration,
-          ),
+        // Include sqlite_schema for the freelist check and every discovered shadow/extension table.
+        integrityTables:
+          runtimeAdmission && !reuseIntegrity
+            ? [
+                { name: "sqlite_schema" },
+                ...database
+                  .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
+                  .all(),
+              ].map(({ name }) => ({
+                table: String(name),
+                check: name === "transcript_events" ? "quick_check" : "integrity_check",
+              }))
+            : undefined,
+        reuseIntegrity,
       },
     );
     if (rebuiltIndexes.length > 0) {
@@ -325,16 +345,23 @@ function ensureAgentSchema(
         !isEmptyDatabase &&
         previousVersion < AGENT_STORAGE_SCHEMA_VERSION &&
         targetVersion >= AGENT_STORAGE_SCHEMA_VERSION;
-      const migrationSchemaSql = requiresStorageMigration
-        ? withLegacyAgentStorageSchema(schemaSql, previousVersion)
+      const requiresSnapshotMigration =
+        !isEmptyDatabase &&
+        previousVersion < SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION &&
+        targetVersion >= SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION;
+      const storageSchemaSql = requiresSnapshotMigration
+        ? withoutSessionEntrySnapshotsSchema(schemaSql)
         : schemaSql;
+      const migrationSchemaSql = requiresStorageMigration
+        ? withLegacyAgentStorageSchema(storageSchemaSql, previousVersion)
+        : storageSchemaSql;
       if (
         previousVersion < targetVersion &&
         previousVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION - 1 &&
-        previousVersion < AGENT_STORAGE_SCHEMA_VERSION &&
+        previousVersion < SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION &&
         targetVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION
       ) {
-        if (previousVersion === CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
+        if (previousVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
           // Keep schema-21's admitted additive repairs before its exact-shape
           // preflight; the storage cutover must not retire those upgrade paths.
           migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);
@@ -362,7 +389,10 @@ function ensureAgentSchema(
           seedCanonicalSessionValidationPending(db);
         }
         if (requiresStorageMigration) {
-          migrateAgentStorageInTransaction(db, schemaSql, previousVersion);
+          migrateAgentStorageInTransaction(db, storageSchemaSql, previousVersion);
+        }
+        if (requiresSnapshotMigration) {
+          migrateSessionEntrySnapshotsInTransaction(db);
         }
         finishAgentSchemaMigration(
           db,
@@ -455,7 +485,10 @@ function ensureAgentSchema(
         seedCanonicalSessionValidationPending(db);
       }
       if (requiresStorageMigration) {
-        migrateAgentStorageInTransaction(db, schemaSql, previousVersion);
+        migrateAgentStorageInTransaction(db, storageSchemaSql, previousVersion);
+      }
+      if (requiresSnapshotMigration) {
+        migrateSessionEntrySnapshotsInTransaction(db);
       }
       finishAgentSchemaMigration(
         db,
@@ -467,7 +500,11 @@ function ensureAgentSchema(
         assertMigration,
       );
     };
-    runSqliteImmediateTransactionSync(db, () => withMutation(mutate), { withCommit: withMutation });
+    runSqliteImmediateTransactionSync(db, () => withMutation(mutate), {
+      databaseLabel: pathname,
+      operationLabel: "agent.schema.ensure",
+      withCommit: withMutation,
+    });
   } finally {
     if (db.isOpen) {
       db.exec("PRAGMA foreign_keys = ON;");
@@ -528,6 +565,8 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
   const withIntegrityMutation: AgentSchemaMutationGuard = (run) =>
     deletionFence
       ? runSqliteImmediateTransactionSync(db, () => withRegistrationFence(run), {
+          databaseLabel: pathname,
+          operationLabel: "agent.schema.integrity",
           withCommit: withRegistrationFence,
         })
       : run();

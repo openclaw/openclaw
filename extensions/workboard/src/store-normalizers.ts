@@ -42,8 +42,11 @@ import {
   type WorkboardWorkerProtocol,
   type WorkboardWorkspace,
 } from "@openclaw/workboard-contract";
-import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeBoundedOptionalString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   MAX_ATTACHMENT_BYTES,
@@ -222,21 +225,6 @@ export function normalizeNotificationSubscription(
     throw new Error("notification subscription needs cardId, sessionKey, runId, or target.");
   }
   const eventKinds = normalizeNotificationKinds(input.eventKinds);
-  const preservedFields: Partial<WorkboardNotificationSubscription> = {};
-  if (fallback) {
-    if (fallback.lastEventAt) {
-      preservedFields.lastEventAt = fallback.lastEventAt;
-    }
-    if (fallback.lastEventId) {
-      preservedFields.lastEventId = fallback.lastEventId;
-    }
-    if (fallback.lastEventSequence) {
-      preservedFields.lastEventSequence = fallback.lastEventSequence;
-    }
-    if (fallback.deliveredEventIds?.length) {
-      preservedFields.deliveredEventIds = fallback.deliveredEventIds;
-    }
-  }
   return {
     id: fallback?.id ?? randomUUID(),
     boardId,
@@ -245,7 +233,12 @@ export function normalizeNotificationSubscription(
     ...(runId ? { runId } : {}),
     ...(target ? { target } : {}),
     ...(eventKinds ? { eventKinds } : {}),
-    ...preservedFields,
+    ...(fallback?.lastEventAt ? { lastEventAt: fallback.lastEventAt } : {}),
+    ...(fallback?.lastEventId ? { lastEventId: fallback.lastEventId } : {}),
+    ...(fallback?.lastEventSequence ? { lastEventSequence: fallback.lastEventSequence } : {}),
+    ...(fallback?.deliveredEventIds?.length
+      ? { deliveredEventIds: fallback.deliveredEventIds }
+      : {}),
     createdAt: fallback?.createdAt ?? now,
     updatedAt: now,
   };
@@ -369,10 +362,6 @@ export function normalizeStringList(value: unknown, fieldName: string, maxLength
   return values;
 }
 
-export function normalizePosition(value: unknown, fallback: number): number {
-  return resolveNonNegativeIntegerOption(value, fallback);
-}
-
 function normalizePositiveInteger(value: unknown, fieldName: string): number | undefined {
   if (value == null || value === "") {
     return undefined;
@@ -485,7 +474,7 @@ export function normalizeAutomation(
   const launch = normalizeLaunchState(
     options.allowLaunchState && Object.hasOwn(record, "launch") ? record.launch : fallback.launch,
   );
-  const next = removeUndefinedAutomationFields({
+  const next = {
     ...(tenant ? { tenant } : {}),
     ...(boardId ? { boardId } : {}),
     ...(createdByCardId ? { createdByCardId } : {}),
@@ -501,7 +490,13 @@ export function normalizeAutomation(
     ...(dispatchCount ? { dispatchCount } : {}),
     ...(lastDispatchAt ? { lastDispatchAt } : {}),
     ...(launch ? { launch } : {}),
-  });
+  };
+  // Legacy imports can retain empty workspace or authority objects.
+  for (const [key, entry] of Object.entries(next)) {
+    if (entry !== null && typeof entry === "object" && Object.keys(entry).length === 0) {
+      Reflect.deleteProperty(next, key);
+    }
+  }
   return Object.keys(next).length ? next : undefined;
 }
 
@@ -511,17 +506,12 @@ function normalizeLaunchTimestamp(value: unknown): number | undefined {
     : undefined;
 }
 
-function normalizeLaunchString(value: unknown, maxLength: number): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  return normalized && normalized.length <= maxLength ? normalized : undefined;
-}
-
 function normalizeLaunchState(value: unknown): WorkboardLaunchState | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  const requestedSessionKey = normalizeLaunchString(value.requestedSessionKey, 240);
-  const provisionalRunId = normalizeLaunchString(value.provisionalRunId, 160);
+  const requestedSessionKey = normalizeBoundedOptionalString(value.requestedSessionKey, 240);
+  const provisionalRunId = normalizeBoundedOptionalString(value.provisionalRunId, 160);
   const preparedAt = normalizeLaunchTimestamp(value.preparedAt);
   if (!requestedSessionKey || !provisionalRunId || preparedAt === undefined) {
     return undefined;
@@ -532,8 +522,8 @@ function normalizeLaunchState(value: unknown): WorkboardLaunchState | undefined 
   }
   if (value.phase === "accepted") {
     const acceptedAt = normalizeLaunchTimestamp(value.acceptedAt);
-    const acceptedSessionKey = normalizeLaunchString(value.acceptedSessionKey, 240);
-    const acceptedRunId = normalizeLaunchString(value.acceptedRunId, 160);
+    const acceptedSessionKey = normalizeBoundedOptionalString(value.acceptedSessionKey, 240);
+    const acceptedRunId = normalizeBoundedOptionalString(value.acceptedRunId, 160);
     return acceptedAt === undefined || !acceptedSessionKey
       ? undefined
       : {
@@ -546,7 +536,7 @@ function normalizeLaunchState(value: unknown): WorkboardLaunchState | undefined 
   }
   if (value.phase === "failed") {
     const failedAt = normalizeLaunchTimestamp(value.failedAt);
-    const reason = normalizeLaunchString(value.reason, 800);
+    const reason = normalizeBoundedOptionalString(value.reason, 800);
     return failedAt === undefined || !reason
       ? undefined
       : { phase: "failed", ...identity, failedAt, reason };
@@ -705,19 +695,7 @@ function normalizeProof(value: unknown): WorkboardProof | null {
   if (!id || !createdAt) {
     return null;
   }
-  const label = normalizeBoundedString(record.label, undefined, 160, "proof label");
-  const command = normalizeBoundedString(record.command, undefined, 1000, "proof command");
-  const url = normalizeBoundedString(record.url, undefined, 2000, "proof URL");
-  const note = normalizeBoundedString(record.note, undefined, 2000, "proof note");
-  return {
-    id,
-    status: normalizeEnumValue(record.status, WORKBOARD_PROOF_STATUSES, "unknown"),
-    createdAt,
-    ...(label ? { label } : {}),
-    ...(command ? { command } : {}),
-    ...(url ? { url } : {}),
-    ...(note ? { note } : {}),
-  };
+  return normalizeProofInput(record, createdAt, id);
 }
 
 export function normalizeArtifact(value: unknown): WorkboardArtifact | null {
@@ -972,13 +950,17 @@ function normalizeNotification(value: unknown): WorkboardNotification | null {
   };
 }
 
-export function normalizeProofInput(input: WorkboardProofInput, now: number): WorkboardProof {
+export function normalizeProofInput(
+  input: WorkboardProofInput,
+  now: number,
+  id?: string,
+): WorkboardProof {
   const label = normalizeBoundedString(input.label, undefined, 160, "proof label");
   const command = normalizeBoundedString(input.command, undefined, 1000, "proof command");
   const url = normalizeBoundedString(input.url, undefined, 2000, "proof URL");
   const note = normalizeBoundedString(input.note, undefined, 2000, "proof note");
   return {
-    id: randomUUID(),
+    id: id ?? randomUUID(),
     status: normalizeEnumValue(input.status, WORKBOARD_PROOF_STATUSES, "unknown"),
     createdAt: now,
     ...(label ? { label } : {}),
@@ -1057,10 +1039,7 @@ export function normalizeMetadata(
     return trimMetadataToBudget(fallback, options);
   }
   const record = value;
-  const stale =
-    record.stale && typeof record.stale === "object" && !Array.isArray(record.stale)
-      ? (record.stale as Record<string, unknown>)
-      : null;
+  const stale = isRecord(record.stale) ? record.stale : null;
   // Archival is a transition owned by archive(), which appends the matching
   // `archived` event. Callers that cannot produce that event (create) must not
   // be able to declare it, or the card is excluded from dispatch from the
@@ -1209,48 +1188,13 @@ export function syncExecutionSessionKey(
   if (!execution) {
     return undefined;
   }
-  return removeUndefinedExecutionFields({
+  const next = {
     ...execution,
     sessionKey,
     updatedAt: Date.now(),
-  });
-}
-
-function removeUndefinedExecutionFields(execution: WorkboardExecution): WorkboardExecution {
-  const next = { ...execution };
+  };
   for (const key of ["engine", "model", "sessionKey", "runId"] as const) {
     if (next[key] === undefined) {
-      delete next[key];
-    }
-  }
-  return next;
-}
-
-function removeUndefinedAutomationFields(automation: WorkboardAutomation): WorkboardAutomation {
-  const next = { ...automation };
-  for (const key of [
-    "tenant",
-    "boardId",
-    "createdByCardId",
-    "idempotencyKey",
-    "skills",
-    "workspace",
-    "workspaceAccess",
-    "maxRuntimeSeconds",
-    "maxRetries",
-    "scheduledAt",
-    "summary",
-    "createdCardIds",
-    "dispatchCount",
-    "lastDispatchAt",
-    "launch",
-  ] as const) {
-    const value = next[key];
-    if (
-      value === undefined ||
-      (Array.isArray(value) && value.length === 0) ||
-      (typeof value === "object" && value !== null && Object.keys(value).length === 0)
-    ) {
       delete next[key];
     }
   }
@@ -1319,28 +1263,14 @@ function dropFirst<T>(items: readonly T[] | undefined): T[] | undefined {
   return next.length ? next : undefined;
 }
 
-function dropFirstProofExcept(
-  items: readonly WorkboardProof[] | undefined,
-  preserveProofId: string | undefined,
-): WorkboardProof[] | undefined {
+function dropFirstMatching<T>(
+  items: readonly T[] | undefined,
+  predicate: (item: T) => boolean,
+): T[] | undefined {
   if (!items?.length) {
     return undefined;
   }
-  const index = preserveProofId ? items.findIndex((proof) => proof.id !== preserveProofId) : 0;
-  if (index < 0) {
-    return items.slice();
-  }
-  const next = items.filter((_, itemIndex) => itemIndex !== index);
-  return next.length ? next : undefined;
-}
-
-function dropFirstNonDependencyLink(
-  items: readonly WorkboardLink[] | undefined,
-): WorkboardLink[] | undefined {
-  if (!items?.length) {
-    return undefined;
-  }
-  const index = items.findIndex((link) => !isDependencyLink(link));
+  const index = items.findIndex(predicate);
   if (index < 0) {
     return items.slice();
   }
@@ -1384,7 +1314,10 @@ export function trimMetadataToBudget(
     ) {
       next = removeUndefinedMetadataFields({
         ...next,
-        proof: dropFirstProofExcept(next.proof, options.preserveProofId),
+        proof: dropFirstMatching(
+          next.proof,
+          (proof) => !options.preserveProofId || proof.id !== options.preserveProofId,
+        ),
       });
     } else if (next.artifacts?.length) {
       next = removeUndefinedMetadataFields({ ...next, artifacts: dropFirst(next.artifacts) });
@@ -1396,7 +1329,7 @@ export function trimMetadataToBudget(
     } else if (next.workerLogs?.length) {
       next = removeUndefinedMetadataFields({ ...next, workerLogs: dropFirst(next.workerLogs) });
     } else if (next.links?.length) {
-      const links = dropFirstNonDependencyLink(next.links);
+      const links = dropFirstMatching(next.links, (link) => !isDependencyLink(link));
       if (links?.length === next.links.length) {
         next = removeUndefinedMetadataFields({ ...next, comments: dropFirst(next.comments) });
       } else {

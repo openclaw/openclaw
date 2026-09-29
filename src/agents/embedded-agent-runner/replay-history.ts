@@ -1,6 +1,3 @@
-/**
- * Sanitizes and validates replayed session history before model calls.
- */
 import { isDeepStrictEqual } from "node:util";
 import {
   hasOnlyAssistantReasoningContent,
@@ -9,7 +6,10 @@ import {
 } from "@openclaw/ai/internal/shared";
 import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { asFiniteNumber as toFiniteCostNumber } from "@openclaw/normalization-core/number-coercion";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -24,7 +24,6 @@ import type {
 } from "../../plugins/types.js";
 import {
   annotateInterSessionPromptText,
-  hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
@@ -129,72 +128,46 @@ function createProviderReplayPluginParams(params: ProviderReplayHookParams) {
 
 function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
-  const out: AgentMessage[] = [];
-  for (const msg of messages) {
-    if (!hasInterSessionUserProvenance(msg as { role?: unknown; provenance?: unknown })) {
-      out.push(msg);
-      continue;
+  const out = messages.map((message) => {
+    if (message?.role !== "user") {
+      return message;
     }
-    const provenance = normalizeInputProvenance((msg as { provenance?: unknown }).provenance);
-    const user = msg as Extract<AgentMessage, { role: "user" }>;
-    if (typeof user.content === "string") {
-      const annotated = annotateInterSessionPromptText(user.content, provenance);
-      if (annotated === user.content) {
-        out.push(msg);
-        continue;
+    const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
+    if (provenance?.kind !== "inter_session") {
+      return message;
+    }
+    if (typeof message.content === "string") {
+      const content = annotateInterSessionPromptText(message.content, provenance);
+      if (content === message.content) {
+        return message;
       }
       touched = true;
-      out.push({
-        ...msg,
-        content: annotated,
-      } as AgentMessage);
-      continue;
+      return { ...message, content };
     }
-    if (!Array.isArray(user.content)) {
-      out.push(msg);
-      continue;
+    if (!Array.isArray(message.content)) {
+      return message;
     }
-
-    const textIndex = user.content.findIndex(
-      (block) =>
-        block &&
-        typeof block === "object" &&
-        (block as { type?: unknown }).type === "text" &&
-        typeof (block as { text?: unknown }).text === "string",
-    );
-
-    if (textIndex >= 0) {
-      const existing = user.content[textIndex] as { type: "text"; text: string };
-      const annotated = annotateInterSessionPromptText(existing.text, provenance);
-      if (annotated === existing.text) {
-        out.push(msg);
-        continue;
+    const content = [...message.content];
+    const textIndex = content.findIndex((block) => {
+      const record = asOptionalObjectRecord(block);
+      return record?.type === "text" && typeof record.text === "string";
+    });
+    if (textIndex < 0) {
+      content.unshift({
+        type: "text",
+        text: annotateInterSessionPromptText("Inter-session content follows.", provenance),
+      });
+    } else {
+      const existing = content[textIndex] as { type: "text"; text: string };
+      const text = annotateInterSessionPromptText(existing.text, provenance);
+      if (text === existing.text) {
+        return message;
       }
-      const nextContent = [...user.content];
-      nextContent[textIndex] = {
-        ...existing,
-        text: annotated,
-      };
-      touched = true;
-      out.push({
-        ...msg,
-        content: nextContent,
-      } as AgentMessage);
-      continue;
+      content[textIndex] = { ...existing, text };
     }
-
     touched = true;
-    out.push({
-      ...msg,
-      content: [
-        {
-          type: "text",
-          text: annotateInterSessionPromptText("Inter-session content follows.", provenance),
-        },
-        ...user.content,
-      ],
-    } as AgentMessage);
-  }
+    return { ...message, content };
+  });
   return touched ? out : messages;
 }
 
@@ -212,23 +185,16 @@ function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
 
   let touched = false;
   const sanitizedContent = replayContent.filter((block) => {
-    if (!block || typeof block !== "object") {
-      return true;
-    }
-    if ((block as { type?: unknown }).type !== "text") {
-      return true;
-    }
-    const text = (block as { text?: unknown }).text;
-    if (typeof text !== "string" || text.trim().length > 0) {
-      return true;
-    }
-    touched = true;
-    return false;
+    const record = asOptionalObjectRecord(block);
+    const keep =
+      record?.type !== "text" || typeof record.text !== "string" || Boolean(record.text.trim());
+    touched ||= !keep;
+    return keep;
   });
   if (sanitizedContent.length === 0) {
-    return hasPersistedMedia(message) ? ({ ...message, content: "" } as AgentMessage) : null;
+    return hasPersistedMedia(message) ? { ...message, content: "" } : null;
   }
-  return touched ? ({ ...message, content: sanitizedContent } as AgentMessage) : message;
+  return touched ? { ...message, content: sanitizedContent } : message;
 }
 
 function normalizeAssistantReplayTextContent(
@@ -361,7 +327,7 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       continue;
     }
     let assistantMessage: AssistantReplayMessage = message;
-    let replayContent = (message as { content?: unknown }).content;
+    const replayContent = (message as { content?: unknown }).content;
     if (typeof replayContent === "string") {
       const normalized = normalizeAssistantReplayTextContent(message, replayContent);
       if (normalized) {
@@ -370,24 +336,25 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       touched = true;
       continue;
     }
-    if (!Array.isArray(replayContent)) {
-      replayContent =
-        replayContent != null && typeof replayContent === "object" ? [replayContent] : [];
+    const blockContent = Array.isArray(replayContent)
+      ? replayContent
+      : replayContent != null && typeof replayContent === "object"
+        ? [replayContent]
+        : [];
+    if (blockContent !== replayContent) {
       assistantMessage = replaceCompactionReplayOwnerContent(
         message,
-        replayContent as typeof message.content,
+        blockContent as typeof message.content,
       ) as AssistantReplayMessage;
       touched = true;
     }
-    if (Array.isArray(replayContent)) {
-      const normalized = normalizeAssistantReplayBlockContent(assistantMessage, replayContent);
-      if (normalized !== assistantMessage) {
-        touched = true;
-        if (!normalized) {
-          continue;
-        }
-        assistantMessage = normalized as AssistantReplayMessage;
+    const normalized = normalizeAssistantReplayBlockContent(assistantMessage, blockContent);
+    if (normalized !== assistantMessage) {
+      touched = true;
+      if (!normalized) {
+        continue;
       }
+      assistantMessage = normalized;
     }
     if (isReasoningOnlyLengthAssistantTurn(assistantMessage)) {
       // Token-limited thinking is incomplete provider state. Replaying it can
@@ -431,34 +398,23 @@ function normalizeAssistantUsageSnapshot(usage: unknown) {
 }
 
 function normalizeAssistantUsageCost(usage: unknown): AssistantUsageSnapshot["cost"] | undefined {
-  const base = makeZeroUsageSnapshot().cost;
-  if (!usage || typeof usage !== "object") {
+  const cost = asOptionalObjectRecord(asOptionalObjectRecord(usage)?.cost);
+  if (!cost) {
     return undefined;
   }
-  const rawCost = (usage as { cost?: unknown }).cost;
-  if (!rawCost || typeof rawCost !== "object") {
+  const values = ["input", "output", "cacheRead", "cacheWrite", "total"].map((field) =>
+    toFiniteCostNumber(cost[field]),
+  );
+  if (values.every((value) => value === undefined)) {
     return undefined;
   }
-  const cost = rawCost as Record<string, unknown>;
-  const inputRaw = toFiniteCostNumber(cost.input);
-  const outputRaw = toFiniteCostNumber(cost.output);
-  const cacheReadRaw = toFiniteCostNumber(cost.cacheRead);
-  const cacheWriteRaw = toFiniteCostNumber(cost.cacheWrite);
-  const totalRaw = toFiniteCostNumber(cost.total);
-  if (
-    inputRaw === undefined &&
-    outputRaw === undefined &&
-    cacheReadRaw === undefined &&
-    cacheWriteRaw === undefined &&
-    totalRaw === undefined
-  ) {
-    return undefined;
-  }
-  const input = inputRaw ?? base.input;
-  const output = outputRaw ?? base.output;
-  const cacheRead = cacheReadRaw ?? base.cacheRead;
-  const cacheWrite = cacheWriteRaw ?? base.cacheWrite;
-  const total = totalRaw ?? input + output + cacheRead + cacheWrite;
+  const [
+    input = 0,
+    output = 0,
+    cacheRead = 0,
+    cacheWrite = 0,
+    total = input + output + cacheRead + cacheWrite,
+  ] = values;
   // Keep authoritative provider billing provenance through replay repair. Dropping it
   // turns a real zero-dollar total back into a local estimate during later accounting.
   const totalOrigin = cost.totalOrigin === "provider-billed" ? cost.totalOrigin : undefined;
@@ -478,48 +434,30 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
       continue;
     }
     const normalizedUsage = normalizeAssistantUsageSnapshot(message.usage);
-    const usageCost =
-      message.usage && typeof message.usage === "object"
-        ? (message.usage as { cost?: unknown }).cost
-        : undefined;
-    const rawContextUsage =
-      message.usage && typeof message.usage === "object"
-        ? (message.usage as { contextUsage?: unknown }).contextUsage
-        : undefined;
+    const usage = asOptionalObjectRecord(message.usage);
+    const usageCost = asOptionalObjectRecord(usage?.cost);
+    const rawContextUsage = asOptionalObjectRecord(usage?.contextUsage);
     const normalizedContextUsage = normalizedUsage.contextUsage;
     const contextUsageMatches =
       normalizedContextUsage === undefined
-        ? rawContextUsage === undefined
-        : normalizedContextUsage.state === "unavailable"
-          ? rawContextUsage !== null &&
-            typeof rawContextUsage === "object" &&
-            (rawContextUsage as { state?: unknown }).state === "unavailable"
-          : rawContextUsage !== null &&
-            typeof rawContextUsage === "object" &&
-            (rawContextUsage as { state?: unknown }).state === "available" &&
-            (rawContextUsage as { promptTokens?: unknown }).promptTokens ===
-              normalizedContextUsage.promptTokens &&
-            (rawContextUsage as { totalTokens?: unknown }).totalTokens ===
-              normalizedContextUsage.totalTokens;
+        ? usage?.contextUsage === undefined
+        : rawContextUsage?.state === normalizedContextUsage.state &&
+          (normalizedContextUsage.state === "unavailable" ||
+            (rawContextUsage.promptTokens === normalizedContextUsage.promptTokens &&
+              rawContextUsage.totalTokens === normalizedContextUsage.totalTokens));
     const normalizedCost = normalizedUsage.cost;
     if (
-      message.usage &&
-      typeof message.usage === "object" &&
-      (message.usage as { input?: unknown }).input === normalizedUsage.input &&
-      (message.usage as { output?: unknown }).output === normalizedUsage.output &&
-      (message.usage as { cacheRead?: unknown }).cacheRead === normalizedUsage.cacheRead &&
-      (message.usage as { cacheWrite?: unknown }).cacheWrite === normalizedUsage.cacheWrite &&
-      (message.usage as { totalTokens?: unknown }).totalTokens === normalizedUsage.totalTokens &&
+      usage &&
+      (["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const).every(
+        (field) => usage[field] === normalizedUsage[field],
+      ) &&
       contextUsageMatches &&
-      ((normalizedCost &&
-        usageCost &&
-        typeof usageCost === "object" &&
-        (usageCost as { input?: unknown }).input === normalizedCost.input &&
-        (usageCost as { output?: unknown }).output === normalizedCost.output &&
-        (usageCost as { cacheRead?: unknown }).cacheRead === normalizedCost.cacheRead &&
-        (usageCost as { cacheWrite?: unknown }).cacheWrite === normalizedCost.cacheWrite &&
-        (usageCost as { total?: unknown }).total === normalizedCost.total) ||
-        (!normalizedCost && usageCost === undefined))
+      (normalizedCost
+        ? usageCost &&
+          (["input", "output", "cacheRead", "cacheWrite", "total"] as const).every(
+            (field) => usageCost[field] === normalizedCost[field],
+          )
+        : usage.cost === undefined)
     ) {
       continue;
     }
@@ -539,22 +477,14 @@ function createProviderReplaySessionState(
   return {
     getCustomEntries() {
       try {
-        const customEntries: ProviderReplaySessionEntry[] = [];
-        for (const entry of sessionManager.getEntries()) {
+        return sessionManager.getEntries().flatMap((entry): ProviderReplaySessionEntry[] => {
           const candidate = entry as CustomEntryLike;
           if (candidate?.type !== "custom" || typeof candidate.customType !== "string") {
-            continue;
+            return [];
           }
           const customType = candidate.customType.trim();
-          if (!customType) {
-            continue;
-          }
-          customEntries.push({
-            customType,
-            data: candidate.data,
-          });
-        }
-        return customEntries;
+          return customType ? [{ customType, data: candidate.data }] : [];
+        });
       } catch {
         return [];
       }

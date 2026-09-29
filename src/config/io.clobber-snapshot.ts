@@ -1,8 +1,9 @@
-// Detects suspicious config clobbers and finds recovery snapshots.
 import path from "node:path";
 import { createDedupeCache } from "../infra/dedupe.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { sleep } from "../utils/sleep.js";
+import { formatConfigArtifactTimestamp } from "./io.write-safety.js";
 
 /** Maximum retained clobbered-config snapshots per config file. */
 const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
@@ -47,17 +48,8 @@ type ConfigClobberSnapshotDeps = {
   logger: Pick<typeof console, "warn">;
 };
 
-function formatConfigArtifactTimestamp(ts: string): string {
-  return ts.replaceAll(":", "-").replaceAll(".", "-");
-}
-
 function isFsErrorCode(error: unknown, code: string): boolean {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    typeof (error as { code?: unknown }).code === "string" &&
-    (error as { code: string }).code === code
-  );
+  return error instanceof Error && hasErrnoCode(error, code);
 }
 
 function resolveClobberPaths(configPath: string): {

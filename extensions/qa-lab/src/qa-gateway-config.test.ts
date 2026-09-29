@@ -5,12 +5,18 @@ import {
   QA_SESSION_OBSERVER_HEADER,
   registerQaSessionObserver,
 } from "./providers/shared/session-observer-registry.js";
-import {
-  buildQaGatewayConfig,
-  DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS,
-  mergeQaControlUiAllowedOrigins,
-} from "./qa-gateway-config.js";
+import { buildQaGatewayConfig } from "./qa-gateway-config.js";
 import type { QaTransportGatewayConfig } from "./qa-transport.js";
+
+function buildConfig(params: Partial<Parameters<typeof buildQaGatewayConfig>[0]>) {
+  return buildQaGatewayConfig({
+    bind: "loopback",
+    gatewayPort: 18789,
+    gatewayToken: "token",
+    workspaceDir: "/tmp/qa-workspace",
+    ...params,
+  });
+}
 
 function createQaChannelTransportParams(baseUrl = "http://127.0.0.1:43124") {
   return {
@@ -149,11 +155,7 @@ describe("buildQaGatewayConfig", () => {
   );
 
   it.each([false, true])("requires explicit ACP fixture selection (selected=%s)", (selected) => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
-      workspaceDir: "/tmp/qa-workspace",
+    const cfg = buildConfig({
       transportPluginIds: ["telegram"],
       enabledPluginIds: selected ? ["acpx"] : [],
     });
@@ -169,38 +171,29 @@ describe("buildQaGatewayConfig", () => {
     );
   });
 
-  it.each(["/tmp/qa-first/workspace", "/tmp/qa-second/workspace"])(
-    "stamps fresh QA configs and confines rolling logs (%s)",
-    (workspaceDir) => {
-      const cfg = buildQaGatewayConfig({
-        bind: "loopback",
-        gatewayPort: 18789,
-        gatewayToken: "token",
-        workspaceDir,
-        ...createQaChannelTransportParams(),
-      });
+  it("stamps fresh QA configs and confines rolling logs", () => {
+    const workspaceDir = "/tmp/qa-first/workspace";
+    const cfg = buildConfig({
+      workspaceDir,
+      ...createQaChannelTransportParams(),
+    });
 
-      expect(cfg.meta).toEqual({ lastTouchedVersion: OPENCLAW_VERSION });
-      expect(cfg.logging?.file).toBe(`${workspaceDir}/logs/openclaw-YYYY-MM-DD.log`);
-      expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-lab", "qa-channel"]);
-      expect(cfg.commands?.ownerAllowFrom).toEqual([
-        "qa-channel:qa-operator",
-        "qa-channel:dm:qa-operator",
-      ]);
-      expect(cfg.commands?.allowFrom).toEqual({ "qa-channel": ["*"] });
-      expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.6-luna");
-      expect(cfg.agents?.entries?.qa).not.toHaveProperty("default");
-      expect(cfg.channels?.["qa-channel"]?.baseUrl).toBe("http://127.0.0.1:43124");
-    },
-  );
+    expect(cfg.meta).toEqual({ lastTouchedVersion: OPENCLAW_VERSION });
+    expect(cfg.logging?.file).toBe(`${workspaceDir}/logs/openclaw-YYYY-MM-DD.log`);
+    expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-lab", "qa-channel"]);
+    expect(cfg.commands?.ownerAllowFrom).toEqual([
+      "qa-channel:qa-operator",
+      "qa-channel:dm:qa-operator",
+    ]);
+    expect(cfg.commands?.allowFrom).toEqual({ "qa-channel": ["*"] });
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.6-luna");
+    expect(cfg.agents?.entries?.qa).not.toHaveProperty("default");
+    expect(cfg.channels?.["qa-channel"]?.baseUrl).toBe("http://127.0.0.1:43124");
+  });
 
   it("keeps mock-openai as the default provider lane", () => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
+    const cfg = buildConfig({
       providerBaseUrl: "http://127.0.0.1:44080/v1",
-      workspaceDir: "/tmp/qa-workspace",
       ...createQaChannelTransportParams(),
     });
 
@@ -218,8 +211,16 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.models?.providers?.["mock-openai"]?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.models?.providers?.["mock-openai"]?.models).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: "gpt-5.6-luna", reasoning: true }),
-        expect.objectContaining({ id: "gpt-5.6-luna-alt", reasoning: true }),
+        expect.objectContaining({
+          id: "gpt-5.6-luna",
+          reasoning: true,
+          compat: { sendSessionIdHeader: true },
+        }),
+        expect.objectContaining({
+          id: "gpt-5.6-luna-alt",
+          reasoning: true,
+          compat: { sendSessionIdHeader: true },
+        }),
       ]),
     );
     expect(cfg.models?.providers?.openai?.baseUrl).toBe("http://127.0.0.1:44080/v1");
@@ -257,12 +258,8 @@ describe("buildQaGatewayConfig", () => {
   });
 
   it("adds selected target-era models to the mock provider catalog", () => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
+    const cfg = buildConfig({
       providerBaseUrl: "http://127.0.0.1:44080/v1",
-      workspaceDir: "/tmp/qa-workspace",
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.5",
       alternateModel: "mock-openai/gpt-5.5-alt",
@@ -278,12 +275,8 @@ describe("buildQaGatewayConfig", () => {
   });
 
   it("maps provider-qualified openai and anthropic refs through the mock provider lane", () => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
+    const cfg = buildConfig({
       providerBaseUrl: "http://127.0.0.1:44080/v1",
-      workspaceDir: "/tmp/qa-workspace",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "anthropic/claude-opus-4-8",
@@ -309,12 +302,8 @@ describe("buildQaGatewayConfig", () => {
   });
 
   it("falls back to provider defaults for blank model refs", () => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
+    const cfg = buildConfig({
       providerBaseUrl: "http://127.0.0.1:44080/v1",
-      workspaceDir: "/tmp/qa-workspace",
       providerMode: "mock-openai",
       primaryModel: " ",
       alternateModel: "",
@@ -325,12 +314,8 @@ describe("buildQaGatewayConfig", () => {
   });
 
   it("can wire AIMock as a separate mock provider lane", () => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
+    const cfg = buildConfig({
       providerBaseUrl: "http://127.0.0.1:45080/v1",
-      workspaceDir: "/tmp/qa-workspace",
       providerMode: "aimock",
       primaryModel: "aimock/gpt-5.6-luna",
       alternateModel: "aimock/gpt-5.6-luna-alt",
@@ -346,12 +331,8 @@ describe("buildQaGatewayConfig", () => {
   });
 
   it("can omit qa-channel for live transport gateway children", () => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
+    const cfg = buildConfig({
       providerBaseUrl: "http://127.0.0.1:44080/v1",
-      workspaceDir: "/tmp/qa-workspace",
       transportPluginIds: [],
       transportConfig: {},
     });
@@ -362,12 +343,8 @@ describe("buildQaGatewayConfig", () => {
   });
 
   it("can stage extra bundled plugins in the mock lane", () => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
+    const cfg = buildConfig({
       providerBaseUrl: "http://127.0.0.1:44080/v1",
-      workspaceDir: "/tmp/qa-workspace",
       enabledPluginIds: ["active-memory"],
       ...createQaChannelTransportParams(),
     });
@@ -377,11 +354,7 @@ describe("buildQaGatewayConfig", () => {
   });
 
   it("uses built-in provider wiring in frontier live mode", () => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
-      workspaceDir: "/tmp/qa-workspace",
+    const cfg = buildConfig({
       providerMode: "live-frontier",
       fastMode: true,
       primaryModel: "openai/gpt-5.6-luna",
@@ -425,11 +398,7 @@ describe("buildQaGatewayConfig", () => {
   });
 
   it("keeps inferred live providers when scenarios require additional plugins", () => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
-      workspaceDir: "/tmp/qa-workspace",
+    const cfg = buildConfig({
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "anthropic/claude-sonnet-4-6",
@@ -452,11 +421,7 @@ describe("buildQaGatewayConfig", () => {
   });
 
   it("keeps forced Codex cells free of OpenClaw request params", () => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
-      workspaceDir: "/tmp/qa-workspace",
+    const cfg = buildConfig({
       providerMode: "live-frontier",
       forcedRuntime: "codex",
       fastMode: true,
@@ -475,35 +440,9 @@ describe("buildQaGatewayConfig", () => {
     });
   });
 
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "automatically stages a confined Codex harness for %s parity",
-    (providerMode) => {
-      const cfg = buildQaGatewayConfig({
-        bind: "loopback",
-        gatewayPort: 18789,
-        gatewayToken: "token",
-        workspaceDir: "/tmp/qa-workspace",
-        providerMode,
-        forcedRuntime: "codex",
-        primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-sol",
-      });
-
-      expect(cfg.plugins?.allow).toContain("codex");
-      expect(cfg.plugins?.entries?.codex).toEqual({
-        enabled: true,
-        config: { appServer: { sandbox: "workspace-write" } },
-      });
-    },
-  );
-
-  it("routes forced Codex mock cells through the app-server OpenAI provider", () => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
+  it("keeps forced Codex mock catalogs static and routes through the app server", () => {
+    const cfg = buildConfig({
       providerBaseUrl: "http://127.0.0.1:44080/v1",
-      workspaceDir: "/tmp/qa-workspace",
       providerMode: "mock-openai",
       forcedRuntime: "codex",
       primaryModel: "mock-openai/gpt-5.6-luna",
@@ -514,7 +453,7 @@ describe("buildQaGatewayConfig", () => {
 
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.6-luna");
     expect(getModelFallbacks(cfg.agents?.defaults?.model)).toEqual(["openai/gpt-5.6-luna-alt"]);
-    expect(cfg.models?.mode).toBe("merge");
+    expect(cfg.models?.mode).toBe("replace");
     expect(cfg.models?.providers?.openai?.baseUrl).toBe("https://api.openai.com/v1");
     expect(cfg.models?.providers?.openai?.request).toBeUndefined();
     for (const model of cfg.models?.providers?.openai?.models ?? []) {
@@ -540,11 +479,7 @@ describe("buildQaGatewayConfig", () => {
   });
 
   it("does not force OpenAI when the frontier lane only needs Anthropic and Google", () => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
-      workspaceDir: "/tmp/qa-workspace",
+    const cfg = buildConfig({
       providerMode: "live-frontier",
       primaryModel: "anthropic/claude-sonnet-4-6",
       alternateModel: "google/gemini-pro-test",
@@ -566,11 +501,7 @@ describe("buildQaGatewayConfig", () => {
   });
 
   it("uses owning plugin ids separately from live model provider ids", () => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
-      workspaceDir: "/tmp/qa-workspace",
+    const cfg = buildConfig({
       providerMode: "live-frontier",
       primaryModel: "codex-cli/test-model",
       alternateModel: "codex-cli/test-model-alt",
@@ -586,11 +517,7 @@ describe("buildQaGatewayConfig", () => {
   });
 
   it("merges selected live provider configs into the isolated QA config", () => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
-      workspaceDir: "/tmp/qa-workspace",
+    const cfg = buildConfig({
       providerMode: "live-frontier",
       primaryModel: "custom-openai/model-a",
       alternateModel: "custom-openai/model-b",
@@ -624,11 +551,7 @@ describe("buildQaGatewayConfig", () => {
   });
 
   it("can set a QA default thinking level for judge turns", () => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
-      workspaceDir: "/tmp/qa-workspace",
+    const cfg = buildConfig({
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "openai/gpt-5.6-sol",
@@ -641,11 +564,7 @@ describe("buildQaGatewayConfig", () => {
   });
 
   it("preserves an intentional explicit same-model pair without a fallback", () => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
-      workspaceDir: "/tmp/qa-workspace",
+    const cfg = buildConfig({
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.4",
       alternateModel: "openai/gpt-5.4",
@@ -658,11 +577,7 @@ describe("buildQaGatewayConfig", () => {
   });
 
   it("can disable control ui for suite-only gateway children", () => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
-      workspaceDir: "/tmp/qa-workspace",
+    const cfg = buildConfig({
       controlUiEnabled: false,
       ...createQaChannelTransportParams(),
     });
@@ -672,39 +587,25 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.gateway?.controlUi).not.toHaveProperty("allowedOrigins");
   });
 
-  it("pins control ui to a provided built root when available", () => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
-      workspaceDir: "/tmp/qa-workspace",
+  it("merges dynamic qa-lab origins without dropping the built control ui root", () => {
+    const cfg = buildConfig({
       controlUiRoot: "/tmp/openclaw/dist/control-ui",
+      controlUiAllowedOrigins: [
+        " http://127.0.0.1:60196 ",
+        "  ",
+        "http://localhost:18789",
+        "http://127.0.0.1:60196",
+      ],
       ...createQaChannelTransportParams(),
     });
 
     expect(cfg.gateway?.controlUi?.enabled).toBe(true);
     expect(cfg.gateway?.controlUi?.root).toBe("/tmp/openclaw/dist/control-ui");
-  });
-
-  it("merges dynamic qa-lab origins without dropping the built control ui root", () => {
-    expect(mergeQaControlUiAllowedOrigins(["http://127.0.0.1:60196", "  "])).toEqual([
-      ...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS,
-      "http://127.0.0.1:60196",
-    ]);
-
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
-      workspaceDir: "/tmp/qa-workspace",
-      controlUiRoot: "/tmp/openclaw/dist/control-ui",
-      controlUiAllowedOrigins: ["http://127.0.0.1:60196"],
-      ...createQaChannelTransportParams(),
-    });
-
-    expect(cfg.gateway?.controlUi?.root).toBe("/tmp/openclaw/dist/control-ui");
     expect(cfg.gateway?.controlUi?.allowedOrigins).toEqual([
-      ...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS,
+      "http://127.0.0.1:18789",
+      "http://localhost:18789",
+      "http://127.0.0.1:43124",
+      "http://localhost:43124",
       "http://127.0.0.1:60196",
     ]);
   });

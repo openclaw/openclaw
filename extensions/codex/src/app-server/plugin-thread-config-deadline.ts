@@ -69,15 +69,18 @@ class CodexPluginThreadConfigDeadlineError extends Error {
 export function resolveCodexPluginThreadConfigStartupPolicy(params: {
   pluginConfig: CodexPluginConfig;
   nativeToolSurfaceEnabled: boolean;
+  hostedAppsSupported?: boolean;
   scheduledRuntimeAuthority?: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"];
 }) {
   const pluginThreadConfigRequired =
+    params.hostedAppsSupported === false ||
     Boolean(params.scheduledRuntimeAuthority) ||
     !params.nativeToolSurfaceEnabled ||
     shouldBuildCodexPluginThreadConfig(params.pluginConfig);
   // Restricted runs disable the native apps feature without inventory discovery.
   const pluginThreadConfigPluginConfig =
-    params.nativeToolSurfaceEnabled || params.scheduledRuntimeAuthority
+    params.hostedAppsSupported !== false &&
+    (params.nativeToolSurfaceEnabled || params.scheduledRuntimeAuthority)
       ? params.pluginConfig
       : disableCodexPluginThreadConfig(params.pluginConfig);
   const resolvedPluginPolicy = pluginThreadConfigRequired
@@ -106,10 +109,12 @@ async function buildCodexPluginThreadConfigWithinDeadline(
   const timeoutMs = resolveCodexPluginThreadConfigTimeoutMs(requestTimeoutMs);
   // One deadline owns the whole config build; every RPC gets only the remaining
   // budget so discovery cannot consume one full request timeout per call.
-  const deadlineMs = Date.now() + timeoutMs;
+  // Use the monotonic clock so NTP adjustments or sleep resumes cannot stretch
+  // or shrink the budget while request timers (also monotonic) are in flight.
+  const deadlineMs = performance.now() + timeoutMs;
   let requestTimedOut = false;
   const boundedRequest: CodexPluginRuntimeRequest = async (method, requestParams) => {
-    const remainingTimeoutMs = deadlineMs - Date.now();
+    const remainingTimeoutMs = deadlineMs - performance.now();
     if (requestTimedOut || remainingTimeoutMs <= 0) {
       throw new CodexPluginThreadConfigDeadlineError();
     }
@@ -117,7 +122,7 @@ async function buildCodexPluginThreadConfigWithinDeadline(
       return await request(method, requestParams, { timeoutMs: remainingTimeoutMs, signal });
     } catch (error) {
       // Inventory readers absorb failures. Preserve timeout evidence before they
-      // turn it into missing apps, even if the wall clock trails the request timer.
+      // turn it into missing apps, even if the monotonic clock trails the request timer.
       requestTimedOut ||= isCodexPluginThreadConfigTimeoutError(error);
       throw error;
     }
@@ -133,7 +138,7 @@ async function buildCodexPluginThreadConfigWithinDeadline(
         });
         const result = transform ? await transform(config, boundedRequest) : config;
         // Inventory readers can absorb an RPC timeout into an unavailable result.
-        if (requestTimedOut || Date.now() >= deadlineMs) {
+        if (requestTimedOut || performance.now() >= deadlineMs) {
           throw new CodexPluginThreadConfigDeadlineError();
         }
         return result;
@@ -144,7 +149,9 @@ async function buildCodexPluginThreadConfigWithinDeadline(
   } catch (error) {
     if (
       signal.aborted ||
-      (!requestTimedOut && !isCodexPluginThreadConfigTimeoutError(error) && Date.now() < deadlineMs)
+      (!requestTimedOut &&
+        !isCodexPluginThreadConfigTimeoutError(error) &&
+        performance.now() < deadlineMs)
     ) {
       throw error;
     }

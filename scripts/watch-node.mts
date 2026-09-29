@@ -13,6 +13,7 @@ import {
   normalizeRunNodePath as normalizePath,
   runNodeWatchedPaths,
 } from "./run-node-watch-paths.mts";
+import type { Watcher, WatcherFactory, WatchPathStats } from "./watch-node-observation.mts";
 
 const WATCH_NODE_RUNNER = "scripts/run-node.mjs";
 const WATCH_RESTART_SIGNAL = "SIGTERM";
@@ -35,17 +36,6 @@ type WatchChild = {
   on(event: "exit", callback: (code: number | null, signal: ProcessSignal | null) => void): unknown;
   on(event: "error", callback: (error: Error) => void): unknown;
 };
-type WatchPathStats = { isDirectory(): boolean };
-type WatchOptions = {
-  ignoreInitial: boolean;
-  ignored: (watchPath: string, stats?: WatchPathStats) => boolean;
-};
-type Watcher = {
-  on(event: "add" | "change" | "unlink", callback: (path: string) => void): void;
-  on(event: "error", callback: (error: unknown) => void): void;
-  close?: () => { catch?(onRejected: () => void): unknown } | void;
-};
-type WatcherFactory = (paths: string[], options: WatchOptions) => Watcher;
 type WatchPathClassifier = {
   refreshGeneratedPluginAssetPaths(): void;
   isRestartRelevantRunNodePath(repoPath: unknown): boolean;
@@ -63,7 +53,7 @@ type WatchMainParams = {
     },
   ) => WatchChild;
   createWatcher?: WatcherFactory;
-  loadChokidar?: () => Promise<{ watch: WatcherFactory }>;
+  loadWatcher?: () => Promise<WatcherFactory>;
   watchPaths?: string[];
   pathClassifier?: WatchPathClassifier;
   process?: NodeJS.Process;
@@ -81,7 +71,7 @@ type WatchDeps = Required<
   Pick<
     WatchMainParams,
     | "spawn"
-    | "loadChokidar"
+    | "loadWatcher"
     | "watchPaths"
     | "pathClassifier"
     | "process"
@@ -252,10 +242,8 @@ const printFriendlyWatchStartupError = (err: unknown) => {
   console.error(err);
 };
 
-const loadChokidar = async () => {
-  const mod = await import("chokidar");
-  return mod.default ?? mod;
-};
+const loadWatcher = async (): Promise<WatcherFactory> =>
+  (await import("./watch-node-observation.mts")).createSourceObserver;
 
 const waitForWatcherRelease = async (lockPath: string, pid: number, deps: WatchDeps) => {
   const deadline = deps.now() + WATCH_LOCK_WAIT_MS;
@@ -351,7 +339,7 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
     lockDisabled: params.lockDisabled === true,
     pathClassifier: params.pathClassifier ?? createRunNodePathClassifier({ rootDir: cwd }),
     createWatcher: params.createWatcher,
-    loadChokidar: params.loadChokidar ?? loadChokidar,
+    loadWatcher: params.loadWatcher ?? loadWatcher,
     watchPaths: params.watchPaths ?? runNodeWatchedPaths,
   } satisfies WatchDeps;
 
@@ -417,6 +405,7 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
         return;
       }
       settled = true;
+      shuttingDown = true;
       if (shutdownKillTimer) {
         clearTimeout(shutdownKillTimer);
       }
@@ -426,13 +415,27 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
       if (onSigTerm) {
         deps.process.off("SIGTERM", onSigTerm);
       }
-      releaseWatchLock(lockHandle);
-      watcher?.close?.()?.catch?.(() => {});
-      if (watcherStartupError && typeof outcome !== "string") {
-        reject(watcherStartupError);
-      } else {
-        resolve(outcome);
-      }
+      // Keep ownership until physical observation retires. A replacement must
+      // not acquire the lock while this owner still has live watcher resources.
+      void (async () => {
+        try {
+          await watcher?.close?.();
+        } catch (error) {
+          if (watcherStartupError) {
+            throw new AggregateError(
+              [watcherStartupError, error],
+              "Watcher startup and retirement failed",
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+        releaseWatchLock(lockHandle);
+        if (watcherStartupError && typeof outcome !== "string") {
+          throw watcherStartupError;
+        }
+        return outcome;
+      })().then(resolve, reject);
     };
 
     const settleIfSignaled = (child: WatchChild | null, signal: ProcessSignal | null) => {
@@ -480,29 +483,25 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
       return true;
     };
 
-    const startRunner = () => {
-      try {
-        deps.pathClassifier.refreshGeneratedPluginAssetPaths();
-      } catch (error) {
-        logWatcher(
-          `Failed to refresh generated asset paths: ${errorMessage(error) || "unknown error"}`,
-          deps,
-        );
-        settle(1);
-        return;
-      }
-      watchProcess = deps.spawn(deps.process.execPath, buildRunnerArgs(deps.args), {
+    const startChild = (
+      args: string[],
+      label: string,
+      env: NodeJS.ProcessEnv,
+      onExit: (
+        exitedProcess: WatchChild | null,
+        exitCode: number | null,
+        exitSignal: ProcessSignal | null,
+      ) => void,
+    ) => {
+      watchProcess = deps.spawn(deps.process.execPath, args, {
         cwd: deps.cwd,
         detached: useChildProcessGroup,
-        env: childEnv,
+        env,
         stdio: "inherit",
       });
       watchProcess.on("error", (error) => {
         watchProcess = null;
-        logWatcher(
-          `Failed to spawn watcher child: ${errorMessage(error) || "unknown error"}`,
-          deps,
-        );
+        logWatcher(`Failed to spawn ${label}: ${errorMessage(error) || "unknown error"}`, deps);
         settle(1);
       });
       watchProcess.on("exit", (exitCode, exitSignal) => {
@@ -514,44 +513,66 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
         if (settleIfSignaled(exitedProcess, exitSignal) || settleIfShuttingDown(exitedProcess)) {
           return;
         }
-        if (restartRequested || shouldRestartAfterChildExit(exitCode, exitSignal, platform)) {
-          forceKillWatchProcessGroup(exitedProcess);
-          restartRequested = false;
-          deferredRestartGeneration += 1;
-          deferredRestartActive = false;
-          if (!hasDistEntry()) {
-            deferredRestartActive = true;
-            const generation = deferredRestartGeneration;
-            logWatcher("Watcher child exited mid-build; waiting for the build entry.", deps);
-            deferRestartUntilDistEntryExists({
-              generation,
-              targetProcess: null,
-              onReady: () => {
-                if (!watchProcess) {
-                  startRunner();
-                }
-              },
-              onTimeout: () => {
-                logWatcher("Build entry wait timed out; starting run-node recovery.", deps);
-                if (!watchProcess) {
-                  startRunner();
-                }
-              },
-            });
-            return;
-          }
-          startRunner();
-          return;
-        }
-        if (shouldRunAutoDoctor(deps, autoDoctorAttempted)) {
-          runAutoDoctorAndRestart();
-          return;
-        }
-        settle(exitSignal ? 1 : (exitCode ?? 1));
+        onExit(exitedProcess, exitCode, exitSignal);
       });
     };
 
-    const handleWatcherError = () => {
+    const startRunner = () => {
+      try {
+        deps.pathClassifier.refreshGeneratedPluginAssetPaths();
+      } catch (error) {
+        logWatcher(
+          `Failed to refresh generated asset paths: ${errorMessage(error) || "unknown error"}`,
+          deps,
+        );
+        settle(1);
+        return;
+      }
+      startChild(
+        buildRunnerArgs(deps.args),
+        "watcher child",
+        childEnv,
+        (exitedProcess, exitCode, exitSignal) => {
+          if (restartRequested || shouldRestartAfterChildExit(exitCode, exitSignal, platform)) {
+            forceKillWatchProcessGroup(exitedProcess);
+            restartRequested = false;
+            deferredRestartGeneration += 1;
+            deferredRestartActive = false;
+            if (!hasDistEntry()) {
+              deferredRestartActive = true;
+              const generation = deferredRestartGeneration;
+              logWatcher("Watcher child exited mid-build; waiting for the build entry.", deps);
+              deferRestartUntilDistEntryExists({
+                generation,
+                targetProcess: null,
+                onReady: () => {
+                  if (!watchProcess) {
+                    startRunner();
+                  }
+                },
+                onTimeout: () => {
+                  logWatcher("Build entry wait timed out; starting run-node recovery.", deps);
+                  if (!watchProcess) {
+                    startRunner();
+                  }
+                },
+              });
+              return;
+            }
+            startRunner();
+            return;
+          }
+          if (shouldRunAutoDoctor(deps, autoDoctorAttempted)) {
+            runAutoDoctorAndRestart();
+            return;
+          }
+          settle(exitSignal ? 1 : (exitCode ?? 1));
+        },
+      );
+    };
+
+    const handleWatcherError = (error: unknown) => {
+      logWatcher(`Source observation failed: ${errorMessage(error) || String(error)}`, deps);
       requestShutdown(1);
     };
 
@@ -567,9 +588,7 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
 
     const resolveCreateWatcher = async () => {
       try {
-        const chokidarModule = await deps.loadChokidar();
-        return (watchPaths: string[], options: WatchOptions) =>
-          chokidarModule.watch(watchPaths, options);
+        return await deps.loadWatcher();
       } catch (err) {
         if (isInvalidPackageConfigError(err)) {
           printFriendlyWatchStartupError(err);
@@ -584,42 +603,23 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
         "Gateway exited early; running `openclaw doctor --fix --non-interactive` once.",
         deps,
       );
-      watchProcess = deps.spawn(deps.process.execPath, buildDoctorRunnerArgs(), {
-        cwd: deps.cwd,
-        detached: useChildProcessGroup,
-        env: {
-          ...childEnv,
+      startChild(
+        buildDoctorRunnerArgs(),
+        "doctor repair",
+        { ...childEnv },
+        (_exitedProcess, exitCode, exitSignal) => {
+          if (exitCode === 0 && !exitSignal) {
+            logWatcher("Doctor repair completed; restarting gateway watch child.", deps);
+            startRunner();
+            return;
+          }
+          logWatcher(
+            `Doctor repair failed; gateway:watch exiting with code ${exitSignal ? 1 : (exitCode ?? 1)}.`,
+            deps,
+          );
+          settle(exitSignal ? 1 : (exitCode ?? 1));
         },
-        stdio: "inherit",
-      });
-      watchProcess.on("error", (error) => {
-        watchProcess = null;
-        logWatcher(
-          `Failed to spawn doctor repair: ${errorMessage(error) || "unknown error"}`,
-          deps,
-        );
-        settle(1);
-      });
-      watchProcess.on("exit", (exitCode, exitSignal) => {
-        const exitedProcess = watchProcess;
-        watchProcess = null;
-        if (settled) {
-          return;
-        }
-        if (settleIfSignaled(exitedProcess, exitSignal) || settleIfShuttingDown(exitedProcess)) {
-          return;
-        }
-        if (exitCode === 0 && !exitSignal) {
-          logWatcher("Doctor repair completed; restarting gateway watch child.", deps);
-          startRunner();
-          return;
-        }
-        logWatcher(
-          `Doctor repair failed; gateway:watch exiting with code ${exitSignal ? 1 : (exitCode ?? 1)}.`,
-          deps,
-        );
-        settle(exitSignal ? 1 : (exitCode ?? 1));
-      });
+      );
     };
 
     const hasDistEntry = () => deps.fs.existsSync(path.join(deps.cwd, "dist", "entry.js"));
@@ -669,10 +669,12 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
       })();
     };
 
-    const requestRestart = (changedPath: string) => {
+    const requestRestart = (changedPath?: string) => {
       if (
         shuttingDown ||
-        isIgnoredWatchPath(changedPath, deps.cwd, deps.watchPaths, deps.pathClassifier)
+        restartRequested ||
+        (changedPath !== undefined &&
+          isIgnoredWatchPath(changedPath, deps.cwd, deps.watchPaths, deps.pathClassifier))
       ) {
         return;
       }
@@ -719,14 +721,14 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
         return;
       }
       watcher = createWatcher(deps.watchPaths, {
-        ignoreInitial: true,
+        cwd: deps.cwd,
+        env: deps.env,
         ignored: (watchPath, stats) =>
           isIgnoredWatchPath(watchPath, deps.cwd, deps.watchPaths, deps.pathClassifier, stats),
+        onChange: requestRestart,
+        onError: handleWatcherError,
+        onLog: (message) => logWatcher(message, deps),
       });
-      watcher.on("add", requestRestart);
-      watcher.on("change", requestRestart);
-      watcher.on("unlink", requestRestart);
-      watcher.on("error", handleWatcherError);
     };
 
     const startWatcher = () => {

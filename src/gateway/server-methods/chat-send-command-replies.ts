@@ -155,10 +155,6 @@ function hasUnmergedReplySemantics(payload: ReplyPayload): boolean {
   );
 }
 
-function hasReplySemantics(payload: ReplyPayload): boolean {
-  return hasMergeableReplySemantics(payload) || hasUnmergedReplySemantics(payload);
-}
-
 function mediaSetsMatch(leftMediaUrls: readonly string[], rightMediaUrls: readonly string[]) {
   if (leftMediaUrls.length !== rightMediaUrls.length) {
     return false;
@@ -226,30 +222,15 @@ export function selectChatSendFinalReplyInputs(params: {
                   mediaSetsMatch(replyMediaDedupeKeys(candidate.input.payload), finalMediaKeys),
               )
             : undefined;
-        const matchingTextBlockEntry = finalDisplayText
+        const duplicateBlockEntry = finalDisplayText
           ? commandBlockPayloadEntriesForDelivery.find(
               (candidate) =>
                 candidate.input.kind === "raw" &&
-                replyDisplayText(candidate.input.payload) === finalDisplayText,
+                replyDisplayText(candidate.input.payload) === finalDisplayText &&
+                (finalMediaUrls.length === 0 ||
+                  mediaSetsMatch(replyMediaDedupeKeys(candidate.input.payload), finalMediaKeys)),
             )
-          : undefined;
-        const matchingMediaAndTextBlockEntry =
-          finalMediaUrls.length > 0 && finalDisplayText
-            ? commandBlockPayloadEntriesForDelivery.find(
-                (candidate) =>
-                  candidate.input.kind === "raw" &&
-                  replyDisplayText(candidate.input.payload) === finalDisplayText &&
-                  mediaSetsMatch(replyMediaDedupeKeys(candidate.input.payload), finalMediaKeys),
-              )
-            : undefined;
-        const duplicateBlockEntry =
-          finalMediaUrls.length > 0
-            ? finalDisplayText
-              ? matchingMediaAndTextBlockEntry
-              : matchingMediaBlockEntry
-            : finalMediaUrls.length === 0
-              ? matchingTextBlockEntry
-              : undefined;
+          : matchingMediaBlockEntry;
         if (duplicateBlockEntry?.input.kind === "raw") {
           duplicateBlockEntry.input = {
             kind: "raw",
@@ -265,7 +246,10 @@ export function selectChatSendFinalReplyInputs(params: {
         if (
           remainingFinalMediaUrls.length === 0 &&
           ((duplicateBlockEntry && !hasUnmergedReplySemantics(payload)) ||
-            (!duplicateBlockEntry && !finalDisplayText && !hasReplySemantics(payload)))
+            (!duplicateBlockEntry &&
+              !finalDisplayText &&
+              !hasMergeableReplySemantics(payload) &&
+              !hasUnmergedReplySemantics(payload)))
         ) {
           return [];
         }
