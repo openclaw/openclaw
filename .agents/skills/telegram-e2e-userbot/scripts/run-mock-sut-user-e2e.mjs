@@ -8,7 +8,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseRecorderReady, readScenarioFile, resolveChatTarget } from "./scenario.mjs";
 import { telegramPythonArgs } from "./telegram-runtime.mjs";
-import { startTelegramTestApiProxy } from "./telegram-test-api-proxy.mjs";
+import { startTelegramTestApiProxy, telegramTestApiPath } from "./telegram-test-api-proxy.mjs";
 import { acquireTelegramTestCredential } from "./telegram-test-credential.mjs";
 
 const SKILL_DIR =
@@ -484,9 +484,9 @@ export async function fetchWithLease(
   return await scope.trackIo(work);
 }
 
-async function telegram(token, method, body = {}, lease, fetchImpl = fetch) {
-  const { response, payload } = await fetchWithLease(
-    `https://api.telegram.org/bot${token}/test/${method}`,
+export async function requestTelegramTestApi(token, method, body, lease, fetchImpl = fetch) {
+  return await fetchWithLease(
+    `https://api.telegram.org${telegramTestApiPath(`/bot${token}/${method}`)}`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -495,6 +495,10 @@ async function telegram(token, method, body = {}, lease, fetchImpl = fetch) {
     lease,
     fetchImpl,
   );
+}
+
+async function telegram(token, method, body = {}, lease, fetchImpl = fetch) {
+  const { response, payload } = await requestTelegramTestApi(token, method, body, lease, fetchImpl);
   lease.assertHealthy();
   if (!response.ok || !payload.ok) {
     throw new Error(payload.description || `${method} failed with status ${response.status}`);
