@@ -5,8 +5,8 @@ import {
   MIGRATION_REASON_TARGET_EXISTS,
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { childRecord, readJsonObject, sanitizeName } from "./helpers.js";
+import { asNonArrayRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readJsonObject, sanitizeName } from "./helpers.js";
 import type { ClaudeSource } from "./source.js";
 
 type MappedMcpSource = {
@@ -74,7 +74,9 @@ async function collectMcpSources(source: ClaudeSource): Promise<MappedMcpSource[
   }
 
   if (source.projectDir) {
-    const projectRecord = childRecord(childRecord(claudeJson, "projects"), source.projectDir);
+    const projectRecord = asNonArrayRecord(
+      asNonArrayRecord(claudeJson.projects)[source.projectDir],
+    );
     const projectScopedServers = mapMcpServers(projectRecord.mcpServers);
     if (projectScopedServers && source.userClaudeJsonPath) {
       sources.push({

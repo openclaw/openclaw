@@ -334,19 +334,6 @@ export function resolveTrustedSourceLinkedOfficialNpmSpec(params: {
   return resolveTrustedSourceLinkedOfficialNpmInstall(params)?.npmSpec;
 }
 
-export function hasOfficialNpmIdReplacement(params: {
-  pluginId: string;
-  record?: PluginInstallRecord;
-}): boolean {
-  return (
-    params.record !== undefined &&
-    resolveTrustedSourceLinkedOfficialNpmInstall({
-      pluginId: params.pluginId,
-      record: params.record,
-    })?.replacementPluginId !== undefined
-  );
-}
-
 /** Resolves the official ClawHub spec when a trusted-source install record matches. */
 export function resolveTrustedSourceLinkedOfficialClawHubSpec(params: {
   pluginId: string;

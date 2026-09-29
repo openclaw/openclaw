@@ -4,10 +4,9 @@
 extensions/acpx/src/codex-auth-bridge.ts	7
 extensions/acpx/src/codex-trust-config.ts	1
 extensions/acpx/src/pi-session-catalog-runtime.ts	1
-extensions/acpx/src/process-lease.ts	3
+extensions/acpx/src/process-lease.ts	1
 extensions/acpx/src/runtime.ts	2
 extensions/acpx/src/service.ts	1
-extensions/acpx/src/state.ts	1
 extensions/active-memory/config.ts	2
 extensions/active-memory/index.ts	3
 extensions/active-memory/query.ts	2
@@ -217,11 +216,11 @@ extensions/copilot/src/sdk-loader.ts	2
 extensions/copilot/src/tool-bridge.ts	4
 extensions/copilot/src/workspace-bootstrap.ts	1
 extensions/cua-computer/src/commands.ts	2
-extensions/cua-computer/src/driver-artifact-verification.ts	2
+extensions/cua-computer/src/driver-artifact-verification.ts	1
 extensions/cua-computer/src/driver-artifacts.ts	1
 extensions/cua-computer/src/driver-client.ts	10
-extensions/cua-computer/src/driver-result.ts	9
-extensions/cua-computer/src/mcp-driver-client.ts	4
+extensions/cua-computer/src/driver-result.ts	4
+extensions/cua-computer/src/mcp-driver-client.ts	3
 extensions/cua-computer/src/window-actions.ts	3
 extensions/deepinfra/provider-models.ts	2
 extensions/deepseek/provider-policy-api.ts	2
@@ -357,7 +356,6 @@ extensions/duckduckgo/src/ddg-search-provider.ts	1
 extensions/elevenlabs/config-compat.ts	2
 extensions/exa/src/exa-web-search-provider.runtime.ts	5
 extensions/fal/image-generation-provider.ts	1
-extensions/fal/music-generation-provider.ts	2
 extensions/fal/video-generation-provider.ts	3
 extensions/feishu/src/accounts.ts	4
 extensions/feishu/src/bitable.ts	1
@@ -503,16 +501,12 @@ extensions/line/src/webhook-spool.ts	2
 extensions/line/src/webhook-utils.ts	1
 extensions/litellm/onboard.ts	1
 extensions/llm-task/doctor-contract-api.ts	1
-extensions/llm-task/index.ts	1
-extensions/llm-task/src/llm-task-tool.ts	5
+extensions/llm-task/src/llm-task-tool.ts	2
 extensions/lmstudio/src/models.ts	2
 extensions/lmstudio/src/stream.ts	3
-extensions/lobster/index.ts	2
-extensions/lobster/src/lobster-runner.ts	4
+extensions/lobster/src/lobster-runner.ts	3
 extensions/logbook/index.ts	5
-extensions/logbook/src/analyze.ts	8
-extensions/logbook/src/config.ts	1
-extensions/logbook/src/node-host.ts	1
+extensions/logbook/src/analyze.ts	5
 extensions/logbook/src/service.ts	6
 extensions/matrix/src/actions.ts	2
 extensions/matrix/src/approval-handler.runtime.ts	8
@@ -640,7 +634,6 @@ extensions/memory-core/src/short-term-promotion.ts	1
 extensions/memory-core/src/standing-intents-tool.ts	1
 extensions/memory-core/src/standing-intents.ts	2
 extensions/memory-core/src/tools.ts	2
-extensions/memory-lancedb/config.ts	4
 extensions/memory-lancedb/doctor-contract-api.ts	1
 extensions/memory-lancedb/embeddings.ts	2
 extensions/memory-lancedb/index.ts	8
@@ -666,7 +659,7 @@ extensions/migrate-hermes/apply.ts	1
 extensions/migrate-hermes/auth-config.ts	2
 extensions/migrate-hermes/auth.ts	1
 extensions/migrate-hermes/memory.ts	1
-extensions/migrate-hermes/model.ts	3
+extensions/migrate-hermes/model.ts	1
 extensions/minimax/model-definitions.ts	2
 extensions/minimax/music-generation-provider.ts	2
 extensions/minimax/oauth.ts	3
@@ -764,7 +757,6 @@ extensions/openrouter/stream.ts	5
 extensions/openrouter/video-generation-provider.ts	1
 extensions/openrouter/video-model-catalog.ts	1
 extensions/openshell/src/backend.ts	2
-extensions/openshell/src/fs-bridge.ts	1
 extensions/parallel/src/parallel-free-web-search-provider.runtime.ts	1
 extensions/parallel/src/parallel-web-search-provider.runtime.ts	1
 extensions/pixverse/video-generation-provider.ts	1
@@ -909,7 +901,6 @@ extensions/reef/src/setup.ts	3
 extensions/reef/src/state.ts	3
 extensions/reef/src/transport.ts	3
 extensions/searxng/src/config.ts	1
-extensions/searxng/src/searxng-client.ts	3
 extensions/signal/src/accounts.ts	3
 extensions/signal/src/approval-handler.runtime.ts	2
 extensions/signal/src/approval-reactions.ts	1
@@ -2020,7 +2011,6 @@ src/commands/doctor-agent-memory-schema.ts	1
 src/commands/doctor-auth-flat-profiles.ts	1
 src/commands/doctor-auth-migration-receipts.ts	3
 src/commands/doctor-auth-profile-config.ts	4
-src/commands/doctor-config-analysis.ts	3
 src/commands/doctor-config-flow.ts	2
 src/commands/doctor-config-preflight.cron.ts	4
 src/commands/doctor-gateway-services.ts	1
@@ -2031,7 +2021,7 @@ src/commands/doctor-plugin-registry.ts	1
 src/commands/doctor-post-upgrade.ts	1
 src/commands/doctor-prompter.ts	1
 src/commands/doctor-retired-phone-control.ts	1
-src/commands/doctor-sandbox-legacy-registry.ts	8
+src/commands/doctor-sandbox-legacy-registry.ts	7
 src/commands/doctor-sandbox.ts	4
 src/commands/doctor-security.ts	3
 src/commands/doctor-session-canonical-keys.ts	1
@@ -2071,7 +2061,7 @@ src/commands/doctor/shared/empty-allowlist-policy.ts	12
 src/commands/doctor/shared/empty-allowlist-scan.ts	17
 src/commands/doctor/shared/legacy-config-compat.ts	1
 src/commands/doctor/shared/legacy-config-core-migrate.ts	1
-src/commands/doctor/shared/legacy-config-core-normalizers.ts	14
+src/commands/doctor/shared/legacy-config-core-normalizers.ts	11
 src/commands/doctor/shared/legacy-config-issues.ts	1
 src/commands/doctor/shared/legacy-config-migrate.ts	2
 src/commands/doctor/shared/legacy-config-migrations.audio.ts	1
@@ -2094,7 +2084,6 @@ src/commands/gateway-health-auth-diagnostic.ts	1
 src/commands/gateway-presence.ts	1
 src/commands/gateway-status/helpers.ts	11
 src/commands/message-format.ts	17
-src/commands/message.ts	2
 src/commands/models/list.probe.ts	1
 src/commands/onboard-agent.ts	1
 src/commands/onboard-config.ts	3
@@ -2143,7 +2132,6 @@ src/config/legacy.roster.ts	8
 src/config/legacy.ts	3
 src/config/markdown-tables.ts	3
 src/config/materialize.ts	2
-src/config/mcp-config-normalize.ts	1
 src/config/mcp-config.ts	1
 src/config/merge-patch.ts	1
 src/config/model-input-normalization.ts	2
@@ -2172,7 +2160,6 @@ src/config/sessions/session-accessor.sqlite-canonical-inventory.ts	1
 src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
 src/config/sessions/session-accessor.sqlite-entry.ts	1
 src/config/sessions/session-accessor.sqlite-message-cut.ts	1
-src/config/sessions/session-accessor.sqlite-parent-fork.ts	1
 src/config/sessions/session-accessor.sqlite-read.ts	6
 src/config/sessions/session-accessor.sqlite-recovery.ts	1
 src/config/sessions/session-accessor.sqlite-reset-window.ts	2
@@ -2210,21 +2197,17 @@ src/context-engine/registry.ts	4
 src/context-engine/runtime-settings.ts	2
 src/cron/delivery-channel-validation.ts	2
 src/cron/delivery-context.ts	1
-src/cron/delivery-plan.ts	9
 src/cron/delivery-target-validation.ts	3
 src/cron/delivery.ts	1
-src/cron/isolated-agent/delivery-dispatch-awareness.ts	1
 src/cron/isolated-agent/delivery-target.ts	1
 src/cron/isolated-agent/helpers.ts	1
 src/cron/isolated-agent/job-fixtures.ts	3
 src/cron/isolated-agent/model-preflight.runtime.ts	1
 src/cron/isolated-agent/run-config.ts	1
 src/cron/isolated-agent/run-current-context.ts	1
-src/cron/isolated-agent/run-session-state.ts	2
 src/cron/isolated-agent/session-cleanup.ts	2
-src/cron/isolated-agent/session.ts	2
 src/cron/job-session-bindings.ts	1
-src/cron/normalize.ts	5
+src/cron/normalize.ts	2
 src/cron/persisted-shape.ts	3
 src/cron/retry-hint.ts	3
 src/cron/run-diagnostics-normalize.ts	2
@@ -2232,8 +2215,7 @@ src/cron/run-diagnostics.ts	3
 src/cron/runtime-authority.ts	3
 src/cron/schedule-identity.ts	2
 src/cron/service/active-run-cancellation.ts	1
-src/cron/service/failure-alerts.ts	1
-src/cron/service/jobs.ts	6
+src/cron/service/jobs.ts	4
 src/cron/service/list-page-validation.ts	2
 src/cron/service/store.ts	1
 src/cron/service/timer.ts	1
@@ -2771,7 +2753,7 @@ src/plugins/bundle-mcp.ts	2
 src/plugins/bundled-channel-config-metadata.ts	4
 src/plugins/bundled-plugin-scan.ts	1
 src/plugins/candidate-install-owner.ts	1
-src/plugins/capability-provider-runtime.ts	13
+src/plugins/capability-provider-runtime.ts	10
 src/plugins/captured-registration.ts	1
 src/plugins/channel-presence-policy.ts	2
 src/plugins/channel-validation.ts	1
@@ -2797,9 +2779,8 @@ src/plugins/hook-decision-types.ts	1
 src/plugins/hook-isolation.ts	3
 src/plugins/hook-runner-global-state.ts	1
 src/plugins/hook-types.ts	2
-src/plugins/hooks.ts	11
+src/plugins/hooks.ts	9
 src/plugins/host-hook-attachments.ts	1
-src/plugins/host-hook-json.ts	1
 src/plugins/host-hook-runtime.ts	1
 src/plugins/host-hook-scheduled-turns.ts	6
 src/plugins/host-hook-state.ts	6
@@ -2810,7 +2791,6 @@ src/plugins/install-record-commit.ts	3
 src/plugins/install-transaction.ts	3
 src/plugins/installed-plugin-index-install-owner.ts	2
 src/plugins/installed-plugin-index-policy.ts	1
-src/plugins/installed-plugin-index-record-builder.ts	1
 src/plugins/installed-plugin-index-record-state.ts	1
 src/plugins/installed-plugin-index-store.ts	2
 src/plugins/interactive-state.ts	2
@@ -2848,10 +2828,8 @@ src/plugins/provider-catalog-result.ts	8
 src/plugins/provider-discovery.runtime.ts	2
 src/plugins/provider-discovery.ts	2
 src/plugins/provider-model-compat.ts	6
-src/plugins/provider-model-primary.ts	1
 src/plugins/provider-openai-chatgpt-oauth.ts	1
 src/plugins/provider-policy-surface.ts	1
-src/plugins/provider-self-hosted-setup.ts	1
 src/plugins/provider-thinking-active.ts	1
 src/plugins/public-surface-loader.ts	2
 src/plugins/recommended-tool-installs.ts	1
@@ -3080,7 +3058,6 @@ src/worker/worker-connection-frames.ts	4
 src/worker/worker-process.ts	1
 src/worker/worker-session-tools.ts	4
 src/worker/workspace-rsync-receiver.ts	1
-ui/src/api/gateway.ts	1
 ui/src/app-navigation.ts	1
 ui/src/app-routes.ts	1
 ui/src/app/app-host-route-state.ts	1

@@ -739,7 +739,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     "keeps isolated Node-dependent coverage without losing other files under %s",
     (policy) => {
       const config = "test/vitest/vitest.unit-fast-isolated.config.ts";
-      const nodeFiles = ["src/agents/code-mode.action-output.test.ts"];
+      const nodeFiles = ["src/agents/code-mode.auto-results.test.ts"];
       const files = getUnitFastIsolatedTestFiles();
       const selection = { configs: [config] };
       const selected = resolveCiTestRuntimeSelections(selection, policy);

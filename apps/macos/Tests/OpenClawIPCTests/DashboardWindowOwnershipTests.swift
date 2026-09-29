@@ -150,13 +150,20 @@ struct DashboardWindowOwnershipTests {
             routeRevision: 2)
         let manager = DashboardManager._testMake(
             authTokenProvider: { _ in await gate.authToken() },
+            legacyCredentialsProvider: { _, _ in
+                guard await gate.authToken() != nil else { throw CancellationError() }
+                return .init(credentials: [:], isCurrent: { true }, waitForInvalidation: nil)
+            },
             endpointStateProvider: { readyState })
         manager._testSetController(controller)
         defer { manager.close() }
 
         await manager.handleEndpointState(readyState)
         let failureController = try #require(manager._testController())
-        #expect(failureController !== controller)
+        #expect(failureController.isShowingFailurePage)
+        #expect(!failureController.canDeliverNativeCommands)
+        #expect(failureController.auth.token == nil)
+        #expect(failureController.documentHost.nativeGatewayAuthProvider == nil)
         #expect(failureController.window === originalWindow)
         #expect(failureController.isWindowOpen)
         #expect(failureController.currentURL == URL(string: "about:blank"))

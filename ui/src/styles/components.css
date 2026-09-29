@@ -1663,7 +1663,7 @@ openclaw-session-progress-hovercard-provider {
 }
 
 .person-activity-card__status--idle > span {
-  background: var(--warn);
+  background: var(--presence-idle);
 }
 
 .person-activity-card__status--unknown > span,

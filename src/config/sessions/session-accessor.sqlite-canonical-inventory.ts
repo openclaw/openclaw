@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
-import type { Selectable } from "kysely";
+import type { InferResult } from "kysely";
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   deliveryContextFromSession,
@@ -22,20 +21,7 @@ import { scanCanonicalSqliteSessionEntries } from "./session-canonical-key.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
-type CanonicalRepairRow = Selectable<OpenClawAgentKyselyDatabase["session_nodes"]> & {
-  current_agent_harness_id: string | null;
-  current_chat_type: string | null;
-  current_ended_at: number | null;
-  current_model: string | null;
-  current_model_provider: string | null;
-  current_previous_session_id: string | null;
-  current_started_at: number | null;
-  current_window_owner_session_key: string | null;
-  delivery_account_id: string | null;
-  delivery_channel: string | null;
-  delivery_target: string | null;
-  delivery_thread_id: string | null;
-};
+type CanonicalRepairRow = InferResult<ReturnType<typeof canonicalRepairQuery>>[number];
 
 type CanonicalSessionDecision = {
   canonicalOwnerSessionKey?: string;

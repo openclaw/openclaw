@@ -68,7 +68,6 @@ import type {
   PluginHookResolveExecEnvEvent,
   PluginHookSkillContext,
   PluginHookSkillProposalEvaluateEvent,
-  PluginHookSkillProposalEvaluateResult,
   PluginHookSkillProposalEvaluationOutcome,
 } from "./hook-types.js";
 import { runPluginCleanup } from "./plugin-instance-scope.js";
@@ -192,7 +191,6 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult = HookResult<K>> = {
   mergeNullResults?: boolean;
   shouldStop?: (result: TResult) => boolean;
   terminalLabel?: string;
-  onTerminal?: (params: { hookName: K; pluginId: string; result: TResult }) => void;
   includeRegistration?: (registration: PluginHookRegistration<K>) => boolean;
   assertHandlerBoundaryActive?: () => void;
   onHandlerResult?: (params: {
@@ -222,9 +220,6 @@ type PluginTargetedInboundClaimOutcome =
     };
 
 type SyncHookName = "tool_result_persist" | "before_message_write";
-type SyncHookHandler<K extends SyncHookName> = NonNullable<PluginHookRegistration<K>["handler"]>;
-type SyncHookEvent<K extends SyncHookName> = Parameters<SyncHookHandler<K>>[0];
-type SyncHookContext<K extends SyncHookName> = Parameters<SyncHookHandler<K>>[1];
 type SyncHookMessage = PluginHookToolResultPersistEvent["message"];
 type SyncMessageHookStepResult = { message?: SyncHookMessage; block?: true };
 
@@ -373,8 +368,6 @@ export function createHookRunner(
     });
   };
 
-  const firstDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => prev ?? next;
-  const lastDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => next ?? prev;
   const stickyTrue = (prev?: boolean, next?: boolean): true | undefined =>
     prev === true || next === true ? true : undefined;
   const mergeBeforeModelResolve = (
@@ -382,21 +375,15 @@ export function createHookRunner(
     next: PluginHookBeforeModelResolveResult,
   ): PluginHookBeforeModelResolveResult => ({
     // Keep the first defined override so higher-priority hooks win.
-    modelOverride: firstDefined(acc?.modelOverride, next.modelOverride),
-    providerOverride: firstDefined(acc?.providerOverride, next.providerOverride),
+    modelOverride: acc?.modelOverride ?? next.modelOverride,
+    providerOverride: acc?.providerOverride ?? next.providerOverride,
   });
 
   const normalizeHookToolsAllow = (value: unknown): string[] | undefined => {
     if (value === undefined) {
       return undefined;
     }
-    if (!Array.isArray(value)) {
-      return [];
-    }
-    if (value.some((entry) => typeof entry !== "string")) {
-      return [];
-    }
-    return value as string[];
+    return Array.isArray(value) && value.every((entry) => typeof entry === "string") ? value : [];
   };
 
   const readHookToolsAllowRestrictions = (value: unknown): string[][] => {
@@ -452,7 +439,7 @@ export function createHookRunner(
           );
     return {
       // Keep the first defined system prompt so higher-priority hooks win.
-      systemPrompt: firstDefined(acc?.systemPrompt, next.systemPrompt),
+      systemPrompt: acc?.systemPrompt ?? next.systemPrompt,
       ...mergeAgentTurnPrepare(acc, next),
       ...(toolsAllow !== undefined ? { toolsAllow } : {}),
       prependSystemContext: concatOptionalTextSegments({
@@ -506,25 +493,11 @@ export function createHookRunner(
         .retryCandidates;
       if (Array.isArray(candidateList) && candidateList.length > 0) {
         return candidateList
-          .map((retry) => normalizeRetry(retry))
+          .map(normalizeRetry)
           .filter((retry): retry is BeforeAgentFinalizeRetry => retry !== undefined);
       }
       const retry = normalizeRetry(result.retry);
       return retry ? [retry] : [];
-    };
-    const attachRetryCandidates = (
-      result: PluginHookBeforeAgentFinalizeResult,
-      candidates: BeforeAgentFinalizeRetry[],
-    ): PluginHookBeforeAgentFinalizeResult => {
-      if (result.action !== "revise" || candidates.length <= 1) {
-        return result;
-      }
-      Object.defineProperty(result, "retryCandidates", {
-        configurable: true,
-        enumerable: false,
-        value: candidates,
-      });
-      return result;
     };
     if (acc?.action === "finalize") {
       return acc;
@@ -535,17 +508,19 @@ export function createHookRunner(
     if (acc?.action === "revise" && next.action === "revise") {
       const retryCandidates = [...readRetryCandidates(acc), ...readRetryCandidates(next)];
       const retry = retryCandidates[0];
-      return attachRetryCandidates(
-        {
-          action: "revise",
-          reason: concatOptionalTextSegments({
-            left: acc.reason,
-            right: next.reason,
-          }),
-          ...(retry ? { retry } : {}),
-        },
-        retryCandidates,
-      );
+      const result: PluginHookBeforeAgentFinalizeResult = {
+        action: "revise",
+        reason: concatOptionalTextSegments({ left: acc.reason, right: next.reason }),
+        ...(retry ? { retry } : {}),
+      };
+      if (retryCandidates.length > 1) {
+        Object.defineProperty(result, "retryCandidates", {
+          configurable: true,
+          enumerable: false,
+          value: retryCandidates,
+        });
+      }
+      return result;
     }
     if (acc?.action === "revise") {
       return acc;
@@ -580,9 +555,6 @@ export function createHookRunner(
     return firstLine || "unknown error";
   };
 
-  const getPluginPackageVersion = (pluginId: string): string | undefined =>
-    registry.plugins.find((plugin) => plugin.id === pluginId)?.packageVersion;
-
   const awaitHook = <T>(
     hook: PluginHookRegistration,
     promise: Promise<T>,
@@ -597,14 +569,14 @@ export function createHookRunner(
   const runSyncMessageHookStep = <K extends SyncHookName>(
     hook: PluginHookRegistration<K>,
     hookName: K,
-    event: SyncHookEvent<K> & { message: SyncHookMessage },
+    event: HookEvent<K> & { message: SyncHookMessage },
     message: SyncHookMessage,
-    ctx: SyncHookContext<K>,
+    ctx: HookContext<K>,
   ): SyncMessageHookStepResult | undefined => {
     try {
       const handler = hook.handler as (
-        event: SyncHookEvent<K>,
-        ctx: SyncHookContext<K>,
+        event: HookEvent<K>,
+        ctx: HookContext<K>,
       ) => { message?: SyncHookMessage; block?: boolean } | PromiseLike<unknown> | void;
       const result = handler({ ...event, message }, ctx);
       if (isPromiseLike(result)) {
@@ -639,8 +611,8 @@ export function createHookRunner(
 
   const runSyncMessageHooks = <K extends SyncHookName>(
     hookName: K,
-    event: SyncHookEvent<K> & { message: SyncHookMessage },
-    ctx: SyncHookContext<K>,
+    event: HookEvent<K> & { message: SyncHookMessage },
+    ctx: HookContext<K>,
   ): { message: SyncHookMessage; block?: true } | undefined => {
     const hooks = getHooksForName(registry, hookName);
     if (hooks.length === 0) {
@@ -809,7 +781,6 @@ export function createHookRunner(
             logger?.debug?.(
               `[hooks] ${hookName}${terminalLabel} decided by ${hook.pluginId} (priority=${priority}); skipping remaining handlers`,
             );
-            policy.onTerminal?.({ hookName, pluginId: hook.pluginId, result });
             shouldStop = true;
           }
         }
@@ -854,7 +825,7 @@ export function createHookRunner(
     K extends PluginHookName,
     TResult extends { handled: boolean },
   >(
-    hooks: Array<PluginHookRegistration<K> & { pluginId: string }>,
+    hooks: PluginHookRegistration<K>[],
     hookName: K,
     event: HookEvent<K>,
     ctx: HookContext<K> & ClaimingHookAdmission,
@@ -1117,7 +1088,7 @@ export function createHookRunner(
             return acc;
           }
           const approvalAlreadyRequested = acc?.requireApproval !== undefined;
-          let params = lastDefined(acc?.params, next.params);
+          let params = next.params ?? acc?.params;
           if (approvalAlreadyRequested) {
             params = acc?.params;
           } else if (next.requireApproval && params !== undefined) {
@@ -1128,7 +1099,7 @@ export function createHookRunner(
           return {
             params,
             block: stickyTrue(acc?.block, next.block),
-            blockReason: lastDefined(acc?.blockReason, next.blockReason),
+            blockReason: next.blockReason ?? acc?.blockReason,
             requireApproval:
               acc?.requireApproval ??
               (next.requireApproval
@@ -1211,17 +1182,16 @@ export function createHookRunner(
     const immutableEvent = deepFreezeHookValue(structuredClone(event));
     return await Promise.all(
       hooks.map(async (hook): Promise<PluginHookSkillProposalEvaluationOutcome> => {
-        const pluginVersion = getPluginPackageVersion(hook.pluginId);
+        const pluginVersion = registry.plugins.find(
+          (plugin) => plugin.id === hook.pluginId,
+        )?.packageVersion;
         const attribution = {
           evaluatorId: hook.registrationId ?? hook.pluginId,
           pluginId: hook.pluginId,
           ...(pluginVersion ? { pluginVersion } : {}),
         };
         try {
-          const handler = hook.handler as (
-            event: PluginHookSkillProposalEvaluateEvent,
-            ctx: PluginHookSkillContext,
-          ) => Promise<PluginHookSkillProposalEvaluateResult | void>;
+          const handler = hook.handler;
           const promise = Promise.resolve(handler(immutableEvent, ctx));
           const result = await awaitHook(hook, promise, modifyingHookTimeoutMsByHook[hookName]);
           return result
@@ -1309,7 +1279,7 @@ export function createHookRunner(
             ? (acc?.payload ?? event.payload)
             : acceptPluginReplyPayload(acc?.payload ?? event.payload, next.payload),
         cancel: stickyTrue(acc?.cancel, next.cancel),
-        reason: lastDefined(acc?.reason, next.reason),
+        reason: next.reason ?? acc?.reason,
       }),
       shouldStop: (result) => result.cancel === true,
       terminalLabel: "cancel=true",
@@ -1324,9 +1294,9 @@ export function createHookRunner(
         ctx,
         {
           mergeResults: (acc, next) => ({
-            content: lastDefined(acc?.content, next.content),
+            content: next.content ?? acc?.content,
             cancel: stickyTrue(acc?.cancel, next.cancel),
-            cancelReason: lastDefined(acc?.cancelReason, next.cancelReason),
+            cancelReason: next.cancelReason ?? acc?.cancelReason,
             metadata: next.metadata ?? acc?.metadata,
           }),
           shouldStop: (decision) => decision.cancel === true,
@@ -1373,7 +1343,7 @@ export function createHookRunner(
         return {
           findings: findings.length ? findings : undefined,
           block: stickyTrue(acc?.block, next.block),
-          blockReason: lastDefined(acc?.blockReason, next.blockReason),
+          blockReason: next.blockReason ?? acc?.blockReason,
         };
       },
       shouldStop: (result) => result.block === true,
