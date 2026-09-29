@@ -1,8 +1,75 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { WorkerWorkspaceCommand } from "./tunnel-contract.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 
 describe("worker workspace quiescence", () => {
+  it.each(["transport", "acknowledgement", "cleanup", "owner-closed", "legacy"] as const)(
+    "recovers only an owned native nonce after failed acquisition (%s)",
+    async (failure) => {
+      const owner = new AbortController();
+      const commands: WorkerWorkspaceCommand[] = [];
+      const runWorkspaceCommand = vi.fn(async (command: WorkerWorkspaceCommand) => {
+        commands.push(command);
+        if (command.quiescence?.action === "release") {
+          if (failure === "cleanup") {
+            throw new Error("recovery unavailable");
+          }
+          return {
+            stdout: "",
+            stderr: "",
+            code: 0,
+            signal: null,
+            killed: false,
+            termination: "exit" as const,
+          };
+        }
+        if (failure === "owner-closed") {
+          owner.abort();
+        }
+        if (failure !== "acknowledgement") {
+          throw new Error("acquisition response lost");
+        }
+        return {
+          stdout: "not an acknowledgement",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit" as const,
+        };
+      });
+      const acquiring = createWorkerWorkspaceQuiescence({
+        ownerSignal: owner.signal,
+        sharedHost: true,
+        nativeWatchdog: async () => failure !== "legacy",
+        runWorkspaceCommand,
+      })("/workspace");
+      if (failure === "cleanup") {
+        await expect(acquiring).rejects.toMatchObject({
+          errors: [
+            expect.objectContaining({ message: "acquisition response lost" }),
+            expect.objectContaining({ message: "recovery unavailable" }),
+          ],
+        });
+      } else {
+        await expect(acquiring).rejects.toThrow(
+          failure === "acknowledgement" ? "invalid acknowledgement" : "acquisition response lost",
+        );
+      }
+      if (failure === "owner-closed" || failure === "legacy") {
+        expect(commands).toHaveLength(1);
+      } else {
+        expect(commands).toHaveLength(2);
+        expect(commands[1]?.quiescence).toEqual({
+          action: "release",
+          nonce: commands[0]?.quiescence?.nonce,
+        });
+        expect(commands[1]?.transportRetry).toBe("never");
+      }
+    },
+  );
+
   it.each([false, true])(
     "drains active renewal before release (owner closes: %s)",
     async (closes) => {

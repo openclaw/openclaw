@@ -48,6 +48,7 @@ import {
 import { callInProcessGatewayTool } from "../../tools/in-process-gateway.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
 import { settleSubagentRegistryPersistenceWork } from "../registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
@@ -99,6 +100,7 @@ const COLD_MODEL_ENTRY_TIMEOUT_MS = 60_000;
 let state: OpenClawTestState;
 let stateDir = "";
 let runtimeConfig: OpenClawConfig;
+let settleRootWork: ReturnType<typeof observeRootWork>;
 
 async function writeTestConfig() {
   const config = {
@@ -181,10 +183,12 @@ beforeEach(async () => {
       return { status: "pending" } as T;
     },
   );
+  settleRootWork = observeRootWork();
 });
 
 afterEach(async ({ task }) => {
-  await settleSubagentRegistryPersistenceWork();
+  // Join finite completion tails before asserting that their registry roots retired.
+  await settleSubagentRegistryPersistenceWork(() => settleRootWork());
   // Retire workspace observers before fixture cleanup removes their roots.
   const { closeSkillsWatchers } = await import("../../../skills/runtime/refresh.js");
   await closeSkillsWatchers(true);
