@@ -2908,6 +2908,9 @@ importers:
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
+      katex:
+        specifier: 0.16.47
+        version: 0.16.47
       lit:
         specifier: 3.3.3
         version: 3.3.3

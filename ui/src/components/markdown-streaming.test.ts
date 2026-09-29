@@ -640,6 +640,88 @@ export function sample${index}(value: number): number {
 
     expect(html).toBe("<p>prices are $$50 and</p>\n");
   });
+
+  it("rescans a backslash that becomes a display opener on the next chunk", () => {
+    const partial = "before\n\n\\";
+    const completed = partial + "[\nx^2\n\n+ y^2\n\\]";
+    const key = "split-bracket-display-opener";
+    toStreamingMarkdownParts(partial, {}, key);
+
+    const html = toStreamingMarkdownParts(completed, {}, key).join("");
+    expect(html).toBe(toStreamingMarkdownParts(completed).join(""));
+    expect(
+      htmlFragment(html).querySelectorAll('openclaw-markdown-math[data-display="true"]'),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    "before\n\n$$\nx^2\n\n+ y^2\n$$\n\nafter",
+    "before\n\n\\[\nx^2\n\n+ y^2\n\\]\n\nafter",
+    "before\n\nInline $x^2$ and \\(y^2\\).",
+    "before\n\n$$x^2$$ and text",
+    "before\n\n\\[x^2\\] and text",
+    "before\n\n`$literal$` and $x^2$",
+    "before\n\nPrices $5-$10; https://example.com/$schema$/query?$x$=1",
+    "before\n\n$$x\\$$ still open\n\n+ y\n$$",
+    "before\n\n$$\nx^2\n> $$\n\n+ y\n$$",
+  ])("keeps keyed and unkeyed math HTML equal at every chunk: %j", (source) => {
+    for (const chunkSize of [1, 7]) {
+      const key = `math-chunks:${source}:${chunkSize}`;
+      for (let end = chunkSize; end < source.length + chunkSize; end += chunkSize) {
+        const prefix = source.slice(0, end);
+        expect(toStreamingMarkdownParts(prefix, {}, key).join("")).toBe(
+          toStreamingMarkdownParts(prefix).join(""),
+        );
+      }
+    }
+  });
+
+  it("keeps parser-rejected distant closers in the reparsed math suffix", () => {
+    const partial = "before\n\n$$\nx" + " ".repeat(4096) + "$$\n\n";
+    const completed = partial + "+ y\n$$";
+    const key = "distant-display-closer";
+    toStreamingMarkdownParts(partial, {}, key);
+    expect(toStreamingMarkdownParts(completed, {}, key).join("")).toBe(
+      toStreamingMarkdownParts(completed).join(""),
+    );
+  });
+
+  it("retires rejected math tails after the bounded search", () => {
+    const source = "\\[\n" + "ordinary line\n\n".repeat(600);
+    const key = "expired-math-tail";
+    splitStableStreamingMarkdown(source.slice(0, 2000), key);
+    const split = splitStableStreamingMarkdown(source, key);
+    expect(split.boundary).toBeGreaterThan(4096);
+    expect(split.tailRepairStart).not.toBeNull();
+  });
+
+  it("keeps bounded multiline math equal across keyed chunks", () => {
+    const source = "before\n\n\\[\n" + "x\n".repeat(2050) + "\\]\n\nafter";
+    const key = "bounded-multiline-display";
+    for (let end = 512; end < source.length + 512; end += 512) {
+      const prefix = source.slice(0, end);
+      expect(toStreamingMarkdownParts(prefix, {}, key).join("")).toBe(
+        toStreamingMarkdownParts(prefix).join(""),
+      );
+    }
+  });
+
+  it("does not close streaming display math on an escaped delimiter", () => {
+    const source = "$$x\\$$ still open";
+    const split = splitStableStreamingMarkdown(source);
+    expect(split.tailRepairStart).toBeNull();
+  });
+
+  it("does not cache past an incomplete inline-math line", () => {
+    const partial = "before\n\nexplanation $x";
+    const completed = `${partial}$`;
+    const key = "partial-inline-math-line";
+
+    splitStableStreamingMarkdown(partial, key);
+    expect(toStreamingMarkdownParts(completed, {}, key).join("")).toBe(
+      toStreamingMarkdownParts(completed).join(""),
+    );
+  });
 });
 
 describe("indented Markdown source", () => {

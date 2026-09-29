@@ -51,6 +51,7 @@ const allowedTags = [
   "li",
   "ol",
   "openclaw-person-reference",
+  "openclaw-markdown-math",
   "p",
   "pre",
   "s",
