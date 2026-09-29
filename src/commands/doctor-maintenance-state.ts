@@ -68,7 +68,7 @@ export function createDoctorMaintenanceState(options: {
       owner = undefined;
       throw error;
     }
-    if (capture) {
+    if (capture && !captureAdmitted) {
       await settle(() => resources!.run(() => capture.admit()));
       captureAdmitted = true;
     }
@@ -143,6 +143,37 @@ export function createDoctorMaintenanceState(options: {
         for (const warning of result.warnings) {
           options.warn(sanitizeDoctorNote(warning));
         }
+      }
+    },
+    async repairSqliteNoCow(paths: readonly string[]) {
+      if (paths.length === 0) {
+        return { changes: [], warnings: [] };
+      }
+      const { repairDoctorSqliteNoCow } = await import("./doctor-sqlite-nocow.js");
+      const { closeOpenClawAgentDatabasesAsync } =
+        await import("../state/openclaw-agent-db-lifecycle.js");
+      options.assertCurrent?.();
+      owner!.assertCurrent();
+      await closeResources();
+      await closeOpenClawAgentDatabasesAsync(resolveStateDir(env));
+      await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
+      try {
+        return await owner!.run(() =>
+          repairDoctorSqliteNoCow({
+            paths,
+            stateDir: resolveStateDir(env),
+            assertCurrent: () => {
+              options.assertCurrent?.();
+              owner!.assertCurrent();
+              for (const pathname of paths) {
+                owner!.assertDatabaseAccess(pathname);
+              }
+            },
+          }),
+        );
+      } finally {
+        // Restoration and update receipts use a fresh scope for the new file identity.
+        await enterResources(owner!);
       }
     },
     async release() {

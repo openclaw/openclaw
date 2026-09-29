@@ -14,6 +14,7 @@ import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js"
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+import * as nocow from "./doctor-sqlite-nocow.js";
 
 const settlement = await import("./doctor-maintenance.settlement.test-support.js");
 const { begin, boundary, cleanupBarrier, root } = settlement;
@@ -62,6 +63,41 @@ it.each([false, true])(
     );
   },
 );
+
+it("attributes a NOCOW physical replacement to the retained Doctor maintenance interval", async () => {
+  vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async (paths) =>
+    readUpdateDatabaseGenerations(paths),
+  );
+  const pathname = path.join(settlement.tempDirs.make("doctor-nocow-receipt-"), "agent.sqlite");
+  const seed = new DatabaseSync(pathname);
+  seed.exec("CREATE TABLE evidence(value INTEGER); INSERT INTO evidence VALUES (1)");
+  seed.close();
+  const generations = readUpdateDatabaseGenerations([pathname]);
+  const rewrite = vi.spyOn(nocow, "repairDoctorSqliteNoCow").mockImplementation(async () => {
+    expect(boundary.close).toHaveBeenCalled();
+    fs.copyFileSync(pathname, `${pathname}.new`);
+    fs.renameSync(`${pathname}.new`, pathname);
+    return { changes: ["NOCOW rewrite complete"], warnings: [] };
+  });
+  const maintenance = await beginDoctorMaintenance({
+    root: null,
+    options: { repair: true, nonInteractive: true },
+    runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
+    databaseGenerations: generations,
+  });
+  await maintenance!.repairSqliteNoCow([pathname]);
+  await maintenance!.release();
+  expect(rewrite).toHaveBeenCalledOnce();
+  expect(maintenance!.databaseWrites).toEqual({
+    unchanged: true,
+    generations: readUpdateDatabaseGenerations([pathname]),
+  });
+  expect(maintenance!.databaseWrites?.generations[pathname]).not.toBe(generations[pathname]);
+  expect(maintenance!.warnings).not.toContain("NOCOW rewrite complete");
+  await expect(maintenance!.repairSqliteNoCow([pathname])).rejects.toThrow(
+    "original live maintenance owner",
+  );
+});
 
 it("keeps fingerprint failures advisory and publishes no database write proof", async () => {
   vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async (paths) =>
