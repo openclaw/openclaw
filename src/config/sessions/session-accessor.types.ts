@@ -238,14 +238,13 @@ export type SessionTranscriptRawDeltaLimits = {
   maxEvents?: number;
 };
 
-/** Generation-aware outcome for one bounded raw transcript read. */
-export type SessionTranscriptRawDeltaResult =
+type SessionTranscriptDeltaResult<TEvent, TResetReason extends string> =
   | {
       kind: "page";
       /** Cursor positioned after the last returned event. */
       cursor: string;
-      /** Ordered raw transcript events selected for this page. */
-      events: SessionTranscriptEventRow[];
+      /** Ordered transcript events selected for this page. */
+      events: TEvent[];
       /** True when another event remains after this page. */
       hasMore: boolean;
       /** First unread event size when it cannot fit under maxBytes. */
@@ -258,9 +257,15 @@ export type SessionTranscriptRawDeltaResult =
       /** Fresh bootstrap cursor for the current generation. */
       cursor: string;
       /** Stable discontinuity that invalidated the supplied cursor. */
-      reason: "generation_mismatch" | "invalid_cursor" | "scope_mismatch";
+      reason: TResetReason;
     }
   | { kind: "missing" };
+
+/** Generation-aware outcome for one bounded raw transcript read. */
+export type SessionTranscriptRawDeltaResult = SessionTranscriptDeltaResult<
+  SessionTranscriptEventRow,
+  "generation_mismatch" | "invalid_cursor" | "scope_mismatch"
+>;
 
 /** Count, byte, and continuation bounds for one visible-message page. */
 export type SessionTranscriptVisibleMessageDeltaLimits = {
@@ -281,33 +286,10 @@ export type SessionTranscriptVisibleMessageEventRow = SessionTranscriptEventRow 
 };
 
 /** Generation-aware outcome for one bounded visible-message read. */
-export type SessionTranscriptVisibleMessageDeltaResult =
-  | {
-      kind: "page";
-      /** Cursor positioned after the last returned visible message. */
-      cursor: string;
-      /** Ordered active-path message events selected for this page. */
-      events: SessionTranscriptVisibleMessageEventRow[];
-      /** True when another visible message remains after this page. */
-      hasMore: boolean;
-      /** First unread event size when it cannot fit under maxBytes. */
-      requiredBytes?: number;
-      /** Stored JSONL bytes represented by events. */
-      serializedBytes: number;
-    }
-  | {
-      kind: "reset";
-      /** Fresh bootstrap cursor for the current visible generation. */
-      cursor: string;
-      /** Stable discontinuity that invalidated the supplied cursor. */
-      reason:
-        | "anchor_missing"
-        | "anchor_moved"
-        | "generation_mismatch"
-        | "invalid_cursor"
-        | "scope_mismatch";
-    }
-  | { kind: "missing" };
+export type SessionTranscriptVisibleMessageDeltaResult = SessionTranscriptDeltaResult<
+  SessionTranscriptVisibleMessageEventRow,
+  "anchor_missing" | "anchor_moved" | "generation_mismatch" | "invalid_cursor" | "scope_mismatch"
+>;
 
 export type TranscriptMessageAppendOptions<TMessage> = {
   /** Rebase a stale explicit parent when the current tail still descends from it. */

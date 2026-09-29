@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import {
+  getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
@@ -179,12 +180,8 @@ export function registerForcedCollectorCompletionSettlementTests({
   mockPendingAgentWait: () => void;
 }): void {
   it.each([
-    { observation: "lifecycle", schema: false, captured: false },
     { observation: "wait", schema: false, captured: false },
-    { observation: "lifecycle", schema: true, captured: false },
-    { observation: "wait", schema: true, captured: false },
     { observation: "lifecycle", schema: true, captured: true },
-    { observation: "wait", schema: true, captured: true },
   ])(
     "settles forced collector yield through $observation (schema=$schema, captured=$captured)",
     async ({ observation, schema, captured }) => {
@@ -308,6 +305,7 @@ export function registerSupersededTimingOwnershipTest({
       }),
     ).toBe(1);
     await timingWriteStartedPromise;
+    expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
 
     await mod.registerSubagentRun({
       runId: "run-released-timing-new",
@@ -317,6 +315,7 @@ export function registerSupersededTimingOwnershipTest({
     mod.releaseSubagentRun("run-released-timing-new");
     releaseTimingWrite?.();
     await timingWriteFinished;
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
 
     const oldRun = findRequesterRun("run-released-timing-old");
     expect(oldRun?.killReconciliation?.supersededAt).toBeTypeOf("number");

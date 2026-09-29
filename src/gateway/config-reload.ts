@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { isDeepStrictEqual } from "node:util";
@@ -196,6 +197,9 @@ export function startGatewayConfigReloader(opts: {
   };
   watchPath: string;
 }): GatewayConfigReloader {
+  // Write listeners schedule jobs inside temporary writer scopes. Reloads belong
+  // to this Gateway instance, even after the originating config lock has closed.
+  const runInReloadContext = AsyncLocalStorage.snapshot();
   const initialSourceConfig = opts.initialCompareConfig ?? opts.initialConfig;
   let currentConfig = opts.initialConfig;
   let currentCompareConfig = initialSourceConfig;
@@ -351,11 +355,15 @@ export function startGatewayConfigReloader(opts: {
     }
     // Coalesce filesystem/write-listener bursts into one reload pass. Config
     // writes often touch temp and final paths in quick succession.
-    reloadJob = opts.scheduler.schedule({
-      id: "config:reload",
-      delayMs: Math.max(wait, leaseRetryDelayMs),
-      run: startTrackedReload,
-    });
+    // Restore instance context at registration so the scheduler can install its
+    // own work scope when the callback runs and retain descendant ownership.
+    reloadJob = runInReloadContext(() =>
+      opts.scheduler.schedule({
+        id: "config:reload",
+        delayMs: Math.max(wait, leaseRetryDelayMs),
+        run: startTrackedReload,
+      }),
+    );
   };
   const schedule = () => {
     scheduleAfter(pendingInProcessConfig ? 0 : settings.debounceMs);

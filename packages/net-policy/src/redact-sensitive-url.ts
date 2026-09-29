@@ -69,10 +69,7 @@ function normalizeUrlQueryParamName(name: string): {
     try {
       decoded = decodeURIComponent(current).replace(URL_QUERY_NAME_SEPARATOR_RE, "");
     } catch {
-      return {
-        value: normalizeLowercaseStringOrEmpty(current).replaceAll("-", "_"),
-        unresolvedEncoding: current.includes("%"),
-      };
+      break;
     }
     if (decoded === current) {
       return {
@@ -202,11 +199,7 @@ function redactQueryString(value: string, depth: number): string {
   if (!mutated) {
     return value;
   }
-  const redactedParams = new URLSearchParams();
-  for (const [key, entryValue] of redactedEntries) {
-    redactedParams.append(key, entryValue);
-  }
-  return redactedParams.toString();
+  return new URLSearchParams(redactedEntries).toString();
 }
 
 function redactUrlLikeFallback(value: string): string {
@@ -317,24 +310,23 @@ function redactFragment(value: string, depth: number): string {
     return redactUrlLikeFallback(wholeUrl.value);
   }
 
-  const candidate = value;
   // Query-only fragments do not have a leading `?`, so the URL-like fallback cannot see them.
-  const firstQueryDelimiter = candidate.search(/[?&]/u);
-  const firstEquals = candidate.indexOf("=");
+  const firstQueryDelimiter = value.search(/[?&]/u);
+  const firstEquals = value.indexOf("=");
   if (firstEquals >= 0 && (firstQueryDelimiter < 0 || firstEquals < firstQueryDelimiter)) {
-    return redactQueryString(candidate, depth);
+    return redactQueryString(value, depth);
   }
 
-  const hashRouterQueryIndex = candidate.indexOf("?");
+  const hashRouterQueryIndex = value.indexOf("?");
   if (hashRouterQueryIndex >= 0) {
-    const query = candidate.slice(hashRouterQueryIndex + 1);
+    const query = value.slice(hashRouterQueryIndex + 1);
     const redactedQuery = redactQueryString(query, depth);
-    const prefix = candidate.slice(0, hashRouterQueryIndex + 1);
+    const prefix = value.slice(0, hashRouterQueryIndex + 1);
     const redactedPrefix = redactEncodedUrlLikeString(redactUrlLikeFallback(prefix), depth + 1);
     return `${redactedPrefix}${redactedQuery}`;
   }
 
-  const fallback = redactUrlLikeFallback(candidate);
+  const fallback = redactUrlLikeFallback(value);
   if (!looksLikeNestedUrlValue(fallback)) {
     return fallback;
   }

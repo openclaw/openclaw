@@ -275,12 +275,6 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     memoryArrayBuffersHistogram.record(evt.memory.arrayBuffersBytes, attrs);
   };
 
-  const recordMemorySample = (
-    evt: Extract<DiagnosticEventPayload, { type: "diagnostic.memory.sample" }>,
-  ) => {
-    recordMemoryUsageMetrics(evt);
-  };
-
   const recordMemoryPressure = (
     evt: Extract<DiagnosticEventPayload, { type: "diagnostic.memory.pressure" }>,
   ) => {
@@ -326,20 +320,16 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     asyncQueueDroppedCounter.add(evt.droppedEvents, {
       "openclaw.diagnostic.async_queue.drop_class": "total",
     });
-    if (evt.droppedTrustedEvents !== undefined) {
-      asyncQueueDroppedCounter.add(evt.droppedTrustedEvents, {
-        "openclaw.diagnostic.async_queue.drop_class": "trusted",
-      });
-    }
-    if (evt.droppedUntrustedEvents !== undefined) {
-      asyncQueueDroppedCounter.add(evt.droppedUntrustedEvents, {
-        "openclaw.diagnostic.async_queue.drop_class": "untrusted",
-      });
-    }
-    if (evt.droppedPriorityEvents !== undefined) {
-      asyncQueueDroppedCounter.add(evt.droppedPriorityEvents, {
-        "openclaw.diagnostic.async_queue.drop_class": "priority",
-      });
+    for (const [dropClass, field] of [
+      ["trusted", "droppedTrustedEvents"],
+      ["untrusted", "droppedUntrustedEvents"],
+      ["priority", "droppedPriorityEvents"],
+    ] as const) {
+      if (evt[field] !== undefined) {
+        asyncQueueDroppedCounter.add(evt[field], {
+          "openclaw.diagnostic.async_queue.drop_class": dropClass,
+        });
+      }
     }
   };
 
@@ -417,7 +407,6 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     recordRunAttempt,
     recordToolLoop,
     recordMemoryUsageMetrics,
-    recordMemorySample,
     recordMemoryPressure,
     recordAsyncQueueDropped,
     recordRunCompleted,

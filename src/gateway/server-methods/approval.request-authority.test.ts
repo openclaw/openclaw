@@ -1,6 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveExecApprovalRequestAllowedDecisions,
@@ -16,6 +20,7 @@ import {
   createOpenClawTestState,
   withOpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import { invalidateGatewayDeviceRevocation } from "../device-revocation.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
@@ -34,7 +39,10 @@ beforeAll(async () => {
   sharedState = await createOpenClawTestState({ label: "approval-request-custody" });
 });
 beforeEach(() => sharedState?.applyEnv());
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
 afterAll(async () => sharedState?.cleanup());
 
 it.each([
@@ -57,6 +65,8 @@ it.each([
   "config",
   "config-equivalent",
   "config-unrelated",
+  "config-other-identity",
+  "config-own-identity-aba",
   "config-role-revoked",
   "config-role-aba",
   "config-routing-aba",
@@ -70,6 +80,7 @@ it.each([
     "native",
     "config-equivalent",
     "config-unrelated",
+    "config-other-identity",
     "native-config-equivalent",
     "native-config-unrelated",
   ].includes(revocation);
@@ -130,10 +141,16 @@ it.each([
       ...(native ? { sessionMutationCommitGuard: nativeGuard } : {}),
     });
     const initialConfig: OpenClawConfig = {};
+    setRuntimeConfigSnapshot(initialConfig);
+    client.authPolicy = captureGatewayAuthPolicy(initialConfig, {
+      role: "operator",
+      verifiedIdentity: "reviewer@example.test",
+    });
     let currentConfig = initialConfig;
     invocation.context.getRuntimeConfig = () => currentConfig;
     const publishConfig = (config: OpenClawConfig) => {
       currentConfig = config;
+      setRuntimeConfigSnapshot(config);
       publishOperatorRoleConfigChange(invocation.context);
     };
     expect(before).toMatchObject({
@@ -197,6 +214,21 @@ it.each([
                   break;
                 case "config-unrelated":
                   publishConfig({ ...initialConfig, messages: { ackReaction: "ok" } });
+                  break;
+                case "config-other-identity":
+                case "config-own-identity-aba":
+                  publishConfig({
+                    gateway: {
+                      auth: {
+                        identityScopes: {
+                          [revocation === "config-other-identity"
+                            ? "other@example.test"
+                            : "reviewer@example.test"]: ["operator.approvals"],
+                        },
+                      },
+                    },
+                  });
+                  publishConfig(initialConfig);
                   break;
                 case "config-role-revoked":
                   publishConfig(rolePolicyConfig());

@@ -339,37 +339,6 @@ async function runBoundaryVerification(params: {
   return parseQaGatewayProcessRuntimeProof(JSON.parse(output) as unknown);
 }
 
-async function runBoundaryControl(params: {
-  launcherPath: string;
-  identityFilePath: string;
-  signal: "SIGCONT" | "SIGUSR2" | "SIGQUIT";
-}) {
-  await runBoundaryLauncherCommand({
-    args: ["--signal", params.signal, params.identityFilePath],
-    label: "signal",
-    launcherPath: params.launcherPath,
-    timeoutMs: PROCESS_BOUNDARY_CONTROL_TIMEOUT_MS,
-  });
-}
-
-async function runBoundaryTermination(params: { launcherPath: string; identityFilePath: string }) {
-  await runBoundaryLauncherCommand({
-    args: ["--terminate", params.identityFilePath],
-    label: "termination",
-    launcherPath: params.launcherPath,
-    timeoutMs: PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS,
-  });
-}
-
-async function runBoundaryUidTermination(launcherPath: string) {
-  await runBoundaryLauncherCommand({
-    args: ["--terminate-uid"],
-    label: "UID termination",
-    launcherPath,
-    timeoutMs: PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS,
-  });
-}
-
 function commandLineBytes(executable: string, argv: readonly string[]) {
   return Buffer.from(`${[executable, ...argv].join("\0")}\0`);
 }
@@ -462,7 +431,12 @@ export async function createQaGatewayProcessBoundaryController(params: {
   const terminateUidUntilQuiescent = async () => {
     for (;;) {
       try {
-        await runBoundaryUidTermination(params.launcherPath);
+        await runBoundaryLauncherCommand({
+          args: ["--terminate-uid"],
+          label: "UID termination",
+          launcherPath: params.launcherPath,
+          timeoutMs: PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS,
+        });
         return;
       } catch {
         await sleep(PROCESS_BOUNDARY_TERMINATE_RETRY_INTERVAL_MS);
@@ -475,9 +449,11 @@ export async function createQaGatewayProcessBoundaryController(params: {
     let lastError: unknown;
     while (Date.now() <= deadline) {
       try {
-        await runBoundaryTermination({
+        await runBoundaryLauncherCommand({
+          args: ["--terminate", identityFilePath],
+          label: "termination",
           launcherPath: params.launcherPath,
-          identityFilePath,
+          timeoutMs: PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS,
         });
         return undefined;
       } catch (error) {
@@ -716,10 +692,11 @@ export async function createQaGatewayProcessBoundaryController(params: {
     identity: QaGatewayVerifiedProcessIdentity,
     signalName: "SIGCONT" | "SIGUSR2" | "SIGQUIT",
   ) => {
-    await runBoundaryControl({
+    await runBoundaryLauncherCommand({
+      args: ["--signal", signalName, identity.identityFilePath],
+      label: "signal",
       launcherPath: params.launcherPath,
-      identityFilePath: identity.identityFilePath,
-      signal: signalName,
+      timeoutMs: PROCESS_BOUNDARY_CONTROL_TIMEOUT_MS,
     });
   };
 

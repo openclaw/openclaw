@@ -126,14 +126,12 @@ export function bindSqliteWorkerBackend(
     }
     assertTransactionUsable(database.db);
   };
-  const readRefusal = () => {
-    const refusal = resolveTranscriptAppendRefusal(
+  const readRefusal = () =>
+    resolveTranscriptAppendRefusal(
       readSessionEntryRow(database, resolved.sessionKey, "list")?.entry,
       resolved,
       { ...resolved, ...fence },
     );
-    return refusal;
-  };
   let prepared:
     | {
         facts: PreparedReport;

@@ -47,6 +47,21 @@ function selectedFiles(shards: ReturnType<typeof createChangedNodeTestShards>) {
   );
 }
 
+it("keeps the hybrid hourly plan within the main-tier cap", () => {
+  const hourly = createNodeTestShardBundles({
+    runnerBackend: "hybrid",
+    compactMode: "pull-request",
+    compactNodeJobCap: 77,
+    includeProofTests: true,
+    includeReleaseOnlyToolingShards: true,
+    includePrExemptRuntimeTests: true,
+    includeReleaseOnlyRuntimeTests: false,
+    includeReleaseOnlyPluginShards: false,
+  });
+  expect(hourly.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
+  expect(hourly.length).toBeLessThanOrEqual(79);
+});
+
 it("retains every PR-exempt file in hourly and release plans with its canonical owner", () => {
   const prExemptFiles = listPrExemptRuntimeTestFiles();
   expect(prExemptFiles.length).toBeGreaterThan(0);
@@ -182,6 +197,7 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
   const hourlyUiOwners = dedicatedGroups(uiHourly);
   const releaseUiOwners = dedicatedGroups(uiRelease);
   expect(hourly.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
+  expect(hourly.length).toBeLessThanOrEqual(79);
   // Node retains canonical jsdom ownership. The UI package independently runs
   // those projects; native Chromium and mocked E2E have dedicated owners only.
   const projectNodeOwners = (jobs: NonNullable<ReturnType<typeof createChangedNodeTestShards>>) =>

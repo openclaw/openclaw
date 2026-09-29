@@ -90,6 +90,12 @@ asynchronous planning first, then reread authoritative rows inside the admitted
 transaction. Preserve FIFO order, physical database identity, transaction/commit grants,
 and settlement of accepted write-capable work.
 
+Outbound media staging and recovery create and release their retention rows through
+the delivery queue's shared-state worker. Callers await creation before publishing
+spool files and await release during cleanup, so a concurrent writer waiting for
+host admission cannot block media sends on the Gateway thread. The existing custody
+rows, atomic enqueue, expiry, and update behavior are unchanged.
+
 Published agent and shared-state database timers dispatch periodic WAL checkpoints
 and bounded page reclamation through those same writers. The existing timer keeps
 its cadence and page budget, releases writer custody between units, and installs
@@ -524,6 +530,16 @@ retaining rows protected by current job or receipt ownership. Reconciled legacy
 rows remain history; they do not recreate a task runtime or linked-flow publication
 owner. This changes no schema, retention policy, or update step.
 
+Cron execution, descendant follow-up, and delivery observations use the existing
+subagent registry worker snapshot. Descendant closure selection and the existing
+query policies run in its consuming frame, including the paired fresh/active
+execution facts. Run draining awaits a fresh observation at each refresh, so a
+successor admitted while a wait settles is not lost. Failed or replaced read
+admission is not an empty descendant set. The obsolete internal synchronous
+descendant-list adapter is removed. The reaper/continuation deletion guards remain
+coupled to the outstanding lifecycle writer migration, not a permanent
+main-thread exception. This changes no schema, retention, or update behavior.
+
 Cron retention discovery uses a separate, single-worker maintenance lane within the
 same session database lifecycle owner. Foreground history and exact-entry reads
 keep their own queue while full-store validation runs. Both lanes retain the same
@@ -635,6 +651,13 @@ Pending work retains the partition queue and fences retired service generations,
 including deferred startup jobs. Remaining manual or timer finalizers retain
 their native implementation as migration debt. Schemas, retention, configuration,
 and update behavior are unchanged.
+
+Direct compaction hydrates durable transcripts through the existing read worker
+before preparing hooks or model calls. The read retains the captured transcript
+identity and cancellation signal; the caller rechecks its live writer authority
+before using the result. Caller-owned in-memory recovery keeps its existing
+buffer. Compaction persistence, stored bytes, retention, and update behavior are
+unchanged.
 
 Streaming assistant and tool-result completion events use the session manager's
 existing SQLite writer domain. The host retains extension hooks, redaction, and

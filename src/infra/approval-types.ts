@@ -1,7 +1,10 @@
 // Approval kind is shared by exec and plugin approval routing surfaces.
-import type { ExecApprovalRequest } from "./exec-approvals-core.js";
-import type { PluginApprovalRequest } from "./plugin-approvals.js";
-import type { SystemAgentApprovalRequest } from "./system-agent-approvals.js";
+import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals-core.js";
+import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
+import type {
+  SystemAgentApprovalRequest,
+  SystemAgentApprovalResolved,
+} from "./system-agent-approvals.js";
 
 export type ChannelApprovalKind = "exec" | "plugin" | "system-agent";
 export type ApprovalRequestChannelRouteClass = "bound-or-explicit" | "unbound";
@@ -11,6 +14,11 @@ export type ApprovalRequestInput =
   | ExecApprovalRequest
   | PluginApprovalRequest
   | SystemAgentApprovalRequest;
+
+export type ApprovalResolved =
+  | ExecApprovalResolved
+  | PluginApprovalResolved
+  | SystemAgentApprovalResolved;
 
 /** Canonical request shape used after the Gateway read boundary. */
 export type ApprovalRequest =

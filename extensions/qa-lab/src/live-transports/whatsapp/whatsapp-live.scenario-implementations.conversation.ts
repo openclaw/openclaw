@@ -6,15 +6,17 @@ import {
   type WhatsAppQaScenarioImplementation,
 } from "./whatsapp-live.contracts.js";
 import {
+  resolveWhatsAppQaNoReplyTarget,
+  waitForDistinctWhatsAppSutMessages,
+  waitForNoWhatsAppReply,
+} from "./whatsapp-live.driver.js";
+import {
   assertWhatsAppMessageFromSutPhone,
   assertWhatsAppMessagesFromSutPhone,
   buildWhatsAppQuotedMessageKeyFromObservedMessage,
   requireWhatsAppTriggerMessageId,
-  resolveWhatsAppQaNoReplyTarget,
-  waitForDistinctWhatsAppSutMessages,
-  waitForNoWhatsAppReply,
   waitForScenarioObservedMessage,
-} from "./whatsapp-live.operations.js";
+} from "./whatsapp-live.observations.js";
 
 function buildWhatsAppQuoteReplyRun(target: "dm" | "group"): WhatsAppQaMessageScenarioRun {
   const token = `WHATSAPP_QA_REPLY_TO_${target.toUpperCase()}_${randomUUID().slice(0, 8).toUpperCase()}`;

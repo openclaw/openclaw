@@ -56,7 +56,6 @@ import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-ide
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import { createFallbackSessionEntry } from "./session-accessor.sqlite-normalize.js";
 import {
-  cloneSessionEntry,
   getSessionKysely,
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
@@ -469,11 +468,11 @@ async function patchSqliteSessionEntrySnapshot(
         }
         let contextEntry = existing;
         let contextEntryBorrowed = true;
-        const patch = await params.update(cloneSessionEntry(writeBase), {
+        const patch = await params.update(structuredClone(writeBase), {
           // Most updaters ignore context; detach its snapshot only when they consume it.
           get existingEntry() {
             if (contextEntryBorrowed) {
-              contextEntry = contextEntry ? cloneSessionEntry(contextEntry) : undefined;
+              contextEntry = contextEntry ? structuredClone(contextEntry) : undefined;
               contextEntryBorrowed = false;
             }
             return contextEntry;
@@ -489,7 +488,7 @@ async function patchSqliteSessionEntrySnapshot(
         const merged = !creationPatch
           ? undefined
           : options.replaceEntry
-            ? cloneSessionEntry(patch as SessionEntry)
+            ? structuredClone(patch as SessionEntry)
             : options.preserveActivity
               ? mergeSessionEntryPreserveActivity(mergeBase, creationPatch)
               : mergeSessionEntry(mergeBase, creationPatch);
@@ -538,7 +537,7 @@ async function patchSqliteSessionEntrySnapshot(
           );
           try {
             if (next && result) {
-              options.onCommitted?.(cloneSessionEntry(result));
+              options.onCommitted?.(structuredClone(result));
             }
           } finally {
             publish?.();

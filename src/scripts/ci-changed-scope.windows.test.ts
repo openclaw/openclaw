@@ -239,6 +239,10 @@ describe("detectChangedScope Windows routing", () => {
       ],
     },
     {
+      name: "routes the browser version probe owner to Windows",
+      paths: ["extensions/browser/src/browser/chrome.executable-probe.ts"],
+    },
+    {
       name: "routes workspace quiescence owners and native coverage to Windows",
       paths: [
         "src/gateway/worker-environments/workspace-quiescence.ts",

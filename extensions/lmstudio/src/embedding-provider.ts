@@ -10,6 +10,7 @@ import {
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { LMSTUDIO_DEFAULT_EMBEDDING_MODEL, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
@@ -41,14 +42,7 @@ type LmstudioEmbeddingClient = {
   ssrfPolicy?: SsrFPolicy;
   model: string;
 };
-type MemoryCoreAcquireLocalService = (
-  target: {
-    providerId: string;
-    baseUrl: string;
-    headers?: HeadersInit;
-  },
-  signal?: AbortSignal | null,
-) => Promise<{ release: () => void } | undefined>;
+type MemoryCoreAcquireLocalService = OpenClawPluginApi["runtime"]["llm"]["acquireLocalService"];
 type LocalServiceAwareEmbeddingOptions = MemoryEmbeddingProviderCreateOptions & {
   acquireLocalService?: MemoryCoreAcquireLocalService;
 };

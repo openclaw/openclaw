@@ -174,6 +174,14 @@ It dispatches the protected REST merge with the exact head pinned and retains
 the prior run, inspected delta, scoped evidence, and operator in the existing
 merge outcome. Accepted or uncertain outcomes still require reconciliation.
 
+If GraphQL cannot determine mergeability, this explicit mode can switch to a
+complete REST observation and retain that reader for the attempt. It preserves
+known GraphQL facts and reads the repository, PR head, main, rules, and required
+checks together; a blocked CI projection remains blocked. The existing admin
+verifier rechecks live authority, enforced reviews, security, and exact CI evidence
+after the final REST reread. Missing or changed evidence still refuses before
+intent. This adds no implicit admin route or mutation retry.
+
 #### Explicitly approved pre-existing failures
 
 When the operator specifically authorizes ignoring independently attributed
@@ -214,6 +222,15 @@ Retain these additional fields:
   `jobIds`, the same `causedBy` root IDs, `reason`, and `evidence` names, plus the
   successful `pr-fail-fast` job's `jobId` and cancellation-step number `step`.
   This records inspected cancellation provenance, never passing coverage.
+
+An explicitly attributed Node job that exhausted its execution deadline may appear
+as `cancelled` in GitHub's job API. Keep it in `failures`, with the actual observed
+cases and incomplete coverage recorded. The verifier requires the matching live
+GitHub Actions check-run, complete deadline/cancellation annotations, consistent
+head, suite and timestamps, an elapsed deadline, one cancelled Node test step,
+no additional failed steps, and unchanged workflow source. It retains the cancelled
+status and deadline evidence; it does not classify this root as fail-fast collateral.
+Manual cancellation and missing or contradictory deadline evidence remain refused.
 
 For the existing Node matrix's native fail-fast (including fork PRs whose monitor
 is skipped), use `cancellation.kind: "matrix-fail-fast"` and

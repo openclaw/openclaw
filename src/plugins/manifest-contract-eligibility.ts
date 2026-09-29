@@ -146,13 +146,11 @@ export function listAvailableManifestContractValues(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): string[] {
-  const values = new Set<string>();
-  for (const plugin of listAvailableManifestContractPlugins(params)) {
-    for (const value of plugin.contracts?.[params.contract] ?? []) {
-      values.add(value);
-    }
-  }
-  return sortUniqueStrings(values);
+  return sortUniqueStrings(
+    listAvailableManifestContractPlugins(params).flatMap(
+      (plugin) => plugin.contracts?.[params.contract] ?? [],
+    ),
+  );
 }
 
 export function loadManifestContractSnapshot(params: {
