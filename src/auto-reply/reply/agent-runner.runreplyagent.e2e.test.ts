@@ -4,23 +4,13 @@ import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 // E2E tests for run-reply-agent execution and generated session artifacts.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import {
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-  type MockInstance,
-} from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
   observeParentSqlite,
   sqliteMethods,
 } from "../../../test/helpers/sqlite-parent-observer.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../../agents/agent-command-restart-recovery.js";
 import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
@@ -64,6 +54,7 @@ import { createReplyAgentRestartRecoveryController } from "./agent-runner-execut
 import { registerReasoningFallbackTests } from "./agent-runner.reasoning-fallback.test-support.js";
 import { registerReplyAdmissionCases } from "./agent-runner.runreplyagent.admission.cases.js";
 import { registerImmediateFailurePolicyCases } from "./agent-runner.runreplyagent.failure-policy.cases.js";
+import { createReplyAgentSessionFixture } from "./agent-runner.runreplyagent.fixture.test-support.js";
 import { registerRequiredReplyCompletionCases } from "./agent-runner.runreplyagent.required-reply.cases.js";
 import { registerSteeringReceiptCases } from "./agent-runner.runreplyagent.steering-receipts.cases.js";
 import { registerWaitingStatusCases } from "./agent-runner.runreplyagent.waiting-status.cases.js";
@@ -143,7 +134,7 @@ const parkedSteer = vi.hoisted(() => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { tempDirs, sessionKeys, createSessionStoreFile } = createReplyAgentSessionFixture();
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   let count = 0;
@@ -171,13 +162,6 @@ function requireStoredSessionEntry(storePath: string, sessionKey = "main"): Sess
     throw new Error(`expected stored session entry for ${sessionKey}`);
   }
   return entry;
-}
-
-async function createSessionStoreFile(entry: SessionEntry, sessionKey = "main"): Promise<string> {
-  const dir = tempDirs.make("openclaw-agent-runner-");
-  const storePath = join(dir, "sessions.json");
-  await replaceSessionEntry({ storePath, sessionKey }, entry);
-  return storePath;
 }
 
 function makeSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
@@ -432,6 +416,7 @@ function createMinimalRun(params?: {
     mode: params?.resolvedQueueMode ?? "interrupt",
   } as unknown as QueueSettings;
   const sessionKey = params?.sessionKey ?? "main";
+  sessionKeys.add(sessionKey);
   const followupRun = {
     prompt: "hello",
     summaryLine: "hello",
@@ -3251,8 +3236,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
   });
 
-  // Waived for 2026.9.7 by the release lead under Peter's 00:40 PT live/e2e waiver decision; see FRV 36534008742 job 109299878929.
-  it.skip("clears an adopted transcript-only claim after user cancellation", async () => {
+  it("clears an adopted transcript-only claim after user cancellation", async () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       abortedLastRun: false,
       restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
