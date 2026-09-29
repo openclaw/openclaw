@@ -6,7 +6,7 @@ import {
   clearEmbeddingProviders,
   registerEmbeddingProvider,
 } from "../plugins/embedding-providers.js";
-import type { MemoryEmbeddingProviderAdapter } from "../plugins/registry-contribution-types.js";
+import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,

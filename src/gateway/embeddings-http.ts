@@ -15,7 +15,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
-import type { MemoryEmbeddingProvider } from "../plugins/registry-contribution-types.js";
+import type { MemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import {
   acquireEmbeddingProviderLease,
   closeEmbeddingProvider,

@@ -140,6 +140,23 @@ export function getPluginValueInstance(value: object): PluginInstanceHandle | un
   return pluginInstanceState.values.get(value);
 }
 
+/** Only a view's creating instance may restore the original passed back to it. */
+export function getPluginOriginalValue(
+  value: object,
+  instance: PluginInstanceHandle,
+): object | undefined {
+  return pluginInstanceState.values.getOriginal(value, instance);
+}
+
+/** The caller must have created this object; foreign plugin objects remain unmodified. */
+export function setPluginOriginalValue(
+  value: object,
+  original: object,
+  instance: PluginInstanceHandle,
+): void {
+  pluginInstanceState.values.setOriginal(value, original, instance);
+}
+
 /** Host consumers retain the exact stream owner until their terminal work settles. */
 export function runPluginStreamConsumer<T>(stream: object, consume: () => T): T {
   const instance = getPluginValueInstance(stream);

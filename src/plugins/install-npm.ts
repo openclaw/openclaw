@@ -1,10 +1,7 @@
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { withInstallActivity } from "../infra/install-progress.js";
 import { resolveNpmSpecMetadata, type NpmSpecResolution } from "../infra/install-source-utils.js";
-import {
-  resolveNpmIntegrityDriftWithDefaultMessage,
-  type NpmIntegrityDriftPayload,
-} from "../infra/npm-integrity.js";
+import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import { resolveManagedNpmRootDependencySpec } from "../infra/npm-managed-root.js";
 import {
   formatPrereleaseResolutionError,
@@ -35,6 +32,7 @@ import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
   type PackageInstallCommonParams,
+  type PluginNpmIntegrityDriftParams,
 } from "./install-types.js";
 
 export async function installPluginFromNpmSpec(
@@ -46,7 +44,7 @@ export async function installPluginFromNpmSpec(
     signal?: AbortSignal;
     expectedReplacementPluginId?: string;
     expectedIntegrity?: string;
-    onIntegrityDrift?: (params: NpmIntegrityDriftPayload) => boolean | Promise<boolean>;
+    onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
   },
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();

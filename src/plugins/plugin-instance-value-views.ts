@@ -2,7 +2,12 @@
 import { types } from "node:util";
 import { createPluginArgumentView } from "./plugin-instance-argument-views.js";
 import { PluginHostObject } from "./plugin-instance-owned-values.js";
-import { pluginInstanceState, type PluginInstanceHandle } from "./plugin-instance-scope.js";
+import {
+  getPluginOriginalValue,
+  pluginInstanceState,
+  setPluginOriginalValue,
+  type PluginInstanceHandle,
+} from "./plugin-instance-scope.js";
 import type { PluginInstanceCallLease, PluginIteratorAdmission } from "./plugin-instance.types.js";
 import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-return-value.js";
 
@@ -277,13 +282,13 @@ export function createPluginValueView(
 ) {
   const wrapped = new WeakMap<object, unknown>();
   const factory = {};
-  const originalValue = (value: object) => valueInstances.getOriginal(value, bindings.instance);
+  const originalValue = (value: object) => getPluginOriginalValue(value, bindings.instance);
   const derivedReceivers = new WeakSet<object>();
   const prototypeReceivers = new WeakMap<object, WeakMap<object, object>>();
   const iterators = new WeakMap<object, PluginIteratorAdmission>();
   const wrapArguments = createPluginArgumentView({
     original: originalValue,
-    setOriginal: (value, source) => valueInstances.setOriginal(value, source, bindings.instance),
+    setOriginal: (value, source) => setPluginOriginalValue(value, source, bindings.instance),
     isWrapped: (value) => MemberReader.get(value, factory) !== undefined,
     wrap: (value) => wrap(value),
     invoke: admitCallback,
@@ -431,7 +436,7 @@ export function createPluginValueView(
         String(key),
         hasProxyPrototype(object) ? invoke(callback) : callback(),
       );
-      valueInstances.setOriginal(bound, property, bindings.instance);
+      setPluginOriginalValue(bound, property, bindings.instance);
       methods.set(key, { original: property, receiver: resolvedReceiver, wrapped: bound });
       return bound;
     };
@@ -559,7 +564,7 @@ export function createPluginValueView(
     }
     wrapped.set(object, result);
     void new MemberReader(result, { factory, source: object, derivedFields, read });
-    valueInstances.setOriginal(result, object, bindings.instance);
+    setPluginOriginalValue(result, object, bindings.instance);
     valueInstances.setHost(result, bindings.instance);
     // SAFETY: The view retains the input prototype and routes each member to the original object.
     return result as T;

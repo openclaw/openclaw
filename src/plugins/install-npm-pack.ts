@@ -5,10 +5,7 @@ import {
   resolveNpmPackArchiveMetadata,
   type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
-import {
-  resolveNpmIntegrityDriftWithDefaultMessage,
-  type NpmIntegrityDriftPayload,
-} from "../infra/npm-integrity.js";
+import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import { parseRegistryNpmSpec, validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveManagedNpmInstallPlan } from "./install-managed-npm-state.js";
@@ -25,6 +22,7 @@ import {
   type InstallPluginResult,
   type PackageInstallCommonParams,
   type PluginInstallErrorCode,
+  type PluginNpmIntegrityDriftParams,
 } from "./install-types.js";
 
 const MANAGED_NPM_PACK_ARCHIVE_DIR = "_openclaw-pack-archives";
@@ -88,7 +86,7 @@ export async function installPluginFromNpmPackArchive(
     archivePath: string;
     signal?: AbortSignal;
     expectedIntegrity?: string;
-    onIntegrityDrift?: (params: NpmIntegrityDriftPayload) => boolean | Promise<boolean>;
+    onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
   },
 ): Promise<InstallPluginResult & { npmTarballName?: string }> {
   const runtime = await loadPluginInstallRuntime();

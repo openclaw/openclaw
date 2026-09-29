@@ -15,18 +15,19 @@ export class PluginInvocationScope {
   private readonly bindings = new Map<PluginInstanceHandle, PluginInvocationBinding>();
   private readonly consumers = new Map<PluginInstanceHandle, PluginInstanceConsumer>();
   private closed = false;
+  private readonly consumerKind: "work" | "custody";
 
   constructor(
     readonly registry: PluginRegistry,
     instances: Iterable<PluginInstanceHandle>,
     options: { retained?: boolean; parent?: PluginInvocationScope; kind?: "work" | "custody" } = {},
   ) {
-    const consumerKind = options.kind ?? "work";
+    this.consumerKind = options.kind ?? "work";
     try {
       for (const instance of new Set(instances)) {
         if (options.retained) {
           const acquire = () =>
-            instance.retainConsumer((run) => this.run(run), registry, consumerKind);
+            instance.retainConsumer((run) => this.run(run), registry, this.consumerKind);
           const parent = options.parent?.consumer(instance);
           const consumer = parent ? parent.run(acquire) : acquire();
           this.consumers.set(instance, consumer);

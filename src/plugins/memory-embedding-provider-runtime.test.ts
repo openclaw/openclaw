@@ -7,7 +7,7 @@ import {
   registerEmbeddingProvider,
   type EmbeddingProviderAdapter,
 } from "./embedding-providers.js";
-import type { MemoryEmbeddingProviderAdapter } from "./registry-contribution-types.js";
+import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 
 const mocks = vi.hoisted(() => ({
   resolvePluginCapabilityProviders: vi.fn<

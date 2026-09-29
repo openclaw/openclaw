@@ -83,4 +83,4 @@ export type {
   MemoryEmbeddingProviderCreateResult,
   MemoryEmbeddingProviderIndexIdentity,
   MemoryEmbeddingProviderRuntime,
-} from "../plugins/registry-contribution-types.js";
+} from "../plugins/memory-embedding-providers.js";

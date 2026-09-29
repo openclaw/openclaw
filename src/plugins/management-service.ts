@@ -650,7 +650,7 @@ export const inspectManagedPlugin = withManagedPluginCache(
               const credential = inspectPluginCredentialValue(params.config, descriptor, env);
               // Public inspection carries presence only. Private values and reference
               // identifiers remain behind the administrator credential editor.
-              const status: NonNullable<ManagedPluginInspection["credentials"]>[number]["status"] =
+              const status: NonNullable<PluginsInspectResult["credentials"]>[number]["status"] =
                 credential.kind === "reference"
                   ? credential.unresolved
                     ? "unresolved"

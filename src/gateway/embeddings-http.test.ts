@@ -12,7 +12,7 @@ import type {
   EmbeddingInput,
   EmbeddingProviderCallOptions,
 } from "../plugins/embedding-providers.js";
-import type { MemoryEmbeddingProviderAdapter } from "../plugins/registry-contribution-types.js";
+import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
