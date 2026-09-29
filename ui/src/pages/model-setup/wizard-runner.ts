@@ -43,8 +43,6 @@ export type ModelSetupWizardCompletion = {
 
 type WizardTerminalObserver = (result: ModelSetupWizardResult) => (() => boolean) | void;
 
-class WizardStartTimeoutError extends Error {}
-
 type WizardRunnerOptions = {
   getClient: () => GatewayBrowserClient | null;
   getAgentId: () => string | null;
@@ -446,11 +444,7 @@ export class ModelSetupWizardRunner {
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
             timedOut = true;
-            reject(
-              new WizardStartTimeoutError(
-                `gateway request timed out after ${MODEL_SETUP_AUTH_START_TIMEOUT_MS}ms: ${session.startMethod}`,
-              ),
-            );
+            reject(new Error(this.options.gatewayNotRespondingMessage()));
           }, MODEL_SETUP_AUTH_START_TIMEOUT_MS);
         }),
       ]);
@@ -669,9 +663,7 @@ export class ModelSetupWizardRunner {
     }
     const message = sessionExpired
       ? this.options.sessionExpiredMessage()
-      : error instanceof WizardStartTimeoutError
-        ? this.options.gatewayNotRespondingMessage()
-        : formatUiError(error, this.options.requestFailedMessage());
+      : formatUiError(error, this.options.requestFailedMessage());
     this.setState({ phase: "error", message: [message, ...session.notes].join("\n\n") });
   }
 
