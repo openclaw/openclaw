@@ -576,7 +576,7 @@ export function registerRequesterSettleRetirementTests({
       try {
         controller.startSubagentAnnounceCleanupFlow(ancestor.runId, ancestor);
         expect(ancestor.cleanupCompletedAt).toBeUndefined();
-        controller.completeCleanupBookkeeping({
+        await controller.completeCleanupBookkeeping({
           runId: intermediate.runId,
           entry: intermediate,
           cleanup: "delete",
