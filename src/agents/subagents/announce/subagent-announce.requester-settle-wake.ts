@@ -58,16 +58,19 @@ import { hasUsableSessionEntry } from "./subagent-announce.js";
 import { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
 import { buildRequesterSettleWakeMessage } from "./subagent-announce.requester-settle-message.js";
 import {
+  REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS,
+  REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS,
+  resolveSettleWakeAttemptFailure,
+} from "./subagent-announce.requester-settle-retry.js";
+import {
   readSharedBatchState,
   retainedYieldIdentity,
   type RequesterSettleWakeBatchState,
   type RequesterSettleWakeBatchCallbacks,
 } from "./subagent-announce.requester-settle-state.js";
 
-const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
 const REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS = 3;
 const REQUESTER_SETTLE_WAKE_MAX_DEFERRALS = 10;
-const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 const activeRequesterSettleWakeBatches = new Map<string, () => boolean>();
 
 /**
@@ -703,29 +706,31 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       return false;
     }
 
-    const attemptCount = attemptIndex + 1;
-    const retryDelayMs = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[attemptIndex];
-    const lastError = delivery.error ?? delivery.reason ?? "undelivered";
-    if (attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS || retryDelayMs === undefined) {
-      await completeBatch(
-        settledBatch,
-        state,
-        { ...delivery, error: lastError },
-        requesterEntry.sessionId,
-      );
+    const failure = await resolveSettleWakeAttemptFailure({
+      attemptIndex,
+      delivery,
+      missingReplyNotice: parentOnly
+        ? undefined
+        : {
+            cfg,
+            requesterSessionKey,
+            requesterAgentId,
+            directIdempotencyKey,
+            directOrigin,
+            signal: params.signal,
+            isSourceSessionEffectsAllowed,
+          },
+    });
+    if (failure.final) {
+      await completeBatch(settledBatch, state, failure.final, requesterEntry.sessionId);
       return false;
     }
     await params.transitionBatch(settledBatch, {
       status: "pending",
-      attemptCount,
-      nextAttemptAt: Date.now() + retryDelayMs,
+      ...failure.retry,
       batchRunIds,
       ...retainedYieldIdentity(state),
-      lastError,
     });
-    logWarn(
-      `requester settle wake attempt ${attemptCount} failed; retrying in ${Math.round(retryDelayMs / 1000)}s: ${lastError}`,
-    );
     return false;
   } finally {
     if (activeRequesterSettleWakeBatches.get(wakeKeyBase) === isGatewayClosed) {

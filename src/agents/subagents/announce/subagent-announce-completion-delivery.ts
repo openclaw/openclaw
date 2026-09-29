@@ -343,6 +343,97 @@ export async function deliverCompletionDirect(params: {
     return undefined;
   }
   const idempotencyKey = `${params.directIdempotencyKey}:text-direct`;
+  return sendCompletionTextDirect({
+    cfg: params.cfg,
+    requesterSessionKey: params.requesterSessionKey,
+    agentId,
+    deliveryTarget: {
+      channel: params.deliveryTarget.channel,
+      to: params.deliveryTarget.to,
+      accountId: params.deliveryTarget.accountId,
+      threadId: params.deliveryTarget.threadId,
+    },
+    conversationType: "direct",
+    content,
+    idempotencyKey,
+    signal: params.signal,
+    onDeliveryResult: params.onDeliveryResult,
+    isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
+  });
+}
+
+// Content-free by design: raw child results stay DM-only because a channel
+// requester's parent may have deliberately withheld them from the room.
+const MISSING_REPLY_GROUP_NOTICE =
+  "A delegated task finished, but its result was not posted here. Ask me for the result.";
+
+/**
+ * Tells a channel/thread requester that a finished child's result was never
+ * surfaced, after the requester's own completion turns stayed silent.
+ */
+export async function deliverMissingReplyGroupNotice(params: {
+  cfg: OpenClawConfig;
+  requesterSessionKey: string;
+  requesterAgentId?: string;
+  directIdempotencyKey: string;
+  deliveryTarget: {
+    deliver: boolean;
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string;
+  };
+  signal?: AbortSignal;
+  isSourceSessionEffectsAllowed?: () => boolean;
+}): Promise<SubagentAnnounceDeliveryResult | undefined> {
+  if (
+    !params.deliveryTarget.deliver ||
+    !params.deliveryTarget.channel ||
+    !params.deliveryTarget.to ||
+    isDirectMessageDeliveryTarget(params.deliveryTarget, params.requesterSessionKey)
+  ) {
+    return undefined;
+  }
+  const agentId = tryResolveSubagentRequesterAgentId(
+    params.cfg,
+    params.requesterSessionKey,
+    params.requesterAgentId,
+  );
+  if (!agentId) {
+    return undefined;
+  }
+  return sendCompletionTextDirect({
+    cfg: params.cfg,
+    requesterSessionKey: params.requesterSessionKey,
+    agentId,
+    deliveryTarget: {
+      channel: params.deliveryTarget.channel,
+      to: params.deliveryTarget.to,
+      accountId: params.deliveryTarget.accountId,
+      threadId: params.deliveryTarget.threadId,
+    },
+    conversationType:
+      inferDeliveryTargetChatType(params.deliveryTarget) === "channel" ? "channel" : "group",
+    content: MISSING_REPLY_GROUP_NOTICE,
+    idempotencyKey: `${params.directIdempotencyKey}:group-notice`,
+    signal: params.signal,
+    isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
+  });
+}
+
+/** Sends one plain-text completion payload; the only send owner for text fallbacks. */
+async function sendCompletionTextDirect(params: {
+  cfg: OpenClawConfig;
+  requesterSessionKey: string;
+  agentId: string;
+  deliveryTarget: { channel: string; to: string; accountId?: string; threadId?: string };
+  conversationType: "direct" | "group" | "channel";
+  content: string;
+  idempotencyKey: string;
+  signal?: AbortSignal;
+  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
+  isSourceSessionEffectsAllowed?: () => boolean;
+}): Promise<SubagentAnnounceDeliveryResult> {
   let committedDelivery: SubagentAnnounceDeliveryResult | undefined;
   let deliveryResultReported: Promise<void> | undefined;
   try {
@@ -359,10 +450,10 @@ export async function deliverCompletionDirect(params: {
       accountId: params.deliveryTarget.accountId,
       threadId: params.deliveryTarget.threadId,
       requesterSessionKey: params.requesterSessionKey,
-      agentId,
-      conversationType: "direct",
-      content,
-      idempotencyKey,
+      agentId: params.agentId,
+      conversationType: params.conversationType,
+      content: params.content,
+      idempotencyKey: params.idempotencyKey,
       skipQueue: true,
       abortSignal: params.signal,
       onPlatformSendDispatch: async () => {
@@ -386,8 +477,8 @@ export async function deliverCompletionDirect(params: {
       },
       mirror: {
         sessionKey: params.requesterSessionKey,
-        agentId,
-        idempotencyKey,
+        agentId: params.agentId,
+        idempotencyKey: params.idempotencyKey,
       },
     });
     if (committedDelivery) {
