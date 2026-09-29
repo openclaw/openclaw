@@ -49,6 +49,8 @@ async function runPendingInterleave(): Promise<void> {
 }
 vi.mock("../secrets/store/secret-store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../secrets/store/secret-store.js")>();
+  const { captureSecretStoreExpiryCutoffs, purgeExpiredSecretStoreEntriesInDatabase } =
+    await import("../secrets/store/secret-store-expiry.kernel.js");
   const withDb = <T extends { database?: unknown }>(params: T) => ({
     ...params,
     database: mocks.database,
@@ -68,8 +70,10 @@ vi.mock("../secrets/store/secret-store.js", async (importOriginal) => {
       actual.readSecretStoreValue(withDb(p)),
     deleteSecretStoreEntry: (p: Parameters<typeof actual.deleteSecretStoreEntry>[0]) =>
       actual.deleteSecretStoreEntry(withDb(p)),
+    // Same kernel the state worker runs, applied directly so the write needs no
+    // host-broker worker thread (the CLI test pool runs files off the main thread).
     purgeExpiredSecretStoreEntries: () =>
-      actual.purgeExpiredSecretStoreEntries({ database: mocks.database }),
+      purgeExpiredSecretStoreEntriesInDatabase(captureSecretStoreExpiryCutoffs(), mocks.database),
   };
 });
 

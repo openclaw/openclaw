@@ -72,7 +72,6 @@ export {
 type SecretStoreDatabase = Pick<OpenClawStateKyselyDatabase, "secret_store_entries">;
 type SecretStoreRow = Selectable<OpenClawStateKyselyDatabase["secret_store_entries"]>;
 
-
 export type SecretStoreEntryMetadata = {
   name: string;
   kind: SecretStoreKind;

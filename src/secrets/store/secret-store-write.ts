@@ -106,11 +106,14 @@ function writeSecretStoreEntriesInternal(
           );
         }
         // A repair preserves the authoritative row's kind and host policy; a kind-inheriting
-        // write resolves the kind from that row before validating the value's shape.
+        // write resolves the kind from that row before validating the value's shape. A stored
+        // value outside the schema domain falls back to the requested kind rather than trusting it.
+        const storedKind =
+          previous?.kind === "secret" || previous?.kind === "env" ? previous.kind : undefined;
         const kind = repair
-          ? ((previous?.kind as SecretStoreKind | undefined) ?? entry.kind)
-          : inheritExistingKind && previous
-            ? (previous.kind as SecretStoreKind)
+          ? (storedKind ?? entry.kind)
+          : inheritExistingKind && storedKind !== undefined
+            ? storedKind
             : entry.kind;
         if (inheritExistingKind || repair) {
           assertSecretStoreWriteShape(entry.value, kind, entry.name, entry.allowedHosts);
