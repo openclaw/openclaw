@@ -8,8 +8,8 @@ export * from "../providers/openai-responses-stream-compat.js";
 export * from "../providers/openai-responses-terminal-usage.js";
 export * from "../providers/openai-responses-tool-call-tracker.js";
 export * from "../providers/openai-stop-reason.js";
+export { hasResponsesWebSearchTool } from "../providers/openai-web-search-tools.js";
 export {
-  hasResponsesWebSearchTool,
   projectOpenAITools,
   reconcileOpenAICompletionsToolChoice,
   reconcileOpenAIResponsesToolChoice,

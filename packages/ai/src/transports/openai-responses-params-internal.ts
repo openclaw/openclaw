@@ -17,10 +17,8 @@ import {
   resolveOpenAIRequestReasoning,
 } from "../providers/openai-request-reasoning.js";
 import { prepareResponsesTools } from "../providers/openai-responses-tools.js";
-import {
-  hasResponsesWebSearchTool,
-  reconcileOpenAIResponsesToolChoice,
-} from "../providers/openai-tool-projection.js";
+import { reconcileOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
+import { hasResponsesWebSearchTool } from "../providers/openai-web-search-tools.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { usesNativeOpenAICodexResponsesBackend } from "./openai-completions-compat.js";
 import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
