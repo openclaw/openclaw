@@ -139,7 +139,6 @@ const runtimeConsumers = [
   },
   ...[
     "src/agents/agent-command-local.test.ts",
-    "src/agents/simple-completion-runtime.plugin-scope.test.ts",
     "src/agents/runtime-plugins.context-engine.integration.test.ts",
     "src/agents/tool-surface-plan.provider-catalog.integration.test.ts",
   ].map((file) => ({
@@ -149,6 +148,7 @@ const runtimeConsumers = [
     dir: "src/agents",
   })),
   ...[
+    "src/agents/simple-completion-runtime.plugin-scope.test.ts",
     // Compiled catalog workers load the fixture's public SDK through built host artifacts.
     "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.integration.test.ts",
