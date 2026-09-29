@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { projectMcpCallToolResult } from "./mcp-content.js";
+import { consumeMcpCodeModeGuestResult, projectMcpCallToolResult } from "./mcp-content.js";
 
 function nestedStructuredContent(depth: number): Record<string, unknown> {
   let value: Record<string, unknown> = { leaf: true };
@@ -63,5 +63,20 @@ describe("projectMcpCallToolResult", () => {
 
     expect(result.details).toMatchObject({ status: "error" });
     expect(result.details).toHaveProperty("structuredContent");
+  });
+
+  it("reports the unprojectable failure to Code Mode guest callers", () => {
+    const result = projectMcpCallToolResult({
+      content: [],
+      structuredContent: nestedStructuredContent(100_000),
+      isError: false,
+    });
+
+    // Guest code reads this snapshot instead of the model-facing result; an
+    // apparent success with empty content would hide the projection failure.
+    expect(consumeMcpCodeModeGuestResult(result)).toEqual({
+      content: [{ type: "text", text: expect.stringContaining("too deeply nested") }],
+      isError: true,
+    });
   });
 });

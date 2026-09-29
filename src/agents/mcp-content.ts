@@ -184,11 +184,17 @@ export function projectMcpCallToolResult(
     },
   };
   return setMcpCodeModeGuestResult(projected, {
-    content: Array.isArray(result.content) ? result.content : [],
+    // Guest callers read this snapshot instead of the model-facing result, so an
+    // unprojectable value is a failure for them too and carries the same notice.
+    content: unprojectable
+      ? projected.content
+      : Array.isArray(result.content)
+        ? result.content
+        : [],
     ...(result.structuredContent !== undefined && !unprojectable
       ? { structuredContent: result.structuredContent }
       : {}),
-    ...(typeof result.isError === "boolean" ? { isError: result.isError } : {}),
+    ...(typeof result.isError === "boolean" || unprojectable ? { isError } : {}),
   });
 }
 
