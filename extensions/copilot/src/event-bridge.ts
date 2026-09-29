@@ -24,6 +24,7 @@ import {
   type AssistantUsageSnapshot,
   type AttemptTranscriptJournalProjection,
 } from "./event-bridge-transcript.js";
+import { createPromptError } from "./prompt-error.js";
 import { normalizeCopilotUsage } from "./usage-bridge.js";
 
 export type { AssistantMessage, AssistantUsageSnapshot } from "./event-bridge-transcript.js";
@@ -123,7 +124,6 @@ interface EventBridgeController {
 }
 
 type MessageAccumulator = { text: string };
-type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
 
 export function attachEventBridge(
   session: SessionLike,
@@ -288,12 +288,7 @@ export function attachEventBridge(
     }
   });
 
-  registerListener(session, unsubscribeFns, "assistant.message", (event) => {
-    if (!isRootSessionEvent(event) || event.ephemeral === true) {
-      return;
-    }
-    handleAssistantMessage(event);
-  });
+  registerListener(session, unsubscribeFns, "assistant.message", handleAssistantMessage);
 
   registerListener(session, unsubscribeFns, "assistant.usage", (event) => {
     if (!isRootSessionEvent(event)) {
@@ -556,9 +551,7 @@ export function attachEventBridge(
     awaitCompactionChain() {
       return compactionChain;
     },
-    async awaitCompactionCompletion() {
-      await awaitStableCompaction();
-    },
+    awaitCompactionCompletion: awaitStableCompaction,
     awaitSessionIdle() {
       return observedSessionIdle ? Promise.resolve() : sessionIdle;
     },
@@ -809,15 +802,6 @@ export function attachEventBridge(
       await awaitStableCompaction();
     }
   }
-}
-
-function createPromptError(code: string, message: string, cause?: unknown): PromptErrorWithCode {
-  const error = new Error(message) as PromptErrorWithCode;
-  error.code = code;
-  if (cause !== undefined) {
-    error.cause = cause;
-  }
-  return error;
 }
 
 function ensureMessageAccumulator(
