@@ -461,11 +461,11 @@ describe("pairing setup code", () => {
   });
 
   it("keeps the configured-password fallback for trusted-proxy mode", async () => {
-    await expectResolvedCustomGatewaySetupOk({
-      auth: { mode: "trusted-proxy", password: "secret" },
-      env: {},
-      expectedAuthLabel: "password",
-    });
+    const resolved = await resolvePairingSetupFromConfig(
+      createCustomGatewayConfig({ mode: "trusted-proxy", password: "secret" }),
+      { env: {} },
+    );
+    expectResolvedSetupOk(resolved, { authLabel: "password" });
   });
 
   it.each([
