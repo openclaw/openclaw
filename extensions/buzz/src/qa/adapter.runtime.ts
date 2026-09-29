@@ -9,9 +9,7 @@ import { createBuzzQaRelayDriver } from "./relay-client.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
-type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>> & {
-  cleanupAfterGatewayStop?: () => Promise<void>;
-};
+type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 
 const BUZZ_GATEWAY_ACCOUNT_ID = "default";
 const BUZZ_MESSAGE_ID_MAPPING_TIMEOUT_MS = 5_000;

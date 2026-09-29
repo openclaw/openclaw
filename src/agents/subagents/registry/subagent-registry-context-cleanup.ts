@@ -22,6 +22,7 @@ import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
 import {
   assertSubagentRegistryWriteOutcomeKnown,
   assertSubagentRegistryWriteSourceCurrent,
+  waitForPendingSubagentRegistryWrites,
   type SubagentRegistryWriteOptions,
 } from "./subagent-registry-persistence.js";
 import type {
@@ -212,8 +213,25 @@ export function createSubagentRegistryContextCleanup(config: {
           outcome,
           error,
           inFlightRunIds: endedHookInFlightRunIds,
-          persist: (...runIds) =>
-            config.persistAsyncOrThrow(stateContext, { assertCurrent }, ...runIds),
+          recordEmitted: async () => {
+            // Do not invalidate an admitted wake's preimage while its worker settles.
+            // Plugin execution remains independent of requester delivery.
+            for (;;) {
+              assertCurrent();
+              const pending = waitForPendingSubagentRegistryWrites(
+                [params.entry.runId],
+                stateContext.admission,
+              );
+              if (!pending) {
+                break;
+              }
+              await pending;
+            }
+            // Capture the stamp write without yielding after the last owner check.
+            // Keep the emitted fact even if its own persistence fails.
+            params.entry.endedHookEmittedAt = Date.now();
+            await config.persistAsyncOrThrow(stateContext, { assertCurrent }, params.entry.runId);
+          },
         });
       });
     } catch (err) {

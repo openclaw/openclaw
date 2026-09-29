@@ -1,5 +1,7 @@
+import path from "node:path";
 import { toUSVString } from "node:util";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 // Keep the one-shot execFile output limit when inspections use IPC.
 export const SQLITE_READONLY_WORKER_MAX_BUFFER = 1024 * 1024;
@@ -51,7 +53,28 @@ export type SqliteReadOnlyWorkerOptions =
       mode: Exclude<SqliteReadOnlyWorkerMode, "auth-profile-rows">;
       stagingRoot?: string;
       signal?: AbortSignal;
+      expectedSourceIdentity?: DatabaseFileIdentity;
     };
+export function sqliteReadOnlyWorkerRequestArgs(
+  pathname: string,
+  options: SqliteReadOnlyWorkerOptions,
+): string[] {
+  const args = [options.mode, path.resolve(pathname)];
+  const expected =
+    options.mode === "auth-profile-rows" ? undefined : options.expectedSourceIdentity;
+  if (expected !== undefined) {
+    if (options.mode !== "sync") {
+      throw new Error(
+        "SQLite source identity is supported only for artifact-preserving sync copies",
+      );
+    }
+    args.push(options.stagingRoot ?? "", JSON.stringify(readDatabaseFileIdentity(expected)));
+  } else if (options.stagingRoot) {
+    args.push(options.stagingRoot);
+  }
+  return args;
+}
+
 export type SqliteReadOnlyWorkerOutput = { failure?: string; stderr: string; stdout: string };
 export type SqliteReadOnlyWorkerValue = string | string[] | SqliteAuthProfileRows;
 export const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;

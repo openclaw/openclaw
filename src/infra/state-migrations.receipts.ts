@@ -186,6 +186,20 @@ export function recordLegacyMigrationReceipt(
   });
 }
 
+/** The caller owns the transaction and its live mutation admission. */
+export function markLegacyMigrationSourceRemovedInDatabase(
+  database: DatabaseSync,
+  sourceKey: string,
+): void {
+  executeSqliteQuerySync(
+    database,
+    getNodeSqliteKysely<MigrationReceiptDatabase>(database)
+      .updateTable("migration_sources")
+      .set({ removed_source: 1 })
+      .where("source_key", "=", sourceKey),
+  );
+}
+
 export function markLegacyMigrationSourceRemoved(
   sourceKey: string,
   env: NodeJS.ProcessEnv,
@@ -196,13 +210,7 @@ export function markLegacyMigrationSourceRemoved(
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       assertCurrent?.();
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<MigrationReceiptDatabase>(db)
-          .updateTable("migration_sources")
-          .set({ removed_source: 1 })
-          .where("source_key", "=", sourceKey),
-      );
+      markLegacyMigrationSourceRemovedInDatabase(db, sourceKey);
       assertCurrent?.();
     },
     { env },

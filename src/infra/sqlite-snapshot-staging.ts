@@ -11,7 +11,7 @@ import {
 } from "./sqlite-private-directory.js";
 import {
   registerSnapshotTempDirectory,
-  registerAsyncSnapshotTempDirectory,
+  registerRetainedSnapshotTempDirectory,
   removeTempDirectory,
   removeTempDirectoryAsync,
   retainSnapshotWork,
@@ -242,7 +242,7 @@ async function allocateSqliteSnapshotStagingDirectory(
           allowLegacyWorker,
           signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
         );
-        registerAsyncSnapshotTempDirectory(owned.directory, owned.retire);
+        registerRetainedSnapshotTempDirectory(owned.directory, owned.startRetire);
         if (signal?.aborted || controller.signal.aborted) {
           if (!(await removeTempDirectoryAsync(owned.directory))) {
             throw new SqliteSnapshotCleanupError(

@@ -1,8 +1,10 @@
 import { isMainThread } from "node:worker_threads";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { getChildLogger } from "../../logging/logger.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { captureOpenClawAgentDatabaseValidationTransfer } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   deferOpenClawAgentPostCommitPublication,
   getOpenClawAgentDatabaseIfOpen,
@@ -33,16 +35,13 @@ import {
   collectReclamationChangedSessionKeys,
   prepareReclamationPublication,
 } from "./session-accessor.sqlite-reclamation-publication.js";
-import {
-  withSqliteReclamationWorker,
-  type SqliteReclamationClaim,
-  type SqliteReclamationWorker,
-} from "./session-accessor.sqlite-reclamation-worker.js";
+import type { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker-lifetime.js";
+import { withSqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker.js";
+import type { SqliteReclamationClaim } from "./session-accessor.sqlite-reclamation-worker.types.js";
 import {
   reclaimSqliteSessionInTransaction,
   resolveSessionReclamationDatabaseOptions,
 } from "./session-accessor.sqlite-reclamation.js";
-import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
@@ -223,25 +222,80 @@ export async function runSqliteSessionReclamation(params: {
       }
       const execution = captureOpenClawAgentDatabaseExecution(params.plan.databaseOptions);
       try {
-        // Existing-only native admission supplies the same authority without a cold host handle.
-        const admitted = await withSessionEntryWorker(
-          params.plan.databaseOptions,
-          undefined,
-          assertRequestCurrent,
-          (owner, source) => owner.runExisting(source, async () => true),
-          undefined,
-          execution,
+        // Capture an opening expectation, never a substitute native claim. The existing
+        // reclamation actor performs its own validation without occupying the foreground opener.
+        const original = execution.fileIdentity;
+        const observed = readDatabasePathIdentitySync(params.plan.databaseOptions.path);
+        const expectedSource = Object.freeze(
+          original
+            ? {
+                key: `file:${original.physicalIdentity}`,
+                canonicalPath: original.nativeLocation,
+                ...(original.birthtime === undefined ? {} : { birthtime: original.birthtime }),
+              }
+            : { key: observed.key, canonicalPath: observed.canonicalPath },
+        );
+        const databaseOptions = {
+          ...params.plan.databaseOptions,
+          path: expectedSource.canonicalPath,
+        };
+        const assertOpeningCurrent = () => {
+          assertRequestCurrent();
+          execution.assertCurrent();
+        };
+        return await withSqliteReclamationWorker(
+          databaseOptions,
+          expectedSource,
+          async (worker) => {
+            const validationSource = { agentId: execution.agentId, path: databaseOptions.path };
+            const receiveValidation =
+              captureOpenClawAgentDatabaseValidationTransfer(validationSource);
+            const prepared = await worker.prepare({
+              plan: params.plan,
+              diagnostics: params.diagnostics,
+              expectedSource,
+              assertCurrent: assertOpeningCurrent,
+              commitGate,
+              onCommitRequest: () => {
+                throw new Error("SQLite source preparation cannot request a mutation commit");
+              },
+              withWriteAdmission: (run, diagnostics) =>
+                runExclusiveSqliteSessionWrite(
+                  databaseOptions,
+                  async () => {
+                    let refusal: { error: unknown } | undefined;
+                    try {
+                      assertOpeningCurrent();
+                    } catch (error) {
+                      refusal = { error };
+                    }
+                    await run(refusal);
+                  },
+                  "session.reclamation.prepare",
+                  { ...params.diagnostics, reclamationAdmission: diagnostics },
+                  "worker",
+                  signal,
+                ),
+            });
+            assertOpeningCurrent();
+            prepared.claim.assertCurrent();
+            receiveValidation(prepared.claim.identity, prepared.validation);
+            return runPreparedSqliteSessionReclamation(
+              { ...params, plan: { ...params.plan, databaseOptions } },
+              {
+                nativeLocation: prepared.source.filename,
+                claim: prepared.claim,
+                validationOwner: { source: validationSource, claim: prepared.claim },
+                worker,
+                assertRequestCurrent: assertOpeningCurrent,
+                commitGate,
+                signal,
+              },
+            );
+          },
+          assertOpeningCurrent,
           signal,
         );
-        const identity = execution.fileIdentity;
-        if (!admitted || !identity) {
-          throw new Error("SQLite session reclamation lost its prepared database");
-        }
-        const claim = execution.captureGenerationClaim();
-        return await runWorker(claim, identity.nativeLocation, {
-          source: { agentId: execution.agentId, path: identity.nativeLocation },
-          claim,
-        });
       } finally {
         await execution.release();
       }
