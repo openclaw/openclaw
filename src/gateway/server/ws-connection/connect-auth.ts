@@ -517,6 +517,7 @@ async function authenticateGatewayConnectCore(
       role,
       authMethod,
       verifiedIdentity: authResult.user,
+      browserOrigin: context.browserOrigin,
     }),
     resolvedAuth,
     minProtocol,

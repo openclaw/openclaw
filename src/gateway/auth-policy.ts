@@ -7,6 +7,7 @@ import type { GatewayAuthPolicy } from "./auth-policy.types.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { resolveIdentityOperatorScopes } from "./operator-identity-scopes.js";
 import { sourceRolePolicies } from "./operator-role-source-policy.js";
+import { checkGatewayWsBrowserOrigin } from "./origin-check.js";
 
 const policies = new WeakMap<
   OpenClawConfig,
@@ -16,11 +17,15 @@ const policies = new WeakMap<
 /** Capture the grant principal together with its generation; null means no identity-derived scopes. */
 export function captureGatewayAuthPolicy(
   config: OpenClawConfig,
-  principal: Pick<GatewayAuthPolicy, "role" | "verifiedIdentity" | "authMethod"> | null,
+  principal: Pick<
+    GatewayAuthPolicy,
+    "role" | "verifiedIdentity" | "authMethod" | "browserOrigin"
+  > | null,
 ): GatewayAuthPolicy {
   const verifiedIdentity = normalizeOptionalString(principal?.verifiedIdentity);
   const role = principal?.role;
   const authMethod = principal?.authMethod;
+  const browserOrigin = principal?.browserOrigin;
   let cached = policies.get(config);
   if (!cached) {
     const gateway = config.gateway;
@@ -41,7 +46,7 @@ export function captureGatewayAuthPolicy(
     };
     policies.set(config, cached);
   }
-  const principalKey = stableStringify([role, verifiedIdentity, authMethod]);
+  const principalKey = stableStringify([role, verifiedIdentity, authMethod, browserOrigin]);
   let policy = cached.identities.get(principalKey);
   if (!policy) {
     const grant =
@@ -89,10 +94,14 @@ export function captureGatewayAuthPolicy(
         methodEnabled,
         proxyUserAllowed,
         fallbackCredentialGeneration,
+        browserOriginAllowed: browserOrigin
+          ? checkGatewayWsBrowserOrigin(browserOrigin, config).ok
+          : undefined,
       }),
       role,
       authMethod,
       verifiedIdentity,
+      browserOrigin: browserOrigin && Object.freeze({ ...browserOrigin }),
     });
     cached.identities.set(principalKey, policy);
   }

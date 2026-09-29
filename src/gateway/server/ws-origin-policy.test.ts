@@ -1,6 +1,6 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { captureGatewayAuthPolicy } from "../auth-policy.js";
+import { captureGatewayAuthPolicy, isGatewayAuthGrantCurrent } from "../auth-policy.js";
 import { GatewayClientRegistry } from "./client-registry.js";
 import { disconnectDisallowedGatewayPolicyClients } from "./ws-origin-policy.js";
 import {
@@ -11,6 +11,74 @@ import {
 import type { GatewayWsClient } from "./ws-types.js";
 
 describe("committed browser origin policy", () => {
+  it.each(["allowedOrigins", "publicOrigin", "host fallback"])(
+    "revokes a fenced browser grant when its %s admission ends",
+    (policy) => {
+      const browserOrigin = {
+        origin: "https://retained.example.test",
+        requestHost: "retained.example.test",
+        isLocalClient: false,
+      };
+      const initial: OpenClawConfig = {
+        gateway: {
+          publicOrigin: policy === "publicOrigin" ? browserOrigin.origin : undefined,
+          controlUi: {
+            allowedOrigins: policy === "allowedOrigins" ? [browserOrigin.origin] : undefined,
+            dangerouslyAllowHostHeaderOriginFallback: policy === "host fallback",
+          },
+        },
+      };
+      const client = {
+        browserOrigin,
+        authPolicy: captureGatewayAuthPolicy(initial, { role: "operator", browserOrigin }),
+        invalidated: false,
+        sourceInvalidated: false,
+        socket: { close: vi.fn() },
+      };
+      const onRevoked = vi.fn();
+      onTestFinished(onGatewayPolicyClientInvalidated(client, onRevoked));
+      const fenced = structuredClone(initial);
+      fenced.gateway!.trustedProxies = ["192.0.2.10"];
+      disconnectDisallowedGatewayPolicyClients([client], fenced);
+      expect(client.socket.close).toHaveBeenCalledWith(4001, "gateway policy changed");
+      expect(client.sourceInvalidated).toBe(false);
+      expect(onRevoked).not.toHaveBeenCalled();
+      expect(isGatewayAuthGrantCurrent(client.authPolicy, fenced)).toBe(true);
+      const removed = structuredClone(fenced);
+      delete removed.gateway!.publicOrigin;
+      removed.gateway!.controlUi = { allowedOrigins: [] };
+      expect(isGatewayAuthGrantCurrent(client.authPolicy, removed)).toBe(false);
+      disconnectDisallowedGatewayPolicyClients([client], removed);
+      expect(client.sourceInvalidated).toBe(true);
+      expect(onRevoked).toHaveBeenCalledOnce();
+      expect(client.socket.close).toHaveBeenLastCalledWith(1008, "origin not allowed");
+    },
+  );
+
+  it("keeps origin grants separate for the same authenticated identity", () => {
+    const origins = ["https://retained.example.test", "https://removed.example.test"];
+    const initial: OpenClawConfig = { gateway: { controlUi: { allowedOrigins: origins } } };
+    const clients = origins.map((origin) => {
+      const browserOrigin = { origin, requestHost: "gateway.example.test", isLocalClient: false };
+      return {
+        browserOrigin,
+        authPolicy: captureGatewayAuthPolicy(initial, {
+          role: "operator",
+          verifiedIdentity: "same@example.test",
+          browserOrigin,
+        }),
+        socket: { close: vi.fn() },
+      };
+    });
+    const next: OpenClawConfig = { gateway: { controlUi: { allowedOrigins: [origins[0]!] } } };
+    expect(clients.map((client) => isGatewayAuthGrantCurrent(client.authPolicy, next))).toEqual([
+      true,
+      false,
+    ]);
+    disconnectDisallowedGatewayPolicyClients(clients, next);
+    expect(clients[0]!.socket.close).not.toHaveBeenCalled();
+    expect(clients[1]!.socket.close).toHaveBeenCalledWith(1008, "origin not allowed");
+  });
   it.each(
     (["allowedOrigins", "dangerouslyAllowHostHeaderOriginFallback"] as const).flatMap((policy) =>
       ["live", "disconnected"].map((transport) => ({ policy, transport })),

@@ -1,4 +1,5 @@
 import type { GatewayAuthResult } from "./auth.js";
+import type { GatewayWsBrowserOrigin } from "./server/client-identity-types.js";
 
 export type GatewayAuthPolicy = Readonly<{
   /** Transport admission policy; changes require a fresh handshake. */
@@ -9,4 +10,6 @@ export type GatewayAuthPolicy = Readonly<{
   authMethod?: GatewayAuthResult["method"];
   /** Only operator WebSocket admission consumes identity grants. */
   verifiedIdentity?: string;
+  /** Handshake-attested origin facts remain authoritative after transport retirement. */
+  browserOrigin?: Readonly<GatewayWsBrowserOrigin>;
 }>;
