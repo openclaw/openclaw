@@ -1592,8 +1592,7 @@ AFTER_CD
         { runnerProfile: "github" },
         { runAttempt: 2 },
         { frozenTarget: true },
-        { headRepository: "contributor/openclaw" },
-        { headRepository: "" },
+        { headRepository: "contributor/openclaw", runAttempt: 2, runnerProfile: "github" },
         { repository: "contributor/openclaw" },
       ];
     for (const context of restrictedNodeContexts) {
@@ -1607,7 +1606,19 @@ AFTER_CD
         JSON.stringify(context),
       ).toBe(96);
     }
-    // Author association no longer limits capacity; only the origin does.
+    // Fork first attempts keep hosted check stripes but plan Node shards with the
+    // configured backend, so they get the same Node parallelism.
+    expect(
+      evaluateWorkflowExpression(nodeParallel, {
+        ...canonicalNodePr,
+        runnerBackend: "hybrid",
+        headRepository: "contributor/openclaw",
+        runnerProfile: "github",
+        preflightOutputs: { node_runner_backend: "hybrid" },
+      }),
+      "fork first attempt",
+    ).toBe(130);
+    // Author association no longer limits capacity.
     for (const authorAssociation of [
       "FIRST_TIME_CONTRIBUTOR",
       "FIRST_TIMER",

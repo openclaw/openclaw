@@ -4427,7 +4427,7 @@ jobs:
     timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
       fail-fast: ${{ github.event_name == 'pull_request' && (github.run_attempt != 1 || github.repository != 'openclaw/openclaw') }}
-      max-parallel: ${{ github.event_name == 'pull_request' && github.repository == 'openclaw/openclaw' && github.event.pull_request.head.repo.full_name == github.repository && github.run_attempt == 1 && needs.preflight.outputs.frozen_target != 'true' && needs.preflight.outputs.runner_profile != 'github' && needs.preflight.outputs.node_runner_backend != 'runson' && contains(fromJSON('["","blacksmith","hybrid"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && 130 || 96 }}
+      max-parallel: ${{ github.event_name == 'pull_request' && github.repository == 'openclaw/openclaw' && github.run_attempt == 1 && needs.preflight.outputs.frozen_target != 'true' && contains(fromJSON('["blacksmith","hybrid"]'), needs.preflight.outputs.node_runner_backend) && contains(fromJSON('["","blacksmith","hybrid"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && 130 || 96 }}
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - *linux_node_checkout_step

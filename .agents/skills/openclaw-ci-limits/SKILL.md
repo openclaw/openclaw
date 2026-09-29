@@ -311,8 +311,8 @@ These are intentionally guarded by the `ci-workflow-guards`,
   one worker per project. Any nonzero exit stops admission of the next envelope.
   Frozen targets retain their original separate rows.
 - CI matrix caps: fast/check lanes at 12, Node test shards at 130 only for
-  same-repository PR first attempts on a non-frozen Blacksmith or hybrid plan, and otherwise 96; Windows stays at 5 and Android at 2.
-  Hosted plans, RunsOn, forks, retries, main, and all manual/qualification dispatches
+  PR first attempts, including forks, on a non-frozen Blacksmith or hybrid Node plan, and otherwise 96; Windows stays at 5 and Android at 2.
+  Hosted plans, RunsOn, retries, main, and all manual/qualification dispatches
   retain 96. This removes a second admission wave for 97–130-row PRs without
   adding jobs or planned vCPU-minutes. Keep the 130/70 final PR/main row caps and 90 native/96 hosted compact
   caps and 5,110-registration arrival envelope; it already counts every PR row
