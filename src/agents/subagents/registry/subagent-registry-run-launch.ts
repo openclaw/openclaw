@@ -5,7 +5,6 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
-import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
@@ -19,6 +18,7 @@ import {
 import { bindSwarmRunReservation } from "../swarm/swarm-scheduler.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { waitForPendingSubagentKillClaim } from "./subagent-registry-persistence.js";
 import { registerRequiredQueuedSubagent } from "./subagent-registry-queued-registration.js";
 import {
   createSubagentRegistrationRecord,
@@ -26,12 +26,7 @@ import {
 } from "./subagent-registry-run-launch-record.js";
 import { SubagentRecoveryManager } from "./subagent-registry-run-recovery.js";
 import type { RegisterSubagentRunOptions, SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  compareSubagentRunGeneration,
-  nextSubagentRunGeneration,
-} from "./subagent-run-generation.js";
-
-const log = createSubsystemLogger("agents/subagent-registry");
+import { latestSubagentRun, nextSubagentRunGeneration } from "./subagent-run-generation.js";
 
 function resolveSwarmWaitOwnerSessionKeys(
   getRunsForChildSession: (childSessionKey: string) => Iterable<SubagentRunRecord>,
@@ -43,12 +38,7 @@ function resolveSwarmWaitOwnerSessionKeys(
   while (currentSessionKey && !visited.has(currentSessionKey)) {
     visited.add(currentSessionKey);
     ownerSessionKeys.push(currentSessionKey);
-    let latestOwner: SubagentRunRecord | undefined;
-    for (const candidate of getRunsForChildSession(currentSessionKey)) {
-      if (!latestOwner || compareSubagentRunGeneration(candidate, latestOwner) > 0) {
-        latestOwner = candidate;
-      }
-    }
+    const latestOwner = latestSubagentRun(getRunsForChildSession(currentSessionKey));
     currentSessionKey =
       latestOwner?.controllerSessionKey?.trim() || latestOwner?.requesterSessionKey.trim() || "";
   }
@@ -263,6 +253,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     if (
       !entry ||
       entry.killIntent ||
+      waitForPendingSubagentKillClaim(entry, captureOpenClawStateWorkerContext().admission) ||
       entry.killReconciliation ||
       (!terminalBeforeAcceptance && entry.execution.status !== "queued" && !lifecycleStarted)
     ) {
@@ -314,27 +305,14 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     }
     entry.swarmLaunchPending = false;
     entry.queuedLaunch = undefined;
-    let persistedRunning = false;
     try {
       this.options.persistOrThrow(previousRunId, nextRunId);
       if (terminalBeforeAcceptance) {
         bindGatewayContextResolver(entry, gatewayContextResolver);
         return true;
       }
-      persistedRunning = true;
     } catch (error) {
       restoreQueuedRun();
-      if (persistedRunning) {
-        try {
-          this.options.persistOrThrow(previousRunId, nextRunId);
-        } catch (rollbackError) {
-          // The failure callback terminalizes this in-memory queued row next.
-          log.warn("failed to persist collector start rollback", {
-            runId: previousRunId,
-            error: rollbackError,
-          });
-        }
-      }
       throw error;
     }
     bindGatewayContextResolver(entry, gatewayContextResolver);

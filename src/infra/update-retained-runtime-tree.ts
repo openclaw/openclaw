@@ -101,6 +101,9 @@ export async function linkUpdateCandidatePluginTrees(
       overwrite: false,
       // The entry loop already prepares each destination parent.
       mkdir: false,
+      // Process-lifetime scratch like the unsynced hard-link path, never a recovery backup.
+      durable: false,
+      clone: "auto",
       maxBytes: entry.size,
       mode: entry.mode | 0o600,
       sourceHardlinks: "allow",

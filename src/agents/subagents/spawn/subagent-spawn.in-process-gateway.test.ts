@@ -599,7 +599,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       "queued collector",
     );
 
-    expect(markSubagentRunTerminated({ runId: firstRunId, reason: "manual kill" })).toBe(1);
+    expect(await markSubagentRunTerminated({ runId: firstRunId, reason: "manual kill" })).toBe(1);
     const killedEntry = expectDefined(subagentRuns.get(firstRunId!), "killed collector");
     const killedSnapshot = structuredClone(killedEntry);
     const killedExecution = structuredClone(killedEntry.execution);

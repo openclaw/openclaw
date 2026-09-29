@@ -62,6 +62,7 @@ import {
 import { cleanupProvisionalSession } from "./subagent-spawn-cleanup.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 import { registerNativeCancellationCases } from "./subagent-spawn.cancellation.test-support.js";
+import { registerParticipantSpawnCases } from "./subagent-spawn.participants.test-support.js";
 import {
   createBoundSpawnInvocation,
   createBoundWorker,
@@ -79,14 +80,16 @@ const runEmbeddedAgent = vi.hoisted(() =>
 );
 
 vi.mock("../../embedded-agent.js", async () => {
-  const { abortEmbeddedAgentRun, isEmbeddedAgentRunActive, waitForEmbeddedAgentRunEnd } =
-    await import("../../embedded-agent-runner/runs.js");
+  const lifecycle = await import("../../embedded-agent-runner/runs.js");
+  const { resolveEmbeddedSessionLane } = await import("../../embedded-agent-runner/lanes.js");
+  const { resolveActiveEmbeddedRunSessionId } =
+    await import("../../embedded-agent-runner/active-run-projections.js");
   return {
-    abortEmbeddedAgentRun,
-    isEmbeddedAgentRunActive,
+    ...lifecycle,
+    resolveActiveEmbeddedRunSessionId,
+    resolveEmbeddedSessionLane,
     runEmbeddedAgent,
-    waitForEmbeddedAgentRunEnd,
-  };
+  } satisfies typeof import("../../embedded-agent.runtime.js");
 });
 
 const parentSessionKey = "agent:main:subagent:production-boundary-parent";
@@ -209,12 +212,14 @@ async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundPa
     { createGatewayInstanceRuntime },
     { createRequestGatewayMethodRegistry },
     { refreshPreparedModelRuntimeSnapshots },
+    { loadGatewayModelCatalogSnapshot, readPreparedGatewayModelCatalog },
   ] = await Promise.all([
     import("../../../gateway/agent-runtime-execution-lineage.js"),
     import("../../../gateway/agent-runtime-approval-authority.js"),
     import("../../../gateway/server-instance-runtime.js"),
     import("../../../gateway/server-methods.js"),
     import("../../prepared-model-runtime.js"),
+    import("../../../gateway/server-model-catalog.js"),
   ]);
   await refreshPreparedModelRuntimeSnapshots(bound.cfg, {
     gatewayLifecycle: true,
@@ -223,6 +228,14 @@ async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundPa
   });
   const context = bound.context as unknown as GatewayRequestContext;
   context.resolveGatewayContext = () => bound.gatewayBinding.current;
+  context.addChatRun = context.chatRunState.registry.add;
+  context.removeChatRun = context.chatRunState.registry.remove;
+  context.loadGatewayModelCatalogSnapshot = (request) =>
+    loadGatewayModelCatalogSnapshot({ ...request, getConfig: () => bound.cfg });
+  context.loadGatewayModelCatalog = async (request) =>
+    (await context.loadGatewayModelCatalogSnapshot(request)).entries;
+  context.readPreparedGatewayModelCatalog = (request) =>
+    readPreparedGatewayModelCatalog({ ...request, getConfig: () => bound.cfg });
   const validateRuntimeAuthority = createAgentRuntimeApprovalAuthorityValidator();
   const identities: AgentRuntimeIdentity[] = [];
   context.validateAgentRuntimeApprovalAuthority = (identity) => {
@@ -367,6 +380,13 @@ function throwBoundFailures(failures: unknown[]) {
 }
 
 describe("recursive spawn production boundary", () => {
+  registerParticipantSpawnCases({
+    createBoundParent,
+    createBoundGateway,
+    runEmbeddedAgent,
+    parentSessionKey,
+    parentRunId,
+  });
   registerOperatorSpawnRollbackCases({
     createBoundParent,
     createBoundGateway,

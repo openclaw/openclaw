@@ -47,7 +47,6 @@ import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scop
 import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import type {
   SessionAccessScope,
-  CapturedSessionEntryReadSource,
   SessionEntryReadScope,
   SessionEntryListScope,
   SessionEntrySummary,
@@ -56,6 +55,11 @@ import type {
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type { SessionColdArchive } from "./session-cold-storage-state.js";
+import type {
+  SessionEntryCurrentFacts,
+  SessionEntryCurrentSource,
+} from "./session-entry-current.types.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { PublishedSessionTranscriptArchive } from "./session-history-archive-pruning.types.js";
 import type {
   SessionHistoryWorkerRequest,
@@ -284,6 +288,17 @@ type SessionEntryReadWorkerInput = {
   continuation?: CanonicalSessionReaderContinuation;
 };
 
+export type SessionEntryCurrentWorkerInput = Omit<SessionEntryReadWorkerInput, "kind"> & {
+  kind: "session-entry-current";
+  source?: SessionEntryCurrentSource;
+};
+
+export type SessionEntryCurrentWorkerResult = {
+  kind: "session-entry-current";
+  entry: SessionEntryCurrentFacts | undefined;
+  source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
+};
+
 export type SessionDiagnosticTextWorkerInput = {
   kind: "session-diagnostic-text";
   database: { agentId: string; path: string };
@@ -312,10 +327,30 @@ type SessionEntryListWorkerInput = {
 export type SessionExactEntriesWorkerInput = {
   kind: "session-exact-entries";
   database: { agentId: string; path: string };
+} & SessionExactEntriesWorkerRequest;
+
+export type SessionExactEntriesWorkerSelection =
+  | {
+      sessionKeys: readonly string[];
+      selection?: never;
+      projection?:
+        | "full"
+        | "backing"
+        | "sharing"
+        | "replacement"
+        | "creation"
+        | "list"
+        | "lifecycle";
+    }
+  | {
+      sessionKeys?: never;
+      selection: { kind: "session-id"; sessionId: string };
+      projection: "sharing";
+    };
+
+type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {
   env: NodeJS.ProcessEnv;
-  sessionKeys: readonly string[];
   lifecycleSessionKey?: string;
-  projection?: "full" | "backing" | "sharing" | "replacement" | "creation" | "list" | "lifecycle";
   includeMembers?: boolean;
   includeParticipantRecords?: boolean;
   includeAuthorization?: boolean;
@@ -442,6 +477,7 @@ export type SessionHistoryWorkerInput =
   | SessionPendingInputReceiptsWorkerInput
   | SessionEntryListWorkerInput
   | SessionEntryReadWorkerInput
+  | SessionEntryCurrentWorkerInput
   | SessionDiagnosticTextWorkerInput
   | SessionExactEntriesWorkerInput
   | SessionRowFactsWorkerInput
@@ -462,9 +498,9 @@ export type SessionTranscriptWorkerInput =
 
 type SessionHistoryDatabaseWorkerInput = Extract<SessionHistoryWorkerInput, { database: unknown }>;
 
-export type SessionHistoryWorkerPreparedInput = {
-  [Input in SessionHistoryDatabaseWorkerInput as Input["kind"]]: Omit<Input, "database">;
-}[SessionHistoryDatabaseWorkerInput["kind"]];
+type PreparedHistoryInput<Input> = Input extends unknown ? Omit<Input, "database"> : never;
+export type SessionHistoryWorkerPreparedInput =
+  PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = {
   prewarm: { kind: "prewarm" };
@@ -500,6 +536,7 @@ export type SessionTranscriptWorkerValues = {
   };
   "session-entry-list": { kind: "session-entry-list"; entries: SessionEntrySummary[] };
   "session-entry-read": SessionEntryReadWorkerResult;
+  "session-entry-current": SessionEntryCurrentWorkerResult;
   "session-diagnostic-text": {
     kind: "session-diagnostic-text";
     text: string | undefined;
@@ -602,7 +639,7 @@ export type SessionHistoryWorkerDatabase = {
     signal?: AbortSignal,
   ) => Promise<SessionTranscriptCurrentTurnEntryRead>;
   readExactEntries: (
-    input: Omit<SessionExactEntriesWorkerInput, "kind" | "database">,
+    input: SessionExactEntriesWorkerRequest,
     signal?: AbortSignal,
   ) => Promise<SessionExactEntriesWorkerResult>;
   readRowFacts: (
@@ -617,6 +654,9 @@ export type SessionHistoryWorkerDatabase = {
       unknown
     >
   >;
+  readEntryCurrent: (
+    input: Omit<SessionEntryCurrentWorkerInput, "kind" | "database">,
+  ) => Promise<SessionEntryCurrentFacts | undefined>;
   readDiagnosticText: (
     input: Omit<SessionDiagnosticTextWorkerInput, "kind" | "database">,
   ) => Promise<string | undefined>;

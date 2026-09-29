@@ -1,4 +1,3 @@
-import type { ChatSendIntent } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { shouldForwardModelCommandToServer } from "../../../../src/auto-reply/commands-registry.shared.js";
 import { isAbortTrigger } from "../../../../src/auto-reply/reply/abort-trigger-text.js";
 import {
@@ -9,11 +8,9 @@ import { normalizeChatFollowUpModeOverride } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
-import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import { canSubmitBeforeChatHistory, parseSlashCommand } from "../../lib/chat/commands.ts";
 import { extractCompanionCommandQuestion } from "../../lib/chat/companion-question.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
-import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
@@ -45,7 +42,7 @@ import {
   submittedCommandScopeIsVisible,
   type ChatCommandComposerRecovery,
 } from "./chat-send-composer.ts";
-import type { ChatHost } from "./chat-send-contract.ts";
+import type { ChatHost, ChatSendSubmitOptions } from "./chat-send-contract.ts";
 import { chatOutboxDrainDependencies, deliverChatQueueItem } from "./chat-send-delivery.ts";
 import { sendDetachedCommandMessage } from "./chat-send-detached-command.ts";
 import {
@@ -87,22 +84,6 @@ import { scheduleChatScroll } from "./scroll.ts";
 
 registerChatGoalsEnglish();
 registerMcpEnglish();
-
-export type ChatSendSubmitOptions = {
-  asyncQuestionItemId?: string;
-  intent?: ChatSendIntent;
-  attachmentsOverride?: readonly ChatAttachment[];
-  mentionsOverride?: readonly HumanMention[];
-  replyTargetOverride?: ChatHost["chatReplyTarget"];
-  /** Ordinary message admission transfers retry custody, including volatile sends. */
-  onOutboxAdmitted?: () => void;
-  followUpMode?: ControlUiFollowUpMode;
-  /** Only the inline queued-row submit may resume and replace an edited row. */
-  resumeQueuedMessageEditId?: string;
-  restoreDraft?: boolean;
-  /** Lets request-scoped UI actions recover from rejected local commands. */
-  onLocalCommandSendRejected?: () => void;
-};
 
 async function waitForSubmittedRoute(host: ChatHost, sessionKey: string): Promise<boolean> {
   const pending = getPendingChatPickerPatch(host, sessionKey);

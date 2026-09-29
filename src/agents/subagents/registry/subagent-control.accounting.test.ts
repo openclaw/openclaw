@@ -13,12 +13,16 @@ import {
 } from "../../../sessions/session-lifecycle-admission.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
+import * as killSession from "./subagent-control-session.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./subagent-control.types.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import * as registryState from "./subagent-registry-state.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
+
+const registryRead = await vi.importActual<typeof registryState>("./subagent-registry-state.js");
 
 const fixture = useSubagentControlFixture();
 const owner = "agent:main:main";
@@ -75,30 +79,51 @@ it.each(
     let armed = false;
     let failedReads = 0;
     let armedReads = 0;
-    const read = sessions.loadExactSessionEntryReadOnly;
-    const reader = vi
-      .spyOn(sessions, "loadExactSessionEntryReadOnly")
-      .mockImplementation((scope) => {
-        if (
-          armed &&
-          scope.sessionKey === key("root") &&
-          ++armedReads === (phase === "descendant drain" ? 2 : 1)
-        ) {
-          armed = false;
-          failedReads += 1;
-          throw new Error(failure);
-        }
-        return read(scope);
+    const prepare = killSession.prepareSubagentKillSession;
+    const ownerReader = vi
+      .spyOn(killSession, "prepareSubagentKillSession")
+      .mockImplementation(async (...args) => {
+        const session = await prepare(...args);
+        return {
+          ...session,
+          assertCurrent() {
+            if (phase === "root traversal" && armed && args[1] === key("root")) {
+              armed = false;
+              failedReads += 1;
+              throw new Error(failure);
+            }
+            session.assertCurrent();
+          },
+        };
       });
-    const patch = sessions.patchSessionEntryCore;
+    const read = registryRead.withSubagentRunReadSnapshot;
+    const reader = vi
+      .spyOn(registryState, "withSubagentRunReadSnapshot")
+      .mockImplementation((runs, select, consume) =>
+        read(runs, select, (selection, selected) => {
+          if (
+            armed &&
+            phase === "descendant drain" &&
+            selection.sessionKeys.includes(key("root")) &&
+            ++armedReads === 2
+          ) {
+            armed = false;
+            failedReads += 1;
+            throw new Error(failure);
+          }
+          return consume(selection, selected);
+        }),
+      );
+    const patch = killSession.persistSubagentAbortedLastRun;
     const writer = vi
-      .spyOn(sessions, "patchSessionEntryCore")
-      .mockImplementation(async (scope, patcher, options) => {
-        const result = await patch(scope, patcher, options);
+      .spyOn(killSession, "persistSubagentAbortedLastRun")
+      .mockImplementation(async (params) => {
+        const result = await patch(params);
         if (
           phase === "root traversal" &&
-          scope.sessionKey === key("root") &&
-          result?.abortedLastRun
+          params.childSessionKey === key("root") &&
+          params.abortedLastRun &&
+          result
         ) {
           // The real marker commit has finished; the next root ownership read is fallible.
           armed = true;
@@ -168,6 +193,7 @@ it.each(
         await pending;
       } finally {
         reader.mockRestore();
+        ownerReader.mockRestore();
         writer.mockRestore();
       }
       expect(getActiveSessionWorkAdmissionCount()).toBe(0);
@@ -193,20 +219,22 @@ it.each([false, true])(
     if (sameTextSibling) {
       setActiveEmbeddedRun("healthy-session", healthyHandle, key("healthy"));
     }
-    const read = sessions.loadExactSessionEntryReadOnly;
+    const read = registryRead.withSubagentRunReadSnapshot;
     let armed = false;
     let reads = 0;
     let failedReads = 0;
     const failure = "transient root discovery failure";
     const reader = vi
-      .spyOn(sessions, "loadExactSessionEntryReadOnly")
-      .mockImplementation((scope) => {
-        if (armed && scope.sessionKey === key("root") && ++reads === 2) {
-          failedReads += 1;
-          throw new Error(failure);
-        }
-        return read(scope);
-      });
+      .spyOn(registryState, "withSubagentRunReadSnapshot")
+      .mockImplementation((runs, select, consume) =>
+        read(runs, select, (selection, selected) => {
+          if (armed && selection.sessionKeys.includes(key("root")) && ++reads === 2) {
+            failedReads += 1;
+            throw new Error(failure);
+          }
+          return consume(selection, selected);
+        }),
+      );
     const pending = killAllControlledSubagentRuns({
       cfg: getRuntimeConfig(),
       controller,

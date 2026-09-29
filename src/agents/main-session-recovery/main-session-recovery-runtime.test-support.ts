@@ -64,8 +64,17 @@ export function createRecoveryRuntimeFixture(params: {
     }
   };
   return {
-    expectAdmission: (expectedGatewayCalls: number, ...scopes: RecoveryScope[]) =>
-      expectState(expectedGatewayCalls, scopes, (entry) => entry.abortedLastRun === false),
+    async expectAdmission(
+      expectedGatewayCalls: number,
+      recovery: { stop: () => Promise<void> },
+      ...scopes: RecoveryScope[]
+    ) {
+      try {
+        await expectState(expectedGatewayCalls, scopes, (entry) => entry.abortedLastRun === false);
+      } finally {
+        await recovery.stop();
+      }
+    },
     async expectFailedRecovery(
       expectedGatewayCalls: number,
       recovery: { stop: () => Promise<void> },

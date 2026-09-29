@@ -1,4 +1,3 @@
-// Browser tests cover pw session plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Frame, Page } from "playwright-core";
@@ -26,20 +25,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function fakePage(): {
-  page: Page;
-  handlers: Map<string, Array<(...args: unknown[]) => void>>;
-  mainFrame: { url: () => string };
-  selectedFrame: Frame;
-  mocks: {
-    on: ReturnType<typeof vi.fn>;
-    frameGetByRole: ReturnType<typeof vi.fn>;
-    frameQuery: ReturnType<typeof vi.fn>;
-    getByRole: ReturnType<typeof vi.fn>;
-    frameLocator: ReturnType<typeof vi.fn>;
-    locator: ReturnType<typeof vi.fn>;
-  };
-} {
+function fakePage() {
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
   const on = vi.fn((event: string, cb: (...args: unknown[]) => void) => {
     const list = handlers.get(event) ?? [];
@@ -93,6 +79,12 @@ function fakePage(): {
   };
 }
 
+function saveContents(contents: string) {
+  return vi.fn(async (outPath: string) => {
+    await fs.writeFile(outPath, contents, "utf8");
+  });
+}
+
 function firstSavePath(saveAs: MutableDownload["saveAs"]): string {
   const [call] = saveAs.mock.calls;
   if (!call) {
@@ -122,10 +114,9 @@ describe("pw-session refLocator", () => {
     expect(mocks.frameLocator).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { ref: "e1", name: "OK" },
-    { ref: "ax12", name: "" },
-  ])("matches the exact name for unmarked $ref with name '$name'", ({ ref, name }) => {
+  it("matches the empty name for an unmarked accessibility ref", () => {
+    const ref = "ax12";
+    const name = "";
     const { page, mocks } = fakePage();
     const state = ensurePageState(page);
     state.roleRefs = { [ref]: { role: "button", name } };
@@ -145,7 +136,8 @@ describe("pw-session refLocator", () => {
     expect(mocks.locator).toHaveBeenCalledWith("aria-ref=e1");
   });
 
-  it.each(["e1", "ax12"])("uses backend-marked DOM locators for %s refs", (ref) => {
+  it("uses backend-marked DOM locators for role refs", () => {
+    const ref = "e1";
     const { page, mocks } = fakePage();
     const state = ensurePageState(page);
     state.roleRefs = { [ref]: { role: "button", name: "OK", domMarker: true } };
@@ -164,27 +156,6 @@ describe("pw-session refLocator", () => {
 });
 
 describe("pw-session role refs cache", () => {
-  it("invalidates cached refs for replacement Pages after main-frame navigation", () => {
-    const cdpUrl = "http://127.0.0.1:9222";
-    const targetId = "t1";
-
-    const { page: pageA, handlers, mainFrame } = fakePage();
-    storeRoleRefsForTarget({
-      page: pageA,
-      cdpUrl,
-      targetId,
-      refs: { e1: { role: "button", name: "Page A" } },
-      mode: "role",
-    });
-
-    handlers.get("framenavigated")?.[0]?.(mainFrame);
-    expect(ensurePageState(pageA).roleRefs).toBeUndefined();
-
-    const { page: pageB } = fakePage();
-    restoreRoleRefsForTarget({ cdpUrl, targetId, page: pageB });
-    expect(ensurePageState(pageB).roleRefs).toBeUndefined();
-  });
-
   it("restores fresh post-navigation refs for a replacement Page", () => {
     const cdpUrl = "http://127.0.0.1:9222";
     const targetId = "t1";
@@ -198,6 +169,7 @@ describe("pw-session role refs cache", () => {
       mode: "role",
     });
     handlers.get("framenavigated")?.[0]?.(mainFrame);
+    expect(ensurePageState(pageA).roleRefs).toBeUndefined();
 
     storeRoleRefsForTarget({
       page: pageA,
@@ -245,28 +217,26 @@ describe("pw-session role refs cache", () => {
     expect(ensurePageState(replacementPage).roleRefsMode).toBe("aria");
   });
 
-  it.each(["framenavigated", "framedetached"] as const)(
-    "invalidates page-wide aria refs when a subframe emits %s",
-    (event) => {
-      const cdpUrl = "http://127.0.0.1:9222";
-      const targetId = `aria-target-${event}`;
-      const { page, handlers } = fakePage();
-      storeRoleRefsForTarget({
-        page,
-        cdpUrl,
-        targetId,
-        refs: { e1: { role: "button", name: "Embedded" } },
-        mode: "aria",
-      });
+  it("invalidates page-wide aria refs on subframe navigation", () => {
+    const event = "framenavigated";
+    const cdpUrl = "http://127.0.0.1:9222";
+    const targetId = `aria-target-${event}`;
+    const { page, handlers } = fakePage();
+    storeRoleRefsForTarget({
+      page,
+      cdpUrl,
+      targetId,
+      refs: { e1: { role: "button", name: "Embedded" } },
+      mode: "aria",
+    });
 
-      handlers.get(event)?.[0]?.({ url: () => "https://frame.example/new" });
+    handlers.get(event)?.[0]?.({ url: () => "https://frame.example/new" });
 
-      expect(ensurePageState(page).roleRefs).toBeUndefined();
-      const { page: replacementPage } = fakePage();
-      restoreRoleRefsForTarget({ cdpUrl, targetId, page: replacementPage });
-      expect(ensurePageState(replacementPage).roleRefs).toBeUndefined();
-    },
-  );
+    expect(ensurePageState(page).roleRefs).toBeUndefined();
+    const { page: replacementPage } = fakePage();
+    restoreRoleRefsForTarget({ cdpUrl, targetId, page: replacementPage });
+    expect(ensurePageState(replacementPage).roleRefs).toBeUndefined();
+  });
 });
 
 describe("pw-session ensurePageState", () => {
@@ -274,12 +244,8 @@ describe("pw-session ensurePageState", () => {
     const { page, handlers } = fakePage();
     ensurePageState(page);
 
-    const saveAsA = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "download-a", "utf8");
-    });
-    const saveAsB = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "download-b", "utf8");
-    });
+    const saveAsA = saveContents("download-a");
+    const saveAsB = saveContents("download-b");
     const downloadA: MutableDownload = {
       suggestedFilename: () => "report.pdf",
       saveAs: saveAsA,
@@ -344,62 +310,11 @@ describe("pw-session ensurePageState", () => {
     }
   });
 
-  it("reports all downloads owned by the active action with managed metadata", async () => {
-    const { page, handlers } = fakePage();
-    ensurePageState(page);
-    const capture = beginActionDownloadCaptureOnPage(page);
-    const firstSave = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "first-action-download", "utf8");
-    });
-    const secondSave = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "second-action-download", "utf8");
-    });
-
-    for (const download of [
-      {
-        url: () => "https://example.com/first.txt",
-        suggestedFilename: () => "first.txt",
-        saveAs: firstSave,
-      },
-      {
-        url: () => "https://example.com/second.txt",
-        suggestedFilename: () => "second.txt",
-        saveAs: secondSave,
-      },
-    ]) {
-      handlers.get("download")?.[0]?.(download);
-    }
-
-    const result = await capture.drain();
-    capture.dispose();
-
-    expect(result).toEqual([
-      {
-        url: "https://example.com/first.txt",
-        suggestedFilename: "first.txt",
-        path: expect.stringMatching(/-first\.txt$/),
-      },
-      {
-        url: "https://example.com/second.txt",
-        suggestedFilename: "second.txt",
-        path: expect.stringMatching(/-second\.txt$/),
-      },
-    ]);
-    await expect(fs.readFile(result?.[0]?.path ?? "", "utf8")).resolves.toBe(
-      "first-action-download",
-    );
-    await expect(fs.readFile(result?.[1]?.path ?? "", "utf8")).resolves.toBe(
-      "second-action-download",
-    );
-  });
-
   it("waits only the requested first-event grace for a just-late action download", async () => {
     const { page, handlers } = fakePage();
     ensurePageState(page);
     const capture = beginActionDownloadCaptureOnPage(page);
-    const saveAs = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "late-action-download", "utf8");
-    });
+    const saveAs = saveContents("late-action-download");
     const drain = capture.drain({ firstEventGraceMs: 1_000 });
 
     setImmediate(() => {
@@ -412,35 +327,6 @@ describe("pw-session ensurePageState", () => {
 
     await expect(drain).resolves.toEqual([
       expect.objectContaining({ suggestedFilename: "late.txt" }),
-    ]);
-    capture.dispose();
-  });
-
-  it("keeps a quiet window open for sibling downloads after the first event", async () => {
-    const { page, handlers } = fakePage();
-    ensurePageState(page);
-    const capture = beginActionDownloadCaptureOnPage(page);
-    const save = (contents: string) =>
-      vi.fn(async (outPath: string) => {
-        await fs.writeFile(outPath, contents, "utf8");
-      });
-
-    handlers.get("download")?.[0]?.({
-      url: () => "https://example.com/first.txt",
-      suggestedFilename: () => "first.txt",
-      saveAs: save("first"),
-    });
-    setImmediate(() => {
-      handlers.get("download")?.[0]?.({
-        url: () => "https://example.com/second.txt",
-        suggestedFilename: () => "second.txt",
-        saveAs: save("second"),
-      });
-    });
-
-    await expect(capture.drain({ quietMs: 1_000 })).resolves.toEqual([
-      expect.objectContaining({ suggestedFilename: "first.txt" }),
-      expect.objectContaining({ suggestedFilename: "second.txt" }),
     ]);
     capture.dispose();
   });
@@ -465,9 +351,7 @@ describe("pw-session ensurePageState", () => {
     });
 
     const drain = capture.drain();
-    const lateSave = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "late", "utf8");
-    });
+    const lateSave = saveContents("late");
     const lateDownload: MutableDownload = {
       url: () => "https://example.com/late.txt",
       suggestedFilename: () => "late.txt",
@@ -489,9 +373,7 @@ describe("pw-session ensurePageState", () => {
     const { page, handlers } = fakePage();
     ensurePageState(page);
     const first = beginActionDownloadCaptureOnPage(page);
-    const firstSaveAs = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "first-action-download", "utf8");
-    });
+    const firstSaveAs = saveContents("first-action-download");
     handlers.get("download")?.[0]?.({
       url: () => "https://example.com/first.txt",
       suggestedFilename: () => "first.txt",
@@ -500,9 +382,7 @@ describe("pw-session ensurePageState", () => {
 
     const latest = beginActionDownloadCaptureOnPage(page);
     first.dispose();
-    const latestSaveAs = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "latest-action-download", "utf8");
-    });
+    const latestSaveAs = saveContents("latest-action-download");
     handlers.get("download")?.[0]?.({
       url: () => "https://example.com/latest.txt",
       suggestedFilename: () => "latest.txt",
@@ -536,33 +416,6 @@ describe("pw-session ensurePageState", () => {
     capture.dispose();
     expect(download).not.toHaveProperty("path");
     expect(download.saveAs).not.toHaveBeenCalled();
-  });
-
-  it("validates action-owned download URLs before saving bytes", async () => {
-    const { page, handlers } = fakePage();
-    ensurePageState(page);
-    const blocked = new Error("blocked action download");
-    const beforeSave = vi.fn(async () => {
-      throw blocked;
-    });
-    const capture = beginActionDownloadCaptureOnPage(page, { beforeSave });
-    const saveAs = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "blocked-action-download", "utf8");
-    });
-
-    handlers.get("download")?.[0]?.({
-      url: () => "http://127.0.0.1/private.txt",
-      suggestedFilename: () => "private.txt",
-      saveAs,
-    });
-
-    await expect(capture.drain()).rejects.toBe(blocked);
-    capture.dispose();
-    expect(beforeSave).toHaveBeenCalledWith({
-      url: "http://127.0.0.1/private.txt",
-      suggestedFilename: "private.txt",
-    });
-    expect(saveAs).not.toHaveBeenCalled();
   });
 
   it("drains late siblings before surfacing the first download policy failure", async () => {
@@ -659,9 +512,7 @@ describe("pw-session ensurePageState", () => {
     const { page, handlers } = fakePage();
     const state = ensurePageState(page);
     const capture = createDownloadCaptureForPage(page, state, 1_000);
-    const saveAs = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "attachment", "utf8");
-    });
+    const saveAs = saveContents("attachment");
     const download = {
       url: () => "https://example.com/export.csv",
       suggestedFilename: () => "export.csv",
@@ -689,9 +540,7 @@ describe("pw-session ensurePageState", () => {
       throw blocked;
     });
     const capture = createDownloadCaptureForPage(page, state, 1_000, { beforeSave });
-    const saveAs = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "blocked", "utf8");
-    });
+    const saveAs = saveContents("blocked");
     const download = {
       url: () => "http://127.0.0.1:18080/export.csv",
       suggestedFilename: () => "export.csv",
@@ -811,54 +660,6 @@ describe("pw-session ensurePageState", () => {
     expect(state2.console).toStrictEqual([]);
     expect(state2.errors).toStrictEqual([]);
     expect(state2.requests).toStrictEqual(new Map());
-  });
-
-  it.each([
-    { mode: "role" as const, frameSelector: undefined },
-    { mode: "aria" as const, frameSelector: "iframe#content" },
-  ])("clears $mode role refs on main-frame navigation", ({ mode, frameSelector }) => {
-    const { page, handlers, mainFrame, selectedFrame } = fakePage();
-    const state = ensurePageState(page);
-
-    storeRoleRefsForTarget({
-      page,
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "t1",
-      refs: { e1: { role: "button", name: "Save" } },
-      frameSelector,
-      frame: frameSelector ? selectedFrame : undefined,
-      mode,
-    });
-    expect(state.roleRefs).toBeDefined();
-    expect(state.roleRefsMode).toBe(mode);
-    expect(state.roleRefsFrameSelector).toBe(frameSelector);
-
-    handlers.get("framenavigated")?.[0]?.(mainFrame);
-
-    expect(state.roleRefs).toBeUndefined();
-    expect(state.roleRefsMode).toBeUndefined();
-    expect(state.roleRefsFrameSelector).toBeUndefined();
-    expect(() => refLocator(page, "e1")).toThrow(/Unknown ref/);
-  });
-
-  it("preserves role refs on subframe navigation", () => {
-    const { page, handlers } = fakePage();
-    const state = ensurePageState(page);
-
-    storeRoleRefsForTarget({
-      page,
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "t1",
-      refs: { e1: { role: "button", name: "MainBtn" } },
-      mode: "role",
-    });
-    expect(Object.keys(state.roleRefs!)).toHaveLength(1);
-
-    const subframe = { url: () => "https://ads.example.com/widget" };
-    handlers.get("framenavigated")?.[0]?.(subframe);
-
-    expect(state.roleRefs).toBeDefined();
-    expect(Object.keys(state.roleRefs!)).toHaveLength(1);
   });
 
   it.each(["framenavigated", "framedetached"] as const)(

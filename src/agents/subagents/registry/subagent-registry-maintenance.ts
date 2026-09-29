@@ -9,36 +9,20 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import { getSubagentMaintenanceRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunMaintenanceRecord } from "./subagent-registry.types.js";
 
-function isCleanupCompleteForMaintenance(entry: SubagentRunMaintenanceRecord): boolean {
-  return typeof entry.cleanupCompletedAt === "number";
-}
-
-function isActiveForMaintenance(entry: SubagentRunMaintenanceRecord): boolean {
-  return typeof entry.execution.endedAt !== "number";
-}
-
-function isPendingFinalDeliveryForMaintenance(entry: SubagentRunMaintenanceRecord): boolean {
-  return entry.delivery?.status === "pending" || isDeliverySuspended(entry);
-}
-
-function isAwaitingCompletionAnnounceForMaintenance(entry: SubagentRunMaintenanceRecord): boolean {
-  return entry.expectsCompletionMessage === true && entry.delivery?.status !== "delivered";
-}
-
 function shouldPreserveForMaintenance(entry: SubagentRunMaintenanceRecord): boolean {
   if (entry.killReconciliation || entry.killIntent) {
     // The killed row is a reconciliation tombstone. Its session owns the
     // provider result until the sweeper accepts completion or finalizes cancellation.
     return true;
   }
-  if (isCleanupCompleteForMaintenance(entry)) {
+  if (typeof entry.cleanupCompletedAt === "number") {
     return false;
   }
-  if (isActiveForMaintenance(entry)) {
-    return true;
-  }
   return (
-    isAwaitingCompletionAnnounceForMaintenance(entry) || isPendingFinalDeliveryForMaintenance(entry)
+    typeof entry.execution.endedAt !== "number" ||
+    (entry.expectsCompletionMessage === true && entry.delivery?.status !== "delivered") ||
+    entry.delivery?.status === "pending" ||
+    isDeliverySuspended(entry)
   );
 }
 

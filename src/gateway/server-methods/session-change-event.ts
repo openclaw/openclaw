@@ -422,7 +422,7 @@ export function emitSessionsChanged(
   const scope: SessionEventAgentScope | null = payload.sessionKey
     ? resolveSessionEventAgentScope(cfg, payload.sessionKey, payload.agentId)
     : [payload.agentId, payload.agentId, undefined];
-  if (options.preparedPublication) {
+  if (options.preparedPublication && payload.sessionKey) {
     return broadcastSessionsChanged(context, payload, scope);
   }
   const publicationKey = sessionChangeKey(cfg, payload, scope);

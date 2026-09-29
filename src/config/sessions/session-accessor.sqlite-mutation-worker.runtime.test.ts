@@ -9,7 +9,7 @@ import { runReclamationWorkerPort } from "./session-accessor.sqlite-mutation-wor
 import type {
   SqliteReclamationWorkerCloseRequest,
   SqliteReclamationWorkerRequest,
-} from "./session-accessor.sqlite-reclamation-worker.js";
+} from "./session-accessor.sqlite-reclamation-worker.types.js";
 
 const gc = vi.hoisted(() => ({
   pending: undefined as (() => void) | undefined,

@@ -23,7 +23,6 @@
 
   // URL PARAMETER HANDLING
 
-  // Parse URL parameters for deep linking: leafId and targetId
   // Check for injected params (when loaded in iframe via srcdoc) or use window.location
   const injectedParams = document.querySelector('meta[name="openclaw-url-params"]');
   const searchString = injectedParams
@@ -32,15 +31,11 @@
   const urlParams = new URLSearchParams(searchString);
   const urlLeafId = urlParams.get("leafId");
   const urlTargetId = urlParams.get("targetId");
-  // Use URL leafId if provided, otherwise fall back to session default
   const leafId = urlLeafId || defaultLeafId;
 
   // DATA STRUCTURES
 
-  const byId = new Map();
-  for (const entry of entries) {
-    byId.set(entry.id, entry);
-  }
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
 
   // Tool call lookup (toolCallId -> {name, arguments})
   const toolCallMap = new Map();
@@ -246,8 +241,8 @@
 
     const activeFirst = (a, b) => Number(containsActive.get(b)) - Number(containsActive.get(a));
     layoutTree(
-      [...roots].toSorted(activeFirst),
-      (node) => [...node.children].toSorted(activeFirst),
+      roots.toSorted(activeFirst),
+      (node) => node.children.toSorted(activeFirst),
       (node) => {
         const target = { node };
         result.push(target);
@@ -257,37 +252,24 @@
     return result;
   }
 
-  /**
-   * Build ASCII prefix string for tree node.
-   */
   function buildTreePrefix(flatNode) {
     const { indent, showConnector, isLast, gutters, isVirtualRootChild, multipleRoots } = flatNode;
     const displayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
     const connector = showConnector && !isVirtualRootChild ? (isLast ? "└─ " : "├─ ") : "";
     const connectorPosition = connector ? displayIndent - 1 : -1;
 
-    const totalChars = displayIndent * 3;
-    const prefixChars = [];
-    for (let i = 0; i < totalChars; i++) {
-      const level = Math.floor(i / 3);
-      const posInLevel = i % 3;
-
+    const prefix = [];
+    for (let level = 0; level < displayIndent; level++) {
       const gutter = gutters.find((g) => g.position === level);
       if (gutter) {
-        prefixChars.push(posInLevel === 0 ? (gutter.show ? "│" : " ") : " ");
+        prefix.push(gutter.show ? "│  " : "   ");
       } else if (connector && level === connectorPosition) {
-        if (posInLevel === 0) {
-          prefixChars.push(isLast ? "└" : "├");
-        } else if (posInLevel === 1) {
-          prefixChars.push("─");
-        } else {
-          prefixChars.push(" ");
-        }
+        prefix.push(connector);
       } else {
-        prefixChars.push(" ");
+        prefix.push("   ");
       }
     }
-    return prefixChars.join("");
+    return prefix.join("");
   }
 
   // FILTERING (pure data)
@@ -338,6 +320,13 @@
     return [];
   }
 
+  function messageText(content) {
+    return renderableContentBlocks(content)
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n");
+  }
+
   function getSearchableText(entry, label) {
     const parts = [];
     if (label) {
@@ -358,9 +347,7 @@
       }
       case "custom_message":
         parts.push(entry.customType);
-        parts.push(
-          typeof entry.content === "string" ? entry.content : extractContent(entry.content),
-        );
+        parts.push(extractContent(entry.content));
         break;
       case "compaction":
         parts.push("compaction");
@@ -379,9 +366,6 @@
     return parts.join(" ").toLowerCase();
   }
 
-  /**
-   * Filter flat nodes based on current filterMode and searchQuery.
-   */
   function filterNodes(flatNodes, currentLeafId) {
     const searchTokens = searchQuery.toLowerCase().split(/\s+/).filter(Boolean);
 
@@ -448,7 +432,6 @@
       return true;
     });
 
-    // Recalculate visual structure based on visible tree
     recalculateVisualStructure(filtered, flatNodes);
 
     return filtered;
@@ -467,10 +450,7 @@
 
     const visibleIds = new Set(filteredNodes.map((n) => n.node.entry.id));
 
-    const entryMap = new Map();
-    for (const flatNode of allFlatNodes) {
-      entryMap.set(flatNode.node.entry.id, flatNode);
-    }
+    const entryMap = new Map(allFlatNodes.map((node) => [node.node.entry.id, node]));
 
     function findVisibleAncestor(nodeId) {
       let currentId = entryMap.get(nodeId)?.node.entry.parentId;
@@ -499,10 +479,7 @@
 
     const visibleRootIds = visibleChildren.get(null);
 
-    const filteredNodeMap = new Map();
-    for (const flatNode of filteredNodes) {
-      filteredNodeMap.set(flatNode.node.entry.id, flatNode);
-    }
+    const filteredNodeMap = new Map(filteredNodes.map((node) => [node.node.entry.id, node]));
 
     // Filtering preserves the full traversal's order; update the original last-ID records.
     layoutTree(
@@ -617,9 +594,6 @@
     }
     return `<img src="data:${mimeType};base64,${imgBase64}" class="${className}" />`;
   }
-  /**
-   * Truncate string to maxLen chars, append "..." if truncated.
-   */
   function truncate(s, maxLen = 100) {
     if (s.length <= maxLen) {
       return s;
@@ -627,9 +601,6 @@
     return truncateUtf16Safe(s, maxLen) + "...";
   }
 
-  /**
-   * Get display text for tree node (returns HTML string).
-   */
   function getTreeNodeDisplayHtml(entry, label) {
     const normalize = (s) => s.replace(/[\n\t]/g, " ").trim();
     const labelHtml =
@@ -697,8 +668,7 @@
         );
       }
       case "custom_message": {
-        const content =
-          typeof entry.content === "string" ? entry.content : extractContent(entry.content);
+        const content = extractContent(entry.content);
         return (
           labelHtml +
           `<span class="tree-custom">[${escapeHtml(entry.customType)}]:</span> ${escapeHtml(truncate(normalize(content)))}`
@@ -893,16 +863,20 @@
     return null;
   }
 
+  function highlightCode(code, lang) {
+    try {
+      return lang
+        ? hljs.highlight(code, { language: lang }).value
+        : hljs.highlightAuto(code).value;
+    } catch {
+      return escapeHtml(code);
+    }
+  }
+
   function formatOutputLines(lines, lang) {
     if (lang) {
-      const code = lines.join("\n");
-      try {
-        return hljs.highlight(code, { language: lang }).value;
-      } catch {
-        return escapeHtml(code);
-      }
+      return highlightCode(lines.join("\n"), lang);
     }
-
     return lines.map((line) => `<div>${escapeHtml(replaceTabs(line))}</div>`).join("");
   }
 
@@ -942,30 +916,17 @@
     return `<div class="tool-output">${formatOutputLines(displayLines)}</div>`;
   }
 
+  function renderContentImages(content, containerClass, imageClass) {
+    const images = renderableContentBlocks(content).filter((block) => block.type === "image");
+    return images.length > 0
+      ? `<div class="${containerClass}">${images.map((img) => renderDataUrlImage(img, imageClass)).join("")}</div>`
+      : "";
+  }
+
   function renderToolCall(call) {
     const result = findToolResult(call.id);
     const isError = result?.isError || false;
     const statusClass = result ? (isError ? "error" : "success") : "pending";
-
-    const getResultText = () => {
-      if (!result) {
-        return "";
-      }
-      const textBlocks = renderableContentBlocks(result.content).filter((c) => c.type === "text");
-      return textBlocks.map((c) => c.text).join("\n");
-    };
-
-    const renderResultImages = () => {
-      const images = renderableContentBlocks(result?.content).filter((c) => c.type === "image");
-      if (images.length === 0) {
-        return "";
-      }
-      return (
-        '<div class="tool-images">' +
-        images.map((img) => renderDataUrlImage(img, "tool-image")).join("") +
-        "</div>"
-      );
-    };
 
     let html = `<div class="tool-execution ${statusClass}">`;
     const args = call.arguments || {};
@@ -979,7 +940,7 @@
         const cmdDisplay = command === null ? invalidArg : escapeHtml(command || "...");
         html += `<div class="tool-command">$ ${cmdDisplay}</div>`;
         if (result) {
-          const output = getResultText().trim();
+          const output = messageText(result.content).trim();
           if (output) {
             html += formatExpandableOutput(output, 5);
           }
@@ -1000,8 +961,8 @@
 
         html += `<div class="tool-header"><span class="tool-name">read</span> <span class="tool-path">${pathHtml}</span></div>`;
         if (result) {
-          html += renderResultImages();
-          const output = getResultText();
+          html += renderContentImages(result.content, "tool-images", "tool-image");
+          const output = messageText(result.content);
           const lang = filePath ? getLanguageFromPath(filePath) : null;
           if (output) {
             html += formatExpandableOutput(output, 10, lang);
@@ -1029,7 +990,7 @@
           html += formatExpandableOutput(content, 10, lang);
         }
         if (result) {
-          const output = getResultText().trim();
+          const output = messageText(result.content).trim();
           if (output) {
             html += `<div class="tool-output"><div>${escapeHtml(output)}</div></div>`;
           }
@@ -1053,7 +1014,7 @@
           }
           html += "</div>";
         } else if (result) {
-          const output = getResultText().trim();
+          const output = messageText(result.content).trim();
           if (output) {
             html += `<div class="tool-output"><pre>${escapeHtml(output)}</pre></div>`;
           }
@@ -1064,7 +1025,7 @@
         html += `<div class="tool-header"><span class="tool-name">${escapeHtml(name)}</span></div>`;
         html += `<div class="tool-output"><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></div>`;
         if (result) {
-          const output = getResultText();
+          const output = messageText(result.content);
           if (output) {
             html += formatExpandableOutput(output, 10);
           }
@@ -1170,9 +1131,6 @@
     }
   }
 
-  /**
-   * Render the copy-link button HTML for a message.
-   */
   function renderCopyLinkButton(entryId) {
     return `<button class="copy-link-btn" data-entry-id="${escapeHtmlAttr(entryId)}" title="Copy link to this message">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1198,26 +1156,8 @@
         let html = `<div class="user-message" id="${entryId}">${copyBtnHtml}${tsHtml}`;
         const content = msg.content;
 
-        if (Array.isArray(content)) {
-          const images = content.filter((c) => c.type === "image");
-          if (images.length > 0) {
-            html += '<div class="message-images">';
-            for (const img of images) {
-              html += renderDataUrlImage(img, "message-image");
-            }
-            html += "</div>";
-          }
-        }
-
-        const text =
-          typeof content === "string"
-            ? content
-            : Array.isArray(content)
-                ? content
-                    .filter((c) => c.type === "text")
-                    .map((c) => c.text)
-                    .join("\n")
-                : "";
+        html += renderContentImages(content, "message-images", "message-image");
+        const text = messageText(content);
         if (text.trim()) {
           html += `<div class="markdown-content">${marked.parse(text)}</div>`;
         }
@@ -1481,7 +1421,6 @@
 
   // NAVIGATION
 
-  // Cache for rendered entry DOM nodes
   const entryCache = new Map();
 
   function renderEntryToNode(entry) {
@@ -1653,21 +1592,7 @@
       code(token) {
         const code = token.text;
         const lang = token.lang;
-        let highlighted;
-        if (lang && hljs.getLanguage(lang)) {
-          try {
-            highlighted = hljs.highlight(code, { language: lang }).value;
-          } catch {
-            highlighted = escapeHtml(code);
-          }
-        } else {
-          // Auto-detect language if not specified
-          try {
-            highlighted = hljs.highlightAuto(code).value;
-          } catch {
-            highlighted = escapeHtml(code);
-          }
-        }
+        const highlighted = highlightCode(code, lang && hljs.getLanguage(lang) ? lang : undefined);
         return `<pre><code class="hljs">${highlighted}</code></pre>`;
       },
       // Delegate nested inline tokens; leaf text keeps the existing escaping.

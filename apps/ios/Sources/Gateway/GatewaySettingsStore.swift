@@ -495,11 +495,7 @@ enum GatewaySettingsStore {
     }
 
     static func activeGatewayEntry() -> GatewayRegistryEntry? {
-        let registry = self.loadGatewayRegistry()
-        guard let activeStableID = registry.activeStableID else { return nil }
-        return registry.entries.first {
-            GatewayStableIdentifier.matches($0.stableID, activeStableID)
-        }
+        self.loadGatewayRegistry().activeEntry
     }
 
     static func clearLegacyGatewaySelectors(stableID: String) {

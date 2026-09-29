@@ -1,5 +1,5 @@
 import type { APIChannel, APIGuildForumChannel, APIGuildMediaChannel } from "discord-api-types/v10";
-import { ChannelType } from "discord-api-types/v10";
+import { ChannelType, Routes } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
@@ -7,7 +7,7 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { resolveChunkMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { createChannelMessage, createThread, type RequestClient } from "./internal/discord.js";
+import { createThread, type RequestClient } from "./internal/discord.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import { prepareDiscordOutboundText } from "./outbound-text.js";
@@ -425,9 +425,11 @@ async function resolveDiscordStructuredSendContext(
         async () => {
           await opts.onPlatformSendDispatch?.();
           opts.assertPlatformSendAuthorized?.();
-          return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {
-            body,
-          });
+          // SAFETY: Discord's Create Message response includes its message and channel IDs.
+          return (await rest.post(Routes.channelMessages(channelId), { body })) as {
+            id: string;
+            channel_id: string;
+          };
         },
         kind,
         { safety: "nonce-protected-create" },

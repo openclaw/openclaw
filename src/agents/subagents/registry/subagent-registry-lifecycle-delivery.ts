@@ -1,12 +1,11 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
-import {
-  loadSessionEntryReadOnly,
-  type SessionTranscriptRuntimeTarget,
-} from "../../../config/sessions/session-accessor.js";
+import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
+import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { resolveSessionStorePathForScope } from "../../../config/sessions/session-store-path.js";
 import { formatErrorMessage, readErrorName } from "../../../infra/errors.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import {
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
@@ -211,6 +210,7 @@ export const freezeRunResultAtCompletion = async (
   context: SubagentLifecycleCommonContext,
   entry: SubagentRunRecord,
   outcome: SubagentRunOutcome,
+  assertCurrent: () => void,
 ): Promise<boolean> => {
   const params = context.options;
   if (ensureCompletionState(entry).resultText !== undefined) {
@@ -225,6 +225,20 @@ export const freezeRunResultAtCompletion = async (
   const owner = params.runs.get(entry.runId);
   const generation = owner?.generation;
   const execution = owner?.execution;
+  const isOwnerCurrent = () =>
+    owner !== undefined &&
+    params.runs.get(entry.runId) === owner &&
+    owner.generation === generation &&
+    owner.execution === execution &&
+    entry.pauseReason !== "sessions_yield" &&
+    owner.pauseReason !== "sessions_yield" &&
+    !context.newerGenerationOwnsSession(entry);
+  const assertCaptureCurrent = () => {
+    assertCurrent();
+    if (!isOwnerCurrent()) {
+      throw new Error("Subagent completion capture lost its original owner");
+    }
+  };
   let resultText: string | null;
   try {
     const transcriptTarget = entry.execution.transcriptTarget;
@@ -242,38 +256,53 @@ export const freezeRunResultAtCompletion = async (
           storePath: configuredStorePath,
         })
       : undefined;
-    const sessionId =
-      transcriptTarget?.sessionId ??
-      (agentId && storePath
-        ? loadSessionEntryReadOnly({ agentId, sessionKey, storePath })?.sessionId
-        : undefined);
-    const sessionTarget: SessionTranscriptRuntimeTarget | undefined =
-      agentId && sessionId && storePath ? { agentId, sessionId, sessionKey, storePath } : undefined;
-    const captured = await withPluginRuntimeGatewayContextResolver(
-      getGatewayContextResolver(entry),
-      () =>
-        params.captureSubagentCompletionReply(entry.childSessionKey, {
-          waitForReply: entry.expectsCompletionMessage === true,
-          outcome,
-          ...(sessionTarget ? { sessionTarget } : {}),
-        }),
-    );
+    const capture = async (sessionId: string | undefined) => {
+      assertCaptureCurrent();
+      const sessionTarget: SessionTranscriptRuntimeTarget | undefined =
+        agentId && sessionId && storePath
+          ? { agentId, sessionId, sessionKey, storePath }
+          : undefined;
+      const result = await withPluginRuntimeGatewayContextResolver(
+        getGatewayContextResolver(entry),
+        () =>
+          params.captureSubagentCompletionReply(entry.childSessionKey, {
+            waitForReply: entry.expectsCompletionMessage === true,
+            outcome,
+            ...(sessionTarget ? { sessionTarget } : {}),
+          }),
+      );
+      assertCaptureCurrent();
+      return result;
+    };
+    const captured =
+      !transcriptTarget?.sessionId && agentId && storePath
+        ? await withSessionEntryReadOnlyInWorker(
+            { agentId, sessionKey, storePath },
+            assertCaptureCurrent,
+            async (read, reader) => {
+              if (!read.ok) {
+                throw read.error;
+              }
+              reader.assertCurrent();
+              return capture(read.value?.sessionId);
+            },
+          )
+        : await capture(transcriptTarget?.sessionId);
     resultText = captured?.trim() ? capFrozenResultText(captured) : null;
-  } catch {
+  } catch (error) {
+    if (hasSqliteWorkerOutcomeUnknown(error)) {
+      throw error;
+    }
+    if (!isOwnerCurrent()) {
+      return false;
+    }
+    assertCurrent();
     resultText = null;
   }
-  const liveEntry = params.runs.get(entry.runId);
-  if (
-    !owner ||
-    liveEntry !== owner ||
-    liveEntry.generation !== generation ||
-    liveEntry.execution !== execution ||
-    entry.pauseReason === "sessions_yield" ||
-    liveEntry?.pauseReason === "sessions_yield" ||
-    context.newerGenerationOwnsSession(entry)
-  ) {
+  if (!isOwnerCurrent()) {
     return false;
   }
+  assertCurrent();
   const completion = ensureCompletionState(entry);
   if (completion.resultText !== undefined) {
     return false;
@@ -350,6 +379,7 @@ export const emitCompletionEndedHookIfNeeded = async (
   entry: SubagentRunRecord,
   reason: SubagentLifecycleEndedReason,
   isCurrent?: () => boolean,
+  prepareCurrent?: () => Promise<boolean>,
 ) => {
   if (params.shouldEmitEndedHookForRun({ entry, reason })) {
     await params.emitSubagentEndedHookForRun({
@@ -357,6 +387,7 @@ export const emitCompletionEndedHookIfNeeded = async (
       reason,
       sendFarewell: true,
       isCurrent,
+      prepareCurrent,
     });
   }
 };

@@ -29,7 +29,6 @@ describe("memory index", () => {
     getFreshManager,
     getPersistentManager,
     seedSessionTranscript: seedMemoryIndexSessionTranscript,
-    trackManager,
   } = fixture;
 
   it("keeps a dirty status manager read-only while searching published results", async () => {
@@ -483,7 +482,6 @@ describe("memory index", () => {
       minScore: 0,
     });
     const manager = await getFreshManager(cfg);
-    trackManager(manager);
     if (!manager.status().fts?.available) {
       return;
     }

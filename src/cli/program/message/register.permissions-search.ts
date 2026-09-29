@@ -7,9 +7,8 @@ import type { MessageCliHelpers } from "./helpers.js";
 export function registerMessagePermissionsCommand(message: Command, helpers: MessageCliHelpers) {
   helpers
     .withMessageBase(
-      helpers.withRequiredMessageTarget(
-        message.command("permissions").description("Fetch channel permissions"),
-      ),
+      message.command("permissions").description("Fetch channel permissions"),
+      "required",
     )
     .action((opts) => helpers.runMessageAction("permissions", opts));
 }

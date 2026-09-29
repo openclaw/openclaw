@@ -41,7 +41,7 @@ import type {
   SqliteReclamationWorkerRequest,
   SqliteReclamationWorkerCloseRequest,
   SqliteReclamationWorkerMessage,
-} from "./session-accessor.sqlite-reclamation-worker.js";
+} from "./session-accessor.sqlite-reclamation-worker.types.js";
 import { withWorkerWriteAdmission } from "./session-accessor.sqlite-worker-admission.runtime.js";
 import {
   runWithSqliteMutationWorkerCoordination,
@@ -402,6 +402,13 @@ export async function runReclamationWorkerPort(
                   clearNodeSqliteKyselyCacheForDatabase(database.db);
                 }
               },
+              request.type === "reclaim" && request.plan.kind === "maintenance-plan"
+                ? (protection) => {
+                    if (request.plan.kind === "maintenance-plan") {
+                      Object.assign(request.plan.input, protection);
+                    }
+                  }
+                : undefined,
             ).finally(() => maintenance?.release());
             return {
               type: "reclaimed",

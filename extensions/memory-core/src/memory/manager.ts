@@ -38,7 +38,6 @@ import {
   type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
 import {
-  isTransientMemoryIndexManagerPurpose,
   MemoryManagerRegistry,
   type MemoryManagerProviderFactory,
   normalizeMemoryIndexManagerPurpose,
@@ -54,6 +53,7 @@ import {
   collectMemoryStorageStatus,
   resolveStatusProviderInfo,
 } from "./manager-status-state.js";
+import type { MemoryEmbeddingBatchConfig } from "./manager-sync-base.js";
 import {
   MemoryTargetedSessionSyncQueue,
   hasTargetedSessionSyncParams,
@@ -91,13 +91,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   private closeTeardownComplete = false;
   protected providerUnavailableReason?: string;
   protected override providerLifecycle: MemoryProviderLifecycleState;
-  protected batch: {
-    enabled: boolean;
-    wait: boolean;
-    concurrency: number;
-    pollIntervalMs: number;
-    timeoutMs: number;
-  };
+  protected batch: MemoryEmbeddingBatchConfig;
   protected publishedDatabase: MemoryIndexDatabase;
   protected readonly cache: { enabled: boolean; maxEntries?: number };
   private syncing: Promise<void> | null = null;
@@ -187,7 +181,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
                       );
                 // Filesystem discovery is asynchronous and must not hold the
                 // agent database's write admission while attaching watchers.
-                await manager.awaitMemoryWatcherReady();
+                await manager.memoryWatcherReady;
                 if (params.inspectSources) {
                   await manager.inspectDiagnosticSourceState();
                 }
@@ -289,7 +283,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       this.indexIdentityDirty =
         this.indexIdentityState.status === "mismatched" ||
         (this.indexIdentityState.status === "missing" && this.sources.has("memory"));
-      const transient = isTransientMemoryIndexManagerPurpose(this.purpose);
+      const transient = this.purpose !== "default";
       const invalidatedSources = new Set(
         (
           this.db
@@ -669,7 +663,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     await this.awaitManagerIdle();
     this.closed = true;
     const pendingProviderInit = this.providerInitPromise;
-    const pendingFallbackInit = this.getPendingFallbackProviderInitialization();
+    const pendingFallbackInit = this.fallbackProviderInitPromise;
     await this.closeWatchResources();
     const reportPendingWorkError = (err: unknown) => {
       log.warn(`memory close: pending manager work failed: ${formatErrorMessage(err)}`);

@@ -310,7 +310,7 @@ function normalizeLmstudioConfiguredCompat(value: unknown): ModelDefinitionConfi
     : undefined;
 }
 
-function toFetchableLmstudioBaseUrl(value: string): string {
+export function toFetchableLmstudioBaseUrl(value: string): string {
   if (hasExplicitHttpScheme(value) || !isLikelyHostBaseUrl(value)) {
     return value;
   }

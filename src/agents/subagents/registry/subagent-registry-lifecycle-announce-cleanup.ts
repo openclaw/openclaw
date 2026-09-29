@@ -3,6 +3,7 @@ import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-requ
 import { defaultRuntime } from "../../../runtime.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
+import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
 import {
   ensureCompletionState,
   ensureDeliveryState,
@@ -47,7 +48,6 @@ import { finalizeResumedAnnounceGiveUp } from "./subagent-registry-lifecycle-giv
 import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
-import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 
 type RunSubagentAnnounceFlow =
   (typeof import("../announce/subagent-announce.js"))["runSubagentAnnounceFlow"];
@@ -113,7 +113,6 @@ const finalizeSubagentCleanup = async (
   cleanupGeneration: number,
   options?: {
     skipAnnounce?: boolean;
-    skipDeliveryStatus?: boolean;
     skipRequesterDelivery?: boolean;
   },
 ) => {
@@ -148,14 +147,16 @@ const finalizeSubagentCleanup = async (
     });
     // Hook loading is best-effort; durable delivery and cleanup must already
     // be terminal before plugin code can fail or stall.
-    if (!context.shouldSuppressSessionEffects(entry)) {
+    if (!(await context.shouldSuppressSessionEffects(entry))) {
       await emitCompletionEndedHookIfNeeded(
         params,
         entry,
         completionReason ?? resolveCleanupCompletionReason(entry),
         () =>
-          context.isEndedHookOwnerCurrent(runId, entry) &&
-          !context.shouldSuppressSessionEffects(entry),
+          context.isEndedHookOwnerCurrent(runId, entry) && context.sessionEffectsHostCurrent(entry),
+        async () =>
+          !(await context.shouldSuppressSessionEffects(entry)) &&
+          context.isEndedHookOwnerCurrent(runId, entry),
       );
     }
   };
@@ -311,7 +312,7 @@ export const startSubagentAnnounceCleanupFlow = (
     context.cleanupFailureCounts.delete(entry);
     return true;
   }
-  let suppressSessionEffects = context.shouldSuppressSessionEffects(entry);
+  let suppressSessionEffects = !context.sessionEffectsHostCurrent(entry);
   const cleanupGeneration = beginSubagentCleanup(context, runId);
   if (cleanupGeneration === undefined) {
     return false;
@@ -328,16 +329,6 @@ export const startSubagentAnnounceCleanupFlow = (
     });
     return true;
   }
-  const cleanupSessionEntry = suppressSessionEffects
-    ? undefined
-    : loadSubagentSessionEntry({ childSessionKey: entry.childSessionKey });
-  const cleanupSessionIdentity =
-    cleanupSessionEntry?.sessionId && cleanupSessionEntry.lifecycleRevision
-      ? {
-          sessionId: cleanupSessionEntry.sessionId,
-          lifecycleRevision: cleanupSessionEntry.lifecycleRevision,
-        }
-      : undefined;
   const suppressChildSessionEffects = () => {
     suppressSessionEffects = true;
     if (entry.execution.suppressSessionEffects !== true) {
@@ -356,12 +347,22 @@ export const startSubagentAnnounceCleanupFlow = (
     }
   };
   const childSessionEffectsAllowed = () => {
-    if (!suppressSessionEffects && context.shouldSuppressSessionEffects(entry)) {
+    if (!suppressSessionEffects && !context.sessionEffectsHostCurrent(entry)) {
       suppressChildSessionEffects();
     }
     return (
       !suppressSessionEffects && context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)
     );
+  };
+  const prepareChildSessionEffects = async () => {
+    const suppress = !suppressSessionEffects && (await context.shouldSuppressSessionEffects(entry));
+    if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+      return false;
+    }
+    if (suppress) {
+      suppressChildSessionEffects();
+    }
+    return childSessionEffectsAllowed();
   };
   if (entry.expectsCompletionMessage === false || skipRequesterDelivery) {
     runDetachedCleanupAttempt(context, {
@@ -376,12 +377,21 @@ export const startSubagentAnnounceCleanupFlow = (
           await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
           return;
         }
-        if (cleanup === "delete" && childSessionEffectsAllowed()) {
-          if (!cleanupSessionIdentity) {
+        if (cleanup === "delete" && (await prepareChildSessionEffects())) {
+          const cleanupSessionEntry = await loadSessionEntryByKey(entry.childSessionKey);
+          const cleanupSessionIdentity =
+            cleanupSessionEntry?.sessionId && cleanupSessionEntry.lifecycleRevision
+              ? {
+                  sessionId: cleanupSessionEntry.sessionId,
+                  lifecycleRevision: cleanupSessionEntry.lifecycleRevision,
+                }
+              : undefined;
+          const canDelete = await prepareChildSessionEffects();
+          if (canDelete && !cleanupSessionIdentity) {
             // Without both lifecycle identities, key-only deletion could remove
             // a successor that reused this child session after cleanup yielded.
             suppressChildSessionEffects();
-          } else {
+          } else if (canDelete && cleanupSessionIdentity) {
             // This durable boundary prevents a late yield from reviving a run
             // after deletion may already have reached the gateway.
             entry.deleteCleanupDispatchedAt ??= Date.now();
@@ -390,6 +400,7 @@ export const startSubagentAnnounceCleanupFlow = (
               callGateway: params.callGateway,
               gatewayBinding: { resolveGatewayContext: getGatewayContextResolver(entry) },
               isCurrent: childSessionEffectsAllowed,
+              prepareCurrent: prepareChildSessionEffects,
               childSessionKey: entry.childSessionKey,
               spawnMode: entry.spawnMode,
               expectedSessionId: cleanupSessionIdentity.sessionId,
@@ -415,7 +426,6 @@ export const startSubagentAnnounceCleanupFlow = (
         }
         await finalizeSubagentCleanup(context, runId, cleanup, "delivered", cleanupGeneration, {
           skipAnnounce: true,
-          skipDeliveryStatus: true,
           skipRequesterDelivery,
         });
       },
@@ -493,6 +503,7 @@ export const startSubagentAnnounceCleanupFlow = (
     wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
     suppressChildSessionEffects: suppressSessionEffects,
     isChildSessionEffectsAllowed: childSessionEffectsAllowed,
+    prepareChildSessionEffects,
     isCompletionDeliveryAllowed: () =>
       isSubagentCompletionDeliveryAllowed(context, entry, cleanupGeneration, committedDelivery),
     isCompletionOwnedByRequesterYield: () =>

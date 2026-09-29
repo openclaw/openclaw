@@ -30,7 +30,7 @@ async function mountComments(additional: ChatAttachment[] = []) {
       start: 0,
       end: 16,
     },
-    undefined,
+    {},
     0,
   )!;
   let attachments: ChatAttachment[] = [attachment, ...additional];
@@ -106,6 +106,47 @@ describe("comment actions outside the transcript", () => {
     expect(fixture.toast.querySelector("[role=status]")).toBeNull();
   });
 
+  it("keeps overflowing edits correctable and counts only the replacement toward the frame budget", async () => {
+    const file: ChatAttachment = {
+      id: "retained-file",
+      mimeType: "text/plain",
+      fileName: "notes.txt",
+      dataUrl: "data:text/plain;base64,bm90ZXM=",
+    };
+    const fixture = await mountComments([file]);
+    const originalPayload = getChatAttachmentDataUrl(fixture.attachment)!;
+    const originalBytes = Buffer.from(originalPayload.split(",")[1]!, "base64").byteLength;
+    fixture.controller.props = {
+      ...fixture.controller.props,
+      attachmentLimits: {
+        maxBytes: 10_000,
+        maxImageBytes: 10_000,
+        maxBatchBytes: originalBytes + 5,
+      },
+    };
+    await fixture.controller.updateComplete;
+    fixture.edit();
+    fixture.input()!.value = "Original comment!";
+    fixture.save().click();
+    await fixture.controller.updateComplete;
+    await fixture.toast.updateComplete;
+    expect(fixture.input()?.value).toBe("Original comment!");
+    expect(fixture.attachments()).toEqual([fixture.attachment, file]);
+    expect(getChatAttachmentDataUrl(fixture.attachment)).toBe(originalPayload);
+    expect(fixture.toast.textContent).toContain("Too large to send: selection-comment.txt");
+
+    fixture.input()!.value = "Replaced comment";
+    fixture.save().click();
+    await fixture.controller.updateComplete;
+    expect(fixture.input()).toBeNull();
+    expect(fixture.attachments()).toMatchObject([
+      { selectionAnnotation: { comment: "Replaced comment" } },
+      file,
+    ]);
+    expect(getChatAttachmentDataUrl(fixture.attachment)).toBeNull();
+    expect(getChatAttachmentDataUrl(file)).toBe(file.dataUrl);
+  });
+
   it("removes all current-session comments while retaining other attachments and their payloads", async () => {
     const createComment = (sessionKey: string) =>
       createChatSelectionAttachment(
@@ -116,7 +157,7 @@ describe("comment actions outside the transcript", () => {
           start: 0,
           end: 15,
         },
-        undefined,
+        {},
         0,
       )!;
     const second = createComment("agent:main:main");

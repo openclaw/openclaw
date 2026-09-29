@@ -6,11 +6,12 @@ type SlackInstallationKind = "workspace" | "enterprise" | "degraded";
 
 type SlackInstallationStateEntry = {
   kind: SlackInstallationKind;
+  teamId?: string;
   owner: symbol;
 };
 
 type SlackInstallationStateRegistration = {
-  update: (kind: SlackInstallationKind) => void;
+  update: (kind: SlackInstallationKind, teamId?: string) => void;
   release: () => void;
 };
 
@@ -22,14 +23,19 @@ const slackInstallationStates = resolveGlobalMap<string, SlackInstallationStateE
 export function registerSlackInstallationState(
   accountId: string,
   kind: SlackInstallationKind,
+  teamId?: string,
 ): SlackInstallationStateRegistration {
   const normalizedAccountId = normalizeAccountId(accountId);
   const owner = Symbol(`slack-installation:${normalizedAccountId}`);
-  slackInstallationStates.set(normalizedAccountId, { kind, owner });
+  slackInstallationStates.set(normalizedAccountId, { kind, teamId, owner });
   return {
-    update: (nextKind) => {
+    update: (nextKind, nextTeamId) => {
       if (slackInstallationStates.get(normalizedAccountId)?.owner === owner) {
-        slackInstallationStates.set(normalizedAccountId, { kind: nextKind, owner });
+        slackInstallationStates.set(normalizedAccountId, {
+          kind: nextKind,
+          teamId: nextTeamId,
+          owner,
+        });
       }
     },
     release: () => {
@@ -42,6 +48,11 @@ export function registerSlackInstallationState(
 
 export function getSlackInstallationKind(accountId: string): SlackInstallationKind | undefined {
   return slackInstallationStates.get(normalizeAccountId(accountId))?.kind;
+}
+
+export function getSlackInstallationTeamId(accountId: string): string | undefined {
+  const state = slackInstallationStates.get(normalizeAccountId(accountId));
+  return state?.kind === "workspace" ? state.teamId : undefined;
 }
 
 export function isSlackWorkspaceInstallation(accountId: string): boolean {

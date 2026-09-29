@@ -1,4 +1,4 @@
-import type { ChannelApprovalKind } from "../infra/approval-types.js";
+import { isPluginApprovalRequest, type ChannelApprovalKind } from "../infra/approval-types.js";
 // Approval delivery helpers format approval prompts and results for channel plugins.
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
@@ -63,7 +63,9 @@ type ApproverRestrictedNativeApprovalFlatParams = {
   /** Whether a sender can approve exec approvals for this account. */
   isExecAuthorizedSender: (params: ApprovalAdapterParams) => boolean;
   /** Optional plugin approval authorization hook; defaults to exec authorization. */
-  isPluginAuthorizedSender?: (params: ApprovalAdapterParams) => boolean;
+  isPluginAuthorizedSender?: (
+    params: ApprovalAdapterParams & { request?: PluginApprovalRequest },
+  ) => boolean;
   /** Whether native approval delivery is enabled for an account. */
   isNativeDeliveryEnabled: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
   /** Native delivery target preference for an account. */
@@ -298,16 +300,28 @@ export function createApproverRestrictedNativeApprovalCapability(
       accountId,
       senderId,
       approvalKind,
+      request,
     }: {
       cfg: OpenClawConfig;
       accountId?: string | null;
       senderId?: string | null;
       action: "approve";
       approvalKind: ChannelApprovalKind;
+      request?: NativeApprovalRequest;
     }) => {
+      const pluginRequest =
+        approvalKind === "plugin" && request && isPluginApprovalRequest(request)
+          ? request
+          : undefined;
       const authorized =
         approvalKind === "plugin"
-          ? pluginSenderAuth({ cfg, accountId, senderId })
+          ? (!request || pluginRequest !== undefined) &&
+            pluginSenderAuth({
+              cfg,
+              accountId,
+              senderId,
+              request: pluginRequest,
+            })
           : params.isExecAuthorizedSender({ cfg, accountId, senderId });
       return authorized
         ? { authorized: true }

@@ -91,6 +91,7 @@ function summarizeNodeEnvironment(
   const requiredNodeCommand =
     allowlist && liveNode
       ? resolveRequiredNodeCommandAuthority({
+          nodeId: node.nodeId,
           requiredCommands,
           declaredCommands: liveNode.declaredCommands,
           effectiveCommands: liveNode.commands,
