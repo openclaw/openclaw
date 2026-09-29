@@ -81,6 +81,7 @@ import type { TerminalSessionManager } from "../terminal/session-manager.js";
 import type {
   WorkerPlacementDiskSpaceReader,
   WorkerPlacementRunnerAvailabilityReader,
+  WorkerPlacementRuntimeInstallReader,
   WorkerSessionPlacementReader,
 } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRetirementService } from "../worker-environments/placement-store.js";
@@ -398,6 +399,8 @@ type GatewayResidentBridgeContext = {
   workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
   /** Process-current paired-device runner proof for active placement projection. */
   workerPlacementRunnerAvailabilityReader?: WorkerPlacementRunnerAvailabilityReader;
+  /** Process-local installation progress for the placement's session-host node. */
+  workerPlacementRuntimeInstallReader?: WorkerPlacementRuntimeInstallReader;
   /** Use-time approval authority validation over the live run/worker owners. */
   validateAgentRuntimeApprovalAuthority?: AgentRuntimeApprovalAuthorityValidator;
   /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */

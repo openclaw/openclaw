@@ -198,7 +198,7 @@ export function registerDirectSessionCleanupAuthorityTests({
       entry,
       emitSubagentProgressEndedForRun: emitProgress,
     });
-    const isRecoveryCurrent = vi.fn(async () => false);
+    const prepareRecoveryCurrent = vi.fn(async () => false);
     const assertRetired = () => {
       throw new Error("Recovery no longer owns the child session");
     };
@@ -209,14 +209,17 @@ export function registerDirectSessionCleanupAuthorityTests({
       reason: SUBAGENT_ENDED_REASON_ERROR,
       triggerCleanup: false,
       recoverInterrupted: true,
-      isRecoveryCurrent,
+      recoveryCurrent: {
+        prepare: prepareRecoveryCurrent,
+        isHostCurrent: () => true,
+      },
       sessionEffects: {
         isCurrent: async () => false,
         assertHostCurrent: assertRetired,
         assertCurrentEntry: assertRetired,
       },
     });
-    expect(isRecoveryCurrent).toHaveBeenCalledOnce();
+    expect(prepareRecoveryCurrent).toHaveBeenCalledOnce();
     expect(entry.execution.status).toBe("running");
     expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
     expect(emitProgress).not.toHaveBeenCalled();

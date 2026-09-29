@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { createServer, type ServerResponse } from "node:http";
 import { createLocalJWKSet, decodeJwt, jwtVerify } from "jose";
 import type { ProviderAuthContext, ProviderAuthResult } from "openclaw/plugin-sdk/plugin-entry";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth-result";
+import { startProviderOAuthLoopbackCallbackServer } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   generateOAuthState,
   generatePKCE,
@@ -13,13 +13,16 @@ import {
   withOAuthLoginAbort,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OPENAI_DEFAULT_MODEL } from "./default-models.js";
+import {
+  createOpenAIAuthorizationCodeForm,
+  withOpenAIOAuthResponse,
+} from "./openai-oauth-http.runtime.js";
 import {
   IDENTITY_AUTH_FLOW,
   isSIWCAuthFlow,
@@ -40,60 +43,60 @@ type LoginOwner = Pick<ProviderAuthContext, "signal" | "assertCurrent">;
 async function requestJson(url: string, owner: LoginOwner, body?: URLSearchParams) {
   owner.signal?.throwIfAborted();
   owner.assertCurrent?.();
-  const { response, release } = await fetchWithSsrFGuard({
-    url,
-    policy: { hostnameAllowlist: ["auth.openai.com"] },
-    mode: "trusted_env_proxy",
-    requireHttps: true,
-    maxRedirects: 0,
-    capture: false,
-    timeoutMs: 30_000,
-    signal: owner.signal,
-    beforeRequest: owner.assertCurrent,
-    auditContext: "openai-token-sharing-oauth",
-    ...(body
-      ? {
-          init: {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body,
+  return await withOpenAIOAuthResponse(
+    {
+      url,
+      policy: { hostnameAllowlist: ["auth.openai.com"] },
+      mode: "trusted_env_proxy",
+      requireHttps: true,
+      maxRedirects: 0,
+      capture: false,
+      timeoutMs: 30_000,
+      signal: owner.signal,
+      beforeRequest: owner.assertCurrent,
+      auditContext: "openai-token-sharing-oauth",
+      ...(body
+        ? {
+            init: {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body,
+            },
+          }
+        : {}),
+    },
+    async (response) => {
+      const bytes = await readResponseWithLimit(response, MAX_RESPONSE_BYTES);
+      owner.signal?.throwIfAborted();
+      owner.assertCurrent?.();
+      let json: Record<string, unknown> | undefined;
+      try {
+        json = asOptionalRecord(JSON.parse(Buffer.from(bytes).toString("utf8")));
+      } catch {
+        // Provider bodies can contain credentials: report bounded status, never the body.
+      }
+      if (!response.ok) {
+        const invalidGrant = json?.error === "invalid_grant";
+        throw Object.assign(
+          new Error(
+            invalidGrant
+              ? "ChatGPT connection expired or was revoked. Sign in again to reconnect."
+              : `ChatGPT authentication request failed (HTTP ${response.status}). Retry sign-in later.`,
+          ),
+          {
+            oauthRefreshFailure: {
+              status: response.status,
+              ...(invalidGrant ? { reason: "invalid_grant", errorType: "invalid_grant" } : {}),
+            },
           },
-        }
-      : {}),
-  });
-  try {
-    const bytes = await readResponseWithLimit(response, MAX_RESPONSE_BYTES);
-    owner.signal?.throwIfAborted();
-    owner.assertCurrent?.();
-    let json: Record<string, unknown> | undefined;
-    try {
-      json = asOptionalRecord(JSON.parse(Buffer.from(bytes).toString("utf8")));
-    } catch {
-      // Provider bodies can contain credentials: report bounded status, never the body.
-    }
-    if (!response.ok) {
-      const invalidGrant = json?.error === "invalid_grant";
-      throw Object.assign(
-        new Error(
-          invalidGrant
-            ? "ChatGPT connection expired or was revoked. Sign in again to reconnect."
-            : `ChatGPT authentication request failed (HTTP ${response.status}). Retry sign-in later.`,
-        ),
-        {
-          oauthRefreshFailure: {
-            status: response.status,
-            ...(invalidGrant ? { reason: "invalid_grant", errorType: "invalid_grant" } : {}),
-          },
-        },
-      );
-    }
-    if (!json) {
-      throw new Error("ChatGPT authentication returned an invalid response.");
-    }
-    return json;
-  } finally {
-    await release();
-  }
+        );
+      }
+      if (!json) {
+        throw new Error("ChatGPT authentication returned an invalid response.");
+      }
+      return json;
+    },
+  );
 }
 
 async function verifyIdentity(
@@ -298,87 +301,15 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
     nonce,
     ...(registering ? { agent_name_hint: "OpenClaw" } : {}),
   }).toString();
-  let resolveCode!: (authorization: { code: string; clientId: string }) => void;
-  let rejectCode!: (error: Error) => void;
-  let callbackConsumed = false;
-  let browserResponse: ServerResponse | undefined;
-  const callback = new Promise<{ code: string; clientId: string }>((resolve, reject) => {
-    resolveCode = resolve;
-    rejectCode = reject;
-  });
-  // Register a rejection handler before browser I/O, which can outlive the callback.
-  void callback.catch(() => undefined);
-  const server = createServer((request, response) => {
-    response.setHeader("Content-Type", "text/html; charset=utf-8");
-    response.setHeader("Connection", "close");
-    response.setHeader("Cache-Control", "no-store");
-    response.setHeader("Referrer-Policy", "no-referrer");
-    let callbackUrl: URL;
-    try {
-      callbackUrl = new URL(request.url ?? "/", TOKEN_SHARING_REDIRECT_URI);
-    } catch {
-      response.writeHead(400).end(oauthErrorHtml("Invalid sign-in callback."));
-      return;
-    }
-    if (
-      request.method !== "GET" ||
-      callbackUrl.pathname !== "/auth/callback" ||
-      callbackUrl.searchParams.getAll("state").length !== 1 ||
-      callbackUrl.searchParams.get("state") !== state ||
-      callbackConsumed
-    ) {
-      response
-        .writeHead(400)
-        .end(oauthErrorHtml("Invalid or expired sign-in callback. Return to OpenClaw to retry."));
-      return;
-    }
-    callbackConsumed = true;
-    try {
-      owner.assertCurrent?.();
-      owner.signal.throwIfAborted();
-      if (callbackUrl.searchParams.has("error")) {
-        throw new Error(
-          callbackUrl.searchParams.get("error") === "access_denied"
-            ? "ChatGPT authorization was declined. Start sign-in again when ready."
-            : "ChatGPT authorization failed. Start sign-in again.",
-        );
-      }
-      const code = callbackUrl.searchParams.get("code");
-      if (!code || callbackUrl.searchParams.getAll("code").length !== 1) {
-        throw new Error(
-          "ChatGPT callback did not contain an authorization code. Start sign-in again.",
-        );
-      }
-      const returnedIds = callbackUrl.searchParams.getAll("client_id");
-      const returnedId = returnedIds[0];
-      // Registration changes the client ID mid-flow. Ordinary reauthorization
-      // may omit it, but must never replace the selected registration.
-      if (
-        returnedIds.length > 1 ||
-        (registering
-          ? !returnedId || !/^oaiapp_[A-Za-z0-9_-]+$/u.test(returnedId)
-          : returnedId !== undefined && returnedId !== clientId)
-      ) {
-        throw new Error("ChatGPT returned an invalid OAuth client ID. Start sign-in again.");
-      }
-      browserResponse = response;
-      resolveCode({ code, clientId: returnedId ?? clientId });
-    } catch (error) {
-      response
-        .writeHead(400)
-        .end(oauthErrorHtml("Authorization did not complete. Return to OpenClaw to retry."));
-      rejectCode(error instanceof Error ? error : new Error("ChatGPT authorization failed."));
-    }
+  const callback = await startProviderOAuthLoopbackCallbackServer({
+    redirectUrl: TOKEN_SHARING_REDIRECT_URI,
+    expectedState: state,
+    signal: owner.signal,
+    // SSH forwards target IPv4 loopback; keep the registered localhost redirect unchanged.
+    bindOnlyHostname: "127.0.0.1",
+    deferResponse: true,
   });
   try {
-    await withOAuthLoginAbort(
-      new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        // SSH forwards target IPv4 loopback; keep the registered localhost redirect unchanged.
-        server.listen(8080, "127.0.0.1", resolve);
-      }),
-      owner.signal,
-    );
     owner.assertCurrent?.();
     // Gateway wizards attach the browser URL to the next note they publish.
     await withOAuthLoginAbort(ctx.openUrl(url.toString()), owner.signal);
@@ -407,22 +338,42 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
     );
     owner.assertCurrent?.();
     owner.signal.throwIfAborted();
-    const authorization = await withOAuthLoginAbort(callback, owner.signal);
+    const authorization = await withOAuthLoginAbort(callback.waitForCallback(), owner.signal);
+    owner.assertCurrent?.();
+    owner.signal.throwIfAborted();
+    if (authorization.type === "oauth_error") {
+      throw new Error(
+        authorization.error === "access_denied"
+          ? "ChatGPT authorization was declined. Start sign-in again when ready."
+          : "ChatGPT authorization failed. Start sign-in again.",
+      );
+    }
+    const returnedIds = authorization.parameters.getAll("client_id");
+    const returnedId = returnedIds[0];
+    // Registration changes the client ID mid-flow. Reauthorization cannot replace it.
+    if (
+      returnedIds.length > 1 ||
+      (registering
+        ? !returnedId || !/^oaiapp_[A-Za-z0-9_-]+$/u.test(returnedId)
+        : returnedId !== undefined && returnedId !== clientId)
+    ) {
+      throw new Error("ChatGPT returned an invalid OAuth client ID. Start sign-in again.");
+    }
+    const authorizedClientId = returnedId ?? clientId;
     const json = await requestJson(
       TOKEN_ENDPOINT,
       owner,
-      new URLSearchParams({
-        grant_type: "authorization_code",
-        client_id: authorization.clientId,
+      createOpenAIAuthorizationCodeForm({
+        clientId: authorizedClientId,
         code: authorization.code,
-        code_verifier: verifier,
-        redirect_uri: TOKEN_SHARING_REDIRECT_URI,
+        verifier,
+        redirectUri: TOKEN_SHARING_REDIRECT_URI,
         resource: TOKEN_SHARING_RESOURCE,
       }),
     );
     const { credential, subject } = await readCredential({
       json,
-      clientId: authorization.clientId,
+      clientId: authorizedClientId,
       nonce,
       owner,
     });
@@ -443,15 +394,17 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
     }
     const profileName = credential.accountId.slice(0, 24);
     const sharing = credential.authFlow === TOKEN_SHARING_AUTH_FLOW;
-    browserResponse
-      ?.writeHead(200)
-      .end(
-        oauthSuccessHtml(
-          sharing
-            ? "ChatGPT token sharing is connected. You can return to OpenClaw."
-            : "ChatGPT sign-in succeeded. Token sharing is disabled; return to OpenClaw to choose inference access.",
-        ),
-      );
+    await callback.complete({
+      status: 200,
+      contentType: "text/html; charset=utf-8",
+      body: oauthSuccessHtml(
+        sharing
+          ? "ChatGPT token sharing is connected. You can return to OpenClaw."
+          : "ChatGPT sign-in succeeded. Token sharing is disabled; return to OpenClaw to choose inference access.",
+      ),
+    });
+    owner.signal.throwIfAborted();
+    owner.assertCurrent?.();
     const result = buildOauthProviderAuthResult({
       providerId: "openai",
       profilePrefix: "openai:token-sharing",
@@ -479,16 +432,13 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
     }
     return result;
   } catch (error) {
-    browserResponse
-      ?.writeHead(400)
-      .end(oauthErrorHtml("Sign-in did not complete. Return to OpenClaw for details and retry."));
+    await callback.complete({
+      status: 400,
+      contentType: "text/html; charset=utf-8",
+      body: oauthErrorHtml("Sign-in did not complete. Return to OpenClaw for details and retry."),
+    });
     throw error;
   } finally {
-    server.close();
-    if (browserResponse && !browserResponse.writableFinished) {
-      browserResponse.once("finish", () => server.closeAllConnections());
-    } else {
-      server.closeAllConnections();
-    }
+    await callback.close();
   }
 }

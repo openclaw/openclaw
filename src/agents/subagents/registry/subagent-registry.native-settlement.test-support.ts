@@ -1,9 +1,7 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import {
-  getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
@@ -246,79 +244,4 @@ export function registerForcedCollectorCompletionSettlementTests({
       expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
     },
   );
-}
-
-export function registerSupersededTimingOwnershipTest({
-  getRegistry,
-  mocks,
-  mockPendingAgentWait,
-  findRequesterRun,
-}: {
-  getRegistry: () => SubagentRegistryHarness;
-  mocks: Pick<
-    ReturnType<typeof createSubagentRegistryMockState>,
-    "entries" | "applySessionEntryExactReplacements"
-  >;
-  mockPendingAgentWait: () => void;
-  findRequesterRun: (runId: string) => SubagentRunRecord | undefined;
-}): void {
-  it("does not restore a superseded lifecycle after a successor is released", async () => {
-    const mod = getRegistry();
-    const childSessionKey = "agent:main:subagent:released-timing-owner";
-    mockPendingAgentWait();
-    mocks.entries = {
-      [childSessionKey]: { sessionId: "sess-released-timing-owner", updatedAt: 1 },
-    };
-    const originalEntry = structuredClone(mocks.entries[childSessionKey]);
-    const replaceSessionEntries = expectDefined(
-      mocks.applySessionEntryExactReplacements.getMockImplementation(),
-      "default session entry replacement",
-    );
-    let releaseTimingWrite: (() => void) | undefined;
-    let timingWriteStarted: (() => void) | undefined;
-    const timingWriteStartedPromise = new Promise<void>((resolve) => {
-      timingWriteStarted = resolve;
-    });
-    const timingWriteFinished = new Promise<void>((resolveFinished) => {
-      mocks.applySessionEntryExactReplacements.mockImplementationOnce(async (params) => {
-        timingWriteStarted?.();
-        await new Promise<void>((resolve) => {
-          releaseTimingWrite = resolve;
-        });
-        try {
-          return await replaceSessionEntries(params);
-        } finally {
-          resolveFinished();
-        }
-      });
-    });
-
-    await mod.registerSubagentRun({
-      runId: "run-released-timing-old",
-      childSessionKey,
-      task: "old timing owner",
-    });
-    expect(
-      mod.markSubagentRunTerminated({
-        runId: "run-released-timing-old",
-        reason: "manual kill",
-      }),
-    ).toBe(1);
-    await timingWriteStartedPromise;
-    expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
-
-    await mod.registerSubagentRun({
-      runId: "run-released-timing-new",
-      childSessionKey,
-      task: "new timing owner",
-    });
-    mod.releaseSubagentRun("run-released-timing-new");
-    releaseTimingWrite?.();
-    await timingWriteFinished;
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-
-    const oldRun = findRequesterRun("run-released-timing-old");
-    expect(oldRun?.killReconciliation?.supersededAt).toBeTypeOf("number");
-    expect(mocks.entries[childSessionKey]).toEqual(originalEntry);
-  });
 }

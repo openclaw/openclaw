@@ -84,20 +84,16 @@ describe("chat selection popup", () => {
     buttons[actionIndex]?.click();
     const [called, untouched] =
       actionIndex === 0 ? [onAddToChatSpy, onAskSideChatSpy] : [onAskSideChatSpy, onAddToChatSpy];
-    if (actionIndex === 0) {
-      expect(called).toHaveBeenCalledWith(
-        {
-          text: "Let's Encrypt cert",
-          start: 0,
-          end: 18,
-          messageId: "assistant-1",
-          entryId: "entry-1",
-        },
-        expect.objectContaining({ top: 100, left: 100 }),
-      );
-    } else {
-      expect(called).toHaveBeenCalledWith("Let's Encrypt cert");
-    }
+    expect(called).toHaveBeenCalledWith(
+      {
+        text: "Let's Encrypt cert",
+        start: 0,
+        end: 18,
+        messageId: "assistant-1",
+        entryId: "entry-1",
+      },
+      expect.objectContaining({ top: 100, left: 100 }),
+    );
     expect(untouched).not.toHaveBeenCalled();
     expect(window.getSelection()?.isCollapsed).toBe(true);
     expect(document.body.querySelector(".chat-selection-popup")).toBeNull();
@@ -173,7 +169,10 @@ describe("chat selection popup", () => {
     (document.body.querySelector(".chat-selection-popup button") as HTMLButtonElement).click();
 
     expect(firstAskSideChat).not.toHaveBeenCalled();
-    expect(secondAskSideChat).toHaveBeenCalledWith("replacement");
+    expect(secondAskSideChat).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "replacement" }),
+      expect.anything(),
+    );
   });
 
   it("dismisses when the selection collapses", () => {

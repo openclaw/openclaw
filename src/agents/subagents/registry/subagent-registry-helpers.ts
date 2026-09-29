@@ -15,9 +15,11 @@ import type {
   SessionEntryCurrentCheck,
   SessionEntryCurrentFacts,
 } from "../../../config/sessions/session-entry-current.types.js";
-import type { InternalSessionEntry } from "../../../config/sessions/types.js";
+import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import type { InternalSessionEntry, SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { computeBackoff } from "../../../infra/backoff.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
   recordGatewaySessionRunFailure,
@@ -104,6 +106,11 @@ export function logAnnounceGiveUp(
 export async function persistSubagentSessionTiming(
   entry: SubagentRunRecord,
   options?: {
+    session?: {
+      storePath: string;
+      entry?: SessionEntry;
+      assertCurrent: () => void;
+    };
     isCurrentGeneration?: () => boolean;
     assertCommitAllowed?: () => void;
     assertCurrentEntry?: (entry: SessionEntryCurrentFacts | undefined) => void;
@@ -117,7 +124,17 @@ export async function persistSubagentSessionTiming(
 
   const cfg = getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(childSessionKey);
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  const storePath =
+    options?.sessionEntryCurrent?.source.path ??
+    options?.session?.storePath ??
+    resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  const refused = new Error("Subagent timing owner changed before commit");
+  const assertGenerationCurrent = () => {
+    if (options?.isCurrentGeneration?.() === false) {
+      throw refused;
+    }
+    options?.assertCommitAllowed?.();
+  };
   const startedAt = getSubagentSessionStartedAt(entry);
   const endedAt =
     typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt)
@@ -184,61 +201,102 @@ export async function persistSubagentSessionTiming(
     }
     return next;
   };
-  let selected: InternalSessionEntry | undefined;
-  let suppressed = false;
-  const assertCurrent = () => {
-    if (options?.isCurrentGeneration?.() === false) {
-      suppressed = true;
-      throw new Error("Subagent timing generation changed before persistence");
-    }
-    options?.assertCommitAllowed?.();
-    if (selected) {
-      try {
-        options?.assertCurrentEntry?.(selected);
-      } catch (error) {
-        suppressed = true;
+  const persist = async (expected: SessionEntry | undefined, assertSessionCurrent?: () => void) => {
+    let selected: InternalSessionEntry | undefined;
+    let suppressed = false;
+    const assertCurrent = () => {
+      assertGenerationCurrent();
+      assertSessionCurrent?.();
+      if (selected) {
+        try {
+          if (options?.sessionEntryCurrent) {
+            options.sessionEntryCurrent.assertCurrent(selected);
+          } else {
+            options?.assertCurrentEntry?.(selected);
+          }
+        } catch (error) {
+          suppressed = true;
+          throw error;
+        }
+      }
+    };
+    const persisted = await applySessionEntryExactReplacements<InternalSessionEntry | undefined>({
+      agentId,
+      storePath,
+      sessionKeys: [childSessionKey],
+      activeSessionKey: childSessionKey,
+      requireWriteSuccess: true,
+      skipMaintenance: true,
+      assertCommitAllowed: assertCurrent,
+      update: ([row]) => {
+        if (
+          !row ||
+          options?.isCurrentGeneration?.() === false ||
+          (expected &&
+            (row.entry.sessionId !== expected.sessionId ||
+              row.entry.lifecycleRevision !== expected.lifecycleRevision))
+        ) {
+          return { result: undefined };
+        }
+        selected = row.entry;
+        assertCurrent();
+        const next = update(selected);
+        return {
+          result: next ?? selected,
+          ...(next ? { replacements: [{ sessionKey: row.sessionKey, entry: next }] } : {}),
+        };
+      },
+    }).catch((error: unknown) => {
+      if (hasSqliteWorkerOutcomeUnknown(error) || !suppressed) {
         throw error;
       }
+      return undefined;
+    });
+    if (persisted && lastRunError) {
+      await recordGatewaySessionRunFailure({
+        target: {
+          agentId,
+          storePath,
+          sessionKey: childSessionKey,
+          sessionId: persisted.sessionId,
+          expectedLifecycleRevision: persisted.lifecycleRevision,
+        },
+        runId: entry.runId,
+        error: entry.execution.outcome?.error,
+        assertCommitAllowed: assertCurrent,
+        sessionEntryCurrent: options?.sessionEntryCurrent,
+      });
     }
   };
-  const persisted = await applySessionEntryExactReplacements<InternalSessionEntry | undefined>({
-    agentId,
-    storePath: options?.sessionEntryCurrent?.source.path ?? storePath,
-    sessionKeys: [childSessionKey],
-    activeSessionKey: childSessionKey,
-    assertCommitAllowed: assertCurrent,
-    update: ([row]) => {
-      if (!row || options?.isCurrentGeneration?.() === false) {
-        return { result: undefined };
+  try {
+    if (options?.session) {
+      options.session.assertCurrent();
+      if (options.session.entry) {
+        await persist(options.session.entry, options.session.assertCurrent);
       }
-      selected = row.entry;
-      assertCurrent();
-      const next = update(selected);
-      return {
-        result: next ?? selected,
-        ...(next ? { replacements: [{ sessionKey: row.sessionKey, entry: next }] } : {}),
-      };
-    },
-  }).catch((error: unknown) => {
-    if (!suppressed) {
+      return;
+    }
+    if (options?.sessionEntryCurrent) {
+      await persist(undefined);
+      return;
+    }
+    await withSessionEntryReadOnlyInWorker(
+      { storePath, sessionKey: childSessionKey, agentId },
+      assertGenerationCurrent,
+      async (read, owner) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        if (read.value) {
+          await persist(read.value, owner.assertCurrent);
+        }
+      },
+    );
+  } catch (error) {
+    // A duplicate completion can retire this generation while its reader drains.
+    if (error !== refused) {
       throw error;
     }
-    return undefined;
-  });
-  if (persisted && lastRunError) {
-    await recordGatewaySessionRunFailure({
-      target: {
-        agentId,
-        storePath,
-        sessionKey: childSessionKey,
-        sessionId: persisted.sessionId,
-        expectedLifecycleRevision: persisted.lifecycleRevision,
-      },
-      runId: entry.runId,
-      error: entry.execution.outcome?.error,
-      assertCommitAllowed: options?.assertCommitAllowed,
-      sessionEntryCurrent: options?.sessionEntryCurrent,
-    });
   }
 }
 

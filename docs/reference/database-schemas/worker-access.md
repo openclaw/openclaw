@@ -48,6 +48,18 @@ Writes, schema transitions, lease grants, and all generic SQLite broker jobs
 retain immediate fresh ownership verification, including their transaction and
 commit grants. Schemas, retained data, and update behavior are unchanged.
 
+Legacy session-entry patches yield while waiting for a competing SQLite writer.
+Each `BEGIN IMMEDIATE` attempt uses a zero busy timeout and can retry within the
+connection's existing admission budget. Once admitted, the synchronous callback
+and commit retain the connection's original busy timeout: rollback-journal
+readers can temporarily block commit even after writer admission succeeds.
+The session writer queue retains FIFO order, the captured connection stays
+retained, and each attempt rechecks its owner. The admitted transaction revalidates
+the prepared rows and caller authority before mutation. Its callback and committed
+publications never replay. Entry reads and transaction bodies still execute on
+the calling thread; this bounded cutover removes native writer-admission waits without
+changing schemas, durability, or update behavior.
+
 Channel setup awaits a fresh policy read after the agent-selection prompt.
 Deferred plugin migration rows are read by the shared-state worker, and setup
 rechecks its config owner after the read before using the selected agent. Each

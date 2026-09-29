@@ -322,12 +322,14 @@ describe("device worker placement dispatch", () => {
       node: deviceProof(0, ["system.run"]),
       deniedByGateway: false,
       expectedProvisionCalls: 1,
+      expectedMessage: "is not advertised by node device-1; enable the plugin or node capability",
     },
     {
       name: "required node command denied by Gateway policy",
       node: deviceProof(0),
       deniedByGateway: true,
       expectedProvisionCalls: 0,
+      expectedMessage: "codex.exec-server.stdio.v1",
     },
   ])("rejects a non-device cloud node with an $name before workspace sync", async (scenario) => {
     const harness = createHarness(database, placementStore);
@@ -340,7 +342,7 @@ describe("device worker placement dispatch", () => {
     }
     const request = prepareCloudNodeDispatch(harness);
 
-    await expect(harness.service.dispatch(request)).rejects.toThrow("codex.exec-server.stdio.v1");
+    await expect(harness.service.dispatch(request)).rejects.toThrow(scenario.expectedMessage);
 
     expect(harness.environments.createWithRequest).toHaveBeenCalledTimes(
       scenario.expectedProvisionCalls,
@@ -642,14 +644,14 @@ describe("device worker placement dispatch", () => {
       executionMode: "remote-exec" as const,
       node: deviceProof(0, ["system.run"]),
       providerId: "device",
-      expectedMessage: "not enabled or approved",
+      expectedMessage: "not advertised by node",
     },
     {
       name: "non-device remote-exec cloud node missing its required command",
       executionMode: "remote-exec" as const,
       node: deviceProof(0, ["system.run"]),
       providerId: "generic-cloud-node",
-      expectedMessage: "not enabled or approved",
+      expectedMessage: "not advertised by node",
     },
     {
       name: "saturated non-device worker-turn cloud node",

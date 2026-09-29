@@ -22,6 +22,11 @@ export type SubagentSessionEffects = {
   nativeCheck?: SessionEntryCurrentCheck;
 };
 
+export type SubagentRecoveryCurrent = {
+  prepare(): Promise<boolean>;
+  isHostCurrent(): boolean;
+};
+
 export type SubagentCompletionRequest = {
   runId: string;
   /** Exact in-process owner required after acquiring the terminal completion lock. */
@@ -35,8 +40,8 @@ export type SubagentCompletionRequest = {
   startedAt?: number;
   suppressSessionEffects?: boolean;
   recoverInterrupted?: true;
-  /** Revalidates orphan ownership after waiting for the terminal completion lock. */
-  isRecoveryCurrent?: () => boolean | Promise<boolean>;
+  /** Prepare database currency asynchronously; publication rechecks live host authority. */
+  recoveryCurrent?: SubagentRecoveryCurrent;
   /** Child effects may be fenced while the recorded result still owes requester delivery. */
   sessionEffects?: SubagentSessionEffects;
   completionSnapshot?: { resultText: string | null; capturedAt: number };

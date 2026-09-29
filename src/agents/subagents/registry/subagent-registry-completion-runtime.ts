@@ -1,9 +1,12 @@
+import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import {
   isGatewayRestartDraining,
   runWithGatewayDetachedWorkContinuation,
 } from "../../../process/gateway-work-admission.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
+import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
@@ -36,6 +39,9 @@ export function createSubagentRegistryCompletionRuntime(config: {
         await completeSubagentRun(params);
         return;
       } catch (error) {
+        if (hasSqliteWorkerOutcomeUnknown(error)) {
+          throw error;
+        }
         const current = runs.get(params.runId);
         warn(message, {
           source,
@@ -105,13 +111,26 @@ export function createSubagentRegistryCompletionRuntime(config: {
     }
     const generation = entry.generation;
     const runId = params.runId;
+    const stateContext = captureOpenClawStateWorkerContext();
+    const isHostCurrent = () => {
+      try {
+        assertSubagentRegistryWriteSourceCurrent(stateContext);
+      } catch {
+        return false;
+      }
+      return (
+        runs.get(runId) === entry &&
+        entry.generation === generation &&
+        params.recoveryCurrent?.isHostCurrent() !== false
+      );
+    };
     const isCurrent = async () =>
-      runs.get(runId) === entry &&
-      entry.generation === generation &&
-      (await params.isRecoveryCurrent?.()) !== false &&
-      runs.get(runId) === entry &&
-      entry.generation === generation;
-    const ownedParams = { ...params, expectedEntry: entry, isRecoveryCurrent: isCurrent };
+      isHostCurrent() && (await params.recoveryCurrent?.prepare()) !== false && isHostCurrent();
+    const ownedParams = {
+      ...params,
+      expectedEntry: entry,
+      recoveryCurrent: { prepare: isCurrent, isHostCurrent },
+    };
     // Each controller attempt owns its terminal transition, while this outer
     // lease outlives the launch scope and spans retries and fallback cleanup.
     try {
@@ -119,6 +138,9 @@ export function createSubagentRegistryCompletionRuntime(config: {
         await completeSubagentRunWithRecoveryAttempt(ownedParams, source, isCurrent);
       }, "subagents:completion");
     } catch (error) {
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        throw error;
+      }
       if (!(await isCurrent())) {
         return;
       }
@@ -163,7 +185,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
   async function finalizeInterruptedSubagentRun(params: {
     runId: string;
     expectedEntry?: SubagentRunRecord;
-    isRecoveryCurrent?: SubagentCompletionRequest["isRecoveryCurrent"];
+    recoveryCurrent?: SubagentCompletionRequest["recoveryCurrent"];
     sessionEffects?: SubagentCompletionRequest["sessionEffects"];
     error: string;
     endedAt?: number;
@@ -183,7 +205,8 @@ export function createSubagentRegistryCompletionRuntime(config: {
     if (
       !entry ||
       (params.expectedEntry && entry !== params.expectedEntry) ||
-      (params.isRecoveryCurrent && !(await params.isRecoveryCurrent())) ||
+      (params.recoveryCurrent && !(await params.recoveryCurrent.prepare())) ||
+      params.recoveryCurrent?.isHostCurrent() === false ||
       runs.get(runId) !== entry ||
       entry.generation !== generation
     ) {
@@ -209,7 +232,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,
       recoverInterrupted: true,
-      isRecoveryCurrent: params.isRecoveryCurrent,
+      recoveryCurrent: params.recoveryCurrent,
       sessionEffects: params.sessionEffects,
       suppressSessionEffects: params.suppressSessionEffects,
     };

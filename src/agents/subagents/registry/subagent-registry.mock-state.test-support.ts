@@ -9,6 +9,7 @@ import type {
 import type { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { captureSessionEntryCurrentRead } from "../../../config/sessions/session-entry-current-runtime.js";
 import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
+import type { SessionEntryReadWorkerOwner } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
@@ -68,7 +69,7 @@ export function createSubagentRegistryMockState() {
       ): Promise<T> => {
         const entries = (params.sessionKeys ?? Object.keys(mocks.entries)).flatMap((sessionKey) => {
           const entry = mocks.entries[sessionKey];
-          return entry ? [{ sessionKey, entry: { ...entry } }] : [];
+          return entry ? [{ sessionKey, entry: structuredClone(entry) }] : [];
         });
         const selectedKeys = new Set(entries.map(({ sessionKey }) => sessionKey));
         const operation = await params.update(entries);
@@ -180,7 +181,7 @@ export function createSubagentRegistryMockState() {
       assertCurrent: () => void,
       consume: (
         read: Result<SessionEntry | undefined, unknown>,
-        owner: Parameters<typeof captureSessionEntryCurrentRead>[1],
+        owner: SessionEntryReadWorkerOwner,
       ) => Promise<T>,
     ): Promise<T> => {
       assertCurrent();

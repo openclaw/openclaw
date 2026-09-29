@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { ok } from "@openclaw/normalization-core/result";
 import { readBoardSessionKeys } from "../../boards/sqlite-board-store.kernel.js";
 import {
   executeSqliteQuerySync,
@@ -21,6 +22,7 @@ import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
 import { readSelectedSessionEntriesInDatabase } from "./session-accessor.sqlite-entry-list.read.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import { readSessionEntryByIdInDatabase } from "./session-accessor.sqlite-exact-read.js";
 import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
 import {
   readLatestAssistantTextFromDatabase,
@@ -220,14 +222,22 @@ export function readExactSessionEntriesWithLifecycle(
                   replacement: { ...replacement, databaseIdentity: identity },
                 };
               }
-              const selected = expectDefined(
-                readExactSessionEntryCandidatesInDatabase(
-                  database,
-                  [request.sessionKeys],
-                  request.projection === "sharing" ? "list" : "full",
-                )[0],
-                "exact session read result",
-              );
+              const selectedById = request.selection
+                ? readSessionEntryByIdInDatabase(database, {
+                    sessionId: request.selection.sessionId,
+                    projection: "list",
+                  })
+                : undefined;
+              const selected = request.selection
+                ? ok(selectedById ? [selectedById] : [])
+                : expectDefined(
+                    readExactSessionEntryCandidatesInDatabase(
+                      database,
+                      [request.sessionKeys],
+                      request.projection === "sharing" ? "list" : "full",
+                    )[0],
+                    "exact session read result",
+                  );
               if (!selected.ok) {
                 throw selected.error;
               }
@@ -237,7 +247,9 @@ export function readExactSessionEntriesWithLifecycle(
                   throw new Error("Private session facts require their process-held owner");
                 }
                 const presentKeys = new Set(selected.value.map(({ sessionKey }) => sessionKey));
-                const missingKeys = request.sessionKeys.filter((key) => !presentKeys.has(key));
+                const missingKeys = (request.sessionKeys ?? []).filter(
+                  (key) => !presentKeys.has(key),
+                );
                 const placeholders = missingKeys.length
                   ? executeSqliteQuerySync(
                       database.db,

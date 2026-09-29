@@ -26,6 +26,22 @@ vi.mock("../../../config/sessions/session-accessor.js", () => ({
 vi.mock("../../../config/sessions/session-accessor.sqlite-replacement-projection.js", () => ({
   applySessionEntryExactReplacements: vi.fn(async () => undefined),
 }));
+vi.mock("./subagent-control-session.js", () => ({
+  prepareSubagentKillSession: async (
+    _config: unknown,
+    _sessionKey: string,
+    assertOwner: () => void,
+  ) => ({
+    storePath: "/synthetic-retained-session/sessions.json",
+    entry: {
+      sessionId: fixture.sessionId,
+      lifecycleRevision: fixture.lifecycleRevision,
+      updatedAt: 1,
+    },
+    assertCurrent: assertOwner,
+    release: () => {},
+  }),
+}));
 vi.mock("../../../gateway/call.js", () => ({ callGateway: vi.fn() }));
 vi.mock("./subagent-registry-state.js", { spy: true });
 vi.mock("./subagent-session-reconciliation.js", () => ({
@@ -57,6 +73,7 @@ function createRegistrationFixture() {
     }
   };
   const options: SubagentManagerOptions = {
+    acquireTerminalCompletionLock: async () => () => {},
     runs: subagentRuns,
     getRunsForChildSession: (key) =>
       [...subagentRuns.values()].filter((run) => run.childSessionKey === key),
@@ -65,7 +82,7 @@ function createRegistrationFixture() {
     persistOrThrow: persist,
     persistAsyncOrThrow: async (_context, publication, ...runIds) => {
       publication.assertCurrent();
-      if (stored.size > 0) {
+      if (runIds.some((runId) => subagentRuns.get(runId)?.queuedLaunch !== undefined)) {
         throw new SubagentRegistryWriteError("not-committed", new Error("descriptor refused"));
       }
       persist(...runIds);
@@ -168,7 +185,7 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
       expect(cleanupResources).not.toHaveBeenCalled();
 
       if (recovery === "confirmed Stop") {
-        expect(manager.markSubagentRunTerminated({ runId })).toBe(1);
+        expect(await manager.markSubagentRunTerminated({ runId })).toBe(1);
         const stopped = expectDefined(subagentRuns.get(runId), "stopped original run");
         const stoppedExecution = stopped.execution;
         expect(stored.get(runId)?.killReconciliation).toBeDefined();

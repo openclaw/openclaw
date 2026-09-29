@@ -349,6 +349,23 @@ describe("rejectNonPostWebhookRequest", () => {
 });
 
 describe("resolveSingleWebhookTarget", () => {
+  it.each([0, false, "", null, undefined])(
+    "retains a matching falsy target %j and detects a second match",
+    async (target) => {
+      expect(resolveSingleWebhookTarget([target], () => true)).toEqual({ kind: "single", target });
+      await expect(resolveSingleWebhookTargetAsync([target], async () => true)).resolves.toEqual({
+        kind: "single",
+        target,
+      });
+      expect(resolveSingleWebhookTarget([target, target], () => true)).toEqual({
+        kind: "ambiguous",
+      });
+      await expect(
+        resolveSingleWebhookTargetAsync([target, target], async () => true),
+      ).resolves.toEqual({ kind: "ambiguous" });
+    },
+  );
+
   const resolvers: Array<{
     name: string;
     run: (

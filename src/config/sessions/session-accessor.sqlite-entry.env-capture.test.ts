@@ -34,13 +34,15 @@ vi.mock("../../infra/sqlite-number.js", () => ({}));
 vi.mock("../../state/openclaw-agent-db-identity.js", () => ({}));
 vi.mock("../../state/openclaw-agent-db-readonly-scope.js", () => ({}));
 vi.mock("../../state/openclaw-agent-db-readonly.js", () => ({}));
+vi.mock("../../state/openclaw-agent-db-transaction.js", () => ({
+  runOpenClawAgentWriteWithYieldingAdmission: boundary.commit,
+}));
 vi.mock("../../state/openclaw-agent-db.js", () => ({
   getOpenClawAgentDatabaseIfOpen: () => undefined,
   isIncognitoOpenClawAgentSqlitePath: () => false,
   openOpenClawAgentDatabase: boundary.open,
   resolveOpenClawAgentSqlitePath: (options: OpenClawAgentDatabaseOptions) =>
     options.path ?? `${options.env?.OPENCLAW_STATE_DIR}/${options.agentId}.sqlite`,
-  runOpenClawAgentWriteTransaction: boundary.commit,
   withOpenClawAgentDatabaseAsync: async (
     _options: OpenClawAgentDatabaseOptions,
     run: () => unknown,

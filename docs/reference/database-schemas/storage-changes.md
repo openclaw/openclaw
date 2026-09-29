@@ -1582,7 +1582,13 @@ on the existing reclamation worker. Only a pass with retention candidates reques
 protected session identities, after rolling back candidate discovery and before
 a fresh planning transaction. The parent captures those identities under the
 writer. Protection includes runtime providers, active work, and active lifecycle
-mutations; the parent rechecks these owners and the write generation before planning commits.
+mutations. At write admission, the parent refreshes active keys and live protection
+without discarding the prepared candidates. The write transaction rereads selected
+rows, transcript versions, and active ancestry, then rejects only candidates that
+changed or became protected. The parent still rejects policy or protection changes
+after admission and before commit. Unrelated activity during planning can therefore
+commit without another planning pass. No schema, retention, or update migration changes
+are required.
 Changed inputs roll back that planning pass before a fresh pass begins. Bounded
 finalization preserves changed entries and publishes removals only for committed
 entries. Transcript sizing and empty-transcript validation run on archive workers;

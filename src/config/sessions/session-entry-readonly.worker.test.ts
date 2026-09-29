@@ -16,6 +16,7 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   loadSessionEntryReadOnlyInScope,
   loadSessionEntryReadOnlyResultInScope,
+  replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
 import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
@@ -253,13 +254,15 @@ it("propagates raw worker failure without calling the optional-data consumer", a
 it("rejects registry revocation during the retained asynchronous consumer", async () => {
   await withOpenClawTestState({ label: "readonly-entry-retained" }, async ({ env, path }) => {
     const storePath = path("shared.sqlite");
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath, env });
     const sessionKey = "agent:main:retained";
-    writeSessionEntry(database, sessionKey, {
-      sessionId: "retained-session",
-      updatedAt: 1,
-      skillsSnapshot: { prompt: "Full stored prompt", skills: [] },
-    });
+    replaceSessionEntrySync(
+      { agentId: "main", storePath, env, sessionKey },
+      {
+        sessionId: "retained-session",
+        updatedAt: 1,
+        skillsSnapshot: { prompt: "Full stored prompt", skills: [] },
+      },
+    );
     let consumed = false;
     await expect(
       withSessionEntryReadOnlyInWorker(

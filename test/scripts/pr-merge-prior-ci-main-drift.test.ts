@@ -114,6 +114,26 @@ describePosix("prior-CI forward main admission", () => {
     },
   );
 
+  it.each(["conflict", "empty change"] as const)(
+    "checks first-observation %s composition",
+    (fault) => {
+      const f = preExistingCandidate();
+      const main = f.commit(
+        f.tree(fault === "conflict" ? "conflicting main\n" : "resolved conflict\n"),
+        [f.base],
+      );
+      f.save({ ...f.state(), observations: [{ main }] });
+
+      const result = f.adminPriorCi(f.path);
+
+      expect(result.status, result.output).not.toBe(0);
+      expect(result.output).toContain(
+        fault === "conflict" ? "cannot establish prepared-head merge tree" : "NO NET CHANGE",
+      );
+      expectNoDispatch(f);
+    },
+  );
+
   it.each([
     ["rewritten verified main", "both observed and verified main"],
     ["rewritten observed main", "both observed and verified main"],

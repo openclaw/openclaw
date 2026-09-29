@@ -25,7 +25,7 @@ describe("sent comment attachment presentation", () => {
           start: 7,
           end: 7 + text.length,
         },
-        undefined,
+        {},
         0,
       )!;
       try {
@@ -59,7 +59,7 @@ describe("sent comment attachment presentation", () => {
           start: 7,
           end: 7 + domLength,
         },
-        undefined,
+        {},
         0,
       )!;
       try {

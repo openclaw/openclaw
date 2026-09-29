@@ -30,6 +30,7 @@ import {
   stageIncognitoSharingPublication,
 } from "./session-accessor.sqlite-incognito-sharing.js";
 import {
+  publishRetainedSessionGeneration,
   reconcileSessionSharingAcquisition,
   updateSessionSharingField,
   recordAcquiringSessionEntry,
@@ -381,29 +382,9 @@ export function retainPreparedSessionGenerationFacts(params: {
   const retained = retainPreparedSessionSharingFacts({
     ...params,
     membership: new Set(),
-    generation: { current: params.entry ?? null },
+    generation: { current: params.entry ?? null, initiallyAbsent: params.entry ? undefined : true },
   });
   return { readCurrent: retained.readGeneration, release: retained.release };
-}
-
-function publishRetainedSessionGeneration(
-  read: PreparedSessionSharingRead,
-  entry: SessionSharingEntry | undefined,
-  known: boolean,
-) {
-  const generation = read.generation;
-  if (!generation?.current) {
-    return;
-  }
-  if (!known) {
-    generation.current = undefined;
-  } else if (
-    !entry ||
-    generation.current.sessionId !== entry.sessionId ||
-    generation.current.lifecycleRevision !== entry.lifecycleRevision
-  ) {
-    generation.current = null;
-  }
 }
 
 function retainedSharingReads(database: SessionEntryCacheDatabase, sessionKey: string) {

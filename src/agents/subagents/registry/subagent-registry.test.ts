@@ -7,6 +7,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
+import { captureSessionEntryCurrentRead } from "../../../config/sessions/session-entry-current-runtime.js";
+import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import {
   runWithOwnedSessionTranscriptWrite,
   withOwnedSessionTranscriptWrites,
@@ -57,8 +59,8 @@ import {
   registerForcedCollectorCompletionSettlementTests,
   registerRestartDrainCompletionSettlementTest,
   registerRestoredRunDeadlineSettlementTests,
-  registerSupersededTimingOwnershipTest,
 } from "./subagent-registry.native-settlement.test-support.js";
+import { registerSupersededNativeTimingTest } from "./subagent-registry.native-termination.test-support.js";
 import { registerSubagentRegistrationPersistenceTests } from "./subagent-registry.persistence.test-support.js";
 import {
   registerRestoredRollbackPublicationTest,
@@ -117,15 +119,18 @@ vi.mock("../../../config/sessions.js", () => ({
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", () => mocks.sessionAccessors);
-vi.mock("../../../config/sessions/session-entry-read-runtime.js", () => ({
-  withSessionEntryReadOnlyInWorker: mocks.withSessionEntryReadOnlyInWorker,
-}));
-vi.mock("../../../config/sessions/session-entry-current-runtime.js", () => ({
-  captureSessionEntryCurrentRead: mocks.captureSessionEntryCurrentRead,
-}));
+vi.mock("../../../config/sessions/session-entry-read-runtime.js", { spy: true });
+const { withSessionEntryReadOnlyInWorker: readCanonicalSessionEntry } = await vi.importActual<
+  typeof import("../../../config/sessions/session-entry-read-runtime.js")
+>("../../../config/sessions/session-entry-read-runtime.js");
 vi.mock("../../../config/sessions/session-accessor.sqlite-replacement-projection.js", () => ({
   applySessionEntryExactReplacements: mocks.applySessionEntryExactReplacements,
 }));
+vi.mock("../../../config/sessions/session-entry-current-runtime.js", { spy: true });
+const { captureSessionEntryCurrentRead: captureCanonicalSessionEntryCurrent } =
+  await vi.importActual<typeof import("../../../config/sessions/session-entry-current-runtime.js")>(
+    "../../../config/sessions/session-entry-current-runtime.js",
+  );
 
 vi.mock("../../../sessions/session-lifecycle-events.js", () => ({
   emitSessionLifecycleEvent: mocks.emitSessionLifecycleEvent,
@@ -288,6 +293,20 @@ describe("subagent registry seam flow", () => {
     mocks.persistSubagentRunsToDiskOrThrow.mockReset();
     mocks.restoreSubagentRunsFromDisk.mockReset().mockReturnValue(0);
     mocks.loadSessionEntry.mockReset();
+    vi.mocked(withSessionEntryReadOnlyInWorker)
+      .mockReset()
+      .mockImplementation((...args) =>
+        args[0].storePath === mocks.resolveStorePath()
+          ? mocks.withSessionEntryReadOnlyInWorker(...args)
+          : readCanonicalSessionEntry(...args),
+      );
+    vi.mocked(captureSessionEntryCurrentRead)
+      .mockReset()
+      .mockImplementation((scope, owner) =>
+        scope.storePath === mocks.resolveStorePath()
+          ? mocks.captureSessionEntryCurrentRead(scope, owner)
+          : captureCanonicalSessionEntryCurrent(scope, owner),
+      );
     mocks.listSessionEntriesCore.mockReset();
     mocks.patchSessionEntryCore.mockReset();
     mocks.readSessionCurrent.mockReset();
@@ -687,7 +706,7 @@ describe("subagent registry seam flow", () => {
     });
     try {
       await started.promise;
-      expect(mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
+      expect(await mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
       expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toBeUndefined();
       expect(mod.startQueuedSubagentRun(runId, "gateway-launch-kill")).toBe(false);
       expect(mod.getSubagentRunByRunId("gateway-launch-kill")).toBeUndefined();
@@ -2155,15 +2174,20 @@ describe("subagent registry seam flow", () => {
         },
       });
 
-      await mod.registerSubagentRun({
-        runId,
-        childSessionKey: "agent:main:subagent:wait-collector-yield",
-        task: "collect through the wait observation",
-        expectsCompletionMessage: false,
-        collect: true,
-        outputSchema: { type: "object" },
-        swarmRequesterSessionKey: "agent:main:main",
-      });
+      const settleRootWork = observeRootWork();
+      try {
+        await mod.registerSubagentRun({
+          runId,
+          childSessionKey: "agent:main:subagent:wait-collector-yield",
+          task: "collect through the wait observation",
+          expectsCompletionMessage: false,
+          collect: true,
+          outputSchema: { type: "object" },
+          swarmRequesterSessionKey: "agent:main:main",
+        });
+      } finally {
+        await settleRootWork();
+      }
 
       await waitForFast(() => {
         expect(findRequesterRun(runId)).toMatchObject({
@@ -2362,7 +2386,9 @@ describe("subagent registry seam flow", () => {
       stream: "lifecycle",
       data: { phase: "end", startedAt: 111, endedAt: 222, yielded: true },
     });
-    expect(mod.markSubagentRunTerminated({ runId, childSessionKey, reason: "killed" })).toBe(1);
+    expect(await mod.markSubagentRunTerminated({ runId, childSessionKey, reason: "killed" })).toBe(
+      1,
+    );
     const killed = mod
       .listSubagentRunsForRequester("agent:main:main")
       .find((run) => run.runId === runId);
@@ -2490,7 +2516,7 @@ describe("subagent registry seam flow", () => {
       stream: "lifecycle",
       data: { phase: "end", startedAt: 111, endedAt: 222, aborted: true },
     });
-    expect(mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
+    expect(await mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
 
     await vi.advanceTimersByTimeAsync(60_000);
     const run = findRequesterRun(runId);
@@ -2912,7 +2938,7 @@ describe("subagent registry seam flow", () => {
       });
 
       vi.setSystemTime(killedAt);
-      expect(mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
+      expect(await mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
       const killedRun = findRequesterRun(runId);
       expect(killedRun).toMatchObject({
         execution: { status: "terminal", endedAt: yieldedAt },
@@ -3163,12 +3189,7 @@ describe("subagent registry seam flow", () => {
     }
   });
 
-  registerSupersededTimingOwnershipTest({
-    getRegistry: () => mod,
-    mocks,
-    mockPendingAgentWait,
-    findRequesterRun,
-  });
+  registerSupersededNativeTimingTest({ getRegistry: () => mod, mocks, mockPendingAgentWait });
 
   it("reconciles an old completion without touching the newer session generation", async () => {
     const oldStartedAt = Date.parse("2026-03-24T11:50:00Z");
@@ -3900,7 +3921,7 @@ describe("subagent registry seam flow", () => {
       workspaceDir: "/tmp/killed-workspace",
     });
 
-    const updated = mod.markSubagentRunTerminated({
+    const updated = await mod.markSubagentRunTerminated({
       runId: "run-killed-init",
       reason: "manual kill",
     });

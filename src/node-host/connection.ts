@@ -7,6 +7,7 @@ import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
   NODE_WORKER_BUNDLE_STATUS_VERSION,
+  NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_STATUS_WAIT_VERSION,
   NODE_WORKER_PORTAL_STREAM_VERSION,
@@ -64,6 +65,7 @@ type NodeOptionalPublicationState = {
   pendingParams?: Record<string, unknown>;
   publishedParams?: Record<string, unknown>;
   rejectedParams?: Record<string, unknown>;
+  loggedFailure?: string;
   retryDelayMs: number;
   retryPending: boolean;
   retryTimer?: NodeJS.Timeout;
@@ -86,6 +88,7 @@ export function startNodeHostConnection({
 }) {
   let publicationClient = client;
   let workerHostingEnabled = prepared.workerHostingEnabled;
+  let workerHostingDisabledReason = prepared.workerHostingDisabledReason;
   let inventory: NodeHostInventory = prepared.initialInventory;
   let workerCapacity: NodeWorkerCapacitySnapshot | undefined;
   let reportedWorkerHostingEnabled = false;
@@ -221,6 +224,7 @@ export function startNodeHostConnection({
           }
           state.publishedParams = nextParams;
           state.rejectedParams = undefined;
+          state.loggedFailure = undefined;
           state.retryDelayMs = NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS;
           state.retryPending = false;
         } catch (error) {
@@ -233,7 +237,11 @@ export function startNodeHostConnection({
             state.pendingParams = undefined;
             state.retryPending = false;
           } else {
-            writeStderrLine(`node host ${label} publish failed: ${String(error)}`);
+            const message = redactSensitiveText(String(error));
+            if (state.loggedFailure !== message) {
+              state.loggedFailure = message;
+              writeStderrLine(`node host ${label} publish failed: ${message}`);
+            }
             if (failure === "rejected") {
               state.rejectedParams = nextParams;
               state.retryPending = false;
@@ -360,7 +368,18 @@ export function startNodeHostConnection({
                 ? { launchToolNames: [...WORKER_TOOL_NAMES] }
                 : {}),
             }
-          : { enabled: false },
+          : {
+              enabled: false,
+              ...(workerHostingDisabledReason &&
+              gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_HOST_DIAGNOSTICS)
+                ? {
+                    reason: redactSensitiveText(workerHostingDisabledReason).slice(
+                      0,
+                      NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH,
+                    ),
+                  }
+                : {}),
+            },
       },
       "runner inventory",
     );
@@ -368,6 +387,7 @@ export function startNodeHostConnection({
 
   const onWorkerHostingDisabled = (reason: string) => {
     workerHostingEnabled = false;
+    workerHostingDisabledReason = reason;
     writeStderrLine(`node host worker hosting disabled: ${redactSensitiveText(reason)}`);
     publishRunnerInventory();
   };

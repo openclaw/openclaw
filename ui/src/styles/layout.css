@@ -1744,7 +1744,7 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-session-group-presence--idle {
-  background: var(--warn);
+  background: var(--presence-idle);
 }
 
 .sidebar-session-group-presence--unknown {
@@ -2606,7 +2606,7 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-online__person[data-presence-activity="idle"] .sidebar-online__avatar::after {
-  background: var(--warn);
+  background: var(--presence-idle);
 }
 
 .sidebar-online__person[data-presence-activity="unknown"] .sidebar-online__avatar::after {

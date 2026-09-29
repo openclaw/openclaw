@@ -14,7 +14,6 @@ extensions/browser/src/browser/chrome-mcp.test.ts
 extensions/browser/src/browser/chrome.internal.test.ts
 extensions/browser/src/browser/chrome.ts
 extensions/browser/src/browser/extension-relay/relay-bridge.ts
-extensions/browser/src/browser/pw-session.create-page.navigation-guard.test.ts
 extensions/browser/src/browser/routes/agent.snapshot.ts
 extensions/codex/doctor-contract-api.test.ts
 extensions/codex/src/app-server/approval-bridge.test.ts
@@ -237,7 +236,6 @@ packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/markdown-core/src/ir.ts
 packages/memory-host-sdk/src/host/session-files.ts
 packages/tool-call-repair/src/stream-normalizer.ts
-src/acp/control-plane/manager.test.ts
 src/acp/control-plane/manager.turn-results.test.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
 src/agents/agent-bundle-mcp-runtime.ts

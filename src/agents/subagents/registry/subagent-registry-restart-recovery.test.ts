@@ -530,8 +530,10 @@ describe("interrupted requester-settle continuation ownership", () => {
     if (result.status !== "terminal") {
       throw new Error("missing interruption classification");
     }
-    expect(await result.isRecoveryCurrent?.()).toBe(true);
+    expect(await result.recoveryCurrent?.prepare()).toBe(true);
+    expect(result.recoveryCurrent?.isHostCurrent()).toBe(true);
     subagentRuns.set(child.runId, child);
-    expect(await result.isRecoveryCurrent?.()).toBe(false);
+    expect(result.recoveryCurrent?.isHostCurrent()).toBe(false);
+    expect(await result.recoveryCurrent?.prepare()).toBe(false);
   });
 });

@@ -246,12 +246,28 @@ export async function recoverInterruptedSubagentRow(
     if (resolveGatewayContext) {
       bindGatewayContextResolver(entry, resolveGatewayContext);
     }
+    const isRecoveryHostCurrent = () => {
+      if (!isCurrent() || (!replayTerminal && hasPendingRequesterSettleWake())) {
+        return false;
+      }
+      if (!replayTerminal) {
+        try {
+          sessionEffects.assertHostCurrent();
+        } catch {
+          return false;
+        }
+      }
+      return true;
+    };
     return {
       status: "terminal",
-      isRecoveryCurrent: async () =>
-        isCurrent() &&
-        (replayTerminal ||
-          ((await sessionEffects.isCurrent()) && isCurrent() && !hasPendingRequesterSettleWake())),
+      recoveryCurrent: {
+        isHostCurrent: isRecoveryHostCurrent,
+        prepare: async () =>
+          isRecoveryHostCurrent() &&
+          (replayTerminal || (await sessionEffects.isCurrent())) &&
+          isRecoveryHostCurrent(),
+      },
       sessionEffects,
       error:
         terminalError ??
