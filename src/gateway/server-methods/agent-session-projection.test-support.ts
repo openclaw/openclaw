@@ -1,4 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
 import type { SessionRowReadView } from "../session-row-prepared-read.js";
@@ -16,17 +16,12 @@ export function createAgentTestSessionRowProjection(
     store: session
       ? {
           [session.row.key]: {
-            sessionId: expectDefined(session.row.sessionId, "fixture session ID"),
-            updatedAt: session.row.updatedAt ?? 0,
+            sessionId: expectDefined(session.row.sessionId, "fixture session identity"),
+            updatedAt: expectDefined(session.row.updatedAt, "fixture session timestamp"),
           },
         }
       : {},
   });
-  const present = projection.present;
-  projection.present = (record, options) =>
-    session?.agentId === record.agentId && session.row.key === record.key
-      ? session.row
-      : present(record, options);
   const fixture: SessionRowProjection = {
     ...projection,
     get state() {
@@ -42,6 +37,15 @@ export function createAgentTestSessionRowProjection(
       };
     },
     getPolicyConfig: getConfig,
+    capture: () => undefined,
+    describe: (query, captured) =>
+      session?.agentId === query.agentId && session.row.key === query.key
+        ? projection.describe(query, captured)
+        : undefined,
+    present: (record, options) =>
+      session?.agentId === record.agentId && session.row.key === record.key
+        ? session.row
+        : projection.present(record, options),
     ensureMaterialized: async () => {},
     withPreparedExactRows: async <T>(
       queries: Parameters<SessionRowProjection["withPreparedExactRows"]>[0],
@@ -50,6 +54,10 @@ export function createAgentTestSessionRowProjection(
       queries(getConfig());
       return { kind: "complete", value: consume(fixture) };
     },
+    snapshot: ({ key, agentId }: { key: string; agentId: string }) => ({
+      row: session?.agentId === agentId && session.row.key === key ? session.row : null,
+      lifecycleRunId: undefined,
+    }),
   };
   return fixture;
 }

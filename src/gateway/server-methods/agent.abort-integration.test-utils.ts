@@ -8,9 +8,9 @@ import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { prepareAgentRunDispatch } from "../agent-turn/agent-run-admission-phase.js";
 import { createAgentTurnIo } from "../agent-turn/io.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
-import type { GatewaySessionRow } from "../session-utils.js";
 import { registerAgentAbortSubagentTests } from "./agent.abort-subagents.test-utils.js";
 import { registerAgentPreDispatchFailureTests } from "./agent.pre-dispatch-failure.test-utils.js";
+import { registerAgentGlobalGoalEventTest } from "./agent.session-events.test-utils.js";
 import {
   getAgentTestMocks,
   operatorWriteCliClient,
@@ -81,75 +81,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(abortEntry.expiresAtMs - abortEntry.startedAtMs).toBeGreaterThan(24 * 60 * 60_000);
   });
 
-  it("keeps selected-global goals on agent session change events", async () => {
-    const goal = {
-      schemaVersion: 1,
-      id: "goal-work-global",
-      objective: "Finish work global task",
-      status: "active",
-      createdAt: 1,
-      updatedAt: 2,
-      tokenStart: 0,
-      tokensUsed: 5,
-      continuationTurns: 0,
-    } satisfies NonNullable<GatewaySessionRow["goal"]>;
-    mocks.listAgentIds.mockReturnValue(["main", "work"]);
-    mocks.resolveExplicitAgentSessionKey.mockReturnValue("global");
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: { agents: { list: [{ id: "main" }, { id: "work" }] }, session: { scope: "global" } },
-      storePath: "/tmp/sessions.json",
-      entry: {
-        sessionId: "global-session-id",
-        updatedAt: Date.now(),
-      },
-      canonicalKey: "global",
-    });
-    const sessionRow = {
-      key: "global",
-      sessionId: "global-session-id",
-      kind: "global",
-      updatedAt: Date.now(),
-      goal,
-    } satisfies GatewaySessionRow;
-    mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockReturnValue(new Promise(() => {}));
-
-    const context = makeContext({ agentId: "work", row: sessionRow });
-    context.getSessionEventSubscriberConnIds = () => new Set(["conn-1"]);
-    const runId = "idem-agent-global-goal-event";
-    await invokeAgent(
-      {
-        message: "hi",
-        agentId: "work",
-        idempotencyKey: runId,
-      },
-      { context, reqId: runId },
-    );
-
-    await waitForAssertion(() => {
-      expect(context.addChatRun).toHaveBeenCalledWith(
-        runId,
-        expect.objectContaining({ sessionKey: "global", agentId: "work" }),
-      );
-      expect(context.chatAbortControllers.get(runId)?.agentId).toBe("work");
-      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-        "sessions.changed",
-        expect.objectContaining({
-          sessionKey: "global",
-          agentId: "work",
-          goal: expect.objectContaining({ id: "goal-work-global" }),
-          session: expect.objectContaining({ key: "global", sessionId: "global-session-id", goal }),
-        }),
-        new Set(["conn-1"]),
-        {
-          agentId: "work",
-          dropIfSlow: true,
-          sessionKeys: ["global"],
-          prepareSessionProjection: expect.any(Function),
-        },
-      );
-    });
-  });
+  registerAgentGlobalGoalEventTest();
 
   it("yields after the accepted ack before dispatching heavy agent work", async () => {
     prime();
@@ -344,7 +276,10 @@ describe("gateway agent handler chat.abort integration", () => {
           releaseSessionWrite = resolve;
         });
       }
-      return await updater({ "agent:main:main": buildExistingMainStoreEntry() });
+      const store = {
+        "agent:main:main": buildExistingMainStoreEntry(),
+      };
+      return await updater(store);
     });
     mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
 
@@ -509,7 +444,10 @@ describe("gateway agent handler chat.abort integration", () => {
           releaseSessionWrite = resolve;
         });
       }
-      return await updater({ "agent:main:main": buildExistingMainStoreEntry() });
+      const store = {
+        "agent:main:main": buildExistingMainStoreEntry(),
+      };
+      return await updater(store);
     });
     mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
 
