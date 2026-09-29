@@ -34,7 +34,7 @@ In a channel with `requireMention: true`, a captionless audio clip can satisfy t
   </Accordion>
 
   <Accordion title="Outbound text and files">
-    - text chunks use `channels.slack.textChunkLimit` (default `8000`, capped at Slack's own message-length limit)
+    - Web API text sends use `channels.slack.textChunkLimit` with a `4000`-character default and maximum chunk budget, measured after Markdown rendering and escaping; slash-command responses retain their separate response-window budget
     - `channels.slack.streaming.chunkMode="newline"` enables paragraph-first splitting
     - file sends use Slack upload APIs and can include thread replies (`thread_ts`)
     - long file captions use the first Slack-safe text chunk as the upload comment and send remaining chunks as follow-up messages

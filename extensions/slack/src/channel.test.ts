@@ -913,9 +913,9 @@ describe("slackPlugin outbound", () => {
     expect(slackPlugin.outbound?.preferFinalAssistantVisibleText).toBe(true);
   });
 
-  it("advertises the 8000-character Slack default chunk limit", () => {
-    expect(slackOutbound.textChunkLimit).toBe(8000);
-    expect(slackPlugin.outbound?.textChunkLimit).toBe(8000);
+  it("advertises the 4000-character Slack default chunk limit", () => {
+    expect(slackOutbound.textChunkLimit).toBe(4000);
+    expect(slackPlugin.outbound?.textChunkLimit).toBe(4000);
   });
 
   it("sends messages when the existing target carries the workspace", async () => {

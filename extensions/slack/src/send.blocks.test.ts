@@ -1,7 +1,8 @@
 // Slack tests cover send.blocks plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
-import { SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
+import { normalizeSlackOutboundText } from "./format.js";
+import { SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT, SLACK_TEXT_LIMIT } from "./limits.js";
 import { SLACK_QUESTION_FINALIZATION_BLOCKS } from "./reply-action-ids.js";
 import {
   clearSlackThreadParticipationCache,
@@ -10,7 +11,6 @@ import {
 
 const { sendMessageSlack } = await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
-const SLACK_TEXT_LIMIT = 8000;
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
@@ -144,7 +144,7 @@ describe("sendMessageSlack chunking", () => {
     });
   });
 
-  it("keeps 4205-character text in a single Slack post by default", async () => {
+  it("chunks default sends at Slack's recommended text budget", async () => {
     const client = createSlackSendTestClient();
     const message = "a".repeat(4205);
 
@@ -154,16 +154,60 @@ describe("sendMessageSlack chunking", () => {
       client,
     });
 
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
     expect(postedMessage(client).channel).toBe("C123");
-    expect(postedMessage(client).text).toBe(message);
+    expect(client.chat.postMessage.mock.calls.map((call) => call[0].text)).toEqual([
+      message.slice(0, SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT),
+      message.slice(SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT),
+    ]);
+  });
+
+  it("keeps long labeled links intact within the rendered Slack send budget", async () => {
+    const client = createSlackSendTestClient();
+    const links = ["first report", "second report"].map((label, index) => ({
+      label,
+      href: `https://example.com/report/${index}?query=${"%20".repeat(850)}&view=summary`,
+    }));
+    const message = links.map(({ label, href }) => `[${label}](${href})`).join("\n\n");
+
+    await sendMessageSlack("channel:C123", message, {
+      cfg: SLACK_TEST_CFG,
+      client,
+    });
+
+    const postedTexts = client.chat.postMessage.mock.calls.map((call) => call[0].text ?? "");
+    expect(postedTexts).toHaveLength(2);
+    expect(postedTexts.every((text) => text.length <= 4_000)).toBe(true);
+    expect(postedTexts.join("")).toBe(normalizeSlackOutboundText(message));
+    for (const { label, href } of links) {
+      expect(
+        postedTexts.some((text) => text.includes(`<${href.replaceAll("&", "&amp;")}|${label}>`)),
+      ).toBe(true);
+    }
+  });
+
+  it("sends native mrkdwn at whitespace boundaries without losing text", async () => {
+    const client = createSlackSendTestClient();
+    const text = `hello &amp; ${"planet ".repeat(650).trim()}`;
+
+    await sendMessageSlack("channel:C123", text, {
+      cfg: SLACK_TEST_CFG,
+      client,
+      textIsSlackMrkdwn: true,
+    });
+
+    const postedTexts = client.chat.postMessage.mock.calls.map((call) => call[0].text ?? "");
+    expect(postedTexts).toHaveLength(2);
+    expect(postedTexts[0]?.endsWith(" ")).toBe(true);
+    expect(postedTexts.join("")).toBe(text);
+    expect(postedTexts.every((chunk) => chunk.length <= 4_000)).toBe(true);
   });
 
   it.each([false, true])(
     "keeps emoji whole when plain text mode is %s",
     async (textIsSlackPlainText) => {
       const client = createSlackSendTestClient();
-      const prefix = "a".repeat(SLACK_TEXT_LIMIT - 2);
+      const prefix = "a".repeat(SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT - 2);
       const family = "👨‍👩‍👧‍👦";
 
       await sendMessageSlack("channel:C123", `${prefix}${family}Z`, {
@@ -181,7 +225,7 @@ describe("sendMessageSlack chunking", () => {
 
   it("keeps Slack mrkdwn code spans closed around protected tokens when chunking", async () => {
     const client = createSlackSendTestClient();
-    const message = `\`${"a".repeat(SLACK_TEXT_LIMIT - 5)}<@U123>${"b".repeat(20)}\``;
+    const message = `\`${"a".repeat(SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT - 5)}<@U123>${"b".repeat(20)}\``;
 
     await sendMessageSlack("channel:C123", message, {
       token: "xoxb-test",
@@ -229,7 +273,7 @@ describe("sendMessageSlack chunking", () => {
         ts: "1781932191.000000",
         channel: "C123",
       });
-    const message = "a".repeat(8500);
+    const message = "a".repeat(SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT + 500);
 
     const result = await sendMessageSlack("channel:C123", message, {
       token: "xoxb-test",
@@ -539,7 +583,7 @@ describe("sendMessageSlack blocks", () => {
     expect(posts.flatMap((post) => post.blocks as unknown[])).toEqual(blocks);
   });
 
-  it("keeps ordered non-native accessibility complete above the normal 8k text limit", async () => {
+  it("keeps ordered non-native accessibility complete above the normal text chunk limit", async () => {
     const client = createSlackSendTestClient();
     const blocks = Array.from({ length: 3 }, (_entry, index) => ({
       type: "section",
@@ -793,7 +837,9 @@ describe("sendMessageSlack blocks", () => {
     expect(postedMessage(client).text).toBe(
       ["Large pipeline (table)", header, ...accounts].join("\n"),
     );
-    expect(String(postedMessage(client).text).length).toBeGreaterThan(SLACK_TEXT_LIMIT);
+    expect(String(postedMessage(client).text).length).toBeGreaterThan(
+      SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT,
+    );
     expect(String(postedMessage(client).text).length).toBeLessThanOrEqual(40_000);
     expect(postedMessage(client).mrkdwn).toBe(false);
   });
@@ -1094,7 +1140,7 @@ describe("sendMessageSlack blocks", () => {
   it("passes reply_broadcast for threaded text sends only on the first chunk", async () => {
     const client = createSlackSendTestClient();
 
-    await sendMessageSlack("channel:C123", "a".repeat(8500), {
+    await sendMessageSlack("channel:C123", "a".repeat(SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT + 500), {
       token: "xoxb-test",
       cfg: SLACK_TEST_CFG,
       client,

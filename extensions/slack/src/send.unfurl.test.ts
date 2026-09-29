@@ -145,7 +145,7 @@ describe("sendMessageSlack unfurl controls", () => {
       client,
     });
 
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(3);
     for (const [payload] of client.chat.postMessage.mock.calls) {
       const postPayload = payload as Record<string, unknown>;
       expect(postPayload.unfurl_links).toBe(false);

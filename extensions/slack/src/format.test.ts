@@ -26,6 +26,57 @@ describe("chunkSlackMrkdwnText", () => {
     expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
   });
 
+  it.each([
+    ["hello world", 9, ["hello ", "world"]],
+    ["&amp; hello world", 13, ["&amp; hello ", "world"]],
+    ["`x` hello world", 11, ["`x` hello ", "world"]],
+    ["alpha  beta\tgamma", 9, ["alpha  ", "beta\t", "gamma"]],
+    ["hello &amp; world", 9, ["hello ", "&amp; ", "world"]],
+  ] as const)("keeps prose words whole in %s", (text, limit, expected) => {
+    const chunks = chunkSlackMrkdwnText(text, limit);
+
+    expect(chunks).toEqual(expected);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
+  });
+
+  it.each([
+    ["one\n\nalpha beta gamma", 18, ["one\n\n", "alpha beta gamma"]],
+    ["one &amp;\n\nalpha beta gamma", 24, ["one &amp;\n\n", "alpha beta gamma"]],
+    ["one &amp;\nalpha beta gamma", 23, ["one &amp;\n", "alpha beta gamma"]],
+  ] as const)("prefers paragraph and line boundaries in %s", (text, limit, expected) => {
+    const chunks = chunkSlackMrkdwnText(text, limit);
+
+    expect(chunks).toEqual(expected);
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("keeps native link labels with spaces intact when choosing prose boundaries", () => {
+    const token = "<https://example.com|report with spaces>";
+    const text = `head ${token} tail`;
+    const limit = token.length + 2;
+    const chunks = chunkSlackMrkdwnText(text, limit);
+
+    expect(chunks).toEqual(["head ", `${token} `, "tail"]);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
+  });
+
+  it("preserves code-internal whitespace when a prose boundary precedes the code", () => {
+    const content = "alpha beta gamma delta";
+    const chunks = chunkSlackMrkdwnText(`lead\n\n\`${content}\``, 14);
+
+    expect(chunks[0]).toBe("lead\n\n");
+    const codeChunks = chunks.slice(1);
+    expect(codeChunks.every((chunk) => chunk.startsWith("`") && chunk.endsWith("`"))).toBe(true);
+    expect(codeChunks.map((chunk) => chunk.slice(1, -1)).join("")).toBe(content);
+    expect(chunks.every((chunk) => chunk.length <= 14)).toBe(true);
+  });
+
+  it("still bounds prose tokens with no whitespace", () => {
+    expect(chunkSlackMrkdwnText("abcdefghijklmnop", 5)).toEqual(["abcde", "fghij", "klmno", "p"]);
+  });
+
   it("keeps short inline-code spans together until the actual section boundary", () => {
     const text = `${"a`b`".repeat(750)}x`;
     const chunks = chunkSlackMrkdwnText(text, 3_000);
