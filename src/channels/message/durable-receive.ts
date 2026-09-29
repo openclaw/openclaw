@@ -15,11 +15,6 @@ type DurableInboundReceivePendingRecord<TPayload, TMetadata = unknown> = Omit<
   "channelId" | "accountId" | "queueName" | "laneKey"
 >;
 
-type DurableInboundReceiveCompletedRecord<TMetadata = unknown> = Pick<
-  ChannelIngressQueueCompletedRecord<TMetadata>,
-  "id" | "completedAt" | "metadata"
->;
-
 /** Accept result for a new or duplicate inbound platform event. */
 type DurableInboundReceiveAcceptResult<TPayload, TMetadata, TCompletedMetadata> =
   | {
@@ -35,47 +30,26 @@ type DurableInboundReceiveAcceptResult<TPayload, TMetadata, TCompletedMetadata> 
   | {
       kind: "completed";
       duplicate: true;
-      record: DurableInboundReceiveCompletedRecord<TCompletedMetadata>;
+      record: Pick<
+        ChannelIngressQueueCompletedRecord<TCompletedMetadata>,
+        "id" | "completedAt" | "metadata"
+      >;
     };
-
-/** Options recorded when accepting a pending inbound event. */
-type DurableInboundReceiveAcceptOptions<TMetadata> = {
-  metadata?: TMetadata;
-  receivedAt?: number;
-};
-
-/** Options recorded when marking an inbound event complete. */
-type DurableInboundReceiveCompleteOptions<TCompletedMetadata> = {
-  metadata?: TCompletedMetadata;
-  completedAt?: number;
-};
-
-/** Options recorded when releasing an inbound event for retry. */
-type DurableInboundReceiveReleaseOptions = {
-  lastError?: string;
-  releasedAt?: number;
-};
 
 /** Durable receive journal facade used by channel receive pipelines. */
 type DurableInboundReceiveJournal<TPayload, TMetadata, TCompletedMetadata> = {
   accept(
     id: string,
     payload: TPayload,
-    options?: DurableInboundReceiveAcceptOptions<TMetadata>,
+    options?: { metadata?: TMetadata; receivedAt?: number },
   ): Promise<DurableInboundReceiveAcceptResult<TPayload, TMetadata, TCompletedMetadata>>;
   pending(): Promise<Array<DurableInboundReceivePendingRecord<TPayload, TMetadata>>>;
   complete(
     id: string,
-    options?: DurableInboundReceiveCompleteOptions<TCompletedMetadata>,
+    options?: { metadata?: TCompletedMetadata; completedAt?: number },
   ): Promise<void>;
-  release(id: string, options?: DurableInboundReceiveReleaseOptions): Promise<boolean>;
+  release(id: string, options?: { lastError?: string; releasedAt?: number }): Promise<boolean>;
   deletePending(id: string): Promise<boolean>;
-};
-
-/** Queue-backed durable receive journal options with optional retention pruning. */
-type DurableInboundReceiveQueueJournalOptions<TPayload, TMetadata, TCompletedMetadata> = {
-  queue: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>;
-  retention?: ChannelIngressQueuePruneOptions;
 };
 
 function normalizeDurableInboundReceiveId(id: string): string {
@@ -91,9 +65,10 @@ export function createDurableInboundReceiveJournalFromQueue<
   TPayload,
   TMetadata = unknown,
   TCompletedMetadata = unknown,
->(
-  options: DurableInboundReceiveQueueJournalOptions<TPayload, TMetadata, TCompletedMetadata>,
-): DurableInboundReceiveJournal<TPayload, TMetadata, TCompletedMetadata> {
+>(options: {
+  queue: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>;
+  retention?: ChannelIngressQueuePruneOptions;
+}): DurableInboundReceiveJournal<TPayload, TMetadata, TCompletedMetadata> {
   const prune = async (protectId?: string) => {
     if (options.retention) {
       await options.queue.prune({
