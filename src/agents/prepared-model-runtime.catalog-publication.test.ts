@@ -426,6 +426,85 @@ describe("catalog publication session rows", () => {
     expect(published?.authModes.custom).toBeUndefined();
   });
 
+  it("stops publishing a discovered provider's auth after an observed logout", async () => {
+    const profile: AuthProfileCredential = {
+      type: "oauth",
+      provider: "native-cli",
+      access: "synthetic-access-native",
+      refresh: "synthetic-refresh-native",
+      expires: 1_900_000_000_000,
+      accountId: "synthetic-account",
+      email: "synthetic@example.test",
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.agentHarnesses.push({
+      pluginId: "synthetic-native",
+      source: "fixture",
+      harness: {
+        id: "synthetic-native",
+        label: "Synthetic native runtime",
+        supports: () => ({ supported: true }),
+        async runAttempt() {
+          throw new Error("catalog-only fixture");
+        },
+        loadModelCatalog: async () => [
+          {
+            provider: "native-cli",
+            id: "synthetic-native-model",
+            name: "Synthetic native model",
+            contextWindow: 32_000,
+            reasoning: false,
+            input: ["text"],
+          },
+        ],
+      },
+    });
+    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+    mocks.configuredAgentIds = ["default"];
+    mocks.runPreparedModelCatalogWorker.mockImplementation(async () => catalog());
+    mocks.usePersistedAuthProfiles = true;
+    const store = { version: 1, profiles: { "native-cli:synthetic": profile } };
+    mocks.preparedAuthStore = store;
+    mocks.authStorage.getAll.mockReturnValue({
+      "native-cli": {
+        type: "oauth",
+        access: profile.access,
+        refresh: profile.refresh,
+        expires: profile.expires,
+      },
+    });
+    saveAuthProfileStore(store, fixture.state.agentDir("default"));
+    const config: OpenClawConfig = {
+      agents: {
+        list: [{ id: "default", default: true }],
+        defaults: { model: "custom/synthetic-model" },
+      },
+    };
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    const owner = await prepareModelRuntimeSnapshot({
+      config,
+      agentId: "default",
+      agentDir: fixture.state.agentDir("default"),
+    });
+    await owner.loadFullModelCatalog!({ refresh: true });
+    // The first acquisition pairs the discovered provider with its credential.
+    const paired = getPreparedModelFullCatalogAuth(owner.readFullModelCatalog!()!);
+    expect(paired?.authStore.profiles["native-cli:synthetic"]).toEqual(profile);
+    // The next acquisition re-reads the same source and finds the provider gone:
+    // the merge must drop the retained entry instead of republishing the
+    // logged-out credential as still available.
+    mocks.preparedAuthStore = { version: 1, profiles: {} };
+    mocks.authStorage.getAll.mockReturnValue({});
+    await owner.loadFullModelCatalog!({ refresh: true });
+    const published = getPreparedModelFullCatalogAuth(owner.readFullModelCatalog!()!);
+    expect(published?.authStore.profiles["native-cli:synthetic"]).toBeUndefined();
+    expect(published?.credentials?.["native-cli"]).toBeUndefined();
+    expect(published?.authModes["native-cli"]).toBeUndefined();
+  });
+
   it("publishes settled attempt status without rebuilding unchanged resident rows", async () => {
     const { rows, list, refresh, initial, readCatalog } = await setup();
 

@@ -470,9 +470,16 @@ export function createFullModelCatalogAccess(
       const auth =
         getPreparedModelFullCatalogAuth(latest.inventory?.catalog ?? staticCatalog) ?? currentAuth;
       const nativeScope = preparedSyntheticAuthProviderScope(discoveredProviders);
+      // The worker re-read each discovered provider's credential source for this
+      // acquisition, so a discovered provider its result omits was observed removed,
+      // not passed over: prior auth must not survive the merge, or a logged-out
+      // provider stays published as available.
       const catalogAuth = nativeAuth
-        ? replacePreparedModelCatalogAuth(auth, nativeAuth, (provider) =>
-            nativeScope.has(normalizeProvider(provider)),
+        ? replacePreparedModelCatalogAuth(
+            auth,
+            nativeAuth,
+            (provider) => nativeScope.has(normalizeProvider(provider)),
+            { observeScopedRemovals: true },
           )
         : auth;
       const acquiredNative =
