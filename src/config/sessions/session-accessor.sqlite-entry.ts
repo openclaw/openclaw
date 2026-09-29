@@ -6,7 +6,7 @@ import {
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { runOpenClawAgentWriteTransactionAsync } from "../../state/openclaw-agent-db-transaction.js";
+import { runOpenClawAgentWriteWithYieldingAdmission } from "../../state/openclaw-agent-db-transaction.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
   isIncognitoOpenClawAgentSqlitePath,
@@ -509,7 +509,7 @@ async function patchSqliteSessionEntrySnapshot(
         // The updater may dispose the prepared handle; re-admit before waiting for the write lock.
         return withDatabase(async () => {
           let result: SessionEntry | null = null;
-          const publish = await runOpenClawAgentWriteTransactionAsync(
+          const publish = await runOpenClawAgentWriteWithYieldingAdmission(
             (writeDatabase) => {
               assertCapturedSource(writeDatabase);
               if (options.shouldCommit?.() === false) {

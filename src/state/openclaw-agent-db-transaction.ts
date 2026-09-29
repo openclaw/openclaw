@@ -21,7 +21,7 @@ import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-perm
 import { getOpenClawAgentDatabaseIfOpen, openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 
 /** Yield only for BEGIN admission; admitted writes and publications are never replayed. */
-export async function runOpenClawAgentWriteTransactionAsync<T>(
+export async function runOpenClawAgentWriteWithYieldingAdmission<T>(
   operation: (database: OpenClawAgentDatabase) => T,
   options: OpenClawAgentDatabaseOptions,
   transactionOptions: Pick<

@@ -35,7 +35,7 @@ vi.mock("../../state/openclaw-agent-db-identity.js", () => ({}));
 vi.mock("../../state/openclaw-agent-db-readonly-scope.js", () => ({}));
 vi.mock("../../state/openclaw-agent-db-readonly.js", () => ({}));
 vi.mock("../../state/openclaw-agent-db-transaction.js", () => ({
-  runOpenClawAgentWriteTransactionAsync: boundary.commit,
+  runOpenClawAgentWriteWithYieldingAdmission: boundary.commit,
 }));
 vi.mock("../../state/openclaw-agent-db.js", () => ({
   getOpenClawAgentDatabaseIfOpen: () => undefined,
