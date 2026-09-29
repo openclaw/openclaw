@@ -83,13 +83,13 @@ function restorePreUpdateChannelModelOverrides(params: {
   channels: Record<string, unknown>;
   preUpdateChannels: Record<string, unknown>;
   restoredChannelIds: string[];
-}): { channels: Record<string, unknown>; changed: boolean } {
+}): Record<string, unknown> {
   if (params.restoredChannelIds.length === 0) {
-    return { channels: params.channels, changed: false };
+    return params.channels;
   }
   const preUpdateModelByChannel = asNullableRecord(params.preUpdateChannels.modelByChannel);
   if (!preUpdateModelByChannel) {
-    return { channels: params.channels, changed: false };
+    return params.channels;
   }
   const currentModelByChannel = asNullableRecord(params.channels.modelByChannel) ?? {};
   const restoredModelByChannel = structuredClone(currentModelByChannel);
@@ -110,9 +110,7 @@ function restorePreUpdateChannelModelOverrides(params: {
       changed = true;
     }
   }
-  return changed
-    ? { channels: { ...params.channels, modelByChannel: restoredModelByChannel }, changed: true }
-    : { channels: params.channels, changed: false };
+  return changed ? { ...params.channels, modelByChannel: restoredModelByChannel } : params.channels;
 }
 
 function restoreDroppedPreUpdateChannels(
@@ -138,12 +136,11 @@ function restoreDroppedPreUpdateChannels(
     return { snapshot, changed: false };
   }
   const restoredChannelIds = restoredKeys.filter((channelId) => channelId !== "modelByChannel");
-  const restoredModelOverrides = restorePreUpdateChannelModelOverrides({
+  restoredChannels = restorePreUpdateChannelModelOverrides({
     channels: restoredChannels,
     preUpdateChannels,
     restoredChannelIds,
   });
-  restoredChannels = restoredModelOverrides.channels;
 
   const authoredChannels = resolveRestoredAuthoredChannels({
     currentChannels: snapshot.sourceConfig.channels,
@@ -230,10 +227,9 @@ function resolveRestoredAuthoredChannels(params: {
     preUpdateChannels: directAuthoredChannels,
     restoredChannelIds: params.restoredChannelIds,
   });
-  if (restoredModelOverrides.changed) {
-    return restoredModelOverrides.channels;
-  }
-  return changed ? restoredChannels : undefined;
+  return changed || restoredModelOverrides !== restoredChannels
+    ? restoredModelOverrides
+    : undefined;
 }
 
 export async function persistValidatedDowngradeConfig(
