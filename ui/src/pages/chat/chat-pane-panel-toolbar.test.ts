@@ -4,8 +4,11 @@ import { html, render } from "lit";
 import { expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
-import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
-import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
+import {
+  createPaneHeaderWorkspaceFixture,
+  createSessionCapabilityFixture,
+  createTestChatPane,
+} from "./chat-pane.test-support.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import { openSlot, promoteSidebarPanel, setSidebarOpen } from "./sidebar-layout.ts";
 
@@ -36,7 +39,7 @@ it("keeps main content actions and focus in the task toolbar across plugin panel
   const paint = () =>
     render(
       pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
+        createPaneHeaderWorkspaceFixture(state),
         { key: state.sessionKey, kind: "direct", updatedAt: 0 },
         false,
         undefined,

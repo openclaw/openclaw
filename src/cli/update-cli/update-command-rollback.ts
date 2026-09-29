@@ -1,3 +1,4 @@
+import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
@@ -8,7 +9,9 @@ import {
   resolveConfigForRead,
   resolveConfigIncludesForRead,
 } from "../../config/io.read-helpers.js";
+import { assertConfigFileWritePathSnapshot } from "../../config/io.write-safety.js";
 import { withConfigMutationLock } from "../../config/mutate.js";
+import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import {
@@ -18,7 +21,7 @@ import {
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import {
   readUpdateStateSchemaVersions,
   resolveUpdateStateContentVersion,
@@ -146,11 +149,14 @@ export async function rollbackFailedUpdate(params: {
   let result = params.result;
   const config =
     params.configSnapshot.sourceConfigBeforeMigrations ?? params.configSnapshot.sourceConfig;
-  const configSnapshot = params.activationConfig ?? {
+  const configSnapshot: UpdateConfigSnapshot = params.activationConfig ?? {
     path: params.configSnapshot.path,
     raw: params.configSnapshot.raw,
     hash: hashConfigRaw(params.configSnapshot.raw),
   };
+  const configFiles = [configSnapshot, ...(params.activationConfig?.includedFiles ?? [])];
+  const expectedConfigHashes = new Map(configFiles.map((file) => [file.path, file.hash]));
+  const changedConfigFiles = configFiles.filter((file) => file.hash !== hashConfigRaw(file.raw));
   const recoveryEnv = { ...env, [ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV]: "1" };
   const port = before?.stopped
     ? (before.servicePort ?? (await resolveUpdatedGatewayRestartPort({ config, serviceEnv: env })))
@@ -219,12 +225,34 @@ export async function rollbackFailedUpdate(params: {
   let failureReason = "rollback-state-unverified";
   const assertConfigUnchanged = async () => {
     assertCurrent();
-    let unchanged =
-      params.activationConfig?.doctorOwned !== false &&
-      (await readUpdateConfigSnapshot(configSnapshot.path)).hash === configSnapshot.hash;
-    if (unchanged && params.configSnapshot.includedPaths?.length) {
-      // Only the root file is restored. Resolve its captured include graph so
-      // edits to separate config files cannot escape the original state guard.
+    let unchanged = configFiles.every((file) => file.doctorOwned !== false);
+    for (const file of configFiles) {
+      if (!unchanged) {
+        break;
+      }
+      try {
+        if (file.pathSnapshot) {
+          assertConfigFileWritePathSnapshot(file.pathSnapshot, fsNode);
+        }
+        unchanged =
+          (await readUpdateConfigSnapshot(file.path)).hash === expectedConfigHashes.get(file.path);
+        if (file.pathSnapshot) {
+          assertConfigFileWritePathSnapshot(file.pathSnapshot, fsNode);
+        }
+      } catch (error) {
+        if (!(error instanceof ConfigMutationConflictError)) {
+          throw error;
+        }
+        unchanged = false;
+      }
+      assertCurrent();
+    }
+    if (
+      unchanged &&
+      params.activationConfig?.includedFiles === undefined &&
+      params.configSnapshot.includedPaths?.length
+    ) {
+      // Older handoffs carry only the root snapshot; keep their include refusal.
       const deps = normalizeConfigIoDeps({ env: { ...env } });
       const included = resolveConfigIncludesForRead(
         params.configSnapshot.parsed,
@@ -317,6 +345,7 @@ export async function rollbackFailedUpdate(params: {
           runId: run.runId,
           env,
           assertCurrent,
+          assertRollbackSafe: packageTransaction.assertRollbackSafe,
         });
       } catch (cause) {
         // A partial restore must not reopen the ledger through ordinary failure reporting.
@@ -405,7 +434,7 @@ export async function rollbackFailedUpdate(params: {
               step: "package rollback",
               status: restored.exitCode === 0 ? "completed" : "failed",
               endedAtMs: Date.now(),
-              ...(restored.reason ? { detail: restored.stderrTail ?? restored.reason } : {}),
+              detail: restored.advisory?.message ?? restored.stderrTail ?? restored.reason,
             },
             { env: opts.run.env },
           );
@@ -414,17 +443,18 @@ export async function rollbackFailedUpdate(params: {
           return failed(restored.reason ?? "source-rollback-failed");
         }
         failureReason = "rollback-state-unverified";
-        if (configSnapshot.hash === hashConfigRaw(configSnapshot.raw)) {
-          await assertConfigUnchanged();
-        } else {
+        await assertConfigUnchanged();
+        // Restore dependencies before the root that selects them.
+        for (const file of changedConfigFiles.toReversed()) {
           await assertConfigUnchanged();
           assertRestorationCurrent();
-          if (configSnapshot.raw === null) {
-            await fs.rm(configSnapshot.path, { force: true });
+          const targetPath = file.pathSnapshot?.targetPath ?? file.path;
+          if (file.raw === null) {
+            await fs.rm(targetPath, { force: true });
           } else {
             await replaceFileAtomic({
-              filePath: configSnapshot.path,
-              content: configSnapshot.raw,
+              filePath: targetPath,
+              content: file.raw,
               mode: 0o600,
               preserveExistingMode: false,
               beforeRename: async () => {
@@ -433,18 +463,39 @@ export async function rollbackFailedUpdate(params: {
               },
             });
           }
+          expectedConfigHashes.set(file.path, hashConfigRaw(file.raw));
         }
+        await assertConfigUnchanged();
         assertRestorationCurrent();
         return undefined;
       };
       // Unchanged config needs only the legacy read checks, including read-only
       // installs. Doctor-owned replacement must exclude config writers before
       // package rollback and retain that owner until config restoration settles.
+      const includeLocks = [
+        ...new Set(
+          changedConfigFiles
+            .filter((file) => file !== configSnapshot)
+            .map((file) => file.pathSnapshot?.targetPath ?? file.path),
+        ),
+      ].toSorted();
+      const restoreWithIncludeLocks = async (
+        index: number,
+      ): Promise<Awaited<ReturnType<typeof restore>>> =>
+        index === includeLocks.length
+          ? await restore()
+          : await withConfigMutationLock(
+              { lockPath: includeLocks[index], assertCurrent: assertRestorationCurrent },
+              () => restoreWithIncludeLocks(index + 1),
+            );
       const refused =
-        configSnapshot.hash === hashConfigRaw(configSnapshot.raw)
+        changedConfigFiles.length === 0
           ? await restore()
           : await withOwnedManagedUpdateEnv(env, () =>
-              withConfigMutationLock({ lockPath: configSnapshot.path }, restore),
+              withConfigMutationLock(
+                { lockPath: configSnapshot.path, assertCurrent: assertRestorationCurrent },
+                () => restoreWithIncludeLocks(0),
+              ),
             );
       assertRestorationCurrent();
       if (refused) {
@@ -528,6 +579,7 @@ export async function rollbackFailedUpdate(params: {
       resolveGatewayService(),
       recoveryEnv,
       params.timeoutMs,
+      { managerUid: restoredService.serviceManagerUid, assertCurrent },
     );
     let verdict = await revalidateManagedGatewayServiceAfterUpdate({
       state,

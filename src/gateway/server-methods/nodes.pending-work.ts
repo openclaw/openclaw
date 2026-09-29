@@ -1,5 +1,3 @@
-// Node pending methods queue and drain work for paired nodes that may reconnect
-// later, with optional APNs wake nudges.
 import {
   ErrorCodes,
   errorShape,
@@ -45,7 +43,6 @@ function resolveClientNodeId(
   return trimmed.length > 0 ? trimmed : null;
 }
 
-/** Gateway handlers for queueing work until a paired node reconnects. */
 export const nodePendingWorkHandlers: GatewayRequestHandlers = {
   "node.pending.drain": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateNodePendingDrainParams, "node.pending.drain", respond)) {

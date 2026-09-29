@@ -231,11 +231,15 @@ function resolveDirectAnnounceTransientRetryDelaysMs() {
 export async function runAnnounceDeliveryWithRetry<T>(params: {
   operation: string;
   signal?: AbortSignal;
+  prepareAttempt?: () => Promise<boolean>;
   isAttemptAllowed?: () => boolean;
   run: () => Promise<T>;
 }): Promise<T> {
   const retryDelaysMs = resolveDirectAnnounceTransientRetryDelaysMs();
   for (const [retryIndex, delayMs] of retryDelaysMs.entries()) {
+    if (params.prepareAttempt && !(await params.prepareAttempt())) {
+      throw new SourceOwnerChangedError();
+    }
     if (params.isAttemptAllowed?.() === false) {
       throw new SourceOwnerChangedError();
     }
@@ -258,6 +262,9 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
       );
       await waitForAnnounceRetryDelay(delayMs, params.signal);
     }
+  }
+  if (params.prepareAttempt && !(await params.prepareAttempt())) {
+    throw new SourceOwnerChangedError();
   }
   if (params.signal?.aborted) {
     throw new Error("announce delivery aborted");

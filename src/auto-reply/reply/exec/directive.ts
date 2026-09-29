@@ -150,24 +150,12 @@ export function extractExecDirective(rawBody?: string): ExecDirectiveParse {
   }
   const start = match.index;
   const argsStart = start + "/exec".length;
-  const parsed = parseExecDirectiveArgs(body.slice(argsStart));
+  const { consumed, ...parsed } = parseExecDirectiveArgs(body.slice(argsStart));
   // Remove only consumed key/value options so remaining text still reaches the agent.
-  const cleaned = removeDirectiveSpan(body, start, argsStart + parsed.consumed);
+  const cleaned = removeDirectiveSpan(body, start, argsStart + consumed);
   return {
     cleaned,
     hasDirective: true,
-    execHost: parsed.execHost,
-    execSecurity: parsed.execSecurity,
-    execAsk: parsed.execAsk,
-    execNode: parsed.execNode,
-    rawExecHost: parsed.rawExecHost,
-    rawExecSecurity: parsed.rawExecSecurity,
-    rawExecAsk: parsed.rawExecAsk,
-    rawExecNode: parsed.rawExecNode,
-    hasExecOptions: parsed.hasExecOptions,
-    invalidHost: parsed.invalidHost,
-    invalidSecurity: parsed.invalidSecurity,
-    invalidAsk: parsed.invalidAsk,
-    invalidNode: parsed.invalidNode,
+    ...parsed,
   };
 }

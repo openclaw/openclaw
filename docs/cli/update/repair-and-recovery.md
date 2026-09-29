@@ -73,6 +73,23 @@ the updated installation in place. Reporting failures do not trigger package
 rollback. The command still exits nonzero when required finalization cannot
 complete; follow its recovery guidance after the owning updater exits.
 
+Activation Doctor rechecks the chat requester's authority inside its own live
+maintenance scope. This lets it read authorization policy while the state database
+is offline for repair, without granting access to unrelated operations. The
+candidate supplies this repair even when an older updater launches Doctor.
+
+Git updaters with database rollback support snapshot the stopped installation's
+databases before activation Doctor. If Doctor fails, verified snapshots restore
+the pre-migration state before the previous source, runtime, configuration, and
+managed Gateway are restored. Doctor records its admitted and settled database
+generations against that backup, so its own migration does not prevent rollback.
+Later operator or runtime writes prevent destructive restoration: the updater
+preserves them, restarts and verifies the Gateway on the migrated installation,
+and reports the refusal with the next Doctor command. Lost ownership still
+prevents unauthorized effects and retains the recovery artifacts. This rollback support
+belongs to the installed updater; a new candidate cannot add it to an older
+updater already running.
+
 Dry runs and commands rejected by the initial argument, external-supervisor,
 state-store ownership, handoff identity, or immutable-config checks do not
 collect diagnostics or start an agent. Once those checks pass, failed metadata,
@@ -82,6 +99,42 @@ its parent Gateway process. Diagnosis preserves that refusal: it does not stop t
 Gateway, retry the update, or bypass safety checks. See
 [Update troubleshooting](/install/update-troubleshooting).
 
+### Original state captures
+
+Before a fresh direct CLI update writes runtime state, the installed updater attempts to
+retain the original config, its includes, local databases, and declared plugin
+migration resources. The capture stays beside the selected state directory in
+`<state-directory>.update-captures/<run-id>`. Doctor continuations keep the same
+capture; they do not replace it with already migrated state. State-directory
+relocation leaves its original location and recorded paths intact.
+Inherited control-plane and managed-helper runs retain their existing capture
+behavior. Standalone `doctor --fix` preserves a separate pre-repair copy; that
+copy does not replace an earlier update's originals.
+
+These captures are evidence for manual recovery. Active writers can change state
+during capture; an observed change leaves the capture incomplete and produces a
+warning. The set is not an atomic snapshot across active stores. Missing,
+unreadable, or incomplete captures do not establish a safe
+rollback point. The updater process keeps optional debug-proxy persistence
+disabled because its update history can use an older database schema. Doctor
+can resume capture after preserving the originals and admitting the repaired
+schema. A successful update that skips Doctor can therefore leave local HTTP
+tracing disabled for that invocation.
+Direct updates, including `--dry-run`, report this limitation when debug capture
+is enabled.
+
+Use `openclaw update status --json` to inspect retained evidence. Runtime rollback
+does not prove that an earlier original capture was restored. Status reports that
+capture as restored only when the restoration evidence identifies its manifest.
+Standalone Doctor copies appear as `manual`; their presence does not record a
+successful or failed repair. An unfinished capture appears as `incomplete`
+alongside valid captures, with its directory and no sealed manifest reference.
+Keep current data and inspect the originals before attempting restoration.
+Older installed updaters may not preserve or forward an original capture; a
+newer Doctor reports that limitation instead of treating current bytes as the
+pre-update state. Take a [verified backup](/install/updating#before-updating-create-a-verified-backup)
+before an upgrade when you need a complete recovery copy.
+
 ### Retained updater runtime
 
 An update can retain its running code in an `openclaw-update-runtime-*` directory
@@ -90,7 +143,9 @@ its workers and removes that directory after success, failure, an exception, or
 `SIGINT`/`SIGTERM`, including failures while reporting the outcome. If a worker
 cannot settle or removal fails, it records `Runtime retained at <path>: <reason>`
 and leaves cleanup available to Doctor. A cleanup warning does not replace the
-original update outcome.
+original update outcome. An earlier nonzero exit remains nonzero while cleanup
+is draining. Mutation and recovery owners must still drain; their failures produce
+a nonzero exit even if the printed command result was successful.
 
 Retention copies plugin manifests and files inspected by plugin safety checks,
 so retaining the updater does not make the checkout's plugins fail hardlink
@@ -100,7 +155,10 @@ These lifecycle and copying changes apply when the installed updater supports
 them; installing a newer candidate cannot change the updater already running.
 After that updater exits, run the newer `openclaw doctor --fix` from the original
 checkout to locate its sibling runtime directories. Doctor also checks known
-temporary directories, including the managed service's `TMPDIR`. Recognized
+temporary directories, including the managed service's `TMPDIR`, `TMP`, and `TEMP`.
+Relative service paths require its recorded absolute working directory. Legacy
+pnpm projections remain recognizable after a versioned package-root change within
+the same store; lookup is limited to 4,096 immediate projected-store entries. Recognized
 runtime projections are disposable; Doctor removes them when no worker still
 uses them. If ownership or process liveness cannot be verified, Doctor preserves
 the directory and reports the reason.
@@ -135,10 +193,10 @@ openclaw update repair --json
 openclaw update repair --accept-capabilities
 ```
 
-When repair runs under Bun, its fresh Doctor, config validation, readiness,
-completion, and non-interactive failure-diagnostic commands use that same Bun
-executable. Node and command-shim invocations keep their existing Node selection
-policy. Managed-service runtime selection remains owned by the service configuration.
+When update, post-core continuation, or repair runs under Bun, its OpenClaw
+maintenance children use that same Bun executable, including fresh Doctor,
+config validation, readiness, completion, and non-interactive failure diagnostics.
+Managed-service runtime selection stays with the service definition and its runtime pin.
 
 If an older updater publishes the new core but then reports
 `update-executor-settlement-failed` with `Parent executor is suspended for its candidate.`,
@@ -269,6 +327,12 @@ For full finalization, `update repair` runs `openclaw doctor --fix`, reloads the
 install records, syncs tracked plugins for the active update channel, updates
 managed npm plugin installs, repairs missing configured plugin payloads,
 refreshes the plugin registry, and writes converged install-record metadata.
+If plugin migrations remain deferred, finalization runs another fresh Doctor after
+releasing install-record ownership, even when no plugin package changed. This lets
+a corrected local plugin finish its pending confirmation in the same repair run.
+Doctor preserves the plugin's configuration when compatibility checks prevent
+discovery, so correcting the plugin does not require recreating its allowlist or
+enabled entry.
 Configured runtime plugins whose versions follow OpenClaw are checked against
 the newly installed core during post-update repair, even when the updater process
 started on the previous version.

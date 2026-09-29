@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { bindRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
@@ -6,6 +7,7 @@ import { isProgressCardRefreshInputProvenance } from "../../sessions/input-prove
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import {
   type ChatImageContent,
   type OffloadedRef,
@@ -24,6 +26,7 @@ import type { PreparedChatSendAttachments } from "./chat-send-attachments.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
+import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
@@ -41,6 +44,7 @@ async function persistChatSendImages(params: {
   offloadedRefs: OffloadedRef[];
   client: GatewayRequestHandlerOptions["client"];
   logGateway: GatewayRequestContext["logGateway"];
+  assertCurrent?: () => void;
 }): Promise<Awaited<ReturnType<typeof persistInboundImagesForTranscript>>> {
   if (
     (params.images.length === 0 && params.offloadedRefs.length === 0) ||
@@ -53,6 +57,7 @@ async function persistChatSendImages(params: {
     offloadedRefs: params.offloadedRefs,
     log: params.logGateway,
     logContext: "chat.send",
+    assertCurrent: params.assertCurrent,
   });
 }
 
@@ -119,7 +124,8 @@ export function prepareChatSendUserTurn(params: {
   >;
   session: Pick<PreparedChatSendSession, "agentId" | "clientRunId" | "sessionKey"> &
     Partial<Pick<PreparedChatSendSession, "cfg">>;
-  admission: Pick<AdmittedChatSend, "originatingRoute">;
+  admission: Pick<AdmittedChatSend, "originatingRoute"> &
+    Partial<Pick<AdmittedChatSend, "assertWorkAdmissionCurrent" | "assertClientUploadAllowed">>;
   attachments: PreparedChatSendAttachments;
   client: GatewayRequestHandlerOptions["client"];
   logGateway: GatewayRequestContext["logGateway"];
@@ -132,6 +138,10 @@ export function prepareChatSendUserTurn(params: {
     offloadedRefs: attachments.offloadedRefs,
     client,
     logGateway,
+    assertCurrent: () => {
+      admission.assertWorkAdmissionCurrent?.();
+      admission.assertClientUploadAllowed?.();
+    },
   });
   userTurn.setInputPromise(
     persistedMediaForTranscriptPromise.then((result) => {
@@ -240,6 +250,36 @@ export function prepareChatSendUserTurn(params: {
     GatewayRunToolBindings: request.toolBindings,
     GatewayUiCommandTarget: gatewayUiCommandTarget,
   };
+  const requester = client?.authenticatedUserProfile;
+  if (
+    requester &&
+    (client.authenticatedUserId || client.internal?.authenticatedOperator) &&
+    isBrowserOperatorUiClient(request.clientInfo) &&
+    !isSyntheticGatewayCaller(client) &&
+    (!request.systemInputProvenance || request.systemInputProvenance.kind === "external_user")
+  ) {
+    const authenticatedUserId = client.authenticatedUserId;
+    const { profileId, displayName } = requester;
+    bindRequesterProfile(ctx, {
+      id: profileId,
+      displayName,
+      isCurrent: () => {
+        try {
+          admission.assertWorkAdmissionCurrent?.();
+        } catch {
+          return false;
+        }
+        return (
+          !client.invalidated &&
+          !client.connectionSignal?.aborted &&
+          !isSyntheticGatewayCaller(client) &&
+          Boolean(client.authenticatedUserId || client.internal?.authenticatedOperator) &&
+          client.authenticatedUserId === authenticatedUserId &&
+          client.authenticatedUserProfile?.profileId === profileId
+        );
+      },
+    });
+  }
   if (client) {
     transferGatewayLocalUserIngress(client, ctx);
   }

@@ -10,6 +10,31 @@ sidebarTitle: "Access control"
 
 Who may reach OpenClaw through Slack, and which Slack actions it may take.
 
+## Linked requester identity
+
+Direct Socket Mode events and HTTP Request URLs that pass Slack signing-secret
+verification carry verified native Slack user IDs, including the
+`team:<team-id>:user:<user-id>` form. Relay events remain asserted because the
+Gateway authenticates the relay peer rather than the Slack sender. Display names
+never establish identity, and sender IDs derived from app-controlled message
+metadata remain asserted.
+
+For ordinary messages and app mentions from a verified Slack sender linked to an
+active user profile, OpenClaw includes that profile's canonical ID and current
+display name in host-generated, per-turn conversation info. A linked profile with `operator.admin` authority can ask
+"Assign this session to me"; the agent uses that profile ID with the `sessions`
+tool's `assign_owner` action for sessions visible to that administrator, including
+sessions the agent spawned. The turn carries the linked administrator's existing
+operator authority and checks the original link, role, and channel lifecycle before
+each privileged action. Unlinking, removing administrator access, or restarting the
+channel invalidates that turn; send a new request after access is restored.
+
+The tool remains owner-only: linking an ordinary member identifies the requester
+without granting assignment access. Unlinked or asserted senders receive no
+requester profile or operator authority. Configured command owners without a linked
+administrator profile keep their existing command access. See
+[Channel identity links](/concepts/user-model#channel-identity-links).
+
 ## Actions and gates
 
 Slack actions are controlled by `channels.slack.actions.*`.

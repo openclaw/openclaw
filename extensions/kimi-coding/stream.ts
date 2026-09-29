@@ -1,15 +1,13 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import {
-  streamSimple,
-  type AssistantMessage,
-  type AssistantMessageEvent,
-} from "openclaw/plugin-sdk/llm";
+import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   normalizeOpenAICompatibleReasoningReplay,
   streamWithPayloadPatch,
+  transformProviderStreamMessages,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
+  asOptionalObjectRecord,
   isRecord,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -30,9 +28,6 @@ type KimiToolCallBlock = {
 
 type KimiThinkingType = "enabled" | "disabled";
 type KimiK3ThinkingEffort = "low" | "high" | "max";
-interface MutableAssistantMessageEventStream extends AsyncIterable<AssistantMessageEvent> {
-  result: () => Promise<AssistantMessage>;
-}
 type KimiThinkingConfig = {
   type: KimiThinkingType;
   budget_tokens?: number;
@@ -225,24 +220,16 @@ function parseKimiTaggedToolCalls(text: string): KimiToolCallBlock[] | null {
 }
 
 function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
-  if (!message || typeof message !== "object") {
-    return;
-  }
-
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
+  const record = asOptionalObjectRecord(message);
+  if (!record || !Array.isArray(record.content)) {
     return;
   }
 
   let changed = false;
   const nextContent: unknown[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      nextContent.push(block);
-      continue;
-    }
-    const typedBlock = block as { type?: unknown; text?: unknown };
-    if (typedBlock.type !== "text" || typeof typedBlock.text !== "string") {
+  for (const block of record.content) {
+    const typedBlock = asOptionalObjectRecord(block);
+    if (typedBlock?.type !== "text" || typeof typedBlock.text !== "string") {
       nextContent.push(block);
       continue;
     }
@@ -261,62 +248,10 @@ function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
     return;
   }
 
-  (message as { content: unknown[] }).content = nextContent;
-  const typedMessage = message as { stopReason?: unknown };
-  if (typedMessage.stopReason === "stop") {
-    typedMessage.stopReason = "toolUse";
+  record.content = nextContent;
+  if (record.stopReason === "stop") {
+    record.stopReason = "toolUse";
   }
-}
-
-function transformKimiStreamEvent(
-  value: unknown,
-  transformMessage: (message: unknown) => void,
-): void {
-  const event =
-    value && typeof value === "object"
-      ? (value as { partial?: unknown; message?: unknown })
-      : undefined;
-  if (!event) {
-    return;
-  }
-  for (const message of [event.partial, event.message]) {
-    transformMessage(message);
-  }
-}
-
-function wrapStreamMessageObjects(
-  stream: MutableAssistantMessageEventStream,
-  transformMessage: (message: unknown) => void,
-): MutableAssistantMessageEventStream {
-  const readFinalMessage = stream.result.bind(stream);
-  Object.assign(stream, {
-    async result() {
-      const message = await readFinalMessage();
-      transformMessage(message);
-      return message;
-    },
-  });
-
-  const createIterator = stream[Symbol.asyncIterator].bind(stream);
-  stream[Symbol.asyncIterator] = () => {
-    const iterator = createIterator();
-    return {
-      async next() {
-        const step = await iterator.next();
-        if (!step.done) {
-          transformKimiStreamEvent(step.value, transformMessage);
-        }
-        return step;
-      },
-      async return(value?: unknown) {
-        return iterator.return?.(value) ?? { done: true as const, value: undefined };
-      },
-      async throw(error?: unknown) {
-        return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-      },
-    };
-  };
-  return stream;
 }
 
 function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
@@ -325,10 +260,10 @@ function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefined): St
     const maybeStream = underlying(model, context, options);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
       return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamMessageObjects(stream, rewriteKimiTaggedToolCallsInMessage),
+        transformProviderStreamMessages(stream, rewriteKimiTaggedToolCallsInMessage),
       );
     }
-    return wrapStreamMessageObjects(maybeStream, rewriteKimiTaggedToolCallsInMessage);
+    return transformProviderStreamMessages(maybeStream, rewriteKimiTaggedToolCallsInMessage);
   };
 }
 
@@ -399,28 +334,20 @@ export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): Stream
   });
 }
 
-function stripContentBlockCacheControl(block: unknown): void {
-  if (!block || typeof block !== "object") {
-    return;
-  }
-
-  const record = block as Record<string, unknown>;
-  delete record.cache_control;
-
-  if (record.type === "tool_result" && Array.isArray(record.content)) {
-    for (const nestedBlock of record.content) {
-      stripContentBlockCacheControl(nestedBlock);
-    }
-  }
-}
-
 function stripContentArrayCacheControl(value: unknown): void {
   if (!Array.isArray(value)) {
     return;
   }
 
   for (const block of value) {
-    stripContentBlockCacheControl(block);
+    const record = asOptionalObjectRecord(block);
+    if (!record) {
+      continue;
+    }
+    delete record.cache_control;
+    if (record.type === "tool_result") {
+      stripContentArrayCacheControl(record.content);
+    }
   }
 }
 
@@ -432,10 +359,6 @@ function stripAnthropicCacheControlMarkers(payloadObj: Record<string, unknown>):
   }
 
   for (const message of payloadObj.messages) {
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-
-    stripContentArrayCacheControl((message as Record<string, unknown>).content);
+    stripContentArrayCacheControl(asOptionalObjectRecord(message)?.content);
   }
 }

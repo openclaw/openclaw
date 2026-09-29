@@ -3,7 +3,11 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
+import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
+import {
+  createSqliteLifecycleAggregateError,
+  throwSqliteLifecycleErrors,
+} from "./sqlite-lifecycle-errors.js";
 import {
   receiveSqliteWorkerReply,
   type SqliteWorkerReplyOwner,
@@ -50,9 +54,7 @@ export function createSqliteWorkerLifecycle({
       createCpuTrackedWorker(options.carrierUrl, {
         resourceLimits: { maxOldGenerationSizeMb: 512 },
         env: resolveNodeCompileCacheEnv(),
-        execArgv: options.carrierUrl.pathname.endsWith(".ts")
-          ? ["--import", import.meta.resolve("tsx/esm")]
-          : [],
+        execArgv: resolveRuntimeWorkerThreadExecArgv(options.carrierUrl),
       }),
     );
     const exited = createDeferredCore();
@@ -205,14 +207,7 @@ export function createSqliteWorkerLifecycle({
       } finally {
         forget(actor);
       }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "SQLite worker actor cleanup failed", {
-          cause: errors[0],
-        });
-      }
+      throwSqliteLifecycleErrors(errors, "SQLite worker actor cleanup failed");
     })().finally(() => {
       actor.closing = undefined;
     });
@@ -244,14 +239,7 @@ export function createSqliteWorkerLifecycle({
         }
       }
       await slot.exit;
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "SQLite worker retirement cleanup failed", {
-          cause: errors[0],
-        });
-      }
+      throwSqliteLifecycleErrors(errors, "SQLite worker retirement cleanup failed");
     })().finally(() => {
       slot.retiring = undefined;
     });

@@ -25,15 +25,17 @@ import {
   hasSnapshotCapabilityProviderAvailability,
   loadCapabilityMetadataSnapshot,
 } from "./manifest-capability-availability.js";
-import { createDefaultMediaGenerateBackgroundScheduler } from "./media-generate-background-shared.js";
+import {
+  createDefaultMediaGenerateBackgroundScheduler,
+  type MediaGenerationTaskHandle,
+} from "./media-generate-background-shared.js";
 import {
   prepareMediaGenerationTask,
   resolveMediaGenerateToolContext,
   type MediaGenerateToolOptions,
   videoGenerationTaskLifecycle,
-  type VideoGenerationTaskHandle,
 } from "./media-generate-background.js";
-import { acquireVideoGenerationToolProviders } from "./media-generation-tool-providers.js";
+import { acquireMediaGenerationToolProviders } from "./media-generation-tool-providers.js";
 import {
   buildMediaReferenceDetails,
   normalizeMediaReferenceInputs,
@@ -55,13 +57,47 @@ import {
   executeVideoGenerationJob,
   loadReferenceAssets,
   normalizeResolution,
-  parseRoleArray,
 } from "./video-generate-tool.execution.js";
 
 const log = createSubsystemLogger("agents/tools/video-generate");
 const MAX_INPUT_IMAGES = 9;
 const MAX_INPUT_VIDEOS = 4;
 const MAX_INPUT_AUDIOS = 3;
+
+function readVideoReferenceInputs(
+  args: Record<string, unknown>,
+  kind: "image" | "video" | "audio",
+  maxCount: number,
+) {
+  const singularKey = kind === "audio" ? "audioRef" : kind;
+  const pluralKey = `${singularKey}s`;
+  const roleKey = `${kind}Roles`;
+  const inputs = normalizeMediaReferenceInputs({
+    args,
+    singularKey,
+    pluralKey,
+    maxCount,
+    label: `reference ${pluralKey}`,
+    dedupe: false,
+  });
+  const rawRoles = readSnakeCaseParamRaw(args, roleKey);
+  if (rawRoles == null) {
+    return { inputs, roles: [] };
+  }
+  if (!Array.isArray(rawRoles)) {
+    throw new ToolInputError(
+      `${roleKey} must be a JSON array of role strings, parallel to the reference list.`,
+    );
+  }
+  // Empty or non-string slots leave a role unset; extra roles cannot align to an asset.
+  const roles = rawRoles.map((entry) => (typeof entry === "string" ? entry.trim() : ""));
+  if (roles.length > inputs.length) {
+    throw new ToolInputError(
+      `${roleKey} has ${roles.length} entries but only ${inputs.length} reference ${kind}${inputs.length === 1 ? "" : "s"} were provided; extra roles cannot be aligned positionally.`,
+    );
+  }
+  return { inputs, roles };
+}
 
 const VideoGenerateToolProperties = {
   action: Type.Optional(
@@ -366,7 +402,7 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
         findDuplicate: createVideoGenerateDuplicateGuardResult,
         acquire: async (config) =>
           options?.preparedModelRuntime?.acquireMediaCapabilityProviders
-            ? acquireVideoGenerationToolProviders({
+            ? acquireMediaGenerationToolProviders("videoGenerationProviders", {
                 cfg: config,
                 prepared: options.preparedModelRuntime,
               })
@@ -417,47 +453,21 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
             providerOptionsRaw != null
               ? (providerOptionsRaw as Record<string, unknown>)
               : undefined;
-          const imageInputs = normalizeMediaReferenceInputs({
+          const { inputs: imageInputs, roles: imageRoles } = readVideoReferenceInputs(
             args,
-            singularKey: "image",
-            pluralKey: "images",
-            maxCount: MAX_INPUT_IMAGES,
-            label: "reference images",
-            dedupe: false,
-          });
-          // *Roles: parallel string arrays giving each asset a semantic role hint.
-          // Use readSnakeCaseParamRaw so both camelCase and snake_case keys are accepted.
-          const imageRoles = parseRoleArray({
-            raw: readSnakeCaseParamRaw(args, "imageRoles"),
-            kind: "imageRoles",
-            assetCount: imageInputs.length,
-          });
-          const videoInputs = normalizeMediaReferenceInputs({
+            "image",
+            MAX_INPUT_IMAGES,
+          );
+          const { inputs: videoInputs, roles: videoRoles } = readVideoReferenceInputs(
             args,
-            singularKey: "video",
-            pluralKey: "videos",
-            maxCount: MAX_INPUT_VIDEOS,
-            label: "reference videos",
-            dedupe: false,
-          });
-          const videoRoles = parseRoleArray({
-            raw: readSnakeCaseParamRaw(args, "videoRoles"),
-            kind: "videoRoles",
-            assetCount: videoInputs.length,
-          });
-          const audioInputs = normalizeMediaReferenceInputs({
+            "video",
+            MAX_INPUT_VIDEOS,
+          );
+          const { inputs: audioInputs, roles: audioRoles } = readVideoReferenceInputs(
             args,
-            singularKey: "audioRef",
-            pluralKey: "audioRefs",
-            maxCount: MAX_INPUT_AUDIOS,
-            label: "reference audioRefs",
-            dedupe: false,
-          });
-          const audioRoles = parseRoleArray({
-            raw: readSnakeCaseParamRaw(args, "audioRoles"),
-            kind: "audioRoles",
-            assetCount: audioInputs.length,
-          });
+            "audio",
+            MAX_INPUT_AUDIOS,
+          );
 
           const selectedProvider = resolveSelectedCapabilityProvider({
             providers: providers ?? listRuntimeVideoGenerationProviders({ config: effectiveCfg }),
@@ -541,23 +551,13 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
               prompt,
               requestKey,
               providerId: selectedProvider?.id,
-              config: effectiveCfg,
               scheduleBackgroundWork,
               onAsyncTaskStarted: options?.onAsyncTaskStarted,
               onFailure: (message: string, meta?: Record<string, unknown>) =>
                 log.warn(message, meta),
               detailExtras: {
-                ...buildMediaReferenceDetails({
-                  entries: loadedReferenceImages,
-                  singleKey: "image",
-                  pluralKey: "images",
-                  getResolvedInput: (entry) => entry.resolvedInput,
-                }),
-                ...buildMediaReferenceDetails({
-                  entries: loadedReferenceVideos,
-                  singleKey: "video",
-                  pluralKey: "videos",
-                  getResolvedInput: (entry) => entry.resolvedInput,
+                ...buildMediaReferenceDetails(loadedReferenceImages, "image"),
+                ...buildMediaReferenceDetails(loadedReferenceVideos, "video", {
                   singleRewriteKey: "videoRewrittenFrom",
                 }),
                 ...(model ? { model } : {}),
@@ -570,7 +570,7 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
                 ...(filename ? { filename } : {}),
                 ...(timeoutMs !== undefined ? { timeoutMs } : {}),
               },
-              run: (taskHandle: VideoGenerationTaskHandle | null) =>
+              run: (taskHandle: MediaGenerationTaskHandle | null) =>
                 executeVideoGenerationJob({
                   effectiveCfg,
                   prompt,

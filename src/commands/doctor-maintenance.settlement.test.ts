@@ -1,7 +1,9 @@
 import "./doctor-maintenance.settlement.test-support.js";
+import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
 import { GatewayServiceStopUnsafeError } from "../daemon/service-inspection-error.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
@@ -13,10 +15,31 @@ import { readUpdateDatabaseGenerations } from "../infra/update-database-generati
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
+import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+import * as nocow from "./doctor-sqlite-nocow.js";
 
 const settlement = await import("./doctor-maintenance.settlement.test-support.js");
 const { begin, boundary, cleanupBarrier, root } = settlement;
+const capturedExecFile = promisify(execFile);
+const capturedSpawnSync = spawnSync;
+
+it("blocks captured native calls and the real broker while settlement controls are active", async () => {
+  try {
+    expect(() => capturedSpawnSync("/synthetic/forbidden")).toThrow(
+      "Doctor settlement controls cannot start or inspect native processes",
+    );
+    await expect(async () => capturedExecFile("/synthetic/forbidden")).rejects.toThrow(
+      "Doctor settlement controls cannot start or inspect native processes",
+    );
+    expect(() =>
+      createSpawnBrokerHost({ workerUrl: new URL("file:///synthetic/forbidden.mjs") }),
+    ).toThrow("Doctor settlement controls cannot start or inspect native processes");
+    expect(boundary.native).toHaveBeenCalledTimes(3);
+  } finally {
+    boundary.native.mockClear();
+  }
+});
 
 it.each([false, true])(
   "captures settled Doctor writes without attributing earlier writes (changed=%s)",
@@ -35,6 +58,7 @@ it.each([false, true])(
       foreign.exec("INSERT INTO evidence VALUES (99)");
       foreign.close();
     }
+    const admitted = readUpdateDatabaseGenerations([pathname, missing]);
     const maintenance = await beginDoctorMaintenance({
       root: null,
       options: { repair: true, nonInteractive: true },
@@ -49,6 +73,7 @@ it.each([false, true])(
     const receipt = maintenance!.databaseWrites;
     expect(receipt).toEqual({
       unchanged: !changed,
+      fromGenerations: admitted,
       generations: readUpdateDatabaseGenerations([pathname, missing]),
     });
     expect(receipt?.generations[pathname]).not.toBe(databaseGenerations[pathname]);
@@ -62,6 +87,42 @@ it.each([false, true])(
     );
   },
 );
+
+it("attributes a NOCOW physical replacement to the retained Doctor maintenance interval", async () => {
+  vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async (paths) =>
+    readUpdateDatabaseGenerations(paths),
+  );
+  const pathname = path.join(settlement.tempDirs.make("doctor-nocow-receipt-"), "agent.sqlite");
+  const seed = new DatabaseSync(pathname);
+  seed.exec("CREATE TABLE evidence(value INTEGER); INSERT INTO evidence VALUES (1)");
+  seed.close();
+  const generations = readUpdateDatabaseGenerations([pathname]);
+  const rewrite = vi.spyOn(nocow, "repairDoctorSqliteNoCow").mockImplementation(async () => {
+    expect(boundary.close).toHaveBeenCalled();
+    fs.copyFileSync(pathname, `${pathname}.new`);
+    fs.renameSync(`${pathname}.new`, pathname);
+    return { changes: ["NOCOW rewrite complete"], warnings: [] };
+  });
+  const maintenance = await beginDoctorMaintenance({
+    root: null,
+    options: { repair: true, nonInteractive: true },
+    runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
+    databaseGenerations: generations,
+  });
+  await maintenance!.repairSqliteNoCow([pathname]);
+  await maintenance!.release();
+  expect(rewrite).toHaveBeenCalledOnce();
+  expect(maintenance!.databaseWrites).toEqual({
+    unchanged: true,
+    fromGenerations: generations,
+    generations: readUpdateDatabaseGenerations([pathname]),
+  });
+  expect(maintenance!.databaseWrites?.generations[pathname]).not.toBe(generations[pathname]);
+  expect(maintenance!.warnings).not.toContain("NOCOW rewrite complete");
+  await expect(maintenance!.repairSqliteNoCow([pathname])).rejects.toThrow(
+    "original live maintenance owner",
+  );
+});
 
 it("keeps fingerprint failures advisory and publishes no database write proof", async () => {
   vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async (paths) =>
@@ -83,11 +144,11 @@ it("keeps fingerprint failures advisory and publishes no database write proof", 
   await maintenance!.release();
 });
 
-it.each(
-  (["admission", "receipt"] as const).flatMap((phase) =>
-    (["forced", "uncertain"] as const).map((cleanup) => ({ phase, cleanup })),
-  ),
-)(
+it.each([
+  { phase: "admission", cleanup: "uncertain" },
+  { phase: "receipt", cleanup: "forced" },
+  { phase: "receipt", cleanup: "uncertain" },
+] as const)(
   "joins database $phase workers before releasing state custody ($cleanup)",
   async ({ phase, cleanup }) => {
     const barrier = cleanupBarrier();
@@ -135,6 +196,7 @@ it.each(
       expect(boundary.restart).toHaveBeenCalledOnce();
       expect(maintenance?.databaseWrites).toEqual({
         unchanged: true,
+        fromGenerations: databaseGenerations,
         generations: databaseGenerations,
       });
       return;
@@ -222,7 +284,6 @@ it("releases its acquired process owner without deferring a one-shot authority r
   });
   await expect(begin(assertCurrent)).rejects.toBe(refused);
   expect(boundary.release).toHaveBeenCalledOnce();
-  expect(boundary.ownerAssert).not.toHaveBeenCalled();
   expect(boundary.restart).not.toHaveBeenCalled();
   expect(boundary.stop).toHaveBeenCalledOnce();
 });
@@ -316,11 +377,12 @@ it.each(["forced", "uncertain"] as const)(
   },
 );
 
-it.each(
-  (["inspection", "autostart", "installation"] as const).flatMap((phase) =>
-    (["forced", "uncertain"] as const).map((cleanup) => ({ phase, cleanup })),
-  ),
-)(
+it.each([
+  { phase: "inspection", cleanup: "uncertain" },
+  { phase: "autostart", cleanup: "uncertain" },
+  { phase: "installation", cleanup: "forced" },
+  { phase: "installation", cleanup: "uncertain" },
+] as const)(
   "settles restoration $phase and retains unknown cleanup ($cleanup)",
   async ({ phase, cleanup }) => {
     if (phase === "installation") {
@@ -380,13 +442,11 @@ it.each(
     const error = await work;
     if (cleanup === "forced") {
       expect(error).toBeUndefined();
-      expect(boundary.restart).toHaveBeenCalledTimes(phase === "installation" ? 0 : 1);
+      expect(boundary.restart).not.toHaveBeenCalled();
       expect(boundary.health).toHaveBeenCalledOnce();
-      if (phase === "installation") {
-        expect(boundary.read).toHaveBeenCalledTimes(2);
-        expect(boundary.revalidate).toHaveBeenCalledTimes(2);
-        expect(boundary.repair).toHaveBeenCalledOnce();
-      }
+      expect(boundary.read).toHaveBeenCalledTimes(2);
+      expect(boundary.revalidate).toHaveBeenCalledTimes(2);
+      expect(boundary.repair).toHaveBeenCalledOnce();
       expect(boundary.log).toHaveBeenCalledWith(
         "Gateway restarted and verified after Doctor repair.",
       );
@@ -475,7 +535,10 @@ it("restores a service after state ownership fails without retaining a partial m
         release: () => {
           heldLeases--;
         },
-        assertCurrent: boundary.ownerAssert,
+        assertCurrent: (assertPolicy?: () => void) => {
+          boundary.ownerAssert();
+          assertPolicy?.();
+        },
         run<T>(operation: () => T): T {
           boundary.ownerAssert();
           return operation();
@@ -494,7 +557,7 @@ it("restores a service after state ownership fails without retaining a partial m
   expect(boundary.sleep).not.toHaveBeenCalled();
 });
 
-it.each(["drain", "acquired", "native-revoked", "install-drift"] as const)(
+it.each(["acquired", "native-revoked", "install-drift"] as const)(
   "refuses changed repair admission and compensates under original service custody (%s)",
   async (phase) => {
     if (phase === "install-drift") {
@@ -524,7 +587,10 @@ it.each(["drain", "acquired", "native-revoked", "install-drift"] as const)(
         release: () => {
           gatewayHeld = false;
         },
-        assertCurrent: boundary.ownerAssert,
+        assertCurrent: (assertPolicy?: () => void) => {
+          boundary.ownerAssert();
+          assertPolicy?.();
+        },
         run<T>(operation: () => T): T {
           boundary.ownerAssert();
           return operation();
@@ -538,9 +604,6 @@ it.each(["drain", "acquired", "native-revoked", "install-drift"] as const)(
     });
     boundary.sleep.mockImplementation(async () => {
       ticks++;
-      if (phase === "drain") {
-        conflict = true;
-      }
     });
     boundary.admission.mockImplementation(() => {
       checkedUnderOwner ||= gatewayHeld && ownerVerified;
@@ -635,13 +698,11 @@ it.each([false, true])(
   },
 );
 
-it("reports an already stopped Gateway without starting it after repair", async () => {
+it("leaves an already stopped Gateway with its legacy update parent after repair", async () => {
+  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
   boundary.stop.mockImplementation(async () => ({ ...settlement.stopped, stopped: false }));
   const maintenance = await begin();
   await maintenance!.finish({});
   expect(boundary.restart).not.toHaveBeenCalled();
   expect(boundary.health).not.toHaveBeenCalled();
-  const warning = expect.stringMatching(/already stopped before repair.*openclaw gateway start/);
-  expect(maintenance!.warnings).toContainEqual(warning);
-  expect(boundary.log).toHaveBeenCalledWith(warning);
 });

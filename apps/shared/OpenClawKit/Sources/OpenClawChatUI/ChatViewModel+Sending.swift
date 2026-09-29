@@ -12,7 +12,8 @@ private let chatSendingLogger = Logger(subsystem: "ai.openclaw", category: "Open
 
 extension OpenClawChatViewModel {
     public var canSend: Bool {
-        !isSubmittingDraft &&
+        !self.usesWebConversation &&
+            !isSubmittingDraft &&
             !isSending &&
             self.attachmentStagingCount == 0 &&
             !self.hasBlockingRunActivity &&
@@ -40,6 +41,7 @@ extension OpenClawChatViewModel {
     }
 
     public func send() {
+        guard !self.usesWebConversation else { return }
         logDiagnostic(
             "chat.ui send invoked sessionKey=\(sessionKey) "
                 + "inputLen=\(input.count) attachments=\(attachments.count) "
@@ -199,9 +201,13 @@ extension OpenClawChatViewModel {
         filter: OpenClawChatCommandFilter) -> [OpenClawChatCommandChoice]
     {
         let trimmed = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        let query = self.normalizedSlashQuery(trimmed)
-        let effectiveFilter: OpenClawChatCommandFilter =
-            self.queryTargetsSkills(trimmed) && filter == .all ? .skills : filter
+        let withoutSlash = trimmed.hasPrefix("/") ? String(trimmed.dropFirst()) : trimmed
+        let normalized = withoutSlash.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let targetsSkills = normalized == "skill" || normalized.hasPrefix("skill ")
+        let query = targetsSkills
+            ? String(normalized.dropFirst("skill".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            : normalized
+        let effectiveFilter: OpenClawChatCommandFilter = targetsSkills && filter == .all ? .skills : filter
         return commands.enumerated()
             .compactMap { index, command -> (Int, Int, OpenClawChatCommandChoice)? in
                 guard self.command(command, isIncludedIn: effectiveFilter) else { return nil }
@@ -215,24 +221,6 @@ extension OpenClawChatViewModel {
                 return $0.1 < $1.1
             }
             .map(\.2)
-    }
-
-    private static func normalizedSlashQuery(_ query: String) -> String {
-        let withoutSlash = query.hasPrefix("/") ? String(query.dropFirst()) : query
-        let lower = withoutSlash.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if lower == "skill" {
-            return ""
-        }
-        if lower.hasPrefix("skill ") {
-            return String(lower.dropFirst("skill ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return lower
-    }
-
-    private static func queryTargetsSkills(_ query: String) -> Bool {
-        let withoutSlash = query.hasPrefix("/") ? String(query.dropFirst()) : query
-        let lower = withoutSlash.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return lower == "skill" || lower.hasPrefix("skill ")
     }
 
     private static func command(
@@ -734,7 +722,8 @@ extension OpenClawChatViewModel {
         if canPreserveInOutbox,
            let durableSessionSettingsExpectation,
            attempt.encodedAttachments.isEmpty,
-           !(error is GatewayResponseError)
+           !(error is GatewayResponseError),
+           !(error is OpenClawChatSendOwnershipError)
         {
             runMessageScopesByRunID.removeValue(forKey: attempt.runId)
             clearPendingRun(attempt.runId)
@@ -757,11 +746,6 @@ extension OpenClawChatViewModel {
                 return
             }
             guard isCurrentSession(attempt.draft.session) else { return }
-            // Refused persistence (queue full / broken store): restore the
-            // draft so the text is not lost with the failed bubble.
-            if input.isEmpty {
-                input = attempt.draft.input
-            }
         }
         self.restoreDraftAfterLiveSendFailure(attempt)
         removePendingLocalUserEcho(for: attempt.runId)

@@ -99,16 +99,11 @@ function replaceTelegramDefaultToTargets(params: {
   };
 
   maybeReplace(telegram, "defaultTo");
-  const accounts = asObjectRecord(telegram.accounts);
-  if (!accounts) {
-    return changed;
-  }
-  for (const accountId of Object.keys(accounts)) {
-    const account = asObjectRecord(accounts[accountId]);
-    if (!account) {
-      continue;
+  for (const value of Object.values(asObjectRecord(telegram.accounts) ?? {})) {
+    const account = asObjectRecord(value);
+    if (account) {
+      maybeReplace(account, "defaultTo");
     }
-    maybeReplace(account, "defaultTo");
   }
   return changed;
 }

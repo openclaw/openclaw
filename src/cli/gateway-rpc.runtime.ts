@@ -11,7 +11,7 @@ import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";
 
-type CallGatewayFromCliRuntimeExtra = {
+export type GatewayRpcExtraOptions = {
   clientName?: Parameters<typeof callGateway>[0]["clientName"];
   mode?: Parameters<typeof callGateway>[0]["mode"];
   deviceIdentity?: Parameters<typeof callGateway>[0]["deviceIdentity"];
@@ -19,15 +19,20 @@ type CallGatewayFromCliRuntimeExtra = {
   expectFinal?: boolean;
   progress?: boolean;
   scopes?: Parameters<typeof callGateway>[0]["scopes"];
-  defaultTimeoutMs?: number;
-  timeoutMs?: number | null;
-  label?: string;
+  sharedStateMode?: Parameters<typeof callGateway>[0]["sharedStateMode"];
+  /** Reuse approved device auth; explicit credentials still take precedence. */
   useStoredDeviceAuth?: boolean;
+  /** Require existing grants without requesting a scope upgrade. */
   requiredStoredDeviceAuthScopes?: Parameters<
     typeof callGateway
   >[0]["requiredStoredDeviceAuthScopes"];
+};
+
+type CallGatewayFromCliRuntimeExtra = GatewayRpcExtraOptions & {
+  defaultTimeoutMs?: number;
+  timeoutMs?: number | null;
+  label?: string;
   requireLocalBackendSharedAuth?: boolean;
-  sharedStateMode?: Parameters<typeof callGateway>[0]["sharedStateMode"];
 };
 
 type GatewayCliTransportRpcOpts = Omit<GatewayRpcOpts, "timeout"> & {

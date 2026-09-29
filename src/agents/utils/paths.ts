@@ -27,27 +27,19 @@ export function canonicalizePath(path: string): string {
  */
 export function isLocalPath(value: string): boolean {
   const trimmed = value.trim();
-  // Known non-local prefixes
-  if (
+  return !(
     trimmed.startsWith("npm:") ||
     trimmed.startsWith("git:") ||
     trimmed.startsWith("github:") ||
     trimmed.startsWith("http:") ||
     trimmed.startsWith("https:") ||
     trimmed.startsWith("ssh:")
-  ) {
-    return false;
-  }
-  return true;
-}
-
-function resolveAgainstCwd(filePath: string, cwd: string): string {
-  return isAbsolute(filePath) ? resolvePath(filePath) : resolvePath(cwd, filePath);
+  );
 }
 
 function getCwdRelativePath(filePath: string, cwd: string): string | undefined {
   const resolvedCwd = resolvePath(cwd);
-  const resolvedPath = resolveAgainstCwd(filePath, resolvedCwd);
+  const resolvedPath = resolvePath(resolvedCwd, filePath);
   const relativePath = relative(resolvedCwd, resolvedPath);
   const isInsideCwd =
     relativePath === "" ||
@@ -57,6 +49,6 @@ function getCwdRelativePath(filePath: string, cwd: string): string | undefined {
 }
 
 export function formatPathRelativeToCwdOrAbsolute(filePath: string, cwd: string): string {
-  const absolutePath = resolveAgainstCwd(filePath, cwd);
+  const absolutePath = resolvePath(cwd, filePath);
   return (getCwdRelativePath(absolutePath, cwd) ?? absolutePath).split(sep).join("/");
 }

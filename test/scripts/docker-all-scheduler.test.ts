@@ -1518,7 +1518,15 @@ await runShellCommand({
         cwd: process.cwd(),
         stdio: ["ignore", "ignore", "pipe"],
       });
+      let runnerStderr = "";
+      runner.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+        runnerStderr += chunk;
+      });
       await waitFor(() => {
+        // A runner that fails to load never becomes ready; report its error, not a timeout.
+        if (runner?.exitCode !== null) {
+          throw new Error(`runner exited before readiness:\n${runnerStderr}`);
+        }
         grandchildPid = readCompletePidFile(grandchildPidPath) ?? 0;
         return existsSync(readyPath) && grandchildPid > 0;
       });

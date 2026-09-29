@@ -964,7 +964,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       ),
       showModeToggle: this.pageId === "advanced",
       formValue: configState.configForm,
-      originalValue: configState.configFormOriginal,
       activeSection,
       activeSubsection,
       onRawChange: (next) => {
@@ -1052,6 +1051,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       chatShowTaskProgress:
         this.settings.chatShowTaskProgress ?? UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
       setChatShowTaskProgress: (enabled) => this.applySettings({ chatShowTaskProgress: enabled }),
+      openLinksExternally: this.settings.openLinksExternally === true,
+      setOpenLinksExternally: (enabled) => this.applySettings({ openLinksExternally: enabled }),
       chatCollapseTaskProgress: this.settings.chatCollapseTaskProgress === true,
       setChatCollapseTaskProgress: (enabled) =>
         this.applySettings({ chatCollapseTaskProgress: enabled }),
@@ -1181,18 +1182,21 @@ export class ConfigPage extends OpenClawLightDomElement {
       onWebPushSetDevicePreferences: (preferences) =>
         void this.context.webPush.run({ kind: "set", scope: "device", preferences }),
     };
+    const renderSectionEditor = (section: string, label: string, schema = props.schema) =>
+      renderConfig({
+        ...props,
+        schema,
+        activeSection: section,
+        activeSubsection: null,
+        showModeToggle: false,
+        embeddedEditor: true,
+        navRootLabel: label,
+      });
     if (this.pageId === "mcp") {
       return renderMcp({
         configObject,
         pluginsHref: pathForRoute("plugins", this.context.basePath),
-        editor: renderConfig({
-          ...props,
-          activeSection: "mcp",
-          activeSubsection: null,
-          showModeToggle: false,
-          embeddedEditor: true,
-          navRootLabel: "MCP",
-        }),
+        editor: renderSectionEditor("mcp", "MCP"),
       });
     }
     if (this.pageId === "memory") {
@@ -1203,30 +1207,14 @@ export class ConfigPage extends OpenClawLightDomElement {
         memoryImportHref: pathForRoute("memory-import", this.context.basePath),
         routeData: this.routeData,
         buildEditor: (keys) =>
-          renderConfig({
-            ...props,
-            schema: narrowMemorySchema(props.schema, keys),
-            activeSection: "memory",
-            activeSubsection: null,
-            showModeToggle: false,
-            embeddedEditor: true,
-            navRootLabel: t("tabs.memory"),
-          }),
+          renderSectionEditor("memory", t("tabs.memory"), narrowMemorySchema(props.schema, keys)),
       });
     }
     if (this.pageId === "talk") {
       return renderTalkPage({
         configObject,
         mutationDisabled: this.isCuratedConfigMutationDisabled(),
-        buildEditor: () =>
-          renderConfig({
-            ...props,
-            activeSection: "talk",
-            activeSubsection: null,
-            showModeToggle: false,
-            embeddedEditor: true,
-            navRootLabel: t("tabs.talk"),
-          }),
+        buildEditor: () => renderSectionEditor("talk", t("tabs.talk")),
       });
     }
     if (this.pageId === "security") {

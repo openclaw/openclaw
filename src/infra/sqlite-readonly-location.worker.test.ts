@@ -54,6 +54,35 @@ async function expectWorkerFailure(
 }
 
 describe("SQLite read-only worker diagnostics", () => {
+  it.each([
+    ["staging-create", undefined, true],
+    ["staging-create-legacy", undefined, true],
+    ["staging-retire", undefined, false],
+    ["async", undefined, false],
+    ["staging-create", "child exited before completion", false],
+  ] as const)(
+    "accepts allocation refusal receipts only for completed staging requests (%s, %s)",
+    async (mode, failure, refused) => {
+      const {
+        readSqliteReadOnlyWorkerValue,
+        SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX,
+        SqliteSnapshotAllocationRefusedError,
+      } = await import("./sqlite-readonly-worker-protocol.js");
+      const stdout = JSON.stringify({
+        ok: false,
+        message: `${SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX}native directory refusal`,
+      });
+      let received: unknown;
+      try {
+        readSqliteReadOnlyWorkerValue({ stdout, stderr: "", failure }, mode);
+      } catch (error) {
+        received = error;
+      }
+      expect(received).toBeInstanceOf(Error);
+      expect(received instanceof SqliteSnapshotAllocationRefusedError).toBe(refused);
+    },
+  );
+
   it("reads cause metadata once through the registered worker", async () => {
     let causeReads = 0;
     const failure = Object.defineProperty(new Error("open failure"), "cause", {

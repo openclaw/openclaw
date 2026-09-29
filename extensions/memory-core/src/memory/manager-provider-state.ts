@@ -47,25 +47,6 @@ export type MemoryProviderLifecycleState =
       attemptedProviderId?: string;
     };
 
-export function createPendingMemoryProviderLifecycle(
-  requestedProvider: string,
-): MemoryProviderLifecycleState {
-  return { mode: "pending", requestedProvider };
-}
-
-export function createDegradedMemoryProviderLifecycle(params: {
-  providerId: string;
-  reason: string;
-  code?: string;
-}): MemoryProviderLifecycleState {
-  return {
-    mode: "degraded",
-    providerId: params.providerId,
-    reason: params.reason,
-    ...(params.code ? { code: params.code } : {}),
-  };
-}
-
 function resolveProviderLifecycle(result: EmbeddingProviderResult): MemoryProviderLifecycleState {
   if (result.provider && result.fallbackFrom) {
     return {
@@ -131,17 +112,7 @@ export function resolveMemoryFallbackProviderRequest(params: {
   cfg: OpenClawConfig;
   settings: ResolvedMemorySearchConfig;
   currentProviderId: string | null;
-}): {
-  provider: string;
-  model: string;
-  remote: ResolvedMemorySearchConfig["remote"];
-  inputType: ResolvedMemorySearchConfig["inputType"];
-  queryInputType: ResolvedMemorySearchConfig["queryInputType"];
-  documentInputType: ResolvedMemorySearchConfig["documentInputType"];
-  outputDimensionality: ResolvedMemorySearchConfig["outputDimensionality"];
-  fallback: "none";
-  local: ResolvedMemorySearchConfig["local"];
-} | null {
+}) {
   const fallback = params.settings.fallback;
   if (
     !fallback ||
@@ -159,7 +130,7 @@ export function resolveMemoryFallbackProviderRequest(params: {
     queryInputType: params.settings.queryInputType,
     documentInputType: params.settings.documentInputType,
     outputDimensionality: params.settings.outputDimensionality,
-    fallback: "none",
+    fallback: "none" as const,
     local: params.settings.local,
   };
 }

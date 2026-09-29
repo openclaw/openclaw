@@ -18,43 +18,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
  */
 type AuditModelRef = { id: string; source: string };
 
-function resolveAuditModelId(
-  cfg: OpenClawConfig,
-  raw: string,
-  aliasIndex: ReturnType<typeof buildModelAliasIndex>,
-): string {
-  // Audit runs before provider/plugin runtime loading, so only config-defined aliases
-  // are normalized here; unresolved values are still reported with their original text.
-  const resolved = resolveModelRefFromString({
-    cfg,
-    raw,
-    defaultProvider: DEFAULT_PROVIDER,
-    aliasIndex,
-    allowPluginNormalization: false,
-  })?.ref;
-  return resolved ? modelKey(resolved.provider, resolved.model) : raw;
-}
-
-function addModelRef(params: {
-  out: AuditModelRef[];
-  cfg: OpenClawConfig;
-  aliasIndex: ReturnType<typeof buildModelAliasIndex>;
-  raw: unknown;
-  source: string;
-}): void {
-  if (typeof params.raw !== "string") {
-    return;
-  }
-  const raw = params.raw.trim();
-  if (!raw) {
-    return;
-  }
-  params.out.push({
-    id: resolveAuditModelId(params.cfg, raw, params.aliasIndex),
-    source: params.source,
-  });
-}
-
 /**
  * Collect every configured primary and fallback model that security audits should classify.
  * Agent-specific refs keep source labels precise so findings point at the risky override.
@@ -66,7 +29,25 @@ export function collectAuditModelRefs(cfg: OpenClawConfig): AuditModelRef[] {
     allowPluginNormalization: false,
   });
   const out: AuditModelRef[] = [];
-  const add = (raw: unknown, source: string) => addModelRef({ out, cfg, aliasIndex, raw, source });
+  const add = (value: unknown, source: string) => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const raw = value.trim();
+    if (!raw) {
+      return;
+    }
+    // Audit runs before provider/plugin runtime loading, so only config-defined aliases
+    // are normalized here; unresolved values are still reported with their original text.
+    const resolved = resolveModelRefFromString({
+      cfg,
+      raw,
+      defaultProvider: DEFAULT_PROVIDER,
+      aliasIndex,
+      allowPluginNormalization: false,
+    })?.ref;
+    out.push({ id: resolved ? modelKey(resolved.provider, resolved.model) : raw, source });
+  };
 
   add(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model), "agents.defaults.model.primary");
   for (const fallback of resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)) {

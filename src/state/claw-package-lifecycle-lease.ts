@@ -202,24 +202,20 @@ export async function withClawPackageLifecycleLease<T>(
   const maintained = maintainClawPackageLifecycleLease(lease);
   // CLI failures call process.exit(), which skips async finally blocks. Release
   // synchronously on exit so the next package command is not blocked until TTL.
-  const releaseOnExit = () => {
-    try {
-      maintained.release();
-    } catch {
-      // Expiry recovers a lease whose exit cleanup loses a database race.
-    }
-  };
-  process.once("exit", releaseOnExit);
-  try {
-    const result = await operation();
-    maintained.assertCurrent();
-    return result;
-  } finally {
-    process.removeListener("exit", releaseOnExit);
+  const release = () => {
     try {
       maintained.release();
     } catch {
       // Expiry recovers a lease whose cleanup cannot reach the shared database.
     }
+  };
+  process.once("exit", release);
+  try {
+    const result = await operation();
+    maintained.assertCurrent();
+    return result;
+  } finally {
+    process.removeListener("exit", release);
+    release();
   }
 }

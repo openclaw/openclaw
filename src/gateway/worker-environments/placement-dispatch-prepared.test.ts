@@ -38,8 +38,8 @@ import {
   stageSessionRepositoryCheckpoint,
 } from "./session-repository-checkpoints.js";
 import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
+import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
-import { readActualWorkspaceManifest } from "./workspace-reconcile-core.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 
 vi.mock("./worker-github-binding.js", () => ({ prepareWorkerGitHubBinding: vi.fn() }));
@@ -564,12 +564,12 @@ describe("prepared worker dispatch", () => {
         "source",
       ]);
       const baseCommit = await requireWorkspaceResultGit(stagingRoot, ["rev-parse", "HEAD"]);
-      const base = await readActualWorkspaceManifest({ root: stagingRoot, baseCommit });
+      const base = await captureWorkspaceManifest({ root: stagingRoot, baseCommit });
       await fs.writeFile(path.join(stagingRoot, "session.txt"), "accepted session change\n");
-      const current = await readActualWorkspaceManifest({ root: stagingRoot, baseCommit });
+      const current = await captureWorkspaceManifest({ root: stagingRoot, baseCommit });
       const repositoryStore = getSessionRepositoryWorkspaceStore();
       expect(repositoryStore.path).toBe(support.testState.stateDb.path);
-      const created = repositoryStore.create({
+      const created = await repositoryStore.create({
         agentId: REQUEST.agentId,
         sessionKey: REQUEST.sessionKey,
         url: "https://github.com/example/project.git",
@@ -577,7 +577,7 @@ describe("prepared worker dispatch", () => {
         runSetupScript: true,
         assertCurrent: () => {},
       });
-      const pinned = repositoryStore.bindBase({
+      const pinned = await repositoryStore.bindBase({
         workspaceId: created.workspaceId,
         expectedRevision: created.revision,
         baseCommit,
@@ -599,7 +599,7 @@ describe("prepared worker dispatch", () => {
       } finally {
         await staged.discard();
       }
-      const accepted = repositoryStore.get(created.workspaceId)!;
+      const accepted = (await repositoryStore.get(created.workspaceId))!;
       const boundWorkspace = {
         workspaceDir: "/worker/prepared/project",
         sourceManifestRef: base.manifestRef,
@@ -670,7 +670,7 @@ describe("prepared worker dispatch", () => {
       expect(harness.log.indexOf("workspace:bind-prepared")).toBeLessThan(
         harness.log.indexOf("sync"),
       );
-      expect(repositoryStore.get(accepted.workspaceId)).toEqual(accepted);
+      expect(await repositoryStore.get(accepted.workspaceId)).toEqual(accepted);
       const checkpoint = await readSessionRepositoryArtifacts({
         workspaceId: accepted.workspaceId,
         assertCurrent: () => {},

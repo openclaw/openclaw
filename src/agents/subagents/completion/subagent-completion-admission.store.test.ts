@@ -1,6 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadPendingSessionDeliveries } from "../../../infra/session-delivery-queue-storage.js";
+import {
+  loadPendingSessionDeliveries,
+  markSessionDeliverySettlement,
+} from "../../../infra/session-delivery-queue-storage.js";
 import { prepareClaimedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
 import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
@@ -270,7 +273,8 @@ describe("native subagent completion worker admission", () => {
             "Correlated settlement touched main-thread SQLite",
           );
           try {
-            await settleCorrelatedSubagentDelivery(queued, "recovered");
+            await markSessionDeliverySettlement(queued, "recovered", context);
+            await settleCorrelatedSubagentDelivery(queued, "recovered", context);
           } finally {
             settlementSql.restore();
           }

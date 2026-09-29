@@ -1,5 +1,6 @@
 import { globSync } from "node:fs";
 import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
+import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
 import {
   matchesVitestCliSelection,
   matchesVitestGlob,
@@ -55,7 +56,7 @@ const bunCompatibleAgentSupportFiles = ["src/agents/worktrees/service.removal-re
 const nativeCompilerTestFiles = [
   "src/agents/agent-bundle-mcp-requester-connect.import-boundary.test.ts",
   "src/agents/agent-model-discovery.imports.test.ts",
-  "src/agents/code-mode.action-output.test.ts",
+  "src/agents/code-mode.auto-results.test.ts",
   "src/agents/harness/native-hook-relay.imports.test.ts",
   "src/cli/program/register.database.import-boundary.test.ts",
   "src/plugin-sdk/provider-tools.test.ts",
@@ -74,8 +75,23 @@ const nativeCompilerTestFiles = [
 // Keep every case on Node while the canonical inventories own all other membership.
 const runtimePartitions = new Map<
   string,
-  { files: (cwd: string) => string[]; nodeRequired: ReadonlySet<string>; includeAfterShard?: true }
+  {
+    files: (cwd: string) => string[];
+    nodeRequired: ReadonlySet<string> | ((file: string) => boolean);
+    includeAfterShard?: true;
+  }
 >([
+  [
+    "test/vitest/vitest.process.config.ts",
+    {
+      files: (cwd) =>
+        globSync("src/process/**/*.test.ts", { cwd, exclude: databaseWorkerCoreTestFiles })
+          .map((file) => file.replaceAll("\\", "/"))
+          .toSorted(),
+      // Only this native-Bun contract is qualified; process siblings retain Node.
+      nodeRequired: (file) => file !== "src/process/terminal-pty-bun.test.ts",
+    },
+  ],
   [
     "test/vitest/vitest.unit-fast.config.ts",
     {
@@ -88,6 +104,7 @@ const runtimePartitions = new Map<
         "src/cli/cli-process-diagnostics.test.ts",
         // Native heap accounting, GC, and Worker limits require V8.
         "src/infra/worker-task-pool.memory.test.ts",
+        "src/plugins/runtime.retention.test.ts",
         "src/process/spawn-broker/callback-context.test.ts",
         "src/process/spawn-broker/cleanup.test.ts",
         "src/process/spawn-broker/handoff.test.ts",
@@ -118,6 +135,7 @@ const runtimePartitions = new Map<
           .toSorted(),
       // Bun GC can retain released chat and overview payloads; keep their retention proof on Node.
       nodeRequired: new Set([
+        "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
         "ui/src/pages/chat/chat-thread.test.ts",
         "ui/src/pages/usage/usage-page-details.test.ts",
       ]),
@@ -125,6 +143,15 @@ const runtimePartitions = new Map<
     },
   ],
 ]);
+
+function partitionRequiresNode(
+  partition: { nodeRequired: ReadonlySet<string> | ((file: string) => boolean) },
+  file: string,
+): boolean {
+  return typeof partition.nodeRequired === "function"
+    ? partition.nodeRequired(file)
+    : partition.nodeRequired.has(file);
+}
 
 function unitFastFiles(): string[] {
   const otherOwners = new Set([...getUnitFastTimerTestFiles(), ...getUnitFastIsolatedTestFiles()]);
@@ -255,7 +282,7 @@ export function resolveCiTestRuntimeSelections(
     }
     const files = new Set(partition.files(cwd));
     return selection.targets.every(
-      (target) => files.has(target) && !partition.nodeRequired.has(target),
+      (target) => files.has(target) && !partitionRequiresNode(partition, target),
     )
       ? completeBun()
       : node;
@@ -320,11 +347,11 @@ export function resolveCiTestRuntimeSelections(
         ? requested.has(file)
         : selection.includePatterns.some((pattern) => matchesVitestGlob(file, pattern))),
   );
-  const bunFiles = files.filter((file) => !partition.nodeRequired.has(file));
+  const bunFiles = files.filter((file) => !partitionRequiresNode(partition, file));
   if (!bunFiles.length) {
     return node;
   }
-  const nodeFiles = files.filter((file) => partition.nodeRequired.has(file));
+  const nodeFiles = files.filter((file) => partitionRequiresNode(partition, file));
   return [
     ...(policy === "dual"
       ? node

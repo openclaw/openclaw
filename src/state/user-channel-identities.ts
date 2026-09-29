@@ -20,7 +20,6 @@ import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.typ
 import { updateConfigMachineStateInDatabase } from "./config-machine-state-write.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
@@ -51,7 +50,7 @@ import type {
 } from "./user-profiles.types.js";
 
 // The dot keeps administrator-attested channel links outside Tailscale login namespaces.
-const CHANNEL_IDENTITY_PROVIDER = "channel.identity";
+export const CHANNEL_IDENTITY_PROVIDER = "channel.identity";
 const POLICY_KEY = "operator.channelPolicy";
 const referenceSchema = z.strictObject({ version: z.literal(1), id: z.uuid() });
 const configuredReferenceSchema = referenceSchema.extend({ version: z.literal(2) });
@@ -209,14 +208,10 @@ function readAuthorization(db: DatabaseSync, id: string, policy: UserChannelAuth
   if (!row?.authorization_basis_json || row.authorization_basis_json.length > 1024) {
     return undefined;
   }
-  try {
-    const grant = grantSchema.safeParse(JSON.parse(row.authorization_basis_json));
-    return grant.success
-      ? { subject: row.subject, reference: { version: 1 as const, id }, grant: grant.data }
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const grant = grantSchema.safeParse(safeParseJson(row.authorization_basis_json));
+  return grant.success
+    ? { subject: row.subject, reference: { version: 1 as const, id }, grant: grant.data }
+    : undefined;
 }
 
 export class UserChannelIdentityConflictError extends Error {
@@ -339,7 +334,8 @@ export function unlinkUserChannelIdentity(
 }
 
 function hasIdentityTables(db: DatabaseSync): boolean {
-  return tableExists(db, "user_profiles") && tableExists(db, "user_profile_identities");
+  const tables = getAdmittedSqliteSchemaFacts(db)?.tables;
+  return tables?.has("user_profiles") === true && tables.has("user_profile_identities");
 }
 
 export function listUserChannelIdentitiesInDatabase(
@@ -421,6 +417,7 @@ export function resolveUserChannelIdentityInDatabase(
     return {
       ...(authorization ? { authorization } : {}),
       profileId: profile.id,
+      displayName: profile.display_name,
       role: profile.role ?? null,
       emails,
       loginIdentities: [

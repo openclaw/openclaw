@@ -125,6 +125,7 @@ export type SqliteWorkerStoreOptions = {
 };
 
 export type PreparedSqliteWorkerOpen = {
+  signal?: AbortSignal;
   preparation?: Buffer;
   runtimeGeneration?: RuntimeWorkerGeneration;
   carrierUrl: URL;
@@ -154,7 +155,12 @@ export type SqliteWorkerAdmissionCleanup = {
 
 export type SqliteWorkerOpenCustody = Pick<
   PreparedSqliteWorkerOpen,
-  "maintenanceScope" | "retainCleanup" | "createAdmission" | "stateDatabasePath" | "onNativeStopped"
+  | "maintenanceScope"
+  | "retainCleanup"
+  | "createAdmission"
+  | "stateDatabasePath"
+  | "onNativeStopped"
+  | "signal"
 > & { preparation?: unknown };
 export type SqliteWorkerInputRetention = "snapshot" | "stream";
 export type SqliteWorkerInputPreparation = {

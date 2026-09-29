@@ -21,7 +21,6 @@ import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js
 import {
   resolveEmbeddingProviderIndexIdentity,
   type EmbeddingProvider,
-  type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { MemoryManagerDatabaseContext } from "./manager-database-context.js";
@@ -49,6 +48,14 @@ export type MemorySyncProgressState = {
   total: number;
   label?: string;
   report: (update: MemorySyncProgressUpdate) => void;
+};
+
+export type MemoryEmbeddingBatchConfig = {
+  enabled: boolean;
+  wait: boolean;
+  concurrency: number;
+  pollIntervalMs: number;
+  timeoutMs: number;
 };
 
 export type MemoryIndexWorkItem = {
@@ -89,17 +96,11 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected abstract readonly workspaceDir: string;
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
-  protected fallbackFrom?: EmbeddingProviderId;
+  protected fallbackFrom?: string;
   protected abstract providerUnavailableReason?: string;
   protected abstract providerLifecycle: MemoryProviderLifecycleState;
   protected providerRuntime?: EmbeddingProviderRuntime;
-  protected abstract batch: {
-    enabled: boolean;
-    wait: boolean;
-    concurrency: number;
-    pollIntervalMs: number;
-    timeoutMs: number;
-  };
+  protected abstract batch: MemoryEmbeddingBatchConfig;
   protected readonly sources: Set<MemorySource> = new Set();
   protected readonly sourceInspections = new Map<
     MemorySource,
@@ -151,14 +152,14 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
     deferIndex?: boolean;
-  }): Promise<MemorySourceSyncPlan>;
+  }): Promise<MemorySourceSyncPlan | undefined>;
   protected abstract syncArchiveFiles(params: {
     needsFullReindex: boolean;
     targetArchiveFiles?: string[];
     progress?: MemorySyncProgressState;
     deferIndex?: boolean;
     prefixIndexItems?: MemoryIndexWorkItem[];
-  }): Promise<MemorySourceSyncPlan>;
+  }): Promise<void>;
 
   protected markMemoryWatchDirty(): void {
     this.memoryWatchGeneration += 1;
@@ -189,10 +190,6 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
 
   protected abstract indexFiles(items: MemoryIndexWorkItem[]): Promise<void>;
 
-  protected emptySourceSyncPlan(): MemorySourceSyncPlan {
-    return { indexItems: [], finalize: () => {} };
-  }
-
   protected snapshotReindexRetryState(): MemoryReindexRetryState {
     return {
       dirty: this.dirty,
@@ -214,10 +211,6 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   }
 
   adoptReindexRetryState(snapshot: MemoryReindexRetryState): void {
-    this.restoreReindexRetryState(snapshot);
-  }
-
-  protected restoreReindexRetryState(snapshot: MemoryReindexRetryState): void {
     this.dirty = snapshot.dirty || this.dirty;
     this.memoryFullRetryDirty = snapshot.memoryFullRetryDirty || this.memoryFullRetryDirty;
     this.sessionsFullRetryDirty = snapshot.sessionsFullRetryDirty || this.sessionsFullRetryDirty;
@@ -305,19 +298,19 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
           progress: params.progress,
           ...(deferIndex ? { deferIndex: true } : {}),
         })
-      : this.emptySourceSyncPlan();
+      : undefined;
     if (params.shouldSyncSessions) {
       await this.syncArchiveFiles({
         needsFullReindex: params.needsFullSessionReindex ?? params.needsFullReindex,
         targetArchiveFiles: params.targetArchiveFiles,
         progress: params.progress,
-        ...(deferIndex ? { deferIndex: true, prefixIndexItems: memoryPlan.indexItems } : {}),
+        ...(deferIndex ? { deferIndex: true, prefixIndexItems: memoryPlan?.indexItems } : {}),
       });
     } else if (deferIndex) {
-      await this.indexQueuedFiles(memoryPlan.indexItems, params.progress);
+      await this.indexQueuedFiles(memoryPlan?.indexItems ?? [], params.progress);
     }
     if (deferIndex) {
-      await memoryPlan.finalize();
+      await memoryPlan?.finalize();
     }
     if (params.shouldSyncSessions) {
       this.clearSessionRetryState();

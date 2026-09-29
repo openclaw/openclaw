@@ -118,6 +118,7 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
   for (const key of [
     "includeDerivedTitles",
     "includeLastMessage",
+    "includeOwnerSessionCounts",
     "ownerFirst",
     "involvingMe",
   ] as const) {

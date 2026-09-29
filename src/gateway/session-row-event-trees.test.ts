@@ -40,7 +40,7 @@ type TreeEventPayload = {
 afterEach(() => vi.restoreAllMocks());
 
 it.each(["sessions.list", "sessions.subscribe"])(
-  "%s restores full ancestor delivery after events overlap the roster read",
+  "%s restores ordinary ancestor delivery across reads and recap-only events",
   async (method) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { entries: { main: {} } } };
@@ -98,16 +98,19 @@ it.each(["sessions.list", "sessions.subscribe"])(
       await initializeSessionReadContext(context);
       const projection = getSessionRowProjection(context)!;
       const detach = connection.attachSessionRowProjection(projection);
-      const publish = () =>
+      const publish = (reason = "send") =>
         connection.broadcast("sessions.changed", {
           sessionKey: child,
           agentId: "main",
-          reason: "send",
+          reason,
         });
       const payloadFor = (peer: (typeof peers)[number]): TreeEventPayload =>
         JSON.parse(peer.send.mock.lastCall![0]).payload;
       try {
+        publish("activity-summary");
+        expect(payloadFor(peers[0]!).ancestorSessions?.map((row) => row.key)).toEqual([root]);
         publish();
+        expect.soft(payloadFor(peers[0]!).ancestorSessions?.map((row) => row.key)).toEqual([root]);
         publish();
         expect(payloadFor(peers[0]!).ancestorSessionRefs).toHaveLength(1);
         const ensure = projection.ensureMaterialized;
@@ -117,7 +120,7 @@ it.each(["sessions.list", "sessions.subscribe"])(
         });
         const respond = vi.fn((ok: boolean) => {
           expect(ok).toBe(true);
-          publish();
+          publish("activity-summary");
         });
         await (method === "sessions.list" ? sessionReadHandlers : sessionSubscriptionHandlers)[
           method
@@ -133,6 +136,30 @@ it.each(["sessions.list", "sessions.subscribe"])(
         expect(payloadFor(peers[0]!).ancestorSessions?.map((row) => row.key)).toEqual([root]);
         expect(payloadFor(peers[0]!)).not.toHaveProperty("ancestorSessionRefs");
         expect(payloadFor(peers[1]!).ancestorSessionRefs).toHaveLength(1);
+        publish();
+        expect.soft(payloadFor(peers[0]!).ancestorSessions?.map((row) => row.key)).toEqual([root]);
+        expect(payloadFor(peers[1]!).ancestorSessionRefs).toHaveLength(1);
+        publish();
+        expect(payloadFor(peers[0]!).ancestorSessionRefs).toHaveLength(1);
+
+        // Runtime-only content can change and return without invalidating stored row facts.
+        connection.chatAbortControllers.set("ancestor-run", {
+          controller: new AbortController(),
+          agentId: "main",
+          sessionKey: root,
+          sessionId: root,
+          startedAtMs: 1,
+          expiresAtMs: 2,
+        });
+        publish("activity-summary");
+        expect(payloadFor(peers[0]!).ancestorSessions).toEqual([
+          expect.objectContaining({ key: root, hasActiveRun: true }),
+        ]);
+        connection.chatAbortControllers.delete("ancestor-run");
+        publish();
+        expect(payloadFor(peers[0]!).ancestorSessions).toEqual([
+          expect.objectContaining({ key: root, hasActiveRun: false }),
+        ]);
         publish();
         expect(payloadFor(peers[0]!).ancestorSessionRefs).toHaveLength(1);
       } finally {

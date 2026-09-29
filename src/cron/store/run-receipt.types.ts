@@ -38,3 +38,14 @@ export type CronRunReceiptOwnerObservation = Pick<
   CronRunReceipt,
   "receiptId" | "ownerPid" | "ownerStartTime" | "startedAtMs"
 >;
+
+export type PreparedCronRunReceiptAdjudication = {
+  storeKey: string;
+  observed?: CronRunReceiptOwnerObservation;
+  observedStale: boolean;
+};
+
+export type PreparedCronRunReceiptClaim = PreparedCronRunReceiptAdjudication & {
+  handle: CronRunReceiptHandle;
+  requestRunId?: string;
+};

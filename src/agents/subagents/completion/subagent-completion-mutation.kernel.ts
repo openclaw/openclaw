@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import {
   bindDeliveryQueueEntry,
+  loadDeliveryQueueEntryInDatabase,
   upsertBoundDeliveryQueueEntryInDatabase,
 } from "../../../infra/delivery-queue-sqlite-bound.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
 import {
   prepareClaimedSessionDelivery,
   SESSION_DELIVERY_QUEUE_NAME,
@@ -11,8 +11,9 @@ import {
 } from "../../../infra/session-delivery-queue.records.js";
 import { resolveEventSessionKey } from "../../../routing/session-key.js";
 import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db-contract.js";
-import type { DB } from "../../../state/openclaw-state-db.generated.js";
 import {
+  completeRequesterSettleWakeState,
+  transitionRequesterSettleWakeState,
   ensureCompletionState,
   ensureDeliveryState,
   isCompletedRequesterDeliveryBlocked,
@@ -21,7 +22,10 @@ import {
   markRequesterSettleWakePending,
 } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
-import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
+import {
+  bindSubagentRunRecord,
+  rowToSubagentRunRecord,
+} from "../registry/subagent-registry.store.codec.js";
 import {
   deleteSubagentRunRowInDatabase,
   upsertSubagentRunRowInDatabase,
@@ -29,17 +33,22 @@ import {
 import {
   loadSubagentRunsForChildSessionFromSqlite,
   readSubagentRun,
+  readSubagentRunRow,
 } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { captureRequesterSettleRunIdentity } from "../registry/subagent-requester-settle-identity.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
 import type {
   BlockSubagentCompletionRequest,
   SubagentCompletionMutation,
   SubagentCompletionMutationResult,
 } from "./subagent-completion-mutation.types.js";
+import {
+  readSubagentCompletionQueueReceipt,
+  reconcileSubagentCompletionQueueReceipts,
+} from "./subagent-completion-queue-receipt.js";
 
 const SUSPENDED_RETENTION_MS = 7 * 24 * 60 * 60_000;
-const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, "subagent_runs">>(db);
 type CompletionMutation = {
   subagent: SubagentRunRecord;
   queued?: QueuedSessionDelivery;
@@ -229,18 +238,13 @@ function commitCompletionMutations(
       upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(subagent));
     }
   }
+  const queueIds = mutations.flatMap(({ queued }) => (queued ? [queued.id] : []));
   return {
     applied: true,
     records: mutations
       .filter((mutation) => !mutation.retire)
       .map(({ subagent }) => {
-        const row = executeSqliteQuerySync(
-          database.db,
-          query(database.db)
-            .selectFrom("subagent_runs")
-            .selectAll()
-            .where("run_id", "=", subagent.runId),
-        ).rows[0];
+        const row = readSubagentRunRow(database, subagent.runId);
         if (!row) {
           throw new Error("Subagent completion mutation lost its native row");
         }
@@ -249,21 +253,23 @@ function commitCompletionMutations(
     retiredRunIds: mutations
       .filter((mutation) => mutation.retire)
       .map(({ subagent }) => subagent.runId),
-    queueIds: mutations.flatMap(({ queued }) => (queued ? [queued.id] : [])),
+    queueIds,
+    ...(queueIds.length > 0
+      ? { queueReceipts: queueIds.map((id) => readSubagentCompletionQueueReceipt(database, id)) }
+      : {}),
   };
 }
 
-function settleRequesterBatch(
+function readRequesterBatch(
   database: OpenClawStateDatabase,
-  params: Extract<SubagentCompletionMutation, { kind: "requesterBatch" }>,
-): SubagentCompletionMutationResult {
-  const now = params.now;
+  params: Extract<SubagentCompletionMutation, { kind: "requesterWake" | "requesterBatch" }>,
+): Array<{ expected: SubagentRunRecord; subagent: SubagentRunRecord }> {
   const entries = params.entries;
   const ids = new Set(entries.map(({ subagent }) => subagent.runId));
   const first = entries[0]?.subagent;
   const cohort = first?.requesterSettleWake?.batchRunIds?.toSorted().join("\0");
   const checkedOmittedIds = new Set<string>();
-  const mutations = entries.map(({ subagent: expected }): CompletionMutation => {
+  return entries.map(({ subagent: expected }) => {
     const changedOwner = () =>
       new Error("subagent completion owner changed before settlement: " + expected.runId);
     const subagent = readSubagentRun(database, expected.runId);
@@ -279,8 +285,11 @@ function settleRequesterBatch(
     ) {
       throw changedOwner();
     }
-    // A caller may omit retired rows, never a surviving member of the same frozen wave.
-    for (const id of subagent.requesterSettleWake?.batchRunIds ?? []) {
+    // Outcome settlement owns the whole frozen wave; quiet wake decisions may select
+    // current members without settling the remaining siblings' delivery outcomes.
+    for (const id of params.kind === "requesterBatch"
+      ? (subagent.requesterSettleWake?.batchRunIds ?? [])
+      : []) {
       if (!ids.has(id) && !checkedOmittedIds.has(id)) {
         const member = readSubagentRun(database, id);
         if (
@@ -296,62 +305,180 @@ function settleRequesterBatch(
     }
     // Decoding restores restart defaults, not the active process's cleanup ownership.
     subagent.cleanupHandled = expected.cleanupHandled;
-    // An exact requester receipt can arrive after expiry transferred this result to its wake.
-    const acknowledgeExpiredDelivery =
-      params.outcome.delivered &&
-      subagent.delivery?.status === "suspended" &&
-      subagent.delivery.suspendedReason === "expiry";
-    let mutation: CompletionMutation = { subagent };
-    if (
-      subagent.pauseReason !== "sessions_yield" &&
-      subagent.expectsCompletionMessage === true &&
-      (["pending", "in_progress"].includes(subagent.delivery?.status ?? "pending") ||
-        acknowledgeExpiredDelivery)
-    ) {
-      if (params.outcome.delivered) {
-        const delivery = ensureDeliveryState(subagent);
-        const deliveredAt = params.outcome.deliveredAt ?? now;
-        Object.assign(delivery, {
-          status: "delivered",
-          disposition: "delivered",
-          deliveredAt,
-          announcedAt: deliveredAt,
-          lastDropReason: undefined,
-        });
-        clearSubagentPendingDelivery(subagent);
-      } else {
-        const blocked = prepareBlockedSubagentCompletion(
-          database,
-          {
-            subagent: expected,
-            reason: params.outcome.error ?? params.outcome.reason ?? "requester settle wake failed",
-            disposition: params.outcome.disposition,
-            storeReplaced: params.outcome.storeReplaced,
-            suspendedReason: params.outcome.storeReplaced ? "permanent_failure" : undefined,
-          },
-          now,
-          subagent,
-        );
-        if (!blocked) {
-          throw changedOwner();
+    return { expected, subagent };
+  });
+}
+
+function settleRequesterBatch(
+  database: OpenClawStateDatabase,
+  params: Extract<SubagentCompletionMutation, { kind: "requesterBatch" }>,
+): SubagentCompletionMutationResult {
+  if (params.committed) {
+    return reconcileRequesterWake(database, params);
+  }
+  const now = params.now;
+  const mutations = readRequesterBatch(database, params).map(
+    ({ expected, subagent }): CompletionMutation => {
+      const changedOwner = () =>
+        new Error("subagent completion owner changed before settlement: " + expected.runId);
+      // An exact requester receipt can arrive after expiry transferred this result to its wake.
+      const acknowledgeExpiredDelivery =
+        params.outcome.delivered &&
+        subagent.delivery?.status === "suspended" &&
+        subagent.delivery.suspendedReason === "expiry";
+      let mutation: CompletionMutation = { subagent };
+      if (
+        subagent.pauseReason !== "sessions_yield" &&
+        subagent.expectsCompletionMessage === true &&
+        (["pending", "in_progress"].includes(subagent.delivery?.status ?? "pending") ||
+          acknowledgeExpiredDelivery)
+      ) {
+        if (params.outcome.delivered) {
+          const delivery = ensureDeliveryState(subagent);
+          const deliveredAt = params.outcome.deliveredAt ?? now;
+          Object.assign(delivery, {
+            status: "delivered",
+            disposition: "delivered",
+            deliveredAt,
+            announcedAt: deliveredAt,
+            lastDropReason: undefined,
+          });
+          clearSubagentPendingDelivery(subagent);
+        } else {
+          const blocked = prepareBlockedSubagentCompletion(
+            database,
+            {
+              subagent: expected,
+              reason:
+                params.outcome.error ?? params.outcome.reason ?? "requester settle wake failed",
+              disposition: params.outcome.disposition,
+              storeReplaced: params.outcome.storeReplaced,
+              suspendedReason: params.outcome.storeReplaced ? "permanent_failure" : undefined,
+            },
+            now,
+            subagent,
+          );
+          if (!blocked) {
+            throw changedOwner();
+          }
+          mutation = blocked;
         }
-        mutation = blocked;
       }
+      mutation.retire = completeRequesterSettleWakeState(mutation.subagent);
+      return mutation;
+    },
+  );
+  return commitCompletionMutations(database, mutations);
+}
+
+function reconcileRequesterWake(
+  database: OpenClawStateDatabase,
+  params: Extract<SubagentCompletionMutation, { kind: "requesterWake" | "requesterBatch" }>,
+): SubagentCompletionMutationResult {
+  const committed = params.committed;
+  if (
+    !committed ||
+    committed.result.applied !== true ||
+    (params.kind === "requesterWake" && committed.result.queueIds.length !== 0)
+  ) {
+    throw new Error("Requester wake reconciliation requires its committed native receipt");
+  }
+  const result = noMutation(true);
+  for (const { subagent: expected } of params.entries) {
+    const original = committed.entries.find(
+      ({ subagent }) => subagent.runId === expected.runId,
+    )?.subagent;
+    const originalCanonical = original && rowToSubagentRunRecord(bindSubagentRunRecord(original));
+    const expectedCanonical = rowToSubagentRunRecord(bindSubagentRunRecord(expected));
+    if (
+      !originalCanonical ||
+      !expectedCanonical ||
+      !isDeepStrictEqual(
+        captureRequesterSettleRunIdentity(originalCanonical),
+        captureRequesterSettleRunIdentity(expectedCanonical),
+      )
+    ) {
+      throw new Error("Requester wake reconciliation lost its original generation");
     }
-    const settled = mutation.subagent;
-    if (settled.pauseReason !== "sessions_yield") {
-      if (settled.requesterTurnRunId && settled.expectsCompletionMessage === true) {
-        settled.retireAfterRequesterTurn =
-          settled.retireAfterRequesterTurn === true ||
-          settled.requesterSettleWake?.retireAfterSettle === true
-            ? true
-            : undefined;
-      } else {
-        mutation.retire = settled.requesterSettleWake?.retireAfterSettle === true;
+    const row = readSubagentRunRow(database, expected.runId);
+    if (
+      loadSubagentRunsForChildSessionFromSqlite(originalCanonical.childSessionKey, database).some(
+        (candidate) => compareSubagentRunGeneration(candidate, originalCanonical) > 0,
+      )
+    ) {
+      throw new Error("Requester wake reconciliation was superseded");
+    }
+    if (committed.result.retiredRunIds.includes(expected.runId)) {
+      if (row) {
+        throw new Error("Requester wake retirement has another native owner");
       }
+      result.retiredRunIds.push(expected.runId);
+      continue;
     }
-    settled.requesterSettleWake = undefined;
-    return mutation;
+    const acknowledged = committed.result.records.find(
+      ({ row: record }) => record.run_id === expected.runId,
+    );
+    const intended = acknowledged && rowToSubagentRunRecord(acknowledged.row);
+    const current = row && rowToSubagentRunRecord(row);
+    if (
+      !row ||
+      !current ||
+      !intended ||
+      !isDeepStrictEqual(
+        captureRequesterSettleRunIdentity(current),
+        captureRequesterSettleRunIdentity(originalCanonical),
+      ) ||
+      !isDeepStrictEqual(
+        captureRequesterSettleRunIdentity(intended),
+        captureRequesterSettleRunIdentity(originalCanonical),
+      ) ||
+      current.pauseReason !== intended.pauseReason ||
+      current.completionTarget !== intended.completionTarget ||
+      current.expectsCompletionMessage !== intended.expectsCompletionMessage ||
+      current.delivery?.generation !== intended.delivery?.generation ||
+      !isDeepStrictEqual(current.execution, intended.execution) ||
+      !isDeepStrictEqual(current.killIntent, intended.killIntent) ||
+      !isDeepStrictEqual(current.killReconciliation, intended.killReconciliation) ||
+      !isDeepStrictEqual(current.requesterSettleWake, intended.requesterSettleWake) ||
+      current.retireAfterRequesterTurn !== intended.retireAfterRequesterTurn ||
+      (params.kind === "requesterBatch" &&
+        (!isDeepStrictEqual(current.delivery, intended.delivery) ||
+          current.suppressCompletionDelivery !== intended.suppressCompletionDelivery ||
+          current.wakeOnDescendantSettle !== intended.wakeOnDescendantSettle))
+    ) {
+      throw new Error("Requester wake committed state no longer owns reconciliation");
+    }
+    // The completed write is not replayed. Publish current canonical fields so
+    // independent cleanup cannot be overwritten by the older acknowledgement.
+    result.records.push({ row, cleanupHandled: expected.cleanupHandled });
+  }
+  if (committed.result.queueIds.length > 0) {
+    const receipts = reconcileSubagentCompletionQueueReceipts(
+      database,
+      committed.result.queueIds,
+      committed.result.queueReceipts,
+    ).filter((receipt) => receipt.status === "pending");
+    result.queueIds = receipts.map(({ id }) => id);
+    if (receipts.length > 0) {
+      result.queueReceipts = receipts;
+    }
+  }
+  return result;
+}
+
+function mutateRequesterWake(
+  database: OpenClawStateDatabase,
+  params: Extract<SubagentCompletionMutation, { kind: "requesterWake" }>,
+): SubagentCompletionMutationResult {
+  if (params.committed) {
+    return reconcileRequesterWake(database, params);
+  }
+  const mutations = readRequesterBatch(database, params).map(({ subagent }): CompletionMutation => {
+    if (params.operation.kind === "complete") {
+      return { subagent, retire: completeRequesterSettleWakeState(subagent) };
+    }
+    transitionRequesterSettleWakeState(subagent, params.operation.state);
+    return { subagent };
   });
   return commitCompletionMutations(database, mutations);
 }
@@ -363,9 +490,45 @@ export function mutateSubagentCompletionInDatabase(
 ): SubagentCompletionMutationResult {
   switch (mutation.kind) {
     case "settle": {
-      const current = readSubagentRun(database, mutation.expected.runId);
+      const queued = loadDeliveryQueueEntryInDatabase(
+        database,
+        SESSION_DELIVERY_QUEUE_NAME,
+        mutation.queueId,
+        "pending",
+        // SAFETY: The session namespace stores only the canonical delivery payload.
+      ) as QueuedSessionDelivery | null;
+      const owner = queued?.kind === "agentTurn" ? queued.owner : undefined;
+      const row = readSubagentRunRow(database, mutation.expected.runId);
+      const current = row && rowToSubagentRunRecord(row);
       if (
         !current ||
+        !queued ||
+        !owner ||
+        owner.kind !== "subagent_completion" ||
+        owner.runId !== current.runId ||
+        owner.generation !== current.delivery?.generation ||
+        owner.deadlineAt !== current.delivery.deadlineAt ||
+        (queued.settlementOutcome ??
+          (queued.acknowledgedAt !== undefined ? "recovered" : undefined)) !== "recovered" ||
+        compareSubagentRunGeneration(current, mutation.expected) !== 0 ||
+        current.childSessionKey !== mutation.expected.childSessionKey ||
+        current.requesterSessionKey !== mutation.expected.requesterSessionKey ||
+        current.requesterStorePath !== mutation.expected.requesterStorePath
+      ) {
+        throw new Error("Subagent completion recovery lost its queue or native owner");
+      }
+      if (current.delivery.status === "delivered" && current.delivery.queueId === undefined) {
+        // A marked queue retains producer cleanup after a committed write. Reconcile
+        // the current native row without replaying its write or terminal timestamps.
+        return {
+          applied: true,
+          records: [{ row, cleanupHandled: mutation.expected.cleanupHandled }],
+          retiredRunIds: [],
+          queueIds: [],
+        };
+      }
+      if (
+        current.delivery.queueId !== mutation.queueId ||
         bindSubagentRunRecord(current).payload_json !==
           bindSubagentRunRecord(mutation.expected).payload_json
       ) {
@@ -407,6 +570,8 @@ export function mutateSubagentCompletionInDatabase(
     }
     case "requesterBatch":
       return settleRequesterBatch(database, mutation);
+    case "requesterWake":
+      return mutateRequesterWake(database, mutation);
   }
   throw new Error("Unknown subagent completion mutation");
 }

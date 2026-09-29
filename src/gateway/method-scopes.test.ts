@@ -136,6 +136,7 @@ describe("method scope resolution", () => {
     ["diagnostics.lanes", ["operator.read"]],
     ["diagnostics.cpuProfile", ["operator.admin"]],
     ["diagnostics.heapProfile", ["operator.admin"]],
+    ["diagnostics.heapSnapshot", ["operator.admin"]],
     ["gateway.restart.preflight", ["operator.read"]],
     ["skills.curator.status", ["operator.read"]],
     ["hooks.status", ["operator.read"]],

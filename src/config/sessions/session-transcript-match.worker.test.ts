@@ -51,10 +51,16 @@ it("keeps incognito matching in its process-owned store without creating disk st
     await expect(findTranscriptEvent(scope, { kind: "latest" })).resolves.toEqual({
       event: unrelated,
     });
+    await expect(
+      findSessionTranscriptArchiveEventReadOnly(scope, "private-run"),
+    ).resolves.toBeUndefined();
     await expect(fs.readdir(state.stateDir, { recursive: true })).resolves.toEqual([]);
 
     await closeOpenClawAgentDatabasesAsync(state.root);
     await expect(findTranscriptEvent(scope, { kind: "latest" })).resolves.toBeUndefined();
+    await expect(
+      findSessionTranscriptArchiveEventReadOnly(scope, "private-run"),
+    ).resolves.toBeUndefined();
     await expect(fs.readdir(state.stateDir, { recursive: true })).resolves.toEqual([]);
   });
 });

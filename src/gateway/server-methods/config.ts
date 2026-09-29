@@ -1,4 +1,3 @@
-// Config gateway methods: validation, redaction, secrets, reload planning.
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -321,14 +320,11 @@ function arrayPreservesBaseEntries(base: unknown[], merged: unknown[]): boolean 
 }
 
 function collectDestructiveIdKeyedArrayEntryPatchPaths(params: {
-  base: unknown[];
+  base: Array<Record<string, unknown> & { id: string }>;
   patch: unknown[];
   merged: unknown[];
   path: string;
 }): string[] {
-  if (!isConfigPatchIdKeyedArray(params.base)) {
-    return [];
-  }
   const baseById = new Map(params.base.map((entry) => [entry.id, entry]));
   const mergedById = new Map(
     params.merged.filter(isConfigPatchObjectWithStringId).map((entry) => [entry.id, entry]),
@@ -532,7 +528,6 @@ function rejectDroppedAgentRosterEntries(params: {
   return true;
 }
 
-/** Shared normalize -> raw-validate -> plugin-validate pipeline for submitted configs; responds on failure. */
 function validateSubmittedConfigOrRespond(params: {
   candidate: unknown;
   modelIdNormalizationPolicies: Parameters<typeof normalizeSubmittedConfigModelRefs>[1];
@@ -1053,11 +1048,7 @@ export const configHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
       return;
     }
-    if (
-      !parsedRes.parsed ||
-      typeof parsedRes.parsed !== "object" ||
-      Array.isArray(parsedRes.parsed)
-    ) {
+    if (!isRecord(parsedRes.parsed)) {
       respond(
         false,
         undefined,

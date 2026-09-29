@@ -496,6 +496,25 @@ function assertConfigSurvived() {
     );
   }
 
+  // Frozen recipes without coverage receipts predate this migration specimen.
+  if (coverage && acceptsIntent(coverage, "tool-search")) {
+    const toolSearch = config.tools?.toolSearch;
+    const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
+    assert(
+      toolSearch?.mode === (baseline ? "code" : "tools"),
+      "Tool Search mode was not preserved or migrated",
+    );
+    assert(toolSearch.enabled !== false, "Tool Search was disabled during migration");
+    if (baseline) {
+      assert(toolSearch.codeTimeoutMs === 5000, "Tool Search legacy timeout specimen changed");
+    } else {
+      assert(
+        !Object.hasOwn(toolSearch, "codeTimeoutMs"),
+        "Tool Search legacy timeout was not removed",
+      );
+    }
+  }
+
   if (acceptsIntent(coverage, "agents")) {
     const legacyAgents = config.agents?.list ?? [];
     const mainAgent =
@@ -1169,6 +1188,25 @@ function readMigratedSessionStore(stateDir, targetStorePath) {
           const entry = JSON.parse(row.value_json);
           store[row.key] =
             typeof row.session_id === "string" ? { ...entry, sessionId: row.session_id } : entry;
+        }
+        if (
+          source === "session_nodes" &&
+          db.prepare("PRAGMA user_version").get().user_version >= 24
+        ) {
+          for (const row of db
+            .prepare("SELECT session_key, field, value_json FROM session_entry_snapshots")
+            .all()) {
+            assert(Object.hasOwn(store, row.session_key), "orphaned session snapshot");
+            assert(
+              ["sessionDiffBaseline", "skillsSnapshot", "systemPromptReport"].includes(row.field),
+              "unknown session snapshot field",
+            );
+            assert(
+              !Object.hasOwn(store[row.session_key], row.field),
+              "duplicate inline session snapshot",
+            );
+            store[row.session_key][row.field] = JSON.parse(row.value_json);
+          }
         }
         return { source, store };
       }

@@ -141,24 +141,11 @@ function coercePrimitiveByType(value: unknown, type: string): unknown {
       return value;
     }
     case "boolean": {
-      if (value === null) {
+      if (value === null || value === "false" || value === 0) {
         return false;
       }
-      if (typeof value === "string") {
-        if (value === "true") {
-          return true;
-        }
-        if (value === "false") {
-          return false;
-        }
-      }
-      if (typeof value === "number") {
-        if (value === 1) {
-          return true;
-        }
-        if (value === 0) {
-          return false;
-        }
+      if (value === "true" || value === 1) {
+        return true;
       }
       return value;
     }
@@ -231,19 +218,14 @@ function applySchemaArrayCoercion(
   schema: JsonSchemaObject,
   root: JsonSchemaObject | undefined,
 ): void {
-  if (Array.isArray(schema.items)) {
-    for (let index = 0; index < value.length; index++) {
-      const itemSchema = schema.items[index];
-      if (itemSchema) {
-        value[index] = coerceWithJsonSchema(value[index], itemSchema, root);
-      }
-    }
+  const items = schema.items;
+  if (!isJsonSchemaObject(items)) {
     return;
   }
-
-  if (isJsonSchemaObject(schema.items)) {
-    for (let index = 0; index < value.length; index++) {
-      value[index] = coerceWithJsonSchema(value[index], schema.items, root);
+  for (let index = 0; index < value.length; index++) {
+    const itemSchema = Array.isArray(items) ? items[index] : items;
+    if (itemSchema) {
+      value[index] = coerceWithJsonSchema(value[index], itemSchema, root);
     }
   }
 }

@@ -20,6 +20,10 @@ import {
   resolveCliNetworkProxyPolicy,
 } from "./command-path-policy.js";
 import { isReservedNonPluginCommandRoot } from "./command-registration-policy.js";
+import {
+  consumeGatewayFastPathRootOptionToken,
+  consumeGatewayRunOptionToken,
+} from "./gateway-run-argv.js";
 import { getCoreCliParentDefaultHelpCommands } from "./program/core-command-descriptors.js";
 import { getSubCliParentDefaultHelpCommands } from "./program/subcli-descriptors.js";
 
@@ -29,6 +33,53 @@ const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
   ...getCoreCliParentDefaultHelpCommands(),
   ...getSubCliParentDefaultHelpCommands(),
 ]);
+
+export function isGatewayRunFastPathArgv(argv: string[]): boolean {
+  const invocation = resolveCliArgvInvocation(argv);
+  if (invocation.hasHelpOrVersion) {
+    return false;
+  }
+  const args = argv.slice(2);
+  let sawGateway = false;
+  let sawRun = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === "--") {
+      return false;
+    }
+    if (!sawGateway) {
+      const consumed = consumeGatewayFastPathRootOptionToken(args, index);
+      if (consumed > 0) {
+        index += consumed - 1;
+        continue;
+      }
+      if (arg !== "gateway") {
+        return false;
+      }
+      sawGateway = true;
+      continue;
+    }
+
+    const rootConsumed = consumeGatewayFastPathRootOptionToken(args, index);
+    if (rootConsumed > 0) {
+      index += rootConsumed - 1;
+      continue;
+    }
+    const consumed = consumeGatewayRunOptionToken(args, index);
+    if (consumed > 0) {
+      index += consumed - 1;
+      continue;
+    }
+    if (!sawRun && arg === "run") {
+      sawRun = true;
+      continue;
+    }
+    return false;
+  }
+
+  return sawGateway;
+}
 
 export function isRemoteAgentDispatchInvocation(argv: string[], primary: string | null): boolean {
   return primary === "agent" && !argv.includes("--local");
@@ -139,6 +190,16 @@ export function shouldStartProxyForCli(argv: string[]): boolean {
   return resolveCliNetworkProxyPolicy(policyArgv) === "default";
 }
 
+function formatExcludedPluginCommand(command: string, owner: string): string {
+  return owner === command
+    ? `The \`openclaw ${command}\` command is unavailable because ` +
+        `\`plugins.allow\` excludes "${command}". Add "${command}" to ` +
+        `\`plugins.allow\` if you want that bundled plugin CLI surface.`
+    : `"${command}" is not a plugin; it is a command provided by the ` +
+        `"${owner}" plugin. Add "${owner}" to \`plugins.allow\` ` +
+        `instead of "${command}".`;
+}
+
 export function resolveMissingPluginCommandMessage(
   pluginId: string,
   config?: OpenClawConfig,
@@ -175,18 +236,7 @@ export function resolveMissingPluginCommandMessage(
   const parentPluginId = commandAlias?.pluginId;
   if (parentPluginId) {
     if (allow.length > 0 && !allow.includes(parentPluginId)) {
-      if (parentPluginId === normalizedPluginId) {
-        return (
-          `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
-          `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
-          `\`plugins.allow\` if you want that bundled plugin CLI surface.`
-        );
-      }
-      return (
-        `"${normalizedPluginId}" is not a plugin; it is a command provided by the ` +
-        `"${parentPluginId}" plugin. Add "${parentPluginId}" to \`plugins.allow\` ` +
-        `instead of "${normalizedPluginId}".`
-      );
+      return formatExcludedPluginCommand(normalizedPluginId, parentPluginId);
     }
     if (config?.plugins?.entries?.[parentPluginId]?.enabled === false) {
       return (
@@ -269,18 +319,7 @@ export function resolveMissingPluginCommandMessage(
     if (allow.includes(normalizedCliCommandSurfaceOwner)) {
       return null;
     }
-    if (normalizedCliCommandSurfaceOwner !== normalizedPluginId) {
-      return (
-        `"${normalizedPluginId}" is not a plugin; it is a command provided by the ` +
-        `"${normalizedCliCommandSurfaceOwner}" plugin. Add "${normalizedCliCommandSurfaceOwner}" to ` +
-        `\`plugins.allow\` instead of "${normalizedPluginId}".`
-      );
-    }
-    return (
-      `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
-      `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
-      `\`plugins.allow\` if you want that bundled plugin CLI surface.`
-    );
+    return formatExcludedPluginCommand(normalizedPluginId, normalizedCliCommandSurfaceOwner);
   }
   if (config?.plugins?.entries?.[normalizedPluginId]?.enabled === false) {
     return (

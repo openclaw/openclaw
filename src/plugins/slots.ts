@@ -154,17 +154,13 @@ export function applyExclusiveSlotSelection(params: {
         if (plugin.id === params.selectedId) {
           continue;
         }
-        const kindForSlot = (Object.keys(SLOT_BY_KIND) as PluginKind[]).find(
-          (k) => SLOT_BY_KIND[k] === slotKey,
-        );
-        if (!kindForSlot || !hasKind(plugin.kind, kindForSlot)) {
+        if (!slotKeysForPluginKind(plugin.kind).includes(slotKey)) {
           continue;
         }
         // Don't disable a plugin that still owns another slot (explicit or default).
-        const stillOwnsOtherSlot = (Object.keys(SLOT_BY_KIND) as PluginKind[])
-          .map((k) => SLOT_BY_KIND[k])
-          .filter((sk) => sk !== slotKey)
-          .some((sk) => (slots[sk] ?? defaultSlotIdForKey(sk)) === plugin.id);
+        const stillOwnsOtherSlot = PLUGIN_SLOT_KEYS.some(
+          (sk) => sk !== slotKey && (slots[sk] ?? defaultSlotIdForKey(sk)) === plugin.id,
+        );
         if (stillOwnsOtherSlot) {
           continue;
         }

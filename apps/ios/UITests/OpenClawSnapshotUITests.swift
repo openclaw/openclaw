@@ -73,7 +73,29 @@ final class OpenClawSnapshotUITests: XCTestCase {
     }
 
     func testReleaseSettingsScreenshot() {
-        self.captureReleaseScreenshot(Self.settingsScreenshotTarget)
+        self.captureReleaseScreenshot(Self.settingsScreenshotTarget) { app in
+            // The connected fixture must not also render the first-run pairing hero.
+            XCTAssertTrue(app.buttons["Reconnect"].waitForExistence(timeout: 5))
+            XCTAssertFalse(app.buttons["Scan QR to Pair"].exists)
+        }
+        guard let app = self.app else { return }
+        // After capture: the fixture never loads the saved manual Gateway, so controls that would
+        // act on its route or credentials stay hidden down to the last row of the screen.
+        let savedGatewayControls = [
+            app.textFields["Host"],
+            app.buttons["Connect Manual"],
+            app.secureTextFields["Gateway Auth Token"],
+            app.secureTextFields["Gateway Password"],
+        ]
+        let resetOnboarding = app.buttons["Reset Onboarding"]
+        for _ in 0..<8 {
+            for control in savedGatewayControls {
+                XCTAssertFalse(control.exists)
+            }
+            if resetOnboarding.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(resetOnboarding.isHittable)
     }
 
     func testWatchMessageDeliveryIsReachableFromSettings() throws {
@@ -591,6 +613,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         let latestSeededReply = app.staticTexts["OPENCLAW_LONG_CHAT_LATEST"]
         XCTAssertTrue(latestSeededReply.waitForExistence(timeout: 8))
+        let transcript = try self.chatTranscript(in: app)
         let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
         XCTAssertTrue(work.waitForExistence(timeout: 5))
         work.tap()
@@ -599,27 +622,33 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
         XCTAssertTrue(latestSeededReply.isHittable)
 
+        // Revealing the reply after expanding work does not establish live-edge following.
+        let initialJumpToLatest = app.buttons["Jump to latest reply"]
+        if initialJumpToLatest.exists {
+            initialJumpToLatest.tap()
+        }
+        XCTAssertTrue(initialJumpToLatest.waitForNonExistence(timeout: 3))
+
         let input = self.chatMessageInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 8))
+        self.waitForEnabled(input)
         input.tap()
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
         func visibleAreaAboveKeyboard() -> CGRect {
-            CGRect(
+            transcript.frame.intersection(CGRect(
                 x: app.frame.minX,
                 y: app.frame.minY,
                 width: app.frame.width,
-                height: keyboard.frame.minY - app.frame.minY)
+                height: keyboard.frame.minY - app.frame.minY))
         }
         XCTAssertTrue(latestSeededReply.exists)
         XCTAssertTrue(latestSeededReply.frame.intersects(visibleAreaAboveKeyboard()))
         XCTAssertLessThanOrEqual(latestSeededReply.frame.maxY, keyboard.frame.minY + 1)
         self.assertElementHasRenderedContent(latestSeededReply, named: "seeded reply after keyboard opens")
 
-        let promptPrefix =
-            "Give me a long, detailed status update covering the release plan, review feedback, " +
-            "open follow-ups, "
-        let promptSuffix = "and the next steps for the team."
+        let promptPrefix = "Check the "
+        let promptSuffix = "release plan."
         let prompt = promptPrefix + promptSuffix
         input.typeText(promptPrefix)
         XCTAssertTrue(latestSeededReply.exists)
@@ -634,6 +663,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         let send = app.buttons["chat-send-message"]
         XCTAssertTrue(send.waitForExistence(timeout: 5))
+        XCTAssertTrue(send.isEnabled)
         send.tap()
 
         // Regression proof for #108692 and #135214: the transcript remains rendered while typing,
@@ -647,15 +677,57 @@ final class OpenClawSnapshotUITests: XCTestCase {
             NSPredicate(format: "label CONTAINS %@", "keep the mobile workflow connected to the gateway"))
             .firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 8))
-        Thread.sleep(forTimeInterval: 1.0)
+        XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 1))
         let visibleArea = visibleAreaAboveKeyboard()
-        XCTAssertTrue(sentPrompt.frame.intersects(visibleArea))
         XCTAssertTrue(reply.frame.intersects(visibleArea))
         XCTAssertLessThanOrEqual(reply.frame.maxY, keyboard.frame.minY + 1)
-        self.assertElementHasRenderedContent(sentPrompt, named: "sent prompt after send")
         self.assertElementHasRenderedContent(reply, named: "reply after send")
         XCTAssertFalse(app.buttons["Jump to latest reply"].exists)
         self.attachScreenshot(named: "keyboard-transcript-visible-after-send")
+
+        // Keep repeated typing and reader positioning on the real editor with deterministic history.
+        // The final multiline turn extends below the viewport so the anchored-reply jump is observable.
+        let anchoredPrompt = String(
+            repeating: "Reader context keeps the question anchored as the reply arrives.\n",
+            count: 9) + "Keep this reply anchored."
+        self.waitForEnabled(input)
+        input.tap()
+        input.typeText(anchoredPrompt)
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
+        try self.dismissChatKeyboardThroughTranscript(in: app)
+        XCTAssertTrue(sentPrompt.frame.intersects(transcript.frame))
+        self.assertElementHasRenderedContent(sentPrompt, named: "sent prompt after keyboard dismissal")
+        XCTAssertEqual(input.value as? String, anchoredPrompt)
+        XCTAssertTrue(send.isEnabled)
+        send.tap()
+        let submitted = app.staticTexts.matching(NSPredicate(format: "label == %@", anchoredPrompt)).firstMatch
+        XCTAssertTrue(submitted.waitForExistence(timeout: 5))
+        let response = app.staticTexts.matching(NSPredicate(
+            format: "label CONTAINS %@ AND label CONTAINS %@",
+            "I can help with",
+            "Keep this reply anchored.")).firstMatch
+        XCTAssertTrue(response.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
+
+        let jumpToLatest = app.buttons["Jump to latest reply"]
+        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "reader-reply-anchored")
+        jumpToLatest.tap()
+        XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
+        let finalReply = app.staticTexts.matching(NSPredicate(
+            format: "label CONTAINS %@ AND label CONTAINS %@",
+            "I can help with",
+            "Keep this reply anchored.")).firstMatch
+        XCTAssertTrue(finalReply.exists)
+        self.assertElementHasRenderedContent(finalReply, named: "reader reply after jumping to latest")
+        self.attachScreenshot(named: "reader-jumped-to-latest")
+
+        transcript.swipeDown()
+        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "reader-manual-departure")
+        jumpToLatest.tap()
+        XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(finalReply.exists)
     }
 
     func testCompletedWorkDisclosureKeepsFinalReplyVisible() throws {
@@ -1008,69 +1080,36 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(refreshedArtifacts.last?["sessionKey"] as? String, artifacts.first?["sessionKey"] as? String)
     }
 
-    func testLiveGatewayFreshInstallSetupAndRelaunch() throws {
-        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone setup proof only")
+    func testLiveGatewayPairChatAndRelaunch() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone lifecycle proof only")
         let app = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
         XCTAssertEqual(app.state, .runningForeground)
-
-        let controlApp = self.relaunchConnectedLiveGatewayApp(
-            initialTab: "control",
-            initialDestination: "overview")
-        XCTAssertTrue(controlApp.staticTexts["Agent session"].waitForExistence(timeout: 8))
-        XCTAssertTrue(controlApp.buttons["RootTabs.Sidebar.Show"].exists)
-        XCTAssertEqual(controlApp.state, .runningForeground)
-    }
-
-    func testLiveGatewayChatRoundTripAndControlOverview() throws {
-        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone chat proof only")
-        let app = try launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
-
-        // Seed real history with the keyboard open before checking transcript-tap dismissal and reader behavior.
-        for index in 0..<3 {
-            let seedMarker = "OPENCLAW_E2E_SEED_\(index)_\(Int(Date().timeIntervalSince1970 * 1000))"
-            let seedContext = String(repeating: "Reader context \(index). ", count: 6)
+        print("IOS_RELEASE_CHECKPOINT paired")
+        for (stage, marker) in [("first", "OPENCLAW_E2E_FIRST"), ("second", "OPENCLAW_E2E_SECOND")] {
             try self.sendLiveGatewayMessage(
-                "\(seedContext)Reply exactly with \(seedMarker) and no other text.",
-                expecting: seedMarker,
-                stage: "seed-\(index)",
-                dismissKeyboard: false,
+                "Reply exactly with \(marker) and no other text.",
+                expecting: marker,
+                stage: stage,
                 in: app)
+            print("IOS_RELEASE_CHECKPOINT \(stage)")
         }
 
-        let replyMarker = "OPENCLAW_E2E_OK_\(Int(Date().timeIntervalSince1970 * 1000))"
+        // A new request after process termination exercises the credentials persisted during pairing.
+        let relaunchedApp = self.relaunchConnectedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        print("IOS_RELEASE_CHECKPOINT relaunched")
         try self.sendLiveGatewayMessage(
-            "Reply exactly with \(replyMarker) and no other text.",
-            expecting: replyMarker,
-            stage: "final",
-            dismissKeyboard: true,
-            in: app)
-        let jumpToLatest = app.buttons["Jump to latest reply"]
-        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
-        self.attachScreenshot(named: "live-gateway-chat-reply-anchored")
-
-        jumpToLatest.tap()
-        XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts[replyMarker].exists)
-        Thread.sleep(forTimeInterval: 0.5)
-        self.attachScreenshot(named: "live-gateway-chat-jumped-to-latest")
-
-        let transcript = try self.chatTranscript(in: app)
-        XCTAssertTrue(transcript.exists)
-        transcript.swipeDown()
-        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
-        self.attachScreenshot(named: "live-gateway-chat-manual-departure")
-        jumpToLatest.tap()
-        XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
-
-        let controlApp = self.relaunchConnectedLiveGatewayApp(
-            initialTab: "control",
-            initialDestination: "overview")
-        XCTAssertTrue(controlApp.staticTexts["Agent session"].waitForExistence(timeout: 8))
-        self.attachScreenshot(named: "live-gateway-control")
+            "Reply exactly with OPENCLAW_E2E_RELAUNCH and no other text.",
+            expecting: "OPENCLAW_E2E_RELAUNCH",
+            stage: "relaunch",
+            in: relaunchedApp)
+        print("IOS_RELEASE_CHECKPOINT relaunch")
         try self.selectSidebarDestination("Overview")
-        XCTAssertTrue(controlApp.buttons["Gateway settings"].waitForExistence(timeout: 5))
+        XCTAssertTrue(relaunchedApp.staticTexts["Agent session"].waitForExistence(timeout: 8))
+        XCTAssertTrue(relaunchedApp.buttons["RootTabs.Sidebar.Show"].exists)
+        XCTAssertTrue(relaunchedApp.buttons["Gateway settings"].waitForExistence(timeout: 5))
         self.attachScreenshot(named: "live-gateway-overview")
-        XCTAssertEqual(controlApp.state, .runningForeground)
+        XCTAssertEqual(relaunchedApp.state, .runningForeground)
+        print("IOS_RELEASE_CHECKPOINT overview")
     }
 
     func testManualAuthRetryUsesEditedToken() throws {
@@ -1652,10 +1691,7 @@ extension OpenClawSnapshotUITests {
     }
 
     private func waitForEnabled(_ element: XCUIElement) {
-        let expectation = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "enabled == true"),
-            object: element)
-        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 5), .completed)
+        XCTAssertTrue(element.wait(for: \.isEnabled, toEqual: true, timeout: 5))
     }
 
     private func waitForHittable(_ isHittable: Bool, of element: XCUIElement) {
@@ -1846,7 +1882,7 @@ extension OpenClawSnapshotUITests {
         initialTab: String,
         initialDestination: String) -> XCUIApplication
     {
-        self.app?.terminate()
+        self.terminateCurrentApp()
         let app = XCUIApplication()
         app.launchArguments += [
             "--openclaw-initial-tab",
@@ -1871,7 +1907,6 @@ extension OpenClawSnapshotUITests {
         _ text: String,
         expecting replyMarker: String,
         stage: String,
-        dismissKeyboard: Bool,
         in app: XCUIApplication) throws
     {
         let input = self.chatMessageInput(in: app)
@@ -1883,27 +1918,6 @@ extension OpenClawSnapshotUITests {
         let send = app.buttons["chat-send-message"]
         XCTAssertTrue(send.waitForExistence(timeout: 3))
         XCTAssertTrue(send.isEnabled)
-        if dismissKeyboard {
-            // Typing can move historical replies off-screen; tap visible text without activating an action.
-            let transcript = try self.chatTranscript(in: app)
-            let actionQueries = [transcript.buttons, transcript.links]
-            let dismissalText = try XCTUnwrap(
-                transcript.staticTexts.allElementsBoundByIndex.first { candidate in
-                    guard candidate.isHittable,
-                          candidate.buttons.count == 0,
-                          candidate.links.count == 0
-                    else {
-                        return false
-                    }
-                    let label = NSPredicate(format: "label == %@", candidate.label)
-                    return actionQueries.allSatisfy {
-                        !$0.matching(label).firstMatch.exists && !$0.containing(label).firstMatch.exists
-                    }
-                },
-                "Expected visible noninteractive transcript text")
-            dismissalText.tap()
-            XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
-        }
         XCTAssertEqual(input.value as? String, text)
         send.tap()
 
@@ -1920,6 +1934,28 @@ extension OpenClawSnapshotUITests {
             app.staticTexts[replyMarker].waitForExistence(timeout: 60),
             failureContext("reply"))
         XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
+    }
+
+    private func dismissChatKeyboardThroughTranscript(in app: XCUIApplication) throws {
+        // Typing can move historical replies off-screen; tap visible text without activating an action.
+        let transcript = try self.chatTranscript(in: app)
+        let actionQueries = [transcript.buttons, transcript.links]
+        let dismissalText = try XCTUnwrap(
+            transcript.staticTexts.allElementsBoundByIndex.first { candidate in
+                guard candidate.isHittable,
+                      candidate.buttons.count == 0,
+                      candidate.links.count == 0
+                else {
+                    return false
+                }
+                let label = NSPredicate(format: "label == %@", candidate.label)
+                return actionQueries.allSatisfy {
+                    !$0.matching(label).firstMatch.exists && !$0.containing(label).firstMatch.exists
+                }
+            },
+            "Expected visible noninteractive transcript text")
+        dismissalText.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
     }
 
     private func openChatGatewaySettings(

@@ -9,19 +9,21 @@ const runtimeStub = () => {
   return { runtime: { log } as unknown as RuntimeEnv, log };
 };
 
-async function runAnimated(rng: () => number) {
+async function runAnimated() {
   const chunks: string[] = [];
+  const pauses: number[] = [];
   const { runtime } = runtimeStub();
-  await printClawBanner(runtime, {
+  const result = await printClawBanner(runtime, {
     columns: 120,
     isTty: true,
     rich: true,
     env: {},
-    rng,
-    sleep: async () => {},
+    sleep: async (ms) => {
+      pauses.push(ms);
+    },
     write: (chunk) => chunks.push(chunk),
   });
-  return chunks;
+  return { chunks, pauses, result };
 }
 
 async function runStatic() {
@@ -69,22 +71,25 @@ describe("printClawBanner", () => {
     expect(output).not.toContain("█");
   });
 
-  it("animates on a rich TTY and settles on the exact static banner", async () => {
+  it("wipes, shimmers once, and snips once within the startup pause budget", async () => {
     const staticRows = await runStatic();
-    const chunks = await runAnimated(() => 0);
+    const { chunks, pauses, result } = await runAnimated();
+    expect(result).toBe("completed");
+    expect(pauses.reduce((total, ms) => total + ms, 0)).toBeLessThanOrEqual(400);
+    expect(pauses).toEqual([...Array<number>(13).fill(20), 35, 35]);
     expect(chunks[0]).toBe("\x1b[?25l");
     expect(chunks).toContain("\x1b[?25h");
     const frames = chunks.filter((chunk) => chunk.includes("\x1b[K"));
-    expect(frames.length).toBeGreaterThan(10);
+    expect(frames).toHaveLength(16);
     expect(
-      frames.some((frame) => {
+      frames.flatMap((frame, index) => {
         const [first = "", second = ""] = stripAnsi(frame).split("\n");
-        return (
-          first.slice(0, 20).trimEnd() === "•●•.:.        .:.•●•" &&
+        return first.slice(0, 20).trimEnd() === "•●•.:.        .:.•●•" &&
           second.slice(0, 20).trimEnd() === ":●●●•:        :•●●●:"
-        );
+          ? [index]
+          : [];
       }),
-    ).toBe(true);
+    ).toEqual([13]);
     const finalRows = stripAnsi(frames[frames.length - 1] ?? "")
       .split("\n")
       .filter((row) => row.length > 0);
@@ -93,21 +98,25 @@ describe("printClawBanner", () => {
 
   it("installs scoped signal handlers only while animating", async () => {
     const before = process.listenerCount("SIGINT");
+    const beforeSigterm = process.listenerCount("SIGTERM");
     let during = -1;
+    let duringSigterm = -1;
     const { runtime } = runtimeStub();
     await printClawBanner(runtime, {
       columns: 120,
       isTty: true,
       rich: true,
       env: {},
-      rng: () => 0.99,
       sleep: async () => {
         during = Math.max(during, process.listenerCount("SIGINT"));
+        duringSigterm = Math.max(duringSigterm, process.listenerCount("SIGTERM"));
       },
       write: () => {},
     });
     expect(during).toBe(before + 1);
+    expect(duringSigterm).toBe(beforeSigterm + 1);
     expect(process.listenerCount("SIGINT")).toBe(before);
+    expect(process.listenerCount("SIGTERM")).toBe(beforeSigterm);
   });
 
   it("settles on the static frame when parallel work finishes first", async () => {
@@ -124,7 +133,6 @@ describe("printClawBanner", () => {
       isTty: true,
       rich: true,
       env: {},
-      rng: () => 0.99,
       settleWhen,
       sleep: () => new Promise<void>(() => {}),
       write: (chunk) => chunks.push(chunk),
@@ -143,12 +151,5 @@ describe("printClawBanner", () => {
     expect(chunks.at(-2)).toBe("\x1b[?25h");
     expect(chunks.at(-1)).toBe("\n");
     expect(process.listenerCount("SIGINT")).toBe(beforeSigint);
-  });
-
-  it("varies snips and shimmer passes with the rng", async () => {
-    // rng below the thresholds adds a second shimmer pass and a second snip.
-    const maximal = (await runAnimated(() => 0)).filter((c) => c.includes("\x1b[K"));
-    const minimal = (await runAnimated(() => 0.99)).filter((c) => c.includes("\x1b[K"));
-    expect(maximal.length).toBeGreaterThan(minimal.length);
   });
 });

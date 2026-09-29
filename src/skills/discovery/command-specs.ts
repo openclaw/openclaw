@@ -9,11 +9,8 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveSkillTelemetrySource } from "../loading/source.js";
-import {
-  filterWorkspaceSkills,
-  loadVisibleSkills,
-  prepareWorkspaceSkills,
-} from "../loading/workspace-skill-loader.js";
+import { filterSkillEntries } from "../loading/workspace-skill-filter.js";
+import { loadVisibleSkills, prepareWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import type {
   SkillEligibilityContext,
   SkillCommandSpec,
@@ -22,7 +19,7 @@ import type {
 } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { sanitizeSkillCommandName, SKILL_COMMAND_MAX_LENGTH } from "./command-name.js";
-import { filterUserInvocableSkillEntries, isSkillPromptVisible } from "./skill-index.js";
+import { isSkillPromptVisible, isSkillUserInvocable } from "./skill-index.js";
 
 const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = createDedupeCache({ ttlMs: 0, maxSize: 1024 });
@@ -97,7 +94,7 @@ export function buildWorkspaceSkillCommandSpecs(
 ): SkillCommandSpec[] {
   const loadOptions = { ...resolveCommandSkillLoadOptions(opts), gatewayOnly: opts?.gatewayOnly };
   const eligible = opts?.entries
-    ? filterWorkspaceSkills(opts.entries, loadOptions)
+    ? filterSkillEntries(opts.entries, loadOptions)
     : loadVisibleSkills(workspaceDir, loadOptions);
   return assembleWorkspaceSkillCommandSpecs(workspaceDir, eligible, opts);
 }
@@ -124,7 +121,7 @@ function assembleWorkspaceSkillCommandSpecs(
   eligible: SkillEntry[],
   opts?: WorkspaceSkillCommandOptions,
 ): SkillCommandSpec[] {
-  const userInvocable = filterUserInvocableSkillEntries(eligible);
+  const userInvocable = eligible.filter(isSkillUserInvocable);
   const used = new Set<string>();
   for (const reserved of opts?.reservedNames ?? []) {
     used.add(normalizeLowercaseStringOrEmpty(reserved));

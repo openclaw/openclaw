@@ -117,7 +117,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
-import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bolt
@@ -129,16 +128,12 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
@@ -233,7 +228,7 @@ private fun UsageSettingsScreen(
     }
   }
 
-  SettingsDetailFrame(title = nativeString("Usage"), subtitle = nativeString("Provider limits and quota health."), icon = Icons.Default.Storage, onBack = onBack) {
+  SettingsDetailFrame(title = nativeString("Usage"), subtitle = nativeString("Provider limits and quota health."), icon = SettingsRoute.Usage.icon, onBack = onBack) {
     SettingsRefreshControls(isConnected, usageConverging, usageState.errorText, viewModel::refreshUsage)
     SettingsSummaryContent(usageState, isConnected, nativeString("Connect the gateway to load usage.")) { usageSummary ->
       SettingsMetricPanel(
@@ -249,12 +244,10 @@ private fun UsageSettingsScreen(
           UsageProviderListRow(provider = provider)
         }
       } else if (usageState.errorText == null) {
-        ClawPanel {
-          Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(text = if (usageConverging) nativeString("Refreshing") else nativeString("No usage data yet."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-            Text(text = nativeString("Provider limits will appear here when your gateway reports them."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-          }
-        }
+        SettingsMessagePanel(
+          title = if (usageConverging) nativeString("Refreshing") else nativeString("No usage data yet."),
+          text = nativeString("Provider limits will appear here when your gateway reports them."),
+        )
       }
     }
   }
@@ -294,7 +287,7 @@ private fun CronJobsSettingsScreen(
   SettingsDetailFrame(
     title = nativeString("Automations"),
     subtitle = nativeString("Scheduled OpenClaw work from your gateway."),
-    icon = Icons.Default.Bolt,
+    icon = SettingsRoute.CronJobs.icon,
     onBack = onBack,
     trailingAction = {
       ClawPlainIconButton(
@@ -320,17 +313,13 @@ private fun CronJobsSettingsScreen(
       label = nativeString("Search"),
       enabled = isConnected,
     )
-    val filterOptions = CronJobsListFilter.entries.map(CronJobsListFilter::label)
     ClawSegmentedControl(
-      options = filterOptions,
-      selected = filter.label,
-      onSelect = { selected ->
-        CronJobsListFilter.entries.firstOrNull { it.label == selected }?.let {
-          filterName = it.name
-        }
-      },
+      options = CronJobsListFilter.entries,
+      selected = filter,
+      onSelect = { filterName = it.name },
       modifier = Modifier.fillMaxWidth(),
-      enabledOptions = if (isConnected) filterOptions.toSet() else emptySet(),
+      enabledOptions = if (isConnected) CronJobsListFilter.entries.toSet() else emptySet(),
+      optionLabel = CronJobsListFilter::label,
     )
     Text(
       text = nativeString("Open an automation to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it."),
@@ -338,30 +327,22 @@ private fun CronJobsSettingsScreen(
       color = ClawTheme.colors.textMuted,
     )
     cronErrorText?.let { errorText ->
-      ClawPanel {
-        Text(text = errorText, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
-      }
+      SettingsMessagePanel(text = errorText, color = ClawTheme.colors.warning)
     }
     when {
       !isConnected -> {
-        ClawPanel {
-          Text(text = nativeString("Connect the gateway to load automations."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
+        SettingsMessagePanel(text = nativeString("Connect the gateway to load automations."))
       }
 
       cronJobs.isEmpty() -> {
-        ClawPanel {
-          Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(text = nativeString("No automations yet."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-            Text(text = nativeString("Scheduled work created on the gateway will appear here."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-          }
-        }
+        SettingsMessagePanel(
+          title = nativeString("No automations yet."),
+          text = nativeString("Scheduled work created on the gateway will appear here."),
+        )
       }
 
       visibleJobs.isEmpty() -> {
-        ClawPanel {
-          Text(text = nativeString("No matching automations."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
+        SettingsMessagePanel(text = nativeString("No matching automations."))
       }
 
       else -> {
@@ -481,7 +462,7 @@ private fun CronJobDetailSettingsScreen(
   SettingsDetailFrame(
     title = current?.name ?: jobName ?: nativeString("Automation"),
     subtitle = nativeString("Inspect and manage scheduled gateway work."),
-    icon = Icons.Default.Bolt,
+    icon = SettingsRoute.CronJobs.icon,
     onBack = ::leaveDetail,
   ) {
     ClawSecondaryButton(
@@ -500,21 +481,15 @@ private fun CronJobDetailSettingsScreen(
 
     when {
       !isConnected -> {
-        ClawPanel {
-          Text(text = nativeString("Connect the gateway to inspect automations."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
+        SettingsMessagePanel(text = nativeString("Connect the gateway to inspect automations."))
       }
 
       errorText != null -> {
-        ClawPanel {
-          Text(text = errorText.resolveNativeTextResource(), style = ClawTheme.type.body, color = ClawTheme.colors.warning)
-        }
+        SettingsMessagePanel(text = errorText.resolveNativeTextResource(), color = ClawTheme.colors.warning)
       }
 
       current == null -> {
-        ClawPanel {
-          Text(text = if (loading) nativeString("Loading automation…") else nativeString("Automation not loaded."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
+        SettingsMessagePanel(text = if (loading) nativeString("Loading automation…") else nativeString("Automation not loaded."))
       }
 
       else -> {
@@ -567,7 +542,7 @@ private fun AgentsSettingsScreen(
     }
   }
 
-  SettingsDetailFrame(title = nativeString("Agents"), subtitle = nativeString("Choose and inspect the assistants available on this gateway."), icon = Icons.Default.Person, onBack = onBack) {
+  SettingsDetailFrame(title = nativeString("Agents"), subtitle = nativeString("Choose and inspect the assistants available on this gateway."), icon = SettingsRoute.Agents.icon, onBack = onBack) {
     SettingsMetricPanel(
       rows =
         listOf(
@@ -577,15 +552,11 @@ private fun AgentsSettingsScreen(
     )
     when {
       !isConnected -> {
-        ClawPanel {
-          Text(text = nativeString("Connect the gateway to load agents."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
+        SettingsMessagePanel(text = nativeString("Connect the gateway to load agents."))
       }
 
       agents.isEmpty() -> {
-        ClawPanel {
-          Text(text = nativeString("No agents loaded yet."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
+        SettingsMessagePanel(text = nativeString("No agents loaded yet."))
       }
 
       else -> {
@@ -614,7 +585,7 @@ private fun ApprovalsSettingsScreen(
     }
   }
 
-  SettingsDetailFrame(title = nativeString("Approvals"), subtitle = nativeString("Review actions that need your attention."), icon = Icons.Default.Lock, onBack = onBack) {
+  SettingsDetailFrame(title = nativeString("Approvals"), subtitle = nativeString("Review actions that need your attention."), icon = SettingsRoute.Approvals.icon, onBack = onBack) {
     SettingsMetricPanel(
       rows =
         listOf(
@@ -631,9 +602,7 @@ private fun ApprovalsSettingsScreen(
       modifier = Modifier.fillMaxWidth(),
     )
     inbox.errorText?.let { errorText ->
-      ClawPanel {
-        Text(text = gatewayExecApprovalTextForDisplay(errorText), style = ClawTheme.type.body, color = ClawTheme.colors.warning)
-      }
+      SettingsMessagePanel(text = gatewayExecApprovalTextForDisplay(errorText), color = ClawTheme.colors.warning)
     }
     // The inbox publishes terminal notices with their cards retired in the same snapshot.
     // Keep the banner independent of remaining cards until the user dismisses it.
@@ -641,19 +610,15 @@ private fun ApprovalsSettingsScreen(
       ExecApprovalNotice(notice = notice, onDismiss = { viewModel.dismissExecApprovalsNotice(notice) })
     }
     if (!isConnected) {
-      ClawPanel {
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-          Text(text = nativeString("Gateway disconnected."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-          Text(text = nativeString("Connect the gateway to load approval requests in the app."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
-      }
+      SettingsMessagePanel(
+        title = nativeString("Gateway disconnected."),
+        text = nativeString("Connect the gateway to load approval requests in the app."),
+      )
     } else if (inbox.approvals.isEmpty()) {
-      ClawPanel {
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-          Text(text = nativeString("No gateway approvals."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-          Text(text = nativeString("Approval requests will appear here while this phone is connected."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
-      }
+      SettingsMessagePanel(
+        title = nativeString("No gateway approvals."),
+        text = nativeString("Approval requests will appear here while this phone is connected."),
+      )
     } else {
       Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
         inbox.approvals.forEach { approval ->
@@ -679,12 +644,10 @@ private fun ProfileSettingsScreen(
   val displayName by viewModel.displayName.collectAsState()
   var draft by remember(displayName) { mutableStateOf(displayName.ifBlank { "OpenClaw" }) }
 
-  SettingsDetailFrame(title = nativeString("Profile"), subtitle = nativeString("How this phone appears to OpenClaw."), icon = Icons.Default.Person, onBack = onBack) {
-    ClawPanel {
-      Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
-        ClawTextField(value = draft, onValueChange = { draft = it }, placeholder = nativeString("Device name"))
-        ClawPrimaryButton(text = nativeString("Save Profile"), onClick = { viewModel.setDisplayName(draft) }, enabled = draft.isNotBlank())
-      }
+  SettingsDetailFrame(title = nativeString("Profile"), subtitle = nativeString("How this phone appears to OpenClaw."), icon = SettingsRoute.Profile.icon, onBack = onBack) {
+    ClawPanel(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+      ClawTextField(value = draft, onValueChange = { draft = it }, placeholder = nativeString("Device name"))
+      ClawPrimaryButton(text = nativeString("Save Profile"), onClick = { viewModel.setDisplayName(draft) }, enabled = draft.isNotBlank())
     }
   }
 }
@@ -757,7 +720,7 @@ private fun VoiceSettingsScreen(
     onDispose { observer.close() }
   }
 
-  SettingsDetailFrame(title = nativeString("Voice"), subtitle = nativeString("Configure wake words, talk, and playback."), icon = Icons.Default.Mic, onBack = onBack) {
+  SettingsDetailFrame(title = nativeString("Voice"), subtitle = nativeString("Configure wake words, talk, and playback."), icon = SettingsRoute.Voice.icon, onBack = onBack) {
     Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
       Text(text = nativeString("Incoming data calls"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       SettingsTogglePanel(
@@ -828,56 +791,54 @@ private fun VoiceSettingsScreen(
         statusText = voiceWakeStatusText,
         ready = voiceWakeIsListening,
       )
-      ClawPanel {
-        Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
-          Text(text = nativeString("Wake words"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-          Text(
-            text = nativeString("Add one wake word or phrase per field. Then say one before your command."),
-            style = ClawTheme.type.body,
-            color = ClawTheme.colors.textMuted,
-          )
-          wakeWordDrafts.forEachIndexed { index, value ->
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-              ClawTextField(
-                value = value,
-                onValueChange = { updated ->
-                  wakeWordDrafts = wakeWordDrafts.toMutableList().also { it[index] = updated }
+      ClawPanel(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+        Text(text = nativeString("Wake words"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(
+          text = nativeString("Add one wake word or phrase per field. Then say one before your command."),
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.textMuted,
+        )
+        wakeWordDrafts.forEachIndexed { index, value ->
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            ClawTextField(
+              value = value,
+              onValueChange = { updated ->
+                wakeWordDrafts = wakeWordDrafts.toMutableList().also { it[index] = updated }
+              },
+              placeholder = nativeString("Wake word or phrase"),
+              enabled = voiceWakeAvailable && !voiceWakeWordsSaving,
+              modifier = Modifier.weight(1f),
+            )
+            if (voiceWakeAvailable && !voiceWakeWordsSaving && wakeWordDrafts.size > 1) {
+              ClawPlainIconButton(
+                icon = Icons.Default.Delete,
+                contentDescription = nativeString("Remove wake phrase"),
+                onClick = {
+                  wakeWordDrafts = wakeWordDrafts.filterIndexed { draftIndex, _ -> draftIndex != index }
                 },
-                placeholder = nativeString("Wake word or phrase"),
-                enabled = voiceWakeAvailable && !voiceWakeWordsSaving,
-                modifier = Modifier.weight(1f),
               )
-              if (voiceWakeAvailable && !voiceWakeWordsSaving && wakeWordDrafts.size > 1) {
-                ClawPlainIconButton(
-                  icon = Icons.Default.Delete,
-                  contentDescription = nativeString("Remove wake phrase"),
-                  onClick = {
-                    wakeWordDrafts = wakeWordDrafts.filterIndexed { draftIndex, _ -> draftIndex != index }
-                  },
-                )
-              }
             }
           }
-          ClawSecondaryButton(
-            text = nativeString("Add wake phrase"),
-            onClick = { wakeWordDrafts = wakeWordDrafts + "" },
-            enabled = voiceWakeAvailable && !voiceWakeWordsSaving && wakeWordDrafts.size < VoiceWakePreferences.maxWords,
-            icon = Icons.Default.Add,
-            modifier = Modifier.fillMaxWidth(),
-          )
-          ClawSecondaryButton(
-            text = if (voiceWakeWordsSaving) nativeString("Saving…") else nativeString("Save wake words"),
-            onClick = { viewModel.setVoiceWakeWords(wakeWordDrafts) },
-            enabled = voiceWakeAvailable && isConnected && !voiceWakeWordsSaving && wakeWordDrafts.any(String::isNotBlank),
-            modifier = Modifier.fillMaxWidth(),
-          )
-          (voiceWakeWordsNoticeText ?: if (!isConnected) nativeString("Connect to a Gateway to save wake words") else null)?.let { notice ->
-            Text(text = notice, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-          }
+        }
+        ClawSecondaryButton(
+          text = nativeString("Add wake phrase"),
+          onClick = { wakeWordDrafts = wakeWordDrafts + "" },
+          enabled = voiceWakeAvailable && !voiceWakeWordsSaving && wakeWordDrafts.size < VoiceWakePreferences.maxWords,
+          icon = Icons.Default.Add,
+          modifier = Modifier.fillMaxWidth(),
+        )
+        ClawSecondaryButton(
+          text = if (voiceWakeWordsSaving) nativeString("Saving…") else nativeString("Save wake words"),
+          onClick = { viewModel.setVoiceWakeWords(wakeWordDrafts) },
+          enabled = voiceWakeAvailable && isConnected && !voiceWakeWordsSaving && wakeWordDrafts.any(String::isNotBlank),
+          modifier = Modifier.fillMaxWidth(),
+        )
+        (voiceWakeWordsNoticeText ?: if (!isConnected) nativeString("Connect to a Gateway to save wake words") else null)?.let { notice ->
+          Text(text = notice, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
         }
       }
       Text(text = nativeString("Talk Provider Setup"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -915,41 +876,39 @@ private fun AudioInputDevicePanel(
   val preferredAvailable = devices.any { it.key == preferredDeviceKey }
   val unavailablePreferredDevice =
     preferredDeviceKey?.takeUnless { preferredAvailable }?.let(::audioInputDeviceOptionFromKey)
-  ClawPanel {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+  ClawPanel(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    AudioInputDeviceRow(
+      title = nativeString("Automatic"),
+      subtitle =
+        if (preferredDeviceKey != null && !preferredAvailable) {
+          nativeString("Preferred microphone unavailable; using automatic routing.")
+        } else {
+          nativeString("Prioritizes connected Bluetooth microphones.")
+        },
+      selected = preferredDeviceKey == null || !preferredAvailable,
+      pending = preferencePending && preferredDeviceKey == null,
+      onClick = { onSelect(null) },
+    )
+    unavailablePreferredDevice?.let { device ->
+      HorizontalDivider(color = ClawTheme.colors.border)
       AudioInputDeviceRow(
-        title = nativeString("Automatic"),
-        subtitle =
-          if (preferredDeviceKey != null && !preferredAvailable) {
-            nativeString("Preferred microphone unavailable; using automatic routing.")
-          } else {
-            nativeString("Prioritizes connected Bluetooth microphones.")
-          },
-        selected = preferredDeviceKey == null || !preferredAvailable,
-        pending = preferencePending && preferredDeviceKey == null,
-        onClick = { onSelect(null) },
+        title = device.productName.ifBlank { nativeString("Preferred microphone") },
+        subtitle = nativeString("Unavailable"),
+        selected = false,
+        pending = preferencePending,
+        onClick = null,
       )
-      unavailablePreferredDevice?.let { device ->
-        HorizontalDivider(color = ClawTheme.colors.border)
-        AudioInputDeviceRow(
-          title = device.productName.ifBlank { nativeString("Preferred microphone") },
-          subtitle = nativeString("Unavailable"),
-          selected = false,
-          pending = preferencePending,
-          onClick = null,
-        )
-      }
-      devices.forEach { device ->
-        HorizontalDivider(color = ClawTheme.colors.border)
-        val typeLabel = audioInputDeviceTypeLabel(device.type)
-        AudioInputDeviceRow(
-          title = device.productName.ifBlank { typeLabel },
-          subtitle = typeLabel,
-          selected = device.key == preferredDeviceKey,
-          pending = preferencePending && device.key == preferredDeviceKey,
-          onClick = { onSelect(device.key) },
-        )
-      }
+    }
+    devices.forEach { device ->
+      HorizontalDivider(color = ClawTheme.colors.border)
+      val typeLabel = audioInputDeviceTypeLabel(device.type)
+      AudioInputDeviceRow(
+        title = device.productName.ifBlank { typeLabel },
+        subtitle = typeLabel,
+        selected = device.key == preferredDeviceKey,
+        pending = preferencePending && device.key == preferredDeviceKey,
+        onClick = { onSelect(device.key) },
+      )
     }
   }
 }
@@ -1182,7 +1141,7 @@ private fun NotificationSettingsScreen(
     }
   }
 
-  SettingsDetailFrame(title = nativeString("Notifications"), subtitle = nativeString("Choose what reaches OpenClaw."), icon = Icons.Default.Notifications, onBack = onBack) {
+  SettingsDetailFrame(title = nativeString("Notifications"), subtitle = nativeString("Choose what reaches OpenClaw."), icon = SettingsRoute.Notifications.icon, onBack = onBack) {
     SettingsTogglePanel(
       rows =
         listOf(
@@ -1216,23 +1175,14 @@ private fun NotificationSettingsScreen(
         modifier = Modifier.weight(1f),
       )
     }
-    ClawPanel {
-      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(text = nativeString("Forwarding Mode"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-        ClawSegmentedControl(
-          options = listOf(nativeString("Blocklist"), nativeString("Allowlist")),
-          selected = nativeString(modeLabel),
-          onSelect = { selected ->
-            viewModel.setNotificationForwardingMode(
-              if (selected == nativeString("Allowlist")) {
-                NotificationPackageFilterMode.Allowlist
-              } else {
-                NotificationPackageFilterMode.Blocklist
-              },
-            )
-          },
-        )
-      }
+    ClawPanel(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      Text(text = nativeString("Forwarding Mode"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      ClawSegmentedControl(
+        options = listOf(NotificationPackageFilterMode.Blocklist, NotificationPackageFilterMode.Allowlist),
+        selected = mode,
+        onSelect = viewModel::setNotificationForwardingMode,
+        optionLabel = { if (it == NotificationPackageFilterMode.Blocklist) nativeString("Blocklist") else nativeString("Allowlist") },
+      )
     }
     NotificationPackagePickerPanel(
       mode = mode,
@@ -1271,47 +1221,45 @@ private fun NotificationPackagePickerPanel(
   onPackageSelectionChange: (String, Boolean) -> Unit,
 ) {
   val visibleApps = apps.take(NOTIFICATION_PICKER_RESULT_LIMIT)
-  ClawPanel {
-    Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
-      Text(text = nativeString("App Filter"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-      Text(
-        text = notificationPackageSelectionSummary(mode = mode, selectedCount = selectedPackages.size),
-        style = ClawTheme.type.body,
-        color = ClawTheme.colors.textMuted,
+  ClawPanel(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+    Text(text = nativeString("App Filter"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+    Text(
+      text = notificationPackageSelectionSummary(mode = mode, selectedCount = selectedPackages.size),
+      style = ClawTheme.type.body,
+      color = ClawTheme.colors.textMuted,
+    )
+    ClawSecondaryButton(
+      text = if (expanded) nativeString("Close App Picker") else nativeString("Open App Picker"),
+      onClick = { onExpandedChange(!expanded) },
+      modifier = Modifier.fillMaxWidth(),
+    )
+    if (expanded) {
+      ClawTextField(value = search, onValueChange = onSearchChange, placeholder = nativeString("Search apps"))
+      SettingsToggleListRow(
+        SettingsToggleRow(
+          title = nativeString("Show System Apps"),
+          subtitle = nativeString("Include Android and background packages."),
+          icon = Icons.Default.Storage,
+          checked = showSystemApps,
+          onCheckedChange = onShowSystemAppsChange,
+        ),
       )
-      ClawSecondaryButton(
-        text = if (expanded) nativeString("Close App Picker") else nativeString("Open App Picker"),
-        onClick = { onExpandedChange(!expanded) },
-        modifier = Modifier.fillMaxWidth(),
-      )
-      if (expanded) {
-        ClawTextField(value = search, onValueChange = onSearchChange, placeholder = nativeString("Search apps"))
-        SettingsToggleListRow(
-          SettingsToggleRow(
-            title = nativeString("Show System Apps"),
-            subtitle = nativeString("Include Android and background packages."),
-            icon = Icons.Default.Storage,
-            checked = showSystemApps,
-            onCheckedChange = onShowSystemAppsChange,
-          ),
-        )
-        if (visibleApps.isEmpty()) {
-          Text(text = nativeString("No matching apps."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        } else {
-          ClawSeparatedColumn(items = visibleApps) { app ->
-            NotificationPackageAppRow(
-              app = app,
-              selected = selectedPackages.contains(app.packageName),
-              onSelectedChange = { selected -> onPackageSelectionChange(app.packageName, selected) },
-            )
-          }
-          if (apps.size > visibleApps.size) {
-            Text(
-              text = nativeString("Showing \${visibleApps.size} of \${apps.size}. Refine search for more.", visibleApps.size, apps.size),
-              style = ClawTheme.type.caption,
-              color = ClawTheme.colors.textMuted,
-            )
-          }
+      if (visibleApps.isEmpty()) {
+        Text(text = nativeString("No matching apps."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      } else {
+        ClawSeparatedColumn(items = visibleApps) { app ->
+          NotificationPackageAppRow(
+            app = app,
+            selected = selectedPackages.contains(app.packageName),
+            onSelectedChange = { selected -> onPackageSelectionChange(app.packageName, selected) },
+          )
+        }
+        if (apps.size > visibleApps.size) {
+          Text(
+            text = nativeString("Showing \${visibleApps.size} of \${apps.size}. Refine search for more.", visibleApps.size, apps.size),
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
         }
       }
     }
@@ -1560,7 +1508,7 @@ private fun PhoneCapabilitiesScreen(
     }
   }
 
-  SettingsDetailFrame(title = nativeString("Phone Capabilities"), subtitle = nativeString("Choose what this phone can share."), icon = Icons.AutoMirrored.Filled.ScreenShare, onBack = onBack) {
+  SettingsDetailFrame(title = nativeString("Phone Capabilities"), subtitle = nativeString("Choose what this phone can share."), icon = SettingsRoute.PhoneCapabilities.icon, onBack = onBack) {
     SettingsTogglePanel(
       rows =
         listOfNotNull(
@@ -1590,21 +1538,20 @@ private fun PhoneCapabilitiesScreen(
     if (SensitiveFeatureConfig.accessibilityControlEnabled) {
       FlavorPhoneCapabilitiesSettings(viewModel)
     }
-    ClawPanel {
-      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(text = nativeString("Location"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-        ClawSegmentedControl(
-          options = locationModeLabels(backgroundLocationAvailable),
-          selected = locationMode.displayLabel,
-          onSelect = { selected -> setLocationAccess(locationModeForLabel(selected)) },
+    ClawPanel(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      Text(text = nativeString("Location"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      ClawSegmentedControl(
+        options = locationModeOptions(backgroundLocationAvailable),
+        selected = locationMode,
+        onSelect = ::setLocationAccess,
+        optionLabel = { it.displayLabel },
+      )
+      if (backgroundLocationAvailable) {
+        Text(
+          text = nativeString("Always allows requested location checks while OpenClaw is in the background; Android shows this in the persistent node notification."),
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
         )
-        if (backgroundLocationAvailable) {
-          Text(
-            text = nativeString("Always allows requested location checks while OpenClaw is in the background; Android shows this in the persistent node notification."),
-            style = ClawTheme.type.caption,
-            color = ClawTheme.colors.textMuted,
-          )
-        }
       }
     }
   }
@@ -1886,7 +1833,7 @@ private fun GatewaySettingsScreen(
   SettingsDetailFrame(
     title = nativeString("Gateway"),
     subtitle = nativeString("Connection between this phone and OpenClaw."),
-    icon = Icons.Default.Cloud,
+    icon = SettingsRoute.Gateway.icon,
     onBack = onBack,
     trailingAction = {
       ClawPlainIconButton(
@@ -1914,19 +1861,17 @@ private fun GatewaySettingsScreen(
       )
     }
     if (gatewayConnectionDisplay.isConnected && !operatorAdminScopeAvailable) {
-      ClawPanel {
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-          Text(
-            text = nativeString("Limited Gateway access"),
-            style = ClawTheme.type.section,
-            color = ClawTheme.colors.text,
-          )
-          Text(
-            text = gatewayLimitedAccessUpgradeText(),
-            style = ClawTheme.type.body,
-            color = ClawTheme.colors.textMuted,
-          )
-        }
+      ClawPanel(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+          text = nativeString("Limited Gateway access"),
+          style = ClawTheme.type.section,
+          color = ClawTheme.colors.text,
+        )
+        Text(
+          text = gatewayLimitedAccessUpgradeText(),
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.textMuted,
+        )
       }
     }
     gatewayConnectionDisplay.problem?.takeIf { it.isNetworkFailure }?.let { problem ->
@@ -1949,45 +1894,43 @@ private fun GatewaySettingsScreen(
       ClawPrimaryButton(text = nativeString("Reconnect"), onClick = viewModel::refreshGatewayConnection, modifier = Modifier.weight(1f))
       ClawSecondaryButton(text = nativeString("Disconnect"), onClick = viewModel::disconnect, modifier = Modifier.weight(1f))
     }
-    ClawPanel {
-      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(text = nativeString("Gateways"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-        if (pairedGateways.isEmpty()) {
-          Text(text = nativeString("No paired gateways."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        } else {
-          pairedGateways.forEachIndexed { index, entry ->
-            if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
-            ClawListItem(
-              title = entry.displayName,
-              subtitle = entry.address,
-              maxLines = 2,
-              leading = {
-                if (entry.stableId == activeGatewayStableId) {
-                  ClawIconBadge(Icons.Default.Check)
-                } else {
-                  ClawIconBadge(Icons.Default.Cloud)
-                }
-              },
-              trailing = {
-                Switch(
-                  checked = entry.stableId == activeGatewayStableId || entry.stableId in connectedGatewayStableIds,
-                  onCheckedChange = { enabled ->
-                    viewModel.setGatewayConnectionEnabled(entry.stableId, enabled)
-                  },
-                  enabled = entry.stableId != activeGatewayStableId,
-                )
-              },
-              onClick =
-                if (entry.stableId == activeGatewayStableId) {
-                  null
-                } else {
-                  { viewModel.switchToGateway(entry.stableId) }
+    ClawPanel(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+      Text(text = nativeString("Gateways"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      if (pairedGateways.isEmpty()) {
+        Text(text = nativeString("No paired gateways."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      } else {
+        pairedGateways.forEachIndexed { index, entry ->
+          if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
+          ClawListItem(
+            title = entry.displayName,
+            subtitle = entry.address,
+            maxLines = 2,
+            leading = {
+              if (entry.stableId == activeGatewayStableId) {
+                ClawIconBadge(Icons.Default.Check)
+              } else {
+                ClawIconBadge(Icons.Default.Cloud)
+              }
+            },
+            trailing = {
+              Switch(
+                checked = entry.stableId == activeGatewayStableId || entry.stableId in connectedGatewayStableIds,
+                onCheckedChange = { enabled ->
+                  viewModel.setGatewayConnectionEnabled(entry.stableId, enabled)
                 },
-            )
-            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-              TextButton(onClick = { pendingRenameStableId = entry.stableId }) { Text(nativeString("Rename")) }
-              TextButton(onClick = { pendingForgetStableId = entry.stableId }) { Text(nativeString("Forget")) }
-            }
+                enabled = entry.stableId != activeGatewayStableId,
+              )
+            },
+            onClick =
+              if (entry.stableId == activeGatewayStableId) {
+                null
+              } else {
+                { viewModel.switchToGateway(entry.stableId) }
+              },
+          )
+          FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = { pendingRenameStableId = entry.stableId }) { Text(nativeString("Rename")) }
+            TextButton(onClick = { pendingForgetStableId = entry.stableId }) { Text(nativeString("Forget")) }
           }
         }
       }
@@ -2007,30 +1950,28 @@ private fun GatewaySettingsScreen(
     )
     SettingsDisclosureButton(text = nativeString("Discovered"), expanded = showDiscovery, onClick = { showDiscovery = !showDiscovery })
     if (showDiscovery) {
-      ClawPanel {
-        Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
-          if (discoveredGateways.isEmpty()) {
-            Text(
-              text = nativeString("No gateways found yet. Use manual setup if discovery is blocked."),
-              style = ClawTheme.type.caption,
-              color = ClawTheme.colors.textMuted,
+      ClawPanel(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+        if (discoveredGateways.isEmpty()) {
+          Text(
+            text = nativeString("No gateways found yet. Use manual setup if discovery is blocked."),
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
+        } else {
+          discoveredGateways.forEachIndexed { index, endpoint ->
+            if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
+            ClawListItem(
+              title = pairedGateways.firstOrNull { it.stableId == endpoint.stableId }?.displayName ?: endpoint.name,
+              subtitle = gatewayDiscoveredRowSubtitle(endpoint),
+              maxLines = 2,
+              leading = { ClawIconBadge(Icons.Default.Cloud) },
+              trailing = {
+                TextButton(onClick = { viewModel.connect(endpoint) }) {
+                  Text(nativeString("Connect"))
+                }
+              },
+              onClick = null,
             )
-          } else {
-            discoveredGateways.forEachIndexed { index, endpoint ->
-              if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
-              ClawListItem(
-                title = pairedGateways.firstOrNull { it.stableId == endpoint.stableId }?.displayName ?: endpoint.name,
-                subtitle = gatewayDiscoveredRowSubtitle(endpoint),
-                maxLines = 2,
-                leading = { ClawIconBadge(Icons.Default.Cloud) },
-                trailing = {
-                  TextButton(onClick = { viewModel.connect(endpoint) }) {
-                    Text(nativeString("Connect"))
-                  }
-                },
-                onClick = null,
-              )
-            }
           }
         }
       }
@@ -2072,122 +2013,113 @@ private fun GatewaySettingsScreen(
     if (showManual) {
       // Adding an already saved gateway intentionally retains its credentials.
       // Manage Gateway keeps the explicit, confirmed setup-replacement path here.
-      ClawPanel {
-        Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
-          Text(text = nativeString("Replace setup"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-          ClawTextField(
-            value = setupCode,
-            onValueChange = {
-              setupCode = it
-              setupValidationText = null
-            },
-            placeholder = "",
-            label = nativeString("Setup code"),
-            secret = true,
+      ClawPanel(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+        Text(text = nativeString("Replace setup"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        ClawTextField(
+          value = setupCode,
+          onValueChange = {
+            setupCode = it
+            setupValidationText = null
+          },
+          placeholder = "",
+          label = nativeString("Setup code"),
+          secret = true,
+        )
+        setupValidationText?.let {
+          Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
+        }
+        ClawSecondaryButton(text = nativeString("Connect"), onClick = { connectGateway(useSetupCode = true) }, modifier = Modifier.fillMaxWidth(), icon = SettingsRoute.Gateway.icon)
+        TextButton(onClick = { showSetupCodeHelp = !showSetupCodeHelp }) {
+          Text(nativeString("Where do I get a setup code?"))
+        }
+        if (showSetupCodeHelp) {
+          Text(
+            text = nativeString("Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below."),
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
           )
-          setupValidationText?.let {
-            Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
-          }
-          ClawSecondaryButton(text = nativeString("Connect"), onClick = { connectGateway(useSetupCode = true) }, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.Cloud)
-          TextButton(onClick = { showSetupCodeHelp = !showSetupCodeHelp }) {
-            Text(nativeString("Where do I get a setup code?"))
-          }
-          if (showSetupCodeHelp) {
-            Text(
-              text = nativeString("Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below."),
-              style = ClawTheme.type.caption,
-              color = ClawTheme.colors.textMuted,
-            )
-          }
         }
       }
-      ClawPanel {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-          Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ClawTextField(
-              value = hostInput,
-              onValueChange = {
-                hostInput = it
-                manualValidationText = null
-              },
-              placeholder = "",
-              label = nativeString("Host"),
-              modifier = Modifier.weight(1f),
-            )
-            ClawTextField(
-              value = portInput,
-              onValueChange = {
-                portInput = it
-                manualValidationText = null
-              },
-              placeholder = "",
-              label = nativeString("Port"),
-              modifier = Modifier.weight(0.62f),
-            )
-          }
-          Text(text = nativeString("Connection security"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-          val securityOptions = listOf(nativeString("Unencrypted"), nativeString("Secure (TLS)"))
-          ClawSegmentedControl(
-            options = securityOptions,
-            selected = if (transport.effectiveTls) nativeString("Secure (TLS)") else nativeString("Unencrypted"),
-            onSelect = { selected -> tlsInput = selected == nativeString("Secure (TLS)") },
-            enabledOptions =
-              if (transport.requiresTls) {
-                setOf(nativeString("Secure (TLS)"))
-              } else {
-                securityOptions.toSet()
-              },
-          )
-          transport.helperText?.let { helperText ->
-            Text(
-              text = helperText,
-              style = ClawTheme.type.caption,
-              color = ClawTheme.colors.textMuted,
-            )
-          }
-          Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ClawTextField(
-              value = tokenInput,
-              onValueChange = {
-                tokenInput = it
-                manualValidationText = null
-              },
-              placeholder = "",
-              label = nativeString("Token"),
-              modifier = Modifier.weight(1f),
-              secret = true,
-            )
-            ClawTextField(
-              value = bootstrapTokenInput,
-              onValueChange = {
-                bootstrapTokenInput = it
-                manualValidationText = null
-              },
-              placeholder = "",
-              label = nativeString("Bootstrap"),
-              modifier = Modifier.weight(1.05f),
-              secret = true,
-            )
-          }
+      ClawPanel(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
           ClawTextField(
-            value = passwordInput,
+            value = hostInput,
             onValueChange = {
-              passwordInput = it
+              hostInput = it
               manualValidationText = null
             },
             placeholder = "",
-            label = nativeString("Password"),
-            secret = true,
+            label = nativeString("Host"),
+            modifier = Modifier.weight(1f),
           )
-          manualValidationText?.let {
-            Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
-          }
-          ClawPrimaryButton(
-            text = nativeString("Save & Connect"),
-            onClick = { connectGateway(useSetupCode = false) },
-            modifier = Modifier.fillMaxWidth(),
+          ClawTextField(
+            value = portInput,
+            onValueChange = {
+              portInput = it
+              manualValidationText = null
+            },
+            placeholder = "",
+            label = nativeString("Port"),
+            modifier = Modifier.weight(0.62f),
           )
         }
+        Text(text = nativeString("Connection security"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+        ClawSegmentedControl(
+          options = listOf(false, true),
+          selected = transport.effectiveTls,
+          onSelect = { tlsInput = it },
+          enabledOptions = if (transport.requiresTls) setOf(true) else setOf(false, true),
+          optionLabel = { if (it) nativeString("Secure (TLS)") else nativeString("Unencrypted") },
+        )
+        transport.helperText?.let { helperText ->
+          Text(
+            text = helperText,
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          ClawTextField(
+            value = tokenInput,
+            onValueChange = {
+              tokenInput = it
+              manualValidationText = null
+            },
+            placeholder = "",
+            label = nativeString("Token"),
+            modifier = Modifier.weight(1f),
+            secret = true,
+          )
+          ClawTextField(
+            value = bootstrapTokenInput,
+            onValueChange = {
+              bootstrapTokenInput = it
+              manualValidationText = null
+            },
+            placeholder = "",
+            label = nativeString("Bootstrap"),
+            modifier = Modifier.weight(1.05f),
+            secret = true,
+          )
+        }
+        ClawTextField(
+          value = passwordInput,
+          onValueChange = {
+            passwordInput = it
+            manualValidationText = null
+          },
+          placeholder = "",
+          label = nativeString("Password"),
+          secret = true,
+        )
+        manualValidationText?.let {
+          Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
+        }
+        ClawPrimaryButton(
+          text = nativeString("Save & Connect"),
+          onClick = { connectGateway(useSetupCode = false) },
+          modifier = Modifier.fillMaxWidth(),
+        )
       }
     }
   }
@@ -2238,88 +2170,83 @@ private fun AppearanceSettingsScreen(
   var appLanguage by remember { mutableStateOf(currentAppLanguage()) }
   val systemLanguageTag = currentSystemLanguageTag(context)
 
-  SettingsDetailFrame(title = nativeString("Appearance"), subtitle = nativeString("Theme and translated Android text."), icon = Icons.Default.Palette, onBack = onBack) {
-    ClawPanel {
-      Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
-        Text(text = nativeString("Theme family"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-        AppearanceThemeFamily.entries.chunked(2).forEach { rowFamilies ->
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
-          ) {
-            rowFamilies.forEach { family ->
-              AppearanceThemeFamilyCard(
-                family = family,
-                selected = family == themeFamily,
-                onClick = { viewModel.setAppearanceThemeFamily(family) },
-                modifier = Modifier.weight(1f),
-              )
-            }
-            if (rowFamilies.size == 1) Spacer(modifier = Modifier.weight(1f))
+  SettingsDetailFrame(title = nativeString("Appearance"), subtitle = nativeString("Theme and translated Android text."), icon = SettingsRoute.Appearance.icon, onBack = onBack) {
+    ClawPanel(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+      Text(text = nativeString("Theme family"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      AppearanceThemeFamily.entries.chunked(2).forEach { rowFamilies ->
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+        ) {
+          rowFamilies.forEach { family ->
+            AppearanceThemeFamilyCard(
+              family = family,
+              selected = family == themeFamily,
+              onClick = { viewModel.setAppearanceThemeFamily(family) },
+              modifier = Modifier.weight(1f),
+            )
           }
+          if (rowFamilies.size == 1) Spacer(modifier = Modifier.weight(1f))
         }
-        Text(
-          text = nativeString("Color mode"),
-          style = ClawTheme.type.section,
-          color = ClawTheme.colors.text,
-          modifier = Modifier.padding(top = ClawTheme.spacing.xxs),
-        )
-        ClawSegmentedControl(
-          options = appearanceThemeOptions(),
-          selected = appearanceThemeSummary(themeMode),
-          onSelect = { selected -> viewModel.setAppearanceThemeMode(appearanceThemeModeForLabel(selected)) },
-        )
-        Text(
-          text = nativeString("Accent color"),
-          style = ClawTheme.type.section,
-          color = ClawTheme.colors.text,
-          modifier = Modifier.padding(top = ClawTheme.spacing.xxs),
-        )
-        (listOf<Long?>(null) + appearanceAccentPalette).chunked(5).forEach { accentRow ->
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
-          ) {
-            accentRow.forEach { candidate ->
-              AppearanceAccentSwatch(
-                argb = candidate,
-                previewArgb = candidate ?: themeFamily.previewAccentArgb,
-                selected = candidate == accentArgb,
-                onClick = { viewModel.setAppearanceAccentArgb(candidate) },
-              )
-            }
+      }
+      Text(
+        text = nativeString("Color mode"),
+        style = ClawTheme.type.section,
+        color = ClawTheme.colors.text,
+        modifier = Modifier.padding(top = ClawTheme.spacing.xxs),
+      )
+      ClawSegmentedControl(
+        options = AppearanceThemeMode.entries,
+        selected = themeMode,
+        onSelect = viewModel::setAppearanceThemeMode,
+        optionLabel = ::appearanceThemeSummary,
+      )
+      Text(
+        text = nativeString("Accent color"),
+        style = ClawTheme.type.section,
+        color = ClawTheme.colors.text,
+        modifier = Modifier.padding(top = ClawTheme.spacing.xxs),
+      )
+      (listOf<Long?>(null) + appearanceAccentPalette).chunked(5).forEach { accentRow ->
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+        ) {
+          accentRow.forEach { candidate ->
+            AppearanceAccentSwatch(
+              argb = candidate,
+              previewArgb = candidate ?: themeFamily.previewAccentArgb,
+              selected = candidate == accentArgb,
+              onClick = { viewModel.setAppearanceAccentArgb(candidate) },
+            )
           }
         }
       }
     }
-    ClawPanel {
-      Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
-        Text(text = nativeString("Text size"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-        Text(text = nativeString("Default: 100%. Only on this device."), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-        ClawSegmentedControl(
-          options = AppearanceTextScale.entries,
-          selected = textScale,
-          onSelect = viewModel::setAppearanceTextScale,
-          maxOptionsPerRow = 3,
-          optionLabel = { "${it.percent}%" },
-        )
-      }
+    ClawPanel(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+      Text(text = nativeString("Text size"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(text = nativeString("Default: 100%. Only on this device."), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+      ClawSegmentedControl(
+        options = AppearanceTextScale.entries,
+        selected = textScale,
+        onSelect = viewModel::setAppearanceTextScale,
+        maxOptionsPerRow = 3,
+        optionLabel = { "${it.percent}%" },
+      )
     }
-    ClawPanel {
-      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(text = nativeString("App language"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-        AppLanguage.entries.forEachIndexed { index, language ->
-          if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
-          AppLanguageRow(
-            language = language,
-            selected = language == appLanguage,
-            systemLanguageTag = systemLanguageTag,
-            onClick = {
-              appLanguage = language
-              setAppLanguage(language)
-            },
-          )
-        }
+    ClawPanel(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+      Text(text = nativeString("App language"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      AppLanguage.entries.forEachIndexed { index, language ->
+        if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
+        AppLanguageRow(
+          language = language,
+          selected = language == appLanguage,
+          systemLanguageTag = systemLanguageTag,
+          onClick = {
+            appLanguage = language
+            setAppLanguage(language)
+          },
+        )
       }
     }
   }
@@ -2455,25 +2382,7 @@ internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String =
     AppearanceThemeMode.Light -> nativeString("Light")
   }
 
-internal fun appearanceThemeOptions(): List<String> = AppearanceThemeMode.entries.map(::appearanceThemeSummary)
-
-internal fun appearanceThemeModeForLabel(label: String): AppearanceThemeMode =
-  AppearanceThemeMode.entries.firstOrNull { appearanceThemeSummary(it).equals(label.trim(), ignoreCase = true) }
-    ?: AppearanceThemeMode.Dark
-
-internal fun locationModeLabels(backgroundLocationAvailable: Boolean): List<String> =
-  if (backgroundLocationAvailable) {
-    listOf(nativeString("Off"), nativeString("While Using"), nativeString("Always"))
-  } else {
-    listOf(nativeString("Off"), nativeString("While Using"))
-  }
-
-internal fun locationModeForLabel(label: String): LocationMode =
-  when (label) {
-    nativeString("While Using") -> LocationMode.WhileUsing
-    nativeString("Always") -> LocationMode.Always
-    else -> LocationMode.Off
-  }
+internal fun locationModeOptions(backgroundLocationAvailable: Boolean): List<LocationMode> = LocationMode.entries.filter { backgroundLocationAvailable || it != LocationMode.Always }
 
 private val LocationMode.displayLabel: String
   get() =
@@ -2496,7 +2405,7 @@ private fun AboutSettingsScreen(
   val currentGatewayVersion = updateAvailable?.currentVersion?.takeIf { it.isNotBlank() } ?: gatewayVersion
   val appLocale = LocalConfiguration.current.locales[0]
 
-  SettingsDetailFrame(title = nativeString("About"), subtitle = nativeString("OpenClaw for Android."), icon = Icons.Default.Info, onBack = onBack) {
+  SettingsDetailFrame(title = nativeString("About"), subtitle = nativeString("OpenClaw for Android."), icon = SettingsRoute.About.icon, onBack = onBack) {
     AboutHeroPanel()
     AboutBuildIdentityPanel(
       versionName = BuildConfig.VERSION_NAME,
@@ -2525,9 +2434,7 @@ private fun AboutSettingsScreen(
         )
       }
     }
-    ClawPanel {
-      Text(text = aboutUpdateText(latestVersion = latestVersion), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-    }
+    SettingsMessagePanel(text = aboutUpdateText(latestVersion = latestVersion))
     AboutLinksPanel()
     Text(
       text = nativeString("© 2026 OpenClaw Foundation — MIT License."),
@@ -2612,7 +2519,7 @@ private fun LicensesSettingsScreen(onBack: () -> Unit) {
     title = nativeString("Licenses"),
     subtitle = if (selectedLicense == null) nativeString("OpenClaw appreciates its partners in the open-source community.") else "",
     subtitleTextAlign = TextAlign.Center,
-    icon = Icons.Default.Info,
+    icon = SettingsRoute.Licenses.icon,
     onBack = backToListOrSettings,
   ) {
     val selected = selectedLicense
@@ -2702,6 +2609,18 @@ private fun aboutUpdateText(latestVersion: String?): String =
   }
 
 @Composable
+internal fun SettingsMessagePanel(
+  text: String,
+  title: String? = null,
+  color: Color = ClawTheme.colors.textMuted,
+) {
+  ClawPanel(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+    title?.let { Text(text = it, style = ClawTheme.type.section, color = ClawTheme.colors.text) }
+    Text(text = text, style = ClawTheme.type.body, color = color)
+  }
+}
+
+@Composable
 internal fun SettingsRefreshControls(
   connected: Boolean,
   refreshing: Boolean,
@@ -2716,9 +2635,7 @@ internal fun SettingsRefreshControls(
     modifier = Modifier.fillMaxWidth(),
   )
   errorText?.let { error ->
-    ClawPanel {
-      Text(text = error.resolveNativeTextResource(), style = ClawTheme.type.body, color = ClawTheme.colors.warning)
-    }
+    SettingsMessagePanel(text = error.resolveNativeTextResource(), color = ClawTheme.colors.warning)
   }
 }
 
@@ -2732,9 +2649,7 @@ internal fun <T> SettingsSummaryContent(
   val summary = state.summary
   when {
     !connected -> {
-      ClawPanel {
-        Text(text = disconnectedText, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-      }
+      SettingsMessagePanel(text = disconnectedText)
     }
 
     summary != null -> {
@@ -2742,9 +2657,7 @@ internal fun <T> SettingsSummaryContent(
     }
 
     !state.refreshing && state.errorText == null -> {
-      ClawPanel {
-        Text(text = nativeString("Load from gateway"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-      }
+      SettingsMessagePanel(text = nativeString("Load from gateway"))
     }
   }
 }
@@ -2937,8 +2850,8 @@ private fun ApprovalListRow(toolCall: ChatPendingToolCall) {
   ClawListItem(
     title = approvalActionName(toolCall.name),
     subtitle = approvalSubtitle(toolCall, hasIssue),
-    leading = { ClawIconBadge(icon = Icons.Default.Lock) },
-    trailing = { ClawStatusPill(text = if (hasIssue) nativeString("Issue") else nativeString("Review"), status = if (hasIssue) ClawStatus.Warning else ClawStatus.Success) },
+    leading = { ClawIconBadge(icon = SettingsRoute.Approvals.icon) },
+    trailing = { ClawStatusPill(text = if (hasIssue) nativeString("Issue") else nativeString("Review"), status = ClawStatus.Warning) },
   )
 }
 
@@ -2967,7 +2880,7 @@ private fun CronJobListRow(
     title = job.name,
     subtitle = cronJobSubtitle(job),
     modifier = Modifier.clickable(onClickLabel = nativeString("Open automation detail"), onClick = onClick),
-    leading = { ClawIconBadge(icon = Icons.Default.Bolt) },
+    leading = { ClawIconBadge(icon = SettingsRoute.CronJobs.icon) },
     trailing = {
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         ClawStatusPill(text = cronJobStatusText(job.enabled, job.lastRunStatus), status = cronJobStatus(job))
@@ -3112,15 +3025,13 @@ private fun CronJobTextPanel(
   text: String,
   warning: Boolean = false,
 ) {
-  ClawPanel {
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-      Text(text = title, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-      Text(
-        text = text,
-        style = ClawTheme.type.body,
-        color = if (warning) ClawTheme.colors.warning else ClawTheme.colors.text,
-      )
-    }
+  ClawPanel(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+    Text(text = title, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+    Text(
+      text = text,
+      style = ClawTheme.type.body,
+      color = if (warning) ClawTheme.colors.warning else ClawTheme.colors.text,
+    )
   }
 }
 

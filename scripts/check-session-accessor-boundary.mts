@@ -316,13 +316,9 @@ function propertyAccessName(expression: ts.Expression) {
 }
 
 function bindingName(node: ts.BindingElement) {
-  if (node.propertyName && ts.isIdentifier(node.propertyName)) {
-    return node.propertyName.text;
-  }
-  if (node.name && ts.isIdentifier(node.name)) {
-    return node.name.text;
-  }
-  return null;
+  const name =
+    node.propertyName && ts.isIdentifier(node.propertyName) ? node.propertyName : node.name;
+  return name && ts.isIdentifier(name) ? name.text : null;
 }
 
 function findNamedBoundaryViolations(
@@ -388,12 +384,9 @@ function findNamedBoundaryViolations(
   return violations;
 }
 
-function findNamedSessionStoreViolations(
-  sourceFile: ts.SourceFile,
-  legacyNames: ReadonlySet<string>,
-  legacyKind: string,
-) {
-  return findNamedBoundaryViolations(sourceFile, legacyNames, `legacy session store ${legacyKind}`);
+function namedBoundaryRule(legacyNames: ReadonlySet<string>, subject: string) {
+  return (_content: string, _fileName: string, sourceFile: ts.SourceFile) =>
+    findNamedBoundaryViolations(sourceFile, legacyNames, subject);
 }
 
 export function collectSessionStoreRuntimeFileBackedCompatExports(
@@ -475,20 +468,13 @@ export function findSessionAccessorBoundaryViolations(
 ) {
   const legacyNames = legacyNamesForFile(fileName);
   const legacyKind = legacyNames === legacyWholeStoreAccessNames ? "access" : "reader";
-  return findNamedSessionStoreViolations(sourceFile, legacyNames, legacyKind);
+  return findNamedBoundaryViolations(sourceFile, legacyNames, `legacy session store ${legacyKind}`);
 }
 
-export function findReadOnlySessionAccessorViolations(
-  _content: string,
-  _fileName: string,
-  sourceFile: ts.SourceFile,
-) {
-  return findNamedBoundaryViolations(
-    sourceFile,
-    materializingSessionEntryAccessorNames,
-    "materializing session entry accessor",
-  );
-}
+export const findReadOnlySessionAccessorViolations = namedBoundaryRule(
+  materializingSessionEntryAccessorNames,
+  "materializing session entry accessor",
+);
 
 export function findEmbeddedAgentSessionTargetViolations(
   _content: string,
@@ -512,14 +498,8 @@ export function findEmbeddedAgentSessionTargetViolations(
   const visitRunOptions = (options: ts.ObjectLiteralExpression) => {
     for (const property of options.properties) {
       if (
-        ts.isPropertyAssignment(property) &&
+        (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) &&
         getPropertyNameText(property.name) === "sessionFile"
-      ) {
-        recordDeprecatedSessionFile(property.name);
-      } else if (
-        ts.isShorthandPropertyAssignment(property) &&
-        ts.isIdentifier(property.name) &&
-        property.name.text === "sessionFile"
       ) {
         recordDeprecatedSessionFile(property.name);
       }
@@ -542,25 +522,15 @@ export function findEmbeddedAgentSessionTargetViolations(
   return violations;
 }
 
-export function findSessionAccessorWriteBoundaryViolations(
-  _content: string,
-  _fileName: string,
-  sourceFile: ts.SourceFile,
-) {
-  return findNamedSessionStoreViolations(sourceFile, legacyWriterNames, "writer");
-}
+export const findSessionAccessorWriteBoundaryViolations = namedBoundaryRule(
+  legacyWriterNames,
+  "legacy session store writer",
+);
 
-export function findTranscriptWriterBoundaryViolations(
-  _content: string,
-  _fileName: string,
-  sourceFile: ts.SourceFile,
-) {
-  return findNamedBoundaryViolations(
-    sourceFile,
-    legacyTranscriptWriterNames,
-    "legacy transcript writer",
-  );
-}
+export const findTranscriptWriterBoundaryViolations = namedBoundaryRule(
+  legacyTranscriptWriterNames,
+  "legacy transcript writer",
+);
 
 export function findGatewaySessionCreateLifecycleViolations(
   _content: string,
@@ -598,29 +568,15 @@ export function findGatewaySessionCreateLifecycleViolations(
   return violations;
 }
 
-export function findSessionCompactManualTrimBoundaryViolations(
-  _content: string,
-  _fileName: string,
-  sourceFile: ts.SourceFile,
-) {
-  return findNamedSessionStoreViolations(
-    sourceFile,
-    legacyManualCompactTrimNames,
-    "manual compact trim",
-  );
-}
+export const findSessionCompactManualTrimBoundaryViolations = namedBoundaryRule(
+  legacyManualCompactTrimNames,
+  "legacy session store manual compact trim",
+);
 
-export function findSessionLifecycleCleanupBoundaryViolations(
-  _content: string,
-  _fileName: string,
-  sourceFile: ts.SourceFile,
-) {
-  return findNamedSessionStoreViolations(
-    sourceFile,
-    legacyLifecycleCleanupNames,
-    "lifecycle cleanup",
-  );
-}
+export const findSessionLifecycleCleanupBoundaryViolations = namedBoundaryRule(
+  legacyLifecycleCleanupNames,
+  "legacy session store lifecycle cleanup",
+);
 
 // Source roots shared by the enforced boundary checks in main() and the debt
 // ratchet below; keeping one list prevents the two scans from drifting apart.

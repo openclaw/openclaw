@@ -36,6 +36,7 @@ import type {
   PluginMetadataSnapshot,
   PluginMetadataSnapshotPluginIdScope,
 } from "./plugin-metadata-snapshot.types.js";
+import { preparePluginNativeAdmissions } from "./plugin-native-admission-state.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
 
 type CurrentPluginMetadataSnapshotOptions = {
@@ -222,6 +223,8 @@ export function createPluginMetadataSnapshotFrame(
 ): PluginExecutionFrame {
   const current = getPluginExecutionFrame();
   const cache = getPluginMetadataSnapshotCache(snapshot);
+  // A retained metadata owner can be borrowed inside a different private state view.
+  preparePluginNativeAdmissions(snapshot.index, cache);
   const workspaceDir = options.workspaceDir ?? snapshot.workspaceDir;
   const fingerprint = (config: OpenClawConfig, policyHash: string | undefined) =>
     resolvePluginControlPlaneFingerprint({

@@ -5,12 +5,13 @@ describe("Chrome MCP profile options", () => {
   it.each([undefined, "npx"])(
     "launches the packaged Chrome MCP on the current runtime for HTTP endpoints with command %s",
     (mcpCommand) => {
-      const { command, args } = normalizeChromeMcpOptions({
+      const { command, args, env } = normalizeChromeMcpOptions({
         cdpUrl: "http://127.0.0.1:9222",
         mcpCommand,
       });
 
       expect(command).toBe(process.execPath);
+      expect(env).toEqual({ CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: "1" });
       expect(args[0]).toMatch(
         /[/\\]chrome-devtools-mcp[/\\]build[/\\]src[/\\]bin[/\\]chrome-devtools-mcp\.js$/,
       );
@@ -66,6 +67,7 @@ describe("Chrome MCP profile options", () => {
     const options = normalizeChromeMcpOptions({ mcpCommand: "custom-chrome-mcp", mcpArgs });
 
     expect(options.command).toBe("custom-chrome-mcp");
+    expect(options.env).toBeUndefined();
     expect(options.args).toEqual([
       "--autoConnect",
       "--no-usage-statistics",

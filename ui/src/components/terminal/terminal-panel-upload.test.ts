@@ -1,11 +1,16 @@
 /* @vitest-environment jsdom */
 
+import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import { createApplicationConfigCapability } from "../../app/config.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
+import { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
 import { terminalOpenResult } from "./terminal-panel.test-support.ts";
 import { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
@@ -62,6 +67,91 @@ function terminalUploadFile(name: string, content: string): File {
 }
 
 describe("OpenClawTerminalPanel upload lifecycle", () => {
+  it("does not request an upload after a pending file read is disabled", async () => {
+    const base = createApplicationConfigCapability({ resourceBasePath: "" });
+    const config = { ...base, current: { ...base.current, uploadsEnabled: true } };
+    const request = vi.fn();
+    const terminal = createTerminalController();
+    const tab = {
+      gatewaySessionId: "session-1",
+      shell: "/bin/sh",
+      status: "live",
+      controller: terminal as unknown as GhosttyTerminalController,
+    };
+    const upload = new TerminalPanelUploadController({
+      config: () => config,
+      activeTab: () => tab,
+      client: () => ({ request, forceReconnect: () => {}, addEventListener: () => () => {} }),
+      isCurrent: () => true,
+      fileInput: () => null,
+      setError: vi.fn(),
+      requestUpdate: vi.fn(),
+    });
+    const read = createDeferred<ArrayBuffer>();
+    const file = new File(["file"], "file.txt");
+    Object.defineProperty(file, "arrayBuffer", { value: () => read.promise });
+    const drop = new Event("drop", { cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", { value: { types: ["Files"], files: [file] } });
+    upload.handleDrop(drop as DragEvent);
+    expect(upload.hasPendingBatch()).toBe(true);
+    config.current.uploadsEnabled = false;
+    read.resolve(new ArrayBuffer(1));
+    await read.promise;
+    await Promise.resolve();
+    expect(request).not.toHaveBeenCalled();
+    expect(terminal.terminal.paste).not.toHaveBeenCalled();
+    expect(upload.hasPendingBatch()).toBe(false);
+  });
+  it("reacts to upload policy changes without intercepting text drops", async () => {
+    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+    const host = createApplicationContextProvider({ config } as ApplicationContext);
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.embedded = true;
+    panel.available = true;
+    host.append(panel);
+    document.body.append(host);
+    await panel.updateComplete;
+    const staleInput = panel.renderRoot.querySelector<HTMLInputElement>(".tp-file-input")!;
+    expect(staleInput).not.toBeNull();
+    let enabled = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ uploadsEnabled: enabled }))),
+    );
+    await config.refresh();
+    await panel.updateComplete;
+    expect(panel.renderRoot.querySelector(".tp-file-input")).toBeNull();
+    expect(panel.renderRoot.querySelector(".tp-upload")).toBeNull();
+    const read = vi.fn();
+    const file = new File(["test"], "test.txt");
+    Object.defineProperty(file, "arrayBuffer", { value: read });
+    Object.defineProperty(staleInput, "files", { value: [file] });
+    staleInput.dispatchEvent(new Event("change"));
+    const viewport = panel.renderRoot.querySelector(".tp-viewport")!;
+    for (const type of ["dragenter", "dragover", "drop"]) {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      const transfer = { types: ["Files"], files: [file], dropEffect: "copy" };
+      Object.defineProperty(event, "dataTransfer", { value: transfer });
+      viewport.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      if (type !== "drop") {
+        expect(transfer.dropEffect).toBe("none");
+      }
+    }
+    expect(read).not.toHaveBeenCalled();
+    expect(panel.terminalPanelUploadController.hasPendingBatch()).toBe(false);
+    const textDrop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(textDrop, "dataTransfer", {
+      value: { types: ["text/plain"], files: [] },
+    });
+    viewport.dispatchEvent(textDrop);
+    expect(textDrop.defaultPrevented).toBe(false);
+    enabled = true;
+    await config.refresh();
+    await panel.updateComplete;
+    expect(panel.renderRoot.querySelector(".tp-file-input")).not.toBeNull();
+    expect(panel.renderRoot.querySelector(".tp-upload")).not.toBeNull();
+  });
   beforeEach(async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());

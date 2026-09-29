@@ -2,7 +2,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
 import { isSessionFileEntry } from "../../agents/sessions/session-file-parser.js";
@@ -27,7 +26,6 @@ import { writeSessionExportFile } from "./commands-export-session-file.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-// Export HTML templates are bundled with this module
 const EXPORT_HTML_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "export-html");
 
 interface SessionData {
@@ -76,9 +74,6 @@ function isBackendDelegatedSession(
   if (!hasBackendSession(entry, hasStoredAcpSession)) {
     return false;
   }
-  if (entries.length === 0) {
-    return false;
-  }
   const messages = entries.filter(
     (transcriptEntry): transcriptEntry is SessionMessageEntry => transcriptEntry.type === "message",
   );
@@ -125,7 +120,6 @@ async function generateHtml(sessionData: SessionData): Promise<string> {
     loadTemplate(path.join("vendor", "highlight.min.js")),
   ]);
 
-  // Use the bundled dark session-export palette
   const themeVars = `
     --cyan: #00d7ff;
     --blue: #5f87ff;
@@ -169,29 +163,23 @@ async function generateHtml(sessionData: SessionData): Promise<string> {
   const containerBg = "#282832";
   const infoBg = "#343541";
 
-  // Base64 encode session data
   const sessionDataBase64 = Buffer.from(JSON.stringify(sessionData)).toString("base64");
 
-  // Build CSS with theme variables
   const css = templateCss
     .replace("/* {{THEME_VARS}} */", themeVars.trim())
     .replace("/* {{BODY_BG_DECL}} */", `--body-bg: ${bodyBg};`)
     .replace("/* {{CONTAINER_BG_DECL}} */", `--container-bg: ${containerBg};`)
     .replace("/* {{INFO_BG_DECL}} */", `--info-bg: ${infoBg};`);
 
-  return [
+  const replacements: Array<[string, string]> = [
     ["CSS", css],
     ["SESSION_DATA", sessionDataBase64],
     ["MARKED_JS", markedJs],
     ["HIGHLIGHT_JS", hljsJs],
     ["JS", templateJs],
-  ].reduce(
-    (html, [name, value]) =>
-      replaceHtmlPlaceholder(
-        html,
-        expectDefined(name, "commands export session name"),
-        expectDefined(value, "commands export session value"),
-      ),
+  ];
+  return replacements.reduce(
+    (html, [name, value]) => replaceHtmlPlaceholder(html, name, value),
     template,
   );
 }
@@ -283,13 +271,11 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     storePath: sessionTarget.storePath,
   });
 
-  // 3. Build full system prompt
   const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle({
     ...params,
-    sessionEntry: entry as HandleCommandsParams["sessionEntry"],
+    sessionEntry: entry,
   });
 
-  // 4. Prepare session data
   const hasStoredAcpSession = hasPersistedAcpSession({
     sessionKey: params.sessionKey,
     entry,
@@ -311,10 +297,8 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     warning: backendWarning,
   };
 
-  // 5. Generate HTML
   const html = await generateHtml(sessionData);
 
-  // 6. Determine output path
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const defaultFileName = `openclaw-session-${entry.sessionId.slice(0, 8)}-${timestamp}.html`;
   let displayPath: string;

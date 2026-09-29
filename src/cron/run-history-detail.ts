@@ -33,21 +33,17 @@ const optionalCronTimestampSchema = z
   .unknown()
   .optional()
   .transform((value) => normalizeTimestamp(value));
-const optionalCronDurationSchema = z
-  .unknown()
-  .optional()
-  .transform((value) => asSafeIntegerInRange(value, { min: 0 }));
-const optionalCronTokenCountSchema = z
+const optionalCronNonnegativeIntegerSchema = z
   .unknown()
   .optional()
   .transform((value) => asSafeIntegerInRange(value, { min: 0 }));
 const cronUsageSchema = z
   .object({
-    input_tokens: optionalCronTokenCountSchema,
-    output_tokens: optionalCronTokenCountSchema,
-    total_tokens: optionalCronTokenCountSchema,
-    cache_read_tokens: optionalCronTokenCountSchema,
-    cache_write_tokens: optionalCronTokenCountSchema,
+    input_tokens: optionalCronNonnegativeIntegerSchema,
+    output_tokens: optionalCronNonnegativeIntegerSchema,
+    total_tokens: optionalCronNonnegativeIntegerSchema,
+    cache_read_tokens: optionalCronNonnegativeIntegerSchema,
+    cache_write_tokens: optionalCronNonnegativeIntegerSchema,
   })
   .transform((usage) =>
     Object.values(usage).some((tokenCount) => tokenCount !== undefined) ? usage : undefined,
@@ -82,7 +78,7 @@ const cronRunLogEntrySchema = z.looseObject({
   runId: optionalNonBlankCronStringSchema,
   diagnostics: z.unknown().optional(),
   runAtMs: optionalCronTimestampSchema,
-  durationMs: optionalCronDurationSchema,
+  durationMs: optionalCronNonnegativeIntegerSchema,
   nextRunAtMs: optionalCronTimestampSchema,
   triggerFired: z
     .unknown()
@@ -194,29 +190,19 @@ export function parseCronRunLogEntryObject(
     provider: entryObj.provider,
     usage: entryObj.usage,
   };
-  if (entryObj.delivered !== undefined) {
-    entry.delivered = entryObj.delivered;
-  }
-  if (entryObj.deliveryStatus !== undefined) {
-    entry.deliveryStatus = entryObj.deliveryStatus;
-  }
-  if (entryObj.deliveryError !== undefined) {
-    entry.deliveryError = entryObj.deliveryError;
-  }
-  if (entryObj.deliverySuppressionReason !== undefined) {
-    entry.deliverySuppressionReason = entryObj.deliverySuppressionReason;
-  }
-  if (entryObj.failureNotificationDelivery !== undefined) {
-    entry.failureNotificationDelivery = entryObj.failureNotificationDelivery;
-  }
-  if (entryObj.delivery !== undefined) {
-    entry.delivery = entryObj.delivery;
-  }
-  if (entryObj.sessionId !== undefined) {
-    entry.sessionId = entryObj.sessionId;
-  }
-  if (entryObj.sessionKey !== undefined) {
-    entry.sessionKey = entryObj.sessionKey;
+  for (const field of [
+    "delivered",
+    "deliveryStatus",
+    "deliveryError",
+    "deliverySuppressionReason",
+    "failureNotificationDelivery",
+    "delivery",
+    "sessionId",
+    "sessionKey",
+  ] as const) {
+    if (entryObj[field] !== undefined) {
+      Object.assign(entry, { [field]: entryObj[field] });
+    }
   }
   return entry;
 }
@@ -297,6 +283,18 @@ export function resolveCronRunRecordTimestamp(
   record: Pick<CronRunRecord, "endedAt" | "lastEventAt" | "createdAt">,
 ): number {
   return record.endedAt ?? record.lastEventAt ?? record.createdAt;
+}
+
+/** Shared newest-first order for history pages, retention, and recovery. */
+export function compareCronRunRecordsNewestFirst(
+  left: CronRunRecord,
+  right: CronRunRecord,
+): number {
+  return (
+    resolveCronRunRecordTimestamp(right) - resolveCronRunRecordTimestamp(left) ||
+    right.createdAt - left.createdAt ||
+    right.id.localeCompare(left.id)
+  );
 }
 
 /** Reads internal trigger recovery data without adding it to run-history responses. */

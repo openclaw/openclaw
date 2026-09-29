@@ -4466,15 +4466,17 @@ class ChatComposerLayoutTest {
       response = { """{"entry":{"key":"$originalSession","modelOverride":null},"resolved":{"modelProvider":"openai","model":"gpt-5.2"}}""" },
     ) { admitted, release ->
       val catalog = controllerFlow<List<GatewayModelSummary>>("_modelCatalog")
+      // Commands can arrive before models.list finishes; capture the catalog only after its model exists.
+      composeRule.waitUntil { composeRule.runOnIdle { catalog.value.any { it.providerQualifiedRef() == "openai/gpt-5.2" } } }
       val availableCatalog = catalog.value
 
       fun publishAvailability(reason: GatewayModelUnavailableReason?) {
-        composeRule.runOnIdle {
-          catalog.value =
-            availableCatalog.map {
-              if (it.providerQualifiedRef() == "openai/gpt-5.2") it.copy(available = reason == null, unavailableReason = reason) else it
-            }
-        }
+        val expectedCatalog =
+          availableCatalog.map {
+            if (it.providerQualifiedRef() == "openai/gpt-5.2") it.copy(available = reason == null, unavailableReason = reason) else it
+          }
+        composeRule.runOnIdle { catalog.value = expectedCatalog }
+        composeRule.waitUntil { composeRule.runOnIdle { model.chatModelCatalog.value == expectedCatalog } }
         composeRule.runOnIdle {
           assertEquals(
             reason,

@@ -15,6 +15,7 @@ import {
 import {
   normalizeApprovalRequest,
   type ApprovalRequestInput,
+  type ApprovalResolved as ApprovalResolvedEvent,
   type ChannelApprovalKind,
   type NormalizedApprovalRequest,
 } from "./approval-types.js";
@@ -24,18 +25,12 @@ import type {
   ExecApprovalChannelRuntimeAdapter,
 } from "./exec-approval-channel-runtime.types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
-import type { PluginApprovalResolved } from "./plugin-approvals.js";
-import type { SystemAgentApprovalResolved } from "./system-agent-approvals.js";
 export type {
   ExecApprovalChannelRuntime,
   ExecApprovalChannelRuntimeAdapter,
 } from "./exec-approval-channel-runtime.types.js";
 
 type ApprovalRequestEvent = ApprovalRequestInput;
-type ApprovalResolvedEvent =
-  | ExecApprovalResolved
-  | PluginApprovalResolved
-  | SystemAgentApprovalResolved;
 type ApprovalReplayMethod = Extract<
   GatewayNativeApprovalMethod,
   "exec.approval.list" | "plugin.approval.list" | "openclaw.approval.list"

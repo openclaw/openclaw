@@ -8,6 +8,7 @@ import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbo
 import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import {
   canRunPlaywrightChromium,
   controlUiBundledSettingsStorageKey,
@@ -195,6 +196,50 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       });
     }
     await controlUi?.close();
+  });
+
+  it("closes Inbox when a dashboard frame receives an outside click without stealing focus", async () => {
+    const context = await browser.newContext({
+      permissions: ["local-network-access"],
+    });
+    contexts.add(context);
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      sessionKey,
+      featureMethods: ["board.get", "board.widget.appView", "mcp.app.view"],
+      methodResponses: {
+        "board.get": boardSnapshot(1),
+        "board.widget.appView": {
+          viewId: "inbox-focus-view",
+          expiresAtMs: Date.now() + 3_600_000,
+        },
+        "mcp.app.view": appViewPayload(),
+      },
+    });
+    await openDashboard(page);
+    const note = page
+      .frameLocator("mcp-app-view iframe")
+      .frameLocator("iframe")
+      .getByRole("textbox", { name: "Draft note" });
+    await note.waitFor();
+    const trigger = page.locator(".sidebar-issues-button:visible");
+    const panel = page.locator("#sidebar-issues-panel");
+    await trigger.click();
+    await panel.waitFor();
+    await clickBoardWidgetControl(page, note);
+    await panel.waitFor({ state: "hidden" });
+    // Type through actual keyboard focus, not fill(), which would refocus the input.
+    await page.keyboard.type("Keep this dashboard draft");
+    expect(await note.inputValue()).toBe("Keep this dashboard draft");
+    await page.keyboard.press("Escape");
+    expect(await panel.count()).toBe(0);
+
+    await trigger.click();
+    await panel.waitFor();
+    await page.keyboard.press("Escape");
+    await panel.waitFor({ state: "hidden" });
+    expect(await trigger.evaluate((element) => document.activeElement === element)).toBe(true);
+    expect(await note.inputValue()).toBe("Keep this dashboard draft");
   });
 
   it("renders a pinned app and proactively renews its board lease", async () => {

@@ -63,14 +63,14 @@ class InvokeDispatcher(
   )
 
   private val cameraGate =
-    CommandGate(cameraEnabled, unavailable("CAMERA_DISABLED", "enable Camera in Settings"))
+    CommandGate(cameraEnabled, nodeInvokeError("CAMERA_DISABLED", "enable Camera in Settings"))
   private val locationGate =
-    CommandGate(locationEnabled, unavailable("LOCATION_DISABLED", "enable Location in Settings"))
+    CommandGate(locationEnabled, nodeInvokeError("LOCATION_DISABLED", "enable Location in Settings"))
   private val motionActivityGate =
-    CommandGate(motionActivityAvailable, unavailable("MOTION_UNAVAILABLE", "accelerometer not available"))
+    CommandGate(motionActivityAvailable, nodeInvokeError("MOTION_UNAVAILABLE", "accelerometer not available"))
   private val motionPedometerGate =
-    CommandGate(motionPedometerAvailable, unavailable("PEDOMETER_UNAVAILABLE", "step counter not available"))
-  private val smsUnavailable = unavailable("SMS_UNAVAILABLE", "SMS not available on this device")
+    CommandGate(motionPedometerAvailable, nodeInvokeError("PEDOMETER_UNAVAILABLE", "step counter not available"))
+  private val smsUnavailable = nodeInvokeError("SMS_UNAVAILABLE", "SMS not available on this device")
   private val smsSendGate = CommandGate(sendSmsAvailable, smsUnavailable)
   private val smsSearchGate =
     CommandGate(
@@ -80,16 +80,16 @@ class InvokeDispatcher(
       isAdvertised = smsSearchPossible,
     )
   private val callLogGate =
-    CommandGate(callLogAvailable, unavailable("CALL_LOG_UNAVAILABLE", "call log not available on this build"))
+    CommandGate(callLogAvailable, nodeInvokeError("CALL_LOG_UNAVAILABLE", "call log not available on this build"))
   private val photosGate =
-    CommandGate(photosAvailable, unavailable("PHOTOS_UNAVAILABLE", "photos not available on this build"))
+    CommandGate(photosAvailable, nodeInvokeError("PHOTOS_UNAVAILABLE", "photos not available on this build"))
   private val installedAppsGate =
-    CommandGate(installedAppsSharingEnabled, unavailable("INSTALLED_APPS_SHARING_DISABLED", "enable Installed Apps in Settings"))
+    CommandGate(installedAppsSharingEnabled, nodeInvokeError("INSTALLED_APPS_SHARING_DISABLED", "enable Installed Apps in Settings"))
   private val debugGate =
-    CommandGate(debugBuild, unavailable("INVALID_REQUEST", "unknown command"))
+    CommandGate(debugBuild, nodeInvokeError("INVALID_REQUEST", "unknown command"))
   private val mobileUiGate =
-    CommandGate(mobileUiAvailable, unavailable("MOBILE_UI_UNAVAILABLE", "accessibility service is not connected"))
-  private val incomingCallGate = CommandGate(incomingCallAvailable, unavailable("CALL_DISABLED", "enable Incoming data calls in Voice settings"))
+    CommandGate(mobileUiAvailable, nodeInvokeError("MOBILE_UI_UNAVAILABLE", "accessibility service is not connected"))
+  private val incomingCallGate = CommandGate(incomingCallAvailable, nodeInvokeError("CALL_DISABLED", "enable Incoming data calls in Voice settings"))
 
   // Keep protocol ordering stable. The same entries advertise and dispatch each bound handler.
   private val commands =
@@ -134,9 +134,9 @@ class InvokeDispatcher(
     command: String,
     paramsJson: String?,
   ): GatewaySession.InvokeResult {
-    val binding = commandsByName[command] ?: return unavailable("INVALID_REQUEST", "unknown command")
+    val binding = commandsByName[command] ?: return nodeInvokeError("INVALID_REQUEST", "unknown command")
     if (binding.requiresForeground && !isForeground()) {
-      return unavailable("NODE_BACKGROUND_UNAVAILABLE", "command requires foreground")
+      return nodeInvokeError("NODE_BACKGROUND_UNAVAILABLE", "command requires foreground")
     }
     val gate = binding.gate
     if (gate != null && !gate.isAvailable()) return gate.unavailable
@@ -171,11 +171,6 @@ class InvokeDispatcher(
       if (voiceWakeAvailable()) add(OpenClawCapability.VoiceWake.rawValue)
       if (mobileUiGate.isAvailable()) add(OpenClawCapability.MobileUI.rawValue)
     }
-
-  private fun unavailable(
-    code: String,
-    message: String,
-  ): GatewaySession.InvokeResult = GatewaySession.InvokeResult.error(code, "$code: $message")
 }
 
 /** Talk-mode command adapter implemented by the voice subsystem. */

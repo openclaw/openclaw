@@ -15,6 +15,8 @@ const toolingClosure = [
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/official-external-provider-catalog.json",
+  "scripts/lib/record-shared.mjs",
   "scripts/lib/update-compat-inventory.json",
   "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
@@ -83,7 +85,11 @@ const shellOwners = {
   ],
   "upgrade-survivor": [
     "upgrade_survivor_capabilities",
-    ["OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE"],
+    [
+      "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE",
+      "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE",
+      "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE",
+    ],
   ],
 };
 
@@ -192,6 +198,7 @@ const selectedMetadata = {
   "upgrade-survivor": [
     "package.json",
     "src/infra/clawhub-install-trust.ts",
+    "src/cli/update-cli/update-command-terminal-publication.ts",
     "src/plugins/clawhub.ts",
     "scripts/e2e/lib/upgrade-survivor",
     "scripts/lib/npm-publish-plan.mjs",
@@ -641,6 +648,8 @@ async function planWorkflowAdmission(input) {
   ) {
     sourcePaths.add("scripts/lib/upgrade-survivor-scenarios.json");
     sourcePaths.add("scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    // Legacy-operator planning stages the candidate's official providers for prepublish.
+    sourcePaths.add("scripts/lib/official-external-provider-catalog.json");
   }
   if (docker.length > 256) {
     throw new Error("too many selected Docker groups");
@@ -1171,14 +1180,10 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
     for (const path of supportFiles[consumer] ?? []) {
       required(sources.tooling, `scripts/e2e/lib/${path}`);
     }
-    if (
-      ["npm-onboard-channel-agent", "codex-on-demand", "update-corrupt-plugin"].includes(consumer)
-    ) {
-      required(sources.tooling, "scripts/lib/record-shared.mjs");
-    }
     if (consumer === "update-corrupt-plugin") {
       required(sources.tooling, "scripts/lib/update-compat-contract.mjs");
       required(sources.tooling, "scripts/lib/openclaw-e2e-instance.sh");
+      required(sources.tooling, "scripts/lib/docker-e2e-watchdog.mjs");
       required(sources.tooling, "scripts/lib/direct-run.mjs");
     }
     if (consumer === "upgrade-survivor" && allow) {

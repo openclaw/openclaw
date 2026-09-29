@@ -247,6 +247,103 @@ describe.skipIf(process.platform === "win32")("persistent Crabbox source capsule
     }
   });
 
+  it.each(["empty", "changed source"])(
+    "reuses unchanged mirror files after a same-ref %s commit and seals the new witness",
+    (change) => {
+      const f = fixture();
+      const first = f.prepare();
+      const stable = fileIdentity(join(first.directory, "stable.txt"));
+      first.cleanup();
+      if (change === "changed source") {
+        writeFileSync(join(f.repository, "change.txt"), "committed newer bytes\r\n");
+        f.git(f.repository, "add", "change.txt");
+      }
+      f.git(
+        f.repository,
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "-m",
+        "next head",
+      );
+      const head = f.git(f.repository, "rev-parse", "HEAD");
+      expect(head).not.toBe(first.sourceSha);
+      const next = f.prepare();
+      try {
+        expect(next.directory).toBe(first.directory);
+        expect(fileIdentity(join(next.directory, "stable.txt"))).toEqual(stable);
+        expect(next.sourceSha).toBe(head);
+        expect(readFileSync(join(next.directory, "change.txt"), "utf8")).toBe(
+          change === "changed source" ? "committed newer bytes\r\n" : "original bytes\n",
+        );
+        const receipt: unknown = JSON.parse(
+          readFileSync(join(next.staging.root, "staging.json"), "utf8"),
+        );
+        expect(receipt).toHaveProperty("witness", {
+          gitDir: f.git(f.repository, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+          ref: "refs/heads/main",
+          commit: head,
+        });
+        f.expectColdEquivalent(next);
+      } finally {
+        next.cleanup();
+      }
+    },
+  );
+
+  it.each(["ref", "Git directory"])(
+    "rebuilds the mirror when its retained source %s changes",
+    (identity) => {
+      const f = fixture();
+      const first = f.prepare();
+      first.cleanup();
+      if (identity === "ref") {
+        f.git(f.repository, "branch", "-m", "another-ref");
+      } else {
+        const gitDir = join(f.root, "relocated-git");
+        renameSync(join(f.repository, ".git"), gitDir);
+        writeFileSync(join(f.repository, ".git"), `gitdir: ${gitDir}\n`);
+      }
+      const next = f.prepare();
+      try {
+        expect(next.directory).not.toBe(first.directory);
+        expect(next.sourceSha).toBe(first.sourceSha);
+        f.expectColdEquivalent(next);
+      } finally {
+        next.cleanup();
+      }
+    },
+  );
+
+  it("rejects a source commit that changes during warm freezing", () => {
+    const f = fixture();
+    const first = f.prepare();
+    first.cleanup();
+    const commit = [
+      "-C",
+      f.repository,
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "--quiet",
+      "--allow-empty",
+      "-m",
+      "changed during freeze",
+    ];
+    expect(() =>
+      f.prepare(
+        true,
+        `require("node:child_process").execFileSync("git", ${JSON.stringify(commit)}, {stdio:"ignore"});`,
+      ),
+    ).toThrow("source revision, index, or eligibility changed while freezing");
+  });
+
   it("retains original tracking when an ignored staged source is deleted and later restored", () => {
     const f = fixture();
     const path = "staged.ignored";

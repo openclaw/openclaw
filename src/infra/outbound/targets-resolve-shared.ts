@@ -27,30 +27,25 @@ type ResolveOutboundTargetParams = {
   mode?: ChannelOutboundTargetMode;
 };
 
-function buildWebChatDeliveryError(): Error {
-  return new Error(
-    `Delivering to WebChat is not supported via \`${formatCliCommand("openclaw agent")}\`; use WhatsApp/Telegram or run with --deliver=false.`,
-  );
-}
-
 /**
  * Resolves a target through a channel plugin or the generic fallback path.
  */
 export function resolveOutboundTargetWithPlugin(params: {
   plugin: ChannelPlugin | undefined;
   target: ResolveOutboundTargetParams;
-  onMissingPlugin?: () => OutboundTargetResolution | undefined;
 }): OutboundTargetResolution | undefined {
   if (params.target.channel === INTERNAL_MESSAGE_CHANNEL) {
     return {
       ok: false,
-      error: buildWebChatDeliveryError(),
+      error: new Error(
+        `Delivering to WebChat is not supported via \`${formatCliCommand("openclaw agent")}\`; use WhatsApp/Telegram or run with --deliver=false.`,
+      ),
     };
   }
 
   const plugin = params.plugin;
   if (!plugin) {
-    return params.onMissingPlugin?.();
+    return undefined;
   }
 
   // Plugin defaults and allowlists can be account-scoped; resolve them before target validation.

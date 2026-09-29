@@ -1,21 +1,25 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
+import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
+import { resolveDebugProxySettings } from "../../proxy-capture/env.js";
+import { withDeferredDebugProxyCapture } from "../../proxy-capture/runtime-deferral.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   confirmUpdateDowngrade,
-  UpdatePreMutationError,
   resolveGitInstallDir,
   type UpdateCommandOptions,
 } from "./shared.js";
 import { withUpdateCandidateAdmission } from "./update-command-candidate-admission.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
+import type { UpdateCommandExecutorOptions } from "./update-command-executor-options.js";
 import {
   captureUpdateCommandExecutorAuthority,
   type UpdateCommandExecutor,
@@ -55,16 +59,22 @@ import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 
 type PreparedUpdate = NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>;
 
-export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<void> {
-  const { withRetainedUpdateRuntime } = await import("../../infra/update-retained-runtime.js");
-  return await withRetainedUpdateRuntime(import.meta.url, (retainRuntime) =>
-    updateCommandWithRuntime(inputOpts, retainRuntime),
-  );
+export async function updateCommand(
+  inputOpts: UpdateCommandOptions,
+  executorOptions?: UpdateCommandExecutorOptions,
+): Promise<void> {
+  return await withDeferredDebugProxyCapture(async () => {
+    const { withRetainedUpdateRuntime } = await import("../../infra/update-retained-runtime.js");
+    return await withRetainedUpdateRuntime(import.meta.url, (retainRuntime) =>
+      updateCommandWithRuntime(inputOpts, retainRuntime, executorOptions),
+    );
+  });
 }
 
 async function updateCommandWithRuntime(
   inputOpts: UpdateCommandOptions,
   retainRuntime: RetainUpdateRuntime,
+  executorOptions?: UpdateCommandExecutorOptions,
 ): Promise<void> {
   const invocationCwd = tryProcessCwd();
   const recoveryState: UpdateCommandRecoveryState = {
@@ -96,9 +106,30 @@ async function updateCommandWithRuntime(
       expectedForeground:
         prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
     });
+    if (inputOpts.dryRun && resolveDebugProxySettings(env).enabled) {
+      defaultRuntime.error("Warning: Debug HTTP capture is disabled during update dry runs.");
+    }
     const { updateStateNeedsInitialization } = await import("./update-command-initialization.js");
     assertUpdatePackageActivationAdmission(root, { serviceRoot });
-    if (await updateStateNeedsInitialization(env)) {
+    const needsInitialization = await updateStateNeedsInitialization(env);
+    const captureOriginal =
+      !inputOpts.dryRun &&
+      !inputOpts.run &&
+      !inputOpts.recovery &&
+      !executorOptions &&
+      !env[UPDATE_RUN_ID_ENV]?.trim() &&
+      env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1";
+    const execute = (initialization?: InitializedUpdate) =>
+      runAdmittedUpdate(
+        inputOpts,
+        prepared,
+        recoveryState,
+        invocationCwd,
+        retainRuntime,
+        initialization,
+        executorOptions,
+      );
+    if (needsInitialization || captureOriginal) {
       const { initializeAndRunUpdate } = await import("./update-command-initialization-run.js");
       return await initializeAndRunUpdate(
         inputOpts,
@@ -106,24 +137,12 @@ async function updateCommandWithRuntime(
         recoveryState,
         invocationCwd,
         env,
-        (initialization) =>
-          runAdmittedUpdate(
-            inputOpts,
-            prepared,
-            recoveryState,
-            invocationCwd,
-            retainRuntime,
-            initialization,
-          ),
+        execute,
+        { needsInitialization, captureOriginal },
+        executorOptions,
       );
     }
-    return await runAdmittedUpdate(
-      inputOpts,
-      prepared,
-      recoveryState,
-      invocationCwd,
-      retainRuntime,
-    );
+    return await execute();
   });
 }
 
@@ -134,13 +153,34 @@ async function runAdmittedUpdate(
   invocationCwd: string | undefined,
   retainRuntime: RetainUpdateRuntime,
   initialization?: InitializedUpdate,
+  executorOptions?: UpdateCommandExecutorOptions,
 ): Promise<void> {
+  const refusal = initialization?.refusal;
+  const serviceRoot = initialization
+    ? initialization.refusal
+      ? initialization.refusal.report.serviceRoot
+      : initialization.target.managedServiceRoot
+    : prepared.servicePlan?.serviceRoot;
+  let initializedFence: UpdateRecoveryFence | undefined;
+  let assertInitializationCurrent: (() => void) | undefined;
+  if (initialization) {
+    const root = initialization.refusal
+      ? initialization.refusal.report.root
+      : initialization.target.root;
+    const fence = await initialization.executor.enter(root, { preflight: true, serviceRoot });
+    initializedFence = fence;
+    assertInitializationCurrent = () => {
+      fence.assertCurrent();
+      assertUpdatePackageActivationAdmission(root, { serviceRoot });
+    };
+  }
   const run = await admitUpdateCommandRun({
     opts: inputOpts,
     root: resolveUpdateCommandAdmissionRoot(prepared),
-    serviceRoot: initialization?.target.managedServiceRoot ?? prepared.servicePlan?.serviceRoot,
+    serviceRoot,
     invocationCwd,
     initialization,
+    assertCurrent: assertInitializationCurrent,
     pkgOwnership: prepared.pkgOwnership,
     expectedForeground:
       prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
@@ -155,65 +195,66 @@ async function runAdmittedUpdate(
   let disposePresentation: (() => void) | undefined;
   let executionStarted = false;
   try {
+    assertInitializationCurrent?.();
+    run.executorFence = initializedFence;
     await initialization?.registerRun(run);
-    if (initialization?.target.updateInstallKind === "package") {
-      run.executorFence = await initialization.executor.enter(initialization.target.root, {
-        preflight: true,
-        serviceRoot: initialization.target.managedServiceRoot,
-      });
-      assertUpdatePackageActivationAdmission(initialization.target.root, {
-        serviceRoot: initialization.target.managedServiceRoot,
-      });
-    }
     const presentation = createUpdateProgress(!opts.json, run);
     disposePresentation = presentation.dispose;
-    const executeWith = async (executor: UpdateCommandExecutor) => {
-      await admitUpdateRequesterContinuation(
-        run,
-        executor,
-        resolveUpdateCommandAdmissionRoot(prepared),
-        initialization?.target.managedServiceRoot ?? prepared.servicePlan?.serviceRoot,
-      );
-      const execute = () => {
-        executionStarted = true;
-        return withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
-          updateCommandInternal(
-            opts,
-            recoveryState,
-            invocationCwd,
-            prepared,
-            presentation,
-            executor,
-            retainRuntime,
-            initialization,
-          ),
+    const executeWith = (executor: UpdateCommandExecutor) =>
+      withUpdatePreviewSignals(opts, async () => {
+        await admitUpdateRequesterContinuation(
+          run,
+          executor,
+          resolveUpdateCommandAdmissionRoot(prepared),
+          serviceRoot,
         );
-      };
-      if (inputOpts.dryRun || !prepared.controlPlaneUpdateSentinelMeta?.handoffId) {
-        return execute();
-      }
-      // The admitted helper owns native stop and recovery for this invocation.
-      // A handoff tuple alone never grants authority to an ordinary service caller.
-      const fence =
-        run.executorFence ??
-        (await executor.enter(prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot, {
-          preflight: true,
-          serviceRoot: prepared.servicePlan?.serviceRoot,
-        }));
-      run.executorFence = fence;
-      const runId = run.runId;
-      const assertCurrent = () => {
-        if (opts.run !== run || run.runId !== runId || run.executorFence !== fence) {
-          throw new UpdateCommandRecoveryPendingError(
-            "Managed updater lost its admitted executor.",
+        const execute = () => {
+          executionStarted = true;
+          if (refusal) {
+            assertInitializationCurrent?.();
+            throw refusal;
+          }
+          return withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
+            updateCommandInternal(
+              opts,
+              recoveryState,
+              invocationCwd,
+              prepared,
+              presentation,
+              executor,
+              retainRuntime,
+              initialization,
+            ),
           );
+        };
+        if (inputOpts.dryRun || !prepared.controlPlaneUpdateSentinelMeta?.handoffId) {
+          return execute();
         }
-        captureUpdateCommandExecutorAuthority(fence, runId);
-      };
-      return withGatewayServiceUpdateAuthority(assertCurrent, execute, {
-        originalRoot: captureUpdateCommandExecutorAuthority(fence, runId).installKey,
+        // The admitted helper owns native stop and recovery for this invocation.
+        // A handoff tuple alone never grants authority to an ordinary service caller.
+        const fence =
+          run.executorFence ??
+          (await executor.enter(
+            prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,
+            {
+              preflight: true,
+              serviceRoot: prepared.servicePlan?.serviceRoot,
+            },
+          ));
+        run.executorFence = fence;
+        const runId = run.runId;
+        const assertCurrent = () => {
+          if (opts.run !== run || run.runId !== runId || run.executorFence !== fence) {
+            throw new UpdateCommandRecoveryPendingError(
+              "Managed updater lost its admitted executor.",
+            );
+          }
+          captureUpdateCommandExecutorAuthority(fence, runId);
+        };
+        return withGatewayServiceUpdateAuthority(assertCurrent, execute, {
+          originalRoot: captureUpdateCommandExecutorAuthority(fence, runId).installKey,
+        });
       });
-    };
     const execute = initialization
       ? () => executeWith(initialization.executor)
       : () =>
@@ -221,11 +262,11 @@ async function runAdmittedUpdate(
             withUpdateInProgressEnv(invocationCwd, () =>
               withUpdateCommandTerminalResult((registerRun) => {
                 registerRun(run);
-                return withUpdateCommandExecutor(run.runId, executeWith);
+                return withUpdateCommandExecutor(run.runId, executeWith, executorOptions);
               }, opts),
             ),
           );
-    await withUpdatePreviewSignals(opts, execute);
+    await execute();
   } catch (error) {
     // Execution owns recovery; only failures before execution starts are terminalized here.
     if (!executionStarted) {
@@ -247,10 +288,9 @@ async function updateCommandInternal(
   retainRuntime: RetainUpdateRuntime,
   initialization?: InitializedUpdate,
 ): Promise<void> {
-  const { timeoutMs } = prepared;
   const run = opts.run!;
   const updateStepTimeoutMs =
-    timeoutMs ?? run.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
+    prepared.timeoutMs ?? run.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
   const target =
     initialization?.target ??
@@ -265,49 +305,31 @@ async function updateCommandInternal(
   if (!target) {
     return;
   }
-  try {
-    return await withUpdateCandidateAdmission(
-      {
-        target,
-        prepared,
-        opts,
-        timeoutMs: updateStepTimeoutMs,
-        invocationCwd,
-        presentation,
-        stagedPackage: initialization?.stagedPackage,
-        candidateAdmission: initialization?.candidateAdmission,
-      },
-      (stagedPackage) =>
-        runResolvedUpdate(
-          opts,
-          recoveryState,
-          invocationCwd,
-          prepared,
-          presentation,
-          executor,
-          retainRuntime,
-          target,
-          stagedPackage,
-          initialization,
-        ),
-    );
-  } catch (error) {
-    if (!(error instanceof UpdatePreMutationError)) {
-      throw error;
-    }
-    return await reportPreMutationUpdateResult({
-      root: target.root,
-      mode: target.mode,
-      installKind: target.updateInstallKind,
+  return await withUpdateCandidateAdmission(
+    {
+      target,
+      prepared,
       opts,
-      controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
-      reason: error.reason,
-      message: error.message,
-      nextAction: error.nextAction,
-      failureFacts: error.failureFacts,
-      recoverySteps: error.recoverySteps,
-    });
-  }
+      timeoutMs: updateStepTimeoutMs,
+      invocationCwd,
+      presentation,
+      stagedPackage: initialization?.stagedPackage,
+      candidateAdmission: initialization?.candidateAdmission,
+    },
+    (stagedPackage) =>
+      runResolvedUpdate(
+        opts,
+        recoveryState,
+        invocationCwd,
+        prepared,
+        presentation,
+        executor,
+        retainRuntime,
+        target,
+        stagedPackage,
+        initialization,
+      ),
+  );
 }
 
 async function runResolvedUpdate(
@@ -348,7 +370,6 @@ async function runResolvedUpdate(
     currentVersion,
     targetVersion,
     downgradeRisk,
-    packageInstallSpec,
     packageInstallTarget,
     packageAlreadyCurrent,
     packageRuntimeTarget,
@@ -427,6 +448,7 @@ async function runResolvedUpdate(
   }
 
   const currentCoreFinalization = {
+    opts,
     legacyConfigPlan,
     root,
     previousInstallRoot: discoveredRoot,
@@ -439,7 +461,6 @@ async function runResolvedUpdate(
     startedAt,
     controlPlaneUpdateSentinelMeta,
     packageUpdateNodeRunner: packageUpdateNodeRunner ?? managedServiceNodeRunner,
-    packageInstallSpec,
     runtimeTarget: packageRuntimeTarget,
     managedServiceRootRedirect,
     managedServiceRoot,
@@ -467,7 +488,6 @@ async function runResolvedUpdate(
     const { finishAlreadyCurrentUpdate } = await import("./update-execution.runtime.js");
     return await finishAlreadyCurrentUpdate({
       ...currentCoreFinalization,
-      opts,
       result: {
         status: "skipped",
         mode: packageInstallTarget?.manager ?? "unknown",
@@ -616,7 +636,6 @@ async function runResolvedUpdate(
     return await finishAlreadyCurrentUpdate({
       ...currentCoreFinalization,
       root: result.root ?? root,
-      opts,
       result,
       ownedManagedUpdateEnv: ownedManagedUpdateContext?.env,
       packageUpdateNodeRunner: packageUpdateNodeRunner ?? managedServiceNodeRunner,

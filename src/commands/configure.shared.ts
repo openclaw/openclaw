@@ -32,15 +32,17 @@ export function parseConfigureWizardSections(raw: unknown): {
   sections: WizardSection[];
   invalid: string[];
 } {
-  const sectionsRaw = Array.isArray(raw) ? raw.map((section) => String(section).trim()) : [];
-  if (sectionsRaw.length === 0) {
-    return { sections: [], invalid: [] };
+  const sections: WizardSection[] = [];
+  const invalid: string[] = [];
+  for (const value of Array.isArray(raw) ? raw : []) {
+    const section = String(value).trim();
+    const known = CONFIGURE_WIZARD_SECTIONS.find((candidate) => candidate === section);
+    if (known) {
+      sections.push(known);
+    } else {
+      invalid.push(section);
+    }
   }
-
-  const invalid = sectionsRaw.filter((s) => !CONFIGURE_WIZARD_SECTIONS.includes(s as never));
-  const sections = sectionsRaw.filter((s): s is WizardSection =>
-    CONFIGURE_WIZARD_SECTIONS.includes(s as never),
-  );
   return { sections, invalid };
 }
 

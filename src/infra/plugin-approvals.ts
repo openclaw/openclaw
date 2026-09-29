@@ -36,6 +36,8 @@ export type PluginApprovalRequestPayload = {
   scope?: ApprovalScope | null;
   toolName?: string | null;
   toolCallId?: string | null;
+  /** Trusted harness-selected policy subject; distinct from display-only toolName. */
+  policySubject?: { pluginKey: string; tool?: string };
   /** Exact MCP persistence intent; the host separately binds live tool-call proof. */
   mcpTool?: { server: string; tool: string };
   allowedDecisions?: readonly ExecApprovalDecision[] | null;

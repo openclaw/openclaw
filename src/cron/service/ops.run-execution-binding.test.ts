@@ -20,11 +20,13 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { saveCronStore } from "../store.js";
 import {
-  claimCronRunReceiptInDatabase,
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
-import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
+import {
+  claimCronRunReceiptInDatabaseForTest,
+  inspectActiveCronRunReceipt,
+} from "../store/run-receipt-store.test-support.js";
 import { run } from "./ops-run.js";
 import { createCronOwnerExecutionIdentityAdmission } from "./run-history.js";
 
@@ -154,15 +156,15 @@ describe("cron run execution binding", () => {
           runIsolatedAgentJob: vi.fn(),
         });
         const prepared = prepareCronRunReceiptClaim({
+          observed: undefined,
           storePath: store.storePath,
           job,
           agentId: job.agentId!,
           startedAtMs: dueAt,
         });
         const initial = runOpenClawStateWriteTransaction(({ db }) =>
-          claimCronRunReceiptInDatabase({
+          claimCronRunReceiptInDatabaseForTest({
             database: db,
-            receiptSchema: prepareCronRunReceiptWriteSchema(db),
             prepared,
             resolveAgentId: (current) => current.agentId!,
           }),
@@ -186,15 +188,15 @@ describe("cron run execution binding", () => {
           initial.receiptId,
         );
         const replacementPrepared = prepareCronRunReceiptClaim({
+          observed: inspectActiveCronRunReceipt({ storePath: store.storePath, jobId: job.id }),
           storePath: store.storePath,
           job,
           agentId: job.agentId!,
           startedAtMs: dueAt + 1,
         });
         const replacement = runOpenClawStateWriteTransaction(({ db: transactionDb }) =>
-          claimCronRunReceiptInDatabase({
+          claimCronRunReceiptInDatabaseForTest({
             database: transactionDb,
-            receiptSchema: prepareCronRunReceiptWriteSchema(transactionDb),
             prepared: replacementPrepared,
             resolveAgentId: (current) => current.agentId!,
           }),
@@ -204,7 +206,7 @@ describe("cron run execution binding", () => {
         expect(
           tableExists(openOpenClawStateDatabase().db, "execution_owner_lifecycle_bindings"),
         ).toBe(false);
-        finishCronRunReceipt({
+        await finishCronRunReceiptAsync({
           handle: replacement,
           status: "skipped",
           finishedAtMs: dueAt + 2,

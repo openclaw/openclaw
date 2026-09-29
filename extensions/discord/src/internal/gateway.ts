@@ -34,14 +34,6 @@ import { WebSocket } from "./ws-runtime.js";
 
 export { GatewayCloseCodes };
 export const GatewayIntents = GatewayIntentBits;
-type RequestGuildMembersData = {
-  guild_id: string;
-  query?: string;
-  limit: number;
-  presences?: boolean;
-  user_ids?: string | string[];
-  nonce?: string;
-};
 type GatewayReconnectReason =
   | "close"
   | "identify"
@@ -111,10 +103,6 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
     this.gatewayInfo = gatewayInfo;
   }
 
-  get ping(): number | null {
-    return null;
-  }
-
   listVoiceChannelStates(guildId: string, channelId: string): APIVoiceState[] | null {
     return this.voiceStateCache.listVoiceChannelStates(guildId, channelId);
   }
@@ -125,22 +113,6 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
 
   takeVoiceStateTransition(state: APIVoiceState): DiscordGatewayVoiceStateTransition | null {
     return this.voiceStateCache.takeTransition(state);
-  }
-
-  get heartbeatInterval(): NodeJS.Timeout | undefined {
-    return this.heartbeatTimers.heartbeatInterval;
-  }
-
-  set heartbeatInterval(timer: NodeJS.Timeout | undefined) {
-    this.heartbeatTimers.heartbeatInterval = timer;
-  }
-
-  get firstHeartbeatTimeout(): NodeJS.Timeout | undefined {
-    return this.heartbeatTimers.firstHeartbeatTimeout;
-  }
-
-  set firstHeartbeatTimeout(timer: NodeJS.Timeout | undefined) {
-    this.heartbeatTimers.firstHeartbeatTimeout = timer;
   }
 
   override async registerClient(client: Client): Promise<void> {
@@ -156,8 +128,8 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
   }
 
   connect(resume = false): void {
-    this.stopReconnectTimer();
-    this.stopHeartbeat();
+    this.reconnectTimer.stop();
+    this.heartbeatTimers.stop();
     if (this.isConnecting) {
       return;
     }
@@ -176,8 +148,8 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
 
   disconnect(): void {
     this.shouldReconnect = false;
-    this.stopReconnectTimer();
-    this.stopHeartbeat();
+    this.reconnectTimer.stop();
+    this.heartbeatTimers.stop();
     this.outboundLimiter.clear();
     this.ws?.close(1000, "Client disconnect");
     this.ws = null;
@@ -220,7 +192,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
         return;
       }
       const closeCode = code as GatewayCloseCodes;
-      this.stopHeartbeat();
+      this.heartbeatTimers.stop();
       this.outboundLimiter.clear();
       this.isConnecting = false;
       this.isConnected = false;
@@ -331,14 +303,6 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
         this.scheduleReconnect({ reason: "zombie", preferResume: true });
       },
     });
-  }
-
-  private stopHeartbeat(): void {
-    this.heartbeatTimers.stop();
-  }
-
-  private stopReconnectTimer(): void {
-    this.reconnectTimer.stop();
   }
 
   private sendHeartbeat(): void {
@@ -453,8 +417,8 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
     if (!this.shouldReconnect) {
       return;
     }
-    this.stopHeartbeat();
-    this.stopReconnectTimer();
+    this.heartbeatTimers.stop();
+    this.reconnectTimer.stop();
     this.ws?.close();
     this.ws = null;
     this.isConnecting = false;
@@ -508,24 +472,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
     this.send({ op: GatewayOpcodes.VoiceStateUpdate, d: data } as GatewaySendPayload, true);
   }
 
-  requestGuildMembers(data: RequestGuildMembersData): void {
-    if (!this.hasIntent(GatewayIntentBits.GuildMembers)) {
-      throw new Error("GUILD_MEMBERS intent is required for requestGuildMembers");
-    }
-    if (data.presences && !this.hasIntent(GatewayIntentBits.GuildPresences)) {
-      throw new Error("GUILD_PRESENCES intent is required when requesting presences");
-    }
-    if (!data.query && data.query !== "" && !data.user_ids) {
-      throw new Error("Either query or user_ids is required for requestGuildMembers");
-    }
-    this.send({ op: GatewayOpcodes.RequestGuildMembers, d: data } as GatewaySendPayload);
-  }
-
   getRateLimitStatus() {
     return this.outboundLimiter.getStatus();
-  }
-
-  hasIntent(intent: number): boolean {
-    return Boolean((this.options.intents ?? 0) & intent);
   }
 }

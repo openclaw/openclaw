@@ -23,6 +23,7 @@ import {
   takeSqliteWorkerOperationAdmissionAttachment,
   deferSqliteWorkerCommitReceipt,
   SqliteWorkerOpenRefusedError,
+  type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
 import type {
@@ -48,7 +49,11 @@ import type {
   AgentDatabaseExecutionOpen,
   AgentDatabaseOperations,
 } from "./openclaw-agent-execution-contract.js";
-import { createAgentDatabaseDomainOwner } from "./openclaw-agent-execution-domain.js";
+import {
+  createAgentDatabaseDomainOwner,
+  requestRestrictedAgentDatabaseAdmission,
+  type AgentDatabaseAdmissionRestriction,
+} from "./openclaw-agent-execution-domain.js";
 import {
   requireOpenClawStateDatabaseIdentity,
   retainOpenClawStateDatabase,
@@ -297,16 +302,21 @@ function openAgentDatabaseBackend(
     });
     return database;
   };
-  const admit = (stage: "transaction" | "commit", publication?: unknown) => {
+  const admit = (
+    stage: "transaction" | "commit",
+    publication?: unknown,
+    requestAdmission?: AgentDatabaseAdmissionRestriction,
+  ) => {
     assertFileIdentity();
-    requestSqliteWorkerOperationAdmission({
+    const request: SqliteWorkerAdmissionRequest = {
       stage,
       facts: {
         identity,
         ...(startupJournalRequested ? { agentDeletionJournalPresent: readDeletionJournal() } : {}),
         ...(publication ? { publication } : {}),
       },
-    });
+    };
+    requestRestrictedAgentDatabaseAdmission(request, requestAdmission);
     if (stage === "commit") {
       ensureOpenClawAgentDatabasePermissions(input.databasePath, options);
     }
@@ -352,6 +362,9 @@ function openAgentDatabaseBackend(
     | undefined;
   let trajectory: typeof import("../trajectory/runtime-store.sqlite.js") | undefined;
   let acpEntry: typeof import("../acp/runtime/session-meta-entry.worker.js") | undefined;
+  let pendingInputWithdrawal:
+    | typeof import("../config/sessions/session-pending-input-withdrawal.worker.js")
+    | undefined;
   const domain = createAgentDatabaseDomainOwner({
     databasePath: input.databasePath,
     assertCurrent() {
@@ -372,7 +385,7 @@ function openAgentDatabaseBackend(
       }
       assertFileIdentity();
     },
-    admit,
+    admit: (stage, requestAdmission) => admit(stage, undefined, requestAdmission),
   });
   let closed = false;
   let closeReceipt: SqliteWorkerCloseReceipt | undefined;
@@ -508,6 +521,14 @@ function openAgentDatabaseBackend(
         admit,
       );
     }
+    if (command.type === "session.pendingInputs.withdraw" && pendingInputWithdrawal) {
+      return pendingInputWithdrawal.discardSessionPendingInputInWorker(
+        openWriter(),
+        options,
+        command.input,
+        admit,
+      );
+    }
     if (command.type === "session.archivePruning.deletePublished" && archivePruning) {
       return archivePruning.deletePublishedSessionArchiveInDatabase(
         openWriter(),
@@ -600,6 +621,13 @@ function openAgentDatabaseBackend(
         return import("../config/sessions/provider-review-store.worker.js").then((module) => {
           providerReview = module;
         });
+      }
+      if (command.type === "session.pendingInputs.withdraw") {
+        return import("../config/sessions/session-pending-input-withdrawal.worker.js").then(
+          (module) => {
+            pendingInputWithdrawal = module;
+          },
+        );
       }
       if (
         command.type === "database.domain.bind" ||

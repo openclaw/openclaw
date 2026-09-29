@@ -827,6 +827,7 @@ ARTIFACT_ROOT=/tmp
 update_repair_required=0
 ${helper}
 phase() { printf '%s\\n' "$1"; shift; "$@"; }
+stop_update_restart_probe_gateway() { :; }
 prepare_restart_inference() { :; }
 prepare_restart_fixture() {
   restart_fixture_package=/tmp/future-package.tgz
@@ -838,6 +839,7 @@ check_gateway_status() { :; }
 update_candidate() {
   [ "$#" -eq 3 ] && [ "$1" = 1 ] && [ "$2" = file:/tmp/future-package.tgz ] && [ "$3" = 2100.1.0 ]
 }
+assert_managed_membership_warning() { :; }
 assert_survival() { :; }
 repair_update_restart_auth
 `,
@@ -848,12 +850,14 @@ repair_update_restart_auth
       );
 
       expect(result.trim().split("\n")).toEqual([
+        "stop-recovery-service",
         "prepare-restart-inference",
         "prepare-restart-fixture",
         "prepare-restart-manager",
         "prepare-recovery-service",
         "prepared-gateway-auth",
         "recovery-update-restart",
+        "recovery-membership-warning",
       ]);
     },
   );

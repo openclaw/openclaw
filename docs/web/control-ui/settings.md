@@ -28,6 +28,8 @@ In **Models**, **Connect provider** offers the credential-only sign-in methods d
 
 Model pickers show the authentication methods available to the selected agent. A single subscription or an explicitly selected account includes its email when available; multiple accounts and mixed API/subscription credentials are shown without guessing which account will run. **Utility Model → Auto** also shows the recommended small model derived from the global primary model, including an explicit account selection inherited from that model. Providers without a recommended small model say so. Agent-specific overrides still take precedence when the agent runs.
 
+During first-run **Model Setup**, reloading the browser resumes an unfinished provider wizard on the same running Gateway without repeating your answers. Continue from its current question, or choose **Cancel** to release provider choices once the Gateway confirms cancellation. Unsubmitted input is not saved. If the Gateway restarted or no longer has the wizard, **Check again** refreshes the current setup without starting another provider attempt; the recovery guard remains until a model can be verified or the pending attempt expires.
+
 ## Environment identity
 
 When you run several Gateways, set `gateway.controlUi.environment` to distinguish their browser tabs and windows:
@@ -172,6 +174,23 @@ Appearance also has a Text size setting. It applies to chat text, composer text,
 Appearance also carries the **Lobster visits** and **Lobster sounds** toggles and the Lobsterdex. Both toggles are browser-local. See [The Lobster](/web/lobster) for what the composer visitors do and how to turn them off for good.
 
 When your connection is bound to an authenticated Gateway profile, theme, theme mode, and accent color are saved to that profile instead of the gateway config. They follow you across devices without changing anyone else's appearance, override gateway-wide `ui.prefs` values, and update your connected clients live. Connections without an authenticated profile continue syncing these preferences through the gateway config exactly as before. Language and chat display preferences remain gateway-config preferences for every connection. Each browser keeps a local mirror for instant boot, and text size remains browser-local. An explicitly read-only connection applies preference changes only in that browser. Changes made while offline remain queued until a later connection can write their applicable preferences; on a read-only reconnect, they continue to behave as browser-local preferences. See [Configuration reference](/gateway/configuration-reference#ui).
+
+## Opening links
+
+Under **Settings → Appearance → Chat**, enable **Open links outside OpenClaw**
+to open web links outside OpenClaw instead of in built-in readers or browser panels.
+In a web browser, links use ordinary browser navigation; in a native app, they open
+in the system's default browser. The switch is off by default, preserving current
+behavior. Turning it off restores built-in readers and any existing **Open links
+in Control UI browser** preference. Browser preview cards also follow this setting
+when you click their image or **Open** button. Their three-dot menu offers
+**Open in OpenClaw** when external opening is enabled, or **Open in new tab**
+when it is disabled. Explicit context-menu choices still work.
+
+This preference is stored only in the current browser or app webview, separately
+for each Gateway. It does not change shared Gateway configuration or sync across
+devices. Clearing site data resets it. Internal OpenClaw navigation and downloads
+are unchanged.
 
 ## Session sources
 

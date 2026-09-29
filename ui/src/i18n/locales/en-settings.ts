@@ -639,6 +639,8 @@ const enSettings = {
       noProviders: "No providers are available to connect.",
       discover: "On this Gateway",
       description: "Save credentials for this agent. Choose the active model separately.",
+      setupDescription:
+        "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
       done: "Provider credentials saved.",
       missingSelection:
         "The account selected for {model} is no longer available. Connect or choose an account to use with this model.",
@@ -1410,6 +1412,9 @@ const enSettings = {
       showTaskProgress: "Show task progress cards",
       showTaskProgressHint:
         "Show task progress in the chat composer. Hiding it does not stop the agent or clear saved progress. Dashboard widgets and session previews are unchanged.",
+      openLinksExternally: "Open links outside OpenClaw",
+      openLinksExternallyHint: "Use your browser instead of the OpenClaw built-in browser.",
+      openLinksExternallyStorage: "Saved in this browser only.",
       collapseTaskProgress: "Collapse task progress by default on desktop",
       collapseTaskProgressHint:
         "On desktop, start task progress collapsed. It can expand when the response finishes if you are at the end of the chat. A manual close keeps it collapsed for that session. On mobile, task progress always starts collapsed and only opens when you open it manually.",

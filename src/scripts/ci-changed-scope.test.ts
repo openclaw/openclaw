@@ -227,14 +227,12 @@ describe("detectChangedScope", () => {
   it("routes Skills watcher ownership to desktop Node proof without native app builds", () => {
     for (const changedPath of [
       "src/skills/runtime/refresh.ts",
-      "src/skills/runtime/refresh-content-native.ts",
-      "src/skills/runtime/refresh-ancestor-native.ts",
-      "src/skills/runtime/refresh-watch-close.ts",
-      "src/skills/runtime/refresh-content-native.test.ts",
-      "src/skills/runtime/refresh-content-native.entries.test.ts",
-      "src/skills/runtime/refresh.native-content.integration.test.ts",
+      "src/skills/runtime/refresh-observation-source.ts",
+      "src/skills/runtime/refresh-file-stability.ts",
+      "src/skills/runtime/refresh-watch-registry.ts",
+      "src/skills/runtime/refresh-file-stability.test.ts",
+      "src/skills/runtime/refresh.recovery.test.ts",
       "src/skills/runtime/refresh.missing-root.integration.test.ts",
-      "src/skills/runtime/refresh.symbolic-source.integration.test.ts",
     ]) {
       expect(detectChangedScope([changedPath]), changedPath).toEqual({
         ...expectedNodeOnlyScope,
@@ -297,19 +295,21 @@ describe("detectChangedScope", () => {
     }
   });
 
-  it("enables the iOS build lane for iOS build helper changes", () => {
+  it("enables iOS build and screenshot lanes for iOS build helper changes", () => {
     for (const helperPath of [
       "scripts/ios-team-id.sh",
       "scripts/ios-write-swift-filelist.mjs",
       "scripts/ios-write-swift-filelist.mts",
       "scripts/ios-version.ts",
       "scripts/lib/ios-version.ts",
+      "scripts/lib/mobile-version.ts",
       "scripts/lib/release-version.mjs",
       "scripts/lib/version-script-args.ts",
     ]) {
       expect(detectChangedScope([helperPath])).toEqual(
         expectedScope({ runNode: true, runIosBuild: true }),
       );
+      expect(shouldRunIosScreenshots([helperPath]), helperPath).toBe(true);
     }
   });
 
@@ -325,8 +325,10 @@ describe("detectChangedScope", () => {
     ["scripts/install-simslim.sh.bak", false],
     ["scripts/ios-simulator-prepare-extra.sh", false],
     ["scripts/lib/ios-simulator-prepare.sh", false],
+    ["scripts/lib/mobile-version.ts.bak", false],
+    ["scripts/mobile-version.ts", false],
     ["scripts/unrelated.sh", false],
-  ])("routes only exact simulator helper paths: %s", (helperPath, enabled) => {
+  ])("routes only exact native build helper paths: %s", (helperPath, enabled) => {
     expect(detectChangedScope([helperPath])).toMatchObject({
       runIosBuild: enabled,
       runMacos: false,
@@ -554,7 +556,6 @@ describe("detectChangedScope", () => {
   it.each([
     "ui/src/pages/chat/chat-realtime.test.ts",
     "ui/package.json",
-    "test/vitest/vitest.shared.config.ts",
     "scripts/ensure-playwright-chromium.mts",
   ])("runs control-ui tests for %s", (changedPath) => {
     expect(detectChangedScope([changedPath]).runUiTests).toBe(true);
@@ -588,6 +589,14 @@ describe("detectChangedScope", () => {
         "scripts/run-vitest.mts",
         "scripts/test-projects.test-support.mts",
         "scripts/lib/ci-docker-seed-plan.mts",
+        "test/scripts/ci-changed-node-test-plan.test.ts",
+        "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
+        "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
+        "test/scripts/ci-changed-node-test-plan.dependency-inputs.test.ts",
+        "test/scripts/ci-changed-node-test-plan.policy.test.ts",
+        "test/scripts/ci-changed-node-test-plan.process-owners.test.ts",
+        "test/scripts/ci-changed-node-test-plan.source-owners.test.ts",
+        "test/scripts/ci-changed-node-test-plan.test-support.ts",
         "test/scripts/ci-docker-seed-plan.test.ts",
         "src/commands/status.scan-result.test.ts",
         "src/scripts/ci-changed-scope.control-ui.test.ts",

@@ -483,7 +483,7 @@ public final class GatewayDiscoveryModel {
             cliPath: GatewayDiscoveryText.txtValue(txt, key: "cliPath"))
     }
 
-    public static func buildSSHTarget(user: String, host: String, port: Int) -> String {
+    public nonisolated static func buildSSHTarget(user: String, host: String, port: Int) -> String {
         var target = "\(user)@\(host)"
         if port != 22 {
             target += ":\(port)"

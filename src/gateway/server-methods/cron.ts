@@ -1,4 +1,3 @@
-// Gateway RPC handlers for cron job CRUD, run logs, wake, and delivery previews.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   type CronListParams,
@@ -72,6 +71,7 @@ import { isCronInvalidRequestError } from "./cron-error-classification.js";
 import { cronHistoryHandler } from "./cron-history.js";
 import {
   assertValidCronUpdatePatch,
+  createCronCreatorSessionGuard,
   normalizeCronAddRequest,
   normalizeCronUpdateRequest,
   assertCronDoesNotTargetAgentHarness,
@@ -157,9 +157,8 @@ function cronPatchTouchesToolRuntime(patch: CronJobPatch): boolean {
   return patch.payload !== undefined || Object.hasOwn(patch, "trigger");
 }
 
-/** Gateway request handlers for cron jobs and cron run-log access. */
 export const cronHandlers: GatewayRequestHandlers = {
-  wake: async ({ params, respond, context, client }) => {
+  wake: async ({ params, respond, context, client, sessionMutationCommitGuard }) => {
     if (!assertValidParams(params, validateWakeParams, "wake", respond)) {
       return;
     }
@@ -258,6 +257,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     // Gateway becomes request-ready before scheduled services start; load the
     // wake owner first so an early operator event cannot disappear on cold start.
     await context.cron.prepareWake?.();
+    sessionMutationCommitGuard?.();
     assertActiveAgentRuntimeAuthority(client, context);
     const result = context.cron.wake({
       mode: p.mode,
@@ -395,11 +395,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         ...(p.compact === true ? compactCronListJob(job) : cronJobReadView(job)),
         effectiveAgentId: tryResolveCronJobEffectiveAgentId(job, defaultAgentId) ?? null,
       }));
-      if (p.compact === true) {
-        respond(true, { ...page, jobs }, undefined);
-        return;
-      }
-      if (p.includeDeliveryPreviews === false) {
+      if (p.compact === true || p.includeDeliveryPreviews === false) {
         // Full job rows are the default because editors need their payloads. Delivery
         // previews are independently suppressible so list-only callers avoid per-job I/O
         // without weakening the shipped full-response default.
@@ -527,8 +523,11 @@ export const cronHandlers: GatewayRequestHandlers = {
     const actorId = normalizeOptionalString(actor?.id);
     const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
     let captureRuntimeAuthority: (() => CronRuntimeAuthority | undefined) | undefined;
+    let assertCapturedAuthorityCurrent: (() => void) | undefined;
     try {
-      captureRuntimeAuthority = resolveCronCreatorAuthorityCapture(callerScope);
+      const capture = resolveCronCreatorAuthorityCapture(callerScope);
+      captureRuntimeAuthority = capture?.captureRuntimeAuthority;
+      assertCapturedAuthorityCurrent = capture?.assertCurrent;
     } catch (err) {
       respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
       return;
@@ -537,23 +536,11 @@ export const cronHandlers: GatewayRequestHandlers = {
       sessionMutationCommitGuard,
       hasCurrentClientAuthority,
     });
-    const selectionIdentity = JSON.stringify(creatorSession?.skillLibrarySelections);
+    const assertCreatorSessionCurrent = createCronCreatorSessionGuard(callerScope, creatorSession);
     const commitGuard = () => {
       assertMutationCurrent?.();
-      if (creatorSession && callerScope?.sessionKey) {
-        const latest = loadGatewaySessionEntryReadOnly(callerScope.sessionKey, {
-          agentId: callerScope.agentId,
-        }).entry;
-        if (
-          latest?.sessionId !== creatorSession.sessionId ||
-          latest.lifecycleRevision !== creatorSession.lifecycleRevision ||
-          JSON.stringify(latest.skillLibrarySelections) !== selectionIdentity
-        ) {
-          throw new Error(
-            "Creator session changed before scheduling; retry from the current turn.",
-          );
-        }
-      }
+      assertCapturedAuthorityCurrent?.();
+      assertCreatorSessionCurrent();
     };
     const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
     const cfg = context.getRuntimeConfig();
@@ -594,11 +581,6 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     try {
       assertCronDoesNotTargetAgentHarness(jobCreate);
-    } catch (err) {
-      respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
-      return;
-    }
-    try {
       await assertValidCronCreateDelivery(cfg, jobCreate);
     } catch (err) {
       respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
@@ -697,14 +679,22 @@ export const cronHandlers: GatewayRequestHandlers = {
     };
     const callerScope = readCronCallerScope(client);
     let captureRuntimeAuthority: (() => CronRuntimeAuthority | undefined) | undefined;
+    let assertCapturedAuthorityCurrent: (() => void) | undefined;
     try {
-      captureRuntimeAuthority = resolveCronCreatorAuthorityCapture(callerScope);
+      const capture = resolveCronCreatorAuthorityCapture(callerScope);
+      captureRuntimeAuthority = capture?.captureRuntimeAuthority;
+      assertCapturedAuthorityCurrent = capture?.assertCurrent;
     } catch (err) {
       respondInvalidCronParams(respond, "cron.update", formatErrorMessage(err));
       return;
     }
     const commitGuard = resolveCronMutationCommitGuard(client, context, undefined, {
-      sessionMutationCommitGuard,
+      sessionMutationCommitGuard: assertCapturedAuthorityCurrent
+        ? () => {
+            sessionMutationCommitGuard?.();
+            assertCapturedAuthorityCurrent?.();
+          }
+        : sessionMutationCommitGuard,
       hasCurrentClientAuthority,
     });
     const jobId = resolveCronJobId(p);

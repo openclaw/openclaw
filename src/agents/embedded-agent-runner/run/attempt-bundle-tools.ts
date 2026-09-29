@@ -80,13 +80,10 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   // can reserve bundled tools or enter deferred catalogs and provider requests.
   let clientTools = providedClientTools;
   if (providedClientTools && effectiveToolsAllow) {
-    clientTools = [];
-    if (providedClientTools.length > 0) {
-      const matchesRuntime = createRuntimeToolMatcher(effectiveToolsAllow);
-      clientTools = providedClientTools.filter((definition) =>
-        matchesRuntime(definition.function.name),
-      );
-    }
+    const matchesRuntime = createRuntimeToolMatcher(effectiveToolsAllow);
+    clientTools = providedClientTools.filter((definition) =>
+      matchesRuntime(definition.function.name),
+    );
   }
   const bundleMetadataSnapshot = params.setup.getCurrentAttemptPluginMetadataSnapshot();
   // Scoped registries are partial views; only complete snapshots can bypass bundle discovery.

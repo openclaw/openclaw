@@ -4,6 +4,78 @@ import { render } from "lit";
 import { expect, it, vi } from "vitest";
 import { renderChatModelPicker } from "./chat-model-picker.ts";
 
+it.each([false, true])(
+  "expands the selected provider on every open (inherited=%s)",
+  async (inherited) => {
+    const container = document.createElement("div");
+    const params: Parameters<typeof renderChatModelPicker>[0] = {
+      disabled: false,
+      modelSelectionLocked: false,
+      modelOptions: [
+        {
+          provider: "other",
+          value: "other/first",
+          commitValue: "other/first",
+          label: "Other",
+          isDefault: false,
+        },
+        {
+          provider: "selected",
+          value: "selected/current",
+          commitValue: inherited ? "" : "selected/current",
+          label: "Current",
+          isDefault: inherited,
+        },
+      ],
+      selectedModelValue: inherited ? "" : "selected/current",
+      sessionModelPinned: !inherited,
+      sessionKey: "main",
+      triggerModelLabel: "Current",
+      open: true,
+      onModelSelect: vi.fn(async () => {}),
+    };
+    render(renderChatModelPicker(params), container);
+    await Promise.resolve();
+    const details = container.querySelector<HTMLDetailsElement>("details")!;
+    const selected = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="selected/current"]',
+    )!;
+    const other = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="other/first"]',
+    )!;
+    const toggle = selected
+      .closest("section")!
+      .querySelector<HTMLButtonElement>("[data-chat-model-provider-toggle]")!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(selected.hidden).toBe(false);
+    expect(other.hidden).toBe(true);
+
+    // A deliberate collapse lasts only for this visit to the picker.
+    toggle.click();
+    expect(selected.hidden).toBe(true);
+    details.open = false;
+    details.dispatchEvent(new Event("toggle"));
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
+    await Promise.resolve();
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(selected.hidden).toBe(false);
+    expect(other.hidden).toBe(true);
+
+    // The next selection, including a change while closed, owns the open group.
+    render(
+      renderChatModelPicker({ ...params, open: false, selectedModelValue: "other/first" }),
+      container,
+    );
+    details.dispatchEvent(new Event("toggle"));
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
+    await Promise.resolve();
+    expect(other.hidden).toBe(false);
+    expect(selected.hidden).toBe(true);
+  },
+);
+
 it.each([false, true])("keeps current visible with Default=%s", (hasDefault) => {
   const container = document.createElement("div");
   render(

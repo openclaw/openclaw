@@ -2166,7 +2166,7 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     migrationDetectionStep,
     ...remainingMainSteps,
   ];
-  const steps = executionSteps.map(migrationStepPlan);
+  let steps = executionSteps.map(migrationStepPlan);
   if (detected.stateSchema.hasLegacy) {
     const sharedAuthStep = steps.find((step) => step.id === "shared-auth-store");
     if (sharedAuthStep) {
@@ -2193,15 +2193,9 @@ export async function planLegacyStateMigrationsReadOnly(params: {
       message: "Channel pairing accounts will be checked with the updated plugins.",
     };
   }
-  const firstRefusalIndex = steps.findIndex((step) => step.refusal !== undefined);
-  const firstRefusal = steps[firstRefusalIndex];
+  const firstRefusal = steps.find((step) => step.refusal !== undefined);
   if (firstRefusal) {
-    for (const step of steps.slice(firstRefusalIndex + 1)) {
-      step.refusal = {
-        code: "blocked-by-prior-refusal",
-        message: `Migration step "${step.id}" is blocked by prior refusal at "${firstRefusal.id}".`,
-      };
-    }
+    steps = closeMigrationPlanTail(steps, firstRefusal);
   }
   const stateDirRefusal = pendingStateDirMigration
     ? {
@@ -3361,7 +3355,7 @@ async function executeLegacyStateMigrations(
     ...detected.warnings,
     ...orphanKeys.warnings,
   ];
-  if (
+  const useFileDetectionFastPath =
     mode === "automatic" &&
     !hasCustomAgentDir &&
     !detected.sessions.hasLegacy &&
@@ -3382,62 +3376,12 @@ async function executeLegacyStateMigrations(
     !detected.deviceAuth.hasLegacy &&
     !detected.restartSentinel?.hasLegacy &&
     !detected.workspace.hasLegacy &&
-    !detected.channelPairing.hasLegacy
-  ) {
-    // SQLite rows can still need owner repair after schema migration has finished.
-    // Preserve those repairs even when legacy file detectors have no work.
-    const fastPathMigrations = await runLegacyStateMigrationSteps(
-      remainingMigrationSteps,
-      params.onStepReceipt,
-      (step) => step.runWithoutFileDetection === true,
-      executionOptions,
-    );
-    const alwaysRunSources = fastPathMigrations.sources;
-    const completedSources = [
-      ...initialMigrationSources,
-      ...alwaysRunSources,
-      deviceAuth,
-      deviceIdentity,
-      meetingTranscripts,
-    ];
-    const changes = completedSources.flatMap((source) => source.changes);
-    const warnings = [
-      ...new Set([
-        ...initialMigrationWarnings,
-        ...[...alwaysRunSources, deviceAuth, deviceIdentity, meetingTranscripts].flatMap(
-          (source) => source.warnings,
-        ),
-      ]),
-    ];
-    const notices = mergeNotices([
-      detected,
-      ...initialMigrationSources,
-      ...alwaysRunSources,
-      deviceAuth,
-      deviceIdentity,
-    ]);
-    logStateMigrationResult({ changes, warnings, notices }, params.log);
-    return {
-      mode,
-      migrated: changes.length > 0,
-      skipped: false,
-      changes,
-      warnings,
-      ...completedPluginMigrationFields(completedSources),
-      stepReceipts: [
-        ...stateSchemaMigration.receipts,
-        ...preludeReceipts,
-        ...eagerMigrations.receipts,
-        ...fastPathMigrations.receipts,
-      ],
-      ...(notices.length > 0 ? { notices } : {}),
-    };
-  }
-
+    !detected.channelPairing.hasLegacy;
+  // SQLite rows can still need owner repair when legacy file detectors have no work.
   const migrations = await runLegacyStateMigrationSteps(
     remainingMigrationSteps,
     params.onStepReceipt,
-    undefined,
+    useFileDetectionFastPath ? (step) => step.runWithoutFileDetection === true : undefined,
     executionOptions,
   );
   const deferredPostSessionStep = migrations.deferredSteps.find(
@@ -3445,31 +3389,28 @@ async function executeLegacyStateMigrations(
   );
   const completedSources = [
     ...initialMigrationSources,
-    ...migrations.sharedSources,
+    ...(useFileDetectionFastPath ? migrations.sources : migrations.sharedSources),
     deviceAuth,
     deviceIdentity,
     ...(hasCustomAgentDir ? [] : [meetingTranscripts]),
-    ...migrations.finalSources,
+    ...(useFileDetectionFastPath ? [] : migrations.finalSources),
   ];
   const changes = completedSources.flatMap((source) => source.changes);
   const warnings = [
     ...new Set([
       ...initialMigrationWarnings,
-      ...migrations.sharedSources.flatMap((source) => source.warnings),
-      ...deviceAuth.warnings,
-      ...deviceIdentity.warnings,
-      ...(hasCustomAgentDir ? [] : meetingTranscripts.warnings),
-      ...migrations.finalSources.flatMap((source) => source.warnings),
+      ...completedSources
+        .slice(initialMigrationSources.length)
+        .flatMap((source) => source.warnings),
     ]),
   ];
   const notices = mergeNotices([
     detected,
     ...initialMigrationSources,
-    ...migrations.sharedNoticeSources,
+    ...(useFileDetectionFastPath ? migrations.sources : migrations.sharedNoticeSources),
     deviceAuth,
     deviceIdentity,
-    meetingTranscripts,
-    ...migrations.finalNoticeSources,
+    ...(useFileDetectionFastPath ? [] : [meetingTranscripts, ...migrations.finalNoticeSources]),
   ]);
   logStateMigrationResult({ changes, warnings, notices }, params.log);
   return {

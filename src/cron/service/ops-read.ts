@@ -298,41 +298,20 @@ function resolveEnabledFilter(opts?: CronListPageOptions): CronJobsEnabledFilter
 }
 
 function resolveScheduleKindFilter(opts?: CronListPageOptions): CronJobsScheduleKindFilter {
-  if (
-    opts?.scheduleKind === "all" ||
-    opts?.scheduleKind === "at" ||
-    opts?.scheduleKind === "every" ||
-    opts?.scheduleKind === "cron" ||
-    opts?.scheduleKind === "on-exit" ||
-    opts?.scheduleKind === "stream"
-  ) {
-    return opts.scheduleKind;
-  }
-  return "all";
+  const kind = opts?.scheduleKind;
+  return kind && ["all", "at", "every", "cron", "on-exit", "stream"].includes(kind) ? kind : "all";
 }
 
 function resolveLastRunStatusFilter(opts?: CronListPageOptions): CronJobsLastRunStatusFilter {
-  if (
-    opts?.lastRunStatus === "all" ||
-    opts?.lastRunStatus === "ok" ||
-    opts?.lastRunStatus === "error" ||
-    opts?.lastRunStatus === "skipped" ||
-    opts?.lastRunStatus === "unknown"
-  ) {
-    return opts.lastRunStatus;
-  }
-  return "all";
+  const lastRunStatus = opts?.lastRunStatus;
+  return lastRunStatus && ["all", "ok", "error", "skipped", "unknown"].includes(lastRunStatus)
+    ? lastRunStatus
+    : "all";
 }
 
 function resolveTriggerFilter(opts?: CronListPageOptions): CronJobsTriggerFilter {
-  if (
-    opts?.trigger === "all" ||
-    opts?.trigger === "conditional" ||
-    opts?.trigger === "unconditional"
-  ) {
-    return opts.trigger;
-  }
-  return "all";
+  const trigger = opts?.trigger;
+  return trigger && ["all", "conditional", "unconditional"].includes(trigger) ? trigger : "all";
 }
 
 const SLOW_LIST_PAGE_MS = 1_000;

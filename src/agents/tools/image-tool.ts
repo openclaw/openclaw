@@ -1,7 +1,9 @@
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import { normalizeMediaProviderId } from "../../../packages/media-understanding-common/src/provider-id.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
 import {
@@ -43,15 +45,11 @@ import {
 import {
   prepareImageCompressionPolicy,
   resolveImageModelConfigForOverride,
-  resolveImageToolMaxTokens,
   runImagePrompt,
 } from "./image-tool.model-execution.js";
+import { buildNativeImageToolResult, type LoadedImageForTool } from "./image-tool.result.js";
 import {
-  buildImageToolReferenceDetails,
-  buildNativeImageToolResult,
-  type LoadedImageForTool,
-} from "./image-tool.result.js";
-import {
+  buildMediaReferenceDetails,
   buildTextToolResult,
   normalizeMediaReferenceList,
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
@@ -127,14 +125,6 @@ function resolveImageCompressionPolicy(
   return prepareImageCompressionPolicy(params, imageToolProviderDeps);
 }
 
-function hasExplicitDefaultPrimaryModel(cfg?: OpenClawConfig): boolean {
-  const model = cfg?.agents?.defaults?.model;
-  if (typeof model === "string") {
-    return model.trim().length > 0;
-  }
-  return typeof model?.primary === "string" && model.primary.trim().length > 0;
-}
-
 function modelRefProvider(candidate: string | null | undefined): string | undefined {
   const trimmed = candidate?.trim();
   if (!trimmed?.includes("/")) {
@@ -175,7 +165,6 @@ const testing = {
   decodeDataUrl,
   coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
-  resolveImageToolMaxTokens,
   resolveImageCompressionPolicy,
   setProviderDepsForTest(overrides?: Partial<typeof defaultImageToolProviderDeps>) {
     Object.assign(
@@ -258,35 +247,25 @@ function resolveImageModelConfigForTool(params: {
     cfg: params.cfg,
     provider: primary.provider,
   });
-  const primaryCandidates = (() => {
-    if (providerVisionFromConfig) {
-      if (primary.provider === "openai") {
-        return [
-          resolveImplicitOpenAiImageCandidate(
-            providerVisionFromConfig.slice(providerVisionFromConfig.indexOf("/") + 1),
-          ),
-        ];
-      }
-      return [providerVisionFromConfig];
-    }
-    const providerDefault = imageToolProviderDeps.resolveDefaultMediaModel({
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      providerId: primary.provider,
-      capability: "image",
-      includeConfiguredImageModels: !isMinimaxVlmProvider(primary.provider),
-    });
-    if (providerDefault) {
-      if (primary.provider === "openai") {
-        return [resolveImplicitOpenAiImageCandidate(providerDefault)];
-      }
-      return [`${primary.provider}/${providerDefault}`];
-    }
-    if (isMinimaxVlmProvider(primary.provider)) {
-      return [`${primary.provider}/MiniMax-VL-01`];
-    }
-    return [];
-  })();
+  const primaryModelId = providerVisionFromConfig
+    ? providerVisionFromConfig.slice(providerVisionFromConfig.indexOf("/") + 1)
+    : imageToolProviderDeps.resolveDefaultMediaModel({
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        providerId: primary.provider,
+        capability: "image",
+        includeConfiguredImageModels: !isMinimaxVlmProvider(primary.provider),
+      });
+  const primaryCandidates =
+    providerVisionFromConfig || primaryModelId
+      ? [
+          primary.provider === "openai"
+            ? resolveImplicitOpenAiImageCandidate(primaryModelId ?? "")
+            : (providerVisionFromConfig ?? `${primary.provider}/${primaryModelId}`),
+        ]
+      : isMinimaxVlmProvider(primary.provider)
+        ? [`${primary.provider}/MiniMax-VL-01`]
+        : [];
 
   const rawAutoCandidates = imageToolProviderDeps
     .resolveAutoMediaKeyProviders({
@@ -316,7 +295,9 @@ function resolveImageModelConfigForTool(params: {
         ...rawAutoCandidates,
       ]),
   );
-  const defaultPrimaryIsImplicit = !hasExplicitDefaultPrimaryModel(params.cfg);
+  const defaultPrimaryIsImplicit = !resolveAgentModelPrimaryValue(
+    params.cfg?.agents?.defaults?.model,
+  );
   const primaryAliasCandidates = defaultPrimaryIsImplicit
     ? autoCandidates.filter((candidate) =>
         isExecutionAliasCandidateForProvider(candidate, primary.provider),
@@ -347,14 +328,9 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 }
 
 function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undefined {
-  if (typeof maxBytesMb === "number" && Number.isFinite(maxBytesMb) && maxBytesMb > 0) {
-    return Math.floor(maxBytesMb * 1024 * 1024);
-  }
-  const configured = cfg?.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return undefined;
+  const limit =
+    asPositiveFiniteNumber(maxBytesMb) ?? asPositiveFiniteNumber(cfg?.agents?.defaults?.mediaMaxMb);
+  return limit === undefined ? undefined : Math.floor(limit * 1024 * 1024);
 }
 
 export function createImageTool(options?: {
@@ -634,7 +610,7 @@ export function createImageTool(options?: {
           loadedImages.push({
             buffer: media.buffer,
             mimeType,
-            resolvedImage,
+            resolvedInput: resolvedImage,
             ...(rewrittenFrom ? { rewrittenFrom } : {}),
           });
         }
@@ -667,7 +643,7 @@ export function createImageTool(options?: {
           imageToolProviderDeps,
         );
 
-        return buildTextToolResult(result, buildImageToolReferenceDetails(loadedImages));
+        return buildTextToolResult(result, buildMediaReferenceDetails(loadedImages, "image"));
       }),
   };
 }

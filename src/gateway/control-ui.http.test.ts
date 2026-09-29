@@ -34,10 +34,12 @@ import {
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ControlUiAssetRetention } from "./control-ui-asset-retention.js";
+import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
 import {
-  CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
-  type ControlUiPluginFrameGrantAck,
-} from "./control-ui-contract.js";
+  parseBootstrapPayload,
+  registerControlUiBootstrapConfigTests,
+  registerControlUiUploadConfigTests,
+} from "./control-ui.bootstrap.test-support.js";
 import {
   createTrustedProxyHeaders,
   setupTrustedProxyAuth,
@@ -104,26 +106,6 @@ describe("handleControlUiHttpRequest", () => {
     const tmp = testTempDirs.make("openclaw-ui-");
     await fs.writeFile(path.join(tmp, "index.html"), indexHtml);
     return tmp;
-  }
-
-  function parseBootstrapPayload(end: ReturnType<typeof makeMockHttpResponse>["end"]) {
-    return JSON.parse(responseBody(end)) as {
-      basePath: string;
-      assistantName: string;
-      assistantAvatar: string;
-      assistantAvatarSource?: string | null;
-      assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
-      assistantAvatarReason?: string | null;
-      assistantAgentId?: string;
-      devGitBranch?: string;
-      environment?: { label: string; color: string };
-      seamColor?: string;
-      terminalEnabled: boolean;
-      cliAgentsEnabled: boolean;
-      automaticallyFetchFavicons: boolean;
-      communityInvite: boolean;
-      pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
-    };
   }
 
   function responseBody(end: ReturnType<typeof makeMockHttpResponse>["end"]) {
@@ -524,6 +506,8 @@ describe("handleControlUiHttpRequest", () => {
     expect(String(csp)).toContain("script-src 'self' 'wasm-unsafe-eval'");
     expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="true"');
   });
+
+  registerControlUiUploadConfigTests();
 
   it("uses effective terminal availability instead of raw restart-pending config", async () => {
     const tmp = await createControlUiRoot();
@@ -1169,6 +1153,57 @@ describe("handleControlUiHttpRequest", () => {
     );
   });
 
+  it.each(["", "/openclaw/"])(
+    "activates only the initial route's modulepreloads under %j",
+    async (basePath) => {
+      const script = "window.controlUiBoot = true;";
+      const html = `<html><head><script>${script}</script><link rel="modulepreload" href="./assets/shared.js"><template data-openclaw-route-preloads="chat"><link rel="modulepreload" crossorigin href="./assets/chat.js"></template><template data-openclaw-route-preloads="new"><link rel="modulepreload" crossorigin href="./assets/new.js"></template></head><body></body></html>`;
+      const rootPath = await createControlUiRoot(html);
+      const mount = basePath.replace(/\/$/, "");
+      const cases = [
+        ["/chat", "chat"],
+        ["/chat/main/session-ref?view=thread", "chat"],
+        ["/new/", "new"],
+        ["/", null],
+        ["/dashboard/main/session-ref", null],
+        ["/approve/request-id", null],
+        ["/share/chat/main/session-ref", null],
+        ["/chatty", null],
+        ["/new/unknown", null],
+      ] as const;
+      for (const [pathname, route] of cases) {
+        const { handled, res, end, setHeader } = await runControlUiRequest({
+          url: `${mount}${pathname}`,
+          method: "GET",
+          rootPath,
+          rootKind: "bundled",
+          basePath,
+        });
+        expect(handled, pathname).toBe(true);
+        expect(res.statusCode, pathname).toBe(200);
+        const body = responseBody(end);
+        expect(body, pathname).not.toContain("data-openclaw-route-preloads");
+        const preloads = Array.from(
+          body.matchAll(/<link rel="modulepreload"[^>]*href="([^"]+)"/g),
+          (match) => match[1],
+        );
+        expect(preloads, pathname).toEqual(
+          pathname.startsWith("/share/")
+            ? []
+            : [`${mount}/assets/shared.js`, ...(route ? [`${mount}/assets/${route}.js`] : [])],
+        );
+        if (!pathname.startsWith("/share/")) {
+          expect(body, pathname).toContain(`<script>${script}</script>`);
+          const csp = setHeader.mock.calls.findLast(
+            ([header]) => header === "Content-Security-Policy",
+          )?.[1];
+          const hash = createHash("sha256").update(script, "utf8").digest("base64");
+          expect(csp, pathname).toContain(`'sha256-${hash}'`);
+        }
+      }
+    },
+  );
+
   it("exposes only the environment identity on public HTML while bootstrap stays authenticated", async () => {
     const tmp = await createControlUiRoot("<html><head></head><body>Hello</body></html>\n");
 
@@ -1313,54 +1348,7 @@ describe("handleControlUiHttpRequest", () => {
     },
   );
 
-  it.each([undefined, false])("serves bootstrap config JSON with cliAgents=%s", async (enabled) => {
-    const tmp = await createControlUiRoot();
-
-    const { res, end } = makeMockHttpResponse();
-    const handled = await handleControlUiHttpRequest(
-      { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
-      res,
-      {
-        root: { kind: "resolved", path: tmp },
-        config: {
-          agents: {
-            defaults: { workspace: tmp },
-            list: [
-              {
-                id: "roboclaw",
-                default: true,
-                workspace: tmp,
-                identity: {
-                  name: "</script><script>alert(1)//",
-                  avatar: "</script>.png",
-                },
-              },
-            ],
-          },
-          ui: { seamColor: "#1A2b3C" },
-          gateway: {
-            ...(enabled === undefined ? {} : { cliAgents: { enabled } }),
-            controlUi: { environment: { label: "edge", color: "amber" } },
-          },
-        },
-      },
-    );
-    expect(handled).toBe(true);
-    const parsed = parseBootstrapPayload(end);
-    expect(parsed.basePath).toBe("");
-    expect(parsed.assistantName).toBe("</script><script>alert(1)//");
-    expect(parsed.assistantAvatar).toBe("A");
-    expect(parsed.assistantAvatarStatus).toBe("none");
-    expect(parsed.assistantAvatarReason).toBe("missing");
-    expect(parsed.assistantAgentId).toBe("roboclaw");
-    expect(parsed.seamColor).toBe("#1A2b3C");
-    expect(parsed.environment).toEqual({ label: "edge", color: "amber" });
-    expect(parsed.terminalEnabled).toBe(true);
-    expect(parsed.cliAgentsEnabled).toBe(enabled !== false);
-    expect(parsed.automaticallyFetchFavicons).toBe(true);
-    expect(parsed.communityInvite).toBe(true);
-    expect(parsed.devGitBranch).toBeUndefined();
-  });
+  registerControlUiBootstrapConfigTests({ createControlUiRoot, devInstallBranchMock });
 
   it.each(["identity", "avatar"] as const)(
     "serves authenticated bootstrap when the %s file worker rejects",
@@ -1401,46 +1389,6 @@ describe("handleControlUiHttpRequest", () => {
       });
     },
   );
-
-  it.each(["automaticallyFetchFavicons", "communityInvite"] as const)(
-    "projects an explicit %s opt-out into bootstrap config",
-    async (key) => {
-      const tmp = await createControlUiRoot();
-
-      const { res, end } = makeMockHttpResponse();
-      const handled = await handleControlUiHttpRequest(
-        { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
-        res,
-        {
-          root: { kind: "resolved", path: tmp },
-          config: {
-            gateway: { controlUi: { [key]: false } },
-          },
-        },
-      );
-
-      expect(handled).toBe(true);
-      expect(parseBootstrapPayload(end)[key]).toBe(false);
-    },
-  );
-
-  it("includes the dev checkout branch in bootstrap config", async () => {
-    devInstallBranchMock.branch = "feat/dev-branch-badge";
-    try {
-      const tmp = await createControlUiRoot();
-
-      const { res, end } = makeMockHttpResponse();
-      const handled = await handleControlUiHttpRequest(
-        { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
-        res,
-        { root: { kind: "resolved", path: tmp }, config: {} },
-      );
-      expect(handled).toBe(true);
-      expect(parseBootstrapPayload(end).devGitBranch).toBe("feat/dev-branch-badge");
-    } finally {
-      devInstallBranchMock.branch = null;
-    }
-  });
 
   it.each(["/openclaw"])(
     "keeps a maximum-size local avatar out of bootstrap at %s",

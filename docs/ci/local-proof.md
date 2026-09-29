@@ -8,11 +8,26 @@ read_when:
 
 ## Local equivalents
 
+The complete channels test lane prepares its native worker artifacts before
+starting the test process. Cold compilation therefore does not consume the
+test-output watchdog's deadline. Focused channel selections retain lazy
+preparation; the watchdog and compiler cleanup rules remain unchanged.
+
 The lint wrapper owns Go resource limits for current CI. It applies them on
 hosts with fewer than eight available CPUs or less than 24 GiB of memory,
 without applying lint defaults to declaration preparation. Explicit Go settings
 remain inherited. Frozen revisions retain the workflow limits because their
 wrappers can predate this policy.
+
+Bounded core and eight-directory plugin lint shards can use two lint threads,
+four Go CPUs, `GOGC=100`, and an 8-GiB soft Go heap target on Linux CI. The batch
+owner must admit one child on at least four CPUs and 15 GiB of verified capacity;
+each child also requires 14 GiB of available memory for core or 10 GiB for plugins.
+The child verifies that its arguments match the admitted shard. Larger plugin
+chunks, unbounded commands, parallel children, and unknown memory keep their
+existing limits. Explicit thread and Go settings remain inherited. The larger
+heap target reduces repeated garbage collection without changing lint rules,
+target files, or declaration preparation.
 
 The runtime topology CI job also supplies `GOGC=30` and `GOMEMLIMIT=3GiB`
 defaults to `pnpm check:architecture`, preserving caller overrides. Both import
@@ -179,8 +194,13 @@ Docker proof wrappers carry the signal and relay their summaries to the runner.
 
 Oxlint keeps configured line caps and exclusions: 700 counted lines for ordinary
 TypeScript, 800 for JavaScript modules, and 1,000 for tests, with the existing
-explicit overrides. Local lint reports errors. CI uses a temporary configuration
-that changes only enabled size-rule severity to warning. SwiftLint likewise
+explicit overrides. Standalone local lint reports errors. In `check:changed`,
+lint reports `max-lines` errors for selected changed files and warnings for
+untouched files included by a broader lint lane. The broad scan still reports
+semantic errors everywhere it runs. Empty or oversized change scopes, changes to
+lint configuration or dependencies, and configurations with inherited limits
+keep strict local enforcement. CI uses a temporary configuration that changes
+only enabled size-rule severity to warning. SwiftLint likewise
 reports native length, nesting, complexity, and count limits as CI warnings;
 semantic lint errors remain blocking.
 
@@ -214,6 +234,13 @@ forbidden eager imports, and exactly-once ownership. Public SDK inventories and
 generated configuration-schema baselines remain contract guards. Runner matrix
 caps protect shared runner-registration capacity and remain blocking. Explicit
 benchmark qualification verdicts retain their requested acceptance criteria.
+
+The workflow file-size guard in `test/scripts/ci-workflow-guards.test.ts` also
+stays blocking. GitHub refuses any workflow file above 512,000 bytes (500 KiB)
+with a run that has no jobs, so every PR and main CI run stops without a failing
+check. The guard fails at 480,000 bytes, while CI can still report it. Shrink the
+file before raising the limit; for example, share byte-identical runner
+expressions, steps, and scripts through YAML anchors and aliases.
 
 ## Local check gates and changed routing
 
@@ -261,18 +288,24 @@ is not generic compute offload. `.crabbox.yaml` defaults remote proof to
 `blacksmith-testbox`. Its configured workflow hydrates provider and agent
 credentials, so untrusted contributor or fork code must use secretless fork CI
 or sanitized direct AWS Crabbox instead.
-The wrapper uses the bundled Crabbox plugin's binary manager. OpenClaw supports
-the current Crabbox CLI contract, starting at 0.56.0. If the selected binary is
-missing or older, the plugin installs a verified current release in its own
-managed directory before provider discovery or lease work. It leaves the original
-binary untouched. Provider readiness and broker authentication still determine
+The wrapper uses the bundled Crabbox plugin's binary manager. All providers and
+cloud-worker profiles require Crabbox 0.67.0 or newer. This includes task-owned
+Testbox SSH teardown, which prevents persistent SSH masters from keeping idle
+Testboxes alive. Missing or older binaries use a verified managed 0.67.0 release
+before provider discovery or lease work. The original binary stays untouched.
+Provider readiness and broker authentication still determine
 which configured backend can run the proof.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
 the changed gate later reconstructs the exact merge base and synced final tree.
-Its outer GitHub job defaults to 240 minutes, matching the native full-test
-gate's four-hour Testbox lease envelope. Manual dispatches can override
-`timeout_minutes`; the lease TTL and individual test deadlines remain separate
-limits.
+Dispatched check leases request `blacksmith-32vcpu-ubuntu-2404`. A native capacity
+probe measured eight CPUs and 30.95 GiB of memory on that class, compared with
+15.42 GiB on the previous 16-class. This supplies headroom for isolated runtime
+validation without increasing the number of jobs or workers. Workloads still
+admit work from observed resources; the runner label is not a capacity guarantee.
+PR hydration checks remain on `ubuntu-24.04`.
+Its outer GitHub job defaults to 240 minutes. Manual dispatches can override
+`timeout_minutes`. Testbox idle timeouts and individual test deadlines remain
+separate limits.
 Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI`, pass
 `--no-hydrate`, and use a fresh temporary remote `HOME`; this prevents the repo
 `OPENCLAW_*` allowlist and existing auth profiles from reaching untrusted code.
@@ -469,12 +502,34 @@ blacksmith testbox status --id <tbx_id>
 blacksmith testbox stop --id <tbx_id>
 ```
 
-Use reuse only when you intentionally need multiple commands on the same hydrated box:
+For several commands in one task, allocate on the first command and reuse its
+reported `leaseId`. Use a unique task label. Stop the lease after the last command:
 
 ```bash
-node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --id <tbx_id> --timing-json --shell -- "corepack pnpm test <path-or-filter>"
-pnpm crabbox:stop -- <tbx_id>
+node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --keep --label <unique-task-name> -- corepack pnpm test <first-file>
+node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --id <tbx_id> --label <unique-task-name> -- corepack pnpm test <next-file>
+node scripts/crabbox-wrapper.mjs stop --provider blacksmith-testbox <tbx_id>
 ```
+
+The wrapper records allocation provenance under `.crabbox/testbox-leases`.
+Reuse requires the same physical checkout, HEAD, merge base, dependency inputs,
+preparation inputs, caller session, and label. Stop older or unrecorded leases
+and allocate through the wrapper. `OPENCLAW_TESTBOX_ALLOW_STALE` no longer bypasses these checks.
+Codex and Claude Code sessions provide session identity automatically.
+GitHub Actions identity includes the workflow attempt and job.
+These identities identify sessions, not individual requests. Use distinct labels
+when one session handles several tasks. A human shell requires a label for retained leases.
+Session-owned `warmup --timing-json` also records allocation provenance.
+Native Crabbox serializes commands on an owned lease. Do not share a lease between tasks.
+
+The wrapper emits `testbox-admission` and `testbox-completion` JSON records.
+They identify the caller kind, hashed session/task and checkout, HEAD, command
+digest, requested timeouts, lease ID, and invocation duration.
+Session IDs, checkout paths, and command contents are not copied into these records.
+Join them to native timing output by lease ID to find the Actions run.
+These are local diagnostics, not Blacksmith dashboard labels or billed lifetime measurements.
+The delegated provider does not enforce `--ttl`. The workflow job timeout and
+Testbox idle timeout remain the effective lifetime limits.
 
 Reuse the lease, not stale source. Blacksmith Testbox owns sync, including
 reused `--id` runs. Do not pass `--no-sync`: the wrapper rejects it before

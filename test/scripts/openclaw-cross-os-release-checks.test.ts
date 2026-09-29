@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import { isRecoverableWindowsPackagedUpgradeUnsettledExit } from "../../scripts/lib/cross-os-release-checks/config.ts";
 import {
   agentOutputHasExpectedOkMarker,
   acquireManagedGatewayInstallerHostLease,
@@ -45,8 +46,6 @@ import {
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
   CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE,
   CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS,
-  CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS,
-  CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
   CROSS_OS_DISCORD_FETCH_TIMEOUT_MS,
@@ -76,6 +75,7 @@ import {
   runCommand,
   resolveCommandSpawnInvocation,
   resolveExplicitBaselineVersion,
+  resolvePackagedUpgradeTimeouts,
   resolveInstalledCliInvocation,
   resolveInstalledPackageRootFromCliPath,
   resolveNpmPackTarballFileName,
@@ -745,19 +745,25 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     });
   });
 
-  it("gives the Windows packaged updater wrapper enough headroom for OpenClaw timeout output", () => {
-    expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS).toBeLessThanOrEqual(10 * 60);
-    expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS).toBeGreaterThan(
-      CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS * 1000,
-    );
-    expect(
-      CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS -
-        CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS * 1000,
-    ).toBeGreaterThanOrEqual(2 * 60 * 1000);
-    expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS).toBeLessThanOrEqual(
-      12 * 60 * 1000,
-    );
-  });
+  it.each([
+    [0, 600, 1_320_000],
+    [677_000, 1016, 2_152_000],
+    [800_000, 1200, 2_520_000],
+    [2_700_000, 1200, 2_520_000],
+    [Number.NaN, 600, 1_320_000],
+  ])(
+    "sizes Windows upgrade budgets from a %d ms baseline install",
+    (durationMs, stepTimeoutSeconds, wrapperTimeoutMs) => {
+      expect(resolvePackagedUpgradeTimeouts(durationMs, "win32")).toEqual({
+        stepTimeoutSeconds,
+        wrapperTimeoutMs,
+      });
+      expect(resolvePackagedUpgradeTimeouts(durationMs, "linux")).toEqual({
+        stepTimeoutSeconds: 1200,
+        wrapperTimeoutMs: 1_200_000,
+      });
+    },
+  );
 
   it("prints command heartbeats before long release commands hit job timeouts", () => {
     expect(CROSS_OS_COMMAND_HEARTBEAT_SECONDS).toBeGreaterThan(0);
@@ -2371,6 +2377,38 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         usedWindowsPackagedUpgradeFallback: true,
       }),
     ).toBe(true);
+  });
+
+  it.each([
+    { label: "shipped baseline", recoverable: true },
+    { label: "non-Windows", platform: "linux" as const },
+    { label: "other exit", exitCode: 1 },
+    { label: "missing warning", stderr: "Updater failed" },
+    { label: "JSON result", stdout: '{"status":"error"}' },
+    { label: "partial output", stdout: '{"status":' },
+    { label: "first fixed release", baselineVersion: "2026.9.7" },
+    { label: "later release", baselineVersion: "2026.9.10" },
+    { label: "later month", baselineVersion: "2026.10.1" },
+    { label: "unknown baseline", baselineVersion: "unknown" },
+    { label: "switched install", installedVersion: "2026.9.7" },
+  ])("limits unsettled-exit recovery: $label", (testCase) => {
+    const baselineVersion = testCase.baselineVersion ?? "2026.9.6";
+    expect(
+      isRecoverableWindowsPackagedUpgradeUnsettledExit(
+        {
+          exitCode: testCase.exitCode ?? 13,
+          stdout: testCase.stdout ?? "",
+          stderr:
+            testCase.stderr ??
+            "Warning: Detected unsettled top-level await at file:///C:/prefix/node_modules/openclaw/openclaw.mjs:757",
+        },
+        {
+          platform: testCase.platform ?? "win32",
+          baselineVersion,
+          installedVersion: testCase.installedVersion ?? baselineVersion,
+        },
+      ),
+    ).toBe(testCase.recoverable ?? false);
   });
 
   it("verifies the Windows packaged-upgrade fallback installed the candidate", () => {

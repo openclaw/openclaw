@@ -1,14 +1,13 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { crabboxState } from "./crabbox-state.test-support.js";
+import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import {
   openCrabboxWarmImageStore,
   type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
 import {
   createWarmProvider,
-  openWarmImageStore,
   provisionWarmProfile,
   tempDirs,
 } from "./crabbox-worker-warm-image.test-support.js";

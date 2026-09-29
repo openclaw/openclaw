@@ -47,27 +47,24 @@ export function renderCaptureHeaders(
       ? Object.entries(parsed).filter(([label]) => isImportantCaptureHeader(label))
       : Object.entries(parsed);
   const groups: Array<{
-    key: string;
     label: string;
     match: (header: string) => boolean;
   }> = [
-    { key: "auth", label: "Auth & Session", match: (header) => isSensitiveCaptureField(header) },
+    { label: "Auth & Session", match: isSensitiveCaptureField },
     {
-      key: "content",
       label: "Content",
       match: (header) => /content-|accept|encoding|transfer-encoding/i.test(header),
     },
     {
-      key: "cache",
       label: "Caching & Validation",
       match: (header) => /cache|etag|if-|last-modified|vary|expires|age/i.test(header),
     },
     {
-      key: "routing",
       label: "Routing & Network",
       match: (header) =>
         /host|origin|referer|x-forwarded|forwarded|cf-|traceparent|tracestate|via/i.test(header),
     },
+    { label: "Other", match: () => true },
   ];
   const remaining = new Map(sourceEntries);
   const renderedGroups = groups
@@ -89,19 +86,6 @@ export function renderCaptureHeaders(
       </section>`;
     })
     .filter(Boolean);
-  const otherRows = Array.from(remaining.entries())
-    .map(([label, value]) => ({
-      label,
-      value: formatCaptureFieldValue(value, label),
-    }))
-    .filter((row) => row.value.length > 0)
-    .toSorted((left, right) => left.label.localeCompare(right.label));
-  if (otherRows.length > 0) {
-    renderedGroups.push(`<section class="capture-inline-section">
-      <div class="capture-summary-label">Other</div>
-      ${renderCaptureKeyValueGrid(otherRows)}
-    </section>`);
-  }
   return (
     renderedGroups.join("") || '<div class="empty-state">No captured headers for this event.</div>'
   );
@@ -169,7 +153,7 @@ function renderCaptureSsePayload(
       ? frames
       : frames.filter((frame) => frame.searchable.includes(normalizedFilter));
   const sortMode = options?.sort ?? "stream";
-  const sortedFrames = [...filteredFrames].toSorted((left, right) => {
+  const sortedFrames = filteredFrames.toSorted((left, right) => {
     if (sortMode === "name") {
       return left.eventName.localeCompare(right.eventName) || left.index - right.index;
     }

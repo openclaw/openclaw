@@ -136,7 +136,6 @@ if (tool === "installer") {
       PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
       RUNNER_TEMP: root,
       CI: "true",
-      GITHUB_OUTPUT: path.join(root, "github-output"),
       OPENCLAW_CI_SIMSLIM_BINARY: "",
       WATCH_FIXTURE_ROOT: root,
       WATCH_FIXTURE_MODE: mode,
@@ -156,12 +155,10 @@ if (tool === "installer") {
         .split("\n")
         .map((line) => JSON.parse(line))
     : [];
-  const output = path.join(root, "github-output");
   return {
     result,
     commands,
     product,
-    output: existsSync(output) ? readFileSync(output, "utf8") : "",
   };
 }
 
@@ -201,18 +198,6 @@ describe.skipIf(process.platform === "win32")("SimSlim workflow admission", () =
     ]);
     expect(result.status).toBe(23);
     expect(commands.some(({ tool }) => tool === "pnpm" || tool === "xcodebuild")).toBe(false);
-  });
-
-  it("publishes the screenshot binary only after installation succeeds", () => {
-    const install = workflow.jobs["ios-screenshot-shard"]?.steps?.find(
-      ({ name }) => name === "Install iOS simulator tooling",
-    );
-    const ready = runSimulatorStep("voice-slim", [install]);
-    expect(ready.result.status, ready.result.stderr).toBe(0);
-    expect(ready.output).toMatch(/^binary=.+\/openclaw-simslim\/simslim\n$/);
-    const failed = runSimulatorStep("voice-slim-install-failed", [install]);
-    expect(failed.result.status).toBe(23);
-    expect(failed.output).toBe("");
   });
 });
 
@@ -413,9 +398,10 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
         "-only-testing:OpenClawTests/OpenClawTypographyTests",
       ]),
     );
-    expect(tests[1]?.args).toContain(
+    expect(tests[1]?.args.filter((arg) => arg.startsWith("-only-testing:"))).toEqual([
       "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings",
-    );
+      "-only-testing:OpenClawUITests/BootstrapSetupFailureUITests",
+    ]);
   });
 
   it("fails on auth test errors before attempting later UI tests", () => {

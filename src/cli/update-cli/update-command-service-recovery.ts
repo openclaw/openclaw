@@ -3,7 +3,13 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { resolveGatewayService, type GatewayService } from "../../daemon/service.js";
-import { getUpdateRun, recordUpdateRunRepairAttempt } from "../../infra/update-run-ledger.js";
+import { readPackageVersion } from "../../infra/package-json.js";
+import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
+import {
+  getUpdateRun,
+  recordUpdateRunDiagnostics,
+  recordUpdateRunRepairAttempt,
+} from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -14,6 +20,7 @@ import {
   type GatewayRestartSnapshot,
 } from "../daemon-cli/restart-health.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import {
   recoverInstalledLaunchAgentAfterUpdate,
   type PostUpdateLaunchAgentRecoveryResult,
@@ -160,6 +167,54 @@ export function formatPostUpdateGatewayRecoveryInstructions(
   return lines;
 }
 
+export async function admitMigratedGatewayRecovery(
+  params: Pick<
+    FinishUpdateParams,
+    | "root"
+    | "opts"
+    | "shouldRestart"
+    | "preManagedServiceStop"
+    | "packageTransaction"
+    | "originalManagedServiceRuntime"
+  >,
+  result: UpdateRunResult,
+  assertCurrent: () => void,
+): Promise<boolean> {
+  if (
+    result.reason !== "state-migrated-no-rollback" ||
+    params.originalManagedServiceRuntime ||
+    !params.shouldRestart ||
+    !params.preManagedServiceStop?.stopped ||
+    !result.steps.some((step) => step.name === "database rollback" && step.exitCode !== 0) ||
+    (result.recovery?.serviceRestartSafe === false &&
+      result.recovery.reason === "source-rollback-failed")
+  ) {
+    return false;
+  }
+  assertCurrent();
+  await params.packageTransaction?.assertRollbackSafe?.();
+  const root = result.root ?? params.root;
+  const version = await readPackageVersion(root);
+  const buildId = await readBuiltGatewayBuildId(root);
+  assertCurrent();
+  if (!version) {
+    throw new UpdateCommandRecoveryPendingError(
+      "Migrated Gateway runtime identity is unavailable.",
+    );
+  }
+  // Preserve later writes; the installed candidate's native startup still owns state admission.
+  result.recovery = { serviceRestartSafe: true, version, ...(buildId ? { buildId } : {}) };
+  if (params.opts.run) {
+    recordUpdateRunDiagnostics(
+      params.opts.run.runId,
+      { recovery: result.recovery },
+      (message) => defaultRuntime.error(message),
+      { env: params.opts.run.env },
+    );
+  }
+  return true;
+}
+
 export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
   onGatewayStartAttempted?: () => void;
   updateRun?: UpdateCommandOptions["run"];
@@ -235,7 +290,10 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     > = original?.service ?? before;
     const readCurrentService = async () => {
       assertCurrent();
-      const state = await readGatewayServiceStateForUpdate(service, serviceEnv, params.timeoutMs);
+      const state = await readGatewayServiceStateForUpdate(service, serviceEnv, params.timeoutMs, {
+        managerUid: expectedService.serviceManagerUid,
+        assertCurrent: assertOriginal,
+      });
       assertCurrent();
       const inspection = await revalidateManagedGatewayServiceAfterUpdate({
         state,

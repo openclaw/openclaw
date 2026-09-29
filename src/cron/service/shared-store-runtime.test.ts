@@ -100,7 +100,7 @@ for (const run of runs) {
     async runIsolatedAgentJob() {
       if (run.leavePending) {
         openOpenClawStateDatabase().db.exec(
-          "CREATE TEMP TRIGGER reject_scheduler_completion BEFORE UPDATE ON cron_jobs " +
+          "CREATE TRIGGER reject_scheduler_completion BEFORE UPDATE ON cron_jobs " +
           "WHEN json_extract(OLD.state_json, '$.runningAtMs') IS NOT NULL " +
           "AND json_extract(NEW.state_json, '$.runningAtMs') IS NULL " +
           "BEGIN SELECT RAISE(ABORT, 'scheduler completion unavailable'); END;",
@@ -211,7 +211,7 @@ try {
   assert.equal(activated.state.runningScheduleChangeId, undefined);
   database = openOpenClawStateDatabase().db;
   database.exec(
-    "CREATE TEMP TRIGGER reject_successor_row BEFORE UPDATE ON cron_jobs WHEN NEW.job_id = '" +
+    "CREATE TRIGGER reject_successor_row BEFORE UPDATE ON cron_jobs WHEN NEW.job_id = '" +
     jobId.replaceAll("'", "''") +
     "' BEGIN SELECT RAISE(ABORT, 'successor row unavailable'); END;"
   );

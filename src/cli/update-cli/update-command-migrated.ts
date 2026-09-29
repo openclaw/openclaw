@@ -327,7 +327,10 @@ export async function continueMigratedUpdateInFreshProcess(
     }
     try {
       await windowsRecovery?.complete(
-        response.result.status === "ok" || isUpdateGatewayReadinessPending(response.result),
+        response.result.status === "ok" ||
+          isUpdateGatewayReadinessPending(response.result) ||
+          (response.result.recovery?.serviceRestartSafe === true &&
+            response.result.recovery.service === "healthy"),
       );
     } catch (cause) {
       throw new UpdateCommandFailure(

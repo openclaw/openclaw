@@ -22,7 +22,7 @@
    both rail states. Guarded to wide viewports; narrow ones keep the gutter
    because the rail presents as a bottom strip there. */
 @media (min-width: 1121px) {
-  .content--chat:has(.chat-workbench) .chat {
+  .content--chat.content--workbench .chat {
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
   }
@@ -71,7 +71,14 @@
   inset: 0 var(--chat-thread-gutter) auto;
   height: 24px;
   pointer-events: none;
-  background: linear-gradient(to bottom, var(--chat-surface), transparent);
+  background: linear-gradient(
+    to bottom,
+    var(--chat-surface) 2px,
+    color-mix(in srgb, var(--chat-surface) 88%, transparent) 25%,
+    color-mix(in srgb, var(--chat-surface) 50%, transparent) 50%,
+    color-mix(in srgb, var(--chat-surface) 12%, transparent) 75%,
+    transparent
+  );
 }
 
 @media (max-width: 560px) {
@@ -994,12 +1001,14 @@ openclaw-session-discussion {
 
 .sidebar-attachment-preview__loading,
 .chat-video-skeleton,
-.chat-assistant-attachment-card--video[aria-busy="true"] .chat-assistant-attachment-card__header {
+.chat-assistant-attachment-card--video.chat-assistant-attachment-card--loading
+  .chat-assistant-attachment-card__header {
   opacity: 0;
   animation: fade-in 0s 150ms forwards;
 }
 
-.chat-assistant-attachment-card--video[aria-busy="true"] {
+/* Keep loading paint local: aria-busy on large lists must not restyle every SVG. */
+.chat-assistant-attachment-card--video.chat-assistant-attachment-card--loading {
   video {
     opacity: 0;
   }
@@ -1239,6 +1248,10 @@ openclaw-session-discussion {
 
 .session-diff__summary-spacer {
   flex: 1;
+}
+
+.session-diff__refresh:disabled svg {
+  animation: btn-spinner-spin 0.7s linear infinite;
 }
 
 .session-diff__toolbar-button,

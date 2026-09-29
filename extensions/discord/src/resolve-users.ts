@@ -1,5 +1,6 @@
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS, fetchDiscord } from "./api.js";
@@ -62,17 +63,14 @@ function parseDiscordUserInput(raw: string): {
 function scoreDiscordMember(member: DiscordMember, query: string): number {
   const q = normalizeLowercaseStringOrEmpty(query);
   const user = member.user;
-  const candidates = [user.username, user.global_name, member.nick ?? undefined]
-    .map((value) => {
-      const normalized = normalizeOptionalString(value);
-      return normalized ? normalizeLowercaseStringOrEmpty(normalized) : undefined;
-    })
-    .filter(Boolean) as string[];
+  const candidates = [user.username, user.global_name, member.nick]
+    .map(normalizeOptionalLowercaseString)
+    .filter((value) => value !== undefined);
   let score = 0;
   if (candidates.some((value) => value === q)) {
     score += 3;
   }
-  if (candidates.some((value) => value?.includes(q))) {
+  if (candidates.some((value) => value.includes(q))) {
     score += 1;
   }
   if (!user.bot) {

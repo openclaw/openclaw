@@ -57,12 +57,14 @@ export function activateSubagentPersistenceRegistry(
   call: typeof callGateway,
 ) {
   const recoveryRuntime = createSubagentPersistenceRuntime(call);
-  registry.activateSubagentRegistry(
-    () => ({ resolveGatewayContext: () => ({ recoveryRuntime }) }) as never,
-  );
+  const gateway = {
+    recoveryRuntime,
+    resolveGatewayContext: () => gateway as never,
+  };
+  return registry.activateSubagentRegistry(gateway.resolveGatewayContext);
 }
 
-export function listFixtureAgentDatabases(
+function listFixtureAgentDatabases(
   listDatabases: typeof listOpenClawAgentDatabasesForTest,
   stateDir: string,
 ) {

@@ -40,6 +40,8 @@ export type ProviderModelAuthPolicyContext = {
   provider: string;
   mode?: string;
   authFlow?: string;
+  /** Requested non-chat operation (for example, image-generation or embedding). */
+  capability?: string;
   api?: string;
   baseUrl?: string;
 };

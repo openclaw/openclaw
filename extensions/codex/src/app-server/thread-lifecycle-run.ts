@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isIncognitoSessionKey } from "../incognito-session.js";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { closeCodexStartupClientBestEffort } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerClientInstanceId } from "./client.js";
 import { assertCodexInferenceRouteConfig } from "./inference-routing.js";
@@ -37,7 +37,9 @@ import {
 import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
 import { resumeExistingCodexThread, startFreshCodexThread } from "./thread-lifecycle-io.js";
 import {
+  buildCodexThreadBindingPolicy,
   prepareCodexThreadLifecyclePreflight,
+  prepareCodexThreadFinalConfigPatch,
   prepareCodexThreadRequestContext,
   publishCodexThreadInferenceBinding,
   resolveCodexThreadAgentDir,
@@ -88,7 +90,6 @@ export async function startOrResumeThread(
       contextEngineBinding,
       dynamicToolsContainDeferred,
       dynamicToolsFingerprint,
-      environmentSelectionFingerprint,
       hostSystemAgentActive,
       legacyDynamicToolsFingerprint,
       legacyUserMcpServersFingerprint,
@@ -150,15 +151,10 @@ export async function startOrResumeThread(
             params.pluginThreadConfig?.build(),
           )
         : undefined;
-      const finalConfigPatch = (await params.buildFinalConfigPatch?.({
-        action: "start",
-        ...(requestContext.nativeModelInputTools
-          ? { nativeModelInputTools: requestContext.nativeModelInputTools }
-          : {}),
-      })) ?? {
-        configPatch: params.finalConfigPatch,
-        nativeHookRelayGeneration: params.nativeHookRelayGeneration,
-      };
+      const finalConfigPatch = await prepareCodexThreadFinalConfigPatch(
+        params,
+        requestContext.nativeModelInputTools,
+      );
       const config = lifecycleTiming.measureSync("merge-thread-config", () =>
         applyCodexNativeSkillIsolation(
           mergeCodexThreadConfigs(
@@ -219,18 +215,12 @@ export async function startOrResumeThread(
             authProfileId: undefined,
             agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
             preserveNativeModel: true,
-            dynamicToolsFingerprint,
-            dynamicToolsContainDeferred,
+            ...buildCodexThreadBindingPolicy(params, preflight),
             webSearchThreadConfigFingerprint,
-            nativeSkillIsolationFingerprint,
-            userMcpServersFingerprint,
             mcpServersFingerprint:
               params.mcpServersFingerprintEvaluated === true
                 ? params.mcpServersFingerprint
                 : pendingBinding.mcpServersFingerprint,
-            configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
-            networkProxyProfileName: params.appServer.networkProxy?.profileName,
-            networkProxyConfigFingerprint,
             nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
             appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
               params.appServer,
@@ -239,8 +229,6 @@ export async function startOrResumeThread(
             pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
             pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
             pluginAppPolicyContext: pluginThreadConfig?.policyContext,
-            contextEngine: contextEngineBinding,
-            environmentSelectionFingerprint,
             conversationSourceTransferComplete: true,
           },
         }),

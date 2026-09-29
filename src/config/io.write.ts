@@ -4,7 +4,8 @@ import { err, ok } from "@openclaw/normalization-core/result";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { isVerbose } from "../global-state.js";
 import {
-  readDeferredPluginMigrations,
+  readConfigWritePendingMigrations,
+  withDeferredPluginConfigRollback,
   withDeferredPluginMigrationsCurrent,
 } from "../infra/deferred-plugin-migrations.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
@@ -77,7 +78,7 @@ import {
 import { resolvePersistCandidateForWrite } from "./io.write-prepare.js";
 import {
   assertBaseSnapshotStillCurrent,
-  createGuardedConfigFileSystem,
+  createConfigFileWriteGuard,
   formatConfigArtifactTimestamp,
   resolveConfigSizeBaselineBytes,
   resolveConfigStatMetadata,
@@ -131,7 +132,7 @@ export async function writeConfigFileFromContext(
       }
     : await readSnapshot();
   const snapshot = snapshotRead.snapshot;
-  const deferredPluginMigrations = readDeferredPluginMigrations({ env: deps.env });
+  const deferredPluginMigrations = readConfigWritePendingMigrations(configPath, deps.env);
   const configForWrite = preserveDeferredPluginMigrationConfig({
     sourceConfig: snapshot.sourceConfig,
     nextConfig: cfg,
@@ -479,7 +480,7 @@ export async function writeConfigFileFromContext(
       warn: (message) => deps.logger.warn(message),
       skipOutputLogs: options.skipOutputLogs,
     });
-    const guardedFs = createGuardedConfigFileSystem(
+    const writeGuard = createConfigFileWriteGuard(
       configPath,
       deps.fs,
       options.assertConfigPathForWrite,
@@ -501,18 +502,26 @@ export async function writeConfigFileFromContext(
         previousSnapshot: snapshot,
         committedHash: publication.phase === "removed" ? hashConfigRaw(null) : nextHash,
         fsModule: deps.fs,
-        ...guardedFs.captureRollbackProof(assertCurrent),
+        ...writeGuard.captureRollbackProof(assertCurrent),
+        withPublication: (publish, didMutate) =>
+          withDeferredPluginConfigRollback(
+            { configPath, env: deps.env, assertCurrent },
+            publish,
+            didMutate,
+          ),
       });
     await using preparedFile = await prepareConfigFileWrite({
       configPath,
       content: json,
       previousRaw: snapshot.raw,
-      fsModule: guardedFs.fileSystem,
-      assertCurrent: guardedFs.assertCurrent,
+      fsModule: writeGuard.fileSystem,
+      assertCurrent: writeGuard.assertCurrent,
+      assertBeforeMutation: writeGuard.assertBeforeMutation,
+      onDestinationState: writeGuard.onDestinationState,
     });
     await options.beforeCommit?.();
     const result = withDeferredPluginMigrationsCurrent(
-      { env: deps.env, expectedPending: deferredPluginMigrations },
+      { env: deps.env, configPath, expectedPending: deferredPluginMigrations },
       () => {
         const published = preparedFile.publish();
         publication.phase = "published";

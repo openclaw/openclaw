@@ -11,9 +11,11 @@ import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.defaultSidebarPageOrder
 import ai.openclaw.app.defaultSidebarVisiblePages
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.operatorScopesAllowWrite
 import ai.openclaw.app.sanitizeSidebarPageOrder
 import ai.openclaw.app.ui.design.ClawColors
+import ai.openclaw.app.ui.design.ClawIcons
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
 import ai.openclaw.app.ui.design.ProviderBrandIcon
@@ -43,14 +45,9 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.outlined.BarChart
-import androidx.compose.material.icons.outlined.Build
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -120,22 +117,29 @@ internal fun sidebarSessionPinnedAfterDrag(
 
 internal enum class SidebarDestination(
   val stableId: String,
-  val icon: ImageVector,
+  val settingsRoute: SettingsRoute? = null,
+  val icon: ImageVector = checkNotNull(settingsRoute).icon,
 ) {
-  Settings(stableId = "settings", icon = Icons.Outlined.Settings),
-  Work(stableId = "work", icon = Icons.Outlined.BarChart),
-  Home(stableId = "home", icon = Icons.Outlined.ChatBubbleOutline),
-  Skills(stableId = "skills", icon = Icons.Outlined.Build),
-  Threads(stableId = "threads", icon = Icons.Outlined.Description),
+  Settings(stableId = "settings", settingsRoute = SettingsRoute.Home),
+  Work(stableId = "work", icon = ClawIcons.Overview),
+  Home(stableId = "home", icon = ClawIcons.Chat),
+  Skills(stableId = "skills", settingsRoute = SettingsRoute.Skills),
+  Threads(stableId = "threads", icon = ClawIcons.Threads),
+  Agents(stableId = "agents", settingsRoute = SettingsRoute.Agents),
+  Automations(stableId = "automations", settingsRoute = SettingsRoute.CronJobs),
+  Usage(stableId = "usage", settingsRoute = SettingsRoute.Usage),
+  SkillWorkshop(stableId = "skill-workshop", settingsRoute = SettingsRoute.SkillWorkshop),
+  Dreaming(stableId = "dreaming", settingsRoute = SettingsRoute.Dreaming),
+  Terminal(stableId = "terminal", settingsRoute = SettingsRoute.Terminal),
+  Desktop(stableId = "desktop", settingsRoute = SettingsRoute.Desktop),
 }
 
 internal fun SidebarDestination.localizedLabel(): String =
   when (this) {
-    SidebarDestination.Settings -> nativeString("Settings")
     SidebarDestination.Work -> nativeString("Overview")
     SidebarDestination.Home -> nativeString("Home")
-    SidebarDestination.Skills -> nativeString("Skills")
     SidebarDestination.Threads -> nativeString("Threads")
+    else -> checkNotNull(settingsRoute).title.resolveNativeText()
   }
 
 private enum class SidebarPagesMenuMode {
@@ -250,7 +254,6 @@ internal data class SidebarCatalogWorkspace(
 
 internal data class SidebarCatalogHost(
   val stableId: String,
-  val catalogId: String,
   val label: String,
   val connected: Boolean,
   val errorText: String?,
@@ -286,10 +289,10 @@ internal fun sidebarCatalogSessionCreationEnabled(
   canMutateSessions: Boolean,
 ): Boolean = catalog.canCreateSession && canMutateSessions
 
-internal fun toggleSidebarCatalogExpansion(
-  expandedCatalogIds: List<String>,
-  catalogId: String,
-): List<String> = if (catalogId in expandedCatalogIds) expandedCatalogIds - catalogId else expandedCatalogIds + catalogId
+internal fun toggleSidebarExpansion(
+  ids: List<String>,
+  id: String,
+): List<String> = if (id in ids) ids - id else ids + id
 
 internal fun sidebarCatalogRefreshNeeded(
   catalogAgentId: String?,
@@ -343,7 +346,6 @@ internal fun sidebarCatalogHosts(catalogs: List<SessionCatalog>): List<SidebarCa
       }
       SidebarCatalogHost(
         stableId = listOf(catalog.id, host.hostId).joinToString("::"),
-        catalogId = catalog.id,
         label = host.label,
         connected = host.connected,
         errorText = host.errorText,
@@ -487,7 +489,8 @@ internal fun OpenClawSidebar(
     )
   val pinnedSessions = recentPresentation.pinned
   val recentSections = recentPresentation.recentSections
-  val orderedPages = orderedSidebarDestinations(pageOrder)
+  val desktopObserveAvailable by viewModel.desktopObserveAvailable.collectAsState()
+  val orderedPages = orderedSidebarDestinations(pageOrder).filter { it.settingsRoute?.isAvailable(desktopObserveAvailable) != false }
   val visiblePageIdSet = visiblePageIds.toSet()
   val visiblePages = orderedPages.filter { it.stableId in visiblePageIdSet }
 
@@ -503,7 +506,10 @@ internal fun OpenClawSidebar(
         pageIds = current,
         destinationId = destination.stableId,
         direction = direction,
-        visiblePageIds = if (visibleOnly) viewModel.sidebarVisiblePages.value.toSet() else null,
+        visiblePageIds =
+          orderedPages.map(SidebarDestination::stableId).toSet().let { available ->
+            if (visibleOnly) available.intersect(viewModel.sidebarVisiblePages.value.toSet()) else available
+          },
       )
     if (next == current) return false
     viewModel.setSidebarPageOrder(next)
@@ -825,7 +831,7 @@ internal fun OpenClawSidebar(
                           null
                         },
                       onClick = {
-                        expandedCatalogIds = toggleSidebarCatalogExpansion(expandedCatalogIds, catalog.id)
+                        expandedCatalogIds = toggleSidebarExpansion(expandedCatalogIds, catalog.id)
                       },
                     )
                     if (section.expanded) {
@@ -840,20 +846,10 @@ internal fun OpenClawSidebar(
                         collapsedWorkspaceIds = collapsedCatalogWorkspaceIds.toSet(),
                         palette = palette,
                         onToggleHost = { stableId ->
-                          collapsedCatalogHostIds =
-                            if (stableId in collapsedCatalogHostIds) {
-                              collapsedCatalogHostIds - stableId
-                            } else {
-                              collapsedCatalogHostIds + stableId
-                            }
+                          collapsedCatalogHostIds = toggleSidebarExpansion(collapsedCatalogHostIds, stableId)
                         },
                         onToggleWorkspace = { stableId ->
-                          collapsedCatalogWorkspaceIds =
-                            if (stableId in collapsedCatalogWorkspaceIds) {
-                              collapsedCatalogWorkspaceIds - stableId
-                            } else {
-                              collapsedCatalogWorkspaceIds + stableId
-                            }
+                          collapsedCatalogWorkspaceIds = toggleSidebarExpansion(collapsedCatalogWorkspaceIds, stableId)
                         },
                         onSelectSession = onSelectCatalogSession,
                         onLoadMore = viewModel::loadMoreSessionCatalog,
@@ -920,7 +916,7 @@ internal fun OpenClawSidebar(
         modifier = Modifier.size(48.dp),
       ) {
         Icon(
-          imageVector = Icons.Outlined.Settings,
+          imageVector = SettingsRoute.Home.icon,
           contentDescription = nativeString("Settings"),
           tint = palette.text,
           modifier = Modifier.size(20.dp),
@@ -1266,22 +1262,18 @@ private fun SidebarSessionCatalog(
           }
         }
       }
-      hosts
-        .filter(SidebarCatalogHost::canLoadMore)
-        .map(SidebarCatalogHost::catalogId)
-        .distinct()
-        .forEach { catalogId ->
-          if (catalogId in state.loadingMoreCatalogIds) {
-            SidebarCatalogStatus(nativeString("Loading more sessions"), palette, progress = true)
-          } else {
-            SidebarActionRow(
-              label = nativeString("Load more"),
-              icon = Icons.Default.KeyboardArrowDown,
-              palette = palette,
-              onClick = { onLoadMore(catalogId) },
-            )
-          }
+      if (hosts.any(SidebarCatalogHost::canLoadMore)) {
+        if (catalog.id in state.loadingMoreCatalogIds) {
+          SidebarCatalogStatus(nativeString("Loading more sessions"), palette, progress = true)
+        } else {
+          SidebarActionRow(
+            label = nativeString("Load more"),
+            icon = Icons.Default.KeyboardArrowDown,
+            palette = palette,
+            onClick = { onLoadMore(catalog.id) },
+          )
         }
+      }
     }
   }
 }

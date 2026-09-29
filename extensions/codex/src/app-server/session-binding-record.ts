@@ -135,6 +135,10 @@ const pluginAppPolicyContextSchema = z
     pluginAppIds: z.record(z.string(), z.array(z.string())).default({}),
   })
   .strict();
+const legacyAppPolicyEntrySchema = z.union([
+  accountAppPolicyEntrySchema.strip(),
+  pluginAppPolicyEntrySchema.strip(),
+]);
 const threadBindingSchema = z
   .object({
     threadId: z.string().refine((value) => Boolean(value.trim())),
@@ -522,18 +526,8 @@ export function readCurrentCodexNativeSubagentSubmissions(
   identity: CodexAppServerBindingIdentity,
   owner: CodexNativeSubagentHistoryOwner,
 ): readonly CodexNativeSubagentSubmission[] {
-  const key = bindingStoreKey(identity);
-  const raw = state.lookup(key);
-  const stored = readStoredCodexAppServerBinding(raw);
-  if (raw !== undefined && !stored) {
-    throw new Error(`Invalid Codex app-server binding row: ${key}`);
-  }
-  if (
-    stored?.state !== "active" ||
-    !ownsStoredSessionGeneration(identity, stored) ||
-    (identity.kind === "session" && owner.sessionId !== identity.sessionId) ||
-    !matchesCodexNativeSubagentSubmissionBinding(stored.binding, owner)
-  ) {
+  const stored = readCurrentNativeSubagentBinding(state, identity, owner);
+  if (!stored) {
     return [];
   }
   const submissions = readCodexNativeSubagentSubmissions(stored.nativeSubagentSubmissions);
@@ -547,6 +541,17 @@ export function readCurrentNativePendingAssignments(
   identity: CodexAppServerBindingIdentity,
   owner: CodexNativeSubagentHistoryOwner,
 ): readonly CodexNativeSubagentPendingAssignment[] {
+  const stored = readCurrentNativeSubagentBinding(state, identity, owner);
+  return (
+    readNativePendingAssignments(stored?.nativeSubagentAssignments)?.assignments ?? []
+  ).filter((entry) => matchesNativeAssignmentLifecycle(entry.owner, owner));
+}
+
+function readCurrentNativeSubagentBinding(
+  state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup">,
+  identity: CodexAppServerBindingIdentity,
+  owner: CodexNativeSubagentHistoryOwner,
+): Extract<StoredCodexAppServerBinding, { state: "active" }> | undefined {
   const key = bindingStoreKey(identity);
   const raw = state.lookup(key);
   const stored = readStoredCodexAppServerBinding(raw);
@@ -559,11 +564,9 @@ export function readCurrentNativePendingAssignments(
     (identity.kind === "session" && owner.sessionId !== identity.sessionId) ||
     !matchesCodexNativeSubagentSubmissionBinding(stored.binding, owner)
   ) {
-    return [];
+    return undefined;
   }
-  return (readNativePendingAssignments(stored.nativeSubagentAssignments)?.assignments ?? []).filter(
-    (entry) => matchesNativeAssignmentLifecycle(entry.owner, owner),
-  );
+  return stored;
 }
 
 export function preserveNativeTaskImport(current: StoredCodexAppServerBinding | undefined) {
@@ -633,71 +636,44 @@ export function readPluginAppPolicyContext(
       entry.destructiveApprovalMode,
       bindingSchemaVersion,
     );
-    const mcpServerNames =
-      Array.isArray(entry.mcpServerNames) &&
-      entry.mcpServerNames.every((serverName) => typeof serverName === "string")
-        ? entry.mcpServerNames
-        : undefined;
-    if (
-      "appId" in entry ||
-      typeof entry.allowDestructiveActions !== "boolean" ||
-      (entry.allowOpenWorld !== undefined && typeof entry.allowOpenWorld !== "boolean") ||
-      destructiveApprovalMode === "invalid" ||
-      !mcpServerNames
-    ) {
+    if ("appId" in entry || destructiveApprovalMode === "invalid") {
       return undefined;
     }
+    const parsed = legacyAppPolicyEntrySchema.safeParse({ ...entry, destructiveApprovalMode });
+    if (!parsed.success) {
+      return undefined;
+    }
+    const validated = parsed.data;
     const policy = {
-      allowDestructiveActions: entry.allowDestructiveActions,
-      ...(typeof entry.allowOpenWorld === "boolean"
-        ? { allowOpenWorld: entry.allowOpenWorld }
+      allowDestructiveActions: validated.allowDestructiveActions,
+      ...(validated.allowOpenWorld !== undefined
+        ? { allowOpenWorld: validated.allowOpenWorld }
         : {}),
       ...(destructiveApprovalMode ? { destructiveApprovalMode } : {}),
-      mcpServerNames,
+      mcpServerNames: validated.mcpServerNames,
     };
-    if (entry.source === "account") {
-      if (typeof entry.appName !== "string") {
-        return undefined;
-      }
+    if (validated.source === "account") {
+      parsedApps[appId] = { source: "account", appName: validated.appName, ...policy };
+    } else {
       parsedApps[appId] = {
-        source: "account",
-        appName: entry.appName,
+        configKey: validated.configKey,
+        marketplaceName: validated.marketplaceName,
+        pluginName: validated.pluginName,
         ...policy,
       };
-      continue;
     }
-    if (
-      (entry.source !== undefined && entry.source !== "plugin") ||
-      typeof entry.configKey !== "string" ||
-      typeof entry.marketplaceName !== "string" ||
-      !CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN.test(entry.marketplaceName) ||
-      typeof entry.pluginName !== "string"
-    ) {
-      return undefined;
-    }
-    parsedApps[appId] = {
-      configKey: entry.configKey,
-      marketplaceName: entry.marketplaceName,
-      pluginName: entry.pluginName,
-      ...policy,
-    };
   }
   const parsedPluginAppIds: PluginAppPolicyContext["pluginAppIds"] = {};
-  if (
-    record.pluginAppIds !== undefined &&
-    (!record.pluginAppIds ||
-      typeof record.pluginAppIds !== "object" ||
-      Array.isArray(record.pluginAppIds))
-  ) {
+  const pluginAppIds =
+    record.pluginAppIds === undefined ? {} : asOptionalRecord(record.pluginAppIds);
+  if (!pluginAppIds) {
     return undefined;
   }
-  if (record.pluginAppIds && typeof record.pluginAppIds === "object") {
-    for (const [configKey, appIds] of Object.entries(record.pluginAppIds)) {
-      if (!Array.isArray(appIds) || appIds.some((appId) => typeof appId !== "string")) {
-        return undefined;
-      }
-      parsedPluginAppIds[configKey] = appIds;
+  for (const [configKey, appIds] of Object.entries(pluginAppIds)) {
+    if (!Array.isArray(appIds) || appIds.some((appId) => typeof appId !== "string")) {
+      return undefined;
     }
+    parsedPluginAppIds[configKey] = appIds;
   }
   return {
     fingerprint: record.fingerprint,

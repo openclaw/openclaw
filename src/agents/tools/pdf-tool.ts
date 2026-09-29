@@ -1,9 +1,9 @@
 import { normalizeMimeType } from "@openclaw/media-core/mime";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
-import type { Context } from "../../llm/types.js";
 import { renderDocumentTruncationNotice } from "../../media/document-extraction-metadata.js";
 import {
   classifyMediaReferenceSource,
@@ -292,26 +292,6 @@ async function runPdfPrompt(params: {
       }
 
       const extractions = await params.getExtractions();
-      const completeExtraction = async (context: Context) => {
-        // A run cancelled mid-dispatch must not buy another provider call.
-        assertModelCurrent();
-        const completion = trackAsyncWork(() =>
-          completeWithPreparedSimpleCompletionModel({
-            model,
-            auth,
-            context,
-            cfg: effectiveCfg,
-            options: {
-              maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
-              signal: modelSignal,
-            },
-            assertCurrent: assertModelCurrent,
-          }),
-        );
-        const message = modelSignal ? await abortable(modelSignal, completion) : await completion;
-        assertModelCurrent();
-        return message;
-      };
       let effectiveExtractions = extractions;
       const hasImages = extractions.some((e) => e.images.length > 0);
       if (hasImages && !model.input?.includes("image")) {
@@ -342,7 +322,23 @@ async function runPdfPrompt(params: {
         params.explicitSelectionLimit,
         model,
       );
-      const message = await completeExtraction(context);
+      // A run cancelled mid-dispatch must not buy another provider call.
+      assertModelCurrent();
+      const completion = trackAsyncWork(() =>
+        completeWithPreparedSimpleCompletionModel({
+          model,
+          auth,
+          context,
+          cfg: effectiveCfg,
+          options: {
+            maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
+            signal: modelSignal,
+          },
+          assertCurrent: assertModelCurrent,
+        }),
+      );
+      const message = modelSignal ? await abortable(modelSignal, completion) : await completion;
+      assertModelCurrent();
       const text = coercePdfAssistantText({ message, provider, model: modelId });
       return { text, provider, model: modelId, native: false, extractions: effectiveExtractions };
     },
@@ -401,14 +397,8 @@ export function createPdfTool(options?: {
 
   const maxBytesMbDefault = options?.config?.agents?.defaults?.pdfMaxMb;
   const maxPagesDefault = options?.config?.agents?.defaults?.pdfMaxPages;
-  const configuredMaxBytesMb =
-    typeof maxBytesMbDefault === "number" && Number.isFinite(maxBytesMbDefault)
-      ? maxBytesMbDefault
-      : DEFAULT_MAX_BYTES_MB;
-  const configuredMaxPages =
-    typeof maxPagesDefault === "number" && Number.isFinite(maxPagesDefault)
-      ? Math.floor(maxPagesDefault)
-      : DEFAULT_MAX_PAGES;
+  const configuredMaxBytesMb = asFiniteNumber(maxBytesMbDefault) ?? DEFAULT_MAX_BYTES_MB;
+  const configuredMaxPages = Math.floor(asFiniteNumber(maxPagesDefault) ?? DEFAULT_MAX_PAGES);
 
   const description =
     'Analyze PDF(s): Anthropic/Google native when supported, else text/image extraction. pdf one; pdfs max 10; prompt says inspection. `pages` selects up to the configured page limit from a range ("1-5", "1,3,5-7"); `password` opens encrypted PDFs (both non-native only).';
@@ -483,7 +473,7 @@ export function createPdfTool(options?: {
     const loadedPdfs: Array<{
       buffer: Buffer;
       filename: string;
-      resolvedPath: string;
+      resolvedInput: string;
       rewrittenFrom?: string;
     }> = [];
 
@@ -553,7 +543,7 @@ export function createPdfTool(options?: {
       loadedPdfs.push({
         buffer: media.buffer,
         filename,
-        resolvedPath,
+        resolvedInput: resolvedPath,
         ...(rewrittenFrom ? { rewrittenFrom } : {}),
       });
     }
@@ -610,12 +600,7 @@ export function createPdfTool(options?: {
       getExtractions,
     });
 
-    const pdfDetails = buildMediaReferenceDetails({
-      entries: loadedPdfs,
-      singleKey: "pdf",
-      pluralKey: "pdfs",
-      getResolvedInput: (pdf) => pdf.resolvedPath,
-    });
+    const pdfDetails = buildMediaReferenceDetails(loadedPdfs, "pdf");
 
     const truncationNotices = result.native
       ? []

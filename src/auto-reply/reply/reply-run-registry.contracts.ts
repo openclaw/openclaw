@@ -53,6 +53,8 @@ export type ReplyBackendQueueMessageOptions = {
   abortSignal?: AbortSignal;
   /** Releases arrival ordering once the runtime has actually accepted this queue item. */
   onQueueAccepted?: (accepted: boolean) => void;
+  /** Releases per-input custody after commit, cancellation, or terminal rejection. */
+  onQueueSettled?: () => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Prepared channel turn to merge only at transcript persistence. */
@@ -66,6 +68,8 @@ export type ReplyMessageInjectionOptions = ReplyBackendQueueMessageOptions & {
   allowPendingUserInputAnswer?: false;
   /** Consumed by reply ownership and never forwarded to the active backend. */
   toolAuthorityOverlay?: ReplyToolAuthorityOverlay;
+  /** Accepted sender facts when the ingress owner already prepared route-specific authority. */
+  personalToolParticipant?: ReplyTurnParticipantInput;
   /** Composed into V2's final admission assertion after asynchronous preparation. */
   assertCurrent?: () => void;
 };
@@ -108,12 +112,38 @@ export type ReplyToolAuthorityOverlay = Readonly<{
   toolBindings?: Readonly<Record<string, unknown>>;
 }>;
 
+type ReplyTurnParticipantInput = Pick<
+  ReplyToolAuthorityOverlay,
+  "operatorAuthority" | "senderId" | "senderName" | "gatewayUiCommandTarget"
+>;
+
 export type ReplyToolAuthoritySnapshot = Readonly<{
+  personalToolOwner?: ReplyTurnParticipantInput;
   /** Selection admitted before runtime fallback or hooks choose a concrete model. */
   requestedRoute?: ReplyToolAuthorityRoute;
   fingerprint(route?: ReplyToolAuthorityRoute): string;
   project: (overlay: ReplyToolAuthorityOverlay, route: ReplyToolAuthorityRoute) => string;
 }>;
+
+export type ReplyTurnParticipant = Readonly<{
+  profileId: string;
+  senderId: string;
+  name: string;
+  /** Host-issued source; independent children acquire their own custody before turn close. */
+  operatorAuthority: AdmittedRunOperatorAuthority;
+  gatewayUiCommandTarget?: GatewayUiCommandTarget;
+  assertCurrent: () => void;
+}>;
+
+export type ReplyTurnParticipants = {
+  accept(participant: ReplyTurnParticipantInput): void;
+  resolve(
+    this: void,
+    user?: string,
+    options?: { allowTurnOwner?: () => boolean },
+  ): ReplyTurnParticipant | undefined;
+  close(): void;
+};
 
 export type ReplyBackendQueueMessageResult = {
   /** Input is non-replayable, but its delivery or commitment could not be confirmed. */
@@ -195,10 +225,14 @@ export type ReplyMessageInjectionResolution =
       backend?: ReplyBackendHandle;
       cancelPendingUserInput?: ReplyBackendHandle["cancelPendingUserInput"];
     }
-  | { backend: ReplyBackendHandle; injection: ReplyBackendMessageInjection };
+  | {
+      backend: ReplyBackendHandle;
+      injection: ReplyBackendMessageInjection;
+    };
 
 /** An adapter over one existing execution owner; it never acquires another run slot. */
 type ReplyMessageInjectionOwner = {
+  acceptParticipant?(participant: ReplyTurnParticipantInput): void;
   projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
   resolve(params: {
     options?: ReplyBackendQueueMessageOptions;
@@ -286,6 +320,7 @@ type ReplyOperationResult =
   | { kind: "aborted"; code: ReplyOperationAbortCode };
 
 export type ReplyOperation = {
+  readonly personalToolParticipants?: ReplyTurnParticipants;
   readonly key: ReplyRunKey;
   readonly sessionId: string;
   /** Captured logical owner for session activity, including raw global keys. */

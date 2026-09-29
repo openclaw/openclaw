@@ -29,8 +29,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -74,7 +72,7 @@ internal fun NodesDevicesSettingsScreen(
       nativeString(
         "Nodes are devices such as phones (including iPhone and Android), watches, and computers that offer capabilities, not agents or chat contacts. Known nodes stay listed when offline. Paired devices show Gateway access; the same device can appear in both groups. Notifications and push output are not agent conversations.",
       ),
-    icon = Icons.Default.Cloud,
+    icon = SettingsRoute.NodesDevices.icon,
     onBack = onBack,
   ) {
     SettingsMetricPanel(
@@ -95,29 +93,21 @@ internal fun NodesDevicesSettingsScreen(
       )
     }
     errorText?.let {
-      ClawPanel {
-        Text(text = it, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
-      }
+      SettingsMessagePanel(text = it, color = ClawTheme.colors.warning)
     }
     noticeText?.let {
-      ClawPanel {
-        Text(text = it, style = ClawTheme.type.body, color = ClawTheme.colors.success)
-      }
+      SettingsMessagePanel(text = it, color = ClawTheme.colors.success)
     }
     when {
       !isConnected -> {
-        ClawPanel {
-          Text(text = nativeString("Connect the gateway to load nodes and paired devices."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
+        SettingsMessagePanel(text = nativeString("Connect the gateway to load nodes and paired devices."))
       }
 
       summary.isEmpty() && summary.devicePairingAvailable && pairingCapabilities.canManage -> {
-        ClawPanel {
-          Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(text = nativeString("No nodes or paired devices."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-            Text(text = nativeString("Linked phones and node hosts will appear here after pairing."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-          }
-        }
+        SettingsMessagePanel(
+          title = nativeString("No nodes or paired devices."),
+          text = nativeString("Linked phones and node hosts will appear here after pairing."),
+        )
       }
 
       else -> {
@@ -174,25 +164,21 @@ private fun NodesDevicesPanel(
   }
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     if (!summary.devicePairingAvailable || !pairingCapabilities.canManage) {
-      ClawPanel {
-        Text(text = devicePairingAdminUnavailableText(), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-      }
+      SettingsMessagePanel(text = devicePairingAdminUnavailableText())
     }
     val approvalCommands = summary.nodes.mapNotNull(::nodeApprovalCommandRow)
     if (approvalCommands.isNotEmpty()) {
-      ClawPanel {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-          Text(text = nativeString("Node approval required"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-          Text(text = nativeString("Run on the Gateway host:"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-          approvalCommands.forEach { (label, command) ->
-            Text(text = label, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-            SelectionContainer {
-              Text(
-                text = command,
-                style = ClawTheme.type.body.copy(fontFamily = FontFamily.Monospace),
-                color = ClawTheme.colors.text,
-              )
-            }
+      ClawPanel(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(text = nativeString("Node approval required"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = nativeString("Run on the Gateway host:"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        approvalCommands.forEach { (label, command) ->
+          Text(text = label, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          SelectionContainer {
+            Text(
+              text = command,
+              style = ClawTheme.type.body.copy(fontFamily = FontFamily.Monospace),
+              color = ClawTheme.colors.text,
+            )
           }
         }
       }

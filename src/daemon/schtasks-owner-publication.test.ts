@@ -10,6 +10,7 @@ import "./test-helpers/schtasks-base-mocks.js";
 import {
   inspectPortUsageMock,
   killProcessTreeMock,
+  makeSpawnSyncResult,
   resetSchtasksBaseMocks,
   withWindowsEnv,
 } from "./test-helpers/schtasks-fixtures.js";
@@ -17,11 +18,6 @@ import {
 const timeState = vi.hoisted(() => ({ now: 0 }));
 const readGatewayOwnerLease = vi.hoisted(() =>
   vi.fn<typeof import("../infra/gateway-owner-lease.js").readGatewayOwnerLease>(),
-);
-const sleepMock = vi.hoisted(() =>
-  vi.fn(async (ms: number) => {
-    timeState.now += ms;
-  }),
 );
 const spawnSync = vi.hoisted(() =>
   vi.fn<
@@ -46,7 +42,9 @@ vi.mock("node:child_process", async (original) => ({
 vi.mock("../infra/gateway-owner-lease.js", () => ({ readGatewayOwnerLease }));
 vi.mock("../utils.js", async (original) => ({
   ...(await original<typeof import("../utils.js")>()),
-  sleep: sleepMock,
+  sleep: async (ms: number) => {
+    timeState.now += ms;
+  },
 }));
 const { terminateScheduledTaskGatewayListeners } = await import("./schtasks-process.js");
 const INSTALLED_GATEWAY_COMMAND_LINE =
@@ -96,9 +94,6 @@ beforeEach(() => {
   resetSchtasksBaseMocks();
   readGatewayOwnerLease.mockReset();
   spawnSync.mockReset();
-  sleepMock.mockReset().mockImplementation(async (ms) => {
-    timeState.now += ms;
-  });
   timeState.now = 0;
   vi.spyOn(Date, "now").mockImplementation(() => timeState.now);
 });
@@ -201,6 +196,9 @@ it.each(["snapshot", "per-pid"])(
             status: 0,
             signal: null,
           };
+        }
+        if (args?.some((arg) => arg.includes("$process.StartTime"))) {
+          return makeSpawnSyncResult({ stdout: forced ? "" : "2026-09-27T00:00:00.000Z" });
         }
         if (firstSnapshot && discovery === "per-pid") {
           firstSnapshot = false;

@@ -9,7 +9,8 @@ import {
   validateAgentsFilesListParams,
   validateAgentsFilesSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { buildIdentityMarkdownForWrite } from "../../agents/identity-file.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
 import {
@@ -19,10 +20,11 @@ import {
   isWorkspaceSetupCompleted,
   WORKSPACE_BOOTSTRAP_FILENAMES,
 } from "../../agents/workspace.js";
+import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
-import { normalizeAgentIdStrict } from "../../routing/session-key.js";
+import { resolveConfiguredAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import { enqueueWorkspaceFileUpdate } from "./workspace-fs.js";
@@ -45,23 +47,6 @@ const CORE_FILE_NAMES_POST_ONBOARDING = CORE_FILE_NAMES.filter(
 // still writable for clients that manage it directly.
 const ALLOWED_FILE_NAMES = new Set<string>(WORKSPACE_BOOTSTRAP_FILENAMES);
 
-function resolveAgentIdOrError(agentIdRaw: string, cfg: OpenClawConfig) {
-  const normalized = normalizeAgentIdStrict(agentIdRaw);
-  if (!normalized.ok) {
-    return null;
-  }
-  const agentId = normalized.value;
-  const allowed = new Set(listAgentIds(cfg));
-  if (!allowed.has(agentId)) {
-    return null;
-  }
-  return agentId;
-}
-
-function respondAgentNotFound(respond: RespondFn, agentId: string): void {
-  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `agent "${agentId}" not found`));
-}
-
 function resolveAgentWorkspaceFileOrRespondError(
   params: AgentsFilesGetParams,
   respond: RespondFn,
@@ -71,9 +56,8 @@ function resolveAgentWorkspaceFileOrRespondError(
   workspaceDir: string;
   name: string;
 } | null {
-  const agentId = resolveAgentIdOrError(params.agentId, cfg);
+  const agentId = resolveConfiguredAgentIdOrRespondError(params.agentId, cfg, respond);
   if (!agentId) {
-    respondAgentNotFound(respond, params.agentId);
     return null;
   }
   const name = params.name.trim();
@@ -146,6 +130,94 @@ function respondWorkspaceFileUnsafe(respond: RespondFn, name: string): void {
   );
 }
 
+export async function writeWorkspaceFileOrRespond(params: {
+  respond: RespondFn;
+  workspaceDir: string;
+  name: string;
+  content: string;
+  assertCurrent?: () => void;
+}): Promise<boolean> {
+  const access = getAgentWorkspaceAccess(params.workspaceDir);
+  if (access) {
+    if (Buffer.byteLength(params.content) > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
+      throw new Error("Workspace document exceeds its write bound");
+    }
+    params.assertCurrent?.();
+    await access.bridge.writeFile({ filePath: params.name, data: params.content, mkdir: false });
+    if (getAgentWorkspaceAccess(params.workspaceDir) !== access) {
+      throw new Error("Workspace access changed while saving Agent identity");
+    }
+    return true;
+  }
+  params.assertCurrent?.();
+  await fs.mkdir(params.workspaceDir, { recursive: true });
+  try {
+    const workspaceRoot = await root(params.workspaceDir);
+    await workspaceRoot.write(params.name, params.content, {
+      encoding: "utf8",
+      assertBeforeMutation: params.assertCurrent,
+    });
+  } catch (err) {
+    if (err instanceof FsSafeError) {
+      respondWorkspaceFileUnsafe(params.respond, params.name);
+      return false;
+    }
+    throw err;
+  }
+  return true;
+}
+
+async function readWorkspaceFileContent(
+  workspaceDir: string,
+  name: string,
+): Promise<string | undefined> {
+  try {
+    const access = getAgentWorkspaceAccess(workspaceDir);
+    if (access) {
+      const data = await access.bridge.readFile({
+        filePath: name,
+        maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+      });
+      if (getAgentWorkspaceAccess(workspaceDir) !== access) {
+        throw new Error("Workspace access changed while reading Agent identity");
+      }
+      if (data.length > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
+        throw new Error("Workspace document exceeds its read bound");
+      }
+      return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(data);
+    }
+    const workspaceRoot = await root(workspaceDir);
+    const safeRead = await workspaceRoot.read(name, {
+      hardlinks: "reject",
+      nonBlockingRead: true,
+    });
+    return safeRead.buffer.toString("utf-8");
+  } catch (err) {
+    if (isMissingPathError(err)) {
+      return undefined;
+    }
+    throw err;
+  }
+}
+
+export async function buildIdentityMarkdownOrRespondUnsafe(params: {
+  respond: RespondFn;
+  workspaceDir: string;
+  identity: IdentityConfig;
+  fallbackWorkspaceDir?: string;
+  preferFallbackWorkspaceContent?: boolean;
+}): Promise<string | null> {
+  try {
+    return await buildIdentityMarkdownForWrite({ ...params, readWorkspaceFileContent });
+  } catch (err) {
+    if (err instanceof FsSafeError) {
+      respondWorkspaceFileUnsafe(params.respond, DEFAULT_IDENTITY_FILENAME);
+      return null;
+    }
+    throw err;
+  }
+}
+
 function respondWorkspaceFileMissing(params: {
   respond: RespondFn;
   agentId: string;
@@ -216,9 +288,8 @@ export const agentFileHandlers: Pick<
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const agentId = resolveAgentIdOrError(params.agentId, cfg);
+    const agentId = resolveConfiguredAgentIdOrRespondError(params.agentId, cfg, respond);
     if (!agentId) {
-      respondAgentNotFound(respond, params.agentId);
       return;
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);

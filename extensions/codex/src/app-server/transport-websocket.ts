@@ -16,6 +16,20 @@ const WEBSOCKET_PING_INTERVAL_MS = 20_000;
 const WEBSOCKET_PONG_TIMEOUT_MS = 20_000;
 const MAX_CONSECUTIVE_MISSED_WEBSOCKET_PONGS = 5;
 
+/** Only the transport can prove that its buffered initialize never reached a peer. */
+export function isCodexWebSocketOpenFailure(error: unknown): boolean {
+  const seen = new Set<Error>();
+  let current = error;
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current);
+    if ("code" in current && current.code === "CODEX_APP_SERVER_WEBSOCKET_OPEN_FAILED") {
+      return true;
+    }
+    current = current.cause;
+  }
+  return false;
+}
+
 /** Opens a WebSocket app-server transport and maps newline-delimited frames to stdout/stdin. */
 export function createWebSocketTransport(
   options: CodexAppServerStartOptions,
@@ -50,6 +64,7 @@ export function createWebSocketTransport(
   const pendingFrames: string[] = [];
   const stdinDecoder = new StringDecoder("utf8");
   let pendingLine = "";
+  let opened = false;
   let killed = false;
   let exitCode: number | null = null;
   let pingTimeout: NodeJS.Timeout | undefined;
@@ -136,6 +151,7 @@ export function createWebSocketTransport(
   // `initialize` can be written before the WebSocket open event fires. Buffer
   // whole JSON-RPC frames so stdio and websocket transports share call timing.
   socket.once("open", () => {
+    opened = true;
     for (const frame of pendingFrames.splice(0)) {
       socket.send(frame);
     }
@@ -148,6 +164,23 @@ export function createWebSocketTransport(
   });
   socket.once("error", (error) => {
     clearConnectionHealthTimers();
+    const code = "code" in error ? error.code : undefined;
+    if (
+      options.transport === "websocket" &&
+      !opened &&
+      (code === "ECONNREFUSED" ||
+        code === "ECONNRESET" ||
+        code === "ETIMEDOUT" ||
+        error.message === "Opening handshake has timed out")
+    ) {
+      events.emit(
+        "error",
+        Object.assign(new Error(error.message, { cause: error }), {
+          code: "CODEX_APP_SERVER_WEBSOCKET_OPEN_FAILED",
+        }),
+      );
+      return;
+    }
     events.emit("error", error);
   });
   socket.once("close", (code, reason) => {
@@ -259,9 +292,6 @@ export function resolveCodexAppServerUnixSocketPath(
 }
 
 function websocketFrameToBuffer(data: RawData): Buffer {
-  if (typeof data === "string") {
-    return Buffer.from(data);
-  }
   if (Buffer.isBuffer(data)) {
     return data;
   }

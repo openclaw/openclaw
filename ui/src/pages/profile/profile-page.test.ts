@@ -4,12 +4,15 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
+import { uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import * as avatarProcessing from "./avatar-processing.ts";
 import type { ModelAccounts } from "./model-accounts.ts";
 import {
   createConnectedContext,
@@ -17,6 +20,7 @@ import {
   mountProfilePage,
   type ProfilePageElement,
 } from "./profile-page.test-support.ts";
+import { ProfilePage } from "./profile-page.ts";
 
 const modelAccountCatalog = {
   providers: [
@@ -215,51 +219,72 @@ it("shows the authenticated user in the profile hero when the default agent diff
   );
 });
 
-it("renders a write-access note without calling users.self for read-only viewers", async () => {
-  const request = vi.fn(async () => ({
-    personal: {
-      state: "disconnected",
-      generation: null,
-      account: null,
-      accessExpiresAtMs: null,
-      refreshState: "not_applicable",
-      pending: null,
-    },
-    system: {
-      source: "system-detected",
-      credentialKind: "native",
-      credentialState: "unavailable",
-      account: null,
-      gitAuthor: { name: null, email: null },
-      evidence: "none",
-      accessExpiresAtMs: null,
-      refreshState: "not_applicable",
-      oauthScopes: [],
-      repositoryGrants: "unknown",
-    },
-  }));
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: "profile-1",
-    email: "ada@example.test",
-    name: "Ada",
-  });
-  harness.context.gateway.snapshot.hello = {
-    type: "hello-ok",
-    protocol: 1,
-    auth: { role: "operator", scopes: ["operator.read"] },
-    features: { methods: ["users.self"] },
-  } as ApplicationGatewaySnapshot["hello"];
-  const page = mountProfilePage(harness.context);
+it.each(["operator.read", "operator.sessions.write"])(
+  "loads a read-only profile with %s without enabling mutations",
+  async (scope) => {
+    const request = vi.fn(async (method: string) =>
+      method === "users.self"
+        ? { profile: modelAccountProfile }
+        : {
+            personal: {
+              state: "disconnected",
+              generation: null,
+              account: null,
+              accessExpiresAtMs: null,
+              refreshState: "not_applicable",
+              pending: null,
+            },
+            system: {
+              source: "system-detected",
+              credentialKind: "native",
+              credentialState: "unavailable",
+              account: null,
+              gitAuthor: { name: null, email: null },
+              evidence: "none",
+              accessExpiresAtMs: null,
+              refreshState: "not_applicable",
+              oauthScopes: [],
+              repositoryGrants: "unknown",
+            },
+          },
+    );
+    const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+      id: "profile-1",
+      email: "ada@example.test",
+      name: "Ada",
+    });
+    harness.context.gateway.snapshot.hello = {
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: [scope] },
+      features: { methods: ["users.self"] },
+    } as ApplicationGatewaySnapshot["hello"];
+    const page = mountProfilePage(harness.context);
 
-  await page.updateComplete;
-  expect(request.mock.calls).toEqual([["users.github.status", {}]]);
-  expect(page.textContent).toContain("Your current access does not allow profile editing.");
-  expect(page.querySelector("#settings-profile-access .settings-row__value")?.textContent).toBe(
-    "operator.read",
-  );
-  expect(page.querySelector(".identity-name-control")).toBeNull();
-  expect(page.querySelector(".profile-refresh")).toBeNull();
-});
+    await page.updateComplete;
+    await waitForFast(() =>
+      expect(page.querySelector(".identity-name-control input")).not.toBeNull(),
+    );
+    expect(request.mock.calls.some(([method]) => method === "users.self")).toBe(true);
+    expect(page.textContent).toContain("Your current access does not allow profile editing.");
+    expect(page.querySelector("#settings-profile-access .settings-row__value")?.textContent).toBe(
+      scope,
+    );
+    expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.disabled).toBe(
+      true,
+    );
+    expect(page.querySelector<HTMLButtonElement>(".identity-name-control button")?.disabled).toBe(
+      true,
+    );
+    expect(page.querySelector('input[type="file"]')).toBeNull();
+    expect(page.querySelector(".profile-refresh")).not.toBeNull();
+    expect(
+      request.mock.calls.some(
+        ([method]) => method.startsWith("users.set") || method === "users.prefs.set",
+      ),
+    ).toBe(false);
+  },
+);
 
 it("offers identity connection setup without profile RPCs or secret inputs for unidentified connections", async () => {
   const request = vi.fn();
@@ -285,7 +310,7 @@ it("offers identity connection setup without profile RPCs or secret inputs for u
   ).not.toBeNull();
   expect(page.querySelector(".identity-name-control")).toBeNull();
   expect(page.querySelector('input[type="file"]')).toBeNull();
-  expect(page.querySelector(".profile-refresh")).toBeNull();
+  expect(page.querySelector(".profile-refresh")).not.toBeNull();
   expect(page.querySelector('.profile-auth-add-account, input[type="password"]')).toBeNull();
   expect(page.textContent).toContain("ws://test.invalid");
   expect(page.textContent).toContain("Personal");
@@ -900,5 +925,57 @@ it("uses the canonical self profile after a merge while presence still carries i
       provider: "openai",
       method: "browser",
     }),
+  );
+});
+
+it("rechecks avatar upload policy after processing and rerenders on config updates", async () => {
+  const profile = { ...modelAccountProfile };
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.self") {
+      return { profile };
+    }
+    if (method === "users.listModelAccounts") {
+      return { profileId: profile.id, accounts: [], links: [] };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    name: "Ada",
+  });
+  const config = createApplicationConfigCapability({ resourceBasePath: "" });
+  const identityLoad = vi.spyOn(
+    ProfilePage.prototype as unknown as { loadIdentity(): Promise<void> },
+    "loadIdentity",
+  );
+  const page = mountProfilePage({ ...harness.context, config }) as ProfilePageElement & {
+    saveIdentity(change: { kind: "avatar"; file: File }): Promise<void>;
+  };
+  await identityLoad.mock.results[0]?.value;
+  await page.updateComplete;
+  const processed =
+    createDeferred<Awaited<ReturnType<typeof avatarProcessing.processProfileAvatar>>>();
+  const process = vi
+    .spyOn(avatarProcessing, "processProfileAvatar")
+    .mockReturnValue(processed.promise);
+  const file = new File(["avatar"], "avatar.png", { type: "image/png" });
+  const saving = page.saveIdentity({ kind: "avatar", file });
+  expect(process).toHaveBeenCalledOnce();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify({ uploadsEnabled: false }))),
+  );
+  await config.refresh();
+  await page.updateComplete;
+  expect(page.querySelector('input[type="file"]')).toBeNull();
+  processed.resolve({ mime: "image/png", avatarBase64: "aA==", byteLength: 1 });
+  await saving;
+  await page.updateComplete;
+  expect(request.mock.calls.some(([method]) => method === "users.setAvatar")).toBe(false);
+  expect(page.querySelector(".identity-error")?.textContent).toContain(uploadsDisabledMessage());
+  await page.saveIdentity({ kind: "avatar", file });
+  expect(process).toHaveBeenCalledOnce();
+  expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.disabled).toBe(
+    false,
   );
 });

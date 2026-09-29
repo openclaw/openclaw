@@ -60,6 +60,10 @@ it("compares real UI builds with canonical compression and keeps artifacts after
     ]) {
       fs.copyFileSync(path.join(repoRoot, "scripts", script), path.join(root, "scripts", script));
     }
+    write(
+      "src/gateway/control-ui-route-preloads.ts",
+      fs.readFileSync(path.join(repoRoot, "src/gateway/control-ui-route-preloads.ts"), "utf8"),
+    );
     write("scripts/tsx.mjs", `await import(${JSON.stringify(tsxImport)});\n`);
     write(".gitignore", "node_modules\ndist/\n");
     write(
@@ -208,7 +212,7 @@ export default {
       );
     }
 
-    const runComparison = () => {
+    const runComparison = (baseRef = base) => {
       fs.rmSync(identityCapture, { force: true });
       return spawnSync(
         process.execPath,
@@ -216,7 +220,7 @@ export default {
           "--import",
           tsxImport,
           path.join(root, "scripts/check-control-ui-performance-base.mts"),
-          base,
+          baseRef,
         ],
         {
           cwd: root,
@@ -282,6 +286,49 @@ export default {
         fs.readdirSync(scratch).filter((name) => name.startsWith("openclaw-ui-performance-base-")),
       ).toEqual([]);
     }
+    write("ui/style.css", css(1_001));
+    write("ui/main.js", "export const = broken;");
+    git("add", ".");
+    git("commit", "--quiet", "-m", "broken base");
+    const brokenBase = git("rev-parse", "HEAD");
+    write(
+      "ui/main.js",
+      'import "./style.css"; import { message } from "../packages/styles/main.js"; document.body.textContent = message;',
+    );
+    git("add", ".");
+    git("commit", "--quiet", "-m", "repair base build");
+    const brokenBaseResult = runComparison(brokenBase);
+    const brokenBaseOutput = `${brokenBaseResult.stdout}${brokenBaseResult.stderr}`;
+    expect(brokenBaseResult.status, brokenBaseOutput).toBe(0);
+    expect(brokenBaseOutput).toContain(
+      "Base Control UI source does not build with the candidate toolchain; enforcing candidate absolute budgets without a differential comparison.",
+    );
+    expect(brokenBaseOutput).not.toContain("startup CSS gzip vs base:");
+    expect(fs.readFileSync(identityCapture, "utf8").trim().split("\n")).toHaveLength(1);
+    const candidateConfig = fs.readFileSync(path.join(root, "ui/vite.config.ts"), "utf8");
+    const signalMarker = path.join(temporaryRoot, "signaled-base-config");
+    write(
+      "ui/vite.config.ts",
+      `import fs from "node:fs";
+fs.writeFileSync(${JSON.stringify(signalMarker)}, "loaded");
+export default { plugins: [{ name: "signal", buildStart() { process.kill(process.pid, "SIGTERM"); } }] };
+`,
+    );
+    git("add", ".");
+    git("commit", "--quiet", "-m", "signaled base");
+    const signaledBase = git("rev-parse", "HEAD");
+    expect(git("show", `${signaledBase}:ui/vite.config.ts`)).toContain("process.kill(process.pid");
+    write("ui/vite.config.ts", candidateConfig);
+    git("add", ".");
+    git("commit", "--quiet", "-m", "repair signaled base");
+    const signaledBaseResult = runComparison(signaledBase);
+    const signaledBaseOutput = `${signaledBaseResult.stdout}${signaledBaseResult.stderr}`;
+    expect(fs.readFileSync(signalMarker, "utf8")).toBe("loaded");
+    expect(signaledBaseResult.status, signaledBaseOutput).toBe(1);
+    expect(signaledBaseOutput).toContain("node failed (SIGTERM)");
+    expect(signaledBaseOutput).not.toContain(
+      "Base Control UI source does not build with the candidate toolchain",
+    );
     const protectedRoot = path.join(temporaryRoot, "protected");
     fs.mkdirSync(protectedRoot);
     fs.writeFileSync(path.join(protectedRoot, "sentinel"), "keep");

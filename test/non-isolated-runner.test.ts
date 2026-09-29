@@ -247,7 +247,7 @@ it("retires gateway admission before the next file", async () => {
   expect(getActiveGatewayRootWorkCount()).toBe(0);
   expect(isGatewayRestartDraining()).toBe(false);
   if (!prior?.continuation) throw new Error("expected prior gateway continuation");
-  await expect(prior.pending).rejects.toThrow("Gateway is draining");
+  await expect(prior.pending).rejects.toMatchObject({ name: "GatewayDrainingError" });
   await expect(prior.continuation.run(async () => true)).rejects.toThrow("no longer active");
   const admission = tryBeginGatewayRootWorkAdmission();
   expect(admission).not.toBeNull();

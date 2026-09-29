@@ -13,6 +13,7 @@ import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { type AnyAgentTool, readFiniteNumberParam, readToolStringParam } from "./common.js";
 import { buildComputerToolDescription } from "./computer-tool-guidance.js";
 import { ComputerToolSession } from "./computer-tool-node.js";
+import { recordComputerToolOutcome } from "./computer-tool-outcome.js";
 import { buildComputerActParams, isComputerActAction } from "./computer-tool-request.js";
 import {
   computerActResultText,
@@ -222,11 +223,19 @@ export function createComputerTool(options?: {
             modelHasVision: options?.modelHasVision,
           });
           session.recordObservation(resolved, result, projected.imageCoordinates);
-          return projected.result;
+          return action === "get_window_state"
+            ? recordComputerToolOutcome(projected.result, result)
+            : projected.result;
         };
 
-        if (action === "screenshot" || action === "wait") {
+        if (action === "screenshot" || action === "wait" || action === "take_control") {
           const noteLines: string[] = [];
+          if (action === "take_control") {
+            await session.takeControl(resolved, toolCallId, signal);
+            noteLines.push(
+              "Agent took control of this desktop; the operator can take control again.",
+            );
+          }
           if (action === "wait") {
             const seconds =
               readFiniteNumberParam(params, "duration", {

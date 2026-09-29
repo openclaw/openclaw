@@ -4,14 +4,14 @@ import JSON5 from "json5";
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { policyRuleValueIsValid } from "./doctor/ordered-shape.js";
 import {
-  isPolicyValueAtLeastAsStrict,
-  policyContainerShapeFindings,
   POLICY_RULE_METADATA as RAW_POLICY_RULE_METADATA,
   type PolicyRuleMetadata,
   type PolicyScopeSelectorKind,
-} from "./doctor/register.js";
+} from "./doctor/metadata.js";
+import { policyRuleValueIsValid } from "./doctor/ordered-shape.js";
+import { policyContainerShapeFindings } from "./doctor/policy-shape.js";
+import { isPolicyValueAtLeastAsStrict } from "./doctor/strictness.js";
 import { ocPathSegment } from "./doctor/utils.js";
 import { getPolicyPath, scopedPolicyValue } from "./policy-value.js";
 

@@ -17,6 +17,7 @@ const instance = randomUUID();
 let ownWindowsCreationTime;
 let census;
 let actorLease;
+let operationDeadline;
 const workspace = path.join(root, "workspace");
 const runnerTemp = path.join(root, "temp");
 const lease = path.join(root, "lease");
@@ -162,10 +163,10 @@ function assertActorLease() {
   }
 }
 
-function readWindowsProcessCensus(pids) {
+function readWindowsProcessCensus(pids, deadline = operationDeadline) {
   return mode === "supervise"
-    ? census.read(pids)
-    : requestWindowsProcessCensus(root, actorLease, pids);
+    ? census.read(pids, deadline)
+    : requestWindowsProcessCensus(root, actorLease, pids, deadline);
 }
 
 async function record(pid, role, attempt = 0) {
@@ -198,7 +199,7 @@ function records() {
     .map((file) => JSON.parse(fs.readFileSync(path.join(recordsDir, file), "utf8")));
 }
 
-async function liveRecords() {
+async function liveRecords(deadline = operationDeadline) {
   const owned = records().filter(
     (entry) =>
       !fs.existsSync(path.join(recordsDir, `${entry.instance}.dead`)) &&
@@ -211,7 +212,7 @@ async function liveRecords() {
   const alive = new Set();
   const pids = new Set(owned.map((entry) => entry.pid));
   const windowsCensus =
-    process.platform === "win32" ? await readWindowsProcessCensus([...pids]) : undefined;
+    process.platform === "win32" ? await readWindowsProcessCensus([...pids], deadline) : undefined;
   if (windowsCensus) {
     for (const entry of owned) {
       if (typeof entry.creationTime !== "string" || !/^\d+$/.test(entry.creationTime)) {
@@ -405,7 +406,7 @@ function holdLease() {
     try {
       return fs.readFileSync(lease, "utf8") === actorLease;
     } catch (error) {
-      if (error.code === "ENOENT") return false;
+      if (error.code === "ENOENT" || error.code === "EPERM") return false;
       throw error;
     }
   };
@@ -451,7 +452,7 @@ function writeConsumer(target, tool) {
 }
 
 async function command() {
-  const actorDeadline = holdLease();
+  operationDeadline = holdLease();
   const descendant = mode === "child" || mode === "grandchild";
   // Descendants publish their actual attempt below. Replacing a provisional PID
   // record can race a Windows reader and fail before readiness with EPERM.
@@ -468,7 +469,7 @@ async function command() {
       await until(
         () => fs.existsSync(path.join(root, "backoff-release.json")),
         "backoff cancellation acknowledgement",
-        actorDeadline,
+        operationDeadline,
       );
     }
     process.exit(0);
@@ -1241,7 +1242,7 @@ async function supervise() {
         }
         await until(
           async () => {
-            report.cleanupRemaining = await liveRecords();
+            report.cleanupRemaining = await liveRecords(actorEnd);
             return report.cleanupRemaining.length === 0;
           },
           "fixture cleanup",
@@ -1319,7 +1320,7 @@ async function supervise() {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.once(signal, () => void stop(`supervisor received ${signal}`));
   }
-  const supervisorDeadline = Date.now() + 45_000;
+  operationDeadline = Date.now() + 45_000;
   setTimeout(() => void stop("fixture deadline exceeded"), 45_000);
   try {
     if (process.platform === "win32") {
@@ -1489,7 +1490,7 @@ source "$2"`,
             shell.signalCode !== null ||
             fs.existsSync(path.join(root, "backoff-ready.json")),
           "owned backoff readiness",
-          supervisorDeadline,
+          operationDeadline,
         );
         if (!stopping && shell.exitCode === null && shell.signalCode === null) {
           await boundary("backoff-cancel");

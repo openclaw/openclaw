@@ -17,9 +17,7 @@ describe("requiresFileConsent", () => {
   ] as const)(
     "%s chat with %s at %i bytes requires consent: %s",
     (conversationType, contentType, bufferSize, expected) => {
-      expect(
-        requiresFileConsent({ conversationType, contentType, bufferSize, thresholdBytes }),
-      ).toBe(expected);
+      expect(requiresFileConsent({ conversationType, contentType, bufferSize })).toBe(expected);
     },
   );
 });

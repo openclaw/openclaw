@@ -1,13 +1,12 @@
-// Diffs plugin module implements browser behavior.
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chromium } from "playwright-core";
-import type { OpenClawConfig } from "../api.js";
 import type { DiffRenderOptions, DiffTheme } from "./types.js";
 import {
   LANGUAGE_PACK_VIEWER_ASSET_PREFIX,
@@ -148,6 +147,7 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
               );
             });
           },
+          undefined,
           {
             timeout: 10_000,
           },

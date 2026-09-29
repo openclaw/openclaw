@@ -161,7 +161,6 @@ export async function runCopilotExecution(context: {
             aborted: true,
             externalAbort: true,
             messagesSnapshot: messages,
-            now,
             promptError: undefined,
             sdkSessionId: undefined,
           }),
@@ -170,7 +169,6 @@ export async function runCopilotExecution(context: {
       return finishAttempt(
         createResult(input, {
           messagesSnapshot: messages,
-          now,
           promptError: createPromptError(
             "sandbox_resolution_failure",
             `[copilot-attempt] sandbox resolution failed: ${toCopilotError(error).message}`,
@@ -189,7 +187,6 @@ export async function runCopilotExecution(context: {
     return finishAttempt(
       createResult(input, {
         messagesSnapshot: messages,
-        now,
         promptError: createPromptError(
           "sandbox_cwd_override_unsupported",
           "[copilot-attempt] cwd override is not supported for sandboxed Copilot runs; omit cwd or use the agent workspace as cwd",
@@ -228,7 +225,6 @@ export async function runCopilotExecution(context: {
     return finishAttempt(
       createResult(input, {
         messagesSnapshot: messages,
-        now,
         promptError: createPromptError("model_not_supported", toCopilotError(error).message, error),
         sdkSessionId: undefined,
       }),
@@ -308,7 +304,6 @@ export async function runCopilotExecution(context: {
       } catch (error: unknown) {
         const result = createResult(input, {
           messagesSnapshot: messages,
-          now,
           promptError: createPromptError(
             "tool_bridge_failure",
             `[copilot-attempt] tool-bridge construction failed: ${toCopilotError(error).message}`,

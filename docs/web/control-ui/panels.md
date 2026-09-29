@@ -17,6 +17,8 @@ Open **Settings → Ask OpenClaw** to talk to the system setup and repair agent.
 
 If no AI provider is configured, Ask OpenClaw offers **Connect an AI provider**. If a configured runtime fails to start or verify, the conversation stays visible with the actual error and **Retry**. Sending stays disabled until verification succeeds. Retry checks the runtime without resending your earlier message or clearing your draft.
 
+Onboarding suggestions can focus the recommended answer when nothing else has focus. If you have already focused the composer or another control, arriving suggestions leave your keyboard focus there.
+
 Each chat message carries the Control UI page you are currently viewing as an untrusted ambient hint, so requests like "configure this channel" or "why is this page empty?" resolve against the page you are looking at.
 
 Guided channel setup, workspace skills setup, web-search provider setup, and local Gateway setup run as hosted wizards inside the chat. Wizard questions stay in the conversation, secret steps mask input in the browser, and successful config-backed flows are audited and re-validated. If a chosen web-search provider needs a plugin install and that install fails, setup stops and reports the failure instead of pretending the provider is configured.
@@ -43,9 +45,13 @@ The operator terminal is enabled by default; set `gateway.terminal.enabled: fals
 
 When the terminal is disabled or your connection lacks admin access, the main terminal page shows an unavailable notice and a **New session** button to return to the composer.
 
-On Linux and macOS, a Gateway running on Bun uses a Node helper for terminal
-I/O. Keep Node available on the Gateway's `PATH`; an unavailable Node executable
-produces a startup error with installation guidance.
+On Linux and macOS, a Gateway running on Bun uses Bun's native PTY without a
+Node runtime only on builds providing `Bun.Terminal.pause()` and `resume()`,
+such as the OpenClaw Bun fork builds that also carry the macOS child-exit fix.
+Other Bun releases use a Node helper for terminal I/O. Keep Node available on
+the Gateway's `PATH`; OpenClaw skips Bun's `node` shim, and an unavailable Node
+executable produces a startup error with installation guidance. Windows keeps
+`node-pty`. See [Bun compatibility](/install/bun-compatibility#known-limitations).
 
 Enablement changes hot-apply without restarting the Gateway. Disabling closes
 attached, detached, and conversation-owned terminals and cancels pending opens.

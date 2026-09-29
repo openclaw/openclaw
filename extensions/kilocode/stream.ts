@@ -1,6 +1,6 @@
-// Kilocode plugin module implements stream behavior.
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
+import { isProxyReasoningUnsupportedModelHint } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOpenAICompatibleReasoningPayload } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   asOptionalRecord,
@@ -19,35 +19,19 @@ function resolveKilocodeAppHeaders(): Record<string, string> {
   return { [KILOCODE_FEATURE_HEADER]: feature };
 }
 
-function normalizeKilocodeStopPayload(payloadObj: Record<string, unknown>): void {
-  if (typeof payloadObj.stop === "string") {
-    payloadObj.stop = [payloadObj.stop];
-  }
-}
-
 function normalizeKilocodeStopAfterCaller(
   value: unknown,
   fallbackPayload: Record<string, unknown> | undefined,
 ): unknown {
-  const replacementPayload = asOptionalRecord(value);
-  if (replacementPayload) {
-    normalizeKilocodeStopPayload(replacementPayload);
-    return value;
-  }
-  if (fallbackPayload) {
-    normalizeKilocodeStopPayload(fallbackPayload);
+  const payload = asOptionalRecord(value) ?? fallbackPayload;
+  if (typeof payload?.stop === "string") {
+    payload.stop = [payload.stop];
   }
   return value;
 }
 
-function isProxyReasoningUnsupported(modelId: string): boolean {
-  const trimmed = normalizeOptionalLowercaseString(modelId);
-  const slashIndex = trimmed?.indexOf("/") ?? -1;
-  return slashIndex > 0 && trimmed?.slice(0, slashIndex) === "x-ai";
-}
-
 function resolveKilocodeThinkingLevel(ctx: ProviderWrapStreamFnContext): ThinkLevel | undefined {
-  if (ctx.modelId === "kilo-auto/balanced" || isProxyReasoningUnsupported(ctx.modelId)) {
+  if (ctx.modelId === "kilo-auto/balanced" || isProxyReasoningUnsupportedModelHint(ctx.modelId)) {
     return undefined;
   }
   return ctx.thinkingLevel;

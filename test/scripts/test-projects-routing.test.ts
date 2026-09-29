@@ -16,7 +16,10 @@ import {
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { withEnv } from "../../src/test-utils/env.js";
 import { createGatewayDatabaseWorkersVitestConfig } from "../vitest/vitest.gateway-database-workers.config.ts";
-import { gatewayDatabaseWorkerTestFiles } from "../vitest/vitest.gateway-server-paths.mjs";
+import {
+  gatewayDatabaseWorkerTestFiles,
+  isGatewayServerTestFile,
+} from "../vitest/vitest.gateway-server-paths.mjs";
 import { packageContractTestFiles } from "../vitest/vitest.package-contract-paths.mjs";
 import { collectVitestExcludePatterns, matchesVitestGlob } from "../vitest/vitest.pattern-file.ts";
 
@@ -368,11 +371,8 @@ describe("test-projects args", () => {
           "src/agents/openai-transport-stream.base.test.ts",
           "src/agents/openai-transport-stream.deepseek-and-shaping.test.ts",
           "src/agents/openai-transport-stream.failed-sse.test.ts",
-          "src/agents/openai-transport-stream.incomplete-output.test.ts",
           "src/agents/openai-transport-stream.incomplete-sse.test.ts",
-          "src/agents/openai-transport-stream.reasoning-and-cache.test.ts",
           "src/agents/openai-transport-stream.replay-and-tools.test.ts",
-          "src/agents/openai-transport-stream.usage-and-calls.test.ts",
         ],
         watchMode: false,
       },
@@ -602,7 +602,7 @@ describe("test-projects args", () => {
       expect(files).toEqual([...files].toSorted((left, right) => left.localeCompare(right)));
     }
 
-    // Mixed selections coalesce package contracts and Gateway worker tests
+    // Mixed selections coalesce package contracts and Gateway child tests
     // into their aggregate owners. Singleton selection retains each leaf owner.
     for (const plan of plans) {
       expect(plan.watchMode).toBe(false);
@@ -614,7 +614,10 @@ describe("test-projects args", () => {
             : plan.config === "test/vitest/vitest.gateway.config.ts" &&
                 gatewayDatabaseWorkerTestFiles.includes(file)
               ? "test/vitest/vitest.gateway-database-workers.config.ts"
-              : plan.config;
+              : plan.config === "test/vitest/vitest.gateway.config.ts" &&
+                  isGatewayServerTestFile(file)
+                ? "test/vitest/vitest.gateway-server.config.ts"
+                : plan.config;
         expect(buildVitestRunPlans([file])).toEqual([
           {
             config,

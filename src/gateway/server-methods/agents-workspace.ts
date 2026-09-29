@@ -10,9 +10,10 @@ import {
   validateAgentsWorkspaceGetParams,
   validateAgentsWorkspaceListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeAgentIdStrict } from "../../routing/session-key.js";
+import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
+import { resolveConfiguredAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import {
@@ -24,7 +25,6 @@ import {
   sortWorkspaceEntries,
   statWorkspacePath,
   toUpdatedAtMs,
-  WORKSPACE_PREVIEW_MAX_BYTES,
 } from "./workspace-fs.js";
 
 // Images bypass the text preview cap but stay far below the 25MB WS payload
@@ -69,16 +69,10 @@ function resolveWorkspaceScopeOrRespond(
   cfg: OpenClawConfig,
   respond: RespondFn,
 ): { agentId: string; workspaceDir: string; browserPath: string } | null {
-  const normalized = normalizeAgentIdStrict(params.agentId);
-  if (!normalized.ok || !new Set(listAgentIds(cfg)).has(normalized.value)) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `agent "${params.agentId}" not found`),
-    );
+  const agentId = resolveConfiguredAgentIdOrRespondError(params.agentId, cfg, respond);
+  if (!agentId) {
     return null;
   }
-  const agentId = normalized.value;
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const rawPath = params.path ?? "";
   const portablePath = rawPath.replaceAll("\\", "/");
@@ -106,7 +100,6 @@ function resolveWorkspaceScopeOrRespond(
   return { agentId, workspaceDir, browserPath };
 }
 
-/** Gateway handlers for read-only agent workspace browsing. */
 export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
   "agents.workspace.list": async ({ params, respond, context }) => {
     if (

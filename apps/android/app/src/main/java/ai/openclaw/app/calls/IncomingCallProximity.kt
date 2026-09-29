@@ -44,7 +44,8 @@ internal class IncomingCallProximity(
           lock.acquire()
           awaitCancellation()
         } finally {
-          if (lock.isHeld) lock.release()
+          // Non-reference-counted release is safe even if the route callback already released this lease.
+          lock.release()
         }
       }
   }

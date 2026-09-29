@@ -12,7 +12,7 @@ import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.ty
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 
 export const GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE =
-  "Gateway access is no longer active; ask a Gateway administrator to restore it.";
+  "Gateway access is not active for this account; ask a Gateway administrator to grant or restore access.";
 
 export class GatewayOperatorAccessDeniedError extends Error {
   constructor() {

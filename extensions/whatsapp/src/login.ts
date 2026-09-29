@@ -1,4 +1,5 @@
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { logInfo } from "openclaw/plugin-sdk/logging-core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, success, defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -30,18 +31,13 @@ export async function loginWeb(
   const credentialPersistenceState: { failure: CredentialPersistenceFailure | null } = {
     failure: null,
   };
-  let resolveCredentialPersistenceFailure = (_failure: CredentialPersistenceFailure) => {};
-  const credentialPersistenceFailurePromise = new Promise<CredentialPersistenceFailure>(
-    (resolve) => {
-      resolveCredentialPersistenceFailure = resolve;
-    },
-  );
+  const credentialPersistenceFailure = createDeferred<CredentialPersistenceFailure>();
   const onCredentialPersistenceError = (error: unknown) => {
     if (credentialPersistenceState.failure) {
       return;
     }
     credentialPersistenceState.failure = { error };
-    resolveCredentialPersistenceFailure(credentialPersistenceState.failure);
+    credentialPersistenceFailure.resolve(credentialPersistenceState.failure);
   };
   const credentialPersistenceTasks = new Set<Promise<unknown>>();
   const onCredentialPersistenceTask = (task: Promise<unknown>) => {
@@ -113,7 +109,7 @@ export async function loginWeb(
       ...credentialPersistenceOptions,
       ...(options?.beforeCredentialPersistence
         ? {
-            credentialPersistenceFailure: credentialPersistenceFailurePromise,
+            credentialPersistenceFailure: credentialPersistenceFailure.promise,
             getCredentialPersistenceFailure: () => credentialPersistenceState.failure,
             waitForCredentialPersistence,
           }

@@ -77,8 +77,7 @@ export function runTailscaleRouteOwner(
     throw new Error("Tailscale route-owner command is empty");
   }
   const args = start.argv.slice(1);
-  let stdout = "";
-  let stderr = "";
+  const output = { stdout: "", stderr: "" };
   let ready = false;
   let stopping = false;
   let forceTimer: NodeJS.Timeout | undefined;
@@ -103,29 +102,27 @@ export function runTailscaleRouteOwner(
       sendMessage({ type: "spawned", pid: child.pid });
     }
   });
-  child.stdout?.on("data", (chunk: Buffer) => {
-    stdout = appendBounded(stdout, chunk);
-    if (!ready && stdout.includes(READY_MARKER)) {
-      ready = true;
-      sendMessage({ type: "ready" });
-    }
-  });
-  child.stderr?.on("data", (chunk: Buffer) => {
-    stderr = appendBounded(stderr, chunk);
-    if (!ready && stderr.includes(READY_MARKER)) {
-      ready = true;
-      sendMessage({ type: "ready" });
-    }
-  });
+  for (const stream of ["stdout", "stderr"] as const) {
+    child[stream]?.on("data", (chunk: Buffer) => {
+      output[stream] = appendBounded(output[stream], chunk);
+      if (!ready && output[stream].includes(READY_MARKER)) {
+        ready = true;
+        sendMessage({ type: "ready" });
+      }
+    });
+  }
   child.once("error", (error) => {
-    stderr = appendBounded(stderr, error instanceof Error ? error.message : String(error));
+    output.stderr = appendBounded(
+      output.stderr,
+      error instanceof Error ? error.message : String(error),
+    );
   });
   child.once("close", (code, signal) => {
     if (forceTimer) {
       clearTimeout(forceTimer);
     }
     if (!stopping || !ready) {
-      sendMessage({ type: "failed", code, signal, stdout, stderr });
+      sendMessage({ type: "failed", code, signal, ...output });
     }
     exit.resolve({ code, signal, stopping });
   });

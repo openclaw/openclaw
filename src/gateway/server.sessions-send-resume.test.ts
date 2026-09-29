@@ -267,7 +267,7 @@ it("rejects parent authority revoked while durable input preparation awaits", as
       items: [{ runId: proof.runId, state: "cancelled" }],
     });
     expect(listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual([
-      { runId: proof.runId, state: "pending" },
+      { runId: proof.runId, state: "pending", cancelled: true },
     ]);
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(proof.finalEffect).not.toHaveBeenCalled();
@@ -337,7 +337,7 @@ it("fences a cancelled successor after adoption before queued input consumption"
     // Use registry cancellation without aborting the Gateway signal: the successor
     // ownership fence, not a generic aborted-signal check, must stop dispatch.
     expect(
-      markSubagentRunTerminated({
+      await markSubagentRunTerminated({
         runId: proof.runId,
         reason: "killed",
         suppressTaskDelivery: true,
