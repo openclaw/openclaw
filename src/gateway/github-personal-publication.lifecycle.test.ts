@@ -37,6 +37,43 @@ vi.mock("../process/exec.js", () => ({
   ) => mocks.runCommand(...args),
 }));
 
+function holdReceiptDeletion(afterPreparation?: () => Promise<void>) {
+  const waiting = createDeferredCore();
+  const release = createDeferredCore();
+  const runOperation = stateWorker.runOpenClawStateWorkerOperation;
+  const holdReceipt = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
+    new Proxy(runOperation, {
+      apply(
+        target,
+        receiver,
+        [workerContext, operation, options]: Parameters<typeof runOperation>,
+      ) {
+        return Reflect.apply(target, receiver, [
+          workerContext,
+          (scope: Parameters<typeof operation>[0]) =>
+            operation({
+              execute: new Proxy(scope.execute, {
+                async apply(execute, executeReceiver, args: Parameters<typeof scope.execute>) {
+                  if (args[0].type === "githubPublication.deleteSessionReceipts") {
+                    waiting.resolve();
+                    await release.promise;
+                  }
+                  const result = await Reflect.apply(execute, executeReceiver, args);
+                  if (args[0].type === "githubPublication.prepareSessionReceiptDeletion") {
+                    await afterPreparation?.();
+                  }
+                  return result;
+                },
+              }),
+            }),
+          options,
+        ]);
+      },
+    }),
+  );
+  return { waiting, release, restore: () => holdReceipt.mockRestore() };
+}
+
 describe("personal publication session lifecycle", () => {
   installGitHubPublicationTestHarness();
   let fixture: Awaited<ReturnType<typeof createPersonalPublicationFixture>>;
@@ -79,35 +116,7 @@ describe("personal publication session lifecycle", () => {
       assertCurrent: () => {},
     });
     const original = session.read();
-    const waiting = createDeferredCore();
-    const release = createDeferredCore();
-    const runOperation = stateWorker.runOpenClawStateWorkerOperation;
-    const holdReceipt = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-      new Proxy(runOperation, {
-        apply(
-          target,
-          receiver,
-          [workerContext, operation, options]: Parameters<typeof runOperation>,
-        ) {
-          return Reflect.apply(target, receiver, [
-            workerContext,
-            (scope: Parameters<typeof operation>[0]) =>
-              operation({
-                execute: new Proxy(scope.execute, {
-                  async apply(execute, executeReceiver, args: Parameters<typeof scope.execute>) {
-                    if (args[0].type === "githubPublication.deleteSessionReceipts") {
-                      waiting.resolve();
-                      await release.promise;
-                    }
-                    return Reflect.apply(execute, executeReceiver, args);
-                  },
-                }),
-              }),
-            options,
-          ]);
-        },
-      }),
-    );
+    const { waiting, release, restore } = holdReceiptDeletion();
     const deletion = applySessionEntryLifecycleMutation({
       agentId: "main",
       storePath: session.storePath,
@@ -156,7 +165,123 @@ describe("personal publication session lifecycle", () => {
     } finally {
       release.resolve();
       await deletion;
-      holdReceipt.mockRestore();
+      restore();
+    }
+  });
+
+  it("preserves a same-key successor receipt while direct deletion removes historical receipts", async () => {
+    const { owner, client, context, coordinator, placements } = fixture;
+    const session = await persistPublicationTestSession();
+    const action = preparePersonalGitHubSessionAction(
+      { client, context },
+      { sessionKey: SESSION_KEY },
+    );
+    const historical = await coordinator.requestPersonalForSession(request(), action);
+    const oldReceipt = readPersonalGitHubPublication(owner, { requestId: historical.requestId });
+    expect(oldReceipt?.status).toBe("published");
+    const oldBinding = { publicationKind: "personal" as const, requestId: historical.requestId };
+    const oldLifecycle = readGitHubPublicationSessionLifecycle(oldBinding);
+    await session.reset(placements);
+    const original = session.read();
+    expect(readPersonalGitHubPublication(owner, { requestId: historical.requestId })).toEqual(
+      oldReceipt,
+    );
+    expect(oldLifecycle?.lifecycle_revision).not.toBe(original.lifecycleRevision);
+    expect(
+      getSessionRepositoryWorkspaceStore().find({ agentId: "main", sessionKey: SESSION_KEY }),
+    ).toBeUndefined();
+
+    const lateReceipt = createDeferredCore<string>();
+    const { waiting, release, restore } = holdReceiptDeletion(async () => {
+      expect(session.read()).toEqual(original);
+      const lateAction = preparePersonalGitHubSessionAction(
+        { client, context },
+        { sessionKey: SESSION_KEY },
+      );
+      const late = await coordinator.requestPersonalForSession(
+        { ...request(), idempotencyKey: "direct-receipt-late-original" },
+        lateAction,
+      );
+      expect(late.requestId).not.toBe(historical.requestId);
+      expect(readPersonalGitHubPublication(owner, { requestId: late.requestId })).toMatchObject({
+        status: "published",
+        session_id: original.sessionId,
+      });
+      expect(
+        readGitHubPublicationSessionLifecycle({
+          publicationKind: "personal",
+          requestId: late.requestId,
+        })?.lifecycle_revision,
+      ).toBe(original.lifecycleRevision);
+      lateReceipt.resolve(late.requestId);
+    });
+    const deletion = deleteSessionEntryLifecycle({
+      agentId: "main",
+      storePath: session.storePath,
+      target: { canonicalKey: SESSION_KEY, storeKeys: [SESSION_KEY] },
+      expectedSessionId: original.sessionId,
+      archiveTranscript: false,
+    }).then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    try {
+      await Promise.race([
+        waiting.promise,
+        deletion.then((outcome) => {
+          throw new Error("Direct deletion settled before receipt cleanup reached its worker", {
+            cause: outcome,
+          });
+        }),
+      ]);
+      const lateRequestId = await lateReceipt.promise;
+      expect(session.read()).toBeUndefined();
+      const successor = {
+        ...original,
+        lifecycleRevision: "direct-receipt-successor-generation",
+        updatedAt: Date.now(),
+      };
+      replaceSessionEntrySync(
+        { agentId: "main", storePath: session.storePath, sessionKey: SESSION_KEY },
+        successor,
+      );
+      const successorAction = preparePersonalGitHubSessionAction(
+        { client, context },
+        { sessionKey: SESSION_KEY },
+      );
+      const published = await coordinator.requestPersonalForSession(
+        { ...request(), idempotencyKey: "direct-receipt-successor" },
+        successorAction,
+      );
+      expect(published.requestId).not.toBe(historical.requestId);
+      const receipt = readPersonalGitHubPublication(owner, { requestId: published.requestId });
+      const binding = { publicationKind: "personal" as const, requestId: published.requestId };
+      const lifecycle = readGitHubPublicationSessionLifecycle(binding);
+      expect(receipt).toMatchObject({ status: "published", session_id: successor.sessionId });
+      expect(lifecycle?.lifecycle_revision).toBe(successor.lifecycleRevision);
+      release.resolve();
+      const outcome = await deletion;
+      expect(outcome).toMatchObject({ ok: true, value: { deleted: true } });
+      expect(readPersonalGitHubPublication(owner, { requestId: published.requestId })).toEqual(
+        receipt,
+      );
+      expect(readGitHubPublicationSessionLifecycle(binding)).toEqual(lifecycle);
+      expect(session.read()).toMatchObject(successor);
+      expect(
+        readPersonalGitHubPublication(owner, { requestId: historical.requestId }),
+      ).toBeUndefined();
+      expect(readGitHubPublicationSessionLifecycle(oldBinding)).toBeUndefined();
+      expect(readPersonalGitHubPublication(owner, { requestId: lateRequestId })).toBeUndefined();
+      expect(
+        readGitHubPublicationSessionLifecycle({
+          publicationKind: "personal",
+          requestId: lateRequestId,
+        }),
+      ).toBeUndefined();
+    } finally {
+      release.resolve();
+      await deletion;
+      restore();
     }
   });
 

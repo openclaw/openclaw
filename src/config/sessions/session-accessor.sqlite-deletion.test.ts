@@ -577,8 +577,10 @@ describe("session deletion and native owner state", () => {
     const cleanupError = new Error("injected receipt cleanup failure");
     vi.spyOn(
       personalPublicationLifecycle,
-      "deletePersonalGitHubSessionReceipts",
-    ).mockRejectedValueOnce(cleanupError);
+      "preparePersonalGitHubSessionReceiptDeletion",
+    ).mockResolvedValueOnce(async () => {
+      throw cleanupError;
+    });
     const identityListener = vi.fn();
     const unsubscribe = onSessionIdentityMutation(identityListener);
 

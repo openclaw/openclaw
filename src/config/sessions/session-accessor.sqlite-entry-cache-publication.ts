@@ -11,9 +11,6 @@ import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import { invalidateOpenClawAgentWritableProjections } from "../../state/openclaw-agent-db-lifecycle.js";
 import { invalidateOpenClawAgentReadOnlyProjections } from "../../state/openclaw-agent-db-readonly-scope.js";
 import {
-  incognitoSharingEntries,
-  incognitoSharingState,
-  stageIncognitoSharingPublication,
   publishTrackedCacheUpdate,
   sessionEntryCaches,
 } from "./session-accessor.sqlite-entry-cache-state.js";
@@ -26,7 +23,12 @@ import {
   type SessionTranscriptInitializationPublication,
   type SessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.types.js";
-import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import {
+  commitIncognitoSessionSharingFacts,
+  commitIncognitoSessionSharingField,
+  publishIncognitoSessionEntryChange,
+  stageIncognitoSharingPublication,
+} from "./session-accessor.sqlite-incognito-sharing.js";
 import {
   publishRetainedSessionGeneration,
   reconcileSessionSharingAcquisition,
@@ -37,7 +39,6 @@ import {
   type PreparedSessionSharingRead,
   type SessionSharingRetentionRequest,
 } from "./session-accessor.sqlite-sharing-acquisition.js";
-import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { SessionEntry } from "./types.js";
 
 type CreationDatabase =
@@ -140,6 +141,30 @@ export function emitPreparedSessionSharingChange(
   };
   preparedSharingChanges.changes.set(change, receipt);
   sessionChanges.emit(change, database.db);
+}
+
+/** A committed metadata-only worker write invalidates caches without changing retained identity. */
+export function publishSessionEntryWorkerMetadataInvalidation(params: {
+  agentId: string;
+  storePath: string;
+  databaseIdentity: string;
+  sessionKey: string;
+}): void {
+  invalidateOpenClawAgentWritableProjections(params.databaseIdentity, (database) =>
+    sessionEntryCaches.delete(database),
+  );
+  invalidateOpenClawAgentReadOnlyProjections(params.databaseIdentity, (database) =>
+    sessionEntryCaches.delete(database),
+  );
+  const change: SessionRowChange = {
+    agentId: params.agentId,
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    scope: "session-entry",
+    facts: { kind: "unchanged" },
+  };
+  preparedSharingChanges.changes.set(change, undefined);
+  sessionChanges.emit(change);
 }
 
 function assertCreationCurrent(
@@ -287,7 +312,7 @@ export function publishSessionEntryPlaceholderInsertion(
         read.facts = facts;
       }
       if (incognito) {
-        incognitoSharingState(database.db).entries.set(sessionKey, facts ?? null);
+        commitIncognitoSessionSharingFacts(database.db, sessionKey, facts ?? null);
       }
       sessionEntryCaches.delete(database.db);
       receipt.committed = staged;
@@ -407,11 +432,7 @@ function publishSessionSharingFieldChange(
           read.facts = updateSessionSharingField(read.facts, change);
         }
       }
-      const entries = incognitoSharingEntries.get(database.db)?.entries;
-      const current = entries?.get(sessionKey);
-      if (current) {
-        entries?.set(sessionKey, updateSessionSharingField(current, change));
-      }
+      commitIncognitoSessionSharingField(database.db, sessionKey, change);
     },
     () => stageSessionSharingPublication(database, sessionKey),
   );
@@ -465,36 +486,7 @@ export function publishSessionSharingEntryChange(
     );
   }
   if (incognito && !sharingUnchanged) {
-    let current: CommittedSessionSharingFacts | null | undefined;
-    try {
-      const entry =
-        update.entry ?? readExactSessionEntryRow(database, update.sessionKey, "list")?.entry;
-      current = entry
-        ? {
-            entry: projectSessionSharingEntry(entry),
-            membership: new Set(
-              listSessionMembersInDatabase(database, update.sessionKey).map(
-                (member) => member.identityId,
-              ),
-            ),
-          }
-        : undefined;
-    } catch {
-      // Failed projection cannot establish absence for a later creation attempt.
-      current = null;
-    }
-    const state = incognitoSharingState(database.db);
-    publishTrackedCacheUpdate(
-      database,
-      () => {
-        if (current !== undefined) {
-          state.entries.set(update.sessionKey, current);
-        } else {
-          state.entries.delete(update.sessionKey);
-        }
-      },
-      () => stageIncognitoSharingPublication(database.db, update.sessionKey),
-    );
+    publishIncognitoSessionEntryChange(database, update);
   }
 }
 

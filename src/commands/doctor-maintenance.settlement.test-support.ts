@@ -180,7 +180,10 @@ beforeEach(() => {
   boundary.admission.mockReturnValue({ kind: "recovery", runs: [] });
   boundary.gatewayAcquire.mockImplementation(() => ({
     release: boundary.release,
-    assertCurrent: boundary.ownerAssert,
+    assertCurrent: (assertPolicy?: () => void) => {
+      boundary.ownerAssert();
+      assertPolicy?.();
+    },
     run<T>(operation: () => T): T {
       boundary.ownerAssert();
       return operation();

@@ -60,6 +60,25 @@ and close their owned handle. Cancellation settles pending work before rejecting
 The optional native helper hashes off the JavaScript event loop; the fallback
 uses bounded buffers. Neither route provides a snapshot of concurrent writes.
 
+### Browser lifecycle cleanup
+
+`closeTrackedBrowserTabsForSessions` from `openclaw/plugin-sdk/browser-maintenance`
+accepts an optional `prepareCurrent(): Promise<boolean>` check after plugin
+activation and before each new cleanup claim. Returning `false` skips new claims;
+the existing `isCurrent()` callback remains a synchronous owner check after awaited
+preparation. A host-supplied `sessionEntryCurrent` check restricts native claim and
+pre-claim state writes using current session facts; it does not grant store access.
+Supplying `sessionEntryCurrent` also requires `prepareCurrent`, which checks
+process-local tabs before they acquire a cleanup reservation. Unpaired checks are
+refused with a warning before tab cleanup begins.
+Official plugins share the `SessionEntryCurrentPreparation` and
+`SessionEntryCurrentCheck` types through `openclaw/plugin-sdk/plugin-state-runtime`.
+Once a tab is claimed, closing and retiring that tab finish under its captured
+Browser authority even if the cleanup caller subsequently changes.
+Artifacts advertise this contract with `supportsSessionEntryCurrent: true`.
+Guarded cleanup against an older artifact leaves tabs untouched and reports an
+update warning; callers using only the existing synchronous guard remain supported.
+
 ### SQLite write admission
 
 `runSqliteImmediateTransaction(db, prepare, options?)` from

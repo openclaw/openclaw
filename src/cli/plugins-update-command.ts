@@ -135,15 +135,6 @@ function shouldPreserveEmptyPlugins(params: {
   );
 }
 
-function projectUpdaterResultOntoSourceConfig(params: {
-  runtimeBase: OpenClawConfig;
-  sourceBase: OpenClawConfig;
-  updatedConfig: OpenClawConfig;
-}): OpenClawConfig {
-  const updatePatch = createMergePatch(params.runtimeBase, params.updatedConfig);
-  return applyMergePatch(params.sourceBase, updatePatch) as OpenClawConfig;
-}
-
 export type RunPluginUpdateCommandParams = {
   ids: string[];
   opts: {
@@ -263,8 +254,7 @@ async function runPluginUpdateCommandUnlocked(
   // mutation-start snapshot so concurrent config changes cannot be resurrected.
   const cfg = mutationSnapshot?.snapshot.runtimeConfig ?? getRuntimeConfig();
   const sourceCfg = mutationSnapshot?.snapshot.sourceConfig ?? cfg;
-  const persistedPluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
-  const pluginInstallRecords = persistedPluginInstallRecords;
+  const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
   const cfgWithPluginInstallRecords = withPluginInstallRecords(cfg, pluginInstallRecords);
   const sourceCfgWithPluginInstallRecords = withPluginInstallRecords(
     sourceCfg,
@@ -545,7 +535,7 @@ async function runPluginUpdateCommandUnlocked(
           installOwners: packageUpdateIds,
         });
         if (
-          !isDeepStrictEqual(currentInstallRecords, persistedPluginInstallRecords) ||
+          !isDeepStrictEqual(currentInstallRecords, pluginInstallRecords) ||
           !currentSnapshot.ok ||
           !isDeepStrictEqual([...currentSnapshot.value], [...packageUpdateSnapshot])
         ) {
@@ -560,11 +550,10 @@ async function runPluginUpdateCommandUnlocked(
       const nextPluginInstallRecords = pluginResult.config.plugins?.installs ?? {};
       const shouldPersistPluginInstallIndex =
         pluginResult.changed || Object.keys(pluginInstallRecords).length > 0;
-      const sourceShapedUpdateConfig = projectUpdaterResultOntoSourceConfig({
-        runtimeBase: cfgWithPluginInstallRecords,
-        sourceBase: sourceCfgWithPluginInstallRecords,
-        updatedConfig: hookResult.config,
-      });
+      const sourceShapedUpdateConfig = applyMergePatch(
+        sourceCfgWithPluginInstallRecords,
+        createMergePatch(cfgWithPluginInstallRecords, hookResult.config),
+      ) as OpenClawConfig;
       // Plugin install records live in the persisted index. Preserve an authored
       // empty plugins section so include ownership does not become a false mutation.
       let nextConfig = withoutPluginInstallRecords(sourceShapedUpdateConfig, {
@@ -617,7 +606,7 @@ async function runPluginUpdateCommandUnlocked(
             isDeepStrictEqual(nextConfig, sourceSnapshot?.snapshot.sourceConfig ?? sourceCfg)
           ) {
             await commitPluginInstallRecordsOnly({
-              previousInstallRecords: persistedPluginInstallRecords,
+              previousInstallRecords: pluginInstallRecords,
               nextInstallRecords: nextPluginInstallRecords,
               nextConfig,
               verifyConfigFresh: async () => {
@@ -629,7 +618,7 @@ async function runPluginUpdateCommandUnlocked(
             });
           } else {
             await commitPluginInstallRecordsWithConfig({
-              previousInstallRecords: persistedPluginInstallRecords,
+              previousInstallRecords: pluginInstallRecords,
               nextInstallRecords: nextPluginInstallRecords,
               nextConfig,
               baseHash: sourceSnapshot?.snapshot.hash,

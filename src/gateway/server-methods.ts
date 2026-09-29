@@ -667,7 +667,7 @@ export async function handleGatewayRequest(
         }
       : respondAuthorized;
     const invokeHandler = async () => {
-      const preparedHandler = await prepareGatewayRequestHandler(handler, entry);
+      const preparedHandler = await prepareGatewayRequestHandler(handler, entry, opts);
       // Lazy preparation may yield across a hot config change. Keep the router fence
       // unless the canonical owner reconciles accepted input before new admission.
       const uploadError = gatewayRouterUploadPolicyError(requestFacts, methodRegistry);

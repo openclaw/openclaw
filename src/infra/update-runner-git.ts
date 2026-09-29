@@ -204,7 +204,9 @@ export async function updateGitCheckout(params: {
         };
         return buildError(reason);
       }
-      await restoreRuntime();
+      if (!runtimeRetained) {
+        await restoreRuntime();
+      }
       return buildError(reason);
     } catch (error) {
       if (sourceMutationStarted && !stateMigrationStarted) {
@@ -480,62 +482,6 @@ export async function updateGitCheckout(params: {
       return await rollbackError("runtime-verification-failed");
     }
 
-    // Source conversion migrates only after its prepared global exposure is swapped.
-    if (!opts.prepareGitExposure) {
-      stateMigrationStarted = true;
-      recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
-      const doctorSteps: UpdateStepResult[] = [];
-      let doctorStep: UpdateStepResult | null;
-      try {
-        doctorStep = await opts.runGitDoctor(gitRoot, doctorSteps);
-      } catch (error) {
-        steps.push(...doctorSteps);
-        throw error;
-      }
-      steps.push(
-        doctorStep ?? {
-          name: "openclaw doctor",
-          command: "run activation doctor",
-          cwd: gitRoot,
-          durationMs: 0,
-          exitCode: 1,
-          stderrTail: "Required activation Doctor did not produce a result.",
-        },
-      );
-      if (!doctorStep) {
-        // The CLI returns null before any state writes when its entrypoint is missing.
-        stateMigrationStarted = false;
-        return await rollbackError("doctor-entry-missing");
-      }
-      if (isFailedUpdateStep(doctorStep)) {
-        return await rollbackError(
-          getUpdateDoctorConfigFailureReason(doctorStep.configWriteRefusal) ?? "doctor-failed",
-        );
-      }
-    }
-
-    if ((await resolveControlUiAssetHealth({ root: gitRoot })).kind !== "ready") {
-      steps.push({
-        name: "ui-assets-verify",
-        command: "verify startup assets",
-        cwd: gitRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: "Control UI startup assets are missing or incomplete after Doctor",
-      });
-      return await rollbackError("ui-assets-missing");
-    }
-    const afterBuildId = await readBuiltGatewayBuildId(gitRoot);
-    const afterShaStep = await runStep(
-      step("git-verify-head", ["git", "-C", gitRoot, "rev-parse", "HEAD"], gitRoot),
-    );
-    if (isFailedUpdateStep(afterShaStep)) {
-      return await rollbackError("head-verification-failed");
-    }
-    if (afterShaStep.stdoutTail?.trim() !== preflight.candidateSha) {
-      return await rollbackError("target-sha-mismatch");
-    }
-    const gitRuntime = await readGitRuntimeArtifactIdentity(gitRoot);
     if (opts.onTransaction) {
       const promotion = runtimePromotion;
       const activatedBranch = await readBranchName(runCommand, gitRoot, timeoutMs);
@@ -555,7 +501,8 @@ export async function updateGitCheckout(params: {
         stderrTail: message,
         ...(warning ? { advisory: { kind: "recoverable-maintenance" as const, message } } : {}),
       });
-      opts.onTransaction({
+      runtimeRetained = true;
+      await opts.onTransaction({
         backupRoot: promotion.backupRoot,
         assertRollbackSafe,
         rollback: (assertCurrent) => {
@@ -615,8 +562,64 @@ export async function updateGitCheckout(params: {
           })());
         },
       });
-      runtimeRetained = true;
     }
+
+    // Source conversion migrates only after its prepared global exposure is swapped.
+    if (!opts.prepareGitExposure) {
+      stateMigrationStarted = true;
+      recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
+      const doctorSteps: UpdateStepResult[] = [];
+      let doctorStep: UpdateStepResult | null;
+      try {
+        doctorStep = await opts.runGitDoctor(gitRoot, doctorSteps);
+      } catch (error) {
+        steps.push(...doctorSteps);
+        throw error;
+      }
+      steps.push(
+        doctorStep ?? {
+          name: "openclaw doctor",
+          command: "run activation doctor",
+          cwd: gitRoot,
+          durationMs: 0,
+          exitCode: 1,
+          stderrTail: "Required activation Doctor did not produce a result.",
+        },
+      );
+      if (!doctorStep) {
+        // The CLI returns null before any state writes when its entrypoint is missing.
+        stateMigrationStarted = false;
+        return await rollbackError("doctor-entry-missing");
+      }
+      if (isFailedUpdateStep(doctorStep)) {
+        return await rollbackError(
+          getUpdateDoctorConfigFailureReason(doctorStep.configWriteRefusal) ?? "doctor-failed",
+        );
+      }
+    }
+
+    if ((await resolveControlUiAssetHealth({ root: gitRoot })).kind !== "ready") {
+      steps.push({
+        name: "ui-assets-verify",
+        command: "verify startup assets",
+        cwd: gitRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: "Control UI startup assets are missing or incomplete after Doctor",
+      });
+      return await rollbackError("ui-assets-missing");
+    }
+    const afterBuildId = await readBuiltGatewayBuildId(gitRoot);
+    const afterShaStep = await runStep(
+      step("git-verify-head", ["git", "-C", gitRoot, "rev-parse", "HEAD"], gitRoot),
+    );
+    if (isFailedUpdateStep(afterShaStep)) {
+      return await rollbackError("head-verification-failed");
+    }
+    if (afterShaStep.stdoutTail?.trim() !== preflight.candidateSha) {
+      return await rollbackError("target-sha-mismatch");
+    }
+    const gitRuntime = await readGitRuntimeArtifactIdentity(gitRoot);
     return {
       status: "ok",
       mode: "git",

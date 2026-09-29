@@ -12,6 +12,7 @@ import {
   resolveMessageRole,
   resolveMessageSender,
 } from "../../../lib/chat/message-normalizer.ts";
+import { readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
 import {
   isUiGlobalScopeConfigured,
   isSubagentSessionKey,
@@ -20,6 +21,7 @@ import {
 } from "../../../lib/sessions/session-key.ts";
 import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
+import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
@@ -185,6 +187,22 @@ export function projectChatTranscript(
   } satisfies Parameters<typeof buildCachedChatItems>[0];
   const chatItems = buildCachedChatItems(chatItemsInput);
   const workingIndicator = chatItems.find((item) => item.kind === "reading-indicator");
+  const activityRunId = workingIndicator?.runId ?? props.runId;
+  const activityGroupKey =
+    props.runActive && activityRunId
+      ? chatItems.findLast(
+          (item) =>
+            item.kind === "group" &&
+            item.messages.some(
+              ({ message }) =>
+                transcriptRunId(message) === activityRunId &&
+                readPreparedActivity(message).some(
+                  (activity) =>
+                    !activity.hideFromChannelProgress && !activity.suppressChannelProgress,
+                ),
+            ),
+        )?.key
+      : undefined;
   const runOutputTokens = workingIndicator?.runId
     ? (props.runUsageById?.get(workingIndicator.runId)?.outputTokens ?? null)
     : null;
@@ -356,6 +374,8 @@ export function projectChatTranscript(
       latestBrowserTabs,
       showReasoning,
       showToolCalls: props.showToolCalls,
+      activityRunId,
+      activityGroupKey,
       autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
       isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
       onToggleToolMessageExpanded: toggleToolCardExpanded,
@@ -606,6 +626,8 @@ export function projectChatTranscript(
     showReasoning,
     props.showToolCalls,
     Boolean(props.runActive),
+    activityRunId,
+    activityGroupKey,
     Boolean(props.runWorking),
     props.startupLabel,
     Boolean(props.waitingApproval),

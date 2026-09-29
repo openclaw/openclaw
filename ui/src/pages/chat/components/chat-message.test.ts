@@ -2823,75 +2823,6 @@ describe("grouped chat rendering", () => {
     expect(container.querySelectorAll(".chat-activity-group__body > .chat-bubble")).toHaveLength(3);
   });
 
-  it("uses the newest group's live card label without inheriting an earlier failure", () => {
-    const container = document.createElement("div");
-    const groups = [
-      createToolGroup("live-first", [
-        createMessageEntry(
-          "failed-read",
-          createToolResultMessage("call-read", "read", JSON.stringify({ error: "failed" }), {
-            isError: true,
-            activity: [
-              projectAgentToolActivity({
-                toolCallId: "call-read",
-                name: "read",
-                phase: "result",
-                isError: true,
-              }),
-            ],
-          }),
-        ),
-      ]),
-      createToolGroup(
-        "live-second",
-        [
-          createMessageEntry("running-edit", {
-            role: "assistant",
-            activity: [
-              projectAgentToolActivity({
-                toolCallId: "call-edit",
-                name: "edit",
-                phase: "start",
-                args: { path: "/repo/src/a.ts" },
-              }),
-            ],
-            __openclawToolStreamLive: true,
-            __openclawToolStreamResultReceived: false,
-            content: [
-              {
-                type: "tool_use",
-                id: "call-edit",
-                name: "edit",
-                input: { path: "/repo/src/a.ts", oldText: "old", newText: "new" },
-              },
-            ],
-          }),
-        ],
-        { isStreaming: true },
-      ),
-    ];
-    const opts = { showReasoning: true, showToolCalls: true, runActive: true };
-
-    render(renderActivityGroup(groups, opts), container);
-    const activitySummary = expectElement(
-      container,
-      ".chat-activity-group__summary",
-      HTMLButtonElement,
-    );
-    expect(container.querySelector(".chat-activity-group.is-open")).toBeNull();
-    expect(activitySummary.getAttribute("aria-expanded")).toBe("false");
-    expect(activitySummary.getAttribute("aria-label")).toBeNull();
-    expect(activitySummary.classList.contains("chat-activity-group__summary--error")).toBe(false);
-    expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
-      "Edit in /repo/src/a.ts…",
-    );
-
-    render(renderActivityGroup(groups, { ...opts, runActive: false }), container);
-    expect(activitySummary.textContent?.replace(/\s+/gu, " ").trim()).toBe(
-      "1 read · 1 edit 1 failed",
-    );
-  });
-
   it("keeps cross-group activity neutral while retaining failed child badges", () => {
     const container = document.createElement("div");
     const failedMessage = (id: string) =>
@@ -2961,57 +2892,6 @@ describe("grouped chat rendering", () => {
     expect(failedSummary.classList.contains("chat-activity-group__summary--error")).toBe(false);
     expect(failedSummary.getAttribute("aria-expanded")).toBe("false");
     expect(failedSummary.getAttribute("aria-label")).toBeNull();
-  });
-
-  it("uses the prepared running mutation title in an active group summary", () => {
-    const container = document.createElement("div");
-    const group = createToolGroup(
-      "running-tool-group",
-      [
-        createMessageEntry("finished-read", {
-          role: "toolResult",
-          toolCallId: "call-read",
-          toolName: "read",
-          activity: [
-            projectAgentToolActivity({
-              toolCallId: "call-read",
-              name: "read",
-              phase: "result",
-              isError: false,
-            }),
-          ],
-          content: "done",
-        }),
-        createMessageEntry("running-edit", {
-          role: "assistant",
-          activity: [
-            projectAgentToolActivity({
-              toolCallId: "call-edit",
-              name: "edit",
-              phase: "start",
-              args: { path: "/repo/src/a.ts" },
-            }),
-          ],
-          __openclawToolStreamLive: true,
-          __openclawToolStreamResultReceived: false,
-          content: [
-            {
-              type: "tool_use",
-              id: "call-edit",
-              name: "edit",
-              input: { path: "/repo/src/a.ts", oldText: "old", newText: "new" },
-            },
-          ],
-        }),
-      ],
-      { timestamp: 1000, isStreaming: true },
-    );
-
-    renderMessageGroups(container, [group], { runActive: true });
-
-    expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
-      "Edit in /repo/src/a.ts…",
-    );
   });
 
   it("keeps failed activity collapsed with neutral chain chrome", () => {

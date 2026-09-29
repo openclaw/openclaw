@@ -16,10 +16,10 @@ import {
 import {
   isPreparedSessionSharingChange,
   projectSessionSharingEntry,
-  readCommittedIncognitoSessionSharing,
   retainPreparedSessionGenerationFacts,
 } from "./session-accessor.sqlite-entry-cache.js";
 import { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-entry.js";
+import { readCommittedIncognitoSessionSharing } from "./session-accessor.sqlite-incognito-sharing.js";
 import type { SessionDeliveryGeneration } from "./session-delivery-generation.types.js";
 import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";

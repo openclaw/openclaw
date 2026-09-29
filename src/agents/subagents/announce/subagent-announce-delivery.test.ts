@@ -17,7 +17,6 @@ import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js
 import { projectChatDisplayMessages } from "../../../gateway/chat-display-projection.js";
 import { authorizeGatewaySessionCreation } from "../../../gateway/operator-role-policy.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
-import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import type { dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import {
   OutboundDeliveryError,
@@ -55,6 +54,7 @@ import {
   testing,
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
+  registerDescendantWakeCurrencyTests,
 } from "./subagent-announce-delivery.test-support.js";
 import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
 import { privateCompletionCases } from "./subagent-announce-private-completion.test-fixtures.js";
@@ -2283,49 +2283,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
   );
 
-  it("wakes settled descendant runs under restrictive gateway roles", async () => {
-    const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
-      runId: "descendant-wake-run",
-    });
-    const resolveGatewayContext: GatewayContextResolver = () => undefined;
-    const signal = new AbortController().signal;
-    const replaceSubagentRunAfterSteer = vi.fn(() => true);
-    testing.setDepsForTest({
-      getRuntimeConfig: () => cfg,
-      loadSessionEntry: () => ({ sessionId: "nested-session", updatedAt: 1 }),
-    });
-
-    const woke = await runDescendantWake({
-      runId: "nested-parent-run",
-      childSessionKey: "agent:main:subagent:nested-parent",
-      taskLabel: "collect descendant findings",
-      findings: "The descendant completed successfully.",
-      announceId: "descendant-completion",
-      isChildSessionEffectsAllowed: () => true,
-      hasUsableSessionEntry: (entry): entry is Record<string, unknown> =>
-        typeof entry === "object" && entry !== null,
-      resolveGatewayContext,
-      signal,
-      deps: {
-        callGateway: createGatewayMock(),
-        dispatchGatewayMethodInProcess,
-        getRuntimeConfig: () => cfg,
-        replaceSubagentRunAfterSteer,
-      },
-    });
-
-    expect(woke).toBe(true);
-    expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 2)).toMatchObject({
-      cancelOnDeadline: true,
-      resolveGatewayContext,
-      signal,
-    });
-    expect(replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
-      expect.objectContaining({
-        previousRunId: "nested-parent-run",
-        nextRunId: "descendant-wake-run",
-      }),
-    );
+  registerDescendantWakeCurrencyTests({
+    createRoleRestrictedInProcessGatewayMock,
+    createGatewayMock,
+    runDescendantWake,
   });
 
   it("does not dispatch child-derived completion after source lifecycle ownership changes", async () => {

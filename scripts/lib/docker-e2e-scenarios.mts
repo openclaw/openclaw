@@ -55,9 +55,11 @@ const rootManagedVpsUpgradeCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1",
   'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
 );
+// Run 36506342273 (hosted 4-vCPU): lane exceeded 1515s; x ~1.5 => 2280s inner.
+// Run 36506210440: restart update took 856s; Crabbox 4-CPU took 993s x ~1.5 => 1500s.
 const updateRestartAuthCommand = upgradeSurvivorScriptCommand(
-  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth",
-  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
+  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
+  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-2280s}"',
 );
 const updateMigrationCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
@@ -74,9 +76,9 @@ const updateFirstHopCompatLanes = listRecordedFirstHopSourceVersions().map((vers
     {
       resources: ["service"],
       stateScenario: "upgrade-survivor",
-      // Run 36465355074: (3 x 310s + 130s + 150s) x ~1.5 => 1800s inner;
+      // Run 36506342273 (hosted 4-vCPU): projected 2125s x ~1.5 => 3200s inner;
       // add 300s for host-side fixtures, package preparation, and cleanup.
-      timeoutMs: 35 * 60 * 1000,
+      timeoutMs: 3500 * 1000,
       weight: 1,
     },
   ),
@@ -239,7 +241,8 @@ function createPackageUpdateMaintenanceLanes() {
     }),
     npmLane("update-restart-auth", updateRestartAuthCommand, {
       stateScenario: "upgrade-survivor",
-      timeoutMs: 25 * 60 * 1000,
+      // Run 36506342273: 1515s x ~1.5 => 2280s inner + 300s host-side margin.
+      timeoutMs: 43 * 60 * 1000,
       upgradeSurvivorScenario: "base",
       weight: 3,
     }),

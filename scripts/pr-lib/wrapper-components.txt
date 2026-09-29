@@ -808,6 +808,7 @@ src/infra/sqlite-terminal-open-latch.ts
 src/infra/sqlite-transaction.ts
 src/infra/sqlite-user-version.ts
 src/infra/sqlite-wal-checkpoint.ts
+src/infra/sqlite-wal-filesystem.ts
 src/infra/sqlite-wal-reclamation.ts
 src/infra/sqlite-wal-split-brain.ts
 src/infra/sqlite-wal-write-admission.ts

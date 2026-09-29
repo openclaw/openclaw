@@ -64,7 +64,7 @@ enum ExecInlineCommandParser {
             if matchesStartupOption(token) {
                 sawStartupOption = true
             }
-            if flags.contains(token) || self.isCombinedCommandFlag(token) {
+            if flags.contains(token) || self.parseCombinedCommandFlag(token) != nil {
                 return sawStartupOption
             }
             if !token.hasPrefix("-"), !token.hasPrefix("+") {
@@ -75,7 +75,7 @@ enum ExecInlineCommandParser {
                 idx += 1 + combinedValueCount
                 continue
             }
-            if self.consumesSeparateValue(token) {
+            if self.posixShellOptionsWithSeparateValues.contains(token) {
                 idx += 2
                 continue
             }
@@ -139,7 +139,7 @@ enum ExecInlineCommandParser {
                 idx += 1 + combinedValueCount
                 continue
             }
-            if allowCombinedC, self.consumesSeparateValue(token) {
+            if allowCombinedC, self.posixShellOptionsWithSeparateValues.contains(token) {
                 idx += 2
                 continue
             }
@@ -164,10 +164,6 @@ enum ExecInlineCommandParser {
             ? argv[nextIndex]
             : ""
         return payload.isEmpty ? nil : payload
-    }
-
-    private static func isCombinedCommandFlag(_ token: String) -> Bool {
-        self.parseCombinedCommandFlag(token) != nil
     }
 
     private static func parseCombinedCommandFlag(_ token: String) -> CombinedCommandFlag? {
@@ -205,10 +201,6 @@ enum ExecInlineCommandParser {
         return chars.dropFirst().reduce(0) { count, char in
             count + ((char == "o" || char == "O") ? 1 : 0)
         }
-    }
-
-    private static func consumesSeparateValue(_ token: String) -> Bool {
-        self.posixShellOptionsWithSeparateValues.contains(token)
     }
 
     private static func isPosixShortOption(_ token: String, containing option: Character) -> Bool {

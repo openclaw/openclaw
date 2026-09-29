@@ -1,7 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type {
   SessionEntryCacheDatabase,
   SessionEntryCacheSnapshot,
@@ -11,7 +10,6 @@ import {
   readSessionEntryCacheValidityToken,
   type SqliteSessionEntryRevision,
 } from "./session-accessor.sqlite-entry-revision.js";
-import type { CommittedSessionSharingFacts } from "./session-accessor.sqlite-sharing-acquisition.js";
 import type { SessionParticipantProjection } from "./session-membership-facts.types.js";
 
 export type SqliteSessionEntryCache = SessionEntryCacheSnapshot & {
@@ -83,53 +81,4 @@ export function readCurrentSessionEntryCacheParticipants(
         participantCount: entry.participantCount,
       }
     : {};
-}
-
-// Process-held stores cannot be reopened in a worker. Their existing writer publishes
-// content-free metadata, bounded by live entries and the native database's lifetime.
-export const incognitoSharingEntries = resolveGlobalSingleton(
-  Symbol.for("openclaw.incognitoSessionSharingEntries"),
-  () =>
-    new WeakMap<
-      DatabaseSync,
-      {
-        entries: Map<string, CommittedSessionSharingFacts | null>;
-        pending: Map<string, Set<object>>;
-      }
-    >(),
-);
-
-export function incognitoSharingState(database: DatabaseSync) {
-  let state = incognitoSharingEntries.get(database);
-  if (!state) {
-    state = { entries: new Map(), pending: new Map() };
-    incognitoSharingEntries.set(database, state);
-  }
-  return state;
-}
-
-export function stageIncognitoSharingPublication(database: DatabaseSync, sessionKey: string) {
-  const state = incognitoSharingState(database);
-  const token = {};
-  const pending = state.pending.get(sessionKey) ?? new Set<object>();
-  state.pending.set(sessionKey, pending);
-  pending.add(token);
-  return () => {
-    pending.delete(token);
-    if (pending.size === 0) {
-      state.pending.delete(sessionKey);
-    }
-  };
-}
-
-export function readCommittedIncognitoSessionSharing(database: DatabaseSync, sessionKey: string) {
-  const state = incognitoSharingEntries.get(database);
-  if (state?.pending.has(sessionKey)) {
-    throw new Error("Incognito session sharing publication is pending");
-  }
-  const current = state?.entries.get(sessionKey);
-  if (current === null) {
-    throw new Error("Incognito session sharing projection is unavailable");
-  }
-  return current;
 }

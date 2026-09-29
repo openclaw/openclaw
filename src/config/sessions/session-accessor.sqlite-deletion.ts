@@ -17,7 +17,7 @@ import {
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { deletePersonalGitHubSessionReceipts } from "../../state/github-personal-publication-lifecycle.js";
+import { preparePersonalGitHubSessionReceiptDeletion } from "../../state/github-personal-publication-lifecycle.js";
 import {
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
@@ -218,6 +218,31 @@ async function withSqliteSessionMutations<T>(
       }
     };
     assertCurrent();
+    const receiptDeletions = new Map<
+      string,
+      Awaited<ReturnType<typeof preparePersonalGitHubSessionReceiptDeletion>>
+    >();
+    for (const workspace of repositoryWorkspaces) {
+      const target = targets.find((candidate) => candidate.sessionKey === workspace.sessionKey);
+      if (!target) {
+        throw new Error("Repository workspace deletion omitted its session target");
+      }
+      receiptDeletions.set(
+        workspace.workspaceId,
+        await preparePersonalGitHubSessionReceiptDeletion({
+          agentId: workspace.agentId,
+          env: scope.env,
+          generations: [
+            {
+              sessionKey: workspace.sessionKey,
+              sessionId: target.sessionId,
+              lifecycleRevision: target.lifecycleRevision ?? null,
+            },
+          ],
+          assertCurrent,
+        }),
+      );
+    }
     return await deletions.run(
       new Map(
         targets.map((target) => [
@@ -250,12 +275,7 @@ async function withSqliteSessionMutations<T>(
                 throw new Error("Repository workspace session changed before deletion");
               }
             };
-            await deletePersonalGitHubSessionReceipts({
-              agentId: workspace.agentId,
-              env: scope.env,
-              sessionKeys: [workspace.sessionKey],
-              assertCurrent: assertSessionAbsent,
-            });
+            await receiptDeletions.get(workspace.workspaceId)!(assertSessionAbsent);
             await repositories?.delete({
               workspaceId: workspace.workspaceId,
               assertCurrent: assertSessionAbsent,

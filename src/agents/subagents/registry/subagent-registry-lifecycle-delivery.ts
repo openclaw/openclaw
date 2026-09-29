@@ -379,6 +379,7 @@ export const emitCompletionEndedHookIfNeeded = async (
   entry: SubagentRunRecord,
   reason: SubagentLifecycleEndedReason,
   isCurrent?: () => boolean,
+  prepareCurrent?: () => Promise<boolean>,
 ) => {
   if (params.shouldEmitEndedHookForRun({ entry, reason })) {
     await params.emitSubagentEndedHookForRun({
@@ -386,6 +387,7 @@ export const emitCompletionEndedHookIfNeeded = async (
       reason,
       sendFarewell: true,
       isCurrent,
+      prepareCurrent,
     });
   }
 };

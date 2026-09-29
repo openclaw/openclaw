@@ -25,7 +25,7 @@ extension OpenClawChatViewModel {
             }
         }
         guard let snapshot = payload.inFlightRun,
-              let runId = Self.normalizedRunID(snapshot.runId),
+              let runId = ChatPayloadDecoding.trimmedNonEmptyString(snapshot.runId),
               self.liveRunStateByRunID[runId]?.terminal != true
         else {
             return

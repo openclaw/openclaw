@@ -688,6 +688,17 @@ extension GatewayConnection {
             distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
     }
 
+    func request(
+        _ request: OpenClawChatGatewayRequest,
+        ifCurrentServerLease lease: ServerLease) async throws -> Data
+    {
+        try await self.request(
+            method: request.method,
+            params: request.params,
+            timeoutMs: request.timeoutMs,
+            ifCurrentServerLease: lease)
+    }
+
     func requestDecoded<T: Decodable>(
         method: Method,
         params: [String: AnyCodable]? = nil,
