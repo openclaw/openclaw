@@ -14,7 +14,26 @@ export type McpToolSchemaEntry = {
   name: string;
   description: string | undefined;
   inputSchema: Record<string, unknown>;
+  _meta?: Record<string, unknown>;
 };
+
+/**
+ * Claude Code per-tool hint: keep this tool's schema in the first request even when the
+ * server itself is deferred behind ToolSearch. Ignored by clients that do not know it.
+ */
+const MCP_ALWAYS_LOAD_META_KEY = "anthropic/alwaysLoad";
+
+/**
+ * Loopback tools a harness must be able to call on turn one without a ToolSearch round trip:
+ * `message` carries channel reads/sends for heartbeat, cron and chat turns, and
+ * `sessions_yield` must follow `sessions_spawn` immediately. When the loopback server is
+ * eager (the default) every tool is loaded anyway, so the hint only matters once deferral
+ * is enabled.
+ */
+const MCP_LOOPBACK_ALWAYS_LOAD_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "message",
+  "sessions_yield",
+]);
 
 function readLoopbackToolField(tool: McpLoopbackTool, key: "name" | "description" | "parameters") {
   try {
@@ -296,6 +315,9 @@ export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry
       name,
       description: readLoopbackToolDescription(tool),
       inputSchema: raw,
+      ...(MCP_LOOPBACK_ALWAYS_LOAD_TOOL_NAMES.has(name)
+        ? { _meta: { [MCP_ALWAYS_LOAD_META_KEY]: true } }
+        : {}),
     };
   });
 }

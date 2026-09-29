@@ -43,3 +43,16 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
     maxSearchLimit,
   };
 }
+
+/**
+ * True only when the operator wrote `tools.toolSearch` and it resolves enabled. Harness
+ * runtimes with their own deferral (Claude CLI via bundle MCP) opt in on this signal so the
+ * implicit embedded default does not change their eager tool loading.
+ */
+export function isToolSearchExplicitlyEnabled(config?: OpenClawConfig): boolean {
+  const tools = isRecord(config?.tools) ? config.tools : undefined;
+  if (tools?.toolSearch === undefined) {
+    return false;
+  }
+  return resolveToolSearchConfig(config).enabled;
+}
