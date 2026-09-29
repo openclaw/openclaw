@@ -103,10 +103,18 @@ static void WriteAll(HANDLE file,const std::string& text) { DWORD written=0; if(
 // Security is applied and inspected through an already-open handle.  Paths are
 // never re-opened after mutation, which keeps the reparse check meaningful.
 static bool SameAcl(PACL left, PACL right) {
-  return left && right && left->AclSize == right->AclSize &&
+  return left && right && IsValidAcl(left) && IsValidAcl(right) &&
+         left->AclSize >= sizeof(ACL) && left->AclSize == right->AclSize &&
          !memcmp(left, right, left->AclSize);
 }
-static void ApplyAndVerifySecurity(HANDLE object, const wchar_t* sddl) {
+static void SecurityStage(const char* object, const char* stage) {
+  // stderr is deliberately flushed so an external native crash harness retains
+  // the last completed, non-secret boundary even if Node cannot unwind.
+  fprintf(stderr, "PHASE_E_SECURITY_STAGE:%s:%s\n", object, stage);
+  fflush(stderr);
+}
+static void ApplyAndVerifySecurity(HANDLE object, const wchar_t* sddl,
+                                   const char* objectName) {
   PSECURITY_DESCRIPTOR descriptor=nullptr;
   if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(
        sddl, SDDL_REVISION_1, &descriptor, nullptr))
@@ -119,10 +127,36 @@ static void ApplyAndVerifySecurity(HANDLE object, const wchar_t* sddl) {
      !GetSecurityDescriptorSacl(descriptor,&labelPresent,&label,&labelDefaulted) || !labelPresent || !label) {
     LocalFree(descriptor); throw std::string("PHASE_E_ACL_BUILD_FAILED");
   }
+  // Do not pass borrowed pointers into a self-relative descriptor to the
+  // security APIs.  Keep independently owned, validated buffers alive across
+  // both mutation and readback; this also avoids architecture-specific pointer
+  // representation/lifetime assumptions at the native ARM64 boundary.
+  if(!IsValidAcl(dacl) || dacl->AclSize<sizeof(ACL) ||
+     !IsValidAcl(label) || label->AclSize<sizeof(ACL)) {
+    LocalFree(descriptor); throw std::string("PHASE_E_ACL_BUILD_FAILED");
+  }
+  DWORD ownerLength=GetLengthSid(owner),groupLength=GetLengthSid(group);
+  // DWORD backing guarantees native alignment for SID/ACL structures on ARM64.
+  auto words=[](size_t bytes){return (bytes+sizeof(DWORD)-1)/sizeof(DWORD);};
+  std::vector<DWORD> ownerBytes(words(ownerLength)),groupBytes(words(groupLength));
+  std::vector<DWORD> daclBytes(words(dacl->AclSize)),labelBytes(words(label->AclSize));
+  if(!CopySid(ownerLength,ownerBytes.data(),owner) ||
+     !CopySid(groupLength,groupBytes.data(),group)) {
+    LocalFree(descriptor); throw std::string("PHASE_E_ACL_BUILD_FAILED");
+  }
+  memcpy(daclBytes.data(),dacl,dacl->AclSize);
+  memcpy(labelBytes.data(),label,label->AclSize);
+  LocalFree(descriptor); descriptor=nullptr;
+  PSID expectedOwner=reinterpret_cast<PSID>(ownerBytes.data());
+  PSID expectedGroup=reinterpret_cast<PSID>(groupBytes.data());
+  PACL expectedDacl=reinterpret_cast<PACL>(daclBytes.data());
+  PACL expectedLabel=reinterpret_cast<PACL>(labelBytes.data());
+  SecurityStage(objectName,"before-apply");
   DWORD status=SetSecurityInfo(object,SE_FILE_OBJECT,
     OWNER_SECURITY_INFORMATION|GROUP_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION|LABEL_SECURITY_INFORMATION,
-    owner,group,dacl,label);
-  if(status!=ERROR_SUCCESS) { LocalFree(descriptor); throw std::string("PHASE_E_ACL_SET_FAILED"); }
+    expectedOwner,expectedGroup,expectedDacl,expectedLabel);
+  if(status!=ERROR_SUCCESS) throw std::string("PHASE_E_ACL_SET_FAILED");
+  SecurityStage(objectName,"after-apply");
   PSECURITY_DESCRIPTOR actual=nullptr; PACL actualDacl=nullptr, actualLabel=nullptr;
   PSID actualOwner=nullptr, actualGroup=nullptr;
   status=GetSecurityInfo(object,SE_FILE_OBJECT,
@@ -130,14 +164,17 @@ static void ApplyAndVerifySecurity(HANDLE object, const wchar_t* sddl) {
     &actualOwner,&actualGroup,&actualDacl,&actualLabel,&actual);
   SECURITY_DESCRIPTOR_CONTROL control=0; DWORD revision=0;
   bool protectedDacl=actual && GetSecurityDescriptorControl(actual,&control,&revision) && (control&SE_DACL_PROTECTED);
+  SecurityStage(objectName,"after-readback");
   bool exact=status==ERROR_SUCCESS && actual && actualOwner && actualGroup && actualDacl && actualLabel &&
-    IsValidSid(actualOwner) && IsValidSid(actualGroup) && EqualSid(owner,actualOwner) && EqualSid(group,actualGroup) &&
-    SameAcl(dacl,actualDacl) && SameAcl(label,actualLabel) && protectedDacl;
-  if(actual)LocalFree(actual); LocalFree(descriptor);
+    IsValidSid(actualOwner) && IsValidSid(actualGroup) &&
+    EqualSid(expectedOwner,actualOwner) && EqualSid(expectedGroup,actualGroup) &&
+    SameAcl(expectedDacl,actualDacl) && SameAcl(expectedLabel,actualLabel) && protectedDacl;
+  if(actual)LocalFree(actual);
   if(!exact) throw std::string("PHASE_E_ACL_VERIFY_FAILED");
+  SecurityStage(objectName,"verified");
 }
 static void NormalizeOwnedSecurity(HANDLE object) {
-  ApplyAndVerifySecurity(object,L"O:SYG:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)S:(ML;;NW;;;HI)");
+  ApplyAndVerifySecurity(object,L"O:SYG:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)S:(ML;;NW;;;HI)","owned");
 }
 static std::wstring CurrentUserSid() {
   HANDLE token=nullptr; if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&token))throw std::string("PHASE_E_TOKEN_QUERY_FAILED");
@@ -148,7 +185,7 @@ static std::wstring CurrentUserSid() {
 static void NormalizeSlotSecurity(HANDLE object,const std::wstring& sid) {
   std::wstring userSid=CurrentUserSid(); if(userSid.empty())throw std::string("PHASE_E_TOKEN_QUERY_FAILED");
   std::wstring sddl=L"O:SYG:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200a9;;;"+sid+L")(A;;0x1200a9;;;"+userSid+L")S:(ML;;NW;;;HI)";
-  ApplyAndVerifySecurity(object,sddl.c_str());
+  ApplyAndVerifySecurity(object,sddl.c_str(),"slot");
 }
 // Every file returned here is normalized and re-verified through this retained
 // handle.  LABEL_SECURITY_INFORMATION uses WRITE_OWNER; owner/group, DACL, and

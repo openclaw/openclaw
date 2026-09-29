@@ -207,10 +207,14 @@ describe("Phase E maintainer policy", () => {
     expect(source).toContain(
       "DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION|LABEL_SECURITY_INFORMATION",
     );
-    expect(source).toContain("owner,group,dacl,label");
-    expect(source).toContain("EqualSid(owner,actualOwner)");
-    expect(source).toContain("SameAcl(dacl,actualDacl)");
-    expect(source).toContain("SameAcl(label,actualLabel)");
+    expect(source).toContain("expectedOwner,expectedGroup,expectedDacl,expectedLabel");
+    expect(source).toContain("CopySid(ownerLength,ownerBytes.data(),owner)");
+    expect(source).toContain("IsValidAcl(dacl)");
+    expect(source).toContain("EqualSid(expectedOwner,actualOwner)");
+    expect(source).toContain("SameAcl(expectedDacl,actualDacl)");
+    expect(source).toContain("SameAcl(expectedLabel,actualLabel)");
+    expect(source).toContain("PHASE_E_SECURITY_STAGE:%s:%s");
+    expect(source).toContain("fflush(stderr)");
     expect(source).toContain("SE_DACL_PROTECTED");
     expect(source).toContain("FILE_FLAG_OPEN_REPARSE_POINT");
     expect(source).toContain("GENERIC_READ|GENERIC_WRITE|READ_CONTROL|WRITE_DAC|WRITE_OWNER");
