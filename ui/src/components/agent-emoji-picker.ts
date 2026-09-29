@@ -40,14 +40,13 @@ const choices = Object.entries(emojiDefinitions).map(([name, emoji]) => ({ name,
 const favoriteChoices = favorites.map(
   (emoji) => choices.find((choice) => choice.emoji === emoji) ?? { name: emoji, emoji },
 );
-let nextId = 0;
 
 export class AgentEmojiPicker extends OpenClawLightDomElement {
   @property() value = "";
   @property({ type: Boolean }) disabled = false;
   @property({ attribute: false }) onSelect: (emoji: string) => void = () => undefined;
   @state() private query = "";
-  private readonly triggerId = `agent-emoji-trigger-${++nextId}`;
+  private readonly triggerId = `agent-emoji-trigger-${crypto.randomUUID()}`;
 
   private select(emoji: string) {
     if (this.disabled || !emoji.trim()) {
