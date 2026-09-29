@@ -337,6 +337,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             gatewayScope: props.gatewayScope,
             sessionIdentity: props.progressCardIdentity,
             cardLifetime: props.progressCardLifetime,
+            activeRunId: props.runId,
+            snapshotRunId: activeSession?.lastRunId,
             readingHistory: props.readingHistory,
             onManipulate: props.onProgressManipulate,
           },

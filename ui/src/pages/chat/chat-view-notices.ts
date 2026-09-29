@@ -4,14 +4,14 @@ import type {
   SessionPlacementWorkerRuntimeInstall,
 } from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
-import { renderCopyButton } from "../../components/copy-button.ts";
 import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
-import { clampText } from "../../lib/format.ts";
+import { hasTranscriptRunError } from "./chat-error-presentation.ts";
+import { renderChatErrorCard, renderChatErrorRefresh } from "./components/chat-error-card.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
@@ -117,49 +117,6 @@ function renderWorkerRuntimeInstallNotice(
   `;
 }
 
-function renderErrorNotice(
-  error: string,
-  action: TemplateResult | typeof nothing = nothing,
-  displayError = formatWebUiIconErrorText(error),
-  tone: "danger" | "warn" = "danger",
-) {
-  const lines = displayError
-    .trim()
-    .split(/\r?\n/u)
-    .map((line) => line.replace(/\s+/gu, " ").trim());
-  const [firstLine = ""] = lines;
-  const summary = clampText(firstLine);
-  const hasDetails = lines.some((line) => line !== "" && line !== summary);
-  // Keep the bounded summary readable without opening the technical details.
-  return html`
-    <div
-      class="chat-composer-neighbor-card chat-composer-neighbor-card--${tone} chat-error"
-      role=${tone === "warn" ? "status" : "alert"}
-    >
-      <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
-        >${icons.alertTriangle}</span
-      >
-      ${
-        hasDetails
-          ? html`<details class="chat-error__content">
-              <summary class="chat-error__summary">
-                <strong>${summary}</strong>
-                <span>${t("chat.details")}</span>
-                <span class="chat-error__chevron" aria-hidden="true">${icons.chevronDown}</span>
-                ${renderCopyButton(error, t("chat.copyError"))}
-              </summary>
-              <pre class="chat-error__diagnostic" tabindex="0" aria-label=${t("chat.errorDetails")}>
-${displayError}</pre>
-            </details>`
-          : html`<span class="chat-error__content"
-              ><strong>${summary}</strong>${renderCopyButton(error, t("chat.copyError"))}</span
-            >`
-      }
-      ${action}
-    </div>
-  `;
-}
-
 export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
   const dismiss = props.onDismissError
     ? html`
@@ -179,7 +136,7 @@ export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
     <div class="chat-topbar-notices">
       ${renderDiskSpaceNotice(props.diskSpace)}
       ${renderWorkerRuntimeInstallNotice(props.workerRuntimeInstall)}
-      ${props.error ? renderErrorNotice(props.error, dismiss) : nothing}
+      ${props.error ? renderChatErrorCard(props.error, dismiss) : nothing}
       ${
         props.focusMode && props.onToggleFocusMode
           ? html`
@@ -202,20 +159,11 @@ export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
 
 export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
   const contention = props.runError?.kind === "state_contention";
-  const refresh = props.onRefresh
-    ? html`<button
-        class="btn btn--sm chat-error__refresh"
-        type="button"
-        ?disabled=${!props.connected}
-        @click=${props.onRefresh}
-      >
-        ${t(contention ? "chat.checkStatus" : "common.refresh")}
-      </button>`
-    : nothing;
+  const refresh = renderChatErrorRefresh(props.onRefresh, props.connected, contention);
   return html`
     ${props.providerReviewNotice ?? nothing}
     ${renderProviderPolicyNotice(props.providerPolicyNotice)}
-    ${props.runError ? renderErrorNotice(props.runError.summary, refresh, undefined, contention ? "warn" : "danger") : nothing}
+    ${props.runError && !hasTranscriptRunError(props.messages, props.runError) ? renderChatErrorCard(props.runError.summary, refresh, undefined, contention ? "warn" : "danger") : nothing}
     ${renderWorkspaceConflictNotice({
       conflict: props.workspaceConflict ?? undefined,
       onDismiss: props.onDismissWorkspaceConflict,
@@ -291,5 +239,5 @@ function renderPlacementStartupError(
           ${t(checking ? "chat.queue.checkDelivery" : "common.retry")}
         </button>`
       : nothing;
-  return renderErrorNotice(error, action, displayError);
+  return renderChatErrorCard(error, action, displayError);
 }

@@ -28,13 +28,15 @@ import {
 } from "../../../lib/chat/tool-cards.ts";
 import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
+import { readTranscriptRunError } from "../chat-error-presentation.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
-import "./chat-clawhub-card.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
+import "./chat-clawhub-card.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { readAsyncQuestions, renderAsyncQuestionSummary } from "./chat-async-question.ts";
 import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
+import { renderChatErrorCard, renderChatErrorRefresh } from "./chat-error-card.ts";
 import { renderOmittedMedia } from "./chat-message-attachment-status.ts";
 import {
   hasUserFileAttachments,
@@ -56,6 +58,7 @@ import {
   type AttachmentItem,
 } from "./chat-message-media.ts";
 import {
+  renderMessageDuplicateCount,
   renderMessageJson,
   renderMessageMarkdown,
   type AssistantMessageDisclosure,
@@ -197,6 +200,8 @@ export function renderGroupedMessage(
     onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
     toolCardOverrides?: ReadonlyMap<ToolCard, unknown>;
     onRequestUpdate?: () => void;
+    onRefreshDiagnostic?: () => void;
+    diagnosticRefreshConnected?: boolean;
     canvasPluginSurfaceUrl?: string | null;
     resourceBasePath?: string;
     mediaPolicyKey?: string;
@@ -241,6 +246,7 @@ export function renderGroupedMessage(
   if (workspaceConflict) {
     return renderWorkspaceConflictTranscriptMessage(workspaceConflict, messageKey, opts.entryId);
   }
+  const diagnostic = readTranscriptRunError(message);
   const isToolShell = normalizedRole === "tool";
   const isStandaloneToolMessage = isStandaloneToolMessageForDisplay(message);
 
@@ -360,6 +366,7 @@ export function renderGroupedMessage(
       ));
   const bubbleClasses = [
     "chat-bubble",
+    diagnostic ? "chat-bubble--run-error" : "",
     transparentShell ? "chat-bubble--with-images" : "",
     onlyPreviewChips ? "chat-bubble--preview-chips-only" : "",
     hasUserFiles ? "chat-bubble--with-files" : "",
@@ -540,7 +547,15 @@ export function renderGroupedMessage(
       { ...prepared.media, text: bodyMarkdown ?? "" },
     );
   };
-  const renderMessageContent = () => (renderInOrder ? renderOrderedContent() : renderText());
+  const renderMessageContent = () =>
+    diagnostic
+      ? renderChatErrorCard(
+          diagnostic,
+          renderChatErrorRefresh(opts.onRefreshDiagnostic, opts.diagnosticRefreshConnected),
+        )
+      : renderInOrder
+        ? renderOrderedContent()
+        : renderText();
   // Collapsed tool results must not load attachments or render hidden markdown.
   // Retained panes use opacity, so hidden transcripts must unmount video previews.
   const renderBody = () => html`
@@ -697,15 +712,8 @@ export function renderGroupedMessage(
           : nothing
       }
       ${
-        duplicateCount > 1 && (!markdown || jsonResult)
-          ? html`<div
-              class="chat-duplicate-count"
-              aria-label=${t("chat.messages.duplicatesCollapsed", {
-                count: String(duplicateCount),
-              })}
-            >
-              ×${duplicateCount}
-            </div>`
+        diagnostic || !markdown || jsonResult
+          ? renderMessageDuplicateCount(duplicateSuffix)
           : nothing
       }
     </div>

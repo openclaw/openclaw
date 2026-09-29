@@ -83,6 +83,7 @@ export type ChatThreadState = {
       string,
       readonly import("./chat-turn-video-gallery.ts").TurnVideoMessage[]
     >;
+    onRefresh?: () => void;
     onSetReply?: (target: MessageReplyTarget) => void;
     onOpenReply?: (replyToId: string) => void;
     onAsyncQuestionDiscard?: (item: ChatQueueItem) => void;
@@ -113,6 +114,9 @@ export type ChatThreadProps = ChatSendStatusActions & {
   /** Mounted transcript visibility, independent of which split pane owns input. */
   transcriptVisible?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
+  connected?: boolean;
+  /** Pane-owned history/status refresh, never a retry of the diagnostic run. */
+  onRefresh?: () => void;
   selectedSession: GatewaySessionRow | undefined;
   boardProvider?: BoardProvider;
   announceTranscript?: boolean;

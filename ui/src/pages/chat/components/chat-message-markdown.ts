@@ -14,6 +14,7 @@ import {
   normalizeRoleForGrouping,
 } from "../../../lib/chat/message-normalizer.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
+import { readTranscriptRunError } from "../chat-error-presentation.ts";
 import {
   resolveCappedMessageId,
   resolveSourceMessageId,
@@ -40,7 +41,8 @@ export const FULL_MESSAGE_RETRY_REVISION_LIMIT = 6;
 // Options and action handlers outlive a render; keep this preparation separate from them.
 export function prepareChatMessageRender(message: unknown) {
   const normalizedMessage = normalizeMessage(message);
-  const displayMarkdown = resolveMessageDisplayMarkdown(message, normalizedMessage);
+  const displayMarkdown =
+    readTranscriptRunError(message) ?? resolveMessageDisplayMarkdown(message, normalizedMessage);
   const record = asNullableRecord(message);
   const metadata = asNullableRecord(record?.["__openclaw"]);
   let humanMentions: ReturnType<typeof readHumanMentions>;
@@ -96,7 +98,10 @@ export function resolveMessageActionDetails(
     ? { messageId: cappedMessageId, state: params.getAssistantMessageExpansion?.(cappedMessageId) }
     : undefined;
   const expansion = fullMessage?.state;
-  const expandedMarkdown = expansion?.status === "loaded" ? expansion.markdown : previewMarkdown;
+  const expandedMarkdown =
+    expansion?.status === "loaded"
+      ? (readTranscriptRunError(expansion.message) ?? expansion.markdown)
+      : previewMarkdown;
   const visibleMarkdown =
     role === "assistant" ? stripThinkingTags(expandedMarkdown) : expandedMarkdown;
   const markdown =

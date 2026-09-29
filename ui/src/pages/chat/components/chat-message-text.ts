@@ -26,6 +26,13 @@ type DuplicateSuffix = {
   label: string;
 };
 
+/** Non-Markdown bodies still expose the grouping owner's repeat count. */
+export function renderMessageDuplicateCount(suffix: DuplicateSuffix | undefined) {
+  return suffix
+    ? html`<div class="chat-duplicate-count" aria-label=${suffix.label}>×${suffix.count}</div>`
+    : nothing;
+}
+
 type MessageTextOptions = {
   role: string;
   isStreaming: boolean;

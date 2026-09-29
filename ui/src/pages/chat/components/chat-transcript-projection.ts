@@ -371,6 +371,10 @@ export function projectChatTranscript(
     return {
       ...sharedMessageRenderOptions,
       transcriptVisible: props.transcriptVisible,
+      onRefreshDiagnostic: props.onRefresh
+        ? () => state.transcriptRenderContext.onRefresh?.()
+        : undefined,
+      diagnosticRefreshConnected: props.connected,
       latestBrowserTabs,
       showReasoning,
       showToolCalls: props.showToolCalls,
@@ -662,6 +666,8 @@ export function projectChatTranscript(
     markdownGitHubAliasSignature(props.githubRepositories, props.githubRepo),
     threadContextWindow,
     Boolean(props.onSetReply),
+    Boolean(props.onRefresh),
+    Boolean(props.connected),
     Boolean(props.asyncQuestions?.submit),
     Boolean(props.onRetryQueuedMessage),
     Boolean(props.onDiscardQueuedMessage),
@@ -678,6 +684,7 @@ export function projectChatTranscript(
     chatItems,
     searchFiltering ? chatItemsInput : undefined,
   );
+  state.transcriptRenderContext.onRefresh = props.onRefresh;
   state.transcriptRenderContext.onSetReply = props.onSetReply;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {
     const loaded = loadedReplySources.get(replyToId);
