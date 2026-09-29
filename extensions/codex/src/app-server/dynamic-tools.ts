@@ -75,6 +75,8 @@ import {
 import {
   createFailedDynamicToolResponse,
   failedToolResult,
+  isAsyncStartedToolResult,
+  isToolResultYield,
   type CodexDynamicToolRuntimeResponse,
 } from "./dynamic-tool-response-state.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
@@ -640,6 +642,11 @@ export function createCodexDynamicToolBridge(params: {
             diagnosticTerminalReason:
               resultFailureKind === "blocked" ? undefined : resultFailureKind,
             transcriptDetails: asOptionalRecord(sanitizeToolResult(result))?.details,
+            // Codex's protocol cannot carry host provenance; retain the executed
+            // result's per-invocation source (falling back to the tool's static
+            // marker) for the mirrored transcript only.
+            resultContentSource:
+              rawResult.resultContentSource ?? toolEntry.tool.resultContentSource,
           };
           const toolConfirmedSourceReply =
             params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
@@ -858,17 +865,6 @@ function toToolResultHookContext(
   };
 }
 
-function isToolResultYield(result: AgentToolResult<unknown>): boolean {
-  const details = result.details;
-  if (!isRecord(details) || typeof details.status !== "string") {
-    return false;
-  }
-  return details.status.trim().toLowerCase() === "yielded";
-}
-function isAsyncStartedToolResult(result: AgentToolResult<unknown>): boolean {
-  const details = result.details;
-  return isRecord(details) && details.async === true && details.status === "started";
-}
 function sanitizeToolTextRuns(
   rawContent: Array<TextContent | ImageContent>,
 ): Array<TextContent | ImageContent> {

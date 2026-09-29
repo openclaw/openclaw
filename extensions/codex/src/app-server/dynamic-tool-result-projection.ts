@@ -22,5 +22,7 @@ export function recordCodexDynamicToolResult(
       response.terminalResolution?.sideEffectEvidence === true,
     contentItems: protocolResponse.contentItems,
     details: response.transcriptDetails,
+    // Per-invocation provenance captured from the executed result, when present.
+    ...(response.resultContentSource ? { resultContentSource: response.resultContentSource } : {}),
   });
 }
