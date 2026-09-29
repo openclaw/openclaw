@@ -201,6 +201,16 @@ describe("Phase E maintainer policy", () => {
     expect(source).toContain("NormalizeOwnedSecurity(HANDLE object)");
     expect(source).toContain("SetSecurityInfo(object,SE_FILE_OBJECT");
     expect(source).toContain("GetSecurityInfo(object,SE_FILE_OBJECT");
+    expect(source).toContain("GetSecurityDescriptorOwner");
+    expect(source).toContain("GetSecurityDescriptorGroup");
+    expect(source).toContain("GetSecurityDescriptorSacl");
+    expect(source).toContain(
+      "DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION|LABEL_SECURITY_INFORMATION",
+    );
+    expect(source).toContain("owner,group,dacl,label");
+    expect(source).toContain("EqualSid(owner,actualOwner)");
+    expect(source).toContain("SameAcl(dacl,actualDacl)");
+    expect(source).toContain("SameAcl(label,actualLabel)");
     expect(source).toContain("SE_DACL_PROTECTED");
     expect(source).toContain("FILE_FLAG_OPEN_REPARSE_POINT");
   });

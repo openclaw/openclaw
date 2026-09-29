@@ -28,3 +28,13 @@ leaves no canonical account or Phase E root:
 .\extensions\srt-sandbox\scripts\exercise-windows-arm64-phase-e-rng.ps1 `
   -AddonPath C:\phase-e-build\phase_e_maintainer.node
 ```
+
+From that same console, execute the retained-handle ACL component gate. It
+requires setup to pass application and exact read-back verification of the
+SYSTEM owner/group, protected DACL, expected ACEs, and high-integrity label,
+then fault immediately after root security normalization and prove rollback:
+
+```powershell
+.\extensions\srt-sandbox\scripts\exercise-windows-arm64-phase-e-acl.ps1 `
+  -AddonPath C:\phase-e-build\phase_e_maintainer.node
+```

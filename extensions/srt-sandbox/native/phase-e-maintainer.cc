@@ -102,20 +102,42 @@ static void CheckPrerequisites() {
 static void WriteAll(HANDLE file,const std::string& text) { DWORD written=0; if(!WriteFile(file,text.data(),static_cast<DWORD>(text.size()),&written,nullptr)||written!=text.size()||!FlushFileBuffers(file)) throw std::string("PHASE_E_STORE_WRITE_FAILED"); }
 // Security is applied and inspected through an already-open handle.  Paths are
 // never re-opened after mutation, which keeps the reparse check meaningful.
-static void NormalizeOwnedSecurity(HANDLE object) {
+static bool SameAcl(PACL left, PACL right) {
+  return left && right && left->AclSize == right->AclSize &&
+         !memcmp(left, right, left->AclSize);
+}
+static void ApplyAndVerifySecurity(HANDLE object, const wchar_t* sddl) {
   PSECURITY_DESCRIPTOR descriptor=nullptr;
   if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(
-       L"O:SYG:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)S:(ML;;NW;;;HI)", SDDL_REVISION_1, &descriptor, nullptr))
+       sddl, SDDL_REVISION_1, &descriptor, nullptr))
     throw std::string("PHASE_E_ACL_BUILD_FAILED");
-  PACL dacl=nullptr; BOOL present=FALSE, defaulted=FALSE;
-  if(!GetSecurityDescriptorDacl(descriptor,&present,&dacl,&defaulted) || !present || !dacl) { LocalFree(descriptor); throw std::string("PHASE_E_ACL_BUILD_FAILED"); }
-  DWORD status=SetSecurityInfo(object,SE_FILE_OBJECT,OWNER_SECURITY_INFORMATION|GROUP_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION|LABEL_SECURITY_INFORMATION,nullptr,nullptr,dacl,nullptr);
-  LocalFree(descriptor); if(status!=ERROR_SUCCESS) throw std::string("PHASE_E_ACL_SET_FAILED");
-  PSECURITY_DESCRIPTOR actual=nullptr; PACL actualDacl=nullptr; PSID owner=nullptr;
-  status=GetSecurityInfo(object,SE_FILE_OBJECT,OWNER_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION|LABEL_SECURITY_INFORMATION,&owner,nullptr,&actualDacl,nullptr,&actual);
-  if(status!=ERROR_SUCCESS || !actual || !owner || !actualDacl || !IsValidSid(owner)) { if(actual)LocalFree(actual); throw std::string("PHASE_E_ACL_VERIFY_FAILED"); }
-  SECURITY_DESCRIPTOR_CONTROL control=0; DWORD revision=0; bool protectedDacl=GetSecurityDescriptorControl(actual,&control,&revision) && (control&SE_DACL_PROTECTED);
-  LocalFree(actual); if(!protectedDacl) throw std::string("PHASE_E_ACL_VERIFY_FAILED");
+  PSID owner=nullptr, group=nullptr; PACL dacl=nullptr, label=nullptr;
+  BOOL daclPresent=FALSE, daclDefaulted=FALSE, labelPresent=FALSE, labelDefaulted=FALSE;
+  if(!GetSecurityDescriptorOwner(descriptor,&owner,nullptr) || !owner || !IsValidSid(owner) ||
+     !GetSecurityDescriptorGroup(descriptor,&group,nullptr) || !group || !IsValidSid(group) ||
+     !GetSecurityDescriptorDacl(descriptor,&daclPresent,&dacl,&daclDefaulted) || !daclPresent || !dacl ||
+     !GetSecurityDescriptorSacl(descriptor,&labelPresent,&label,&labelDefaulted) || !labelPresent || !label) {
+    LocalFree(descriptor); throw std::string("PHASE_E_ACL_BUILD_FAILED");
+  }
+  DWORD status=SetSecurityInfo(object,SE_FILE_OBJECT,
+    OWNER_SECURITY_INFORMATION|GROUP_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION|LABEL_SECURITY_INFORMATION,
+    owner,group,dacl,label);
+  if(status!=ERROR_SUCCESS) { LocalFree(descriptor); throw std::string("PHASE_E_ACL_SET_FAILED"); }
+  PSECURITY_DESCRIPTOR actual=nullptr; PACL actualDacl=nullptr, actualLabel=nullptr;
+  PSID actualOwner=nullptr, actualGroup=nullptr;
+  status=GetSecurityInfo(object,SE_FILE_OBJECT,
+    OWNER_SECURITY_INFORMATION|GROUP_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION|LABEL_SECURITY_INFORMATION,
+    &actualOwner,&actualGroup,&actualDacl,&actualLabel,&actual);
+  SECURITY_DESCRIPTOR_CONTROL control=0; DWORD revision=0;
+  bool protectedDacl=actual && GetSecurityDescriptorControl(actual,&control,&revision) && (control&SE_DACL_PROTECTED);
+  bool exact=status==ERROR_SUCCESS && actual && actualOwner && actualGroup && actualDacl && actualLabel &&
+    IsValidSid(actualOwner) && IsValidSid(actualGroup) && EqualSid(owner,actualOwner) && EqualSid(group,actualGroup) &&
+    SameAcl(dacl,actualDacl) && SameAcl(label,actualLabel) && protectedDacl;
+  if(actual)LocalFree(actual); LocalFree(descriptor);
+  if(!exact) throw std::string("PHASE_E_ACL_VERIFY_FAILED");
+}
+static void NormalizeOwnedSecurity(HANDLE object) {
+  ApplyAndVerifySecurity(object,L"O:SYG:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)S:(ML;;NW;;;HI)");
 }
 static std::wstring CurrentUserSid() {
   HANDLE token=nullptr; if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&token))throw std::string("PHASE_E_TOKEN_QUERY_FAILED");
@@ -126,16 +148,7 @@ static std::wstring CurrentUserSid() {
 static void NormalizeSlotSecurity(HANDLE object,const std::wstring& sid) {
   std::wstring userSid=CurrentUserSid(); if(userSid.empty())throw std::string("PHASE_E_TOKEN_QUERY_FAILED");
   std::wstring sddl=L"O:SYG:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200a9;;;"+sid+L")(A;;0x1200a9;;;"+userSid+L")S:(ML;;NW;;;HI)";
-  PSECURITY_DESCRIPTOR descriptor=nullptr;
-  if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(),SDDL_REVISION_1,&descriptor,nullptr)) throw std::string("PHASE_E_ACL_BUILD_FAILED");
-  PACL dacl=nullptr; BOOL present=FALSE, defaulted=FALSE;
-  if(!GetSecurityDescriptorDacl(descriptor,&present,&dacl,&defaulted)||!present||!dacl){LocalFree(descriptor);throw std::string("PHASE_E_ACL_BUILD_FAILED");}
-  DWORD status=SetSecurityInfo(object,SE_FILE_OBJECT,OWNER_SECURITY_INFORMATION|GROUP_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION|LABEL_SECURITY_INFORMATION,nullptr,nullptr,dacl,nullptr); LocalFree(descriptor);
-  if(status!=ERROR_SUCCESS)throw std::string("PHASE_E_ACL_SET_FAILED");
-  PSECURITY_DESCRIPTOR actual=nullptr; PACL actualDacl=nullptr; PSID owner=nullptr;
-  status=GetSecurityInfo(object,SE_FILE_OBJECT,OWNER_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION|LABEL_SECURITY_INFORMATION,&owner,nullptr,&actualDacl,nullptr,&actual);
-  SECURITY_DESCRIPTOR_CONTROL control=0; DWORD revision=0; bool protectedDacl=status==ERROR_SUCCESS&&actual&&owner&&actualDacl&&IsValidSid(owner)&&GetSecurityDescriptorControl(actual,&control,&revision)&&(control&SE_DACL_PROTECTED);
-  if(actual)LocalFree(actual); if(!protectedDacl)throw std::string("PHASE_E_ACL_VERIFY_FAILED");
+  ApplyAndVerifySecurity(object,sddl.c_str());
 }
 static HANDLE OpenSafe(const wchar_t* path,DWORD disposition) { HANDLE file=CreateFileW(path,GENERIC_READ|GENERIC_WRITE,0,nullptr,disposition,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr); if(file==INVALID_HANDLE_VALUE) throw std::string("PHASE_E_STORE_OPEN_FAILED"); BY_HANDLE_FILE_INFORMATION info{}; if(!GetFileInformationByHandle(file,&info)||(info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)){CloseHandle(file);throw std::string("PHASE_E_REPARSE_DETECTED");} return file; }
 static bool ExistsSafe(const std::wstring& path,bool directory=false) { HANDLE handle=CreateFileW(path.c_str(),READ_CONTROL,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT|(directory?FILE_FLAG_BACKUP_SEMANTICS:0),nullptr); if(handle==INVALID_HANDLE_VALUE){DWORD error=GetLastError();if(error==ERROR_FILE_NOT_FOUND||error==ERROR_PATH_NOT_FOUND)return false;throw std::string("PHASE_E_ARTIFACT_QUERY_FAILED");} BY_HANDLE_FILE_INFORMATION info{}; bool ok=GetFileInformationByHandle(handle,&info)&&!(info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT); CloseHandle(handle); if(!ok)throw std::string("PHASE_E_REPARSE_DETECTED"); return true; }
@@ -208,8 +221,9 @@ static void RemoveOwnedFwpm(const std::vector<Account>& accounts) { HANDLE engin
 static void CreatePool(FaultPoint fault) {
   size_t legacy; auto prior=Inspect(&legacy); if(!prior.empty()) throw std::string("PHASE_E_NAMESPACE_AMBIGUOUS"); std::vector<std::wstring> made;
   std::vector<Account> accounts;
-  try { for(auto& name:kPool){ USER_INFO_1 user{}; user.usri1_name=const_cast<wchar_t*>(name); user.usri1_priv=USER_PRIV_USER; user.usri1_flags=UF_SCRIPT|UF_DONT_EXPIRE_PASSWD; DWORD parameter=0; if(NetUserAdd(nullptr,1,reinterpret_cast<LPBYTE>(&user),&parameter)!=NERR_Success) throw std::string("PHASE_E_ACCOUNT_CREATE_FAILED"); made.push_back(name); Inject(fault,FaultPoint::Account); SetPhaseEPassword(name); Inject(fault,FaultPoint::Credential); } size_t ignored; accounts=Inspect(&ignored); if(accounts.size()!=8) throw std::string("PHASE_E_POSTCONDITION_FAILED"); CheckPrerequisites(); EnsureSafeRoot(); Inject(fault,FaultPoint::RootStore); EnsureProfilesAndScratch(accounts); Inject(fault,FaultPoint::ProfileScratch); ReconcileFwpm(accounts); Inject(fault,FaultPoint::Fwpm); PersistOwnedState(accounts); }
-  catch(...) { if(!accounts.empty()) { try { RemoveOwnedFwpm(accounts); } catch(...) {} } try { RemoveOwnedState(); } catch(...) {} for(auto& name:made) NetUserDel(nullptr,name.c_str()); throw; }
+  bool rootCreated=false;
+  try { for(auto& name:kPool){ USER_INFO_1 user{}; user.usri1_name=const_cast<wchar_t*>(name); user.usri1_priv=USER_PRIV_USER; user.usri1_flags=UF_SCRIPT|UF_DONT_EXPIRE_PASSWD; DWORD parameter=0; if(NetUserAdd(nullptr,1,reinterpret_cast<LPBYTE>(&user),&parameter)!=NERR_Success) throw std::string("PHASE_E_ACCOUNT_CREATE_FAILED"); made.push_back(name); Inject(fault,FaultPoint::Account); SetPhaseEPassword(name); Inject(fault,FaultPoint::Credential); } size_t ignored; accounts=Inspect(&ignored); if(accounts.size()!=8) throw std::string("PHASE_E_POSTCONDITION_FAILED"); CheckPrerequisites(); rootCreated=!ExistsSafe(kRoot,true); EnsureSafeRoot(); Inject(fault,FaultPoint::RootStore); EnsureProfilesAndScratch(accounts); Inject(fault,FaultPoint::ProfileScratch); ReconcileFwpm(accounts); Inject(fault,FaultPoint::Fwpm); PersistOwnedState(accounts); }
+  catch(...) { if(!accounts.empty()) { try { RemoveOwnedFwpm(accounts); } catch(...) {} } try { RemoveOwnedState(); } catch(...) {} if(rootCreated)RemoveDirectoryW(kRoot); for(auto& name:made) NetUserDel(nullptr,name.c_str()); throw; }
 }
 static std::string Evidence(const char* mode,const char* outcome,const std::vector<Account>& accounts,size_t legacy) {
   std::string list; for(size_t i=0;i<accounts.size();++i){ if(i) list+=','; std::string name(accounts[i].name.begin(),accounts[i].name.end()),sid=SidJsonText(accounts[i].sid); list+="{\"name\":\""+name+"\",\"sid\":\""+sid+"\"}"; }
