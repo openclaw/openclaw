@@ -20,7 +20,7 @@ export async function resolveDiscordTarget(
     return undefined;
   }
 
-  const likelyUsername = isLikelyUsername(trimmed);
+  const likelyUsername = !/^(user:|channel:|discord:|@|<@!?)|[\d]+$/.test(trimmed);
   const shouldLookup = isExplicitUserLookup(trimmed, parseOptions) || likelyUsername;
 
   if (
@@ -103,24 +103,10 @@ function isConfiguredAllowedDiscordDmUser(input: string, options: DirectoryConfi
 }
 
 function isExplicitUserLookup(input: string, options: DiscordTargetParseOptions): boolean {
-  if (/^<@!?(\d+)>$/.test(input)) {
-    return true;
-  }
-  if (/^(user:|discord:)/.test(input)) {
-    return true;
-  }
-  if (input.startsWith("@")) {
-    return true;
-  }
-  if (/^\d+$/.test(input)) {
-    return options.defaultKind === "user";
-  }
-  return false;
-}
-
-function isLikelyUsername(input: string): boolean {
-  if (/^(user:|channel:|discord:|@|<@!?)|[\d]+$/.test(input)) {
-    return false;
-  }
-  return true;
+  return (
+    /^<@!?(\d+)>$/.test(input) ||
+    /^(user:|discord:)/.test(input) ||
+    input.startsWith("@") ||
+    (/^\d+$/.test(input) && options.defaultKind === "user")
+  );
 }

@@ -484,12 +484,10 @@ export function boundReportDocument(input: ReportDocument): ReportDocument {
     .flatMap((member) => [
       ...member.github.items.map((item) => ({
         atMs: item.atMs,
-        value: item,
         list: member.github.items,
       })),
       ...member.discord.excerpts.map((excerpt) => ({
         atMs: excerpt.atMs,
-        value: excerpt,
         list: member.discord.excerpts,
       })),
     ])

@@ -127,6 +127,8 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
   onCommitRequest: () => void;
   withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
   validationOwner?: SqliteMutationWorkerValidationOwner;
+  /** Opening proof remains revocable and is adopted only against the worker's native identity. */
+  readOpeningValidation?: () => OpenClawAgentDatabaseValidation | undefined;
   dispatch?: () => void;
   getFailure?: () => Error | undefined;
   onExit?: (code: number) => void;
@@ -142,7 +144,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
       : undefined;
   const readValidation = () => {
     if (!validationOwner) {
-      return undefined;
+      return params.readOpeningValidation?.();
     }
     if ("database" in validationOwner) {
       return validationOwner.isCurrent()

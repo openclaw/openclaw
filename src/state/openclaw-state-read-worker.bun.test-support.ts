@@ -9,7 +9,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
 } from "./openclaw-state-db-cache.js";
-import { createOpenClawStateReadTransport } from "./openclaw-state-read-worker.js";
+import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
 
 const root = process.argv[2] ?? "";
 assert(root);
@@ -30,32 +30,47 @@ function lifecycle() {
   const worker = snapshot.workerLifecycle.find(
     ({ script }) => script === "openclaw-state-read.worker.js",
   );
-  return {
-    started: worker?.started ?? 0,
-    retired: worker?.retired.reduce((total, { count }) => total + count, 0) ?? 0,
-    live: snapshot.workerCount,
-  };
+  const supervisor = snapshot.workerLifecycle.find(
+    ({ script }) => script === "worker-native-lifecycle.worker.js",
+  );
+  assert(worker);
+  assert(supervisor);
+  assert.deepEqual(
+    snapshot.workerLifecycle.map(({ script }) => script).toSorted(),
+    ["openclaw-state-read.worker.js", "worker-native-lifecycle.worker.js"],
+    "only the SQL reader and its retained supervisor are tracked",
+  );
+  const retired = worker.retired.reduce((total, { count }) => total + count, 0);
+  const supervisorRetired = supervisor.retired.reduce((total, { count }) => total + count, 0);
+  assert.deepEqual(
+    { started: supervisor.started, retired: supervisorRetired },
+    { started: 1, retired: 0 },
+    "the unbound SQL-free supervisor remains until process exit",
+  );
+  const live = worker.started - retired;
+  assert.equal(snapshot.workerCount, live + supervisor.started - supervisorRetired);
+  return { started: worker.started, retired, live };
 }
 
 async function read(location = filename, checkFreshAdmission = false) {
   const admission = captureOpenClawStateDatabaseReadAdmission(filename);
-  const transport = createOpenClawStateReadTransport({ type: "nodeHost.config" });
+  const transport = captureOpenClawStateReadSource().createTransport({ type: "nodeHost.config" });
   try {
-    const outcome = await transport.read(
+    const outcome = await transport.startRead(
       {
         context: { environment: { OPENCLAW_STATE_DIR: root }, admission },
         location,
         checkFreshAdmission,
       },
       { signal: new AbortController().signal, assertCurrent: admission.assertCurrent },
-    );
+    ).result;
     if ("error" in outcome) {
       throw outcome.error;
     }
     assert(outcome.value.ok && outcome.value.type === "nodeHost.config");
     assert.equal(outcome.value.row?.updated_at_ms, 1);
   } finally {
-    await transport.close();
+    await transport.startClose().result;
   }
 }
 

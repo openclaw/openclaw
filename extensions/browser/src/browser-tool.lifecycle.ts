@@ -113,23 +113,16 @@ export async function executeBrowserLifecycleAction({
           timeoutMs: toolTimeoutMs,
           signal,
         });
-      if (proxyRequest) {
-        const result = await proxyRequest({
-          method: "GET",
-          path: "/profiles",
-          timeoutMs: toolTimeoutMs,
-        });
-        return jsonResult({
-          ...(result && typeof result === "object" ? result : { profiles: result }),
-          systemProfiles,
-          ...(systemProfilesUnavailable ? { systemProfilesUnavailable } : {}),
-        });
-      }
+      const result = proxyRequest
+        ? await proxyRequest({ method: "GET", path: "/profiles", timeoutMs: toolTimeoutMs })
+        : {
+            profiles: await browserProfiles(baseUrl, {
+              timeoutMs: toolTimeoutMs,
+              signal,
+            }),
+          };
       return jsonResult({
-        profiles: await browserProfiles(baseUrl, {
-          timeoutMs: toolTimeoutMs,
-          signal,
-        }),
+        ...(result && typeof result === "object" ? result : { profiles: result }),
         systemProfiles,
         ...(systemProfilesUnavailable ? { systemProfilesUnavailable } : {}),
       });

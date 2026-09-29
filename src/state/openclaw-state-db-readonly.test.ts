@@ -8,6 +8,7 @@ import { constants, DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
+import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
 import * as sqliteReadOnly from "../infra/sqlite-snapshot-source.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -20,11 +21,13 @@ import {
 import { StateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
+  closeOpenClawStateDatabaseAsync,
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
 import { iterateOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-read-connection.js";
 import {
   isOpenClawStateDatabaseDefinitelyAbsent,
+  executeExistingOpenClawStateRead,
   withSynchronousArtifactPreservingStateSnapshot,
   isArtifactPreservingStateRead,
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
@@ -38,6 +41,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import * as readWorker from "./openclaw-state-read-worker.js";
 
 function createOptions(stateDir: string) {
   return {
@@ -632,6 +636,128 @@ it("shares only one synchronous metadata snapshot and refreshes committed WAL ne
       expect(prepare).toHaveBeenCalledTimes(5);
       expect(() => scope(() => Promise.resolve(1))).toThrow("must remain synchronous");
     } finally {
+      writer.close();
+    }
+  });
+});
+
+it("keeps the original synchronous snapshot while retained current reads see later commits", async () => {
+  await withTempDir("openclaw-retained-inherited-snapshot-", async (root) => {
+    const options = createOptions(root);
+    openOpenClawStateDatabase(options);
+    closeOpenClawStateDatabaseForTest();
+    const writer = new DatabaseSync(options.path);
+    writer.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0");
+    writer
+      .prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)")
+      .run("retained.snapshot.fixture", '"first"', 1);
+    const controller = new AbortController();
+    const pending: Array<ReturnType<typeof executeExistingOpenClawStateRead>> = [];
+    const wait = new Int32Array(new SharedArrayBuffer(4));
+    const captured: Array<{
+      source: ReturnType<typeof readWorker.captureOpenClawStateReadSource>;
+      released: boolean;
+    }> = [];
+    const captureSource = readWorker.captureOpenClawStateReadSource;
+    const capture = vi
+      .spyOn(readWorker, "captureOpenClawStateReadSource")
+      .mockImplementation(() => {
+        const selected = captureSource();
+        const read = { source: selected, released: false };
+        captured.push(read);
+        return {
+          ...selected,
+          own(service, close) {
+            const unregister = selected.own(service, close);
+            return () => {
+              unregister();
+              read.released = true;
+            };
+          },
+        };
+      });
+    const legacyRead = () =>
+      withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) =>
+          db
+            .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+            .get("retained.snapshot.fixture")?.value_json,
+        options,
+      );
+    const finishRead = (current = false) => {
+      const index = captured.length;
+      pending.push(
+        executeExistingOpenClawStateRead(
+          options,
+          { type: "tui.lastSession.read", stateKey: "retained.snapshot.fixture" },
+          { current, signal: controller.signal },
+        ),
+      );
+      const read = captured[index];
+      if (!read) {
+        throw new Error("Snapshot read source was not captured");
+      }
+      const deadline = performance.now() + 15_000;
+      let microtaskRan = false;
+      queueMicrotask(() => {
+        microtaskRan = true;
+      });
+      while (!read.released) {
+        read.source.service();
+        if (read.released) {
+          break;
+        }
+        if (performance.now() >= deadline) {
+          throw new Error("Retained snapshot read did not settle");
+        }
+        Atomics.wait(wait, 0, 0, 2);
+      }
+      expect(microtaskRan).toBe(false);
+      expect(read.released).toBe(true);
+    };
+    try {
+      withArtifactPreservingStateReads(() =>
+        withSynchronousArtifactPreservingStateSnapshot(() => {
+          expect(legacyRead()).toBe('"first"');
+          writer
+            .prepare(
+              "UPDATE config_machine_state SET value_json = ?, updated_at_ms = 2 WHERE state_key = ?",
+            )
+            .run('"second"', "retained.snapshot.fixture");
+          const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(() => {
+            throw new Error("Retained read prepared SQLite on the caller thread");
+          });
+          const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(() => {
+            throw new Error("Retained read executed SQLite on the caller thread");
+          });
+          try {
+            finishRead();
+            finishRead(true);
+            finishRead();
+            expect(prepare).not.toHaveBeenCalled();
+            expect(exec).not.toHaveBeenCalled();
+          } finally {
+            prepare.mockRestore();
+            exec.mockRestore();
+          }
+          expect(legacyRead()).toBe('"first"');
+        }),
+      );
+      const replies = await Promise.all(pending);
+      expect(
+        replies.map((reply) => {
+          if (!reply?.ok || reply.type !== "tui.lastSession.read") {
+            throw new Error("Retained state read returned the wrong domain reply");
+          }
+          return reply.row?.value_json;
+        }),
+      ).toEqual(['"first"', '"second"', '"first"']);
+    } finally {
+      capture.mockRestore();
+      controller.abort(new Error("Snapshot proof finished"));
+      await Promise.allSettled(pending);
+      await closeOpenClawStateDatabaseAsync();
+      await cleanupSnapshotOperations();
       writer.close();
     }
   });

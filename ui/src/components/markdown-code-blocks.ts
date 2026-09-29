@@ -15,7 +15,7 @@ import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import { t } from "../i18n/index.ts";
 import { registerCodeBlocksEnglish } from "../i18n/locales/en-code-blocks.ts";
-import { copyToClipboard } from "../lib/clipboard.ts";
+import { copyMarkdownText } from "./markdown-copy.ts";
 import {
   parseMarkdownJson,
   renderMarkdownJsonModes,
@@ -30,8 +30,6 @@ registerCodeBlocksEnglish();
 const blockArtCopyPayloadPrefix = "openclaw:block-art-code:";
 const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
 const CODE_PREVIEW_LINE_COUNT = 7;
-const codeBlockCopyAttempts = new WeakMap<HTMLElement, number>();
-const codeBlockCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
 
 for (const [language, definition] of Object.entries({
   bash,
@@ -95,34 +93,22 @@ export function handleMarkdownCodeBlockClick(event: Event): void {
     return;
   }
   const code = readMarkdownCodeBlockCopyText(button);
-  const attempt = (codeBlockCopyAttempts.get(button) ?? 0) + 1;
-  codeBlockCopyAttempts.set(button, attempt);
-  // Streaming retains the control while its payload changes; old content must
-  // not trigger a fallback write or claim the current control's feedback.
-  const isCurrent = () =>
-    button.isConnected &&
-    codeBlockCopyAttempts.get(button) === attempt &&
-    readMarkdownCodeBlockCopyText(button) === code;
-  void copyToClipboard(code, isCurrent).then((copied) => {
-    // Clipboard writes can finish out of click order; older attempts must not own feedback.
-    if (!isCurrent()) {
-      return;
-    }
-    button.classList.toggle("copied", copied);
-    button.classList.toggle("copy-failed", !copied);
-    button.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
-    clearTimeout(codeBlockCopyResetTimers.get(button));
-    const resetTimer = setTimeout(
-      () => {
+  copyMarkdownText(
+    button,
+    code,
+    () => readMarkdownCodeBlockCopyText(button) === code,
+    (copied) => {
+      if (copied === undefined) {
         button.classList.remove("copied");
         button.classList.remove("copy-failed");
         button.setAttribute("aria-label", t("common.copyCode"));
-        codeBlockCopyResetTimers.delete(button);
-      },
-      copied ? 1500 : 2000,
-    );
-    codeBlockCopyResetTimers.set(button, resetTimer);
-  });
+      } else {
+        button.classList.toggle("copied", copied);
+        button.classList.toggle("copy-failed", !copied);
+        button.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
+      }
+    },
+  );
 }
 
 function handleCodeBlockDisclosure(target: Element): void {

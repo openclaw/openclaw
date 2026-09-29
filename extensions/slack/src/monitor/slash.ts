@@ -68,7 +68,7 @@ import { escapeSlackMrkdwn } from "./mrkdwn.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
 import {
   createSlackResponseUrlBudget,
-  isSlackResponseAlreadyReportedError,
+  SlackResponseAlreadyReportedError,
 } from "./response-url-budget.js";
 import { resolveSlackRoomContextHints } from "./room-context.js";
 import { captureSlackSessionTargetGuard } from "./session-run-targets.js";
@@ -886,7 +886,7 @@ export function createSlackCommandHandler(params: {
       return true;
     } catch (err) {
       runtime.error?.(danger(`slack slash handler failed: ${formatErrorMessage(err)}`));
-      if (!isSlackResponseAlreadyReportedError(err) && responseBudget.remaining() !== 0) {
+      if (!(err instanceof SlackResponseAlreadyReportedError) && responseBudget.remaining() !== 0) {
         await respondEphemeral("Sorry, something went wrong handling that command.");
       }
     }
