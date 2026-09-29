@@ -19,12 +19,13 @@ export function captureGatewayAuthPolicy(
   config: OpenClawConfig,
   principal: Pick<
     GatewayAuthPolicy,
-    "role" | "verifiedIdentity" | "authMethod" | "browserOrigin"
+    "role" | "verifiedIdentity" | "authMethod" | "authModeOverride" | "browserOrigin"
   > | null,
 ): GatewayAuthPolicy {
   const verifiedIdentity = normalizeOptionalString(principal?.verifiedIdentity);
   const role = principal?.role;
   const authMethod = principal?.authMethod;
+  const authModeOverride = principal?.authModeOverride;
   const browserOrigin = principal?.browserOrigin;
   let cached = policies.get(config);
   if (!cached) {
@@ -46,7 +47,13 @@ export function captureGatewayAuthPolicy(
     };
     policies.set(config, cached);
   }
-  const principalKey = stableStringify([role, verifiedIdentity, authMethod, browserOrigin]);
+  const principalKey = stableStringify([
+    role,
+    verifiedIdentity,
+    authMethod,
+    authModeOverride,
+    browserOrigin,
+  ]);
   let policy = cached.identities.get(principalKey);
   if (!policy) {
     const grant =
@@ -68,6 +75,7 @@ export function captureGatewayAuthPolicy(
     ) {
       const auth = resolveGatewayAuthForConfig({
         config,
+        authOverride: authModeOverride ? { mode: authModeOverride } : undefined,
         tailscaleMode: config.gateway?.tailscale?.mode,
       });
       if (authMethod === "trusted-proxy") {
@@ -100,6 +108,7 @@ export function captureGatewayAuthPolicy(
       }),
       role,
       authMethod,
+      authModeOverride,
       verifiedIdentity,
       browserOrigin: browserOrigin && Object.freeze({ ...browserOrigin }),
     });

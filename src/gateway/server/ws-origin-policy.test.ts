@@ -138,6 +138,28 @@ describe("committed browser origin policy", () => {
 });
 
 describe("committed authentication policy", () => {
+  it.each([false, true])("honors the admitted startup auth mode override: %s", (override) => {
+    const initial: OpenClawConfig = { gateway: { auth: { mode: "none" } } };
+    const client = {
+      authPolicy: captureGatewayAuthPolicy(initial, {
+        role: "operator",
+        authMethod: "none",
+        authModeOverride: override ? "none" : undefined,
+      }),
+      invalidated: false,
+      sourceInvalidated: false,
+      socket: { close: vi.fn() },
+    };
+    const onRevoked = vi.fn();
+    onTestFinished(onGatewayPolicyClientInvalidated(client, onRevoked));
+    const next: OpenClawConfig = { gateway: { auth: { mode: "token" } } };
+    disconnectDisallowedGatewayPolicyClients([client], next);
+    expect(client.invalidated).toBe(!override);
+    expect(client.sourceInvalidated).toBe(!override);
+    expect(onRevoked).toHaveBeenCalledTimes(override ? 0 : 1);
+    expect(client.socket.close).toHaveBeenCalledTimes(override ? 0 : 1);
+  });
+
   it.each([
     { role: "operator", verifiedIdentity: undefined },
     { role: "node", verifiedIdentity: "other@example.test" },

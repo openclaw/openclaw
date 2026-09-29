@@ -516,6 +516,7 @@ async function authenticateGatewayConnectCore(
     authPolicy: captureGatewayAuthPolicy(context.configSnapshot, {
       role,
       authMethod,
+      authModeOverride: resolvedAuth.modeSource === "override" ? resolvedAuth.mode : undefined,
       verifiedIdentity: authResult.user,
       browserOrigin: context.browserOrigin,
     }),
