@@ -2421,7 +2421,7 @@ src/hooks/gmail-setup-utils.ts	4
 src/hooks/internal-hook-types.ts	2
 src/hooks/loader.ts	1
 src/hooks/message-hook-mappers.ts	2
-src/hooks/module-loader.ts	3
+src/hooks/module-loader.ts	2
 src/hooks/policy.ts	1
 src/infra/advertised-lan-host.ts	1
 src/infra/agent-event-lifecycle.ts	1
@@ -2886,7 +2886,7 @@ src/secrets/runtime-openai-file-fixture.test-helper.ts	1
 src/secrets/runtime-owner-assignments.ts	1
 src/secrets/runtime-secret-scan.ts	1
 src/secrets/runtime-state.ts	4
-src/secrets/runtime-web-tools.shared.ts	2
+src/secrets/runtime-web-tools.shared.ts	1
 src/secrets/runtime-web-tools.ts	4
 src/secrets/runtime.ts	4
 src/secrets/store/secret-store.ts	2
@@ -2905,7 +2905,6 @@ src/sessions/session-key-utils.ts	1
 src/sessions/session-lifecycle-admission.ts	1
 src/sessions/session-upstream-monitor.ts	2
 src/sessions/user-turn-transcript-runtime-context.ts	2
-src/sessions/user-turn-transcript.media-normalize.ts	2
 src/sessions/user-turn-transcript.ts	5
 src/shared/account-enabled.ts	1
 src/shared/bounded-serial-queue.ts	1

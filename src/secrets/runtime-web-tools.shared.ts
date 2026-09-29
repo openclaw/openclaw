@@ -149,10 +149,7 @@ function normalizeKnownProvider(
 /**
  * Returns whether a configured value or sibling ref field contains a SecretRef.
  */
-export function hasConfiguredSecretRef(
-  value: unknown,
-  defaults: SecretDefaults | undefined,
-): boolean {
+function hasConfiguredSecretRef(value: unknown, defaults: SecretDefaults | undefined): boolean {
   return Boolean(
     resolveSecretInputRef({
       value,
