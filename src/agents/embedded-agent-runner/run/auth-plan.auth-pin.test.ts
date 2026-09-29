@@ -80,6 +80,50 @@ describe("embedded run auth plan provider pin", () => {
     await state.cleanup();
   });
 
+  it("prepares a plugin-owned turn independently of an unavailable shared profile", async () => {
+    const harness: AgentHarness = {
+      ...openClawHarness,
+      id: "plugin-runtime",
+      authBootstrap: "plugin",
+    };
+    readCodexCliCredentialsCachedMock.mockImplementation(() => {
+      throw new Error("Plugin authentication cannot read the Codex login");
+    });
+    const stores = modelRuntime.createEmptyAgentDiscoveryStores();
+    const prepared = await prepareEmbeddedRunAuthPlan({
+      assertCurrent: () => {},
+      runParams: {
+        sessionId: "plugin-auth-session",
+        runId: "plugin-auth-run",
+        workspaceDir: state.workspaceDir,
+        prompt: "Auth preparation only",
+        timeoutMs: 5_000,
+        authProfileId: "openai:unavailable",
+        authProfileIdSource: "user",
+      },
+      provider: platformModel.provider,
+      modelId: platformModel.id,
+      model: platformModel,
+      agentDir,
+      workspaceDir: state.workspaceDir,
+      nativeModelOwned: false,
+      ...stores,
+      getAgentHarness: () => harness,
+      setAgentHarness: () => {},
+      getRuntimeModel: () => platformModel,
+      getEffectiveModel: () => platformModel,
+      applyResolvedRuntimeModel: () => {},
+      selectHarnessForPreparedAttempts: () => harness,
+    });
+
+    expect(prepared.preparedAuthAttempts).toEqual([
+      { kind: "implicit", plan: prepared.activePreparedAuthPlan },
+    ]);
+    expect(prepared.activePreparedAuthPlan.harnessAuthProvider).toBe("plugin-runtime");
+    expect(prepared.attemptAuthProfileStore).toEqual({ version: 1, profiles: {} });
+    expect(await prepared.materializeAuthPlan(prepared.activePreparedAuthPlan)).toBe(platformModel);
+  });
+
   it("prepares a LiteLLM turn while Anthropic credentials await migration", async () => {
     await state.writeJson("agents/main/agent/auth-profiles.json", {
       version: 1,

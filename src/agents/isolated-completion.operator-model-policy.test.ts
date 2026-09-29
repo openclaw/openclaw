@@ -171,13 +171,13 @@ describe("isolated completion requester model policy", () => {
     }
     expect(observers.size).toBe(0);
   });
-  it.each(["host", "harness"] as const)(
+  it.each(["host", "harness", "plugin"] as const)(
     "rejects a denied model resolved during %s preparation",
     async (owner) => {
       const dispatch = vi.fn();
       registerIsolatedHarness({
         id: "test-harness",
-        ...(owner === "harness" ? { authBootstrap: "harness" as const } : {}),
+        ...(owner !== "host" ? { authBootstrap: owner } : {}),
         runIsolatedCompletionV2: dispatch,
       });
       await expect(runPluginCompletion(operator())).rejects.toMatchObject({

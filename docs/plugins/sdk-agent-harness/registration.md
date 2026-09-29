@@ -52,6 +52,8 @@ export default definePluginEntry({
 `authBootstrap` is intentionally absent from this generic example. Add
 `authBootstrap: "harness"` only when the harness meets the
 [harness-owned auth bootstrap contract](/plugins/sdk-agent-harness/core-ownership#harness-owned-auth-bootstrap).
+Use `authBootstrap: "plugin"` for a dedicated plugin credential under the
+[plugin-owned auth bootstrap contract](/plugins/sdk-agent-harness/core-ownership#plugin-owned-auth-bootstrap).
 
 ### Isolated completion
 
@@ -64,6 +66,8 @@ deadline controls, and one prepared `authorization`:
 - `owner: "harness"` contains the prepared runtime auth plan and a credential
   snapshot restricted to the single profile selected for that call. Core owns
   automatic fallback order and invokes the harness separately for each candidate.
+  With plugin-owned auth, it contains an empty credential snapshot and optional
+  prepared `model` metadata; the plugin resolves only its own configured secret.
 
 Agents API is a documented exception to the literal empty tool surface: it
 creates a fresh session without an executor, supplied functions, web search,

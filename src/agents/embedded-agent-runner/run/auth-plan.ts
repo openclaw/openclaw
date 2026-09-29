@@ -57,6 +57,34 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   const runParams = params.runParams;
   const usesOpenAIAuthRouting = params.provider === OPENAI_PROVIDER_ID;
   const initialHarness = params.getAgentHarness();
+  if (initialHarness.authBootstrap === "plugin") {
+    const prepared = prepareAgentRuntimeAuth({
+      provider: params.provider,
+      modelId: params.modelId,
+      harnessId: initialHarness.id,
+      harnessAuthBootstrap: initialHarness.authBootstrap,
+    });
+    const selectedHarness = params.selectHarnessForPreparedAttempts(
+      params.getEffectiveModel(),
+      prepared.attempts,
+    );
+    if (selectedHarness.id !== initialHarness.id) {
+      throw new Error(
+        `Plugin-owned authentication changed the selected agent harness for ${params.provider}/${params.modelId}.`,
+      );
+    }
+    const materialize = async () => params.getRuntimeModel();
+    return {
+      attemptAuthProfileStore: { version: 1, profiles: {} } satisfies AuthProfileStore,
+      lockedProfileId: undefined,
+      preferredProfileId: undefined,
+      providerUsesProfileScopedModelMetadata: false,
+      materializeAuthPlan: materialize,
+      materializeAuthPlanUncached: materialize,
+      preparedAuthAttempts: prepared.attempts,
+      activePreparedAuthPlan: prepared.plan,
+    };
+  }
   const initialPluginHarnessOwnsTransport = initialHarness.id !== "openclaw";
   const openClawNativeCodexResponsesNeedsAuthBootstrap =
     !initialPluginHarnessOwnsTransport &&

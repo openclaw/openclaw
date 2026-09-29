@@ -77,7 +77,8 @@ only when you want API-key auth for an agent model.
 
 The separate Agents API plugin (`@openclaw/agentsapi`) registers the explicit
 `agentsapi` harness, alongside the Codex plugin. The OpenAI provider plugin
-continues to own model routes and API-key authentication.
+continues to own shared model routes and API-key authentication. The Agents API
+plugin can use a separate credential at `plugins.entries.agentsapi.config.apiKey`.
 Select a model in `agents.defaults.model.primary` and set its
 `agents.defaults.models["openai/<model>"].agentRuntime.id` to `"agentsapi"`.
 Use OpenAI API-key authentication. The harness sends the configured model to the
@@ -107,6 +108,31 @@ requires a reset. Native delegation remains disabled.
 ```
 
 If `plugins.allow` is configured, include `agentsapi` alongside `openai`.
+
+To keep the Agents API credential separate from shared OpenAI and Codex auth,
+configure the plugin's key with a SecretRef:
+
+```json5
+{
+  plugins: {
+    entries: {
+      agentsapi: {
+        enabled: true,
+        config: {
+          apiKey: { source: "env", provider: "default", id: "AGENTS_API_KEY" },
+        },
+      },
+    },
+  },
+}
+```
+
+Provide `AGENTS_API_KEY` to the Gateway process. This setting does not populate
+`OPENAI_API_KEY` or change the OpenAI Responses provider configuration. A
+configured but unavailable key fails instead of selecting a shared credential.
+Omitting `apiKey` preserves the existing shared OpenAI authentication behavior.
+The SDK continues to own the Agents API endpoint.
+
 The standalone plugin keeps native session identifiers in plugin state. It uses
 the shared harness runtime for leases, generation admission, deletion rollback,
 cancellation, deadlines, and lifecycle events. Agents API protocol events,

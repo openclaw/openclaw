@@ -10,21 +10,30 @@ import { aggregateAgentsApiUsage } from "./agentsapi-usage.js";
 export async function runAgentsApiIsolatedCompletion(
   params: Parameters<NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>>[0],
   assertHarnessCurrent: () => void,
+  pluginApiKey?: string,
 ) {
   assertHarnessCurrent();
   params.assertCurrent?.();
   const authorization = params.authorization;
-  const apiKey = authorization.owner === "host" ? authorization.auth.apiKey : undefined;
-  if (authorization.owner !== "host" || authorization.auth.mode !== "api-key" || !apiKey) {
+  const apiKey =
+    pluginApiKey ?? (authorization.owner === "host" ? authorization.auth.apiKey : undefined);
+  if (
+    !apiKey ||
+    (!pluginApiKey && (authorization.owner !== "host" || authorization.auth.mode !== "api-key"))
+  ) {
     throw new Error("Agents API isolated completion requires the host-prepared API key");
   }
   const { model } = authorization;
+  if (!model) {
+    throw new Error("Agents API isolated completion requires host-prepared model metadata");
+  }
   if (
     params.provider !== "openai" ||
     model.provider !== "openai" ||
-    model.api !== "openai-responses" ||
-    model.baseUrl !== "https://api.openai.com/v1" ||
-    Object.keys(model.headers ?? {}).length > 0
+    (!pluginApiKey &&
+      (model.api !== "openai-responses" ||
+        model.baseUrl !== "https://api.openai.com/v1" ||
+        Object.keys(model.headers ?? {}).length > 0))
   ) {
     throw new Error("Agents API isolated completion requires the official OpenAI API-key route");
   }

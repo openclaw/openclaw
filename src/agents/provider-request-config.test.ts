@@ -6,8 +6,10 @@ import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata
 import {
   applyPreparedRuntimeAuthToModel,
   attachModelProviderRequestRouteFacts,
+  attachModelProviderRequestTransport,
   buildProviderRequestDispatcherPolicy,
   getModelProviderRequestRouteFacts,
+  getModelProviderRequestTransport,
   inheritModelProviderRequestRouteFacts,
   mergeModelProviderRequestOverrides,
   resolveProviderRequestPolicyConfig,
@@ -15,6 +17,7 @@ import {
   resolveProviderRequestHeaders,
   sanitizeConfiguredModelProviderRequest,
   sanitizeConfiguredProviderRequest,
+  stripModelProviderRequestTransport,
 } from "./provider-request-config.js";
 import { resolveProviderTransportSsrFPolicy } from "./provider-transport-fetch.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
@@ -41,6 +44,31 @@ function buildProviderMetadataOwners(
 }
 
 describe("provider request config", () => {
+  it("retains model and route metadata when another owner takes over request transport", () => {
+    const owners = buildProviderMetadataOwners();
+    const request = { auth: { mode: "authorization-bearer" as const, token: "fixture-token" } };
+    const source = attachModelProviderRequestTransport(
+      attachModelProviderRequestRouteFacts(
+        makeProviderModelFixture({
+          id: "fixture-model",
+          provider: "fixture-provider",
+          api: "openai-responses",
+          baseUrl: "https://fixture.example.test/v1",
+        }),
+        owners,
+      ),
+      request,
+    );
+    const metadata = stripModelProviderRequestTransport(source);
+
+    expect(metadata.id).toBe(source.id);
+    expect(getModelProviderRequestRouteFacts(metadata)).toBe(
+      getModelProviderRequestRouteFacts(source),
+    );
+    expect(getModelProviderRequestTransport(metadata)).toBeUndefined();
+    expect(getModelProviderRequestTransport(source)).toBe(request);
+  });
+
   it("carries lifecycle plugin metadata ownership through model projections", () => {
     const owners = {
       channels: new Map(),

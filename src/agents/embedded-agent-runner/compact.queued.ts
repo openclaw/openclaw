@@ -26,7 +26,6 @@ import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import { retainAgentHarnessCompactionSource } from "../harness/host-source-authority.js";
-import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   type PreparedModelRuntimeSnapshot,
@@ -54,6 +53,7 @@ import {
 } from "./compaction-runtime-context.js";
 import {
   prepareCompactionHarnessAuth,
+  prepareCompactionModel,
   projectCodexHostTranscriptBytePreflightConfig,
   resolveCompactionRuntimeSelection,
 } from "./compaction-runtime-preparation.js";
@@ -61,7 +61,6 @@ import type { acceptCompactionSuccessor } from "./compaction-successor.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import type { ContextEngineMaintenanceResources } from "./context-engine-maintenance-work.js";
 import { log } from "./logger.js";
-import { resolveTieredModel } from "./model-resolution.js";
 import { resolveModelAsync } from "./model.js";
 import type { EmbeddedAgentQueueHandle } from "./run-state.js";
 import {
@@ -415,23 +414,18 @@ async function compactResolvedContextEngine(
     selectedHarnessRuntime: lockedHarnessRuntime,
   });
   const lockedNativeHarness = Boolean(lockedHarnessRuntime && lockedHarnessRuntime !== "openclaw");
-  // Ensure the policy-selected harness plugin so selection can pick implicit codex.
-  await ensureSelectedAgentHarnessPlugin({
-    config: params.config,
+  const { resolution: modelResolution } = await prepareCompactionModel({
+    abortSignal: params.abortSignal,
+    assertCurrent: () => assertQueuedCompactionPreparationActive(params, host),
     provider: ceProvider,
+    runtimeProvider: ceRuntimeProvider,
     modelId: ceModelId,
     agentId: runtimePolicyAgentId,
     sessionKey: runtimePolicySessionKey,
     agentHarnessId: params.agentHarnessId,
     agentHarnessRuntimeOverride: selectedHarnessRuntime,
-    workspaceDir: resolvedWorkspaceDir,
     pluginRegistry: requireActivePluginRegistry(),
-  });
-  assertQueuedCompactionPreparationActive(params, host);
-  const { resolution: modelResolution } = await resolveTieredModel({
-    abortSignal: params.abortSignal,
-    provider: ceRuntimeProvider,
-    modelId: ceModelId,
+    reusableRuntimeAuthPlan,
     agentDir,
     config: params.config,
     workspaceDir: resolvedWorkspaceDir,
@@ -498,6 +492,7 @@ async function compactResolvedContextEngine(
         workspaceDir: resolvedWorkspaceDir,
         authProfileId,
         authProfileMode,
+        harnessAuthBootstrap: selectedPreparedHarness.authBootstrap,
       });
       assertQueuedCompactionPreparationActive(params, host);
       return resolved;

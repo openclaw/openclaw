@@ -188,6 +188,8 @@ export type AgentHarnessIsolatedCompletionAuthorization =
       /** The selected harness owns credential resolution for this prepared route. */
       owner: "harness";
       plan: import("../runtime-plan/types.js").AgentRuntimeAuthPlan;
+      /** Prepared metadata for a plugin that resolves its own credential and transport. */
+      model?: import("../../llm/types.js").Model;
       /** Credential snapshot restricted to the single profile selected for this call. */
       authProfileStore: import("../auth-profiles/types.js").AuthProfileStore;
     };
@@ -485,8 +487,8 @@ type AgentHarnessContract<
     readPreviousSessionId?: () => string | undefined;
     assertCurrent: () => void;
   }): AgentHarnessSessionRuntimeOwnership | undefined;
-  /** Lets this harness resolve forwarded profiles or its own native credentials. */
-  authBootstrap?: "harness";
+  /** "harness" may resolve forwarded profiles; "plugin" uses only plugin-owned credentials. */
+  authBootstrap?: "harness" | "plugin";
   runAttempt(params: TAttemptParams): Promise<AgentHarnessAttemptResult>;
   /**
    * Produces one final answer from a settled tool transcript without exposing

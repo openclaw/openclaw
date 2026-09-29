@@ -11,6 +11,7 @@ export default definePluginEntry({
     noopPrefixes: ["plugins.entries.agentsapi.config.plugins"],
   },
   register(api) {
-    api.registerAgentHarness(createAgentsApiHarness(api.runtime));
+    const config = agentsApiConfigSchema.parse(api.pluginConfig ?? {});
+    api.registerAgentHarness(createAgentsApiHarness(api.runtime, config));
   },
 });

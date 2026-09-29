@@ -20,6 +20,7 @@ import { resolveStoredCredentialReadOnlyAvailability } from "../auth-profiles/re
 import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
+import type { AgentHarness } from "../harness/types.js";
 import { resolveProviderDirectAuthPlanningEvidence } from "../model-auth-env.js";
 import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
 import {
@@ -65,7 +66,7 @@ type PrepareAgentRuntimeAuthPlanParams = {
   allowAuthProfileFallback?: boolean;
   harnessId?: string;
   harnessRuntime?: string;
-  harnessAuthBootstrap?: "harness";
+  harnessAuthBootstrap?: AgentHarness["authBootstrap"];
   allowHarnessAuthProfileForwarding?: boolean;
   allowTransientCooldownProbe?: boolean;
   resolveProviderPreferredProfileId?(context: {
@@ -238,6 +239,21 @@ function resolvePreparedProviderEntryApiKeyProfileReference(
 export function prepareAgentRuntimeAuth(
   input: PrepareAgentRuntimeAuthPlanParams,
 ): PreparedAgentRuntimeAuth {
+  if (input.harnessAuthBootstrap === "plugin") {
+    const harnessId = input.harnessId?.trim() || input.harnessRuntime?.trim();
+    if (!harnessId || harnessId === "openclaw") {
+      throw new Error("Plugin-owned authentication requires a selected plugin harness");
+    }
+    // Provider credentials and profiles cannot replace the plugin's configured owner.
+    const plan: AgentRuntimeAuthPlan = {
+      providerForAuth: input.provider,
+      modelId: input.modelId,
+      authProfileProviderForAuth: input.provider,
+      harnessAuthProvider: harnessId,
+      credentialSource: { kind: "none" },
+    };
+    return { plan, attempts: [{ kind: "implicit", plan }] };
+  }
   const params = { ...input, config: resolveModelProviderAuthConfig(input) };
   const requestedProfileId = params.sessionAuthProfileId?.trim() || undefined;
   const userPinnedProfileId =

@@ -284,15 +284,18 @@ export async function resolveEmbeddedRunModelSetup(params: {
       ...createEmptyAgentDiscoveryStores(),
     };
   } else {
-    const selectedRuntimeProvider = resolveSelectedOpenAIRuntimeProvider({
-      provider,
-      harnessRuntime: agentHarness.id,
-      agentHarnessId: agentHarness.id,
-      authProfileProvider: runParams.authProfileId?.split(":", 1)[0],
-      authProfileId: runParams.authProfileId,
-      config: runParams.config,
-      workspaceDir: params.workspaceDir,
-    });
+    const selectedRuntimeProvider =
+      agentHarness.authBootstrap === "plugin"
+        ? provider
+        : resolveSelectedOpenAIRuntimeProvider({
+            provider,
+            harnessRuntime: agentHarness.id,
+            agentHarnessId: agentHarness.id,
+            authProfileProvider: runParams.authProfileId?.split(":", 1)[0],
+            authProfileId: runParams.authProfileId,
+            config: runParams.config,
+            workspaceDir: params.workspaceDir,
+          });
     const tieredResolution = await resolveTieredModel({
       abortSignal: runParams.abortSignal,
       assertCurrent: params.assertCurrent,
@@ -308,6 +311,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
       authProfileId: runParams.authProfileId,
       preparedModelRuntime: params.preparedModelRuntime,
       staticCatalogOwnsTransport: pluginHarnessOwnsTransport,
+      harnessAuthBootstrap: agentHarness.authBootstrap,
     });
     resolvedModelProvider = tieredResolution.provider;
     modelResolution = tieredResolution.resolution;

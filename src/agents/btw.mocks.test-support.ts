@@ -131,7 +131,9 @@ vi.mock("./prepared-model-runtime.js", () => {
       configuredRuntimeModels: [],
       findConfiguredRuntimeModel: () => undefined,
       inlineProviderModels: [],
-      createStores: () => ({ authStorage, modelRegistry }),
+      createStores:
+        (preparedRuntimeSnapshotState.snapshot as { createStoresOverride?: () => unknown })
+          .createStoresOverride ?? (() => ({ authStorage, modelRegistry })),
     };
   };
   return {
@@ -152,6 +154,7 @@ vi.mock("./model-discovery-context.js", () => ({
 }));
 
 vi.mock("./embedded-agent-runner/model.js", () => ({
+  createEmptyAgentDiscoveryStores: () => ({ authStorage: {}, modelRegistry: {} }),
   resolveModelAsync: (...args: unknown[]) => resolveModelAsyncMock(...args),
   resolveModelWithRegistry: (...args: unknown[]) => resolveModelWithRegistryMock(...args),
 }));

@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
+import type { AgentHarness } from "../harness/types.js";
 import type { ModelFallbackRouteResolution } from "../model-fallback.types.js";
 import {
   prepareModelRuntimeSnapshot,
@@ -25,6 +26,7 @@ export async function resolveTieredModel(params: {
   authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   staticCatalogOwnsTransport?: boolean;
+  harnessAuthBootstrap?: AgentHarness["authBootstrap"];
 }): Promise<{ provider: string; resolution: ModelResolution }> {
   const result = await withSqliteReadOnlyWorkerScope(async () => {
     const providers =
@@ -39,6 +41,7 @@ export async function resolveTieredModel(params: {
         workspaceDir: params.workspaceDir,
         authProfileId: params.authProfileId,
         authProfileMode: params.authProfileMode,
+        harnessAuthBootstrap: params.harnessAuthBootstrap,
         modelIdSource: params.requestedRouteResolution === "resolved" ? "selected" : "input",
       };
       let firstFailure: { provider: string; resolution: ModelResolution } | undefined;
@@ -57,13 +60,19 @@ export async function resolveTieredModel(params: {
       }
       return firstFailure!;
     };
+    const harnessOwnsTransport =
+      params.staticCatalogOwnsTransport || params.harnessAuthBootstrap === "plugin";
     const firstTier = await resolveCandidates({
       skipAgentDiscovery: true,
-      allowBundledStaticCatalogFallback: params.staticCatalogOwnsTransport,
-      preferBundledStaticCatalogTransport: params.staticCatalogOwnsTransport,
+      allowBundledStaticCatalogFallback: harnessOwnsTransport,
+      preferBundledStaticCatalogTransport: harnessOwnsTransport,
       preparedModelRuntime: params.preparedModelRuntime,
     });
-    if (firstTier.resolution.model || params.staticCatalogOwnsTransport) {
+    if (
+      firstTier.resolution.model ||
+      params.staticCatalogOwnsTransport ||
+      params.harnessAuthBootstrap === "plugin"
+    ) {
       return firstTier;
     }
     const config = params.config ?? {};

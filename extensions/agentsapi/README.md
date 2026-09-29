@@ -6,6 +6,33 @@ Linux environment. Select it through `agents.defaults.agentRuntime.id` or an age
 
 Multi-user Gateways are not supported by the Agents API MVP.
 
+Configure a dedicated credential at `plugins.entries.agentsapi.config.apiKey`:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "agentsapi": {
+        "enabled": true,
+        "config": {
+          "apiKey": "${AGENTS_API_KEY}"
+        }
+      }
+    }
+  }
+}
+```
+
+This setting accepts a literal key, an environment placeholder, or a SecretRef.
+When configured, conversation turns and isolated completions use only this key.
+An empty or unresolved configured key fails before a request is sent. The plugin
+does not fall back to OpenAI provider keys or auth profiles. Omit the setting to
+retain the existing OpenAI API-key route.
+
+The dedicated key leaves Responses provider settings and Codex login unchanged.
+The OpenAI SDK owns the Agents API endpoint; no separate URL is required. Changing
+the effective key requires resetting existing OpenClaw sessions.
+
 Configure HTTP MCP servers through the shared `mcp.servers` configuration or an
 enabled plugin's MCP bundle. For example:
 

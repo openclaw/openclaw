@@ -11,7 +11,6 @@ import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { describeFailoverError } from "../failover-error.js";
-import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { MissingProviderAuthError } from "../model-auth.js";
 import { projectModelThinkingCompat } from "../model-catalog-lookup.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
@@ -34,10 +33,10 @@ import { createDirectCompactionDiagId } from "./compaction-diagnostics.js";
 import { resolveEmbeddedCompactionThinkingLevel } from "./compaction-runtime-context.js";
 import {
   prepareCompactionHarnessAuth,
+  prepareCompactionModel,
   resolveCompactionRuntimeSelection,
 } from "./compaction-runtime-preparation.js";
 import { log } from "./logger.js";
-import { resolveTieredModel } from "./model-resolution.js";
 import { resolveModelAsync } from "./model.js";
 import type { TranscriptByteCompactionPersistence } from "./transcript-byte-preflight-authority.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
@@ -93,20 +92,6 @@ export async function prepareDirectCompactionAttempt(
     boundHarnessRuntime: params.agentHarnessId,
     preparedRuntimePlan: params.runtimePlan,
   });
-  // Keep the configured provider for harness policy, while auth/model loading below can
-  // route OpenAI compaction through Codex OAuth when that runtime owns the session credentials.
-  // Ensure the policy-selected harness plugin so selection can pick implicit codex.
-  await ensureSelectedAgentHarnessPlugin({
-    config: params.config,
-    provider,
-    modelId,
-    agentId: runtimePolicyAgentId,
-    sessionKey: runtimePolicySessionKey,
-    agentHarnessId: boundHarnessRuntime,
-    agentHarnessRuntimeOverride: selectedHarnessRuntimeOverride,
-    workspaceDir: resolvedWorkspace,
-    pluginRegistry: params.preparedModelRuntime.pluginRegistry!,
-  });
   const attemptedThinking = new Set<ThinkLevel>();
   const fail = (reason: string, err?: unknown): EmbeddedAgentCompactResult => {
     const failureReason = classifyCompactionReason(reason);
@@ -135,9 +120,16 @@ export async function prepareDirectCompactionAttempt(
     };
   };
   const preparedModelRuntime = params.preparedModelRuntime;
-  const { resolution: modelResolution } = await resolveTieredModel({
+  const { resolution: modelResolution } = await prepareCompactionModel({
     abortSignal: params.abortSignal,
-    provider: runtimeProvider,
+    provider,
+    runtimeProvider,
+    agentId: runtimePolicyAgentId,
+    sessionKey: runtimePolicySessionKey,
+    agentHarnessId: boundHarnessRuntime,
+    agentHarnessRuntimeOverride: selectedHarnessRuntimeOverride,
+    pluginRegistry: preparedModelRuntime.pluginRegistry,
+    reusableRuntimeAuthPlan,
     modelId,
     requestedRouteResolution: params.requestedRouteResolution,
     agentDir,
@@ -183,6 +175,17 @@ export async function prepareDirectCompactionAttempt(
     providerUsesProfileScopedModelMetadata,
   } = harnessAuth;
   const preparedHarnessRuntime = selectedPreparedHarness.id;
+  if (selectedPreparedHarness.authBootstrap === "plugin") {
+    return {
+      ok: false as const,
+      result: {
+        ok: false,
+        compacted: false,
+        reason: `Agent harness "${preparedHarnessRuntime}" owns authentication. OpenClaw compaction requires a separately configured model with provider authentication.`,
+        failure: { reason: "unsupported_harness_compaction" },
+      } satisfies EmbeddedAgentCompactResult,
+    };
+  }
   const resolveRuntimeAuthAttempt = () =>
     resolvePreparedRuntimeAuthAttempts({
       attempts: runtimeAuthPreparation.attempts,
@@ -209,6 +212,7 @@ export async function prepareDirectCompactionAttempt(
               allowBundledStaticCatalogFallback: true,
               authProfileId: profileId,
               authProfileMode,
+              harnessAuthBootstrap: selectedPreparedHarness.authBootstrap,
             }),
         })) ?? materializeParams.model,
       forceCredentialScopedDirectModelResolve: providerUsesProfileScopedModelMetadata,

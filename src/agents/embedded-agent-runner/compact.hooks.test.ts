@@ -2160,7 +2160,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   it("stops preparation when host authority expires during model resolution before route rematerialization", async () => {
     const modelResolutionStarted = createDeferred();
     const releaseModelResolution = createDeferred();
-    const authStorage = createCompactHooksAuthStorage();
     let hostActive = true;
     resolveModelAsyncMock.mockImplementationOnce(async (provider, modelId) => {
       modelResolutionStarted.resolve(undefined);
@@ -2175,7 +2174,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
           input: [],
         },
         error: null,
-        authStorage,
+        authStorage: createCompactHooksAuthStorage(),
         modelRegistry: {},
       };
     });
@@ -2207,12 +2206,13 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       },
     );
     await modelResolutionStarted.promise;
+    expect(selectAgentHarnessForPreparedModelProvidersMock).toHaveBeenCalledOnce();
     hostActive = false;
     releaseModelResolution.resolve(undefined);
 
     await expect(pending).rejects.toThrow("queued compaction host authority expired");
     expect(resolveModelAsyncMock).toHaveBeenCalledTimes(1);
-    expect(selectAgentHarnessForPreparedModelProvidersMock).not.toHaveBeenCalled();
+    expect(selectAgentHarnessForPreparedModelProvidersMock).toHaveBeenCalledOnce();
     expect(contextEngineCompactMock).not.toHaveBeenCalled();
     expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
     expect(enqueueCommandInLaneMock).not.toHaveBeenCalled();

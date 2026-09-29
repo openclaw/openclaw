@@ -34,6 +34,10 @@ import type {
   AgentHarnessIsolatedCompletionParamsV2,
   AgentHarnessIsolatedCompletionResult,
 } from "./harness/types.js";
+import {
+  prepareIsolatedHostAuthorization,
+  selectIsolatedHarnessAuthPlan,
+} from "./isolated-completion-authorization.js";
 import { createIsolatedCompletionModelAuthority } from "./isolated-completion-model-authority.js";
 import {
   hasCliSideEffectEvidence,
@@ -48,10 +52,6 @@ import {
   resolveCliRuntimeExecutionProvider,
 } from "./model-runtime-aliases.js";
 import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
-import {
-  unwrapModelHeaderSentinelsForProviderEgress,
-  unwrapSecretSentinelsForProviderEgress,
-} from "./provider-secret-egress.js";
 import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
 import {
   canRunPreparedAgentRuntimeAuthAttempt,
@@ -110,19 +110,6 @@ function clampIsolatedStreamParams(
     return streamParams;
   }
   return { ...streamParams, maxTokens: Math.min(streamParams.maxTokens, modelMaxTokens) };
-}
-
-function selectIsolatedHarnessAuthPlan(attempt: PreparedAgentRuntimeAuthAttempt) {
-  if (attempt.kind !== "profile") {
-    return attempt.plan;
-  }
-  return {
-    ...attempt.plan,
-    forwardedAuthProfileId: attempt.profileId,
-    // Core owns candidate order. A harness receives one selected credential
-    // snapshot per call so it cannot inspect or reorder fallback profiles.
-    forwardedAuthProfileCandidateIds: [attempt.profileId],
-  };
 }
 
 async function runCliIsolatedCompletion(params: {
@@ -276,29 +263,6 @@ function resolveCliOwner(params: {
   );
 }
 
-function prepareIsolatedHostAuthorization<
-  T extends Pick<AgentHarnessIsolatedCompletionParams, "model" | "auth">,
->(harness: AgentHarness, authorization: T): T {
-  if (harness.id === "openclaw") {
-    return authorization;
-  }
-  // External harnesses are the provider egress boundary. Keep credentials
-  // sentinelized until this owner is selected, then hand it usable values.
-  const boundary = "plugin harness isolated completion handoff";
-  const apiKey = authorization.auth.apiKey
-    ? unwrapSecretSentinelsForProviderEgress(authorization.auth.apiKey, boundary)
-    : authorization.auth.apiKey;
-  const model = unwrapModelHeaderSentinelsForProviderEgress(authorization.model, boundary);
-  if (apiKey === authorization.auth.apiKey && model === authorization.model) {
-    return authorization;
-  }
-  return {
-    ...authorization,
-    model,
-    auth: { ...authorization.auth, apiKey },
-  };
-}
-
 /** Run one fresh completion with the selected runtime's documented isolation boundary. */
 export async function runIsolatedCompletion(
   params: RunIsolatedCompletionParams,
@@ -412,12 +376,15 @@ async function runIsolatedCompletionOwned(
         agentId,
         agentHarnessRuntimeOverride: runtimeOverride,
       });
-      const cliOwner = resolveCliOwner({
-        request,
-        provider,
-        runtime: runtimeOverride ?? selection.policy.runtime,
-        ...context,
-      });
+      const pluginOwnsAuth = !selection.builtIn && selection.harness.authBootstrap === "plugin";
+      const cliOwner = pluginOwnsAuth
+        ? undefined
+        : resolveCliOwner({
+            request,
+            provider,
+            runtime: runtimeOverride ?? selection.policy.runtime,
+            ...context,
+          });
       if (cliOwner) {
         const completion = await runCliIsolatedCompletion({
           request,
@@ -439,7 +406,7 @@ async function runIsolatedCompletionOwned(
         ? (await import("./harness/builtin-openclaw.js")).createOpenClawAgentHarness()
         : selection.harness;
       assertCurrent();
-      if (!harness.runIsolatedCompletionV2 && !harness.runIsolatedCompletion) {
+      if (!harness.runIsolatedCompletionV2 && (pluginOwnsAuth || !harness.runIsolatedCompletion)) {
         throw new IsolatedCompletionError(
           "unsupported",
           `Agent harness ${harness.id} does not support isolated completion.`,
@@ -495,7 +462,7 @@ async function runIsolatedCompletionOwned(
               attempts: readonly PreparedAgentRuntimeAuthAttempt[];
             }
           | undefined;
-        if (harness.authBootstrap === "harness") {
+        if (pluginOwnsAuth || harness.authBootstrap === "harness") {
           const resolution = await resolveAuthorizedModel(
             provider,
             request.model,
@@ -504,10 +471,14 @@ async function runIsolatedCompletionOwned(
             {
               abortSignal: request.abortSignal,
               assertCurrent,
-              ...lease.snapshot.createStores(),
+              ...(pluginOwnsAuth
+                ? { harnessAuthBootstrap: "plugin" as const }
+                : {
+                    ...lease.snapshot.createStores(),
+                    authProfileId: request.authProfileId,
+                  }),
               preparedModelRuntime: lease.snapshot,
               workspaceDir,
-              authProfileId: request.authProfileId,
               skipAgentDiscovery: true,
               allowBundledStaticCatalogFallback: true,
               preferBundledStaticCatalogTransport: true,
@@ -521,19 +492,21 @@ async function runIsolatedCompletionOwned(
           }
           const runtimeModel = resolution.model;
           assertCurrent();
-          const authProfileStore = ensureAuthProfileStore(agentDir, {
-            profileId: request.authProfileId,
-            readOnly: true,
-            allowKeychainPrompt: false,
-            config,
-          });
+          const authProfileStore: ReturnType<typeof ensureAuthProfileStore> = pluginOwnsAuth
+            ? { version: 1, profiles: {} }
+            : ensureAuthProfileStore(agentDir, {
+                profileId: request.authProfileId,
+                readOnly: true,
+                allowKeychainPrompt: false,
+                config,
+              });
           const authParams = {
             provider: runtimeModel.provider,
             modelId: runtimeModel.id,
             modelApi: runtimeModel.api,
             modelBaseUrl: runtimeModel.baseUrl,
             ...context,
-            env: process.env,
+            ...(!pluginOwnsAuth ? { env: process.env } : {}),
             authProfileStore,
             sessionAuthProfileId: request.authProfileId,
             sessionAuthProfileSource: request.authProfileId ? "user" : undefined,
@@ -542,7 +515,9 @@ async function runIsolatedCompletionOwned(
             harnessRuntime: harness.id,
             harnessAuthBootstrap: harness.authBootstrap,
           } satisfies Parameters<typeof prepareAgentRuntimeAuth>[0];
-          await reconcileAuthProfileQuotaBlocks(authParams);
+          if (!pluginOwnsAuth) {
+            await reconcileAuthProfileQuotaBlocks(authParams);
+          }
           assertCurrent();
           const authAttempts = prepareAgentRuntimeAuth(authParams).attempts;
           harnessAuth = { model: runtimeModel, store: authProfileStore, attempts: authAttempts };
@@ -591,7 +566,15 @@ async function runIsolatedCompletionOwned(
           }
           try {
             let authorization: AgentHarnessIsolatedCompletionAuthorization;
-            if (
+            if (pluginOwnsAuth && harnessAuth && attempt) {
+              modelMaxTokens = harnessAuth.model.maxTokens;
+              authorization = {
+                owner: "harness",
+                model: harnessAuth.model,
+                plan: attempt.plan,
+                authProfileStore: harnessAuth.store,
+              };
+            } else if (
               attempt?.plan.harnessAuthProvider &&
               attempt.plan.modelRoute?.authRequirement !== "api-key" &&
               harnessAuth

@@ -8,10 +8,16 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { captureNativeSessionGenerationAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  assertPluginCapabilitySecretAvailable,
+  coerceSecretRef,
+  normalizeResolvedSecretInputString,
+} from "openclaw/plugin-sdk/secret-input-runtime";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
 import { createAgentsApiBindings } from "./agentsapi-bindings.js";
 import { runAgentsApiIsolatedCompletion } from "./agentsapi-isolated-completion.js";
 import { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
+import type { AgentsApiConfig } from "./config.js";
 
 const AGENTS_API_NATIVE_TOOL_REQUIREMENTS = [
   "exec",
@@ -24,7 +30,11 @@ const AGENTS_API_NATIVE_TOOL_REQUIREMENTS = [
 ] as const;
 
 /** Agents API owns native protocol; the host harness runtime owns coordination. */
-export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
+export function createAgentsApiHarness(
+  runtime: PluginRuntime,
+  config: AgentsApiConfig = {},
+): AgentHarnessV2 {
+  const ownsCredential = config.apiKey !== undefined;
   let disposed = false;
   let closing = false;
   const runningSessions = new Map<string, number>();
@@ -40,6 +50,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
     id: "agentsapi",
     label: "OpenAI Agents API (MVP)",
     autoSelection: { providerIds: [] },
+    ...(ownsCredential ? { authBootstrap: "plugin" as const } : {}),
     deliveryDefaults: { visibleReplies: "automatic" },
     conversationToolPolicySupport: "exact",
     conversationToolPolicyNativeTools: AGENTS_API_NATIVE_TOOL_REQUIREMENTS,
@@ -67,6 +78,9 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
       if (ctx.provider !== "openai") {
         return { supported: false, reason: "Agents API requires the OpenAI provider" };
       }
+      if (ownsCredential) {
+        return { supported: true };
+      }
       if (
         ctx.modelProvider?.preparedAuth?.requirement === "subscription" ||
         (ctx.modelProvider?.api && ctx.modelProvider.api !== "openai-responses") ||
@@ -82,6 +96,8 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
       if (closing) {
         throw new Error("Agents API harness is closing");
       }
+      params.assertCurrent?.();
+      const apiKey = ownsCredential ? readAgentsApiKey(params.config, config) : undefined;
       const controller = new AbortController();
       const pending = runAgentsApiIsolatedCompletion(
         {
@@ -91,15 +107,20 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
             : controller.signal,
         },
         assertCurrent,
+        apiKey,
       );
       isolatedRuns.set(controller, pending);
       return pending.finally(() => isolatedRuns.delete(controller));
     },
-    runAttempt: async (params) => {
+    runAttempt: async (inputParams) => {
       assertCurrent();
       if (closing) {
         throw new Error("Agents API harness is closing");
       }
+      inputParams.hostCapabilities.assertActive();
+      const params = ownsCredential
+        ? { ...inputParams, resolvedApiKey: readAgentsApiKey(inputParams.config, config) }
+        : inputParams;
       const target = validateAgentsApiInput(params);
       const authority = captureNativeSessionGenerationAuthority({
         target,
@@ -187,6 +208,27 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
       }
     },
   };
+}
+
+function readAgentsApiKey(
+  runtimeConfig: AgentHarnessAttemptParamsV2["config"],
+  pluginConfig: AgentsApiConfig,
+): string {
+  const path = "plugins.entries.agentsapi.config.apiKey";
+  assertPluginCapabilitySecretAvailable(path);
+  const value = runtimeConfig
+    ? runtimeConfig.plugins?.entries?.agentsapi?.config?.apiKey
+    : pluginConfig.apiKey;
+  const apiKey = normalizeResolvedSecretInputString({
+    value,
+    refValue: coerceSecretRef(value, runtimeConfig?.secrets?.defaults),
+    defaults: runtimeConfig?.secrets?.defaults,
+    path,
+  });
+  if (!apiKey) {
+    throw new Error(`Agents API requires ${path}; resolve its configured secret before running`);
+  }
+  return apiKey;
 }
 
 function validateAgentsApiInput(params: AgentHarnessAttemptParamsV2) {

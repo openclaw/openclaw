@@ -203,6 +203,22 @@ set this capability on a harness that only sometimes owns authentication.
 This static bootstrap capability is distinct from ownership of an already-bound
 native session's model and connection.
 
+### Plugin-owned auth bootstrap
+
+A harness with its own configured credential declares `authBootstrap: "plugin"`.
+Core resolves configured or bundled model metadata without shared provider
+credential discovery, and leaves credential preparation to the plugin. Shared
+provider keys, environment fallbacks, auth-profile pins, and profile rotation do
+not apply to that harness. Model policy, admission, cancellation, and tool policy
+still apply.
+
+The plugin must resolve its declared secret from the admitted runtime
+configuration and fail when that credential is unavailable. It must not fall
+back to a shared provider key. A plugin can retain legacy shared authentication
+when its dedicated setting is absent by omitting this capability at registration.
+Normal turns, side questions, compaction, and V2 isolated completions honor the
+same credential owner. Legacy isolated completion cannot serve plugin-owned auth.
+
 ### Bound native session ownership
 
 The optional `resolveSessionRuntimeOwnership({ config, agentId, sessionId,

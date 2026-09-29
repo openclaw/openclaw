@@ -18,8 +18,10 @@ import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
 import plugin from "./index.js";
 
-const { createSession } = vi.hoisted(() => ({
+const { createSession, fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   createSession: vi.fn<typeof import("./agentsapi-session.js").createAgentsApiSession>(),
+  fetchWithSsrFGuardMock:
+    vi.fn<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>(),
 }));
 
 // The provider turn, instructions, and transfers are separate contracts. Keep the
@@ -35,14 +37,15 @@ vi.mock("./agentsapi-files.js", () => ({
   collectOutputs: async () => [],
 }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: () => {
-    throw new Error("Unexpected live request in the Agents API persistence fixture");
-  },
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
 beforeEach(() => {
   vi.useFakeTimers();
   vi.spyOn(AbortSignal, "timeout").mockImplementation(() => new AbortController().signal);
+  fetchWithSsrFGuardMock.mockImplementation(() => {
+    throw new Error("Unexpected live request in the Agents API persistence fixture");
+  });
   createSession.mockImplementation((options) => {
     const turn = completedTurn(options.sessionId);
     return {
@@ -66,6 +69,7 @@ beforeEach(() => {
 
 afterEach(() => {
   createSession.mockReset();
+  fetchWithSsrFGuardMock.mockReset();
   resetPluginStateStoreForTests();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -189,6 +193,68 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
     }
   });
 });
+
+it.each([
+  {
+    name: "dedicated plugin",
+    pluginConfig: { apiKey: "fixture-agents-api-key" },
+    key: "fixture-agents-api-key",
+  },
+  { name: "legacy provider", pluginConfig: {}, key: "fixture-not-a-real-api-key" },
+])(
+  "authenticates registered conversation attempts with the $name key",
+  async ({ pluginConfig, key }) => {
+    await withOpenClawTestState({ label: "agentsapi-conversation-auth" }, async (state) => {
+      const params = await createAttempt(state.stateDir);
+      const config: OpenClawConfig = {
+        plugins: { entries: { agentsapi: { config: pluginConfig } } },
+      };
+      params.config = config;
+      const runtime = createPluginRuntimeMock({ config: { current: () => config } });
+      runtime.state.openKeyedStore = <T>(
+        options: Parameters<typeof runtime.state.openKeyedStore>[0],
+      ) => createPluginStateKeyedStoreForTests<T>("agentsapi", { ...options, env: state.env });
+      runtime.state.openSyncKeyedStore = <T>(
+        options: Parameters<typeof runtime.state.openSyncKeyedStore>[0],
+      ) => createPluginStateSyncKeyedStoreForTests<T>("agentsapi", { ...options, env: state.env });
+      const registerAgentHarness = vi.fn<OpenClawPluginApi["registerAgentHarness"]>();
+      plugin.register(
+        createTestPluginApi({ id: "agentsapi", runtime, pluginConfig, registerAgentHarness }),
+      );
+      const harness = registerAgentHarness.mock.calls[0]?.[0];
+      if (!harness?.runAttempt) {
+        throw new Error("Expected the registered Agents API harness");
+      }
+      const backendMessage = "Fixture session creation rejected";
+      fetchWithSsrFGuardMock.mockImplementation(async (request) => {
+        request.beforeRequest?.();
+        return {
+          response: Response.json({ error: { message: backendMessage } }, { status: 400 }),
+          finalUrl: request.url,
+          release: async () => {},
+        };
+      });
+      try {
+        expect(await harness.runAttempt(params)).toMatchObject({
+          terminal: {
+            kind: "failed",
+            error: expect.objectContaining({ message: expect.stringContaining(backendMessage) }),
+          },
+        });
+        expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+        const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+        if (!call) {
+          throw new Error("Expected an SDK session creation request");
+        }
+        const request = new Request(call.url, call.init);
+        expect(request.url).toBe("https://api.openai.com/v1/agents/sessions");
+        expect(request.headers.get("authorization")).toBe(`Bearer ${key}`);
+      } finally {
+        await harness.dispose?.();
+      }
+    });
+  },
+);
 
 async function reopenState() {
   await closeOpenClawStateDatabaseAsync();

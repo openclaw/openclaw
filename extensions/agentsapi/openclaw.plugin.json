@@ -7,10 +7,37 @@
     "onStartup": false,
     "onAgentHarnesses": ["agentsapi"]
   },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [{ "path": "apiKey", "expected": "string", "ownerKind": "capability" }]
+    }
+  },
+  "uiHints": {
+    "apiKey": {
+      "label": "Agents API key",
+      "help": "Dedicated Agents API credential. Supports SecretRefs and environment placeholders. When configured, no OpenAI provider credential is used.",
+      "sensitive": true
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "apiKey": {
+        "anyOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "required": ["source", "provider", "id"],
+            "additionalProperties": false,
+            "properties": {
+              "source": { "type": "string", "enum": ["env", "store", "file", "exec"] },
+              "provider": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+              "id": { "type": "string" }
+            }
+          }
+        ]
+      },
       "plugins": {
         "type": "object",
         "additionalProperties": false,

@@ -1,8 +1,10 @@
 import path from "node:path";
 import type { EnvironmentParam } from "openai/resources/beta/agents/agents";
+import { buildOptionalSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
 
 export const agentsApiConfigSchema = z.strictObject({
+  apiKey: buildOptionalSecretInputSchema(),
   plugins: z
     .strictObject({
       enabled: z.boolean().optional(),
@@ -54,6 +56,8 @@ export const agentsApiConfigSchema = z.strictObject({
     )
     .optional(),
 });
+
+export type AgentsApiConfig = z.input<typeof agentsApiConfigSchema>;
 
 export type AgentsApiEnvironment =
   | EnvironmentParam.EnvironmentParamOpenAIHosted
