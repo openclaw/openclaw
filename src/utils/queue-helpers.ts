@@ -189,6 +189,8 @@ export function waitForQueueDebounce(
   return new Promise<void>((resolve) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let observedEnqueuedAt: number | undefined;
+    let observedAtMs = 0;
     const finish = () => {
       if (settled) {
         return;
@@ -205,7 +207,14 @@ export function waitForQueueDebounce(
         finish();
         return;
       }
-      const since = Date.now() - queue.lastEnqueuedAt;
+      const nowMs = performance.now();
+      if (queue.lastEnqueuedAt !== observedEnqueuedAt) {
+        observedEnqueuedAt = queue.lastEnqueuedAt;
+        observedAtMs = nowMs;
+      }
+      // Wall time counts quiet time before this wait; elapsed time keeps a
+      // backward wall-clock step from extending the window until wall time catches up.
+      const since = Math.max(Date.now() - queue.lastEnqueuedAt, nowMs - observedAtMs);
       if (since >= debounceMs) {
         finish();
         return;
