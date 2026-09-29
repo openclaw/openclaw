@@ -377,8 +377,8 @@ export function renderAppearanceSection(props: ConfigProps) {
                           placeholder="https://tweakcn.com/editor/theme?theme=... or amethyst-haze"
                           .value=${props.customThemeImportUrl}
                           @input=${(event: Event) =>
-                            // SAFETY: The listener is bound directly to this input.
                             props.onCustomThemeImportUrlChange(
+                              // SAFETY: The listener is bound directly to this input.
                               (event.currentTarget as HTMLInputElement).value,
                             )}
                         />
