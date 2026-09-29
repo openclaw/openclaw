@@ -2139,25 +2139,14 @@ function listImportGraphGrepMatches(
   if (result?.status !== 1) {
     const trackedFiles = new Set(listImportGraphFilesForCwd(cwd, { tooling }));
     // Source archives use the same filesystem inventory and native reader as the full graph.
-    let candidates = (
+    const candidates = (
       result?.status === 0
         ? result.stdout.split("\0").filter((file) => trackedFiles.has(file))
         : [...trackedFiles].filter((file) => !testFilesOnly || isTestFileTarget(file))
     ).toSorted((left, right) => left.localeCompare(right));
-    if (result?.status !== 0) {
-      // Wide frontiers bypass Git's prefilter. Match before parsing imports, and
-      // leave nonmatches uncached so later full-graph queries can still read them.
-      candidates = readTestSelectorSourceFacts(
-        cwd,
-        candidates.map((file) => ({ file, parseImports: false })),
-        missing,
-        GIT_LS_FILES_MAX_BUFFER_BYTES,
-      )
-        .filter(({ matches: fileTerms }) => fileTerms.length > 0)
-        .map(({ file }) => file);
-    }
-    // Per-term membership preserves the helper first-success rule.
-    // Cached edges need only term facts; full-graph acquisition reuses their parsing.
+    // Per-term membership preserves the helper first-success rule. One native pass
+    // matches every candidate, parses only uncached matches, and leaves nonmatches
+    // uncached so later full-graph queries still read them.
     for (const { edges, matches: fileTerms } of readImportGraphEdges(
       cwd,
       candidates,

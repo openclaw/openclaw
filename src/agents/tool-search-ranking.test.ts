@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as ranking from "./tool-search-ranking.js";
 import {
   buildLexicalIndex,
   scoreLexical,
@@ -7,6 +8,8 @@ import {
 } from "./tool-search-ranking.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 function entry(partial: Partial<ToolSearchCatalogEntry>): ToolSearchCatalogEntry {
   return {
@@ -217,6 +220,32 @@ describe("untrusted schemas", () => {
 });
 
 describe("ToolSearchRuntime.search", () => {
+  it("reuses document tokens across runtimes and visibility views until the catalog changes", async () => {
+    const catalog = CATALOG.map(entry);
+    const tokenize = vi.spyOn(ranking, "tokenizeDocument");
+    for (const [query, expected] of [
+      ["repository", ["issue_create"]],
+      ["scheduling", ["cron_create"]],
+      ["read", ["read_file"]],
+      ["the and with", []],
+    ] as const) {
+      const hits = await runtime(catalog).search(query, {
+        allowedIds: new Set(catalog.map(({ id }) => id)),
+      });
+      expect(hits.map(({ name }) => name)).toEqual(expected);
+    }
+    expect(tokenize).toHaveBeenCalledTimes(catalog.length);
+
+    catalog[0]!.description = "Observe asteroids";
+    expect((await runtime(catalog).search("asteroids")).map(({ name }) => name)).toEqual([
+      "web_search",
+    ]);
+    expect(tokenize).toHaveBeenCalledTimes(catalog.length + 1);
+
+    await runtime([...catalog]).search("repository");
+    expect(tokenize).toHaveBeenCalledTimes(catalog.length * 2 + 1);
+  });
+
   it.each(["listURL", "listUrl"])("prefers the exact catalog ID spelling for %s", async (name) => {
     const search = runtime(
       ["listURL", "listUrl"].map((toolName) =>

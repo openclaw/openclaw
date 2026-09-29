@@ -54,11 +54,6 @@ export async function withPluginSubagentRequesterContext<T>(
   });
 }
 
-function getPluginSubagentRequesterContext(): PluginSubagentRequesterContext | undefined {
-  const scope = pluginSubagentRequesterScope.getStore();
-  return scope?.active === true ? scope.requester : undefined;
-}
-
 export function resolvePluginSubagentCompletionRequester(
   completionDelivery: unknown,
 ): PluginSubagentRequesterContext | undefined {
@@ -68,7 +63,8 @@ export function resolvePluginSubagentCompletionRequester(
   if (completionDelivery === undefined) {
     return undefined;
   }
-  const requester = getPluginSubagentRequesterContext();
+  const scope = pluginSubagentRequesterScope.getStore();
+  const requester = scope?.active === true ? scope.requester : undefined;
   if (!requester) {
     throw new Error(
       'completionDelivery "current-requester" requires an active requester-bound plugin hook invocation.',
