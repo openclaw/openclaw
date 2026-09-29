@@ -1,12 +1,11 @@
-/**
- * HTTP handler for the Admin RPC endpoint. It validates JSON requests, enforces
- * the method allowlist, dispatches gateway methods, and maps errors to HTTP.
- */
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
+import {
+  dispatchGatewayMethod,
+  type GatewayMethodDispatchError,
+} from "openclaw/plugin-sdk/gateway-method-runtime";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readJsonBodyWithLimit,
   sendHttpRequestRejection,
@@ -23,23 +22,9 @@ const ErrorCodes = {
   UNAVAILABLE: "UNAVAILABLE",
 } as const;
 
-type RpcBody = {
-  id?: unknown;
-  method?: unknown;
-  params?: unknown;
-};
-
-type RpcError = {
-  code: string;
-  message: string;
-  details?: unknown;
-  retryable?: boolean;
-  retryAfterMs?: number;
-};
-
 type RpcResponse =
   | { id: string; ok: true; payload: unknown; meta?: Record<string, unknown> }
-  | { id: string; ok: false; error: RpcError; meta?: Record<string, unknown> };
+  | { id: string; ok: false; error: GatewayMethodDispatchError; meta?: Record<string, unknown> };
 
 type ParsedRequest = {
   id: string;
@@ -61,7 +46,7 @@ type ReadJsonBodyResult =
       closeAfterResponse?: boolean;
     };
 
-function createError(code: string, message: string): RpcError {
+function createError(code: string, message: string): GatewayMethodDispatchError {
   return { code, message };
 }
 
@@ -146,20 +131,16 @@ function readRpcRequestBody(body: unknown):
   if (!isRecord(body)) {
     return { ok: false, message: "request body must be an object" };
   }
-  const rpcBody = body as RpcBody;
-  if (typeof rpcBody.method !== "string" || rpcBody.method.trim().length === 0) {
+  const method = normalizeOptionalString(body.method);
+  if (!method) {
     return { ok: false, message: "method must be a non-empty string" };
   }
-  const id =
-    typeof rpcBody.id === "string" && rpcBody.id.trim().length > 0
-      ? rpcBody.id.trim()
-      : randomUUID();
   return {
     ok: true,
     request: {
-      id,
-      method: rpcBody.method.trim(),
-      ...(Object.hasOwn(rpcBody, "params") ? { params: rpcBody.params } : {}),
+      id: normalizeOptionalString(body.id) ?? randomUUID(),
+      method,
+      ...(Object.hasOwn(body, "params") ? { params: body.params } : {}),
     },
   };
 }

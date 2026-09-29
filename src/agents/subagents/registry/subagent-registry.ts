@@ -102,8 +102,10 @@ function persistSubagentRunsOrThrow(...runIds: string[]) {
 }
 
 /** Prepare registry hydration before the session owner's synchronous reset commit. */
-export function prepareSubagentSessionCleanupRevocation(sessionKey: string): () => void {
-  subagentRestorer.restoreOnce(undefined, true);
+export async function prepareSubagentSessionCleanupRevocation(
+  sessionKey: string,
+): Promise<() => void> {
+  await subagentRestorer.restoreOnce(undefined, true);
   return () => {
     // The reset owner already resolved the target. Child keys are agent-scoped;
     // an unscoped global key must not be reinterpreted as another child session.
@@ -424,10 +426,10 @@ const subagentRestorer = createSubagentRegistryRestorer({
     suspendReplacedNotificationsInBackground();
     return true;
   },
-  persist: persistSubagentRuns,
   persistOrThrow: persistSubagentRunsOrThrow,
   settleRequesterTurn: settleRequesterTurnAfterSessionSpawns,
   ensureListener: () => subagentListener.ensure(),
+  persistAsyncOrThrow: persistSubagentRunsAsyncOrThrow,
   startSweeper: () => subagentSweeper.start(),
   scheduleSweep: scheduleSubagentRegistrySweep,
   resumeRun: (runId) => resumeSubagentRun(runId, "restore"),
@@ -674,9 +676,10 @@ const publicApi = createSubagentRegistryPublicApi({
   runs: subagentRuns,
   persist: persistSubagentRuns,
   persistOrThrow: persistSubagentRunsOrThrow,
-  restoreOnce: () => subagentRestorer.restoreOnce(),
+  restoreOnce: (context) => subagentRestorer.restoreOnce(undefined, true, context),
   startAnnounceCleanup: startSubagentAnnounceCleanupFlow,
   settleRequesterTurn: settleRequesterTurnAfterSessionSpawns,
+  markRequesterYielded: subagentLifecycleController.markRequesterTurnYielded,
 });
 
 export const leasePendingAgentSteeringItems = publicApi.leasePendingAgentSteeringItems;
@@ -693,15 +696,15 @@ export function initSubagentRegistry() {
   const state = subagentRegistryBootstrapState;
   if (!state.ready || !state.restorer) {
     state.pending = true;
-    return;
+    return undefined;
   }
-  state.restorer.restoreOnce();
+  return state.restorer.restoreOnce();
 }
 export function activateSubagentRegistry(resolveGatewayContext: GatewayContextResolver) {
   // Reuse the instance's own fenced closure so late-restored siblings share one
   // authority across repeated activation; the raw holder can outlive that instance.
   activeGatewayContextResolver = resolveGatewayContext()?.resolveGatewayContext;
-  subagentRestorer.activate();
+  return subagentRestorer.activate();
 }
 export const settleRequesterAfterSessionSpawns = publicApi.settleRequesterAfterSessionSpawns;
 export const markRequesterTurnYielded = publicApi.markRequesterTurnYielded;
@@ -748,7 +751,7 @@ bootstrapState.restorer = subagentRestorer;
 bootstrapState.ready = true;
 if (bootstrapState.pending) {
   bootstrapState.pending = false;
-  subagentRestorer.restoreOnce();
+  void subagentRestorer.restoreOnce();
 }
 
 const SUBAGENT_REGISTRY_TEST_HANDLE = Symbol.for("openclaw.subagentRegistryTestApi");

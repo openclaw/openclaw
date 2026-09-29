@@ -102,7 +102,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.childSessionKey === "string") ||
       (input.command.type === "subagents.runs" &&
         isRecord(input.command.scope) &&
-        (input.command.scope.kind === "maintenance" ||
+        (input.command.scope.kind === "all" ||
+          input.command.scope.kind === "maintenance" ||
           (input.command.scope.kind === "session" &&
             typeof input.command.scope.sessionKey === "string") ||
           (input.command.scope.kind === "descendants" &&

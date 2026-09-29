@@ -414,15 +414,15 @@ describe("requester settle wake product flow", () => {
       vi.setSystemTime(100_000);
       const context = createGatewayContext();
       const otherContext = createGatewayContext();
-      registry.initSubagentRegistry();
-      const activate = () => {
+      await registry.initSubagentRegistry();
+      const activate = async () => {
         // Standalone registration can be wholly unbound, but cannot mix ambient
         // routing with a captured owner. Restored rows have a separate activation gate.
         if (binding !== "mixed-unbound") {
-          registry.activateSubagentRegistry(() => context);
+          await registry.activateSubagentRegistry(() => context);
         }
       };
-      activate();
+      await activate();
       const children = ["alpha", "beta"].map((name) => ({
         name,
         runId: `run-${name}`,
@@ -470,16 +470,16 @@ describe("requester settle wake product flow", () => {
           if (child.name === yieldedParent) {
             await createSessionsYieldTool({
               sessionId: "sess-main",
-              claimYield: () =>
-                registry.markRequesterTurnYielded({
+              claimYield: async () =>
+                (await registry.markRequesterTurnYielded({
                   requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
                   requesterAgentId: "main",
                   requesterTurnRunId,
-                }) > 0,
+                })) > 0,
               onYield: () => {},
             }).execute(`yield-${child.name}`, {});
           }
-          registry.settleRequesterAfterSessionSpawns({
+          await registry.settleRequesterAfterSessionSpawns({
             requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
             requesterAgentId: "main",
             requesterTurnRunId,
@@ -496,8 +496,8 @@ describe("requester settle wake product flow", () => {
       expect(resolvers[1]?.()).toBe(
         binding === "same" ? context : binding === "distinct" ? otherContext : undefined,
       );
-      activate();
-      activate();
+      await activate();
+      await activate();
       children.forEach((child, index) => {
         expect(getGatewayContextResolver(registry.getSubagentRunByRunId(child.runId)!)).toBe(
           resolvers[index],
@@ -525,8 +525,8 @@ describe("requester settle wake product flow", () => {
         expect(completed.execution.status).toBe("terminal");
         expect(getGatewayContextResolver(completed)).toBeUndefined();
       }
-      activate();
-      activate();
+      await activate();
+      await activate();
       children.forEach((child, index) => {
         const row = registry.getSubagentRunByRunId(child.runId)!;
         if (child !== first || first.name !== yieldedParent) {
@@ -537,7 +537,7 @@ describe("requester settle wake product flow", () => {
       emitCompleted(second.runId, second.childSessionKey, `${second.name} complete`);
       await flushOwnedWork();
       await waitForDeliveredCleanup(second.runId, { allowPendingRequesterSettleWake: true });
-      activate();
+      await activate();
       await registry.testing.sweepOnceForTests();
       await vi.advanceTimersByTimeAsync(30_000);
       await flushOwnedWork();
@@ -597,8 +597,8 @@ describe("requester settle wake product flow", () => {
     async ({ runtime, acceptNextChild, attachRequesterFinal }) => {
       vi.setSystemTime(100_000);
       const context = createGatewayContext();
-      registry.initSubagentRegistry();
-      registry.activateSubagentRegistry(() => context);
+      await registry.initSubagentRegistry();
+      await registry.activateSubagentRegistry(() => context);
       const alpha = {
         runId: "run-serial-alpha",
         childSessionKey: "agent:main:subagent:serial-alpha",
@@ -614,12 +614,12 @@ describe("requester settle wake product flow", () => {
       const yieldTurn = async (requesterTurnRunId: string, accepted: (typeof alpha)[]) => {
         const result = await createSessionsYieldTool({
           sessionId: "sess-main",
-          claimYield: () =>
-            registry.markRequesterTurnYielded({
+          claimYield: async () =>
+            (await registry.markRequesterTurnYielded({
               requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
               requesterAgentId: "main",
               requesterTurnRunId,
-            }) > 0,
+            })) > 0,
           onYield: () => {},
         }).execute(`yield-${requesterTurnRunId}`, {});
         expect(result).toMatchObject({
@@ -700,7 +700,7 @@ describe("requester settle wake product flow", () => {
               throw new Error("yielded native requester did not complete its turn");
             }
             const { settleRequesterRun } = await import("../../requester-run-settlement.js");
-            settleRequesterRun(runParams, terminal.result, admission.assertSourceCurrent);
+            await settleRequesterRun(runParams, terminal.result, admission.assertSourceCurrent);
             for (const child of accepted) {
               expect(registry.getSubagentRunByRunId(child.runId)).toMatchObject({
                 requesterTurnRunId: undefined,

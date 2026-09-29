@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/state/session-repository-workspaces.test.ts",
   "src/infra/update-run-reconciliation.worker.test.ts",
   "src/infra/update-run-interruption.worker.test.ts",
   "src/channels/turn/durable-delivery.reload.test.ts",
@@ -346,6 +347,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt-stream-settle.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-yield-handoff.test.ts",
   "src/agents/embedded-agent-runner/run-entry.test.ts",
+  "src/agents/openclaw-tools.requester-yield.test.ts",
   "src/agents/openclaw-tools.sessions-steering.test.ts",
   "src/agents/openclaw-tools.sessions-send-child-coordination.test.ts",
   "src/agents/openclaw-tools.sessions.test.ts",

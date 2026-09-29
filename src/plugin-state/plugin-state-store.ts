@@ -4,7 +4,10 @@ import type { Result } from "@openclaw/normalization-core/result";
 import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { validatePluginStateComparison } from "./plugin-state-store.comparison.js";
-import { preparePluginStateJournalValue } from "./plugin-state-store.journal.js";
+import {
+  preparePluginStateJournalValue,
+  type PluginStateSequencedJournalParams,
+} from "./plugin-state-store.journal.js";
 import { isRetainedPluginStateNamespace } from "./plugin-state-store.kernel.js";
 import {
   validatePluginStateKeyRange,
@@ -497,11 +500,7 @@ export async function registerPluginStateSequencedJournalEntry(params: {
   journalOptions: OpenKeyedStoreOptions;
   /** This owner adds a fixed-width sequence suffix so key order matches append order. */
   journalKeyPrefix: string;
-  journalKeyRange: {
-    keyStartInclusive: string;
-    keyEndExclusive: string;
-    valueKind?: string;
-  };
+  journalKeyRange: PluginStateSequencedJournalParams["journalKeyRange"];
   journalValue: Record<string, unknown>;
 }): Promise<number> {
   if (params.pluginId.startsWith("core:")) {

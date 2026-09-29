@@ -138,7 +138,7 @@ export async function runSqliteSessionReclamation(params: {
             return reclaimSqliteSessionInTransaction(params.plan, {
               beforeMutation: params.assertCommitAllowed,
               onCommit: (database, result) => {
-                params.assertCommitAllowed?.();
+                // The native connection now sees its own removals; row guards ran before mutation.
                 assertSessionSubagentRunsCurrent(params.plan, params.plan.databaseOptions.env);
                 const publish = prepareReclamationPublication(
                   params.plan,
@@ -344,11 +344,22 @@ async function runPreparedSqliteSessionReclamation(
                   plan.kind === "lifecycle-projection-commit"
                     ? prepareReclamationPublication(plan, identity, completed)
                     : publishCommitted;
+                const removedSessionKeys =
+                  completed.kind === "lifecycle-projection-commit"
+                    ? completed.value.removedSessionKeys
+                    : completed.kind === "maintenance-finalize"
+                      ? completed.value.committedEntries.map(({ sessionKey }) => sessionKey)
+                      : completed.kind === "entry" &&
+                          plan.kind === "entry" &&
+                          completed.value.deleted
+                        ? plan.preparedTargetSnapshot.map(({ sessionKey }) => sessionKey)
+                        : [];
                 publishSessionEntryWorkerInvalidations(
                   {
                     agentId: plan.databaseOptions.agentId,
                     storePath: owner.nativeLocation,
                     databaseIdentity: identity,
+                    removedSessionKeys: new Set(removedSessionKeys),
                   },
                   collectReclamationChangedSessionKeys(plan, completed),
                   () => {

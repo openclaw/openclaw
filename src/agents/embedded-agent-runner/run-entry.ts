@@ -165,10 +165,10 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
     const result = await runEmbeddedAgentEntryInternal(params);
     // Placement and asynchronous terminal cleanup have finished. Only this
     // accepted logical result may release children retained across candidates.
-    settleRequesterRun(requester, result.result, () => admission?.assertSourceCurrent());
+    await settleRequesterRun(requester, result.result, () => admission?.assertSourceCurrent());
     return result;
   } catch (error) {
-    throw settleFailedRequesterRun(requester, error);
+    throw await settleFailedRequesterRun(requester, error);
   }
 }
 

@@ -1581,7 +1581,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/auto-reply/reply/dispatch-from-config.question-custody.test.ts",
   "src/auto-reply/reply/dispatch-from-config.reply-dispatch-scope.test.ts",
   "src/auto-reply/reply/dispatch-from-config.secrets.test.ts",
-  "src/auto-reply/reply/dispatch-from-config.stale-recovery.test.ts",
   "src/auto-reply/reply/dispatch-from-config.terminal-recovery.test.ts",
   "src/auto-reply/reply/dispatch-from-config.test.ts",
   "src/auto-reply/reply/dispatch-from-config.tts-stream.test.ts",

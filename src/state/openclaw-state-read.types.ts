@@ -155,6 +155,7 @@ export type OpenClawStateReadCommand =
   | {
       type: "subagents.runs";
       scope:
+        | { kind: "all" }
         | { kind: "maintenance" }
         | { kind: "session"; sessionKey: string }
         | { kind: "ids"; runIds: readonly string[] }

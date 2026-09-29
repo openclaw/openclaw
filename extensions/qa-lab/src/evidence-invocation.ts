@@ -250,6 +250,7 @@ export function createQaEvidenceInvocation(params: {
 
   function select(index: number, occurrenceId: string): string;
   function select(index: number, occurrenceId: null): null;
+  function select(index: number, occurrenceId: string | null): string | null;
   function select(index: number, occurrenceId: string | null): string | null {
     anchorFor(index);
     const nextAnchors = structuredClone(anchors);

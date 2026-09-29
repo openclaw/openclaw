@@ -224,17 +224,20 @@ function buildUpdateFixture(fixture: CliOptions["fixture"], nowMs: number): Upda
     },
   };
 
+  const schedule: UpdateScheduleState = {
+    ...baseSchedule,
+    campaign: {
+      id:
+        fixture === "update-blocked"
+          ? "mock-update-waiting-for-idle"
+          : "mock-update-before-failure",
+      state: "waiting-for-idle",
+      announcedAtMs: nowMs - 2 * 60_000,
+      forceAtMs: nowMs + 13 * 60_000,
+      updatedAtMs: nowMs,
+    },
+  };
   if (fixture === "update-blocked") {
-    const schedule: UpdateScheduleState = {
-      ...baseSchedule,
-      campaign: {
-        id: "mock-update-waiting-for-idle",
-        state: "waiting-for-idle",
-        announcedAtMs: nowMs - 2 * 60_000,
-        forceAtMs: nowMs + 13 * 60_000,
-        updatedAtMs: nowMs,
-      },
-    };
     return {
       available,
       schedule,
@@ -259,16 +262,6 @@ function buildUpdateFixture(fixture: CliOptions["fixture"], nowMs: number): Upda
     };
   }
 
-  const schedule: UpdateScheduleState = {
-    ...baseSchedule,
-    campaign: {
-      id: "mock-update-before-failure",
-      state: "waiting-for-idle",
-      announcedAtMs: nowMs - 2 * 60_000,
-      forceAtMs: nowMs + 13 * 60_000,
-      updatedAtMs: nowMs,
-    },
-  };
   const result: UpdateRunResult = {
     status: "error",
     mode: "git",
@@ -808,64 +801,44 @@ function buildModelProviderMocks(baseTime: number) {
     authStatus: {
       ts: baseTime,
       providers: [
-        {
-          provider: "anthropic",
-          displayName: "Claude",
-          status: "ok",
-          expiry: expiry(11 * 24 * hour, "11d"),
-          profiles: [
-            {
-              profileId: "anthropic:default",
-              type: "oauth",
-              status: "ok",
-              expiry: expiry(11 * 24 * hour, "11d"),
-            },
-          ],
-          usage: {
-            providerId: "anthropic",
-            plan: anthropicUsage.plan,
-            windows: anthropicUsage.windows,
+        ...[
+          {
+            usage: anthropicUsage,
+            profileId: "anthropic:default",
+            type: "oauth",
+            status: "ok",
+            remainingMs: 11 * 24 * hour,
+            label: "11d",
           },
-        },
-        {
-          provider: "openai",
-          displayName: "OpenAI",
-          status: "ok",
-          expiry: expiry(6 * 24 * hour, "6d"),
-          profiles: [
-            {
-              profileId: "openai:codex",
-              type: "oauth",
-              status: "ok",
-              expiry: expiry(6 * 24 * hour, "6d"),
-            },
-          ],
-          usage: {
-            providerId: "openai",
-            plan: openaiUsage.plan,
-            windows: openaiUsage.windows,
-            billing: openaiUsage.billing,
+          {
+            usage: openaiUsage,
+            profileId: "openai:codex",
+            type: "oauth",
+            status: "ok",
+            remainingMs: 6 * 24 * hour,
+            label: "6d",
           },
-        },
-        {
-          provider: "github-copilot",
-          displayName: "GitHub Copilot",
-          status: "expiring",
-          expiry: expiry(26 * 60 * 1000, "26m"),
-          profiles: [
-            {
-              profileId: "github-copilot:default",
-              type: "token",
-              status: "expiring",
-              expiry: expiry(26 * 60 * 1000, "26m"),
-            },
-          ],
-          usage: {
-            providerId: "github-copilot",
-            plan: copilotUsage.plan,
-            windows: copilotUsage.windows,
+          {
+            usage: copilotUsage,
+            profileId: "github-copilot:default",
+            type: "token",
+            status: "expiring",
+            remainingMs: 26 * 60 * 1000,
+            label: "26m",
           },
-        },
+        ].map(({ usage, profileId, type, status, remainingMs, label }) => ({
+          provider: usage.provider,
+          displayName: usage.displayName,
+          status,
+          expiry: expiry(remainingMs, label),
+          profiles: [{ profileId, type, status, expiry: expiry(remainingMs, label) }],
+          usage: {
+            providerId: usage.provider,
+            plan: usage.plan,
+            windows: usage.windows,
+            ...("billing" in usage ? { billing: usage.billing } : {}),
+          },
+        })),
         {
           provider: "openrouter",
           displayName: "OpenRouter",
@@ -898,10 +871,13 @@ function buildModelProviderMocks(baseTime: number) {
         ],
         contextWindowDefault: "1m",
       },
-      {
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        provider: "anthropic",
+      ...[
+        { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+        { id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" },
+      ].map(({ id, name, provider }) => ({
+        id,
+        name,
+        provider,
         available: true,
         contextWindow: 200_000,
         thinkingLevels: [
@@ -912,22 +888,7 @@ function buildModelProviderMocks(baseTime: number) {
         thinkingDefault: "medium",
         reasoning: true,
         supportsTools: true,
-      },
-      {
-        id: "gpt-5-mini",
-        name: "GPT-5 Mini",
-        provider: "openai",
-        available: true,
-        contextWindow: 200_000,
-        thinkingLevels: [
-          { id: "low", label: "Low" },
-          { id: "medium", label: "Medium" },
-          { id: "high", label: "High" },
-        ],
-        thinkingDefault: "medium",
-        reasoning: true,
-        supportsTools: true,
-      },
+      })),
       { id: "gpt-5", name: "GPT-5", provider: "openai", available: true },
       { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google", available: false },
       { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter", available: true },
@@ -1595,6 +1556,22 @@ async function createChatPickerScenario(
     },
   ];
   const sessionWorkspaceRoot = "/mock/workspace";
+  const sessionFileCase = <T extends { path: string }>(file: T) => ({
+    match: { sessionKey: "agent:main:main", path: file.path },
+    response: { file, root: sessionWorkspaceRoot, sessionKey: "agent:main:main" },
+  });
+  const sessionFileListCase = <T extends Record<string, unknown>>(
+    browser: T,
+    match: Record<string, unknown> = {},
+  ) => ({
+    match: { sessionKey: "agent:main:main", ...match },
+    response: {
+      browser,
+      files: sessionFiles,
+      root: sessionWorkspaceRoot,
+      sessionKey: "agent:main:main",
+    },
+  });
   const sessionFileContentByPath = new Map([
     [
       "ui/src/ui/views/chat.ts",
@@ -1626,75 +1603,57 @@ async function createChatPickerScenario(
     ],
   ]);
   const sessionFileCases = [
-    {
-      match: { sessionKey: "agent:main:main" },
-      response: {
-        browser: {
-          entries: [
-            {
-              kind: "directory",
-              name: "packages",
-              path: "packages",
-              sessionKind: "read",
-              updatedAtMs: baseTime - 420_000,
-            },
-            {
-              kind: "directory",
-              name: "src",
-              path: "src",
-              sessionKind: "read",
-              updatedAtMs: baseTime - 300_000,
-            },
-            {
-              kind: "directory",
-              name: "ui",
-              path: "ui",
-              sessionKind: "modified",
-              updatedAtMs: baseTime - 20_000,
-            },
-            {
-              kind: "file",
-              name: "package.json",
-              path: "package.json",
-              size: 92750,
-              updatedAtMs: baseTime - 800_000,
-            },
-          ],
-          path: "",
+    sessionFileListCase({
+      entries: [
+        {
+          kind: "directory",
+          name: "packages",
+          path: "packages",
+          sessionKind: "read",
+          updatedAtMs: baseTime - 420_000,
         },
-        files: sessionFiles,
-        root: sessionWorkspaceRoot,
-        sessionKey: "agent:main:main",
-      },
-    },
+        {
+          kind: "directory",
+          name: "src",
+          path: "src",
+          sessionKind: "read",
+          updatedAtMs: baseTime - 300_000,
+        },
+        {
+          kind: "directory",
+          name: "ui",
+          path: "ui",
+          sessionKind: "modified",
+          updatedAtMs: baseTime - 20_000,
+        },
+        {
+          kind: "file",
+          name: "package.json",
+          path: "package.json",
+          size: 92750,
+          updatedAtMs: baseTime - 800_000,
+        },
+      ],
+      path: "",
+    }),
   ];
-  const sessionFileGetCases = sessionFiles.map((file) => ({
-    match: { sessionKey: "agent:main:main", path: file.path },
-    response: {
-      file: {
-        ...file,
-        content: sessionFileContentByPath.get(file.path) ?? "",
-        // Fake CAS token so the file panel offers edit mode against the mock.
-        hash: mockFileHash(sessionFileContentByPath.get(file.path) ?? ""),
-      },
-      root: sessionWorkspaceRoot,
-      sessionKey: "agent:main:main",
-    },
-  }));
-  const sessionFileSetCases = sessionFiles.map((file) => ({
-    match: { sessionKey: "agent:main:main", path: file.path },
-    response: {
-      file: {
-        ...file,
-        kind: "modified",
-        workspacePath: file.path,
-        hash: mockFileHash(`${file.path}:saved`),
-        updatedAtMs: baseTime,
-      },
-      root: sessionWorkspaceRoot,
-      sessionKey: "agent:main:main",
-    },
-  }));
+  const sessionFileGetCases = sessionFiles.map((file) =>
+    sessionFileCase({
+      ...file,
+      content: sessionFileContentByPath.get(file.path) ?? "",
+      // Fake CAS token so the file panel offers edit mode against the mock.
+      hash: mockFileHash(sessionFileContentByPath.get(file.path) ?? ""),
+    }),
+  );
+  const sessionFileSetCases = sessionFiles.map((file) =>
+    sessionFileCase({
+      ...file,
+      kind: "modified",
+      workspacePath: file.path,
+      hash: mockFileHash(`${file.path}:saved`),
+      updatedAtMs: baseTime,
+    }),
+  );
   const lobsterSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
   <rect width="640" height="360" fill="#10151d"/>
   <circle cx="320" cy="185" r="76" fill="#e23f3f"/>
@@ -1810,34 +1769,22 @@ async function createChatPickerScenario(
   const activitySessions = buildActivitySessionRows(activityTime);
   const dashboardGallerySessions =
     fixture === "dashboards"
-      ? [
-          sessionRow("agent:main:dashboard:release-health", "Release health", baseTime - 3_000, {
+      ? (
+          [
+            ["release-health", "Release health", 3_000, MOCK_ACTOR_MIRA],
+            ["model-spend", "Model spend", 8_000, MOCK_ACTOR_PETER],
+            ["support-radar", "Support radar", 18_000, MOCK_ACTOR_MIRA],
+            ["ci-signal", "CI signal", 42_000, MOCK_ACTOR_PETER],
+            ["community-pulse", "Community pulse", 75_000, MOCK_ACTOR_MIRA],
+            ["gateway-fleet", "Gateway fleet", 130_000, MOCK_ACTOR_PETER],
+          ] as const
+        ).map(([key, label, age, owner]) =>
+          sessionRow(`agent:main:dashboard:${key}`, label, baseTime - age, {
             boardFace: "dashboard",
-            createdActor: MOCK_ACTOR_MIRA,
-            hasActiveRun: true,
-            status: "running",
+            createdActor: owner,
+            ...(key === "release-health" ? { hasActiveRun: true, status: "running" } : {}),
           }),
-          sessionRow("agent:main:dashboard:model-spend", "Model spend", baseTime - 8_000, {
-            boardFace: "dashboard",
-            createdActor: MOCK_ACTOR_PETER,
-          }),
-          sessionRow("agent:main:dashboard:support-radar", "Support radar", baseTime - 18_000, {
-            boardFace: "dashboard",
-            createdActor: MOCK_ACTOR_MIRA,
-          }),
-          sessionRow("agent:main:dashboard:ci-signal", "CI signal", baseTime - 42_000, {
-            boardFace: "dashboard",
-            createdActor: MOCK_ACTOR_PETER,
-          }),
-          sessionRow("agent:main:dashboard:community-pulse", "Community pulse", baseTime - 75_000, {
-            boardFace: "dashboard",
-            createdActor: MOCK_ACTOR_MIRA,
-          }),
-          sessionRow("agent:main:dashboard:gateway-fleet", "Gateway fleet", baseTime - 130_000, {
-            boardFace: "dashboard",
-            createdActor: MOCK_ACTOR_PETER,
-          }),
-        ]
+        )
       : [];
   const activeGoal = {
     schemaVersion: 1 as const,
@@ -2432,7 +2379,10 @@ async function createChatPickerScenario(
         email: selfProfile.emails[0],
         avatarUrl: `/api/users/${selfProfile.id}/avatar`,
       },
-      {
+      ...[
+        ["agent:activity:design-review", "agent:main:main"],
+        ["agent:activity:design-review"],
+      ].map((watchedSessions) => ({
         id: "presence-colin",
         name: "Colin",
         email: "colin@example.com",
@@ -2441,19 +2391,8 @@ async function createChatPickerScenario(
         deviceFamily: "Mac",
         platform: "macOS",
         timeZone: "America/Los_Angeles",
-        watchedSessions: ["agent:activity:design-review", "agent:main:main"],
-      },
-      {
-        id: "presence-colin",
-        name: "Colin",
-        email: "colin@example.com",
-        onlineSince: activityTime - 47 * 60_000,
-        lastActivityAt: activityTime - 2 * 60_000,
-        deviceFamily: "Mac",
-        platform: "macOS",
-        timeZone: "America/Los_Angeles",
-        watchedSessions: ["agent:activity:design-review"],
-      },
+        watchedSessions,
+      })),
       {
         id: "presence-patricia",
         name: "Patrick",
@@ -3028,63 +2967,53 @@ async function createChatPickerScenario(
       },
       "sessions.files.list": {
         cases: [
-          {
-            match: { sessionKey: "agent:main:main", path: "ui" },
-            response: {
-              browser: {
-                entries: [
-                  {
-                    kind: "directory",
-                    name: "src",
-                    path: "ui/src",
-                    sessionKind: "modified",
-                    updatedAtMs: baseTime - 20_000,
-                  },
-                  {
-                    kind: "file",
-                    name: "vite.config.ts",
-                    path: "ui/vite.config.ts",
-                    size: 9860,
-                    updatedAtMs: baseTime - 900_000,
-                  },
-                ],
-                parentPath: "",
-                path: "ui",
-              },
-              files: sessionFiles,
-              root: sessionWorkspaceRoot,
-              sessionKey: "agent:main:main",
+          sessionFileListCase(
+            {
+              entries: [
+                {
+                  kind: "directory",
+                  name: "src",
+                  path: "ui/src",
+                  sessionKind: "modified",
+                  updatedAtMs: baseTime - 20_000,
+                },
+                {
+                  kind: "file",
+                  name: "vite.config.ts",
+                  path: "ui/vite.config.ts",
+                  size: 9860,
+                  updatedAtMs: baseTime - 900_000,
+                },
+              ],
+              parentPath: "",
+              path: "ui",
             },
-          },
-          {
-            match: { sessionKey: "agent:main:main", search: "chat" },
-            response: {
-              browser: {
-                entries: [
-                  {
-                    kind: "file",
-                    name: "chat.ts",
-                    path: "ui/src/ui/views/chat.ts",
-                    sessionKind: "modified",
-                    size: 48320,
-                    updatedAtMs: baseTime - 20_000,
-                  },
-                  {
-                    kind: "file",
-                    name: "chat-flow.e2e.test.ts",
-                    path: "ui/src/e2e/chat-flow.e2e.test.ts",
-                    size: 24950,
-                    updatedAtMs: baseTime - 25_000,
-                  },
-                ],
-                path: "",
-                search: "chat",
-              },
-              files: sessionFiles,
-              root: sessionWorkspaceRoot,
-              sessionKey: "agent:main:main",
+            { path: "ui" },
+          ),
+          sessionFileListCase(
+            {
+              entries: [
+                {
+                  kind: "file",
+                  name: "chat.ts",
+                  path: "ui/src/ui/views/chat.ts",
+                  sessionKind: "modified",
+                  size: 48320,
+                  updatedAtMs: baseTime - 20_000,
+                },
+                {
+                  kind: "file",
+                  name: "chat-flow.e2e.test.ts",
+                  path: "ui/src/e2e/chat-flow.e2e.test.ts",
+                  size: 24950,
+                  updatedAtMs: baseTime - 25_000,
+                },
+              ],
+              path: "",
+              search: "chat",
             },
-          },
+            { search: "chat" },
+          ),
           ...sessionFileCases,
         ],
       },

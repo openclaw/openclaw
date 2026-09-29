@@ -4528,6 +4528,7 @@ function createCompactNodeTestShardBundles(
   splitHostedToolingTails = false,
   hostedToolingTailBudgets?: ReadonlyMap<string, number>,
   hostedToolingTailDonation?: HostedToolingTailDonation,
+  prioritizeSerialGateway = false,
 ): CompactNodeTestShard[] {
   if (options.runnerBackend === "runson") {
     // Hybrid owns placement and measured serial packing; RunsOn only extracts cron.
@@ -4540,6 +4541,7 @@ function createCompactNodeTestShardBundles(
         splitHostedToolingTails,
         hostedToolingTailBudgets,
         hostedToolingTailDonation,
+        prioritizeSerialGateway,
       ),
       options.compactNodeJobCap ?? COMPACT_NODE_TEST_JOB_CAP,
     );
@@ -4824,13 +4826,13 @@ function createCompactNodeTestShardBundles(
     const usesBlacksmithRunner = usesBlacksmithCapacity(groups[0].runner);
     // Admit the final groups with their shared prerequisite. Rebalancing after
     // this check can break build sharing and exceed a bin's admitted cap.
-    // Place serial Gateway work first: flexible parallel groups can fill its
-    // remaining space without stranding same-family stripes in the final repack.
+    // Retry over-cap hybrid plans with Gateway first; leave successful cost-first
+    // placement and its runtime recipients intact.
     const sortedGroups = groups
       .flatMap((group) => expandCompactGroup(group, options.runnerBackend))
       .toSorted(
         (a, b) =>
-          (options.runnerBackend === "hybrid"
+          (prioritizeSerialGateway
             ? Number(b.configs.some(isExclusiveCiTestConfig)) -
               Number(a.configs.some(isExclusiveCiTestConfig))
             : 0) ||
@@ -5346,6 +5348,20 @@ function createCompactNodeTestShardBundles(
         )
       : finalJobs;
   if (measuredJobs.length > compactJobCap) {
+    if (options.runnerBackend === "hybrid" && !prioritizeSerialGateway) {
+      // Rebuild from source so the alternate order passes every admission and
+      // runtime-placement check before any rows are published.
+      return createCompactNodeTestShardBundles(
+        sourceShards,
+        options,
+        compactMode,
+        selectedToolingFiles,
+        splitHostedToolingTails,
+        hostedToolingTailBudgets,
+        hostedToolingTailDonation,
+        true,
+      );
+    }
     throw new Error(
       `compact ${options.runnerBackend ?? "blacksmith"} node test plan exceeds ${compactJobCap} jobs (${measuredJobs.length} planned)`,
     );

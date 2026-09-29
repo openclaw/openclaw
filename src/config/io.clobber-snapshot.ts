@@ -3,6 +3,7 @@ import { createDedupeCache } from "../infra/dedupe.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { sleep } from "../utils/sleep.js";
+import { formatConfigArtifactTimestamp } from "./io.write-safety.js";
 
 /** Maximum retained clobbered-config snapshots per config file. */
 const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
@@ -46,10 +47,6 @@ type ConfigClobberSnapshotDeps = {
   fs: ConfigClobberSnapshotFs;
   logger: Pick<typeof console, "warn">;
 };
-
-function formatConfigArtifactTimestamp(ts: string): string {
-  return ts.replaceAll(":", "-").replaceAll(".", "-");
-}
 
 function isFsErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && hasErrnoCode(error, code);

@@ -115,7 +115,6 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.controlUi.root": "dist/control-ui",
   "gateway.controlUi.allowedOrigins": "https://control.example.com",
   "gateway.push.apns.relay.baseUrl": "https://ios-push-relay.openclaw.ai",
-  "channels.mattermost.baseUrl": "https://chat.example.com",
   "agents.entries.*.identity.avatar": "avatars/openclaw.png",
 };
 

@@ -12,19 +12,29 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { chromium } from "playwright-core";
 import { z } from "zod";
 import type { QaGatewayChild } from "../../gateway-child.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
 import { readLiveQaChannelAccounts } from "../shared/live-channel-status.js";
 import { requireLiveQaEnv } from "../shared/live-credential-env.js";
-import { assertLiveScenarioReply as assertDiscordScenarioReply } from "../shared/live-scenario-reply.js";
+import { createDiscordQaEndpointFetcher } from "./discord-live.endpoint.js";
+import {
+  buildDiscordWebMessageUrl,
+  collectSeenReactionSequence,
+  normalizeDiscordObservedMessage,
+  normalizeDiscordReactionSnapshot,
+  renderDiscordStatusReactionHtml,
+  renderDiscordThreadReplyAttachmentHtml,
+  type DiscordMessage,
+  type DiscordObservedMessage,
+  type DiscordReactionSnapshot,
+  type DiscordUser,
+} from "./discord-live.evidence.js";
 import type { DiscordTranscriptsVoiceAuthorizationRun } from "./discord-transcripts-authorization.types.js";
 
-type DiscordQaRuntimeEnv = {
+export type DiscordQaRuntimeEnv = {
   guildId: string;
   channelId: string;
   driverBotToken: string;
@@ -79,44 +89,10 @@ type DiscordQaScenarioMetadata = {
   title: string;
 };
 
-type DiscordUser = {
-  id: string;
-  username?: string;
-  bot?: boolean;
-};
-
-type DiscordMessage = {
-  id: string;
-  channel_id: string;
-  guild_id?: string;
-  attachments?: DiscordAttachment[];
-  content?: string;
-  reactions?: DiscordReaction[];
-  timestamp?: string;
-  author?: DiscordUser;
-  referenced_message?: { id?: string } | null;
-};
-
-type DiscordAttachment = {
-  id?: string;
-  filename?: string;
-  size?: number;
-  url?: string;
-};
-
 type DiscordThread = {
   id: string;
   name?: string;
   parent_id?: string;
-};
-
-type DiscordReaction = {
-  count?: number;
-  emoji?: {
-    id?: string | null;
-    name?: string | null;
-  };
-  me?: boolean;
 };
 
 type DiscordApplicationCommand = {
@@ -124,7 +100,7 @@ type DiscordApplicationCommand = {
   name?: string;
 };
 
-type DiscordChannel = {
+export type DiscordChannel = {
   id: string;
   guild_id?: string;
   name?: string;
@@ -137,33 +113,6 @@ type DiscordVoiceState = {
   channel_id?: string | null;
   guild_id?: string;
   user_id?: string;
-};
-
-type DiscordObservedMessage = {
-  messageId: string;
-  channelId: string;
-  guildId?: string;
-  senderId: string;
-  senderIsBot: boolean;
-  senderUsername?: string;
-  scenarioId?: string;
-  scenarioTitle?: string;
-  matchedScenario?: boolean;
-  text: string;
-  triggerMessageId?: string;
-  triggerTimestamp?: string;
-  replyToMessageId?: string;
-  timestamp?: string;
-};
-
-type DiscordReactionSnapshot = {
-  elapsedMs: number;
-  observedAt: string;
-  reactions: Array<{
-    count: number;
-    emoji: string;
-    me: boolean;
-  }>;
 };
 
 type DiscordStatusReactionTimeline = {
@@ -199,65 +148,9 @@ type DiscordThreadReplyAttachmentEvidence = {
 
 const DISCORD_QA_CAPTURE_UI_METADATA_ENV = "OPENCLAW_QA_DISCORD_CAPTURE_UI_METADATA";
 const DISCORD_QA_KEEP_THREADS_ENV = "OPENCLAW_QA_DISCORD_KEEP_THREADS";
-const DISCORD_PUBLIC_API_BASE = "https://discord.com/api/v10";
 const discordQaApiBaseByToken = new Map<string, string>();
 
 type DiscordQaRequestOptions = NonNullable<Parameters<typeof requestDiscordLive>[2]>;
-
-type DiscordQaRequestInit = RequestInit & { duplex?: "half" };
-
-function requestInitFromDiscordQaRequest(request: Request): DiscordQaRequestInit {
-  return {
-    method: request.method,
-    headers: request.headers,
-    ...(request.body ? { body: request.body, duplex: "half" as const } : {}),
-    signal: request.signal,
-    cache: request.cache,
-    credentials: request.credentials,
-    integrity: request.integrity,
-    keepalive: request.keepalive,
-    mode: request.mode,
-    referrer: request.referrer,
-    referrerPolicy: request.referrerPolicy,
-  };
-}
-
-function createDiscordQaEndpointFetcher(apiBaseUrl: string): typeof fetch {
-  const base = new URL(apiBaseUrl.endsWith("/") ? apiBaseUrl : `${apiBaseUrl}/`);
-  return async (input, init) => {
-    const request = new Request(input, init);
-    if (!request.url.startsWith(`${DISCORD_PUBLIC_API_BASE}/`)) {
-      throw new Error(`Discord QA request escaped the expected API base: ${request.url}`);
-    }
-    const suffix = request.url.slice(`${DISCORD_PUBLIC_API_BASE}/`.length);
-    const target = new URL(suffix, base);
-    const guarded = await fetchWithSsrFGuard({
-      url: target.toString(),
-      init: requestInitFromDiscordQaRequest(request),
-      signal: request.signal,
-      policy: { allowPrivateNetwork: true, allowedOrigins: [base.origin] },
-      maxRedirects: 0,
-      auditContext: "qa-lab-discord-endpoint",
-    });
-    try {
-      const status = guarded.response.status;
-      const bodyAllowed =
-        request.method !== "HEAD" &&
-        guarded.response.body !== null &&
-        status !== 204 &&
-        status !== 205 &&
-        status !== 304;
-      const body = bodyAllowed ? await guarded.response.arrayBuffer() : null;
-      return new Response(body && body.byteLength > 0 ? body : null, {
-        status,
-        statusText: guarded.response.statusText,
-        headers: guarded.response.headers,
-      });
-    } finally {
-      await guarded.release();
-    }
-  };
-}
 
 async function requestDiscord<T>(
   requestPath: string,
@@ -266,6 +159,7 @@ async function requestDiscord<T>(
 ): Promise<T> {
   const apiBaseUrl = discordQaApiBaseByToken.get(token);
   return await requestDiscordLive<T>(requestPath, token, {
+    timeoutMs: 15_000,
     ...options,
     ...(apiBaseUrl
       ? { endpointRuntime: null, fetcher: createDiscordQaEndpointFetcher(apiBaseUrl) }
@@ -414,7 +308,9 @@ function assertDiscordSnowflake(value: string, label: string) {
   }
 }
 
-function resolveDiscordQaRuntimeEnv(env: NodeJS.ProcessEnv = process.env): DiscordQaRuntimeEnv {
+export function resolveDiscordQaRuntimeEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): DiscordQaRuntimeEnv {
   const voiceChannelId = env.OPENCLAW_QA_DISCORD_VOICE_CHANNEL_ID?.trim();
   const runtimeEnv = {
     guildId: requireLiveQaEnv(env, "OPENCLAW_QA_DISCORD_GUILD_ID"),
@@ -437,7 +333,7 @@ function validateDiscordQaRuntimeEnv(runtimeEnv: DiscordQaRuntimeEnv, prefix: st
   }
 }
 
-function parseDiscordQaCredentialPayload(payload: unknown): DiscordQaRuntimeEnv {
+export function parseDiscordQaCredentialPayload(payload: unknown): DiscordQaRuntimeEnv {
   const parsed = discordQaCredentialPayloadSchema.parse(payload);
   const runtimeEnv = {
     guildId: parsed.guildId,
@@ -451,7 +347,7 @@ function parseDiscordQaCredentialPayload(payload: unknown): DiscordQaRuntimeEnv 
   return runtimeEnv;
 }
 
-function buildDiscordQaConfig(
+export function buildDiscordQaConfig(
   baseCfg: OpenClawConfig,
   params: {
     guildId: string;
@@ -590,33 +486,23 @@ function buildDiscordQaConfig(
   };
 }
 
-async function getCurrentDiscordUser(token: string) {
-  return await requestDiscord<DiscordUser>("/users/@me", token, {
-    timeoutMs: 15_000,
-  });
+export async function getCurrentDiscordUser(token: string) {
+  return await requestDiscord<DiscordUser>("/users/@me", token);
 }
 
 async function listGuildChannels(params: { token: string; guildId: string }) {
-  return await requestDiscord<DiscordChannel[]>(
-    `/guilds/${params.guildId}/channels`,
-    params.token,
-    {
-      timeoutMs: 15_000,
-    },
-  );
+  return await requestDiscord<DiscordChannel[]>(`/guilds/${params.guildId}/channels`, params.token);
 }
 
 async function getDiscordChannel(params: { token: string; channelId: string }) {
-  return await requestDiscord<DiscordChannel>(`/channels/${params.channelId}`, params.token, {
-    timeoutMs: 15_000,
-  });
+  return await requestDiscord<DiscordChannel>(`/channels/${params.channelId}`, params.token);
 }
 
 function isDiscordVoiceChannel(channel: DiscordChannel) {
   return channel.type === 2 || channel.type === 13;
 }
 
-async function resolveDiscordQaVoiceChannel(params: {
+export async function resolveDiscordQaVoiceChannel(params: {
   guildId: string;
   token: string;
   voiceChannelId?: string;
@@ -655,14 +541,11 @@ async function resolveDiscordQaVoiceChannel(params: {
   return first;
 }
 
-async function getCurrentDiscordVoiceState(params: { token: string; guildId: string }) {
+export async function getCurrentDiscordVoiceState(params: { token: string; guildId: string }) {
   try {
     return await requestDiscord<DiscordVoiceState>(
       `/guilds/${params.guildId}/voice-states/@me`,
       params.token,
-      {
-        timeoutMs: 15_000,
-      },
     );
   } catch (error) {
     if (error instanceof DiscordApiError && error.status === 404) {
@@ -672,7 +555,7 @@ async function getCurrentDiscordVoiceState(params: { token: string; guildId: str
   }
 }
 
-async function waitForDiscordVoiceState(params: {
+export async function waitForDiscordVoiceState(params: {
   channelId: string;
   guildId: string;
   sutBotId: string;
@@ -711,7 +594,7 @@ async function waitForDiscordVoiceState(params: {
   );
 }
 
-async function sendChannelMessage(token: string, channelId: string, content: string) {
+export async function sendChannelMessage(token: string, channelId: string, content: string) {
   return await requestDiscord<DiscordMessage>(`/channels/${channelId}/messages`, token, {
     body: {
       content,
@@ -719,7 +602,6 @@ async function sendChannelMessage(token: string, channelId: string, content: str
         parse: ["users"],
       },
     },
-    timeoutMs: 15_000,
   });
 }
 
@@ -727,13 +609,10 @@ async function getChannelMessage(params: { token: string; channelId: string; mes
   return await requestDiscord<DiscordMessage>(
     `/channels/${params.channelId}/messages/${params.messageId}`,
     params.token,
-    {
-      timeoutMs: 15_000,
-    },
   );
 }
 
-async function waitForDiscordMessageText(params: {
+export async function waitForDiscordMessageText(params: {
   token: string;
   channelId: string;
   messageId: string;
@@ -754,7 +633,7 @@ async function waitForDiscordMessageText(params: {
   );
 }
 
-async function waitForDiscordMessageDeleted(params: {
+export async function waitForDiscordMessageDeleted(params: {
   token: string;
   channelId: string;
   messageId: string;
@@ -789,9 +668,6 @@ async function listChannelMessagesAfter(params: {
   return await requestDiscord<DiscordMessage[]>(
     `/channels/${params.channelId}/messages?${query.toString()}`,
     params.token,
-    {
-      timeoutMs: 15_000,
-    },
   );
 }
 
@@ -809,7 +685,6 @@ async function createThreadFromMessage(params: {
         name: params.name,
         auto_archive_duration: 60,
       },
-      timeoutMs: 15_000,
     },
   );
 }
@@ -820,14 +695,12 @@ async function archiveDiscordThread(params: { token: string; threadId: string })
       archived: true,
     },
     method: "PATCH",
-    timeoutMs: 15_000,
   });
 }
 
 async function joinDiscordThread(params: { token: string; threadId: string }) {
   await requestDiscord<void>(`/channels/${params.threadId}/thread-members/@me`, params.token, {
     method: "PUT",
-    timeoutMs: 15_000,
   });
 }
 
@@ -835,36 +708,10 @@ async function listThreadMessages(params: { token: string; threadId: string }) {
   return await requestDiscord<DiscordMessage[]>(
     `/channels/${params.threadId}/messages?limit=50`,
     params.token,
-    {
-      timeoutMs: 15_000,
-    },
   );
 }
 
-function reactionEmojiName(reaction: DiscordReaction) {
-  return reaction.emoji?.name?.trim() || reaction.emoji?.id?.trim() || "";
-}
-
-function normalizeDiscordReactionSnapshot(params: {
-  message: DiscordMessage;
-  observedAt: Date;
-  startedAtMs: number;
-}): DiscordReactionSnapshot {
-  return {
-    elapsedMs: Math.max(0, params.observedAt.getTime() - params.startedAtMs),
-    observedAt: params.observedAt.toISOString(),
-    reactions: (params.message.reactions ?? [])
-      .map((reaction) => ({
-        emoji: reactionEmojiName(reaction),
-        count: Math.max(0, Math.floor(reaction.count ?? 0)),
-        me: reaction.me === true,
-      }))
-      .filter((reaction) => reaction.emoji.length > 0)
-      .toSorted((a, b) => a.emoji.localeCompare(b.emoji)),
-  };
-}
-
-function computeDiscordRttMs(triggerTimestamp?: string, replyTimestamp?: string) {
+export function computeDiscordRttMs(triggerTimestamp?: string, replyTimestamp?: string) {
   if (!triggerTimestamp || !replyTimestamp) {
     return undefined;
   }
@@ -876,92 +723,7 @@ function computeDiscordRttMs(triggerTimestamp?: string, replyTimestamp?: string)
   return Math.max(0, Math.round(replyAtMs - triggerAtMs));
 }
 
-function collectSeenReactionSequence(
-  snapshots: readonly DiscordReactionSnapshot[],
-  expectedSequence: readonly string[],
-) {
-  const seen = new Set<string>();
-  const sequence: string[] = [];
-  for (const snapshot of snapshots) {
-    const snapshotEmojis = new Set(snapshot.reactions.map((reaction) => reaction.emoji));
-    for (const emoji of expectedSequence) {
-      if (snapshotEmojis.has(emoji) && !seen.has(emoji)) {
-        seen.add(emoji);
-        sequence.push(emoji);
-      }
-    }
-  }
-  return sequence;
-}
-
-function renderDiscordStatusReactionHtml(params: {
-  expectedSequence: readonly string[];
-  scenarioTitle: string;
-  seenSequence: readonly string[];
-  snapshots: readonly DiscordReactionSnapshot[];
-}) {
-  const rows = params.snapshots
-    .map((snapshot) => {
-      const reactions = snapshot.reactions
-        .map(
-          (reaction) =>
-            `<span class="pill"><span class="emoji">${escapeHtml(reaction.emoji)}</span><span class="count">${reaction.count}</span></span>`,
-        )
-        .join("");
-      return `<tr><td>${snapshot.elapsedMs}ms</td><td>${escapeHtml(snapshot.observedAt)}</td><td>${reactions || '<span class="muted">none</span>'}</td></tr>`;
-    })
-    .join("\n");
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>${escapeHtml(params.scenarioTitle)}</title>
-  <style>
-    body { margin: 0; background: #313338; color: #f2f3f5; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    main { width: 1040px; padding: 32px; }
-    h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; letter-spacing: 0; }
-    .sub { color: #b5bac1; margin-bottom: 24px; }
-    .message { background: #2b2d31; border-left: 4px solid #5865f2; padding: 20px; border-radius: 8px; margin-bottom: 24px; }
-    .author { color: #f2f3f5; font-weight: 700; margin-bottom: 8px; }
-    .content { color: #dbdee1; line-height: 1.45; }
-    .sequence { display: flex; gap: 12px; margin-top: 18px; align-items: center; }
-    .step { background: #404249; border: 1px solid #4e5058; border-radius: 18px; padding: 7px 12px; font-size: 20px; min-width: 42px; text-align: center; }
-    .step.seen { background: #1f3b2d; border-color: #2d7d46; }
-    table { width: 100%; border-collapse: collapse; background: #2b2d31; border-radius: 8px; overflow: hidden; }
-    th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid #404249; vertical-align: top; }
-    th { color: #b5bac1; font-size: 13px; text-transform: uppercase; }
-    .pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #4e5058; border-radius: 14px; padding: 4px 9px; margin: 0 8px 8px 0; background: #383a40; }
-    .emoji { font-size: 18px; }
-    .count { color: #b5bac1; font-size: 13px; }
-    .muted { color: #949ba4; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>${escapeHtml(params.scenarioTitle)}</h1>
-    <div class="sub">Expected: ${params.expectedSequence.map(escapeHtml).join(" → ")} · Seen: ${params.seenSequence.map(escapeHtml).join(" → ") || "none"}</div>
-    <section class="message">
-      <div class="author">Mantis Discord QA</div>
-      <div class="content">Reaction timeline captured from the real Discord triggering message via REST polling.</div>
-      <div class="sequence">
-        ${params.expectedSequence
-          .map(
-            (emoji) =>
-              `<span class="step ${params.seenSequence.includes(emoji) ? "seen" : ""}">${escapeHtml(emoji)}</span>`,
-          )
-          .join("")}
-      </div>
-    </section>
-    <table>
-      <thead><tr><th>Elapsed</th><th>Observed At</th><th>Reactions</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-  </main>
-</body>
-</html>`;
-}
-
-async function writeDiscordStatusReactionEvidence(params: {
+export async function writeDiscordStatusReactionEvidence(params: {
   outputDir: string;
   timeline: DiscordStatusReactionTimeline;
 }) {
@@ -1005,59 +767,6 @@ async function writeHtmlScreenshot(params: { htmlPath: string; screenshotPath: s
   } catch (error) {
     return { screenshotWarning: formatErrorMessage(error) };
   }
-}
-
-function renderDiscordThreadReplyAttachmentHtml(params: {
-  attachmentFilenames: readonly string[];
-  expectedAttachmentFilename: string;
-  messageContent?: string;
-  scenarioTitle: string;
-  status: "pass" | "fail";
-  threadName: string;
-}) {
-  const hasAttachment = params.attachmentFilenames.includes(params.expectedAttachmentFilename);
-  const attachmentRows =
-    params.attachmentFilenames.length > 0
-      ? params.attachmentFilenames
-          .map((filename) => `<span class="attachment">${escapeHtml(filename)}</span>`)
-          .join("")
-      : '<span class="missing">No attachments on the SUT thread reply</span>';
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>${escapeHtml(params.scenarioTitle)}</title>
-  <style>
-    body { margin: 0; background: #313338; color: #f2f3f5; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    main { width: 1040px; padding: 32px; }
-    h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; letter-spacing: 0; }
-    .sub { color: #b5bac1; margin-bottom: 24px; }
-    .message { background: #2b2d31; border-left: 4px solid ${hasAttachment ? "#23a55a" : "#da373c"}; padding: 20px; border-radius: 8px; }
-    .author { color: #f2f3f5; font-weight: 700; margin-bottom: 8px; }
-    .content { color: #dbdee1; line-height: 1.45; margin-bottom: 16px; }
-    .badge { display: inline-flex; align-items: center; border-radius: 16px; padding: 6px 10px; font-size: 13px; font-weight: 700; background: ${hasAttachment ? "#1f3b2d" : "#4a2527"}; border: 1px solid ${hasAttachment ? "#2d7d46" : "#a1282e"}; color: #f2f3f5; margin-bottom: 18px; }
-    .attachments { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
-    .attachment { display: inline-flex; align-items: center; gap: 8px; border: 1px solid #5865f2; background: #202136; color: #cfd4ff; border-radius: 6px; padding: 10px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-    .attachment::before { content: "file"; color: #b5bac1; font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 12px; text-transform: uppercase; }
-    .missing { color: #ffb4b4; border: 1px solid #a1282e; background: #3a2023; border-radius: 6px; padding: 10px 12px; }
-    .expected { color: #b5bac1; margin-top: 18px; font-size: 14px; }
-    code { color: #f2f3f5; background: #1e1f22; border-radius: 4px; padding: 2px 5px; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>${escapeHtml(params.scenarioTitle)}</h1>
-    <div class="sub">Thread: ${escapeHtml(params.threadName)}</div>
-    <section class="message">
-      <div class="author">OpenClaw Discord SUT</div>
-      <div class="badge">${params.status === "pass" ? "Attachment found" : "Attachment missing"}</div>
-      <div class="content">${escapeHtml(params.messageContent ?? "No SUT reply content captured")}</div>
-      <div class="attachments">${attachmentRows}</div>
-      <div class="expected">Expected attachment: <code>${escapeHtml(params.expectedAttachmentFilename)}</code></div>
-    </section>
-  </main>
-</body>
-</html>`;
 }
 
 async function writeDiscordThreadReplyAttachmentEvidence(params: {
@@ -1110,7 +819,7 @@ async function writeDiscordThreadReplyAttachmentEvidence(params: {
   return { htmlPath, ...(uiPath ? { uiPath } : {}), ...screenshot };
 }
 
-async function observeStatusReactionTimeline(params: {
+export async function observeStatusReactionTimeline(params: {
   channelId: string;
   expectedSequence: string[];
   messageId: string;
@@ -1156,9 +865,6 @@ async function listApplicationCommands(params: { token: string; applicationId: s
   return await requestDiscord<DiscordApplicationCommand[]>(
     `/applications/${params.applicationId}/commands`,
     params.token,
-    {
-      timeoutMs: 15_000,
-    },
   );
 }
 
@@ -1168,34 +874,7 @@ function compareDiscordSnowflakes(a: string, b: string) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function buildDiscordWebMessageUrl(params: {
-  guildId: string;
-  messageId?: string;
-  threadId: string;
-}) {
-  return `https://discord.com/channels/${params.guildId}/${params.threadId}${
-    params.messageId ? `/${params.messageId}` : ""
-  }`;
-}
-
-function normalizeDiscordObservedMessage(message: DiscordMessage): DiscordObservedMessage | null {
-  if (!message.author?.id) {
-    return null;
-  }
-  return {
-    messageId: message.id,
-    channelId: message.channel_id,
-    guildId: message.guild_id,
-    senderId: message.author.id,
-    senderIsBot: message.author.bot === true,
-    senderUsername: message.author.username,
-    text: message.content ?? "",
-    replyToMessageId: message.referenced_message?.id,
-    timestamp: message.timestamp,
-  };
-}
-
-async function pollChannelMessages(params: {
+export async function pollChannelMessages(params: {
   token: string;
   channelId: string;
   afterSnowflake: string;
@@ -1269,7 +948,7 @@ async function pollThreadReplyMessage(params: {
   return undefined;
 }
 
-async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
+export async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
   cfg: OpenClawConfig;
   driverBotId: string;
   outputDir: string;
@@ -1397,7 +1076,7 @@ async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
   }
 }
 
-async function waitForDiscordChannelRunning(gateway: QaGatewayChild, accountId: string) {
+export async function waitForDiscordChannelRunning(gateway: QaGatewayChild, accountId: string) {
   const startedAt = Date.now();
   let lastStatus: ChannelAccountSnapshot | undefined;
   while (Date.now() - startedAt < 45_000) {
@@ -1419,7 +1098,7 @@ async function waitForDiscordChannelRunning(gateway: QaGatewayChild, accountId: 
   throw new Error(`discord account "${accountId}" did not become connected${details}`);
 }
 
-function matchesDiscordScenarioReply(params: {
+export function matchesDiscordScenarioReply(params: {
   channelId: string;
   message: DiscordObservedMessage;
   matchText?: string;
@@ -1432,7 +1111,7 @@ function matchesDiscordScenarioReply(params: {
   );
 }
 
-async function assertDiscordApplicationCommandsRegistered(params: {
+export async function assertDiscordApplicationCommandsRegistered(params: {
   applicationId: string;
   expectedCommandNames: string[];
   timeoutMs: number;
@@ -1463,38 +1142,4 @@ async function assertDiscordApplicationCommandsRegistered(params: {
   );
 }
 
-const testing = {
-  collectSeenReactionSequence,
-  assertDiscordScenarioReply,
-  assertDiscordApplicationCommandsRegistered,
-  buildDiscordQaConfig,
-  buildDiscordWebMessageUrl,
-  computeDiscordRttMs,
-  createDiscordQaEndpointFetcher,
-  getCurrentDiscordUser,
-  observeStatusReactionTimeline,
-  pollChannelMessages,
-  runDiscordThreadReplyFilePathAttachmentScenario,
-  sendChannelMessage,
-  getChannelMessage,
-  getCurrentDiscordVoiceState,
-  listApplicationCommands,
-  resolveDiscordQaVoiceChannel,
-  matchesDiscordScenarioReply,
-  normalizeDiscordReactionSnapshot,
-  normalizeDiscordObservedMessage,
-  parseDiscordQaCredentialPayload,
-  renderDiscordStatusReactionHtml,
-  renderDiscordThreadReplyAttachmentHtml,
-  resolveDiscordQaRuntimeEnv,
-  waitForDiscordChannelRunning,
-  waitForDiscordMessageDeleted,
-  waitForDiscordMessageText,
-  waitForDiscordVoiceState,
-  writeDiscordStatusReactionEvidence,
-};
-
-export const discordQaScenarioSupport = {
-  testing,
-};
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

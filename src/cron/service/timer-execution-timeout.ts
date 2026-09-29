@@ -2,6 +2,7 @@ import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor
 import type { HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
@@ -58,6 +59,7 @@ export type TimedCronRunOutcome = CronJobExecutionResult & {
   activeJobMarker?: CronActiveJobMarker;
   reservationIdentity?: object;
   runReceipt?: CronRunReceiptHandle;
+  runReceiptContext?: OpenClawStateWorkerContext;
   receiptSettlementDisposition?: CronRunReceiptSettlementDisposition;
   startedAt: number;
   endedAt: number;

@@ -23,6 +23,7 @@ import {
   callPersonalPublicationRpc,
   createForeignPublicationSession,
   createPersonalPublicationFixture,
+  readPersonalPublicationFixtureStatus,
   personalPublicationAccount as account,
   expectPersonalPublicationReplay,
 } from "./github-personal-publication.test-support.js";
@@ -85,11 +86,7 @@ describe("personal publication authority and recovery", () => {
     selection: { source: "personal" as const, generation, account },
   });
   const status = (requestId: string) =>
-    coordinator.personalStatus(
-      action,
-      { sessionKey: SESSION_KEY, agentId: "main", sessionId: SESSION_ID },
-      requestId,
-    );
+    readPersonalPublicationFixtureStatus({ coordinator, action }, requestId);
 
   const rpc = (method: string, params?: Record<string, unknown>) =>
     callPersonalPublicationRpc({ client, context, coordinator }, method, params);
@@ -433,6 +430,7 @@ describe("personal publication authority and recovery", () => {
         { owner: otherOwner, assertCurrent: () => {} },
         { sessionKey: SESSION_KEY, agentId: "main", sessionId: SESSION_ID },
         result.requestId,
+        undefined,
       ),
     ).toThrow("not found");
     const count = commands.length;

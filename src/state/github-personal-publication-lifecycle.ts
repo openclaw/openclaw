@@ -1,9 +1,14 @@
+import { assertSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.js";
+import { requestSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
+import type {
+  SessionEntryCurrentCheck,
+  SessionEntryCurrentSource,
+} from "../config/sessions/session-entry-current.types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import type {
   GitHubSessionReceiptGeneration,
@@ -23,7 +28,9 @@ export async function preparePersonalGitHubSessionReceiptDeletion(params: {
   generations: readonly GitHubSessionReceiptGeneration[];
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
-}): Promise<(assertCurrent?: () => void) => Promise<void>> {
+}): Promise<
+  (assertCurrent?: () => void, sessionEntryCurrent?: SessionEntryCurrentCheck) => Promise<void>
+> {
   params.assertCurrent?.();
   const context = captureOpenClawStateWorkerContext({ env: params.env });
   const generations = params.generations.map((generation) => ({ ...generation }));
@@ -38,7 +45,7 @@ export async function preparePersonalGitHubSessionReceiptDeletion(params: {
     { assertCurrent: params.assertCurrent, existingOnly: true },
   )) ?? { personal: [], repository: [] };
   params.assertCurrent?.();
-  return async (assertCurrent) => {
+  return async (assertCurrent, sessionEntryCurrent) => {
     const assertAdmission = () => {
       context.admission.assertCurrent();
       assertCurrent?.();
@@ -48,13 +55,22 @@ export async function preparePersonalGitHubSessionReceiptDeletion(params: {
       (scope) =>
         scope.execute({
           type: "githubPublication.deleteSessionReceipts",
-          input: { ...input, generations, receipts },
+          input: {
+            ...input,
+            generations,
+            receipts,
+            sessionEntryCurrentSource: sessionEntryCurrent?.source,
+          },
         }),
       {
         assertCurrent: assertAdmission,
-        createAdmission: createSqliteWorkerWriteAdmission(assertAdmission, [
-          context.admission.databasePath,
-        ]),
+        createAdmission: createSqliteWorkerWriteAdmission(
+          (request) => {
+            assertAdmission();
+            assertSessionEntryCurrentAdmission(request, sessionEntryCurrent);
+          },
+          [context.admission.databasePath],
+        ),
       },
     );
   };
@@ -91,6 +107,7 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
     sessionKeys: readonly string[];
     generations: readonly GitHubSessionReceiptGeneration[];
     receipts: GitHubSessionReceiptIdentities;
+    sessionEntryCurrentSource?: SessionEntryCurrentSource;
   },
 ): void {
   const tables = [
@@ -103,7 +120,11 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      requestSessionEntryCurrentAdmission(
+        params.sessionEntryCurrentSource,
+        { stage: "transaction", facts: undefined },
+        { lookup: "logical" },
+      );
       const query = getNodeSqliteKysely<DB>(db);
       const hasLifecycles = tableExists(db, "github_publication_session_lifecycles");
       const current = readSessionReceiptDeletionIdentitiesInDatabase(database, params);
@@ -178,7 +199,11 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
           executeSqliteQuerySync(db, query.deleteFrom(table).where("request_id", "=", requestId));
         }
       }
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      requestSessionEntryCurrentAdmission(
+        params.sessionEntryCurrentSource,
+        { stage: "commit", facts: undefined },
+        { lookup: "logical" },
+      );
     },
     { database },
     { operationLabel: "github-personal-publication.session-delete" },

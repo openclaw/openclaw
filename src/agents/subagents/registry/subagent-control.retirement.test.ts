@@ -601,11 +601,11 @@ describe("restored historical cancellation ownership", () => {
     seedSubagentCompletionDelivery({ ...input, databaseOptions: { database } });
   }
 
-  function restore() {
-    initSubagentRegistry();
+  async function restore() {
+    await initSubagentRegistry();
     // These terminal-only fixtures need a live owner but never dispatch a model turn.
     const gatewayContext = { resolveGatewayContext: () => gatewayContext as never };
-    activateSubagentRegistry(() => gatewayContext as never);
+    await activateSubagentRegistry(() => gatewayContext as never);
   }
 
   function expectNoExecutionReplay() {
@@ -618,7 +618,7 @@ describe("restored historical cancellation ownership", () => {
   it("reconciles the kill owner before waking retained native completion without repeating cleanup", async () => {
     const input = historicalCancellation();
     persistRetiredOwner(input);
-    restore();
+    await restore();
     resumeSubagentRun(input.subagent.runId, "restore");
     await settle();
     await testing.sweepOnceForTests();
@@ -661,7 +661,7 @@ describe("restored historical cancellation ownership", () => {
         ...(yielded ? { requesterYieldBatch: true, afterRequesterYield: true } : {}),
       };
       persistRetiredOwner(input);
-      restore();
+      await restore();
       resumeSubagentRun(input.subagent.runId, "restore");
       await settle();
       await testing.sweepOnceForTests();
@@ -681,7 +681,7 @@ describe("restored historical cancellation ownership", () => {
   it("leaves a newer persisted kill marker untouched by the restored snapshot", async () => {
     const input = historicalCancellation();
     persistRetiredOwner(input);
-    restore();
+    await restore();
     const updated = structuredClone(input.subagent);
     updated.killReconciliation = { killedAt: Date.now() };
     upsertSubagentRunRowInDatabase(openOpenClawStateDatabase(), bindSubagentRunRecord(updated));
@@ -699,7 +699,7 @@ describe("restored historical cancellation ownership", () => {
   it("defers a rejected historical retirement write without aborting resume", async () => {
     const input = historicalCancellation();
     persistRetiredOwner(input);
-    restore();
+    await restore();
     const database = openOpenClawStateDatabase();
     database.db.exec(`CREATE TRIGGER reject_retired_cancellation
       BEFORE UPDATE ON subagent_runs
@@ -760,7 +760,7 @@ describe("restored historical cancellation ownership", () => {
             }, attachment),
         );
       }
-      restore();
+      await restore();
       const originalBefore = loadSubagentRegistryFromSqlite().get(input.subagent.runId);
       const successorBefore = structuredClone(
         stage === "before restore" ? subagentRuns.get(successor.runId) : successor,
@@ -789,7 +789,7 @@ describe("restored historical cancellation ownership", () => {
     input.subagent.cleanupHandled = false;
     input.subagent.requesterSettleWake!.retireAfterSettle = true;
     persistRetiredOwner(input);
-    restore();
+    await restore();
     await settle();
     await testing.sweepOnceForTests();
     await settle();

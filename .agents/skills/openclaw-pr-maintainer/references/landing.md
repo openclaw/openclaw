@@ -223,6 +223,21 @@ Retain these additional fields:
   successful `pr-fail-fast` job's `jobId` and cancellation-step number `step`.
   This records inspected cancellation provenance, never passing coverage.
 
+A cancelled job that actually failed its Node test step can remain an independently
+attributed root. Add `failedStep: { number: 18, workflowJob:
+"checks-node-core-test-nondist-shard" }` to that job's existing `failures` entry,
+using its actual step number. Keep all observed cases, source paths, and independent
+baseline artifacts. The verifier requires the matching current GitHub Actions
+check-run/head/suite/timestamps, complete terminal steps, exactly one failed
+`Run Node test shard`, successful cleanup, and only successful or skipped other
+steps. The unchanged tested workflow must retain the audited Node shard entrypoint
+and matrix owner without `continue-on-error`. Matrix membership remains an inspected
+attestation, not an inference from the job name. The retained `failedStep` proof
+includes its cancelled job conclusion and actual step; exclude that root from
+collateral `cancellation.jobIds`, but include it in every `causedBy` root list.
+Extra failed steps, absent or changed qualification, and mismatched sources refuse
+admission. This does not qualify the underlying test failure by itself.
+
 An explicitly attributed Node job that exhausted its execution deadline may appear
 as `cancelled` in GitHub's job API. Keep it in `failures`, with the actual observed
 cases and incomplete coverage recorded. The verifier requires the matching live

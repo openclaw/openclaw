@@ -329,12 +329,12 @@ export function registerRequesterWakeReceiptBoundaryTests({
     const settleWakeOwner = outcomeDrift ? observeRootWork() : undefined;
     const yieldTool = createSessionsYieldTool({
       sessionId: "sess-main",
-      claimYield: () =>
-        registry.markRequesterTurnYielded({
+      claimYield: async () =>
+        (await registry.markRequesterTurnYielded({
           requesterSessionKey,
           requesterAgentId: "main",
           requesterTurnRunId,
-        }) > 0,
+        })) > 0,
       onYield: () => {},
     });
     await expect(

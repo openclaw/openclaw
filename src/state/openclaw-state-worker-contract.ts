@@ -26,6 +26,7 @@ import type {
   ConfigHealthSnapshot,
   ConfigHealthEntryBasis,
 } from "../config/io.health-state.types.js";
+import type { SessionEntryCurrentSource } from "../config/sessions/session-entry-current.types.js";
 import type { CronStateWorkerOperations } from "../cron/store/worker-contract.js";
 import type { FleetRegistryWriteOperations } from "../fleet/registry.types.js";
 import type {
@@ -107,6 +108,7 @@ import type { OnboardingRecommendationWriteOperations } from "./onboarding-recom
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
+import type { RepositoryWorkspaceWorkerOperations } from "./session-repository-workspaces.types.js";
 import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js";
 import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 
@@ -114,6 +116,7 @@ export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; ident
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
 export type OpenClawStateWorkerOperations = UpdateRunReconciliationOperations &
+  RepositoryWorkspaceWorkerOperations &
   CaptureWorkerOperations &
   TuiLastSessionWorkerOperations &
   AcpSessionWriteOperations &
@@ -183,6 +186,7 @@ export type OpenClawStateWorkerOperations = UpdateRunReconciliationOperations &
         sessionKeys: readonly string[];
         generations: readonly GitHubSessionReceiptGeneration[];
         receipts: GitHubSessionReceiptIdentities;
+        sessionEntryCurrentSource?: SessionEntryCurrentSource;
       };
       output: void;
     };

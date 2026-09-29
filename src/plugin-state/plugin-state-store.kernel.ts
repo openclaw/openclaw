@@ -444,11 +444,6 @@ export function lookupPluginStateEntry(
   store: PluginStateDatabase,
   params: { pluginId: string; namespace: string; key: string },
 ): unknown {
-  const row = selectPluginStateEntry(store.db, {
-    pluginId: params.pluginId,
-    namespace: params.namespace,
-    key: params.key,
-    now: Date.now(),
-  });
+  const row = selectPluginStateEntry(store.db, { ...params, now: Date.now() });
   return row ? parseStoredJson(row.value_json, "lookup", store.path) : undefined;
 }

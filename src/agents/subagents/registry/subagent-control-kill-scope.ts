@@ -61,10 +61,7 @@ export type KillScope = {
   stateContext: OpenClawStateWorkerContext;
 };
 
-export type KillPublicationPreparation = {
-  prepare: () => Promise<void>;
-  needsPreparation: () => boolean;
-};
+export type KillPublicationPreparation = (publish: () => void) => Promise<void>;
 
 export async function withSubagentKillScope<T>(
   params: KillSelection,
@@ -335,15 +332,27 @@ export async function withSubagentKillScope<T>(
     };
     await scope.refresh();
     const result = await run(scope, trees);
+    let published: T = result;
+    let publicationConsumed = false;
+    const publishResult = () => {
+      if (publicationConsumed) {
+        throw new Error("Subagent cancellation result was already published");
+      }
+      publicationConsumed = true;
+      if (publish) {
+        assertCurrent();
+        published = publish(result, trees);
+      }
+    };
     if (preparePublication) {
-      do {
-        await preparePublication.prepare();
-      } while (preparePublication.needsPreparation());
+      await preparePublication(publishResult);
+    } else {
+      publishResult();
     }
-    if (publish) {
-      assertCurrent();
+    if (!publicationConsumed) {
+      throw new Error("Subagent cancellation publication did not consume its prepared scope");
     }
-    outcome = { ok: true, value: publish ? publish(result, trees) : result };
+    outcome = { ok: true, value: published };
   } catch (error) {
     outcome = { ok: false, error };
   }

@@ -21,6 +21,7 @@ import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtim
 import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-auth.js";
 import { listWhatsAppDeliveredMessageIdentities } from "./inbound/send-result.js";
@@ -86,13 +87,6 @@ function buildReactionTargetKey(params: {
     return null;
   }
   return `${accountId}:${remoteJid}:${messageId}`;
-}
-
-function addCandidateRemoteJid(target: string[], value: string | null | undefined): void {
-  const remoteJid = value?.trim();
-  if (remoteJid && !target.includes(remoteJid)) {
-    target.push(remoteJid);
-  }
 }
 
 function reportApprovalBindingCorrelationMismatch(binding: {
@@ -323,11 +317,11 @@ async function resolveWhatsAppApprovalReactionTargetFromCandidates(params: {
 }): Promise<ResolvedWhatsAppApprovalReactionTarget | null> {
   const candidateRemoteJids: string[] = [];
   for (const observedRemoteJid of params.observedRemoteJids) {
-    addCandidateRemoteJid(candidateRemoteJids, observedRemoteJid);
+    candidateRemoteJids.push(observedRemoteJid);
     try {
-      for (const candidate of (await params.resolveReactionTargetJids?.(observedRemoteJid)) ?? []) {
-        addCandidateRemoteJid(candidateRemoteJids, candidate);
-      }
+      candidateRemoteJids.push(
+        ...((await params.resolveReactionTargetJids?.(observedRemoteJid)) ?? []),
+      );
     } catch (error) {
       params.logVerboseMessage?.(
         `whatsapp: approval reaction target JID mapping failed for ${observedRemoteJid}: ${String(error)}`,
@@ -335,7 +329,7 @@ async function resolveWhatsAppApprovalReactionTargetFromCandidates(params: {
     }
   }
 
-  for (const remoteJid of candidateRemoteJids) {
+  for (const remoteJid of normalizeUniqueTrimmedStringList(candidateRemoteJids)) {
     const target = await resolveWhatsAppApprovalReactionTargetWithPersistence({
       accountId: params.accountId,
       remoteJid,
@@ -358,9 +352,10 @@ function readWhatsAppApprovalReactionEvent(params: {
   const reaction = msg.message?.reactionMessage;
   const reactionKey = reaction?.text?.trim() ?? "";
   const messageId = reaction?.key?.id?.trim() ?? "";
-  const remoteJids: string[] = [];
-  addCandidateRemoteJid(remoteJids, reaction?.key?.remoteJid);
-  addCandidateRemoteJid(remoteJids, msg.key?.remoteJid);
+  const remoteJids = normalizeUniqueTrimmedStringList([
+    reaction?.key?.remoteJid,
+    msg.key?.remoteJid,
+  ]);
   const actorJid =
     msg.key?.participant?.trim() ||
     (msg.key?.fromMe
