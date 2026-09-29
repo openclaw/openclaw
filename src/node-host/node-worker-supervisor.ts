@@ -40,7 +40,6 @@ import {
   nodeWorkerEnvironmentBinding,
   nodeWorkerEnvironmentKey,
   nodeWorkerEnvironmentMatches,
-  type NodeWorkerActiveOwnership,
   type NodeWorkerPendingAdmission,
   type NodeWorkerRunningChild,
   type NodeWorkerSupervisorOptions,
@@ -386,7 +385,7 @@ class NodeWorkerSupervisor {
     timer.unref();
     try {
       while (current && (current.state === "pending" || current.state === "running")) {
-        const turn: NodeWorkerActiveOwnership["turn"] = this.children.active.get(
+        const turn: NodeWorkerRunningChild["turn"] = this.children.active.get(
           current.ownerLaunchId,
         )?.turn;
         const admission = this.admissions.get(nodeWorkerEnvironmentKey(current));
@@ -426,21 +425,19 @@ class NodeWorkerSupervisor {
     }
     await this.initialize();
     const turn = await this.turns.get(launchId);
-    if (turn) {
-      const owner = this.children.active.get(turn.ownerLaunchId);
-      if (
-        !this.closeCompleted &&
-        (!owner ||
-          owner.state === "observed" ||
-          (owner.state === "running" && owner.deferredOutcome) ||
-          turn.state === "pending" ||
-          turn.state === "running")
-      ) {
-        await this.children.statusOwner(turn.ownerLaunchId);
-      }
-      return this.turns.get(launchId);
+    const owner = turn && this.children.active.get(turn.ownerLaunchId);
+    if (
+      turn &&
+      !this.closeCompleted &&
+      (!owner ||
+        owner.state === "observed" ||
+        (owner.state === "running" && owner.deferredOutcome) ||
+        turn.state === "pending" ||
+        turn.state === "running")
+    ) {
+      await this.children.statusOwner(turn.ownerLaunchId);
     }
-    return undefined;
+    return turn ? this.turns.get(launchId) : undefined;
   }
 
   async retainWorkspaces(
