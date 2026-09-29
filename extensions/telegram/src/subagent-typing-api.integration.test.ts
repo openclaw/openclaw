@@ -1,4 +1,7 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import type {
+  OpenClawPluginApi,
+  PluginRuntimeLifecycleRegistration,
+} from "openclaw/plugin-sdk/core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerTelegramSubagentTyping } from "../subagent-typing-api.js";
@@ -58,10 +61,19 @@ describe("Telegram detached-subagent typing integration", () => {
       expect.objectContaining({ accountId: "work", messageThreadId: 7 }),
     );
 
-    const lifecycle = registerRuntimeLifecycle.mock.calls[0]?.[0] as {
-      cleanup: () => Promise<void> | void;
-    };
-    await lifecycle.cleanup();
+    const lifecycle = registerRuntimeLifecycle.mock
+      .calls[0]?.[0] as PluginRuntimeLifecycleRegistration;
+    await lifecycle.cleanup?.({ reason: "reset", sessionKey: "agent:main:root" });
+
+    progressHandler?.(progressEvent("started", "run-3"));
+    await vi.dynamicImportSettled();
+    expect(sendRuntimeMocks.sendTypingTelegram).toHaveBeenCalledTimes(4);
+
+    progressHandler?.(progressEvent("ended", "run-3"));
+    await vi.advanceTimersByTimeAsync(TELEGRAM_CHAT_ACTION_INTERVAL_MS);
+    expect(sendRuntimeMocks.sendTypingTelegram).toHaveBeenCalledTimes(4);
+
+    await lifecycle.cleanup?.({ reason: "disable" });
   });
 });
 

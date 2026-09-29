@@ -1,5 +1,8 @@
 // Telegram tests cover detached-subagent hook wiring behavior.
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import type {
+  OpenClawPluginApi,
+  PluginRuntimeLifecycleRegistration,
+} from "openclaw/plugin-sdk/core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerTelegramSubagentTyping } from "../subagent-typing-api.js";
@@ -23,7 +26,7 @@ describe("Telegram detached-subagent hook wiring", () => {
     });
   });
 
-  it("returns immediately and cleans up the lazily created controller", async () => {
+  it("preserves typing across session cleanup and disposes on plugin retirement", async () => {
     let progressHandler: ((event: unknown, context: unknown) => unknown) | undefined;
     const registerRuntimeLifecycle = vi.fn();
     const api = createTestPluginApi({
@@ -41,10 +44,16 @@ describe("Telegram detached-subagent hook wiring", () => {
     expect(progressHandler?.(event, {})).toBeUndefined();
     await vi.waitFor(() => expect(controllerMocks.handle).toHaveBeenCalledWith(event));
 
-    const lifecycle = registerRuntimeLifecycle.mock.calls[0]?.[0] as {
-      cleanup: () => Promise<void> | void;
-    };
-    await lifecycle.cleanup();
+    const lifecycle = registerRuntimeLifecycle.mock
+      .calls[0]?.[0] as PluginRuntimeLifecycleRegistration;
+    await lifecycle.cleanup?.({ reason: "reset", sessionKey: "agent:main:root" });
+    await lifecycle.cleanup?.({ reason: "delete", sessionKey: "agent:main:root" });
+    expect(controllerMocks.dispose).not.toHaveBeenCalled();
+
+    progressHandler?.({ ...event, runId: "run-2" }, {});
+    await vi.waitFor(() => expect(controllerMocks.handle).toHaveBeenCalledTimes(2));
+
+    await lifecycle.cleanup?.({ reason: "restart" });
     expect(controllerMocks.dispose).toHaveBeenCalledOnce();
   });
 });

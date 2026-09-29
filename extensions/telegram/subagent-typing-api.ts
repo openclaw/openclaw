@@ -48,11 +48,16 @@ export function registerTelegramSubagentTyping(api: OpenClawPluginApi): void {
 
   api.lifecycle.registerRuntimeLifecycle({
     id: "telegram-subagent-typing",
-    cleanup: () =>
-      controllerPromise
+    cleanup: async ({ reason }) => {
+      // Session cleanup is route-local; this controller is process-scoped and survives it.
+      if (reason === "reset" || reason === "delete") {
+        return;
+      }
+      await controllerPromise
         ?.then((controller) => controller.dispose())
         .catch((err: unknown) => {
           api.logger.debug?.(`telegram subagent typing cleanup failed: ${String(err)}`);
-        }),
+        });
+    },
   });
 }
