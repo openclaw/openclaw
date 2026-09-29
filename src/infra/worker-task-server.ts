@@ -49,7 +49,8 @@ export function serveOwnedWorkerTasks<Output>(
   ) => Output | Promise<Output>,
   options: {
     transferList?: (value: Output) => Transferable[];
-    closeResource?: (key?: string) => void;
+    closeResource?: (key?: string) => void | Promise<void>;
+    encodeResourceError?: (error: unknown) => unknown;
   } = {},
 ): void {
   const port = parentPort;
@@ -90,7 +91,9 @@ export function serveOwnedWorkerTasks<Output>(
             if (!options.closeResource) {
               throw new Error("Worker does not own retained resources");
             }
-            options.closeResource(message.key);
+            return options.closeResource(message.key);
+          })
+          .then(() => {
             receipt.postMessage({ ok: true }, []);
           })
           .catch((error: unknown) => {
@@ -98,6 +101,7 @@ export function serveOwnedWorkerTasks<Output>(
               {
                 ok: false,
                 error: error instanceof Error ? error.message : String(error),
+                detail: options.encodeResourceError?.(error),
               },
               [],
             );

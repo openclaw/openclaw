@@ -16,26 +16,30 @@ import {
   type UpdateCommandOptions,
 } from "./shared.js";
 import type { UpdateCommandExecutor } from "./update-command-executor.js";
+import type { UpdateInitializationAdmission } from "./update-command-initialization-types.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
 import { runPackageUpdateDoctor } from "./update-command-package.js";
 import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
 import type { resolveUpdateCommandTarget } from "./update-command-target.js";
 
-export type InitializedUpdate = {
-  env: NodeJS.ProcessEnv;
-  runId: string;
-  executor: UpdateCommandExecutor;
-  registerRun: (run: NonNullable<UpdateCommandOptions["run"]>) => Promise<void>;
-  target: NonNullable<Awaited<ReturnType<typeof resolveUpdateCommandTarget>>>;
-  databasePath: string;
-  configPath: string;
-  stagedPackage?: StagedPackageInstallUpdate;
-  candidateAdmission?: UpdateCandidateAdmissionResult;
-  downgradeConfirmed?: boolean;
-};
+export type UpdateTargetSelection =
+  | {
+      target: NonNullable<Awaited<ReturnType<typeof resolveUpdateCommandTarget>>>;
+      refusal?: never;
+    }
+  | { target?: never; refusal: UnreportedUpdateAdmissionOutcome };
+
+export type InitializedUpdate = UpdateInitializationAdmission &
+  UpdateTargetSelection & {
+    executor: UpdateCommandExecutor;
+    registerRun: (run: NonNullable<UpdateCommandOptions["run"]>) => Promise<void>;
+    stagedPackage?: StagedPackageInstallUpdate;
+    candidateAdmission?: UpdateCandidateAdmissionResult;
+    downgradeConfirmed?: boolean;
+  };
 
 export async function confirmFreshUpdateDowngrade(params: {
-  target: InitializedUpdate["target"];
+  target: NonNullable<InitializedUpdate["target"]>;
   opts: UpdateCommandOptions;
   controlPlaneUpdateSentinelMeta: ConstructorParameters<
     typeof UnreportedUpdateAdmissionOutcome

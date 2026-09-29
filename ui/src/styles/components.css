@@ -3824,13 +3824,18 @@ td.data-table-key-col {
 }
 
 .agent-identity-editor__emoji-control {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  position: relative;
 }
 
-.agent-identity-editor__emoji-control input {
-  flex: 1;
+.agent-identity-editor__emoji-control > input {
+  padding-inline-end: 42px;
+}
+
+.agent-identity-editor__emoji-control > openclaw-agent-emoji-picker {
+  position: absolute;
+  inset-inline-end: 3px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .agent-identity-editor__fields input {

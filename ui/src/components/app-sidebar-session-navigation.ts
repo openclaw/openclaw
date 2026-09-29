@@ -18,6 +18,8 @@ import {
   sessionNavigationTarget,
 } from "../lib/sessions/route-navigation.ts";
 import {
+  areUiSessionKeysEquivalent,
+  buildAgentMainSessionKey,
   normalizeAgentId,
   resolveUiDefaultAgentId,
   resolveUiSessionRowAgentId,
@@ -32,7 +34,6 @@ import { excludeSessionCatalogRows } from "./app-sidebar-session-catalog-state.t
 import {
   adoptedCatalogSessionKeys,
   projectSidebarSessionCatalogs,
-  visibleSessionCatalogProjection,
 } from "./app-sidebar-session-catalogs.ts";
 import {
   findActiveSidebarLineageRow,
@@ -45,11 +46,9 @@ import {
   createSidebarSessionRowsComparator,
   collectKnownSidebarSessionCatalogIds,
   extendSidebarSessionSelection,
-  findSidebarMainSessionRow,
   findProjectedSidebarSession,
   resolveActiveSidebarAgent,
   resolveLatestSidebarAgentSession,
-  resolveSidebarAgentResumeKey,
   resolveSidebarMainSessionKey,
   toggleSidebarSessionSelection,
   type SidebarSessionNavigationState,
@@ -187,15 +186,15 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     loadStoredSidebarSessionStatusFilter();
   @state() hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
 
+  // Adopted-key exclusion and rendering share this projection so hidden catalogs
+  // never remove their adopted rows from the regular session list.
   visibleSessionCatalogs = () =>
-    visibleSessionCatalogProjection(
-      excludeSessionCatalogRows(
-        this.sessionData.sessionCatalogs,
-        this.sessionData.pendingCatalogArchives,
-      ),
-      this.hiddenSessionCatalogIds,
-      this.sessionsStatusFilter === "archived",
-    );
+    this.sessionsStatusFilter === "archived"
+      ? []
+      : excludeSessionCatalogRows(
+          this.sessionData.sessionCatalogs,
+          this.sessionData.pendingCatalogArchives,
+        ).filter((catalog) => !this.hiddenSessionCatalogIds.has(catalog.id));
 
   protected catalogLiveRows = () => [
     ...(this.sessionData.sessionsResult?.sessions ?? []),
@@ -269,11 +268,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   private childSessionParents(): Set<string> {
     const revalidating = new Set<string>();
     const pending = [...this.visibleSessionRowsInOrder()];
-    while (pending.length > 0) {
-      const session = pending.shift();
-      if (!session) {
-        continue;
-      }
+    for (const session of pending) {
       pending.push(...session.children);
       if (
         (session.childLoadParentKeys?.length ?? 0) > 0 &&
@@ -600,7 +595,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       sessionData: this.sessionData,
       context: this.context,
     });
-    return resolveSidebarAgentResumeKey(latest, agentId, this.sessionMainKey());
+    return latest?.key ?? buildAgentMainSessionKey({ agentId, mainKey: this.sessionMainKey() });
   }
 
   /** Offline routes to Settings instead of a dead chat load. */
@@ -744,7 +739,11 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
         ? (this.sessionData.sessionsResult?.sessions ?? [])
         : (this.sessionData.sessionResultsByAgent[normalized]?.sessions ?? []));
     const lineage = this.sessionData.activeSessionLineageRoot;
-    return findSidebarMainSessionRow(lineage ? [...rows, lineage] : rows, mainKey);
+    return (
+      (lineage ? [...rows, lineage] : rows).find((row) =>
+        areUiSessionKeysEquivalent(row.key, mainKey),
+      ) ?? null
+    );
   }
 
   /** Identity-card click: the agent's rolling main session, or Settings offline. */

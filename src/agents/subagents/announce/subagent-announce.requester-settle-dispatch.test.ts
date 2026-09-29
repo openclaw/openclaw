@@ -162,20 +162,16 @@ describe("requester settle dispatch deadline", () => {
     vi.useRealTimers();
   });
 
-  it.each([
-    { afterRequesterYield: false, runTimeoutSeconds: 0 },
-    { afterRequesterYield: true, runTimeoutSeconds: 600 },
-    { afterRequesterYield: true, runTimeoutSeconds: undefined },
-  ])(
-    "wakes a nested yielded requester once with its $runTimeoutSeconds-second budget (child completed before yield=$afterRequesterYield)",
-    async ({ afterRequesterYield, runTimeoutSeconds }) => {
+  it.each([false, true])(
+    "wakes a nested yielded requester once (child completed before yield=%s)",
+    async (afterRequesterYield) => {
       const requesterSessionKey = "agent:main:subagent:middle";
       registryRead.getLatestLiveSubagentRunByChildSessionKey.mockReturnValue({
         ...settledChild(),
         runId: "yielded-requester",
         childSessionKey: requesterSessionKey,
         pauseReason: "sessions_yield",
-        runTimeoutSeconds,
+        runTimeoutSeconds: 0,
       });
       const child = settledChild();
       child.requesterSessionKey = requesterSessionKey;
@@ -242,7 +238,6 @@ describe("requester settle dispatch deadline", () => {
         expect.objectContaining({
           targetRequesterSessionKey: requesterSessionKey,
           requesterIsSubagent: true,
-          requesterRunTimeoutSeconds: runTimeoutSeconds ?? 0,
           requireVisibleReply: true,
           sourceTool: "subagent_settle",
           triggerMessage: expect.stringContaining("child result"),

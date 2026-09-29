@@ -240,47 +240,34 @@ export function createProfileSelectionOps({
 
   const closeTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<string> => {
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
+    let close = () =>
+      fetchOk(
+        appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`),
+        undefined,
+        options?.signal ? { signal: options.signal } : undefined,
+        getCdpControlPolicy(),
+      );
     if (capabilities.usesChromeMcp) {
       assertChromeMcpCdpTransportAllowed(profile, getCdpControlPolicy());
       const { closeChromeMcpTab } = await getChromeMcpModule();
-      options?.signal?.throwIfAborted();
-      await dispatchBrowserTabClose(resolvedTargetId, profile.name, () => {
-        options?.signal?.throwIfAborted();
-        return closeChromeMcpTab(profile.name, resolvedTargetId, profile, options);
-      });
-    } else {
-      let closedViaPlaywright = false;
-      // For remote profiles, use Playwright's persistent connection to close tabs.
-      if (capabilities.usesPersistentPlaywright) {
-        const mod = await getPwAiModule({ mode: "strict" });
-        if (mod) {
-          options?.signal?.throwIfAborted();
-          await dispatchBrowserTabClose(resolvedTargetId, profile.name, () => {
-            options?.signal?.throwIfAborted();
-            return mod.closePageByTargetIdViaPlaywright({
-              cdpUrl: profile.cdpUrl,
-              targetId: resolvedTargetId,
-              ssrfPolicy: getCdpControlPolicy(),
-              ...(options?.signal ? { signal: options.signal } : {}),
-            });
+      close = () => closeChromeMcpTab(profile.name, resolvedTargetId, profile, options);
+    } else if (capabilities.usesPersistentPlaywright) {
+      const mod = await getPwAiModule({ mode: "strict" });
+      if (mod) {
+        close = () =>
+          mod.closePageByTargetIdViaPlaywright({
+            cdpUrl: profile.cdpUrl,
+            targetId: resolvedTargetId,
+            ssrfPolicy: getCdpControlPolicy(),
+            ...(options?.signal ? { signal: options.signal } : {}),
           });
-          closedViaPlaywright = true;
-        }
-      }
-
-      if (!closedViaPlaywright) {
-        options?.signal?.throwIfAborted();
-        await dispatchBrowserTabClose(resolvedTargetId, profile.name, () => {
-          options?.signal?.throwIfAborted();
-          return fetchOk(
-            appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`),
-            undefined,
-            options?.signal ? { signal: options.signal } : undefined,
-            getCdpControlPolicy(),
-          );
-        });
       }
     }
+    options?.signal?.throwIfAborted();
+    await dispatchBrowserTabClose(resolvedTargetId, profile.name, () => {
+      options?.signal?.throwIfAborted();
+      return close();
+    });
 
     if (runtime.lastTargetId === resolvedTargetId) {
       // Retire only the closed sticky identity; otherwise an unprovable session

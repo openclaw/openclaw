@@ -18,8 +18,8 @@ import {
 import { selectFile } from "./chat-attachment-picker.test-support.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { ChatPageRetainedSessions } from "./chat-page-retained-sessions.ts";
 import {
-  closeStagedPane,
   ChatPaneComposerHandoff,
   discardStateStagedAttachments,
   preparePaneStagedAttachments,
@@ -50,7 +50,7 @@ import {
   isQueuedMessageBeingEdited,
   updateQueuedMessageEdit,
 } from "./queued-message-edit.ts";
-import type { ChatSplitLayout } from "./split-layout-types.ts";
+import { singlePaneLayout } from "./split-layout.ts";
 
 function storedAttachment(id: string, mimeType = "image/png"): ChatAttachment {
   return registerChatAttachmentPayload({
@@ -621,34 +621,37 @@ describe("cross-region Home composer ownership", () => {
 });
 
 describe("staged chat attachment pane handoff", () => {
+  function retainedSessions(context: ApplicationContext, ...panes: HTMLElement[]) {
+    const host = Object.assign(document.createElement("div"), { requestUpdate: () => {} });
+    host.append(...panes);
+    return new ChatPageRetainedSessions(host, {
+      context: () => context,
+      presented: () => true,
+      routeHref: () => window.location.href,
+      layout: () => singlePaneLayout("c1", "p1", "main"),
+      narrow: () => false,
+      selectReplacement: () => {},
+      adoptNavigation: () => {},
+    });
+  }
+
   it("discards a mounted package before clearing a closed pane handoff", () => {
     const calls: string[] = [];
-    const root = {
-      querySelectorAll: () => [
-        { paneId: "p1", discardStagedAttachments: () => calls.push("discard-one") },
-        { paneId: "p1", discardStagedAttachments: () => calls.push("discard-two") },
-        { paneId: "p2", discardStagedAttachments: () => calls.push("wrong-pane") },
-      ],
-    } as unknown as ParentNode;
+    const mountedPane = (paneId: string, label: string) =>
+      Object.assign(document.createElement("openclaw-chat-pane"), {
+        paneId,
+        discardStagedAttachments: () => calls.push(label),
+      });
     const context = {
       chatAttachmentHandoff: { clearPane: () => calls.push("clear") },
     } as unknown as ApplicationContext;
-    const layout = {
-      columns: [
-        {
-          id: "c1",
-          panes: [
-            { id: "p1", sessionKey: "one" },
-            { id: "p2", sessionKey: "two" },
-          ],
-          paneWeights: [1, 1],
-        },
-      ],
-      columnWeights: [1],
-      activePaneId: "p1",
-    } satisfies ChatSplitLayout;
 
-    expect(closeStagedPane(context, root, layout, "p1")?.id).toBe("p2");
+    retainedSessions(
+      context,
+      mountedPane("p1", "discard-one"),
+      mountedPane("p1", "discard-two"),
+      mountedPane("p2", "wrong-pane"),
+    ).discardPane("p1");
     expect(calls).toEqual(["discard-one", "discard-two", "clear"]);
   });
 
@@ -668,26 +671,11 @@ describe("staged chat attachment pane handoff", () => {
         storageFailed: false,
       },
     };
-    const root = { querySelectorAll: () => [pane] } as unknown as ParentNode;
-    const layout = {
-      columns: [
-        {
-          id: "c1",
-          panes: [
-            { id: "p1", sessionKey: "one" },
-            { id: "p2", sessionKey: current.sessionKey },
-          ],
-          paneWeights: [1, 1],
-        },
-      ],
-      columnWeights: [1],
-      activePaneId: "p2",
-    } satisfies ChatSplitLayout;
     const scopeKey = storedChatOutboxScopeKey(
       resolveUiConversationIdentity(current, current.sessionKey),
     );
 
-    closeStagedPane(pane.context, root, layout, pane.paneId);
+    retainedSessions(pane.context, pane).discardPane(pane.paneId);
     const lateAttachment = storedAttachment("late-close-completion");
     current.chatAttachments.push(lateAttachment);
     pane.disconnectedCallback();

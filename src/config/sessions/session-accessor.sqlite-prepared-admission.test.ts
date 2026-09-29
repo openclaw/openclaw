@@ -649,9 +649,11 @@ it("reacquires the split lifecycle writer after archive materialization with ret
       "session.transcript.batch",
     );
     const cached = getOpenClawAgentDatabaseIfOpen(f.options);
-    if (cached) {
-      closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+    if (!cached) {
+      throw new Error("Fixture lost its cached handle before materialization");
     }
+    closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+    expect(cached.db.isOpen).toBe(false);
   };
   const work = own(
     applySessionEntryLifecycleMutation({
@@ -690,6 +692,7 @@ it("reacquires the split lifecycle writer after archive materialization with ret
   expect(loadTranscriptEventsSync(transcript.scope)).toEqual([]);
   // Cache eviction preserves the native admission and its completed integrity proof.
   probe.expectHealthy(0);
+  expect(admission.count()).toBe(1);
 });
 
 it.each([false, true])(

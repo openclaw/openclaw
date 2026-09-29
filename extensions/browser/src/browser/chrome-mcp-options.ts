@@ -7,7 +7,6 @@ import {
 import parseArgs from "yargs-parser";
 import type {
   ChromeMcpOptionsInput,
-  ChromeMcpProfileOptions,
   NormalizedChromeMcpProfileOptions,
 } from "./chrome-mcp-contracts.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
@@ -111,11 +110,4 @@ export function buildChromeMcpSessionCacheKey(
     options.command,
     options.args,
   ]);
-}
-
-export function chromeMcpProfileOptionsFromParams(params: {
-  profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
-}): string | ChromeMcpProfileOptions | undefined {
-  return params.profile ?? params.userDataDir;
 }

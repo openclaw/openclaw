@@ -8,10 +8,6 @@ import {
   getBrowserProfileCapabilities,
 } from "./browser-tool.runtime.js";
 
-export type BrowserNodeTarget = NonNullable<
-  Awaited<ReturnType<typeof resolveBrowserToolNodeTarget>>
->;
-
 export async function resolveBrowserToolNodeTarget(params: {
   requestedNode?: string;
   profile?: string;

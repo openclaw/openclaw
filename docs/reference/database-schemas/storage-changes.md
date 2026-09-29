@@ -1094,6 +1094,16 @@ then rereads the exact unexpired owner from current committed state. Host schedu
 does not pin the WAL; writes and renewals retain their transaction-held checks.
 Schemas, retention, durability, and update behavior are unchanged.
 
+Doctor imports retired MCP OAuth JSON through the same shared-state worker.
+The host retains exclusive maintenance ownership, the retired runtime's file lock,
+and the original source claim while the worker reads receipts, atomically imports
+credentials with their receipt, and records source removal. Existing SQLite
+credentials and explicit logout retain precedence. A definite pre-commit failure
+restores the source; an uncertain import keeps the Doctor claim for receipt
+verification on the next run, without replaying the write. A confirmed commit
+retains its result even when delivery fails, and reports that failure. Published
+updaters still invoke the same Doctor repair path; no schema or stored format changes.
+
 Requester MCP setup reads its sorted authorization set in one current read-worker
 operation. The worker decodes selected rows in caller order and returns only
 status facts; each message still observes current storage before runtime reuse.

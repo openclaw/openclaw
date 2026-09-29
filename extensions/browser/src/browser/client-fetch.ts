@@ -303,31 +303,20 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
   const operatorHint = resolveBrowserFetchOperatorHint(url);
   const msg = normalizeErrorMessage(err);
   const kind = classifyBrowserFetchFailure(err);
+  let message: string;
   if (kind === "timeout") {
-    return new Error(
-      `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint} ${BROWSER_TOOL_TRANSIENT_MODEL_HINT}`,
-      err instanceof Error ? { cause: err } : undefined,
-    );
-  }
-  if (kind === "aborted") {
-    return new Error(
-      `Browser control request was cancelled. ${operatorHint}`,
-      err instanceof Error ? { cause: err } : undefined,
-    );
-  }
-  if (kind === "transient-network") {
-    return new Error(
-      `Can't reach the OpenClaw browser control service. ${operatorHint} (${msg}) ${BROWSER_TOOL_TRANSIENT_MODEL_HINT}`,
-      err instanceof Error ? { cause: err } : undefined,
-    );
-  }
-  return new Error(
-    appendBrowserToolModelHint(
+    message = `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint} ${BROWSER_TOOL_TRANSIENT_MODEL_HINT}`;
+  } else if (kind === "aborted") {
+    message = `Browser control request was cancelled. ${operatorHint}`;
+  } else if (kind === "transient-network") {
+    message = `Can't reach the OpenClaw browser control service. ${operatorHint} (${msg}) ${BROWSER_TOOL_TRANSIENT_MODEL_HINT}`;
+  } else {
+    message = appendBrowserToolModelHint(
       `Can't reach the OpenClaw browser control service. ${operatorHint} (${msg})`,
       BROWSER_TOOL_PERSISTENT_MODEL_HINT,
-    ),
-    err instanceof Error ? { cause: err } : undefined,
-  );
+    );
+  }
+  return new Error(message, err instanceof Error ? { cause: err } : undefined);
 }
 
 function createBrowserRequestAbort(upstreamSignal?: AbortSignal | null) {

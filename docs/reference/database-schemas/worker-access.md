@@ -283,6 +283,15 @@ dispatch can refuse work; cancellation after execution must still join its nativ
 settlement. Close and shutdown join accepted work and cleanup before releasing
 the store or replacing its generation.
 
+Cold session reclamation opens and validates its captured existing file in the
+reclamation worker, leaving the foreground executor available during integrity
+checks. Opening expectations do not grant native authority: the host accepts the
+worker's actual file identity and retained lease before dispatching the mutation.
+Both directions preserve revocable validation proof. Caller permission refusal
+does not retire an otherwise healthy actor; source replacement or lifetime
+retirement still refuses work and joins cleanup. Schemas, stored bytes, retention,
+and update behavior are unchanged.
+
 Session-reclamation retirement honors settled cleanup reported by its worker,
 including after a failed request. After an unsettled native exit, the shared-state
 cleanup worker releases the exact retained lease. Retirement joins lease deletion and cleanup

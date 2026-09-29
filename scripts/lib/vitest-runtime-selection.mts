@@ -5,6 +5,7 @@ import {
   resolveVitestRuntimeConfigScopes,
   type VitestRuntimeTestSelection,
 } from "./vitest-build-prerequisites.mts";
+import { collectVitestFileFilters } from "./vitest-cli-mode.mts";
 
 /** Bind installed CLI matching without adding runtime dependencies to CI planning. */
 export function resolveVitestRuntimeCliSelections(
@@ -27,6 +28,16 @@ export function shouldPrepareVitestCoreWorkers(
   env: NodeJS.ProcessEnv,
   includePatterns?: readonly string[] | null,
 ): boolean {
+  // The full channels lane imports native declarations during collection. Prepare
+  // them before the test watchdog starts, as for the known database-worker lane.
+  if (
+    config === "test/vitest/vitest.channels.config.ts" &&
+    collectVitestFileFilters(args).length === 0 &&
+    includePatterns == null &&
+    !env.OPENCLAW_VITEST_INCLUDE_FILE?.trim()
+  ) {
+    return true;
+  }
   const infra = "test/vitest/vitest.infra.config.ts";
   const contracts = "test/vitest/vitest.contracts-plugin.config.ts";
   const includesProject = (project: string) =>

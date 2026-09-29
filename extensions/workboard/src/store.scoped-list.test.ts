@@ -270,6 +270,33 @@ describe("Workboard context and session-scoped reads", () => {
 });
 
 describe("Workboard board-scoped SQLite hydration", () => {
+  it("prunes empty legacy automation fields without losing persisted details", async () => {
+    const { store, stores, dbPath } = createWorkboardSqliteTestHarness({
+      createStores: createKernelStores,
+    });
+    const card = await store.create({ title: "Legacy automation" });
+    const automation = {
+      summary: "Keep persisted details",
+      skills: [],
+      createdCardIds: [],
+      workspace: {},
+      workspaceAccess: {},
+    };
+    {
+      using raw = new DatabaseSync(dbPath);
+      raw
+        .prepare("UPDATE workboard_cards SET automation_json = ? WHERE id = ?")
+        .run(JSON.stringify(automation), card.id);
+    }
+    expect((await store.get(card.id))?.metadata?.automation).toEqual(automation);
+
+    const updated = await store.update(card.id, { metadata: {} });
+    expect(updated.metadata?.automation).toEqual({ summary: "Keep persisted details" });
+    expect((await stores.cards.lookup(card.id))?.card.metadata?.automation).toEqual({
+      summary: "Keep persisted details",
+    });
+  });
+
   it("reads only the requested board while preserving complete cards and order", async () => {
     const { store } = createWorkboardSqliteTestHarness({ createStores: createKernelStores });
     const later = await store.create({ title: "Later", boardId: "ops", labels: ["one", "two"] });

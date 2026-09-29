@@ -634,13 +634,13 @@ merge_run() {
       ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg refusal "$refusal_directory" --arg replacement "$replacement_head" --argjson admin "$MERGE_USE_PRIOR_CI_ADMIN" '
         .phase == "intent" and
         (if $admin then .method == "squash" and
-          (if $replacement != "" then .route == "auto" and .cancellation.state == "confirmed" and .head != $replacement
+          (if $replacement != "" then .route == "auto" and .cancellation.state == "confirmed"
            else .accepted == false and .route == "admin" and .priorCiAdmin.dispatchTransport == "rest" end)
          else (.accepted == false and (.route == "immediate" or ($refusal != "" and .route == "auto" and .method == "squash"))) or
           (.route == "auto" and .cancellation.state == "confirmed") end)
       ' >/dev/null; then
       if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
-        merge_outcome_stop "operator admin recovery requires an exact rejected prior-CI intent or a confirmed auto cancellation with an explicit different replacement; no attempt was authorized"
+        merge_outcome_stop "operator admin recovery requires an exact rejected prior-CI intent or a confirmed auto cancellation with an explicit selected head; no attempt was authorized"
       else
         merge_outcome_stop "operator recovery requires the exact unaccepted immediate intent or confirmed auto cancellation; no attempt was authorized"
       fi

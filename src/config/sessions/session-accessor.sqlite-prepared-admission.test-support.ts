@@ -9,7 +9,9 @@ export function holdReclamationAdmission(
 ) {
   const entered = createDeferred();
   const release = createDeferred();
+  let admissions = 0;
   const pause = async () => {
+    admissions += 1;
     entered.resolve();
     await release.promise;
   };
@@ -52,6 +54,7 @@ export function holdReclamationAdmission(
   );
   return {
     release,
+    count: () => admissions,
     async expectPending(operation: Promise<unknown>) {
       expect(
         await Promise.race([

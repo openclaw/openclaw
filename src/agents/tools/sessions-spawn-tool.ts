@@ -185,7 +185,7 @@ function createSessionsSpawnToolSchema(params: {
       Type.Integer({
         minimum: 0,
         description:
-          "Per-run timeout in seconds; overrides the configured subagent default. Zero disables the timeout.",
+          "Child run timeout in seconds; overrides the configured subagent default and is preserved on native continuations. Zero disables the timeout; requester wake turns use their own budget.",
       }),
     ),
     thinking: Type.Optional(

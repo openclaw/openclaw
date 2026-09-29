@@ -47,25 +47,6 @@ export type MemoryProviderLifecycleState =
       attemptedProviderId?: string;
     };
 
-export function createPendingMemoryProviderLifecycle(
-  requestedProvider: string,
-): MemoryProviderLifecycleState {
-  return { mode: "pending", requestedProvider };
-}
-
-export function createDegradedMemoryProviderLifecycle(params: {
-  providerId: string;
-  reason: string;
-  code?: string;
-}): MemoryProviderLifecycleState {
-  return {
-    mode: "degraded",
-    providerId: params.providerId,
-    reason: params.reason,
-    ...(params.code ? { code: params.code } : {}),
-  };
-}
-
 function resolveProviderLifecycle(result: EmbeddingProviderResult): MemoryProviderLifecycleState {
   if (result.provider && result.fallbackFrom) {
     return {
