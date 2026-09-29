@@ -104,10 +104,9 @@ export function retainOpenClawStateWorkerLease(
       try {
         assertCommandAdmission(invocation);
       } catch (error) {
-        const rejected = createDeferredCore<never>();
-        rejected.reject(error);
-        void rejected.promise.catch(() => undefined);
-        return rejected.promise;
+        const rejected = Promise.reject<never>(error);
+        void rejected.catch(() => undefined);
+        return rejected;
       }
       const run = async () => {
         // Prepared input transfers its credits at enqueue in this same turn.
@@ -149,10 +148,9 @@ export function retainOpenClawStateWorkerLease(
     try {
       assertNewOperation();
     } catch (error) {
-      const rejected = createDeferredCore<T>();
-      rejected.reject(error);
-      void rejected.promise.catch(() => undefined);
-      return rejected.promise;
+      const rejected = Promise.reject<T>(error);
+      void rejected.catch(() => undefined);
+      return rejected;
     }
     const invocation: Invocation = { phase: "accepting", pending: new Set() };
     invocations.add(invocation);

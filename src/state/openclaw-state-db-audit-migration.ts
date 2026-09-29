@@ -49,14 +49,8 @@ const AUDIT_EVENT_V2_COLUMNS = [
   "target_ref",
 ] as const;
 
-type TableColumnInfo = {
-  name?: unknown;
-  notnull?: unknown;
-  pk?: unknown;
-};
-
-function tableColumnInfo(db: DatabaseSync, tableName: string): TableColumnInfo[] {
-  return db.prepare(`PRAGMA table_info(${tableName})`).all() as TableColumnInfo[];
+function tableColumnInfo(db: DatabaseSync, tableName: string) {
+  return db.prepare(`PRAGMA table_info(${tableName})`).all();
 }
 
 function tableHasExactColumns(
@@ -80,23 +74,18 @@ function tableHasRequiredColumns(
 function tableSql(db: DatabaseSync, tableName: string): string | undefined {
   const row = db
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(tableName) as { sql?: unknown } | undefined;
+    .get(tableName);
   return typeof row?.sql === "string" ? row.sql : undefined;
 }
 
 function tableHasUniqueColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
-  const indexes = db.prepare(`PRAGMA index_list(${tableName})`).all() as Array<{
-    name?: unknown;
-    unique?: unknown;
-  }>;
+  const indexes = db.prepare(`PRAGMA index_list(${tableName})`).all();
   return indexes.some((index) => {
     if (Number(index.unique ?? 0) !== 1 || typeof index.name !== "string") {
       return false;
     }
     const escaped = index.name.replaceAll("'", "''");
-    const columns = db.prepare(`PRAGMA index_info('${escaped}')`).all() as Array<{
-      name?: unknown;
-    }>;
+    const columns = db.prepare(`PRAGMA index_info('${escaped}')`).all();
     return columns.length === 1 && columns[0]?.name === columnName;
   });
 }
@@ -192,7 +181,7 @@ function readAuditEventSequenceHighWater(db: DatabaseSync): number | undefined {
   }
   const row = db
     .prepare("SELECT CAST(seq AS TEXT) AS seq FROM sqlite_sequence WHERE name = 'audit_events'")
-    .get() as { seq?: unknown } | undefined;
+    .get();
   if (row === undefined) {
     return undefined;
   }

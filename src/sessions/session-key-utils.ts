@@ -80,16 +80,19 @@ export function isCronSessionKey(sessionKey: string | undefined | null): boolean
   return normalizeOptionalLowercaseString(parsed.rest)?.startsWith("cron:") === true;
 }
 
-export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
+function hasSessionKeyPrefix(sessionKey: string | undefined | null, prefix: string): boolean {
   const raw = normalizeOptionalString(sessionKey);
   if (!raw) {
     return false;
   }
-  if (normalizeOptionalLowercaseString(raw)?.startsWith("subagent:")) {
-    return true;
-  }
-  const parsed = parseAgentSessionKey(raw);
-  return normalizeOptionalLowercaseString(parsed?.rest)?.startsWith("subagent:") === true;
+  return (
+    raw.toLowerCase().startsWith(prefix) ||
+    normalizeOptionalLowercaseString(parseAgentSessionKey(raw)?.rest)?.startsWith(prefix) === true
+  );
+}
+
+export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
+  return hasSessionKeyPrefix(sessionKey, "subagent:");
 }
 
 export function getSubagentDepth(sessionKey: string | undefined | null): number {
@@ -105,16 +108,7 @@ export function getSubagentDepth(sessionKey: string | undefined | null): number 
 }
 
 export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {
-  const raw = normalizeOptionalString(sessionKey);
-  if (!raw) {
-    return false;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(raw);
-  if (normalized.startsWith("acp:")) {
-    return true;
-  }
-  const parsed = parseAgentSessionKey(raw);
-  return normalizeOptionalLowercaseString(parsed?.rest)?.startsWith("acp:") === true;
+  return hasSessionKeyPrefix(sessionKey, "acp:");
 }
 
 /** Stored ACP bindings and stale ACP keys both belong to ACP dispatch, never local fallback. */
