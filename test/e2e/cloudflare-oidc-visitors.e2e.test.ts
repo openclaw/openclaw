@@ -10,7 +10,7 @@ import {
   NOW,
   visitorFixture,
   visitorGrant,
-} from "../../extensions/visitor-access/src/visitors.test-support.js";
+} from "../../extensions/visitor-access/test-api.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import {
   accessOrigin,
