@@ -2,6 +2,9 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { logVerbose } from "../../globals.js";
+import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
@@ -14,7 +17,10 @@ import {
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
-import { markPostCompactionModelFailurePayload } from "./agent-runner-failure-reply.js";
+import {
+  buildPreflightCompactionFailureText,
+  markPostCompactionModelFailurePayload,
+} from "./agent-runner-failure-reply.js";
 import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
 import { accountAgentTurnCompaction } from "./agent-runner-result-accounting.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
@@ -131,21 +137,51 @@ export async function executePreparedReplyAgentRun(
     return flushed.sessionEntry;
   };
 
+  // A failed required compaction answers with the "Context is too large" reply before
+  // admission. Keep only the user's transcript entry (no recovery claim), as chat.send
+  // does for returned errors. Source authority is rechecked inside the guarded write,
+  // after message resolution and queueing, so revocation during those awaits wins.
+  const persistUserTurnAfterFailedPreflight = async (error: unknown) => {
+    const recorder = followupRun.userTurnTranscriptRecorder;
+    if (!recorder || buildPreflightCompactionFailureText(formatErrorMessage(error)) === null) {
+      return;
+    }
+    try {
+      await recorder.persistApproved({
+        expectedSessionId: replyOperation.sessionId,
+        beforeFreshMessageCommit: () => {
+          replyOperation.abortSignal.throwIfAborted();
+          followupRun.operatorAuthority?.assertCurrent();
+          if (replyOperation.lifecycleGeneration) {
+            assertAgentRunLifecycleGenerationCurrent(replyOperation.lifecycleGeneration);
+          }
+        },
+      });
+    } catch (persistError) {
+      logVerbose(`user turn not kept after failed preflight: ${formatErrorMessage(persistError)}`);
+    }
+  };
+
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
-  activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
-    runSessionCompactionIfNeeded({
-      ...context,
-      pendingUserEntryId: preflightAdmission?.entryId,
-      promptForEstimate: followupRun.prompt,
-      sessionEntry: activeSessionEntry,
-      sessionStore: activeSessionStore,
-      abortSignal: replyOperation.abortSignal,
-      beforeCompaction: checkpointMemory,
-      onCompactionStart: () => replyOperation.setPhase("preflight_compacting"),
-      onSessionIdChanged: (sessionId) => replyOperation.updateSessionId(sessionId),
-      onCompactionNotice: sendDirectCompactionNotice,
-    }),
-  );
+  try {
+    activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
+      runSessionCompactionIfNeeded({
+        ...context,
+        pendingUserEntryId: preflightAdmission?.entryId,
+        promptForEstimate: followupRun.prompt,
+        sessionEntry: activeSessionEntry,
+        sessionStore: activeSessionStore,
+        abortSignal: replyOperation.abortSignal,
+        beforeCompaction: checkpointMemory,
+        onCompactionStart: () => replyOperation.setPhase("preflight_compacting"),
+        onSessionIdChanged: (sessionId) => replyOperation.updateSessionId(sessionId),
+        onCompactionNotice: sendDirectCompactionNotice,
+      }),
+    );
+  } catch (error) {
+    await persistUserTurnAfterFailedPreflight(error);
+    throw error;
+  }
   setActiveSessionEntry(activeSessionEntry);
   const preflightCompactionApplied =
     (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;

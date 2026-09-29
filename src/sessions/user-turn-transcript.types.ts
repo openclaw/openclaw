@@ -163,6 +163,7 @@ export type PersistUserTurnTranscriptParams = UserTurnTranscriptTarget & {
   updateMode?: UserTurnTranscriptUpdateMode;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+  beforeFreshMessageCommit?: () => void;
   onOriginalInputCommitted?: (commit: UserTurnOriginalInputCommit) => void;
 };
 
@@ -241,6 +242,8 @@ export type UserTurnTranscriptRecorder = {
     expectedSessionId?: string;
     expectedSessionState?: SessionTranscriptTurnExpectedState;
     sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+    /** Synchronous caller-authority check inside the guarded write, before a fresh insert. */
+    beforeFreshMessageCommit?: () => void;
     /** Allow a later explicit persistence attempt when this attempt appends nothing. */
     retryIfUnpersisted?: boolean;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;

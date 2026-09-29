@@ -122,6 +122,7 @@ async function persistUserTurnTranscript(
         {
           message,
           idempotencyLookup: "scan",
+          beforeFreshMessageCommit: params.beforeFreshMessageCommit,
           prepareMessageAfterIdempotencyCheck: (candidate) =>
             preparePersistedUserTurnMessageForTranscriptWrite(
               candidate as PersistedUserTurnMessage,
@@ -416,6 +417,7 @@ export function createUserTurnTranscriptRecorder(
     expectedSessionId?: string;
     expectedSessionState?: SessionTranscriptTurnPersistOptions["expectedSessionState"];
     sessionLifecyclePatch?: SessionTranscriptTurnPersistOptions["sessionLifecyclePatch"];
+    beforeFreshMessageCommit?: () => void;
     retryIfUnpersisted?: boolean;
   }): Promise<UserTurnTranscriptPersistResult | undefined> => {
     if (options.skipWhenBlocked && blocked) {
@@ -464,6 +466,7 @@ export function createUserTurnTranscriptRecorder(
             expectedSessionId: options.expectedSessionId || resolvedTarget.expectedSessionId,
             sessionLifecyclePatch: options.sessionLifecyclePatch ?? params.sessionLifecyclePatch,
             expectedSessionState: options.expectedSessionState ?? params.expectedSessionState,
+            beforeFreshMessageCommit: options.beforeFreshMessageCommit,
             updateMode: candidateUpdateMode,
             beforeMessageWrite: params.beforeMessageWrite ?? resolvedTarget.beforeMessageWrite,
             onOriginalInputCommitted: notifyOriginalInputCommitted,
@@ -693,6 +696,7 @@ export function createUserTurnTranscriptRecorder(
         expectedSessionId: options?.expectedSessionId,
         expectedSessionState: options?.expectedSessionState,
         sessionLifecyclePatch: options?.sessionLifecyclePatch,
+        beforeFreshMessageCommit: options?.beforeFreshMessageCommit,
         retryIfUnpersisted: options?.retryIfUnpersisted,
       }),
     persistBlocked: async (blockedMessage, options) => {
