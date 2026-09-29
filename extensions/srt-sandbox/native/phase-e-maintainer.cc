@@ -365,7 +365,7 @@ static PSECURITY_DESCRIPTOR UserFilterSecurityDescriptor(PSID sid,ULONG* length)
   access.grfInheritance=NO_INHERITANCE;
   BuildTrusteeWithSidW(&access.Trustee,sid);
   PSECURITY_DESCRIPTOR descriptor=nullptr;
-  DWORD status=BuildSecurityDescriptorW(nullptr,nullptr,1,&access,0,nullptr,length,&descriptor);
+  DWORD status=BuildSecurityDescriptorW(nullptr,nullptr,1,&access,0,nullptr,nullptr,length,&descriptor);
   if(status!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_SECURITY_DESCRIPTOR_FAILED:")+
                                   std::to_string(static_cast<unsigned long>(status));
   SECURITY_DESCRIPTOR_CONTROL control{}; DWORD revision=0;

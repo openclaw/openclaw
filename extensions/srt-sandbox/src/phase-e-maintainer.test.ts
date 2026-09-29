@@ -182,6 +182,9 @@ describe("Phase E maintainer policy", () => {
     expect(source).toContain("conditionValue.type=FWP_SECURITY_DESCRIPTOR_TYPE");
     expect(source).toContain("condition.conditionValue.sd=&descriptorBlob");
     expect(source).toContain("BuildTrusteeWithSidW(&access.Trustee,sid)");
+    expect(source).toContain(
+      "BuildSecurityDescriptorW(nullptr,nullptr,1,&access,0,nullptr,nullptr,length,&descriptor)",
+    );
     expect(source).toContain("access.grfAccessPermissions=FWP_ACTRL_MATCH_FILTER");
     expect(source).toContain("control&SE_SELF_RELATIVE");
     expect(source).toContain("SecurityDescriptorMatchesSid");
