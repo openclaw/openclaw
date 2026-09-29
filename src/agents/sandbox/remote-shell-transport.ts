@@ -359,12 +359,13 @@ function renderUploadDiagnostic(
   fallback: string,
 ): string {
   const text = finalizeCapturedOutput(capture, mode).toString("utf8").trim();
-  if (!text) {
-    return fallback;
-  }
+  // Choose the body first, then append the notice unconditionally. A retained
+  // tail that trims to empty (whitespace-only diagnostics) still dropped bytes,
+  // so falling back before the notice would hide the truncation from the user.
+  const body = text || fallback;
   return capture.truncatedBytes > 0
-    ? `${text}\n(truncated; dropped ${capture.truncatedBytes} earlier bytes of remote diagnostics)`
-    : text;
+    ? `${body}\n(truncated; dropped ${capture.truncatedBytes} earlier bytes of remote diagnostics)`
+    : body;
 }
 
 async function assertSafeUploadSymlinks(localDir: string, signal?: AbortSignal): Promise<void> {

@@ -143,6 +143,62 @@ describe("remote shell upload diagnostic bound", () => {
     expect(mirroredStdoutBytes).toBe(emittedPerStream);
     expect(remote.kill).not.toHaveBeenCalled();
   });
+
+  it("keeps the truncation notice when the retained tail trims to whitespace", async () => {
+    const tar = createFakeChildProcess();
+    const remote = createFakeChildProcess();
+    const children = [tar, remote];
+    let spawnIndex = 0;
+    spawnMock.mockImplementation((() => children[spawnIndex++]!) as never);
+
+    const session = createRemoteShellSandboxSession({
+      buildCommand: () => ({ argv: [process.execPath, "-e", "0"], env: {} }),
+    });
+
+    const upload = session.uploadDirectory({
+      localDir,
+      remoteDir: "/remote/workspace",
+    });
+
+    await withTestTimeout(
+      waitForListeners(remote),
+      10_000,
+      "the uploader never attached the remote child's listeners",
+    );
+    await withTestTimeout(
+      waitForListeners(tar),
+      10_000,
+      "the uploader never attached the tar child's listeners",
+    );
+
+    // The remote complains early, then floods stderr with more than the bound in
+    // whitespace. The retired tail trims to empty, so the renderer must still
+    // report that earlier diagnostics were dropped instead of silently falling
+    // back to the bare exit code.
+    remote.stderr.write("early remote complaint\n");
+    const whitespaceBytes = 8 * SANDBOX_UPLOAD_DIAGNOSTIC_TAIL_BYTES;
+    const chunks = Math.ceil(whitespaceBytes / (64 * 1024));
+    for (let index = 0; index < chunks; index += 1) {
+      remote.stderr.write(Buffer.alloc(64 * 1024, 0x20));
+    }
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    tar.emit("close", 0, null);
+    remote.emit("close", 1, null);
+
+    const error = await upload.then(
+      () => {
+        throw new Error("expected the upload to reject on a nonzero remote exit");
+      },
+      (rejection: unknown) => rejection as Error,
+    );
+
+    expect(error.message).toContain("remote exited with code 1");
+    expect(error.message).toContain("truncated");
+    const reportedDropped = Number(/(\d+) earlier bytes/.exec(error.message)?.[1]);
+    expect(reportedDropped).toBeGreaterThan(0);
+  });
 });
 
 type FakeChildProcess = EventEmitter & {
