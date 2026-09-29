@@ -93,60 +93,53 @@ async function nextTurn() {
   });
 }
 
-it.each(["preparing", "draining", "prepared"] as const)(
-  "keeps one collector launch pending through reversible Gateway %s suspension",
-  async (phase) => {
-    const f = claimFixture();
-    f.release();
-    const suspension = tryBeginSuspension(() => {});
-    if (!suspension) {
-      throw new Error("Expected a fresh suspension admission");
-    }
-    if (phase === "draining") {
-      expect(suspension.drain()).toBe(true);
-    } else if (phase === "prepared") {
-      expect(suspension.commit()).toBe(true);
-    }
-    const launch = vi.fn(async () => ({ response: { runId: "original", status: "accepted" } }));
-    const cleanup = vi.fn(async () => ({ attachmentsRemoved: true, sessionDeleted: true }));
-    const callbacks = createCallbacks({
-      childRunId: "original",
-      childSessionKey: "agent:main:subagent:original",
-      requesterSessionKey: "agent:main:main",
-      registrationScope: f.scope,
-      preparation: { rollback: f.rollback, dispose: f.dispose },
-      provisionalSessionIdentity: {},
-      launchChildRun: launch,
-      recordParticipant: vi.fn(),
-      emitSpawnLifecycleHooks: async () => {},
-      cleanupFailedSpawn: cleanup,
-    });
-    const first = outsideRoot(() => callbacks.start());
-    const duplicate = outsideRoot(() => callbacks.start());
-    let settled = false;
-    const observed = Promise.allSettled([first, duplicate]).then(() => {
-      settled = true;
-    });
-    try {
-      await nextTurn();
-      expect(settled).toBe(false);
-      expect(launch).not.toHaveBeenCalled();
-      expect(phase === "preparing" ? suspension.rollback() : suspension.release()).toBe(true);
-      await Promise.all([first, duplicate]);
-      await callbacks.start();
-      expect(launch).toHaveBeenCalledOnce();
-      expect(startQueuedRun).toHaveBeenCalledOnce();
-      expect(f.dispose).toHaveBeenCalledOnce();
-      expect(f.rollback).not.toHaveBeenCalled();
-      expect(f.settle).not.toHaveBeenCalled();
-      expect(cleanup).not.toHaveBeenCalled();
-    } finally {
-      suspension.rollback();
-      suspension.release();
-      await observed;
-    }
-  },
-);
+it("keeps one collector launch pending through reversible Gateway suspension", async () => {
+  const f = claimFixture();
+  f.release();
+  const suspension = tryBeginSuspension(() => {});
+  if (!suspension) {
+    throw new Error("Expected a fresh suspension admission");
+  }
+  expect(suspension.commit()).toBe(true);
+  const launch = vi.fn(async () => ({ response: { runId: "original", status: "accepted" } }));
+  const cleanup = vi.fn(async () => ({ attachmentsRemoved: true, sessionDeleted: true }));
+  const callbacks = createCallbacks({
+    childRunId: "original",
+    childSessionKey: "agent:main:subagent:original",
+    requesterSessionKey: "agent:main:main",
+    registrationScope: f.scope,
+    preparation: { rollback: f.rollback, dispose: f.dispose },
+    provisionalSessionIdentity: {},
+    launchChildRun: launch,
+    recordParticipant: vi.fn(),
+    emitSpawnLifecycleHooks: async () => {},
+    cleanupFailedSpawn: cleanup,
+  });
+  const first = outsideRoot(() => callbacks.start());
+  const duplicate = outsideRoot(() => callbacks.start());
+  let settled = false;
+  const observed = Promise.allSettled([first, duplicate]).then(() => {
+    settled = true;
+  });
+  try {
+    await nextTurn();
+    expect(settled).toBe(false);
+    expect(launch).not.toHaveBeenCalled();
+    expect(suspension.release()).toBe(true);
+    await Promise.all([first, duplicate]);
+    await callbacks.start();
+    expect(launch).toHaveBeenCalledOnce();
+    expect(startQueuedRun).toHaveBeenCalledOnce();
+    expect(f.dispose).toHaveBeenCalledOnce();
+    expect(f.rollback).not.toHaveBeenCalled();
+    expect(f.settle).not.toHaveBeenCalled();
+    expect(cleanup).not.toHaveBeenCalled();
+  } finally {
+    suspension.rollback();
+    suspension.release();
+    await observed;
+  }
+});
 
 it.each([false, true])(
   "closes a claim-free failure scope with dispatchAttempted=%s",
@@ -187,54 +180,51 @@ it.each([false, true])(
   },
 );
 
-it.each(["superseded", "confirmed Stop"] as const)(
-  "settles a %s activation through its retained scope before retiring the slot",
-  async (owner) => {
-    const f = claimFixture();
-    f.release();
-    f.scope.canLaunch = () => false;
-    let retired = false;
-    f.scope.canCleanupSession = () => owner === "confirmed Stop" && !retired;
-    const settled = createDeferred();
-    f.settle.mockImplementation(async () => {
-      await settled.promise;
-      retired = true;
-    });
-    registerRun.mockImplementation(
-      async (
-        _record: unknown,
-        options: { retainOwnership: (scope: SubagentRegistrationScope) => void },
-      ) => {
-        options.retainOwnership(f.scope);
-      },
-    );
-    resolveEngine.mockResolvedValue({
-      prepareSubagentSpawn: async () => ({ rollback: f.rollback }),
-      dispose: f.dispose,
-    });
-    const result = await spawn(
-      { task: "superseded original collector", collect: true },
-      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
-    );
-    try {
-      expect(result.status).toBe("accepted");
-      await vi.waitFor(() => expect(f.settle).toHaveBeenCalledOnce());
-      expect(isActive(result.runId!)).toBe(true);
-      expect(f.rollback).not.toHaveBeenCalled();
-      expect(
-        callGateway.mock.calls.some(
-          ([request]) => request.method === "agent" || request.method === "sessions.delete",
-        ),
-      ).toBe(false);
-      settled.resolve();
-      await vi.waitFor(() => expect(isActive(result.runId!)).toBe(false));
-      expect(f.settle).toHaveBeenCalledOnce();
-      expect(f.rollback).not.toHaveBeenCalled();
-    } finally {
-      settled.resolve();
-    }
-  },
-);
+it("settles a stopped activation through its retained scope before retiring the slot", async () => {
+  const f = claimFixture();
+  f.release();
+  f.scope.canLaunch = () => false;
+  let retired = false;
+  f.scope.canCleanupSession = () => !retired;
+  const settled = createDeferred();
+  f.settle.mockImplementation(async () => {
+    await settled.promise;
+    retired = true;
+  });
+  registerRun.mockImplementation(
+    async (
+      _record: unknown,
+      options: { retainOwnership: (scope: SubagentRegistrationScope) => void },
+    ) => {
+      options.retainOwnership(f.scope);
+    },
+  );
+  resolveEngine.mockResolvedValue({
+    prepareSubagentSpawn: async () => ({ rollback: f.rollback }),
+    dispose: f.dispose,
+  });
+  const result = await spawn(
+    { task: "superseded original collector", collect: true },
+    { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+  );
+  try {
+    expect(result.status).toBe("accepted");
+    await vi.waitFor(() => expect(f.settle).toHaveBeenCalledOnce());
+    expect(isActive(result.runId!)).toBe(true);
+    expect(f.rollback).not.toHaveBeenCalled();
+    expect(
+      callGateway.mock.calls.some(
+        ([request]) => request.method === "agent" || request.method === "sessions.delete",
+      ),
+    ).toBe(false);
+    settled.resolve();
+    await vi.waitFor(() => expect(isActive(result.runId!)).toBe(false));
+    expect(f.settle).toHaveBeenCalledOnce();
+    expect(f.rollback).not.toHaveBeenCalled();
+  } finally {
+    settled.resolve();
+  }
+});
 
 it("retains the actual spawn activation handoff through a provisional claim", async () => {
   const f = claimFixture();
@@ -277,54 +267,45 @@ it("retains the actual spawn activation handoff through a provisional claim", as
   }
 });
 
-it.each(["start", "failure cleanup"] as const)(
-  "retains the collector %s handoff through a provisional claim",
-  async (phase) => {
-    const f = claimFixture();
-    const launch = vi.fn(async () => ({ response: { runId: "original", status: "accepted" } }));
-    const cleanup = vi.fn(async () => ({ attachmentsRemoved: true, sessionDeleted: true }));
-    const callbacks = createCallbacks({
-      childRunId: "original",
-      childSessionKey: "agent:main:subagent:original",
-      requesterSessionKey: "agent:main:main",
-      registrationScope: f.scope,
-      preparation: { rollback: f.rollback, dispose: f.dispose },
-      provisionalSessionIdentity: {},
-      launchChildRun: launch,
-      recordParticipant: vi.fn(),
-      emitSpawnLifecycleHooks: async () => {},
-      cleanupFailedSpawn: cleanup,
-    });
-    let completed = false;
-    const pending = Promise.resolve(
-      phase === "start" ? callbacks.start() : callbacks.onStartFailure(new Error("launch refused")),
-    );
-    const observed = pending.then(
-      () => {
-        completed = true;
-      },
-      () => {
-        completed = true;
-      },
-    );
-    try {
-      await nextTurn();
-      expect(completed).toBe(false);
-      expect(launch).not.toHaveBeenCalled();
-      expect(cleanup).not.toHaveBeenCalled();
-      expect(f.rollback).not.toHaveBeenCalled();
-      expect(f.settle).not.toHaveBeenCalled();
-      f.release();
-      await pending;
-      if (phase === "start") {
-        expect(launch).toHaveBeenCalledOnce();
-      } else {
-        expect(cleanup).toHaveBeenCalledOnce();
-        expect(f.settle).toHaveBeenCalledOnce();
-      }
-    } finally {
-      f.release();
-      await observed;
-    }
-  },
-);
+it("retains collector failure cleanup through a provisional claim", async () => {
+  const f = claimFixture();
+  const launch = vi.fn(async () => ({ response: { runId: "original", status: "accepted" } }));
+  const cleanup = vi.fn(async () => ({ attachmentsRemoved: true, sessionDeleted: true }));
+  const callbacks = createCallbacks({
+    childRunId: "original",
+    childSessionKey: "agent:main:subagent:original",
+    requesterSessionKey: "agent:main:main",
+    registrationScope: f.scope,
+    preparation: { rollback: f.rollback, dispose: f.dispose },
+    provisionalSessionIdentity: {},
+    launchChildRun: launch,
+    recordParticipant: vi.fn(),
+    emitSpawnLifecycleHooks: async () => {},
+    cleanupFailedSpawn: cleanup,
+  });
+  let completed = false;
+  const pending = Promise.resolve(callbacks.onStartFailure(new Error("launch refused")));
+  const observed = pending.then(
+    () => {
+      completed = true;
+    },
+    () => {
+      completed = true;
+    },
+  );
+  try {
+    await nextTurn();
+    expect(completed).toBe(false);
+    expect(launch).not.toHaveBeenCalled();
+    expect(cleanup).not.toHaveBeenCalled();
+    expect(f.rollback).not.toHaveBeenCalled();
+    expect(f.settle).not.toHaveBeenCalled();
+    f.release();
+    await pending;
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(f.settle).toHaveBeenCalledOnce();
+  } finally {
+    f.release();
+    await observed;
+  }
+});

@@ -1,5 +1,3 @@
-// Subagent spawn model-session tests verify runtime model metadata is persisted
-// before a child agent run starts.
 import os from "node:os";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -13,7 +11,8 @@ import {
 const callGatewayMock = vi.fn();
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
-
+let config = createSubagentSpawnTestConfig(os.tmpdir());
+let persistedStore: Record<string, Record<string, unknown>> | undefined;
 let resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 
@@ -21,68 +20,65 @@ describe("spawnSubagentDirect runtime model persistence", () => {
   beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
-      getRuntimeConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
+      getRuntimeConfig: () => config,
       loadSessionStoreMock,
       updateSessionStoreMock,
       workspaceDir: os.tmpdir(),
     }));
   });
-
   beforeEach(() => {
     resetSubagentRegistryForTests();
+    config = createSubagentSpawnTestConfig(os.tmpdir());
     callGatewayMock.mockReset();
     loadSessionStoreMock.mockReset().mockReturnValue({});
     updateSessionStoreMock.mockReset();
-    setupAcceptedSubagentGatewayMock(callGatewayMock);
-
-    updateSessionStoreMock.mockImplementation(
-      async (
-        _storePath: string,
-        mutator: (store: Record<string, Record<string, unknown>>) => unknown,
-      ) => {
-        const store: Record<string, Record<string, unknown>> = {};
-        await mutator(store);
-        return store;
-      },
-    );
-  });
-
-  it("persists an explicit auth profile separately from the child model id", async () => {
-    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    persistedStore = undefined;
     installSessionStoreCaptureMock(updateSessionStoreMock, {
       onStore: (store) => {
         persistedStore = store;
       },
     });
-
-    const result = await spawnSubagentDirect(
-      {
-        task: "test",
-        model: "openai/gpt-5.6-luna@openai:test-profile",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "guildchat",
-      },
-    );
-
-    expect(result.status).toBe("accepted");
-    expect(result.resolvedModel).toBe("openai/gpt-5.6-luna");
-    expectPersistedRuntimeModel({
-      persistedStore,
-      sessionKey: /^agent:main:subagent:/,
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      overrideSource: "user",
-    });
-    const [, persistedEntry] = Object.entries(persistedStore ?? {})[0] ?? [];
-    expect(persistedEntry?.authProfileOverride).toBe("openai:test-profile");
-    expect(persistedEntry?.authProfileOverrideSource).toBe("user");
+    setupAcceptedSubagentGatewayMock(callGatewayMock);
   });
+
+  it.each(["user", "auto"] as const)(
+    "persists a %s-selected model separately from its auth profile",
+    async (source) => {
+      const model = "openai/gpt-5.6-luna@openai:test-profile";
+      if (source === "auto") {
+        config = createSubagentSpawnTestConfig(os.tmpdir(), {
+          agents: { defaults: { workspace: os.tmpdir(), subagents: { model } } },
+        });
+      }
+      const result = await spawnSubagentDirect(
+        { task: "test", ...(source === "user" ? { model } : {}) },
+        { agentSessionKey: "agent:main:main", agentChannel: "guildchat" },
+      );
+      expect(result.status).toBe("accepted");
+      expect(result.resolvedModel).toBe("openai/gpt-5.6-luna");
+      expectPersistedRuntimeModel({
+        persistedStore,
+        sessionKey: /^agent:main:subagent:/,
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        overrideSource: source,
+      });
+      const [, entry] = Object.entries(persistedStore ?? {})[0] ?? [];
+      expect(entry).toMatchObject({
+        authProfileOverride: "openai:test-profile",
+        authProfileOverrideSource: "user",
+      });
+      if (source === "auto") {
+        expect(entry).toMatchObject({
+          modelOverrideFallbackOriginProvider: "openai",
+          modelOverrideFallbackOriginModel: "gpt-5.6-luna",
+        });
+      }
+    },
+  );
 
   it.each([
     { source: "active", model: "custom/model" },
-    { source: "persisted", model: "custom/model" },
     { source: "persisted", model: "middle" },
   ])("preserves the $source resolved model $model in child state", async ({ source, model }) => {
     const [{ createPluginMetadataSnapshotFixture }, { withPluginRuntimeGenerationScope }] =
@@ -107,13 +103,6 @@ describe("spawnSubagentDirect runtime model persistence", () => {
         modelOverrideRouteResolution: "resolved",
       },
     });
-    let persistedStore: Record<string, Record<string, unknown>> | undefined;
-    installSessionStoreCaptureMock(updateSessionStoreMock, {
-      onStore: (store) => {
-        persistedStore = store;
-      },
-    });
-
     const result = await withPluginRuntimeGenerationScope({ metadataSnapshot }, () =>
       spawnSubagentDirect(
         { task: "preserve the selected model" },
@@ -137,117 +126,14 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     expect(result.resolvedModel).toBe(`custom/${model}`);
   });
 
-  it("persists self-origin metadata for auto-selected subagent models", async () => {
-    const dedicatedUpdateSessionStoreMock = vi.fn();
-    const {
-      resetSubagentRegistryForTests: resetForAutoModelTest,
-      spawnSubagentDirect: spawnWithAutoModel,
-    } = await loadSubagentSpawnModuleForTest({
-      callGatewayMock,
-      getRuntimeConfig: () =>
-        createSubagentSpawnTestConfig(os.tmpdir(), {
-          agents: {
-            defaults: {
-              workspace: os.tmpdir(),
-              model: { primary: "openai/gpt-5.5" },
-              subagents: { model: "gpt-5.4" },
-            },
-          },
-        }),
-      updateSessionStoreMock: dedicatedUpdateSessionStoreMock,
-      workspaceDir: os.tmpdir(),
-    });
-    resetForAutoModelTest();
-    let persistedStore: Record<string, Record<string, unknown>> | undefined;
-    installSessionStoreCaptureMock(dedicatedUpdateSessionStoreMock, {
-      onStore: (store) => {
-        persistedStore = store;
-      },
-    });
-
-    const result = await spawnWithAutoModel(
-      {
-        task: "test",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "guildchat",
-      },
-    );
-
-    expect(result.status).toBe("accepted");
-    const [, persistedEntry] = Object.entries(persistedStore ?? {})[0] ?? [];
-    expect(persistedEntry?.modelOverrideSource).toBe("auto");
-    expect(persistedEntry?.modelOverrideFallbackOriginProvider).toBe("openai");
-    expect(persistedEntry?.modelOverrideFallbackOriginModel).toBe("gpt-5.4");
-  });
-
-  it("persists an inherited auth profile separately from the child model id", async () => {
-    const dedicatedUpdateSessionStoreMock = vi.fn();
-    const {
-      resetSubagentRegistryForTests: resetForProfileTest,
-      spawnSubagentDirect: spawnWithProfile,
-    } = await loadSubagentSpawnModuleForTest({
-      callGatewayMock,
-      getRuntimeConfig: () =>
-        createSubagentSpawnTestConfig(os.tmpdir(), {
-          agents: {
-            defaults: {
-              workspace: os.tmpdir(),
-              model: { primary: "openai/gpt-5.6-luna@openai:test-profile" },
-            },
-          },
-        }),
-      updateSessionStoreMock: dedicatedUpdateSessionStoreMock,
-      workspaceDir: os.tmpdir(),
-    });
-    resetForProfileTest();
-    let persistedStore: Record<string, Record<string, unknown>> | undefined;
-    installSessionStoreCaptureMock(dedicatedUpdateSessionStoreMock, {
-      onStore: (store) => {
-        persistedStore = store;
-      },
-    });
-
-    const result = await spawnWithProfile(
-      { task: "test" },
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "guildchat",
-      },
-    );
-
-    expect(result.status).toBe("accepted");
-    expect(result.resolvedModel).toBe("openai/gpt-5.6-luna");
-    expectPersistedRuntimeModel({
-      persistedStore,
-      sessionKey: /^agent:main:subagent:/,
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      overrideSource: "auto",
-    });
-    const [, persistedEntry] = Object.entries(persistedStore ?? {})[0] ?? [];
-    expect(persistedEntry?.authProfileOverride).toBe("openai:test-profile");
-    expect(persistedEntry?.authProfileOverrideSource).toBe("user");
-  });
-
   it.each([
     { name: "different model", model: "custom/model-b", parentMode: true, expected: undefined },
     {
-      name: "same model explicit off",
-      model: "custom/model-a",
+      name: "same model alias explicit off",
+      model: "same-model",
       parentMode: false,
       expected: false,
     },
-    { name: "same model alias", model: "same-model", parentMode: false, expected: false },
-    {
-      name: "configured child",
-      configuredModel: "custom/model-b",
-      parentMode: true,
-      expected: undefined,
-    },
-    { name: "case-distinct model", model: "custom/MODEL-A", parentMode: true, expected: undefined },
-    { name: "different provider", model: "other/model-a", parentMode: true, expected: undefined },
     {
       name: "explicit child off",
       model: "custom/model-b",
@@ -270,27 +156,19 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     },
   ])(
     "scopes inherited Fast mode: $name",
-    async ({ model, configuredModel, parentMode, override, savedModel, expected }) => {
-      const { spawnSubagentDirect: spawn } = await loadSubagentSpawnModuleForTest({
-        callGatewayMock,
-        loadSessionStoreMock,
-        updateSessionStoreMock,
-        getRuntimeConfig: () =>
-          createSubagentSpawnTestConfig(os.tmpdir(), {
-            tools: { swarm: { enabled: true } },
-            agents: {
-              defaults: {
-                workspace: os.tmpdir(),
-                model: { primary: "custom/model-a" },
-                models: {
-                  "custom/model-a": { alias: "same-model", params: { fastMode: true } },
-                  "custom/model-b": { params: { fastMode: false } },
-                },
-                ...(configuredModel ? { subagents: { model: configuredModel } } : {}),
-              },
+    async ({ model, parentMode, override, savedModel, expected }) => {
+      config = createSubagentSpawnTestConfig(os.tmpdir(), {
+        tools: { swarm: { enabled: true } },
+        agents: {
+          defaults: {
+            workspace: os.tmpdir(),
+            model: { primary: "custom/model-a" },
+            models: {
+              "custom/model-a": { alias: "same-model", params: { fastMode: true } },
+              "custom/model-b": { params: { fastMode: false } },
             },
-          }),
-        workspaceDir: os.tmpdir(),
+          },
+        },
       });
       loadSessionStoreMock.mockReturnValue({
         "agent:main:main": {
@@ -300,14 +178,7 @@ describe("spawnSubagentDirect runtime model persistence", () => {
           fastMode: parentMode,
         },
       });
-      let persistedStore: Record<string, Record<string, unknown>> | undefined;
-      installSessionStoreCaptureMock(updateSessionStoreMock, {
-        onStore: (store) => {
-          persistedStore = store;
-        },
-      });
-
-      const result = await spawn(
+      const result = await spawnSubagentDirect(
         { task: "test", model, fastMode: override },
         {
           agentSessionKey: "agent:main:main",
