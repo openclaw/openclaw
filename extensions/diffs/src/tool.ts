@@ -1,15 +1,16 @@
 import fs from "node:fs/promises";
 import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readFiniteNumberParam } from "openclaw/plugin-sdk/param-readers";
+import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   asNonArrayRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import type { Static } from "typebox";
-import type { AnyAgentTool, OpenClawConfig, OpenClawPluginToolContext } from "../api.js";
 import type { DiffScreenshotter } from "./browser.runtime.js";
 import { resolveDiffImageRenderOptions } from "./config.js";
 import { DiffRenderInputError, renderDiffDocument } from "./render.js";

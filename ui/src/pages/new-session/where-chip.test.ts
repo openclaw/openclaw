@@ -896,6 +896,15 @@ describe("Where chip", () => {
       label: "Slot utilization unavailable",
     },
     {
+      name: "admits worker execution by reclaiming the sole idle worker slot",
+      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+      workerSlots: { total: 1, available: 0, reclaimableIdle: 1 },
+      invocableCommands: [],
+      commandState: undefined,
+      disabled: false,
+      label: "1 of 1 session slots in use",
+    },
+    {
       name: "disables a declared remote command that the Gateway has not enabled",
       devicePlacement: {
         requiredNodeCommands: ["codex.exec-server.stdio.v1"],

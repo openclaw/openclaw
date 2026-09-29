@@ -1102,6 +1102,7 @@ src/plugins/plugin-native-reference.ts
 src/plugins/plugin-package-metadata-capture.ts
 src/plugins/plugin-peer-link.ts
 src/plugins/plugin-policy-id.ts
+src/plugins/plugin-provider-request-policy.ts
 src/plugins/plugin-registry-comparison.ts
 src/plugins/plugin-registry-contributions.ts
 src/plugins/plugin-registry-id-normalizer.ts

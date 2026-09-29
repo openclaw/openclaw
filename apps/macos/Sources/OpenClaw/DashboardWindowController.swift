@@ -234,6 +234,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         WindowPlacement.ensureOnScreen(window: window, defaultSize: DashboardWindowLayout.windowSize)
 
         documentHost.isAvailable = { [weak self] in self?.window != nil }
+        documentHost.isNativeAuthAvailable = { [weak self] in self?.hasRetainedWindow == true }
         documentHost.onAuthenticationFailure = { [weak self] error in
             self?.showFailure(
                 title: "Gateway sign-in required",
@@ -629,7 +630,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         Self.installNativeChromeScript(into: controller, url: self.currentURL)
         Self.installNativeAppLinkScript(into: controller, url: self.currentURL)
         Self.installNativeGatewaysScript(into: controller, url: self.currentURL, snapshot: self.gatewaySnapshot)
-        ControlUIDocumentHost.installNativeAuthScript(into: controller, url: self.currentURL, auth: self.auth)
+        self.documentHost.installNativeAuthScript()
     }
 
     private func installHistoryStateBridge() {
@@ -1502,6 +1503,10 @@ extension DashboardWindowController {
 
     var _testDashboardDataStore: WKWebsiteDataStore {
         self.webView.configuration.websiteDataStore
+    }
+
+    var _testHasPendingBrowserProfileImportOffer: Bool {
+        self.browserProfileImportOfferRequestIsInFlight || self.browserProfileImportOfferRetryPending
     }
 
     var _testAllowsBackForwardGestures: Bool {

@@ -15,6 +15,8 @@ const toolingClosure = [
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/official-external-provider-catalog.json",
+  "scripts/lib/record-shared.mjs",
   "scripts/lib/update-compat-inventory.json",
   "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
@@ -646,6 +648,8 @@ async function planWorkflowAdmission(input) {
   ) {
     sourcePaths.add("scripts/lib/upgrade-survivor-scenarios.json");
     sourcePaths.add("scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    // Legacy-operator planning stages the candidate's official providers for prepublish.
+    sourcePaths.add("scripts/lib/official-external-provider-catalog.json");
   }
   if (docker.length > 256) {
     throw new Error("too many selected Docker groups");

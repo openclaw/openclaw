@@ -285,10 +285,6 @@ function isLocalizedDocPath(p: string) {
   return /^\/?[a-z]{2}(?:-[A-Za-z]{2,8})+\//.test(p);
 }
 
-function isGeneratedTranslatedDoc(relPath: string) {
-  return isLocalizedDocPath(relPath);
-}
-
 function createRedirectMap(docsConfig: Record<string, unknown>): Map<string, string> {
   const redirects = new Map<string, string>();
   const redirectEntries = Array.isArray(docsConfig.redirects) ? docsConfig.redirects : [];
@@ -323,7 +319,7 @@ function buildAuditIndex(
       return false;
     }
     const rel = normalizeSlashes(path.relative(docsDir, abs));
-    return !isGeneratedTranslatedDoc(rel);
+    return !isLocalizedDocPath(rel);
   });
   const routes = new Set<string>();
 
@@ -348,7 +344,6 @@ function buildAuditIndex(
     docsDir,
     docsConfig,
     redirects,
-    allFiles,
     relAllFiles,
     markdownFiles,
     routes,
@@ -443,9 +438,6 @@ function mirroredFragmentReason(terminal: string, hash: string) {
   return `fragment unverified without the ClawHub source checkout (terminal: ${terminal}${hash}); set ${CLAWHUB_REPO_ENV}`;
 }
 
-/**
- * Audits local docs links against route, file, and redirect indexes.
- */
 export function auditDocsLinks(
   options: { docsDir?: string; allowExternalClawHubRoutes?: boolean; anchors?: boolean } = {},
 ) {
@@ -630,7 +622,7 @@ export function auditDocsLinks(
   }
 
   for (const page of collectNavPageEntries(index.docsConfig.navigation || [])) {
-    if (isGeneratedTranslatedDoc(page)) {
+    if (isLocalizedDocPath(page)) {
       continue;
     }
     checked++;
@@ -654,7 +646,6 @@ export function auditDocsLinks(
   return { checked, broken, collisions, unverifiedMirroredFragments };
 }
 
-/** Runs the docs link audit CLI. */
 function runDocsLinkAuditCli() {
   const args = process.argv.slice(2);
   if (args[0] === "--prepare-external-links") {

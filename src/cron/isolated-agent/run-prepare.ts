@@ -1,6 +1,7 @@
 /** Session identity and context preparation for isolated cron runs. */
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
+import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -8,10 +9,7 @@ import {
   type PreparedModelRuntimeLease,
 } from "../../agents/prepared-model-runtime.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
-import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
-import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
@@ -19,15 +17,11 @@ import {
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
-import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
-import type { SkillSnapshot } from "../../skills/types.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
-import type { CronDeliveryPlan } from "../delivery-plan.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { isDetachedCronSessionTarget } from "../session-target.js";
-import type { CronJob, CronRunDiagnostics } from "../types.js";
 import {
   resolveCronModelSelection,
   resolveCronModelSelectionOwner,
@@ -38,7 +32,6 @@ import { resolveCronActiveRuntimeConfig, resolveCronAgentConfig } from "./run-co
 import { buildCurrentConversationContextBlock } from "./run-current-context.js";
 import {
   createCronToolsAllowPreflightDiagnostics,
-  type ResolvedCronDeliveryTarget,
   resolveCronDeliveryContext,
 } from "./run-delivery-trace.js";
 import { resolveCronPreflight } from "./run-fallback-policy.js";
@@ -47,7 +40,6 @@ import {
   resolveCronAuthSelection,
   loadCronExternalContentRuntime,
   loadSessionAccessorRuntime,
-  resolveCronAgentTurnMessage,
   retireRolledCronSessionMcpRuntime,
   type RunCronAgentTurnParams,
   type WithRunSession,
@@ -57,13 +49,9 @@ import {
   beginCronSessionWorkAdmission,
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
-  markCronSessionPreRun,
+  setCronSessionRuntimeModel,
   persistCronSkillsSnapshotIfChanged,
-  type CronLiveSelection,
-  type CronRunContinuationSession,
   type CronSessionRowWriter,
-  type MutableCronSession,
-  type PersistCronSessionEntry,
 } from "./run-session-state.js";
 import { resolveCronRunTimeoutOverrideMs } from "./run-timeout.js";
 import { prepareCronSessionWorkspace, type CronWorkspaceLease } from "./run-workspace.js";
@@ -82,75 +70,23 @@ import {
   resolveSessionRuntimeOverrideForProvider,
   resolveThinkingSelection,
 } from "./run.runtime.js";
-import type { RunCronAgentTurnResult } from "./run.types.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { prepareCronSession } from "./session.js";
 
-export type PreparedCronRunContext = {
-  input: RunCronAgentTurnParams;
-  cfgWithAgentDefaults: OpenClawConfig;
-  agentId: string;
-  agentCfg: AgentDefaultsConfig;
-  agentDir: string;
-  agentSessionKey: string;
-  sourceSessionKey?: string;
-  sourceSessionGeneration?: { sessionId: string; lifecycleRevision: string | undefined };
-  runSessionId: string;
-  currentRunSessionId: () => string;
-  runSessionKey: string;
-  usesDetachedRunSession: boolean;
-  workspaceDir: string;
-  cwd?: string;
-  workspaceLease?: CronWorkspaceLease;
-  executionRoot?: RunCronAgentTurnParams["executionRoot"];
-  commandBody: string;
-  inputProvenance?: InputProvenance;
-  cronSession: MutableCronSession;
-  sessionWorkAdmission: SessionWorkAdmissionLease;
-  persistSessionEntry: PersistCronSessionEntry;
-  runContinuationSession?: CronRunContinuationSession;
-  withRunSession: WithRunSession;
-  agentPayload: Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
-  deliveryPlan: CronDeliveryPlan;
-  resolvedDelivery: ResolvedCronDeliveryTarget;
-  deliveryRequested: boolean;
-  /** Trusted delivery-channel formatting metadata; absent without a resolved chat delivery. */
-  deliverySystemPrompt?: string;
-  /** Message-tool formatting contract for a run without a reply route; applied once tools resolve. */
-  messageToolFormatPrompt?: string;
-  sourceDelivery: SourceDeliveryPlan;
-  suppressExecNotifyOnExit: boolean;
-  skillsSnapshot: SkillSnapshot;
-  liveSelection: CronLiveSelection;
-  useSubagentFallbacks: boolean;
-  inheritDefaultFallbacksForAgentStringModel: boolean;
-  modelFallbacksOverride?: string[];
-  thinkingSelection: Awaited<ReturnType<typeof resolveCronThinkingSelection>>;
-  timeoutMs: number;
-  preflightDiagnostics?: CronRunDiagnostics;
-  /**
-   * Set when the cron payload's `timeoutSeconds` was explicitly configured
-   * for this run (independent of whether its numeric value happens to equal
-   * `agents.defaults.timeoutSeconds`). Forwarded to the embedded runner so
-   * the LLM idle watchdog can honor the cron's per-run choice.
-   */
-  runTimeoutOverrideMs?: number;
-  preparedModelRuntimeLease: PreparedModelRuntimeLease;
-};
-
-type CronPreparationResult =
-  | { ok: true; context: PreparedCronRunContext }
-  | { ok: false; result: RunCronAgentTurnResult };
+export type PreparedCronRunContext = Extract<
+  Awaited<ReturnType<typeof prepareCronRunContext>>,
+  { ok: true }
+>["context"];
 
 export async function prepareCronRunContext(params: {
   input: RunCronAgentTurnParams;
   isFastTestEnv: boolean;
   onLifecycleInterrupt: () => void;
-}): Promise<CronPreparationResult> {
+}) {
   const { input } = params;
   const commandPromptPreflight = resolveCronCommandPromptPreflight(input.job);
   if (commandPromptPreflight) {
-    return { ok: false, result: commandPromptPreflight };
+    return { ok: false as const, result: commandPromptPreflight };
   }
   const requestedRuntimeCfg = resolveCronActiveRuntimeConfig(input.cfg);
   const requestedAgentId = input.agentId?.trim() || input.job.agentId?.trim();
@@ -348,7 +284,7 @@ export async function prepareCronRunContext(params: {
     if (!resolvedModelSelection.ok) {
       sessionWorkAdmission.release();
       return {
-        ok: false,
+        ok: false as const,
         result: withRunSession({
           status: "error",
           error: resolvedModelSelection.error,
@@ -384,7 +320,7 @@ export async function prepareCronRunContext(params: {
       logWarn(`[cron:${input.job.id}] ${preflight.reason}`);
       sessionWorkAdmission.release();
       return {
-        ok: false,
+        ok: false as const,
         result: withRunSession({
           status: "skipped",
           error: preflight.reason,
@@ -470,6 +406,8 @@ export async function prepareCronRunContext(params: {
       overrideSeconds: explicitTimeoutSeconds,
     });
     // Preserve explicit timeout provenance so the idle watchdog does not reapply 120s when defaults match.
+    // Preserve an explicit cron timeout even when it equals the agent default;
+    // the embedded runner uses its presence to configure the idle watchdog.
     const runTimeoutOverrideMs = resolveCronRunTimeoutOverrideMs(explicitTimeoutSeconds);
     const agentPayload = input.job.payload.kind === "agentTurn" ? input.job.payload : null;
     const configuredProvider = cfgWithAgentDefaults.models?.providers?.[provider];
@@ -515,9 +453,11 @@ export async function prepareCronRunContext(params: {
             storePath: cronSession.storePath,
           })
         : undefined;
+    const turnMessage =
+      input.job.payload.kind === "agentTurn" ? input.job.payload.message : input.message;
     const message = currentConversationContext
-      ? `${currentConversationContext}\n\n${resolveCronAgentTurnMessage(input)}`
-      : resolveCronAgentTurnMessage(input);
+      ? `${currentConversationContext}\n\n${turnMessage}`
+      : turnMessage;
     const sourcePromptPrefix = `[cron:${input.job.id} ${input.job.name}]`;
     const base = `${sourcePromptPrefix} ${message}`.trim();
     const isExternalHook =
@@ -573,7 +513,8 @@ export async function prepareCronRunContext(params: {
       persistSessionEntry,
     });
 
-    markCronSessionPreRun({ entry: cronSession.sessionEntry, provider, model });
+    setCronSessionRuntimeModel({ entry: cronSession.sessionEntry, provider, model });
+    cronSession.sessionEntry.systemSent = true;
     try {
       await persistSessionEntry();
     } catch (err) {
@@ -604,7 +545,7 @@ export async function prepareCronRunContext(params: {
       isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
     });
     const authProfileId = authSelection?.profileId;
-    const liveSelection: CronLiveSelection = {
+    const liveSelection: LiveSessionModelSelection = {
       provider,
       model,
       agentRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
@@ -644,7 +585,7 @@ export async function prepareCronRunContext(params: {
 
     workspaceLeaseTransferred = true;
     return {
-      ok: true,
+      ok: true as const,
       context: {
         input,
         cfgWithAgentDefaults,
@@ -665,14 +606,14 @@ export async function prepareCronRunContext(params: {
         commandBody,
         inputProvenance:
           agentPayload && !isExternalHook
-            ? {
+            ? ({
                 kind: "internal_system",
                 sourceTool: "cron",
                 sourcePromptPrefix,
                 jobId: input.job.id,
                 runId: runSessionId,
                 sourceSessionKey: runSessionKey,
-              }
+              } satisfies InputProvenance)
             : undefined,
         cronSession,
         sessionWorkAdmission,
@@ -683,7 +624,9 @@ export async function prepareCronRunContext(params: {
         deliveryPlan,
         resolvedDelivery,
         deliveryRequested,
+        // Trusted formatting metadata belongs to the resolved delivery channel.
         deliverySystemPrompt,
+        // Applied only after the final tool surface exposes the message tool.
         messageToolFormatPrompt,
         sourceDelivery,
         suppressExecNotifyOnExit: deliveryPlan.mode === "none",

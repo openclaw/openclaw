@@ -160,7 +160,7 @@ describe("extractDeliveryInfo", () => {
 
     expect(result.deliveryContext?.to).toBe("telegram:user-123");
     expect(storeState.loadExactSessionEntryCandidatesReadOnlyBatch).toHaveBeenCalledWith([
-      expect.objectContaining({ storePath: "/tmp/sessions.json", projection: "list" }),
+      expect.objectContaining({ storePath: "/tmp/sessions.json", projection: "delivery" }),
     ]);
     expect(storeState.openSessionEntryReadView).not.toHaveBeenCalled();
   });
