@@ -919,8 +919,12 @@ extension SettingsProTab {
     var gatewayAdvancedCard: some View {
         Section {
             self.settingsToggle("Auto-connect on launch", isOn: self.$gatewayAutoConnect)
-            self.gatewaySecureField("Gateway Auth Token", text: self.gatewayTokenBinding)
-            self.gatewaySecureField("Gateway Password", text: self.gatewayPasswordBinding)
+            // Fixtures never load the saved pair, so an edit here would overwrite it with blank fields.
+            Group {
+                self.gatewaySecureField("Gateway Auth Token", text: self.gatewayTokenBinding)
+                self.gatewaySecureField("Gateway Password", text: self.gatewayPasswordBinding)
+            }
+            .disabled(self.appModel.isLocalGatewayFixtureEnabled)
             if let headersStableID = self.gatewayCustomHeadersTargetStableID {
                 NavigationLink {
                     GatewayCustomHeadersSettingsView(gatewayStableID: headersStableID)

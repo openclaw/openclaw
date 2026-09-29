@@ -78,6 +78,15 @@ final class OpenClawSnapshotUITests: XCTestCase {
             XCTAssertTrue(app.buttons["Reconnect"].waitForExistence(timeout: 5))
             XCTAssertFalse(app.buttons["Scan QR to Pair"].exists)
         }
+        guard let app = self.app else { return }
+        // After capture: the fixture never loads saved credentials, so editing them would overwrite the pair.
+        let password = app.secureTextFields["Gateway Password"]
+        for _ in 0..<8 where !password.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(password.isHittable)
+        XCTAssertFalse(app.secureTextFields["Gateway Auth Token"].isEnabled)
+        XCTAssertFalse(password.isEnabled)
     }
 
     func testWatchMessageDeliveryIsReachableFromSettings() throws {
