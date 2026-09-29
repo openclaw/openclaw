@@ -70,7 +70,13 @@ export function hasConfiguredModelRouteSupport(params: {
     return true;
   }
   const endpoint = resolveProviderEndpoint(params.route.baseUrl, params.providerMetadataOwners);
-  if (endpoint.endpointClass === "custom" || endpoint.endpointClass === "local") {
+  // Vercel AI Gateway is classified only for app attribution; routing catalog models through it
+  // remains an operator-owned proxy route like any custom baseUrl.
+  if (
+    endpoint.endpointClass === "custom" ||
+    endpoint.endpointClass === "local" ||
+    endpoint.endpointClass === "vercel-ai-gateway"
+  ) {
     return true;
   }
   if (!params.catalogModel) {
