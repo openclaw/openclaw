@@ -5,8 +5,12 @@
 import type { Server } from "node:http";
 import type { ChromeMcpPageProbe } from "./chrome-mcp-contracts.js";
 import type { RunningChrome } from "./chrome.js";
-import type { ProfileStatus as BrowserClientProfileStatus } from "./client.js";
-import type { BrowserOpenResult, BrowserTab, BrowserTransport } from "./client.types.js";
+import type {
+  BrowserOpenResult,
+  BrowserTab,
+  BrowserTransport,
+  ProfileStatus as BrowserClientProfileStatus,
+} from "./client.types.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import type { BrowserErrorResponse } from "./errors.js";
 import type { ExtensionRelayResource } from "./extension-relay/relay-access.js";

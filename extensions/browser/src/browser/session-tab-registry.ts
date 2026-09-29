@@ -8,6 +8,7 @@ import {
   captureBrowserSessionTabAuthority,
   isBrowserStateRuntimeCurrent,
   readCurrentBrowserState,
+  type BrowserSessionTabAuthority,
 } from "../browser-runtime-state.js";
 import {
   type CleanupKind,
@@ -28,7 +29,6 @@ import {
   readBrowserDashboardStopIntents,
   withBrowserSessionTabOperation,
   type BrowserSessionTabRecord,
-  type BrowserSessionTabAuthority,
 } from "./session-tab-store.js";
 import {
   selectStaleTrackedTabs,

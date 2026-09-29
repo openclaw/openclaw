@@ -3,6 +3,7 @@ import {
   captureBrowserSessionTabAuthority,
   getOptionalBrowserStateRuntime,
   type BrowserDashboardRegistration,
+  type BrowserSessionTabAuthority,
 } from "../browser-runtime-state.js";
 import type { BrowserTabOwnership } from "./client.types.js";
 import {
@@ -48,7 +49,6 @@ import {
   withBrowserSessionTabOperation,
   withBrowserSessionTabNativeActivity,
   type BrowserSessionTabRecord,
-  type BrowserSessionTabAuthority,
   type BrowserSessionTabSelection,
 } from "./session-tab-store.js";
 import { selectSessionTabToUntrack } from "./session-tab-untrack-selection.js";

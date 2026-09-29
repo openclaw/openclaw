@@ -7,7 +7,6 @@ import type {
   BrowserDashboardDefinition,
   SessionBrowserDashboard,
 } from "./browser-dashboard.types.js";
-import type { BrowserSessionTabAuthority } from "./browser/session-tab-store.js";
 
 export type BrowserDashboardOperation = {
   promise: Promise<unknown>;
@@ -25,6 +24,12 @@ export type BrowserDashboardRegistration = {
   closeDispatched?: true;
 };
 export type BrowserSessionTabOperationKey = string | symbol | BrowserDashboardRegistration;
+
+export type BrowserSessionTabAuthority = {
+  runtime?: BrowserStateRuntime;
+  assertCurrent?: () => void;
+  dashboardRegistration?: BrowserDashboardRegistration;
+};
 
 export type BrowserStateRuntime = {
   sessionTabs: PluginStateKeyedStore<unknown>;
