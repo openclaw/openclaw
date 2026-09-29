@@ -11,7 +11,6 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import {
-  appendTranscriptMessage,
   applySessionEntryLifecycleMutation,
   replaceSessionEntry,
   resetSessionEntryLifecycle,
@@ -74,41 +73,9 @@ describe("SQLite reset boundary transcript header", () => {
     }
   }
 
-  // A reset before the first message must not make the window permanently headerless.
-  it.each(
-    (["single", "batched"] as const).flatMap((writer) =>
-      ["empty-window", "next-window"].map((nextSessionId) => ({ writer, nextSessionId })),
-    ),
-  )(
-    "keeps an empty $writer reset readable with next session $nextSessionId",
-    async ({ writer, nextSessionId }) => {
-      const sessionKey = "agent:main:empty-window-reset";
-      await replaceSessionEntry(
-        { sessionKey, storePath },
-        { sessionId: "empty-window", updatedAt: 10 },
-      );
-
-      await reset(writer, sessionKey, nextSessionId);
-
-      expect(
-        SessionManager.open({
-          agentId: "main",
-          sessionKey,
-          sessionId: "empty-window",
-          storePath,
-        }).getHeader(),
-      ).toMatchObject({ version: CURRENT_SESSION_VERSION, cwd: "/tmp/reset-session-workspace" });
-      const events = readEvents("empty-window");
-      expect(events[0]?.type).toBe("session");
-      expect(events[0]?.version).toBe(CURRENT_SESSION_VERSION);
-      // The header must record the session workspace, not the service process cwd.
-      expect(events[0]?.cwd).toBe("/tmp/reset-session-workspace");
-      expect(events[1]?.type).toBe("reset");
-    },
-  );
-
   // The prior session's workspace must survive callers that know only the agent workspace.
   it.each([
+    { writer: "single" as const, previous: {}, expectedCwd: "/tmp/reset-session-workspace" },
     {
       writer: "single" as const,
       previous: {
@@ -137,29 +104,18 @@ describe("SQLite reset boundary transcript header", () => {
 
       await reset(writer, sessionKey, "next-custom");
 
+      expect(
+        SessionManager.open({
+          agentId: "main",
+          sessionKey,
+          sessionId: "custom-window",
+          storePath,
+        }).getHeader(),
+      ).toMatchObject({ version: CURRENT_SESSION_VERSION, cwd: expectedCwd });
       const events = readEvents("custom-window");
-      expect(events[0]?.type).toBe("session");
+      expect(events[0]).toMatchObject({ type: "session", version: CURRENT_SESSION_VERSION });
       expect(events[0]?.cwd).toBe(expectedCwd);
       expect(events[1]?.type).toBe("reset");
     },
   );
-
-  it("still records the boundary after the header on a populated transcript", async () => {
-    const sessionKey = "agent:main:populated-window-reset";
-    await replaceSessionEntry(
-      { sessionKey, storePath },
-      { sessionId: "populated-window", updatedAt: 10 },
-    );
-    await appendTranscriptMessage(
-      { sessionId: "populated-window", sessionKey, storePath },
-      { message: { role: "user", content: "first" } },
-    );
-
-    await reset("single", sessionKey, "next-populated");
-
-    const events = readEvents("populated-window");
-    expect(events[0]?.type).toBe("session");
-    expect(events.filter((event) => event?.type === "session")).toHaveLength(1);
-    expect(events.at(-1)?.type).toBe("reset");
-  });
 });

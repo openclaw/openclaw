@@ -5,7 +5,6 @@ import { TLON_MEDIA_FETCH_TIMEOUTS } from "../media-fetch-timeouts.js";
 const MAX_IMAGES_PER_MESSAGE = 8;
 
 type ExtractedImages = { images: Array<{ url: string }>; unavailableCount: number };
-type DownloadedMedia = { localPath: string; contentType: string };
 type TlonInboundMedia = { path: string; contentType: string };
 type TlonInboundMediaDownload = { attachments: TlonInboundMedia[]; unavailableCount: number };
 
@@ -52,11 +51,7 @@ function extractImageBlocks(content: unknown): ExtractedImages {
   return { images, unavailableCount };
 }
 
-/**
- * Download a media file from URL to local storage.
- * Returns the local path where the file was saved.
- */
-async function downloadMedia(url: string, maxBytes?: number): Promise<DownloadedMedia | null> {
+async function downloadMedia(url: string, maxBytes?: number): Promise<TlonInboundMedia | null> {
   try {
     // Validate URL is http/https before fetching
     const parsedUrl = new URL(url);
@@ -73,7 +68,7 @@ async function downloadMedia(url: string, maxBytes?: number): Promise<Downloaded
       requestInit: { method: "GET" },
     });
     return {
-      localPath: saved.path,
+      path: saved.path,
       contentType: saved.contentType ?? "application/octet-stream",
     };
   } catch (error: unknown) {
@@ -97,10 +92,7 @@ export async function downloadMessageImages(
   for (const image of images) {
     const downloaded = await downloadMedia(image.url, maxBytes);
     if (downloaded) {
-      attachments.push({
-        path: downloaded.localPath,
-        contentType: downloaded.contentType,
-      });
+      attachments.push(downloaded);
     } else {
       unavailableCount++;
     }

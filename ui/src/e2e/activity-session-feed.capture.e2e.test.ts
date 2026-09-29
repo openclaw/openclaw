@@ -317,7 +317,7 @@ suite.define(() => {
         expect(response?.status()).toBe(200);
         const onlineToggle = page.getByRole("button", { name: "Online", exact: true });
         await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
-        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(4);
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(5);
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
           path: path.join(outputDir, "01-sidebar-online-default-open-light.png"),
@@ -331,10 +331,10 @@ suite.define(() => {
           .poll(() =>
             page.locator(".sidebar-online .viewer-facepile").getAttribute("data-viewer-count"),
           )
-          .toBe("4");
+          .toBe("5");
         await expect
           .poll(() => page.locator(".sidebar-online .viewer-avatar--overflow").textContent())
-          .toContain("+2");
+          .toContain("+3");
         await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
@@ -360,7 +360,7 @@ suite.define(() => {
         await onlineToggle.focus();
         await page.keyboard.press("Space");
         await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
-        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(4);
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(5);
         await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
         await page.locator(".sidebar").screenshot({
           animations: "disabled",

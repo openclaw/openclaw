@@ -609,7 +609,7 @@ export async function runGatewayLoop(params: {
       return timer;
     };
     const timer = arm(startupBudget.timeoutMs);
-    if (process.platform === "linux") {
+    if (process.platform === "linux" || process.platform === "darwin") {
       void resolveGatewayShutdownBudget(supervisorMode, gatewayLog, {
         previous: startupBudget,
         acceptedAtMs: pendingRequest.acceptedAtMs,
@@ -761,7 +761,7 @@ export async function runGatewayLoop(params: {
     }
 
     const completion = (async () => {
-      if (process.platform === "linux") {
+      if (process.platform === "linux" || process.platform === "darwin") {
         if (budget.nativeStopBudget && !getManagedUpdateOwner()) {
           armForceExitTimer(budget.timeoutMs);
         }

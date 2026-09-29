@@ -300,6 +300,7 @@ export const en = {
       accessQuestion: "How should I set things up?",
       aiAccessTitle: "AI access",
       appliedTitle: "Inference ready",
+      localSetupTitle: "Local setup",
       alreadySetUp: "Everything's already set up here — your AI just passed a fresh check.",
       applyFailedFallback:
         "Something went wrong while applying setup: {detail}\nLet's finish together in chat instead.",
@@ -1198,6 +1199,7 @@ export const en = {
       outroSeeded:
         "Onboarding complete. Web UI seeded in the background; open it anytime with the dashboard link above.",
       quickstartNodeRuntime: "QuickStart uses Node for the Gateway service (stable + supported).",
+      quickstartBunRuntime: "QuickStart uses Bun for the Gateway service.",
       reinstall: "Reinstall",
       rerunInstallDaemon: "Or rerun with: {command}",
       restart: "Restart",

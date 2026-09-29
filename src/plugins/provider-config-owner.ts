@@ -12,6 +12,15 @@ import {
   normalizePluginProviderBaseUrl,
 } from "./plugin-metadata-provider-facts.js";
 
+export function hasConfiguredModelProvider(params: {
+  provider: string;
+  config?: OpenClawConfig;
+}): boolean {
+  return (
+    findNormalizedProviderValue(params.config?.models?.providers, params.provider) !== undefined
+  );
+}
+
 /** Limits implicit catalogs to endpoints declared by their provider owner. */
 export function isProviderCatalogSourceAllowed(params: {
   provider: string;

@@ -312,18 +312,14 @@ function deriveWindowLabelFromTimestamps(record: Record<string, unknown>): strin
 
 function deriveWindowLabel(payload: Record<string, unknown>): string {
   const hours = pickNumber(payload, WINDOW_HOUR_KEYS);
-  if (hours && Number.isFinite(hours)) {
+  if (hours) {
     return `${hours}h`;
   }
   const minutes = pickNumber(payload, WINDOW_MINUTE_KEYS);
-  if (minutes && Number.isFinite(minutes)) {
+  if (minutes) {
     return `${minutes}m`;
   }
-  const fromTimestamps = deriveWindowLabelFromTimestamps(payload);
-  if (fromTimestamps) {
-    return fromTimestamps;
-  }
-  return "5h";
+  return deriveWindowLabelFromTimestamps(payload) ?? "5h";
 }
 
 function deriveUsedPercent(
@@ -379,11 +375,7 @@ function deriveUsedPercent(
 
   // usage_percent / usagePercent in MiniMax's API represents remaining quota,
   // not consumed quota. Invert to get usedPercent.
-  if (fromRemainingPercent !== null) {
-    return fromRemainingPercent;
-  }
-
-  return null;
+  return fromRemainingPercent;
 }
 
 function hasModelUsageEvidence(record: Record<string, unknown>): boolean {
@@ -395,9 +387,7 @@ function hasModelUsageEvidence(record: Record<string, unknown>): boolean {
 }
 
 function isChatModelUsageRecord(record: Record<string, unknown>): boolean {
-  const name = normalizeLowercaseStringOrEmpty(
-    typeof record.model_name === "string" ? record.model_name : "",
-  );
+  const name = normalizeLowercaseStringOrEmpty(record.model_name);
   return name === "general" || name.startsWith("minimax-m");
 }
 
@@ -416,10 +406,6 @@ function isBoundedModelUsageRecord(record: Record<string, unknown>): boolean {
 // with authoritative percentage fields. Prefer that owner before status-based fallbacks.
 function pickChatModelRemains(modelRemains: unknown[]): Record<string, unknown> | undefined {
   const records = modelRemains.filter(isRecord).filter(hasModelUsageEvidence);
-  if (records.length === 0) {
-    return undefined;
-  }
-
   return (
     records.find(isChatModelUsageRecord) ?? records.find(isBoundedModelUsageRecord) ?? records[0]
   );
@@ -435,61 +421,51 @@ function pickEpoch(record: Record<string, unknown>, keys: readonly string[]): nu
   return undefined;
 }
 
-function shouldExposeMinimaxWindow(
-  record: Record<string, unknown>,
-  statusKeys: readonly string[],
-): boolean {
-  // MiniMax status 3 is unlimited. UsageWindow cannot represent infinity, so a 0%-used
-  // bounded bar would be misleading; legacy rows without status remain visible.
-  return pickNumber(record, statusKeys) !== 3;
-}
-
 function deriveMinimaxModelWindows(record: Record<string, unknown>): {
   recognized: boolean;
   windows: UsageWindow[];
 } {
   const windows: UsageWindow[] = [];
-  const currentUsedPercent = deriveUsedPercent(record, {
-    total: CURRENT_INTERVAL_TOTAL_KEYS,
-    used: NO_USAGE_KEYS,
-    remaining: CURRENT_INTERVAL_REMAINING_KEYS,
-    percent: NO_USAGE_KEYS,
-    remainingPercent: CURRENT_INTERVAL_REMAINING_PERCENT_KEYS,
-    remainingPercentUnit: "percent",
-    preferRemainingPercent: true,
-  });
-  if (
-    currentUsedPercent !== null &&
-    shouldExposeMinimaxWindow(record, CURRENT_INTERVAL_STATUS_KEYS)
-  ) {
-    windows.push({
-      label: deriveWindowLabel(record),
-      usedPercent: currentUsedPercent,
-      resetAt: pickEpoch(record, ["end_time", "endTime"]),
-    });
-  }
-
-  const weeklyUsedPercent = deriveUsedPercent(record, {
-    total: CURRENT_WEEKLY_TOTAL_KEYS,
-    used: NO_USAGE_KEYS,
-    remaining: CURRENT_WEEKLY_REMAINING_KEYS,
-    percent: NO_USAGE_KEYS,
-    remainingPercent: CURRENT_WEEKLY_REMAINING_PERCENT_KEYS,
-    remainingPercentUnit: "percent",
-    preferRemainingPercent: true,
-  });
-  if (weeklyUsedPercent !== null && shouldExposeMinimaxWindow(record, CURRENT_WEEKLY_STATUS_KEYS)) {
-    windows.push({
+  let recognized = false;
+  for (const window of [
+    {
+      total: CURRENT_INTERVAL_TOTAL_KEYS,
+      remaining: CURRENT_INTERVAL_REMAINING_KEYS,
+      remainingPercent: CURRENT_INTERVAL_REMAINING_PERCENT_KEYS,
+      status: CURRENT_INTERVAL_STATUS_KEYS,
+      reset: ["end_time", "endTime"],
+    },
+    {
       label: "Week",
-      usedPercent: weeklyUsedPercent,
-      resetAt: pickEpoch(record, ["weekly_end_time", "weeklyEndTime"]),
+      total: CURRENT_WEEKLY_TOTAL_KEYS,
+      remaining: CURRENT_WEEKLY_REMAINING_KEYS,
+      remainingPercent: CURRENT_WEEKLY_REMAINING_PERCENT_KEYS,
+      status: CURRENT_WEEKLY_STATUS_KEYS,
+      reset: ["weekly_end_time", "weeklyEndTime"],
+    },
+  ]) {
+    const usedPercent = deriveUsedPercent(record, {
+      ...window,
+      used: NO_USAGE_KEYS,
+      percent: NO_USAGE_KEYS,
+      remainingPercentUnit: "percent",
+      preferRemainingPercent: true,
+    });
+    if (usedPercent === null) {
+      continue;
+    }
+    recognized = true;
+    // Status 3 is unlimited: recognize the model without exposing a bounded bar.
+    if (pickNumber(record, window.status) === 3) {
+      continue;
+    }
+    windows.push({
+      label: window.label ?? deriveWindowLabel(record),
+      usedPercent,
+      resetAt: pickEpoch(record, window.reset),
     });
   }
-
-  return {
-    recognized: currentUsedPercent !== null || weeklyUsedPercent !== null,
-    windows,
-  };
+  return { recognized, windows };
 }
 
 function resolveMinimaxUsageUrl(baseUrl?: string): string {

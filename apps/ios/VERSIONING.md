@@ -44,8 +44,15 @@ exact versions again; all future uploads use the appended single-digit format.
 
 ## Release commands
 
-Run **iOS Store Release** in GitHub Actions from `main`, or use the same release entry
-point from a clean local `main` checkout that matches `origin/main`:
+Run **iOS Store Release** in GitHub Actions from `main` with the default **release**
+operation. With the GitHub CLI:
+
+```bash
+gh workflow run ios-store-release.yml --ref main
+```
+
+Or use the same release entry point from a clean local `main` checkout that matches
+`origin/main`:
 
 ```bash
 pnpm ios:release:upload

@@ -4,6 +4,7 @@ import {
   formatNodeRunnerUpdateRequired,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+  NODE_WORKER_STATUS_WAIT_VERSION,
   NODE_WORKER_PREPARED_WORKSPACE_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   resolveNodeWorkerExecutionIssue,
@@ -12,6 +13,7 @@ import {
   type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { availableWorkerSlots } from "../shared/node-list-parse.js";
 import type { NodeWorkerBundleStatus } from "../shared/node-list-types.js";
 
 type NodeWorkerHostClientId =
@@ -216,26 +218,6 @@ export function collectNodeRunnerCatalogState(params: {
   return { sessionHostNodeIds, issuesByNodeId, workerSlotsByNodeId, workerBundleByNodeId };
 }
 
-export function sameNodeWorkerHostDeclaration(
-  left: NodeWorkerHostDeclaration | undefined,
-  right: NodeWorkerHostDeclaration | undefined,
-): boolean {
-  return (
-    left?.enabled === right?.enabled &&
-    (left?.enabled !== true ||
-      (right?.enabled === true &&
-        left.capacity.total === right.capacity.total &&
-        left.capacity.available === right.capacity.available &&
-        left.bundlePrewarm === right.bundlePrewarm &&
-        left.bundleRetention === right.bundleRetention &&
-        left.bundleStatus === right.bundleStatus &&
-        left.portalStream === right.portalStream &&
-        left.environmentSession === right.environmentSession &&
-        left.preparedWorkspace === right.preparedWorkspace &&
-        left.capturedExecPolicy === right.capturedExecPolicy))
-  );
-}
-
 export function resolveNodeWorkerSupervisorProof(
   node: NodeRunnerRegistrySession,
   runnerInventoryByConn: ReadonlyMap<string, NodeRunnerInventoryRecord>,
@@ -268,6 +250,9 @@ export function resolveNodeWorkerSupervisorProof(
     workerHost: {
       ...declaration.workerHost,
       capacity: { ...declaration.workerHost.capacity },
+      ...(declaration.workerHost.launchToolNames !== undefined
+        ? { launchToolNames: [...declaration.workerHost.launchToolNames] }
+        : {}),
     },
     commands: [...node.commands],
   };
@@ -302,6 +287,7 @@ export function isNodeWorkerSupervisorProofCurrent(
     launchEligibility?: boolean;
     commands?: readonly string[];
     environmentSession?: boolean;
+    statusWait?: boolean;
     preparedWorkspace?: boolean;
     capturedExecPolicy?: boolean;
   } = {},
@@ -316,9 +302,11 @@ export function isNodeWorkerSupervisorProofCurrent(
     current.clientId === proof.clientId &&
     current.clientMode === proof.clientMode &&
     current.protocolFeature === proof.protocolFeature &&
-    (!requirements.launchEligibility || current.workerHost.capacity.available > 0) &&
+    (!requirements.launchEligibility || availableWorkerSlots(current.workerHost.capacity) > 0) &&
     (!requirements.environmentSession ||
       current.workerHost.environmentSession === NODE_WORKER_ENVIRONMENT_SESSION_VERSION) &&
+    (!requirements.statusWait ||
+      current.workerHost.statusWait === NODE_WORKER_STATUS_WAIT_VERSION) &&
     (!requirements.preparedWorkspace ||
       current.workerHost.preparedWorkspace === NODE_WORKER_PREPARED_WORKSPACE_VERSION) &&
     (!requirements.capturedExecPolicy || !resolveNodeWorkerExecutionIssue(current.workerHost)) &&

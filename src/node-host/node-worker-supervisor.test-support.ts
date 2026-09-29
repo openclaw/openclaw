@@ -5,12 +5,12 @@ import {
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerLaunchPlan } from "../worker/launch-descriptor.js";
-import { nodeWorkerPlanHash } from "../worker/node-supervisor-protocol.js";
+import {
+  nodeWorkerPlanHash,
+  type NodeWorkerLaunchInput,
+  type NodeWorkerSupervisorIdentity,
+} from "../worker/node-supervisor-protocol.js";
 import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
-import type {
-  NodeWorkerLaunchInput,
-  NodeWorkerSupervisorIdentity,
-} from "./node-worker-supervisor-contract.js";
 
 const TEST_BUNDLE_HASH = "a".repeat(64);
 export const TEST_WORKER_CREDENTIAL = 'node worker/"credential\\secret?';

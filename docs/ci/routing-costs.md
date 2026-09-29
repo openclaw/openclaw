@@ -156,8 +156,8 @@ That chain spends 130 seconds in hosted queueing, two in creation, 632 executing
 and 16 in Blacksmith queueing. No test depends on the artifact build in either
 chain. Changing matrix shape would not remove the gate's serial queue.
 
-Trusted hybrid first attempts therefore request the 16-class for the heavier
-first packed core-lint row, the 8-class for the second, and the 4-class for the gate. The logical lint partitions, single
+Trusted hybrid first attempts therefore request the 16-class for both
+packed core-lint rows and the 4-class for the gate. The logical lint partitions, single
 lint thread, extension-lint rows, main parity slots,
 workflow dependencies, and deadlines stay unchanged. Hosted remains the route
 for independent cheap work. RunsOn's cron evidence does not qualify lint or a
@@ -169,12 +169,14 @@ their execution slack without changing API deadlines or test coverage.
 The first native candidate used the 8-class for both lint rows. Its PR run
 `35813098351` passed in 785 seconds, but core lint 1 took 621 seconds (568 in
 lint itself), versus the 398-second hosted baseline (350 in lint). Core lint 2
-took 353 seconds versus 323 hosted. Retaining four actual CPUs only for the
-heavier row avoids spending the queue saving on slower execution. At the
+took 353 seconds versus 323 hosted. That revision retained four actual CPUs only for the
+heavier row to avoid spending the queue saving on slower execution. At the
 historical list rates and old hosted runtimes held constant, the 16/8 split
 costs about $0.2984 instead of $0.1923 for two 8-class rows. These unrounded
 estimates exclude minimum billing and ancillary charges; native measurements,
 rather than that forecast, own the final cost and wall comparison.
+
+The second packed row later exhausted its 15-minute limit in run `36422187813`. A controlled four-CPU, 16-GiB-capped lease completed its unchanged stripes 3, 4, and 5 in 137.37 seconds with the existing larger-runner Go policy. Both rows now request the 16-class. The promotion adds no jobs or registrations; at the full 15-minute deadline, the second row adds at most 120 class-vCPU-minutes versus the 8-class. The lease measurement is not a native CI timing result.
 
 The revised PR run `35814962786` measured core lint 1 at 275 seconds on the
 16-class and core lint 2 at 385 seconds on the 8-class. The heavier row's

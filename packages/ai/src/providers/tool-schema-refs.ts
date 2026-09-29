@@ -190,37 +190,21 @@ function inlineLocalSchemaRefsWithDefs(
     if (key === "$defs" || key === "definitions" || key === "components") {
       continue;
     }
-    if (SCHEMA_LITERAL_KEYS.has(key)) {
-      setOwnSchemaProperty(result, key, value);
-      continue;
-    }
+    let next = value;
     if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
       const entries = Object.entries(value);
       for (const entry of entries) {
         entry[1] = inlineLocalSchemaRefsWithDefs(entry[1], nextDefs, refStack, state, rootDocument);
       }
-      setOwnSchemaProperty(result, key, Object.fromEntries(entries));
-      continue;
-    }
-    if (SCHEMA_OBJECT_KEYS.has(key) && isSchemaRecord(value)) {
-      setOwnSchemaProperty(
-        result,
-        key,
-        inlineLocalSchemaRefsWithDefs(value, nextDefs, refStack, state, rootDocument),
+      next = Object.fromEntries(entries);
+    } else if (SCHEMA_OBJECT_KEYS.has(key) && isSchemaRecord(value)) {
+      next = inlineLocalSchemaRefsWithDefs(value, nextDefs, refStack, state, rootDocument);
+    } else if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
+      next = value.map((entry) =>
+        inlineLocalSchemaRefsWithDefs(entry, nextDefs, refStack, state, rootDocument),
       );
-      continue;
     }
-    if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
-      setOwnSchemaProperty(
-        result,
-        key,
-        value.map((entry) =>
-          inlineLocalSchemaRefsWithDefs(entry, nextDefs, refStack, state, rootDocument),
-        ),
-      );
-      continue;
-    }
-    setOwnSchemaProperty(result, key, value);
+    setOwnSchemaProperty(result, key, next);
   }
   if (state.unresolvedLocalRefs) {
     if ("$defs" in obj) {

@@ -10,7 +10,7 @@ import { isPerAgentSessionStoreConfig } from "../../config/sessions/session-stor
 import { resolvePersistedSessionStoreOwner } from "../../config/sessions/session-store-owner.js";
 import { listConfiguredSessionStoreAgentIds } from "../../config/sessions/targets-configured-agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveGatewayAuthPolicyGeneration } from "../auth-policy.js";
+import { captureGatewayAuthPolicy, isGatewayAuthPolicyCurrent } from "../auth-policy.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import {
@@ -32,7 +32,6 @@ function captureApprovalConfigPolicy(config: OpenClawConfig) {
   const compatibilityAgent = resolveSessionStoreCompatibilityAgentId(config);
   const storeAgents = [...new Set([...configuredStores, compatibilityAgent])].toSorted();
   return {
-    authentication: resolveGatewayAuthPolicyGeneration(config),
     routing: resolveSessionRoutingContract(config),
     storeOwner: resolvePersistedSessionStoreOwner(config),
     compatibilityAgent,
@@ -66,7 +65,9 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
   const resolveGatewayContext = options.context.resolveGatewayContext;
   const gatewayContext = resolveGatewayContext?.() ?? options.context;
   const getConfig = readCommittedConfig ?? readRuntimeConfig;
-  const configPolicy = captureApprovalConfigPolicy(getConfig());
+  const config = getConfig();
+  const authPolicy = client?.authPolicy ?? captureGatewayAuthPolicy(config, null);
+  const configPolicy = captureApprovalConfigPolicy(config);
   const accessRevision = readGatewayAccessRevision();
   let configRevoked = false;
   let closed = false;
@@ -76,7 +77,10 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
     }
     try {
       // Observe every committed transition, including revoke/restore between two checks.
-      configRevoked = !isDeepStrictEqual(configPolicy, captureApprovalConfigPolicy(getConfig()));
+      const current = getConfig();
+      configRevoked =
+        !isGatewayAuthPolicyCurrent(authPolicy, current) ||
+        !isDeepStrictEqual(configPolicy, captureApprovalConfigPolicy(current));
     } catch {
       configRevoked = true;
     }

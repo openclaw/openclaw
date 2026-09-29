@@ -57,7 +57,6 @@ import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts
 import {
   renderBrowserTabPreviews,
   renderToolCard,
-  shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
 } from "./chat-tool-cards.ts";
 import { renderToolOutcomeSummary } from "./chat-tool-outcome-summary.ts";
@@ -308,11 +307,7 @@ export function renderActivityGroup(
         aria-controls=${activityBodyId}
         @pointerenter=${syncToolDisclosureOverflow}
         @focus=${syncToolDisclosureOverflow}
-        @click=${(event: MouseEvent) => {
-          if (shouldToggleSelectableDisclosure(event)) {
-            opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded);
-          }
-        }}
+        @click=${() => opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded)}
       >
         <span class="chat-activity-group__icon">${icons.listTree}</span>
         <span class="chat-tool-disclosure__content">
@@ -424,7 +419,7 @@ export function resolveMessageGroupSenderLabel(
   return normalizedRole === "user"
     ? isOwnSenderGroup(group, opts.userId)
       ? resolvedUserName
-      : (userLabel ?? resolvedUserName)
+      : (userLabel ?? t("chat.messages.unattributedSender"))
     : normalizedRole === "assistant"
       ? (userLabel ?? opts.assistantName ?? "Assistant")
       : normalizedRole === "tool"
@@ -468,17 +463,18 @@ export function renderMessageGroupContent(group: MessageGroup, opts: RenderMessa
 export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
   const sourceOnly = isSourceOnlyUserGroup(group);
+  const showAvatar =
+    normalizedRole !== "user" || Boolean(group.sender || group.senderLabel?.trim());
   const assistantName = opts.assistantName ?? "Assistant";
+  const isOwnGroup = isOwnSenderGroup(group, opts.userId);
   const isPeerGroup =
-    normalizedRole === "user" &&
-    Boolean(opts.userId && group.sender) &&
-    !isOwnSenderGroup(group, opts.userId);
+    normalizedRole === "user" && Boolean(opts.userId && group.sender) && !isOwnGroup;
   const forwardedSource = hasForwardedSource(group);
   const isForwarded = normalizedRole === "assistant" && forwardedSource;
   const showSenderName =
     !isForwarded &&
     !sourceOnly &&
-    (normalizedRole !== "user" || isPeerGroup || opts.showOwnSenderName !== false);
+    (normalizedRole !== "user" || !isOwnGroup || opts.showOwnSenderName !== false);
   const visibleSources = group.sourceClients?.filter(
     (source) => gatewayClientKind(source) !== "web",
   );
@@ -568,7 +564,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     avatarPlacement === "gutter" &&
     Boolean(preparedMessages[lastMessageIndex]?.source.displayMarkdown);
   const avatar =
-    !sourceOnly &&
+    showAvatar &&
     !isTurnBlock &&
     avatarPlacement === "gutter" &&
     (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
@@ -582,7 +578,10 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               avatar: opts.assistantAvatar ?? null,
               textAvatar: opts.assistantTextAvatar,
             },
-            { name: opts.userName ?? null, avatar: opts.userAvatar ?? null },
+            // Missing historical attribution is not evidence that the viewer sent it.
+            isOwnGroup
+              ? { name: opts.userName ?? null, avatar: opts.userAvatar ?? null }
+              : undefined,
             group.sender,
           )
       : nothing;
@@ -672,7 +671,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                 ${isPeerGroup ? nothing : userFooterActions}
                 <div class="chat-group-footer__meta">
                   ${
-                    normalizedRole === "user" && !sourceOnly && avatarPlacement === "footer"
+                    normalizedRole === "user" && showAvatar && avatarPlacement === "footer"
                       ? renderChatAuthorAvatar(group.sender)
                       : nothing
                   }

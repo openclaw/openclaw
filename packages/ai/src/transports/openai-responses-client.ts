@@ -383,6 +383,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         );
         const responseModelTracker = createResponseModelTracker(isOpenAICodexResponsesModel(model));
         let continuationBaseline: ResponsesContinuationRequest | undefined;
+        let dispatchedPreviousResponseId: string | undefined;
         let contextUsageEligible = true;
         const createSseStream = async (
           initialRequest = (continuationClaim?.request ?? params) as typeof params,
@@ -404,6 +405,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             canRetryStream: () => output.content.length === 0,
             wrapStream: ({ stream: rawResponseStream, response, attempt }) => {
               contextUsageEligible &&= attempt.kind === "initial";
+              dispatchedPreviousResponseId = attempt.request.previous_response_id;
               continuationBaseline = attempt.request.previous_response_id
                 ? (params as ResponsesContinuationRequest)
                 : (attempt.request as ResponsesContinuationRequest);
@@ -603,7 +605,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             );
           }
           if (continuationClaim && continuationBaseline && terminal) {
-            continuationClaim.commit(continuationBaseline, terminal);
+            continuationClaim.commit(continuationBaseline, terminal, dispatchedPreviousResponseId);
           }
           if (terminal && admitted && contextUsageEligible) {
             recordResponsesContextUsage(

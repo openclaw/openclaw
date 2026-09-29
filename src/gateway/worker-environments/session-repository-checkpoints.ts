@@ -16,6 +16,7 @@ import {
   requireWorkspaceResultGit,
   updateWorkspaceResultRefs,
   withWorkspaceResultRefMutation,
+  workspaceResultCheckpointInitArgs,
 } from "./workspace-result-git.js";
 import type { StagedWorkerArtifactInventory } from "./workspace-result-inventory.js";
 import {
@@ -285,7 +286,7 @@ export async function stageSessionRepositoryCheckpoint(
   assertRevision();
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
   assertRevision();
-  await requireWorkspaceResultGit(root, ["init", "--quiet", "--bare", "--object-format=sha1"]);
+  await requireWorkspaceResultGit(root, workspaceResultCheckpointInitArgs());
   assertRevision();
   let discardPromise: Promise<void> | undefined;
   const discard = () => {

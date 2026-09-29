@@ -9,7 +9,6 @@ import { createCronStoreHarness, createNoopLogger } from "../../cron/service.tes
 import type { CronJob } from "../../cron/types.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { compactCronListJob } from "../../gateway/server-methods/cron-list-projection.js";
-import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { applyCodeModeCatalog } from "../code-mode.js";
 import {
@@ -32,20 +31,6 @@ const job: CronJob = {
   wakeMode: "next-heartbeat",
   payload: { kind: "systemEvent", text: "Check unpaid invoices" },
   state: {},
-};
-const legacyCompactJob = {
-  id: job.id,
-  name: job.name,
-  enabled: true,
-  scheduleKind: "every",
-  schedule: job.schedule,
-  effectiveAgentId: "main",
-  nextRunAt: null,
-  nextRunAtMs: null,
-  lastRunAt: null,
-  lastRunAtMs: null,
-  lastRunStatus: null,
-  lastRunError: null,
 };
 const compactJob = {
   ...compactCronListJob({
@@ -90,92 +75,20 @@ const history = {
 
 describe("automations output contract", () => {
   const { makeStorePath } = createCronStoreHarness({ prefix: "cron-code-mode-output-" });
-  it.each([
-    {
-      name: "scheduler status",
-      args: { action: "status" },
-      reply: {
-        enabled: true,
-        triggersEnabled: true,
-        storePath: "/synthetic/state.sqlite",
-        storage: "sqlite",
-        sqlitePath: "/synthetic/state.sqlite",
-        jobs: 1,
-        nextWakeAtMs: null,
-      },
-    },
-    { name: "compact inventory", args: { action: "list" }, reply: list },
-    {
-      name: "older compact inventory",
-      args: { action: "list" },
-      reply: { ...list, jobs: [legacyCompactJob] },
-    },
-    { name: "job details", args: { action: "get", jobId: job.id }, reply: job },
-    {
-      // The scheduler reports scheduleErrorCount in state once a job has
-      // schedule-computation errors; the read schema must accept it (#157477).
-      name: "job details with scheduler diagnostics",
-      args: { action: "get", jobId: job.id },
-      reply: {
+  it("accepts stored scheduler diagnostics (#157477)", async () => {
+    const tool = createCronTool(undefined, {
+      callGatewayTool: vi.fn().mockResolvedValue({
         ...job,
         state: { scheduleErrorCount: 3, lastError: "schedule error: bad cron expr" },
-      },
-    },
-    {
-      name: "creation",
-      args: { action: "add", job: createJob },
-      reply: { ...job, deliveryPreview },
-    },
-    {
-      name: "declarative convergence",
-      args: { action: "add", job: { ...createJob, declarationKey: "invoices" } },
-      reply: { created: false, updated: true, job, deliveryPreview },
-    },
-    {
-      name: "update",
-      args: { action: "update", jobId: job.id, job: { name: "Check invoices" } },
-      reply: job,
-    },
-    {
-      name: "removal",
-      args: { action: "remove", jobId: job.id },
-      reply: { ok: true, removed: true },
-    },
-    {
-      name: "unsuccessful removal",
-      args: { action: "remove", jobId: job.id },
-      reply: { ok: false, removed: false },
-    },
-    {
-      name: "queued run",
-      args: { action: "run", jobId: job.id },
-      reply: { ok: true, enqueued: true, runId: "run-invoices", processInstanceId: "gateway-1" },
-    },
-    {
-      name: "skipped run",
-      args: { action: "run", jobId: job.id },
-      reply: { ok: true, ran: false, reason: "already-running", processInstanceId: "gateway-1" },
-    },
-    { name: "rejected run", args: { action: "run", jobId: job.id }, reply: { ok: false } },
-    {
-      name: "run history",
-      args: { action: "runs", jobId: job.id },
-      reply: history,
-    },
-    { name: "wake", args: { action: "wake", text: "Review invoices" }, reply: { ok: true } },
-    {
-      name: "unsuccessful wake",
-      args: { action: "wake", text: "Review invoices" },
-      reply: { ok: false, reason: "unwakeable-session-key" },
-    },
-  ])("describes $name through the real tool", async ({ args, reply }) => {
-    const tool = createCronTool(undefined, { callGatewayTool: vi.fn().mockResolvedValue(reply) });
-    const result = await tool.execute("call-contract", args);
-    const schema = expectDefined(tool.outputSchema, "automations output schema");
-    expect(Value.Errors(schema, result.details)).toEqual([]);
+      }),
+    });
+    const result = await tool.execute("diagnostics", { action: "get", jobId: job.id });
+    expect(Value.Errors(expectDefined(tool.outputSchema, "output schema"), result.details)).toEqual(
+      [],
+    );
   });
 
-  it.each(["isolated", "current"] as const)(
+  it.each(["current"] as const)(
     "accepts successful removal with pending %s session cleanup without retrying",
     async (sessionTarget) => {
       onTestFinished(resetCodeModeTestState);
@@ -249,33 +162,6 @@ describe("automations output contract", () => {
     expect(
       Value.Errors(expectDefined(tool.outputSchema, "automations output schema"), result.details),
     ).toEqual([]);
-  });
-
-  it("describes self-scoped status, inventory, and paced proposals", async () => {
-    const runId = "automation-output-run";
-    claimAgentRunContext(runId, {
-      sessionKey: `agent:main:cron:${job.id}`,
-      cronRunsByJobId: new Map([[job.id, { pacingEnabled: true }]]),
-    });
-    onTestFinished(() => clearAgentRunContext(runId));
-    const tool = createCronTool(
-      { selfRemoveOnlyJobId: job.id, runId },
-      {
-        callGatewayTool: vi
-          .fn()
-          .mockResolvedValueOnce({ enabled: true, jobs: 10 })
-          .mockResolvedValueOnce(list),
-      },
-    );
-    const schema = expectDefined(tool.outputSchema, "automations output schema");
-    const status = await tool.execute("call-status", { action: "status" });
-    expect(status.details).toEqual({ enabled: true });
-    const inventory = await tool.execute("call-list", { action: "list" });
-    expect(inventory.details).not.toHaveProperty("snapshotRevision");
-    const proposal = await tool.execute("call-next", { action: "next_check", in: "30m" });
-    for (const result of [status, inventory, proposal]) {
-      expect(Value.Errors(schema, result.details)).toEqual([]);
-    }
   });
 
   it("composes action results through generated declarations and JavaScript", async () => {

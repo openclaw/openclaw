@@ -12,9 +12,7 @@ import {
 } from "./runtime.js";
 import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 
-export function getActiveRuntimePluginRegistry(): PluginRegistry | null {
-  return getActivePluginRegistry();
-}
+export { getActivePluginRegistry as getActiveRuntimePluginRegistry } from "./runtime.js";
 
 /** Return the exact active registry without triggering a fresh load on cache miss. */
 export function resolveCompatibleRuntimePluginRegistry(
