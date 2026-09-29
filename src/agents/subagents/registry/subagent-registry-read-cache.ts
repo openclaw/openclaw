@@ -17,6 +17,7 @@ import {
   getActiveOpenClawStateDatabaseReadSnapshot,
 } from "../../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
+import type { OpenClawStateReadCommand } from "../../../state/openclaw-state-read.types.js";
 import {
   captureOpenClawStateReadContext,
   captureOpenClawStateWorkerContext,
@@ -53,6 +54,7 @@ type SubagentRunsCacheState<T extends SubagentRunReadRecord> = (
     promise: Promise<void>;
     ownerAbortSignal?: AbortSignal;
     cleanCancellation?: boolean;
+    committedRevision?: number;
   };
 };
 
@@ -143,7 +145,7 @@ export function retainUnpublishedSubagentChanges<T>(
 }
 
 /** Selecting a read must not consume another database owner's publication. */
-function selectSubagentCacheStateForRead<T extends SubagentRunReadRecord>(
+export function selectSubagentCacheStateForRead<T extends SubagentRunReadRecord>(
   state: SubagentRunsCacheState<T>,
   context?: OpenClawStateReadContext,
 ): SubagentRunsCacheState<T> {
@@ -204,6 +206,9 @@ export function rememberSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
     sourceIdentity: admission?.identity.key ?? retiredPublicationIdentity?.key,
     retiredPublicationIdentity,
   };
+  if (committed && previous.pending?.committedRevision !== undefined) {
+    previous.pending.committedRevision += 1;
+  }
   const snapshot = previous.snapshot;
   if (!changedRunIds) {
     cache.state = {
@@ -423,7 +428,7 @@ export async function readCompactSubagentRuns(context: OpenClawStateWorkerContex
 
 export async function readFullSubagentRuns(
   context: OpenClawStateWorkerContext,
-  scope: { kind: "session"; sessionKey: string } | { kind: "ids"; runIds: readonly string[] },
+  scope: Extract<OpenClawStateReadCommand, { type: "subagents.runs" }>["scope"],
   options: { current?: boolean } = {},
 ) {
   if (scope.kind === "ids" && scope.runIds.length === 0) {
@@ -439,7 +444,7 @@ export async function readFullSubagentRuns(
   if (!reply) {
     return new Map<string, SubagentRunRecord>();
   }
-  if (!reply.ok || reply.type !== "subagents.runs") {
+  if (!reply.ok || reply.type !== "subagents.runs" || reply.projection === "maintenance") {
     throw new Error("Unexpected subagent registry read result");
   }
   return reply.runs;
@@ -560,6 +565,57 @@ export async function prepareSubagentRunsCache<T extends SubagentRunReadRecord>(
   }
 }
 
+/** Restore consumes durable rows before another host publication can overtake the accepted read. */
+export async function consumeFreshSubagentRuns<T>(
+  cache: SubagentRunsCache<SubagentRunRecord>,
+  context: OpenClawStateWorkerContext,
+  consume: (runs: Map<string, SubagentRunRecord>) => T,
+): Promise<T> {
+  assertSubagentReadContext(context);
+  while (cache.state.pending) {
+    await cache.state.pending.promise;
+    assertSubagentReadContext(context);
+  }
+  const previous = selectSubagentCacheStateForRead(cache.state, context);
+  const state = {
+    ...previous,
+    admission: captureSubagentFactsAdmission(context.admission.databasePath),
+    sourceIdentity: context.admission.identity.key,
+  };
+  cache.state = state;
+  let result: T;
+  const fill: NonNullable<SubagentRunsCacheState<SubagentRunRecord>["pending"]> = {
+    committedRevision: 0,
+    promise: Promise.resolve().then(async () => {
+      while (true) {
+        assertSubagentReadContext(context);
+        const revision = fill.committedRevision;
+        const runs = await readFullSubagentRuns(context, { kind: "all" }, { current: true });
+        assertSubagentReadContext(context);
+        if (cache.state.pending !== fill) {
+          throw new Error("Subagent restore lost its accepted read owner");
+        }
+        if (revision !== fill.committedRevision) {
+          continue;
+        }
+        // A committed deletion invalidates the read above; unpublished projections never
+        // supply canonical rows. Consume and publish without another asynchronous boundary.
+        result = consumeSubagentRuns(runs, () => consume(runs));
+        return;
+      }
+    }),
+  };
+  state.pending = fill;
+  try {
+    await fill.promise;
+    return result!;
+  } finally {
+    if (cache.state.pending === fill) {
+      cache.state.pending = undefined;
+    }
+  }
+}
+
 export function acceptedFullSnapshot(
   cache: SubagentRunsCache<SubagentRunRecord>,
   context: OpenClawStateWorkerContext,
@@ -594,9 +650,20 @@ export function mergeSelectedFullRuns(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   persisted: Map<string, SubagentRunRecord>,
   matches: (entry: SubagentRunReadRecord) => boolean,
-  { context, runIds }: { context?: OpenClawStateWorkerContext; runIds?: ReadonlySet<string> } = {},
+  {
+    context,
+    runIds,
+    freshPersisted = false,
+  }: {
+    context?: OpenClawStateWorkerContext;
+    runIds?: ReadonlySet<string>;
+    freshPersisted?: boolean;
+  } = {},
 ): Map<string, SubagentRunRecord> {
-  const current = context ? acceptedFullSnapshot(cache, context) : undefined;
+  const current =
+    context && (!freshPersisted || cache.state.replacementPending)
+      ? acceptedFullSnapshot(cache, context)
+      : undefined;
   const merged = new Map<string, SubagentRunRecord>();
   for (const [runId, entry] of selectedEntries(current ?? persisted, runIds)) {
     if (matches(entry)) {
@@ -613,7 +680,12 @@ export function mergeSelectedFullRuns(
     state.sourceIdentity === context.admission.identity.key &&
     matchesSubagentCacheAdmission(state.admission, context.admission)
   ) {
-    for (const [runId, { entry }] of state.changes ? selectedEntries(state.changes, runIds) : []) {
+    for (const [runId, { entry, committed }] of state.changes
+      ? selectedEntries(state.changes, runIds)
+      : []) {
+      if (freshPersisted && committed) {
+        continue;
+      }
       if (entry && matches(entry)) {
         merged.set(runId, structuredClone(entry));
       } else {

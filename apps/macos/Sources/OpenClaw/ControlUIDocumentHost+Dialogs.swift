@@ -20,7 +20,7 @@ extension ControlUIDocumentHost {
         completionHandler(Self.javaScriptConfirmResult(for: alert.runModal()))
     }
 
-    func openPanel(
+    static func openPanel(
         parameters: WKOpenPanelParameters,
         parent: NSWindow?,
         completionHandler: @escaping @MainActor @Sendable ([URL]?) -> Void)

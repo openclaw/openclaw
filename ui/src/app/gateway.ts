@@ -33,6 +33,7 @@ export type ApplicationGatewaySnapshot = {
   sessionKey: string;
   lastError: string | null;
   lastErrorCode: string | null;
+  reconnectAt?: number;
   lastErrorAuthReason?: string | null;
   /** This connection owns its identity; users.self resolves the canonical profile. */
   selfUser?: AuthenticatedUser | null;

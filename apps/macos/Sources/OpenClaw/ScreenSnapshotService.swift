@@ -86,21 +86,15 @@ final class ScreenSnapshotService {
         }
 
         let bitmap = NSBitmapImageRep(cgImage: cgImage)
-        let data: Data
-        switch format {
-        case .png:
-            guard let encoded = bitmap.representation(using: .png, properties: [:]) else {
-                throw ScreenSnapshotError.encodeFailed("png encode failed")
-            }
-            data = encoded
-        case .jpeg:
-            guard let encoded = bitmap.representation(
-                using: .jpeg,
-                properties: [.compressionFactor: normalized.quality])
-            else {
-                throw ScreenSnapshotError.encodeFailed("jpeg encode failed")
-            }
-            data = encoded
+        let encoding: (NSBitmapImageRep.FileType, [NSBitmapImageRep.PropertyKey: Any]) = switch format {
+        case .png: (.png, [:])
+        case .jpeg: (.jpeg, [.compressionFactor: normalized.quality])
+        }
+        guard let data = bitmap.representation(
+            using: encoding.0,
+            properties: encoding.1)
+        else {
+            throw ScreenSnapshotError.encodeFailed("\(format.rawValue) encode failed")
         }
 
         return ScreenSnapshotResult(

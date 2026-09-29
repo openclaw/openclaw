@@ -1,0 +1,97 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { getTrackedWorkerLifecycleSnapshot } from "../infra/worker-cpu.js";
+import {
+  captureOpenClawStateDatabaseReadAdmission,
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
+} from "./openclaw-state-db-cache.js";
+import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
+
+const root = process.argv[2] ?? "";
+assert(root);
+assert(process.versions.bun);
+ensureSqliteLibrarySelected();
+const filename = path.join(root, "state.sqlite");
+const privateLocation = path.join(root, "private.sqlite");
+for (const location of [filename, privateLocation]) {
+  const seed = openNodeSqliteDatabase(location);
+  seed.exec(
+    "CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER); INSERT INTO config_machine_state VALUES ('nodeHost.config', '1', 1)",
+  );
+  seed.close();
+}
+
+function lifecycle() {
+  const snapshot = getTrackedWorkerLifecycleSnapshot();
+  const worker = snapshot.workerLifecycle.find(
+    ({ script }) => script === "openclaw-state-read.worker.js",
+  );
+  const supervisor = snapshot.workerLifecycle.find(
+    ({ script }) => script === "worker-native-lifecycle.worker.js",
+  );
+  assert(worker);
+  assert(supervisor);
+  assert.deepEqual(
+    snapshot.workerLifecycle.map(({ script }) => script).toSorted(),
+    ["openclaw-state-read.worker.js", "worker-native-lifecycle.worker.js"],
+    "only the SQL reader and its retained supervisor are tracked",
+  );
+  const retired = worker.retired.reduce((total, { count }) => total + count, 0);
+  const supervisorRetired = supervisor.retired.reduce((total, { count }) => total + count, 0);
+  assert.deepEqual(
+    { started: supervisor.started, retired: supervisorRetired },
+    { started: 1, retired: 0 },
+    "the unbound SQL-free supervisor remains until process exit",
+  );
+  const live = worker.started - retired;
+  assert.equal(snapshot.workerCount, live + supervisor.started - supervisorRetired);
+  return { started: worker.started, retired, live };
+}
+
+async function read(location = filename, checkFreshAdmission = false) {
+  const admission = captureOpenClawStateDatabaseReadAdmission(filename);
+  const transport = captureOpenClawStateReadSource().createTransport({ type: "nodeHost.config" });
+  try {
+    const outcome = await transport.startRead(
+      {
+        context: { environment: { OPENCLAW_STATE_DIR: root }, admission },
+        location,
+        checkFreshAdmission,
+      },
+      { signal: new AbortController().signal, assertCurrent: admission.assertCurrent },
+    ).result;
+    if ("error" in outcome) {
+      throw outcome.error;
+    }
+    assert(outcome.value.ok && outcome.value.type === "nodeHost.config");
+    assert.equal(outcome.value.row?.updated_at_ms, 1);
+  } finally {
+    await transport.startClose().result;
+  }
+}
+
+try {
+  for (let index = 0; index < 5; index++) {
+    await read();
+  }
+  assert.deepEqual(lifecycle(), { started: 1, retired: 0, live: 1 }, "successful reads reuse");
+  await closeOpenClawStateDatabaseByPathAsync(filename);
+  assert.deepEqual(lifecycle(), { started: 1, retired: 1, live: 0 }, "host close joins exit");
+  await read();
+  assert.deepEqual(lifecycle(), { started: 2, retired: 1, live: 1 }, "closed pool reopens");
+  await read(privateLocation);
+  assert.deepEqual(lifecycle(), { started: 2, retired: 2, live: 0 }, "internal close joins exit");
+  fs.mkdirSync(path.join(root, "state"));
+  const quarantine = openNodeSqliteDatabase(path.join(root, "state", "openclaw-quarantine.sqlite"));
+  quarantine.exec("PRAGMA user_version = 0");
+  quarantine.close();
+  await read(filename, true);
+  assert.deepEqual(lifecycle(), { started: 3, retired: 3, live: 0 }, "admission close joins exit");
+  console.log("Bun shared-state worker reuse and native-exit cleanup passed");
+} finally {
+  await closeOpenClawStateDatabaseAsync();
+}

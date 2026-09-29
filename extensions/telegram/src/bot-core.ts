@@ -178,12 +178,8 @@ export async function createTelegramBotCore(
           });
         return;
       }
-      if (result?.kind === "failed-retryable") {
-        if (isTelegramSpooledReplayUpdate(ctx.update)) {
-          throw new TelegramSpooledReplayProcessingError(result.error);
-        }
-        updateTracker.finishUpdate(begin.update, { completed: true });
-        return;
+      if (result?.kind === "failed-retryable" && isTelegramSpooledReplayUpdate(ctx.update)) {
+        throw new TelegramSpooledReplayProcessingError(result.error);
       }
       updateTracker.finishUpdate(begin.update, { completed: true });
     } catch (error) {

@@ -68,11 +68,6 @@ type FollowupDeliveryDecision =
       run: FollowupRun;
       finalTextLength: number;
       resolved: { provider: string; model: string };
-    }
-  | {
-      kind: "deliver-diagnostic";
-      payload: ReplyPayload;
-      resolved: { provider: string; model: string };
     };
 
 /** Resolves one final queued delivery action without performing transport I/O. */
@@ -146,6 +141,13 @@ export async function resolveFollowupDeliveryDecision(params: {
     originatingTo: turn.queued.originatingTo,
     originatingThreadId: turn.queued.originatingThreadId,
   };
+  const preparePayloads = (
+    payloads: ReplyPayload[],
+    options: Omit<
+      Parameters<typeof resolveFollowupDeliveryPayloads>[0],
+      "payloads" | keyof typeof deliveryContext
+    > = {},
+  ) => resolveFollowupDeliveryPayloads({ ...deliveryContext, ...options, payloads });
   if (execution.outcome.kind === "rejected") {
     if (!isInteractive) {
       return { kind: "suppress", reason: "silent" };
@@ -158,9 +160,7 @@ export async function resolveFollowupDeliveryDecision(params: {
       return { kind: "suppress", reason: "message-tool-only" };
     }
     const payloads = renderFailurePayloads(
-      resolveFollowupDeliveryPayloads({
-        ...deliveryContext,
-        payloads: [execution.outcome.payload],
+      preparePayloads([execution.outcome.payload], {
         reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
         commentaryPayloadsEnabled: opts?.commentaryPayloadsEnabled === true,
       }),
@@ -213,9 +213,7 @@ export async function resolveFollowupDeliveryDecision(params: {
       ? result.meta.finalAssistantVisibleText
       : "",
   );
-  let payloads = resolveFollowupDeliveryPayloads({
-    ...deliveryContext,
-    payloads: accounting.payloadArray,
+  let payloads = preparePayloads(accounting.payloadArray, {
     reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
     commentaryPayloadsEnabled: opts?.commentaryPayloadsEnabled === true,
     sentMediaUrls: result.messagingToolSentMediaUrls,
@@ -254,18 +252,10 @@ export async function resolveFollowupDeliveryDecision(params: {
     };
   }
   if (recovery.kind === "diagnostic") {
-    const [payload] = resolveFollowupDeliveryPayloads({
-      ...deliveryContext,
-      payloads: [recovery.payload],
-    });
-    if (!payload) {
-      return { kind: "suppress", reason: "silent" };
-    }
-    return {
-      kind: "deliver-diagnostic",
-      payload,
-      resolved: runtimeResolved,
-    };
+    const [payload] = preparePayloads([recovery.payload]);
+    return payload
+      ? { kind: "deliver", payloads: [payload], resolved: runtimeResolved }
+      : { kind: "suppress", reason: "silent" };
   }
   const hasTerminalPayload = payloads.some(
     (payload) =>
@@ -302,29 +292,13 @@ export async function resolveFollowupDeliveryDecision(params: {
       : undefined
     : (waitingStatusPayload ?? buildEmptyInteractiveReplyPayload({ completion }));
   if (!hasTerminalPayload && fallbackPayload) {
-    payloads = [
-      ...payloads,
-      ...resolveFollowupDeliveryPayloads({
-        ...deliveryContext,
-        payloads: [fallbackPayload],
-      }),
-    ];
+    payloads.push(...preparePayloads([fallbackPayload]));
   }
   if (accounting.compactionNotice) {
-    const compactionNotices = resolveFollowupDeliveryPayloads({
-      ...deliveryContext,
-      payloads: [accounting.compactionNotice],
-    });
-    payloads = [...compactionNotices, ...payloads];
+    payloads.unshift(...preparePayloads([accounting.compactionNotice]));
   }
   if (accounting.diagnosticsPayload && payloads.length > 0) {
-    payloads = [
-      ...payloads,
-      ...resolveFollowupDeliveryPayloads({
-        ...deliveryContext,
-        payloads: [accounting.diagnosticsPayload],
-      }),
-    ];
+    payloads.push(...preparePayloads([accounting.diagnosticsPayload]));
   }
   const responseUsageLine = resolveResponseUsageLine({
     config: turn.config,
@@ -604,7 +578,7 @@ export async function deliverFollowupDecision(params: {
     return { kind: "completed", payloads };
   }
   const payloads = await sendFollowupPayloads({
-    payloads: decision.kind === "deliver" ? decision.payloads : [decision.payload],
+    payloads: decision.payloads,
     turn,
     defaults,
     runId: params.runId,

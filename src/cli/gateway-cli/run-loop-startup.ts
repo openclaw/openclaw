@@ -1,11 +1,65 @@
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { markGatewayRestartTrace } from "../../gateway/restart-trace.js";
-import type { GatewayStartupOperation } from "../../gateway/server-public.js";
+import type { GatewayServerOptions, GatewayStartupOperation } from "../../gateway/server-public.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { GatewayRestartEmitter } from "../../infra/restart.js";
 import { SqliteIntegrityWorkerInterruptedError } from "../../infra/sqlite-integrity-worker-error.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+
+export type GatewayRunLoopStartOptions = Pick<
+  GatewayServerOptions,
+  | "processStartedAt"
+  | "startupStartedAt"
+  | "hostLifecycle"
+  | "startupOperation"
+  | "gatewayStateOwner"
+> & { requestHotReloadRecovery?: GatewayRestartEmitter };
+
+export type GatewayRestartStartupFailureHandler = (
+  error: unknown,
+  signal: AbortSignal,
+) => Promise<"completed" | void>;
+
+export function createGatewayRestartRecovery(
+  onFailure: GatewayRestartStartupFailureHandler | undefined,
+  logger: Pick<SubsystemLogger, "info">,
+) {
+  let work: { controller: AbortController; settled: Promise<"completed" | void> } | undefined;
+  return {
+    abort() {
+      work?.controller.abort();
+    },
+    async waitForCleanup() {
+      await work?.settled;
+    },
+    async attempt(error: unknown): Promise<boolean> {
+      if (!onFailure) {
+        return false;
+      }
+      const controller = new AbortController();
+      work = {
+        controller,
+        settled: Promise.resolve().then(() => onFailure(error, controller.signal)),
+      };
+      try {
+        const completion = await work.settled;
+        if (controller.signal.aborted) {
+          return false;
+        }
+        if (completion !== "completed") {
+          throw error;
+        }
+        // Completion proves triage cleanup, not Gateway health. Startup owns that proof.
+        logger.info("Automatic triage completed; retrying Gateway startup once.");
+        return true;
+      } finally {
+        work = undefined;
+      }
+    },
+  };
+}
 
 export function createGatewayStartupOperations(): {
   run: GatewayStartupOperation;
@@ -58,7 +112,6 @@ export function createGatewayStartupOperations(): {
 export async function prepareGatewayRestartIteration(
   runtime: typeof import("./lifecycle.runtime.js"),
   logger: Pick<SubsystemLogger, "warn">,
-  onAdmissionReset: () => void,
 ): Promise<void> {
   // After an in-process restart (SIGUSR2), reset command-queue lane state.
   // Interrupted tasks from the previous lifecycle may have left `active`
@@ -94,9 +147,6 @@ export async function prepareGatewayRestartIteration(
   // suspension admission callback and discards the coordinator entry.
   resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetAllLanes();
-  // resetAllLanes installs the next admission generation. Keep the local
-  // mirror aligned so a restart queued during cleanup closes that generation.
-  onAdmissionReset();
   clearRuntimeConfigSnapshot();
   resetGatewayRestartStateForInProcessRestart();
   // Rent: a failed startup has no server close handle, and restart hooks can

@@ -33,9 +33,12 @@ subjects unchanged and all remaining checks finish. Retries retain native matrix
 fail-fast. Main and manual runs retain complete matrices. See
 [failure cancellation](/ci/pipeline#fail-fast-order).
 
-First-hop compatibility uses a 30-minute container budget and a 35-minute lane budget,
-based on measured hosted hops with a slow-host margin. The release self-upgrade
-job allows 80 minutes for two waves of six source versions plus setup; see
+First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane
+budget, based on hosted 4-vCPU measurements with a slow-host margin. The release
+self-upgrade job allows 130 minutes for two waves of six source versions plus setup.
+Authenticated update restart uses a 2,280-second container budget, a 43-minute lane
+budget, and a lane-specific 1,500-second command timeout. Its OpenAI/recovery chunk
+allows 160 minutes for the npm-serialized lanes plus setup; see
 [release-path chunks](/ci/release-validation/install-smoke-and-docker-e2e#release-path-chunks).
 
 For the published-upgrade regression gate, see [selection and routing](/ci/scope-and-routing#scope-and-routing), [runner budgets](/ci/capacity#runner-registration-budget), and [Package Acceptance baselines](/ci/release-validation#suite-profiles). Weekly validation is listed under [Update Migration](/ci/scheduled-workflows#update-migration).

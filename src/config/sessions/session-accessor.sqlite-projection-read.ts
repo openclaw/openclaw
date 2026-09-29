@@ -344,36 +344,25 @@ export function readCurrentProjectionSnapshot<T>(
       if (snapshot.cold) {
         throw new SessionTranscriptColdError(resolved.sessionId);
       }
-      if (snapshot.latestSeq === null) {
-        return {
-          kind: "value" as const,
-          value: read({
-            database,
-            generation: snapshot.generation,
-            hasUnindexedPrefix: false,
-            resolved,
-            state: EMPTY_PROJECTION_STATE,
-          }),
-        };
-      }
+      const empty = snapshot.latestSeq === null;
+      const state = empty ? EMPTY_PROJECTION_STATE : snapshot.state;
       if (
-        snapshot.state &&
-        !snapshot.state.needsRebuild &&
-        snapshot.state.indexedSeq === snapshot.latestSeq &&
-        !snapshot.hasUnclassified
+        !state ||
+        state.needsRebuild ||
+        (!empty && (state.indexedSeq !== snapshot.latestSeq || snapshot.hasUnclassified))
       ) {
-        return {
-          kind: "value" as const,
-          value: read({
-            database,
-            generation: snapshot.generation,
-            hasUnindexedPrefix: snapshot.hasUnindexedPrefix,
-            resolved,
-            state: snapshot.state,
-          }),
-        };
+        return { kind: "unavailable" as const };
       }
-      return { kind: "unavailable" as const };
+      return {
+        kind: "value" as const,
+        value: read({
+          database,
+          generation: snapshot.generation,
+          hasUnindexedPrefix: !empty && snapshot.hasUnindexedPrefix,
+          resolved,
+          state,
+        }),
+      };
     },
     {
       databaseLabel: database.path,

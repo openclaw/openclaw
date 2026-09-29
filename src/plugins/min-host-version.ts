@@ -33,10 +33,7 @@ export function parseMinHostVersionRequirement(
   raw: unknown,
   options: { allowLegacyBareSemver?: boolean } = {},
 ): MinHostVersionRequirement | null {
-  if (typeof raw !== "string") {
-    return null;
-  }
-  const trimmed = raw.trim();
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }

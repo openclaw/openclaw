@@ -145,7 +145,7 @@ function preparePlacementProjection(
   });
   bindSessionRowProjection(context, () => projection);
   onTestFinished(() => projection.dispose());
-  const snapshot = vi.spyOn(projection, "snapshot");
+  const present = vi.spyOn(projection, "present");
   const update = () => {
     const record = projection.describe({ key: sessionKey, agentId: "main" });
     if (!record) {
@@ -160,7 +160,7 @@ function preparePlacementProjection(
     }
   };
   update();
-  return { update, snapshot };
+  return { update, present };
 }
 
 let restorePerformanceClock: () => void;
@@ -255,8 +255,10 @@ describe("sessions.changed coalescing", () => {
     expect(published).not.toHaveProperty("placement.turnClaim");
     expect(JSON.stringify(published)).not.toContain("private-turn-claim");
     expect(getMany).not.toHaveBeenCalled();
-    expect(resident.snapshot).toHaveBeenCalledTimes(2);
-    expect(resident.snapshot).toHaveBeenLastCalledWith({ key: sessionKey, agentId: "main" });
+    expect(resident.present).toHaveBeenCalledTimes(2);
+    expect(resident.present).toHaveBeenLastCalledWith(
+      expect.objectContaining({ key: sessionKey, agentId: "main" }),
+    );
 
     placements.clear();
     resident.update();

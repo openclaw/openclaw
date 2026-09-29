@@ -21,6 +21,7 @@ import {
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
+  resolveClaudeSonnet55ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaude1MContext,
   supportsClaudeAdaptiveThinking,
@@ -260,7 +261,7 @@ function isAnthropicUnreleasedGenerationModel(modelId: string): boolean {
  * shaping follows without teaching the shared contracts about unknown ids.
  */
 function resolveAnthropicUnreleasedCanonicalModelId(modelId: string): string {
-  return /(?:^|-)claude-sonnet-/.test(modelId) ? "claude-sonnet-5" : "claude-opus-5-5";
+  return /(?:^|-)claude-sonnet-/.test(modelId) ? "claude-sonnet-5-5" : "claude-opus-5-5";
 }
 
 // Dynamic rows use the manifest as the provider-owned offline contract when a lifecycle registry
@@ -478,15 +479,18 @@ function normalizeAnthropicResolvedModel(
     const current = model.thinkingLevelMap;
     const preview = isAnthropicMythosPreviewModel(contractModelId);
     const mandatory = requiresClaudeMandatoryAdaptiveThinking({ id: contractModelId });
+    const remapsMinimal =
+      mandatory || resolveClaudeSonnet55ModelIdentity({ id: contractModelId }) !== undefined;
     if (
       current?.max === undefined ||
-      (!preview && (current?.xhigh === undefined || (mandatory && current?.minimal === undefined)))
+      (!preview &&
+        (current?.xhigh === undefined || (remapsMinimal && current?.minimal === undefined)))
     ) {
       patch.thinkingLevelMap = {
         ...(preview
           ? { max: "max" as const }
           : {
-              ...(mandatory ? { minimal: "low" as const } : {}),
+              ...(remapsMinimal ? { minimal: "low" as const } : {}),
               xhigh:
                 mandatory || supportsClaudeNativeXhighEffort({ id: contractModelId })
                   ? ("xhigh" as const)

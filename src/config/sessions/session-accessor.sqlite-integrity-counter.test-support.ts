@@ -3,9 +3,11 @@ import type { WorkerOptions } from "node:worker_threads";
 const integrityCounterPreload = `
   import { DatabaseSync } from "node:sqlite";
   import { parentPort, workerData } from "node:worker_threads";
-  const databasePath = workerData.operation === "reclaim"
-    ? workerData.databaseOptions.path
-    : workerData.plan?.databaseOptions.path;
+  const databasePath = workerData.integrityDatabasePath ?? (
+    workerData.operation === "reclaim"
+      ? workerData.databaseOptions.path
+      : workerData.plan?.databaseOptions.path
+  );
   const prepare = DatabaseSync.prototype.prepare;
   DatabaseSync.prototype.prepare = function(sql) {
     const statement = prepare.call(this, sql);
@@ -37,6 +39,7 @@ export function withWorkerSqliteIntegrityCounter(
   options: WorkerOptions | undefined,
   counts: SharedArrayBuffer | undefined,
   release?: SharedArrayBuffer,
+  databasePath?: string,
 ): WorkerOptions | undefined {
   return counts
     ? {
@@ -49,6 +52,7 @@ export function withWorkerSqliteIntegrityCounter(
         workerData: {
           ...options?.workerData,
           integrityChecks: counts,
+          ...(databasePath ? { integrityDatabasePath: databasePath } : {}),
           ...(release ? { integrityRelease: release } : {}),
         },
       }

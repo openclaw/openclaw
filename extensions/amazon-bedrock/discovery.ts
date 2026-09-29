@@ -11,6 +11,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import { resolveAwsSdkEnvVarName } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type {
   BedrockDiscoveryConfig,
@@ -31,13 +32,11 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 import {
   loadBedrockControlPlaneSdk,
   runBedrockControlPlaneRequest,
   type BedrockControlPlaneSdk,
 } from "./control-plane.js";
-import { resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { resolveBedrockNativeThinkingLevelMap } from "./thinking-policy.js";
 
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600;
@@ -178,12 +177,6 @@ function isKnownClaudeMythosPreviewModelId(modelId: string): boolean {
   );
 }
 
-function resolveKnownThinkingLevelMap(
-  modelId: string,
-): ModelDefinitionConfig["thinkingLevelMap"] | undefined {
-  return resolveBedrockNativeThinkingLevelMap(modelId);
-}
-
 function resolveKnownMaxTokens(modelId: string): number | undefined {
   return resolveClaudeFable5ModelIdentity({ id: modelId }) ||
     resolveClaudeMythos5ModelIdentity({ id: modelId }) ||
@@ -242,27 +235,11 @@ function includesTextModalities(modalities?: Array<string>): boolean {
   return (modalities ?? []).some((entry) => normalizeOptionalLowercaseString(entry) === "text");
 }
 
-function isActive(summary: BedrockModelSummary): boolean {
-  const status = summary.modelLifecycle?.status;
-  return typeof status === "string" ? status.toUpperCase() === "ACTIVE" : false;
-}
-
 function mapInputModalities(summary: BedrockModelSummary): Array<"text" | "image"> {
-  const inputs = summary.inputModalities ?? [];
-  const mapped = new Set<"text" | "image">();
-  for (const modality of inputs) {
-    const lower = normalizeOptionalLowercaseString(modality);
-    if (lower === "text") {
-      mapped.add("text");
-    }
-    if (lower === "image") {
-      mapped.add("image");
-    }
-  }
-  if (mapped.size === 0) {
-    mapped.add("text");
-  }
-  return Array.from(mapped);
+  const inputs = (summary.inputModalities ?? [])
+    .map(normalizeOptionalLowercaseString)
+    .filter((modality) => modality === "text" || modality === "image");
+  return inputs.length > 0 ? [...new Set(inputs)] : ["text"];
 }
 
 function inferReasoningSupport(summary: BedrockModelSummary): boolean {
@@ -304,25 +281,15 @@ function matchesProviderFilter(summary: BedrockModelSummary, filter: string[]): 
 }
 
 function shouldIncludeSummary(summary: BedrockModelSummary, filter: string[]): boolean {
-  if (!summary.modelId?.trim()) {
-    return false;
-  }
-  if (!matchesProviderFilter(summary, filter)) {
-    return false;
-  }
-  if (summary.responseStreamingSupported !== true) {
-    return false;
-  }
-  if (isKnownClaudeMythosPreviewModelId(summary.modelId)) {
-    return false;
-  }
-  if (!includesTextModalities(summary.outputModalities)) {
-    return false;
-  }
-  if (!isActive(summary)) {
-    return false;
-  }
-  return true;
+  return Boolean(
+    summary.modelId?.trim() &&
+    matchesProviderFilter(summary, filter) &&
+    summary.responseStreamingSupported === true &&
+    !isKnownClaudeMythosPreviewModelId(summary.modelId) &&
+    includesTextModalities(summary.outputModalities) &&
+    typeof summary.modelLifecycle?.status === "string" &&
+    summary.modelLifecycle.status.toUpperCase() === "ACTIVE",
+  );
 }
 
 function toModelDefinition(
@@ -330,7 +297,7 @@ function toModelDefinition(
   defaults: { contextWindow: number; maxTokens: number },
 ): ModelDefinitionConfig {
   const id = summary.modelId?.trim() ?? "";
-  const thinkingLevelMap = resolveKnownThinkingLevelMap(id);
+  const thinkingLevelMap = resolveBedrockNativeThinkingLevelMap(id);
   return {
     id,
     name: summary.modelName?.trim() || id,
@@ -448,7 +415,7 @@ function resolveInferenceProfiles(
     const baseModel = baseModelId
       ? foundationModels.get(normalizeLowercaseStringOrEmpty(baseModelId))
       : undefined;
-    const knownThinkingLevelMap = resolveKnownThinkingLevelMap(
+    const knownThinkingLevelMap = resolveBedrockNativeThinkingLevelMap(
       baseModelId ?? profile.inferenceProfileId,
     );
     const contractModelId = baseModelId ?? profile.inferenceProfileId;
@@ -520,9 +487,6 @@ export async function discoverBedrockModels(params: {
 
   const sdk = await loadBedrockControlPlaneSdk();
   const clientFactory = params.clientFactory ?? ((region: string) => sdk.createClient(region));
-  if (!params.clientFactory) {
-    await refreshAwsSharedConfigCacheForBedrock();
-  }
   const client = clientFactory(params.region);
 
   const discoveryPromise = (async () => {
@@ -634,7 +598,7 @@ export async function resolveImplicitBedrockProvider(params: {
   const env = params.env ?? process.env;
   const discoveryConfig = params.pluginConfig?.discovery;
   const enabled = discoveryConfig?.enabled;
-  const hasAwsCreds = resolveBedrockConfigApiKey(env) !== undefined;
+  const hasAwsCreds = resolveAwsSdkEnvVarName(env) !== undefined;
   if (enabled === false) {
     return null;
   }

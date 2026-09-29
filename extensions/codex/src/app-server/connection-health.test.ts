@@ -5,6 +5,7 @@ import type {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import { createCodexAppServerConnectionHealthService } from "./connection-health.js";
+import { createClientHarness } from "./test-support.js";
 
 const sharedClientMocks = vi.hoisted(() => ({
   getLeasedSharedCodexAppServerClient: vi.fn(),
@@ -32,6 +33,7 @@ describe("Codex remote WebSocket connection health", () => {
       runningService = undefined;
       sharedClientMocks.getLeasedSharedCodexAppServerClient.mockReset();
       sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
+      vi.useRealTimers();
     }
   });
 
@@ -124,6 +126,34 @@ describe("Codex remote WebSocket connection health", () => {
     expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
   });
 
+  it("reconnects when a leased client closed before the health observer subscribed", async () => {
+    vi.useFakeTimers();
+    const first = createClientHarness();
+    first.client.close();
+    const next = createClient();
+    sharedClientMocks.getLeasedSharedCodexAppServerClient
+      .mockResolvedValueOnce(first.client)
+      .mockResolvedValueOnce(next.client);
+    const ctx = createServiceContext();
+    const service = createCodexAppServerConnectionHealthService({
+      getPluginConfig: () => ({
+        appServer: { transport: "websocket", url: "ws://127.0.0.1:39175" },
+      }),
+      getRuntimeConfig: () => ctx.config,
+    });
+
+    await startService(service, ctx);
+    await vi.advanceTimersByTimeAsync(1_250);
+
+    expect(sharedClientMocks.getLeasedSharedCodexAppServerClient).toHaveBeenCalledTimes(2);
+    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledWith(
+      first.client,
+    );
+    expect(next.addCloseHandler).toHaveBeenCalledOnce();
+    expect(first.writes).toEqual([]);
+    expect(next.request).not.toHaveBeenCalled();
+  });
+
   it.each([401, 403])("does not retry an HTTP %i authentication failure", async (statusCode) => {
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockRejectedValueOnce(
       new Error(`Unexpected server response: ${statusCode}`),
@@ -195,7 +225,11 @@ function createClient() {
     handlers.add(handler);
     return () => handlers.delete(handler);
   });
-  const client = { addCloseHandler, request } as unknown as CodexAppServerClient;
+  const client = {
+    addCloseHandler,
+    request,
+    getCloseError: () => undefined,
+  } as unknown as CodexAppServerClient;
 
   return {
     client,

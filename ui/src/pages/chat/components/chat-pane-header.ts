@@ -61,17 +61,11 @@ type ChatPaneHeaderProps = {
   actionsDisabled?: boolean;
   panelActions: TemplateResult | typeof nothing;
   panelLayoutActions: TemplateResult | typeof nothing;
-  discussionAction: TemplateResult | typeof nothing;
-  diffAction: TemplateResult | typeof nothing;
-  sessionRailAction: TemplateResult | typeof nothing;
-  workspaceAction: TemplateResult | typeof nothing;
   presence?: TemplateResult | typeof nothing;
-  faceControl?: TemplateResult | typeof nothing;
   sharingControl?: TemplateResult | typeof nothing;
   publicAccessIndicator?: TemplateResult | typeof nothing;
   placementControl?: TemplateResult | typeof nothing;
   sessionMenuAction: TemplateResult | typeof nothing;
-  onboarding?: boolean;
   onBeginRename: () => void;
   onRenameInput: (value: string) => void;
   onCommitRename: () => void;
@@ -293,11 +287,11 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
   const copied = props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";
   const drawerLabel = props.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
   const compactSessionActions = props.narrow && props.sessionMenuAction !== nothing;
-  const hasFaceControl = props.faceControl !== undefined && props.faceControl !== nothing;
+  const hasSharingControl = props.sharingControl !== undefined && props.sharingControl !== nothing;
 
   return html`
     <div
-      class="chat-pane__header ${hasFaceControl ? "chat-pane__header--centered" : ""}"
+      class="chat-pane__header "
       role="group"
       aria-label=${props.title}
       tabindex="-1"
@@ -337,24 +331,28 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             : nothing
         }
         ${renderIdentityCrumbs(props, copied, copyPathLabel, copyBranchLabel)}
-        ${props.publicAccessIndicator ?? nothing} ${props.sharingControl ?? nothing}
-        ${renderStandalonePersonLink(
-          renderSessionOwnerChip(
-            props.showOwnerChip ? props.session?.owner?.actor : undefined,
-            "header",
-            props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
-            props.ownerViewing,
-          ),
-          props.showOwnerChip
-            ? personActivityLink(
-                props.session?.owner?.actor.identity?.type === "profile"
-                  ? props.session.owner.actor.identity.id
-                  : undefined,
-                props.personActivity,
-                props.session?.owner?.actor.label,
+        ${props.publicAccessIndicator ?? nothing}
+        ${
+          hasSharingControl
+            ? props.sharingControl
+            : renderStandalonePersonLink(
+                renderSessionOwnerChip(
+                  props.showOwnerChip ? props.session?.owner?.actor : undefined,
+                  "header",
+                  props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
+                  props.ownerViewing,
+                ),
+                props.showOwnerChip
+                  ? personActivityLink(
+                      props.session?.owner?.actor.identity?.type === "profile"
+                        ? props.session.owner.actor.identity.id
+                        : undefined,
+                      props.personActivity,
+                      props.session?.owner?.actor.label,
+                    )
+                  : null,
               )
-            : null,
-        )}
+        }
         ${
           props.showOwnerChip && props.session?.participants?.length
             ? html`<openclaw-viewer-facepile
@@ -369,11 +367,6 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         }
         ${props.placementControl ?? nothing} ${props.presence ?? nothing}
       </div>
-      ${
-        hasFaceControl
-          ? html`<div class="chat-pane__header-center">${props.faceControl}</div>`
-          : nothing
-      }
       <div class="chat-pane__header-trailing">
         ${
           !props.catalog && props.branches.length > 1
@@ -448,12 +441,6 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
           ${props.panelLayoutActions}
           <fieldset class="chat-pane__actions" ?disabled=${props.actionsDisabled}>
             ${compactSessionActions ? nothing : props.panelActions}
-            ${compactSessionActions ? nothing : props.discussionAction}
-            ${
-              props.catalog || compactSessionActions
-                ? nothing
-                : html`${props.diffAction} ${props.workspaceAction} ${props.sessionRailAction}`
-            }
             ${(
               [
                 [

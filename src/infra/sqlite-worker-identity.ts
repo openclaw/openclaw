@@ -3,11 +3,46 @@ import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "./errno.js";
 
-export type DatabasePathIdentity = Readonly<{
+export type DatabaseFileIdentity = Readonly<{
   key: string;
-  canonicalPath: string;
   birthtime?: string;
 }>;
+export type DatabasePathIdentity = DatabaseFileIdentity & Readonly<{ canonicalPath: string }>;
+
+export function readDatabaseFileIdentity(value: unknown): DatabaseFileIdentity {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    !("key" in value) ||
+    typeof value.key !== "string" ||
+    !/^file:(?:0|[1-9]\d{0,19}):(?:0|[1-9]\d{0,19})$/.test(value.key) ||
+    ("birthtime" in value &&
+      value.birthtime !== undefined &&
+      (typeof value.birthtime !== "string" || !/^-?(?:0|[1-9]\d{0,29})$/.test(value.birthtime)))
+  ) {
+    throw new Error("SQLite snapshot requires a captured physical file identity");
+  }
+  return {
+    key: value.key,
+    ...("birthtime" in value && typeof value.birthtime === "string"
+      ? { birthtime: value.birthtime }
+      : {}),
+  };
+}
+
+export function assertDatabaseFileIdentity(
+  file: BigIntStats,
+  expected: DatabaseFileIdentity,
+): void {
+  if (
+    !file.isFile() ||
+    `file:${file.dev}:${file.ino}` !== expected.key ||
+    (expected.birthtime !== undefined && file.birthtimeNs.toString() !== expected.birthtime)
+  ) {
+    throw new Error("SQLite database file identity changed before existing-only open");
+  }
+}
 
 function existingIdentity(
   file: BigIntStats,
@@ -137,12 +172,8 @@ export function assertExistingDatabaseIdentity(
   expected: string,
   expectedBirthtime?: string,
 ): void {
-  const file = statSync(databasePath, { bigint: true });
-  if (
-    !file.isFile() ||
-    `file:${file.dev}:${file.ino}` !== expected ||
-    (expectedBirthtime !== undefined && file.birthtimeNs.toString() !== expectedBirthtime)
-  ) {
-    throw new Error("SQLite database file identity changed before existing-only open");
-  }
+  assertDatabaseFileIdentity(statSync(databasePath, { bigint: true }), {
+    key: expected,
+    birthtime: expectedBirthtime,
+  });
 }

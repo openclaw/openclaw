@@ -1,5 +1,7 @@
 /** Best-effort durable signal log for session state changes. */
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { assertSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.js";
+import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import {
   captureSessionWatcherStorePaths,
   resolvePhysicalSessionStorePath,
@@ -428,6 +430,7 @@ export function recordSessionCompacted(params: {
 type AsyncSessionStateEventOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
   now?: number;
   assertCurrent?: () => void;
+  sessionEntryCurrent?: SessionEntryCurrentCheck;
   onlyIfWatched?: boolean;
   expectedUpstream?: SessionUpstreamLink;
   acpControl?: import("../acp/runtime/session-meta-control.types.js").AcpSessionControlConstraint;
@@ -438,6 +441,7 @@ export async function recordSessionStateEventAsync(
   input: SessionStateEventInput,
   options: AsyncSessionStateEventOptions = {},
 ): Promise<SessionStateEventRecord | undefined> {
+  const sessionEntryCurrent = options.sessionEntryCurrent;
   try {
     const context = captureOpenClawStateWorkerContext(options);
     const now = options.now ?? Date.now();
@@ -454,7 +458,14 @@ export async function recordSessionStateEventAsync(
       async (scope) => {
         const recorded = await scope.execute({
           type: "sessionState.record",
-          input: { event, now, onlyIfWatched: options.onlyIfWatched, expectedUpstream, acpControl },
+          input: {
+            event,
+            now,
+            onlyIfWatched: options.onlyIfWatched,
+            expectedUpstream,
+            acpControl,
+            sessionEntryCurrentSource: sessionEntryCurrent?.source,
+          },
         });
         for (const notice of recorded.notices) {
           enqueueSessionStateNotice(notice);
@@ -462,7 +473,10 @@ export async function recordSessionStateEventAsync(
         if (recorded.row && !prunePending && now - lastPruneAt > SESSION_STATE_PRUNE_INTERVAL_MS) {
           prunePending = true;
           try {
-            await scope.execute({ type: "sessionState.prune", input: { now } });
+            await scope.execute({
+              type: "sessionState.prune",
+              input: { now, sessionEntryCurrentSource: sessionEntryCurrent?.source },
+            });
             lastPruneAt = Math.max(lastPruneAt, now);
           } catch (error) {
             log.warn(`failed to prune session state history: ${String(error)}`);
@@ -482,6 +496,7 @@ export async function recordSessionStateEventAsync(
             }
             context.admission.assertCurrent();
             options.assertCurrent?.();
+            assertSessionEntryCurrentAdmission(request, sessionEntryCurrent);
             grant();
           }),
         }),

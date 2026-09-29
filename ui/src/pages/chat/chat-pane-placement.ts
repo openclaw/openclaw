@@ -26,6 +26,10 @@ export type PlacementComposerPresentation = {
   busyMessage: string | null;
   startup: ApplicationPlacementStartupStatus | null;
   diskSpace: Extract<NonNullable<GatewaySessionRow["placement"]>, { state: "active" }>["diskSpace"];
+  workerRuntimeInstall: Extract<
+    NonNullable<GatewaySessionRow["placement"]>,
+    { state: "active" | "provisioning" }
+  >["workerRuntimeInstall"];
   runError: { summary: string } | null;
   failedUnavailableMessage: string;
   disabledBanner: ChatComposerDisabledBanner | undefined;
@@ -135,6 +139,10 @@ export function resolvePlacementComposer(params: {
     busyMessage,
     startup: state.kind === "setup" ? state.startup : null,
     diskSpace: placement?.state === "active" ? placement.diskSpace : undefined,
+    workerRuntimeInstall:
+      placement?.state === "active" || placement?.state === "provisioning"
+        ? placement.workerRuntimeInstall
+        : undefined,
     runError:
       failureReason && !controls.restarting
         ? { summary: t("chat.cloudWorkerFailed", { error: failureReason }) }

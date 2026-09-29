@@ -88,6 +88,7 @@ function wakeParams(
 ) {
   return {
     requesterSessionKey: REQUESTER,
+    isSourceCurrent: () => true,
     settledEntry:
       listedRequesterRuns().find((entry) => entry.runId === "run-b") ??
       makeSettledChild({ runId: "run-b" }),

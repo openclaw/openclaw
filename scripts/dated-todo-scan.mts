@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, resolve } from "node:path";
+import { escapeRegExp } from "./lib/regexp.mjs";
 
 const DEFAULT_OUTPUT = ".artifacts/dated-todo-candidates.json";
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -145,22 +146,48 @@ function run(command: string, args: string[], cwd: string, maxBuffer = 32 * 1024
   return result.stdout;
 }
 
-function runGitGrep(root: string, paths: string[]): string {
+function runDatePrefilter(root: string, paths: string[], useGit = false): string {
+  const command = useGit ? "git" : "rg";
+  const label = useGit ? "git grep" : "rg";
   const result = spawnSync(
-    "git",
-    [
-      "grep",
-      "-l",
-      "-I",
-      "-i",
-      "-E",
-      "-e",
-      ISO_DATE_PREFILTER,
-      "-e",
-      GIT_MONTH_DATE_PREFILTER,
-      "--",
-      ...paths,
-    ],
+    command,
+    useGit
+      ? [
+          "grep",
+          "-l",
+          "-I",
+          "-i",
+          "-E",
+          "-e",
+          ISO_DATE_PREFILTER,
+          "-e",
+          GIT_MONTH_DATE_PREFILTER,
+          "--",
+          ...paths,
+        ]
+      : [
+          "-l",
+          "-i",
+          "--hidden",
+          "--no-ignore",
+          "--no-messages",
+          "-e",
+          ISO_DATE_PREFILTER,
+          "-e",
+          MONTH_DATE_PREFILTER,
+          "--glob",
+          "!.git/**",
+          "--glob",
+          "!.i18n/**",
+          "--glob",
+          "!node_modules/**",
+          "--glob",
+          "!dist/**",
+          "--glob",
+          "!dist-runtime/**",
+          ...[...EXCLUDED_SEGMENTS].flatMap((segment) => ["--glob", `!**/${segment}/**`]),
+          ...paths,
+        ],
     {
       cwd: root,
       encoding: "utf8",
@@ -168,56 +195,14 @@ function runGitGrep(root: string, paths: string[]): string {
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
-  if (result.error) {
-    throw new Error(`Failed to run git grep: ${result.error.message}`);
-  }
-  if (result.status !== 0 && result.status !== 1) {
-    throw new Error(`git grep failed (${result.status ?? "unknown"}): ${result.stderr.trim()}`);
-  }
-  return result.stdout;
-}
-
-function runDatePrefilter(root: string, paths: string[]): string {
-  const result = spawnSync(
-    "rg",
-    [
-      "-l",
-      "-i",
-      "--hidden",
-      "--no-ignore",
-      "--no-messages",
-      "-e",
-      ISO_DATE_PREFILTER,
-      "-e",
-      MONTH_DATE_PREFILTER,
-      "--glob",
-      "!.git/**",
-      "--glob",
-      "!.i18n/**",
-      "--glob",
-      "!node_modules/**",
-      "--glob",
-      "!dist/**",
-      "--glob",
-      "!dist-runtime/**",
-      ...[...EXCLUDED_SEGMENTS].flatMap((segment) => ["--glob", `!**/${segment}/**`]),
-      ...paths,
-    ],
-    {
-      cwd: root,
-      encoding: "utf8",
-      maxBuffer: 32 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  if (result.error && "code" in result.error && result.error.code === "ENOENT") {
-    return runGitGrep(root, paths);
+  if (!useGit && result.error && "code" in result.error && result.error.code === "ENOENT") {
+    return runDatePrefilter(root, paths, true);
   }
   if (result.error) {
-    throw new Error(`Failed to run rg: ${result.error.message}`);
+    throw new Error(`Failed to run ${label}: ${result.error.message}`);
   }
   if (result.status !== 0 && result.status !== 1) {
-    throw new Error(`rg failed (${result.status ?? "unknown"}): ${result.stderr.trim()}`);
+    throw new Error(`${label} failed (${result.status ?? "unknown"}): ${result.stderr.trim()}`);
   }
   return result.stdout;
 }
@@ -286,16 +271,9 @@ function collectScanCandidates(files: LoadedFile[]): Candidate[] {
       if (!TODO_PATTERN.test(lines[index] ?? "")) {
         continue;
       }
-      const nearbyDates: string[] = [];
-      for (
-        let nearby = Math.max(0, index - 1);
-        nearby <= Math.min(lines.length - 1, index + 1);
-        nearby += 1
-      ) {
-        if (DATE_PATTERN.test(lines[nearby] ?? "")) {
-          nearbyDates.push(lines[nearby] ?? "");
-        }
-      }
+      const nearbyDates = lines
+        .slice(Math.max(0, index - 1), index + 2)
+        .filter((line) => DATE_PATTERN.test(line));
       if (nearbyDates.length === 0) {
         continue;
       }
@@ -325,8 +303,7 @@ function readCompatReport(options: ScanOptions): CompatReport {
 }
 
 function findCompatLocation(code: string, files: LoadedFile[]): { file: string; line: number } {
-  const escapedCode = code.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  const codeField = new RegExp(`\\bcode\\s*:\\s*["']${escapedCode}["']`, "u");
+  const codeField = new RegExp(`\\bcode\\s*:\\s*["']${escapeRegExp(code)}["']`, "u");
   for (const { file, lines } of files) {
     const index = lines.findIndex((line) => codeField.test(line));
     if (index >= 0) {
@@ -346,27 +323,28 @@ function collectCompatCandidates(report: CompatReport, files: LoadedFile[]): Can
     const rightCompat = right.file.startsWith("src/plugins/compat/") ? 0 : 1;
     return leftCompat - rightCompat || left.file.localeCompare(right.file);
   });
-  return records
-    .filter(
-      (record) =>
-        record?.status === "deprecated" &&
-        typeof record.code === "string" &&
-        typeof record.removeAfter === "string",
-    )
-    .map((record) => {
-      const code = record.code as string;
-      const removeAfter = record.removeAfter as string;
-      const location = findCompatLocation(code, locationFiles);
-      return {
+  return records.flatMap((record) => {
+    if (
+      record?.status !== "deprecated" ||
+      typeof record.code !== "string" ||
+      typeof record.removeAfter !== "string"
+    ) {
+      return [];
+    }
+    const { code, removeAfter } = record;
+    const location = findCompatLocation(code, locationFiles);
+    return [
+      {
         file: location.file,
         line: location.line,
         text: compactText([
           `${code}: removeAfter ${removeAfter}`,
           typeof record.replacement === "string" ? `replacement ${record.replacement}` : "",
         ]),
-        source: "compat-registry",
-      };
-    });
+        source: "compat-registry" as const,
+      },
+    ];
+  });
 }
 
 function sortAndDeduplicate(candidates: Candidate[]): Candidate[] {

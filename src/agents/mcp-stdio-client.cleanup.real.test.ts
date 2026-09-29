@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../process/supervisor/cancellation-policy.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { createMcpStdioClient, type McpStdioClient } from "./mcp-stdio-client.js";
 
 const fixture = vi.hoisted(() => ({
@@ -48,6 +49,9 @@ afterEach(async () => {
 async function createFixture(
   hold: "relay" | "blocked-relay" | "anchor" | "anchor-kill-fails" = "relay",
 ) {
+  // These faults target the retained two-process POSIX relay. The Linux native
+  // owner has no intermediate relay to hold or forcibly retire.
+  mockProcessPlatform("darwin");
   const root = tempDirs.make("mcp-relay-retirement-");
   const preload = path.join(root, "retain-relay.mjs");
   const heldPath = path.join(root, "held-anchor");

@@ -2,7 +2,6 @@
 // oxfmt-ignore
 import { cleanupPreparedModelRuntimeHarness, getPreparedModelRuntimeMocks, resetPreparedModelRuntimeHarness } from "../agents/prepared-model-runtime.test-harness.js";
 import fs from "node:fs/promises";
-import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
@@ -23,6 +22,7 @@ import {
   getRuntimeConfigWriteApplication,
   attachRuntimeConfigWriteApplication,
 } from "../config/runtime-write-application.js";
+import * as configFileSource from "../config/source-file.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { bindPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import { activateSavedSetupCredential } from "../system-agent/setup-inference-credential-access.js";
@@ -40,6 +40,7 @@ import {
   startGatewayConfigReloader,
   type GatewayConfigReloadTransactionOwnership,
 } from "./config-reload.js";
+import { createWatcherMock } from "./config-reload.watcher.test-support.js";
 let state: OpenClawTestState;
 beforeEach(async () => {
   state = await createOpenClawTestState({ label: "activation-reloader" });
@@ -120,7 +121,24 @@ describe("setup activation reload ownership", () => {
       await refreshPreparedModelRuntimeSnapshots(previous);
       const initial = await readConfigFileSnapshot();
       const reloadError = vi.fn();
-      const watch = vi.spyOn(chokidar, "watch");
+      let emitConfigChange: (() => void) | undefined;
+      const configFileAdapter = vi
+        .spyOn(configFileSource, "createConfigFileAdapter")
+        .mockImplementation((options) => {
+          if (options.path === state.configPath) {
+            emitConfigChange = options.onChange;
+          }
+          const watcher = createWatcherMock();
+          const adapter = watcher.attach(options);
+          const start = adapter.start;
+          return {
+            ...adapter,
+            start() {
+              start();
+              watcher.emit("ready");
+            },
+          };
+        });
       const watcherReady = createDeferred();
       const captureEntered = createDeferred();
       const releaseCapture = createDeferred();
@@ -204,13 +222,13 @@ describe("setup activation reload ownership", () => {
       try {
         await reloader.ready;
         if (scenario === "superseded") {
-          const [watched] = watch.mock.results;
-          if (watched?.type !== "return") {
-            throw new Error("config watcher was not created");
+          const notifyConfigChange = emitConfigChange;
+          if (!notifyConfigChange) {
+            throw new Error("config file adapter was not created");
           }
-          // Deliver the writer's filesystem echo during model preparation.
+          // Deliver the writer's source notification during model preparation.
           getPreparedModelRuntimeMocks().discoverModels.mockImplementationOnce(() => {
-            watched.value.emit("change", state.configPath);
+            notifyConfigChange();
             echoObserved = true;
           });
         }
@@ -281,6 +299,7 @@ describe("setup activation reload ownership", () => {
             expect(nextRaw).not.toBe(raw);
           }
           await fs.writeFile(state.configPath, nextRaw);
+          emitConfigChange?.();
           await observedDuringCapture.promise;
           expect(currentOwnership?.isCurrent()).toBe(false);
           expect(await fs.readFile(state.configPath, "utf8")).toBe(nextRaw);
@@ -377,7 +396,11 @@ describe("setup activation reload ownership", () => {
         ).toBe("openai/fixture-newer");
       } finally {
         releaseCapture.resolve();
-        await reloader.stop();
+        try {
+          await reloader.stop();
+        } finally {
+          configFileAdapter.mockRestore();
+        }
       }
     },
   );

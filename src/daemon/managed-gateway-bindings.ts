@@ -3,9 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveGatewayLaunchAgentLabel } from "./constants.js";
 import { listManagedOpenClawGatewayServices, type ExtraGatewayService } from "./inspect.js";
 import { decodeLaunchdPlistMetadata } from "./launchd-plist.js";
+import type { LoadedLaunchAgentState } from "./launchd-runtime.js";
 import type { GatewayServiceEnv, SystemdServiceReadTarget } from "./service-types.js";
 import { resolveSystemdTemplateInstanceName } from "./systemd-scope.js";
 import { parseSystemdInlineEnvironment } from "./systemd-unit.js";
@@ -16,13 +18,47 @@ export type ManagedGatewayBinding = {
   readonly scope?: "user" | "system";
   readonly systemdReadTarget?: SystemdServiceReadTarget;
   readonly windowsStartupEntry?: string;
+  readonly launchAgentPlistPath?: string;
 };
+
+/** Inspect the exact discovered owner; Startup definitions must never borrow Task state. */
+export async function readManagedGatewayBindingState(
+  binding: ManagedGatewayBinding,
+  options: { timeoutMs?: number } = {},
+): Promise<LoadedLaunchAgentState> {
+  if (process.platform === "darwin") {
+    const { readLoadedLaunchAgentState } = await import("./launchd-runtime.js");
+    return readLoadedLaunchAgentState(binding.env, {
+      ...options,
+      plistPath: binding.launchAgentPlistPath,
+    });
+  }
+  const { readGatewayServiceState, resolveGatewayService } = await import("./service.js");
+  let timeoutMs = options.timeoutMs;
+  if (binding.windowsStartupEntry) {
+    const { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } =
+      await import("../infra/windows-powershell-spawn.js");
+    timeoutMs = Math.min(
+      timeoutMs ?? WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+      WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+    );
+  }
+  return readGatewayServiceState(resolveGatewayService(), {
+    env: binding.env,
+    requireEffective: true,
+    requireLoadedCommand: true,
+    ...(binding.systemdReadTarget ? { systemdReadTarget: binding.systemdReadTarget } : {}),
+    ...(binding.windowsStartupEntry ? { windowsStartupEntry: binding.windowsStartupEntry } : {}),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  });
+}
 
 function bindingSelectorKey(binding: ManagedGatewayBinding): string {
   return [
     binding.profile,
     binding.scope ?? binding.systemdReadTarget?.scope ?? "",
     binding.systemdReadTarget?.unitPath ?? "",
+    binding.launchAgentPlistPath ?? "",
     binding.windowsStartupEntry
       ? path.win32.normalize(binding.windowsStartupEntry).toLowerCase()
       : "",
@@ -148,7 +184,12 @@ async function bindingFromLaunchdService(
   if (plistPath) {
     const bytes = await readServiceFile(plistPath);
     if (bytes) {
-      const plist = await decodeLaunchdPlistMetadata(bytes).catch(() => undefined);
+      const plist = await decodeLaunchdPlistMetadata(bytes).catch((error: unknown) => {
+        if (hasCommandProcessCleanupError(error)) {
+          throw error;
+        }
+        return undefined;
+      });
       const vars = plist?.EnvironmentVariables;
       if (isRecord(vars)) {
         const profileValue = readStringField(vars, "OPENCLAW_PROFILE");
@@ -163,6 +204,7 @@ async function bindingFromLaunchdService(
   return {
     profile,
     scope: svc.scope,
+    ...(plistPath ? { launchAgentPlistPath: plistPath } : {}),
     env: hostBindingEnv(env, {
       ...profileEnvFields(profile),
       OPENCLAW_LAUNCHD_LABEL: svc.label,
@@ -186,7 +228,7 @@ function bindingFromWindowsTask(
 }
 
 /**
- * Enumerate installed managed Gateway selectors for the live-dist fence.
+ * Enumerate installed managed Gateway selectors for runtime mutation checks.
  */
 export async function discoverManagedGatewayBindings(
   env: Record<string, string | undefined>,
@@ -233,7 +275,7 @@ export async function discoverManagedGatewayBindings(
       push(bindingFromWindowsTask(svc.label, svc.windowsProfile, env));
     }
   } catch (error) {
-    if (options.requireComplete) {
+    if (options.requireComplete || hasCommandProcessCleanupError(error)) {
       throw error;
     }
     return results;

@@ -30,6 +30,21 @@ export const personalPublicationAccount = { accountId: 101, login: "personal-ali
 const account = personalPublicationAccount;
 const profileId = "ghp_22222222222222222222222222222222";
 
+export function readPersonalPublicationFixtureStatus(
+  fixture: Pick<
+    Awaited<ReturnType<typeof createPersonalPublicationFixture>>,
+    "coordinator" | "action"
+  >,
+  requestId: string,
+) {
+  return fixture.coordinator.personalStatus(
+    fixture.action,
+    { sessionKey: SESSION_KEY, agentId: "main", sessionId: SESSION_ID },
+    requestId,
+    undefined,
+  );
+}
+
 export async function expectPersonalPublicationReplay(
   {
     generation,

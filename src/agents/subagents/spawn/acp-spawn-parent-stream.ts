@@ -1,4 +1,3 @@
-/** Relays child ACP session stream updates back into the requester parent session. */
 import { asFiniteNumber, resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -57,13 +56,6 @@ function normalizeStringArray(value: unknown): string[] {
     return [];
   }
   return value.filter((item): item is string => typeof item === "string" && item.length > 0);
-}
-
-function formatProxyEnvSummary(keys: string[]): string {
-  if (keys.length === 0) {
-    return "proxy env: none";
-  }
-  return `proxy env: ${keys.join(", ")}`;
 }
 
 function mergeStreamingConfig(base: unknown, override: unknown): unknown {
@@ -139,7 +131,6 @@ function resolveParentProgressCommentary(params: {
   );
 }
 
-/** Starts a bounded parent-session relay for child ACP output and progress notices. */
 export function startAcpSpawnParentStreamRelay(params: {
   runId: string;
   parentSessionKey: string;
@@ -459,29 +450,17 @@ export function startAcpSpawnParentStreamRelay(params: {
   const buildNoOutputNotice = () => {
     const seconds = Math.round(noOutputNoticeMs / 1000);
     if (!promptSubmittedAt) {
-      return {
-        summary: `No prompt submission observed for ${seconds}s after child start.`,
-        text: `${relayLabel} session started but no prompt submission was observed for ${seconds}s.`,
-      };
+      return `${relayLabel} session started but no prompt submission was observed for ${seconds}s.`;
     }
     if (!firstRuntimeEventAt) {
-      const proxySummary = formatProxyEnvSummary(proxyEnvKeysAtPrompt);
-      return {
-        summary: `Prompt submitted but no ACP runtime event for ${seconds}s (${proxySummary}).`,
-        text: `${relayLabel} prompt was submitted but no ACP runtime event arrived for ${seconds}s (${proxySummary}). Check upstream connectivity, auth, or proxy/network access in the gateway child environment.`,
-      };
+      const proxySummary = `proxy env: ${proxyEnvKeysAtPrompt.join(", ") || "none"}`;
+      return `${relayLabel} prompt was submitted but no ACP runtime event arrived for ${seconds}s (${proxySummary}). Check upstream connectivity, auth, or proxy/network access in the gateway child environment.`;
     }
     if (!firstVisibleOutputAt) {
       const lastEvent = lastRuntimeEventType ? ` Last ACP event: ${lastRuntimeEventType}.` : "";
-      return {
-        summary: `ACP runtime active but no visible assistant output for ${seconds}s.${lastEvent}`,
-        text: `${relayLabel} has ACP runtime activity but no visible assistant output for ${seconds}s.${lastEvent} It may be working, blocked on a tool, or failing before visible output.`,
-      };
+      return `${relayLabel} has ACP runtime activity but no visible assistant output for ${seconds}s.${lastEvent} It may be working, blocked on a tool, or failing before visible output.`;
     }
-    return {
-      summary: `No visible output for ${seconds}s. It may be waiting for input.`,
-      text: `${relayLabel} has produced no visible output for ${seconds}s. It may be waiting for interactive input.`,
-    };
+    return `${relayLabel} has produced no visible output for ${seconds}s. It may be waiting for interactive input.`;
   };
 
   const noOutputWatcherTimer = setInterval(() => {
@@ -495,8 +474,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     stallNotified = true;
-    const notice = buildNoOutputNotice();
-    emit(notice.text, `${contextPrefix}:stall`);
+    emit(buildNoOutputNotice(), `${contextPrefix}:stall`);
   }, noOutputPollMs);
   noOutputWatcherTimer.unref?.();
 

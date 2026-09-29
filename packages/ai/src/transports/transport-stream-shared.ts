@@ -1,8 +1,3 @@
-/**
- * Shared transport-stream normalization helpers.
- *
- * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
- */
 import type {
   AssistantMessage,
   Model,

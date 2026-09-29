@@ -18,6 +18,7 @@ import {
 } from "../infra/state-migrations.state-dir.js";
 import * as updateState from "../infra/update-candidate-state.js";
 import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -153,12 +154,23 @@ describe("Doctor maintenance with shared-state workers", () => {
                   beforeAdmission.close();
                 }
               }
+              const admittedGenerations = databaseGenerations
+                ? readUpdateDatabaseGenerations([databasePath])
+                : undefined;
               const log = vi.fn();
               const maintenance = await beginDoctorMaintenance({
                 options: { repair: true, nonInteractive: true },
                 root: null,
                 runtime: { log, error() {}, exit() {} },
                 databaseGenerations,
+                assertCurrent:
+                  scenario === "resident-worker"
+                    ? () => {
+                        expect(readConfigMachineState("doctor-relocation-sentinel")).toEqual({
+                          keep: true,
+                        });
+                      }
+                    : undefined,
               });
               try {
                 if (scenario.endsWith("-contender")) {
@@ -225,6 +237,7 @@ describe("Doctor maintenance with shared-state workers", () => {
               if (databaseGenerations) {
                 expect(maintenance!.databaseWrites).toEqual({
                   unchanged: scenario === "receipt-unchanged",
+                  fromGenerations: admittedGenerations,
                   generations: readUpdateDatabaseGenerations([databasePath]),
                 });
                 expect(maintenance!.databaseWrites?.generations[databasePath]).not.toBe(

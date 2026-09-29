@@ -281,7 +281,7 @@ export async function statusCommand(
     nodeService: nodeDaemon,
     nodeOnlyGateway,
   });
-  const updateRows = buildStatusUpdateRows(
+  const updateRows = await buildStatusUpdateRows(
     (await readRestartSentinelReadOnly().catch(() => null))?.payload,
     {
       ok,

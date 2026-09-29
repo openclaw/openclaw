@@ -4,9 +4,6 @@ import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugi
 import { isHttpsUrl } from "./media-url.js";
 import type { LineOutboundMediaKind } from "./types.js";
 
-// LINE accepts a tracking id on a video sent to a user, but the SDK type omits it.
-type LineVideoMessage = messagingApi.VideoMessage & { trackingId?: string };
-
 type LineOutboundMediaResolved = {
   mediaUrl: string;
   /** "unsupported" names a known format LINE cannot carry as native media. */
@@ -126,41 +123,6 @@ function isLineUserTarget(target: string): boolean {
   return /^U/i.test(normalized);
 }
 
-function createImageMessage(
-  originalContentUrl: string,
-  previewImageUrl?: string,
-): messagingApi.ImageMessage {
-  return {
-    type: "image",
-    originalContentUrl,
-    previewImageUrl: previewImageUrl ?? originalContentUrl,
-  };
-}
-
-function createVideoMessage(
-  originalContentUrl: string,
-  previewImageUrl: string,
-  trackingId?: string,
-): LineVideoMessage {
-  return {
-    type: "video",
-    originalContentUrl,
-    previewImageUrl,
-    ...(trackingId ? { trackingId } : {}),
-  };
-}
-
-function createAudioMessage(
-  originalContentUrl: string,
-  durationMs: number,
-): messagingApi.AudioMessage {
-  return {
-    type: "audio",
-    originalContentUrl,
-    duration: durationMs,
-  };
-}
-
 // An image bubble LINE cannot fill renders as blank space the sender never sees,
 // so media the platform will not carry degrades to the URL it was made of — the
 // same shape createLocationMessage uses for a pin LINE will not draw.
@@ -168,21 +130,27 @@ function lineMediaUrlFallback(mediaUrl: string): messagingApi.TextMessage {
   return { type: "text", text: mediaUrl };
 }
 
-function buildLineMediaMessageObject(
-  resolved: LineOutboundMediaResolved,
-  opts?: { allowTrackingId?: boolean },
-): messagingApi.Message {
+// Reply-token and push delivery share media validation and provider payload construction.
+export async function buildLineMediaMessage(
+  mediaUrl: string,
+  opts: ResolveLineOutboundMediaOpts,
+  target: string,
+): Promise<messagingApi.Message> {
+  const resolved = await resolveLineOutboundMedia(mediaUrl, opts);
+  const allowTrackingId = isLineUserTarget(target);
   switch (resolved.mediaKind) {
     case "unsupported":
       return lineMediaUrlFallback(resolved.mediaUrl);
     case "video": {
       const previewImageUrl = resolved.previewImageUrl?.trim();
       if (previewImageUrl) {
-        return createVideoMessage(
-          resolved.mediaUrl,
+        return {
+          type: "video",
+          originalContentUrl: resolved.mediaUrl,
           previewImageUrl,
-          opts?.allowTrackingId ? resolved.trackingId : undefined,
-        );
+          // LINE accepts tracking ids for users although its SDK omits the field.
+          ...(allowTrackingId && resolved.trackingId ? { trackingId: resolved.trackingId } : {}),
+        };
       }
       // LINE always needs a poster for a video. Explicit kind or video-only
       // metadata keeps the missing field visible; only URL inference degrades.
@@ -192,21 +160,16 @@ function buildLineMediaMessageObject(
       return lineMediaUrlFallback(resolved.mediaUrl);
     }
     case "audio":
-      return createAudioMessage(resolved.mediaUrl, resolved.durationMs ?? 60000);
+      return {
+        type: "audio",
+        originalContentUrl: resolved.mediaUrl,
+        duration: resolved.durationMs ?? 60000,
+      };
     default:
-      return createImageMessage(resolved.mediaUrl, resolved.previewImageUrl);
+      return {
+        type: "image",
+        originalContentUrl: resolved.mediaUrl,
+        previewImageUrl: resolved.previewImageUrl ?? resolved.mediaUrl,
+      };
   }
-}
-
-// Resolve and build through one leaf so reply-token and inline push delivery
-// cannot drift on media kind, preview, duration, or tracking-id policy.
-export async function buildLineMediaMessage(
-  mediaUrl: string,
-  opts: ResolveLineOutboundMediaOpts,
-  target: string,
-): Promise<messagingApi.Message> {
-  const resolved = await resolveLineOutboundMedia(mediaUrl, opts);
-  return buildLineMediaMessageObject(resolved, {
-    allowTrackingId: isLineUserTarget(target),
-  });
 }

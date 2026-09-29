@@ -66,6 +66,7 @@ export function createNodeWorkerWorkspaceActions(params: {
   ownerSignal: AbortSignal;
   isOwnerCurrent: () => boolean;
   restoredWorkspace?: NodeWorkerWorkspaceBinding;
+  supportsNativeQuiescence?: () => Promise<boolean>;
   workspaceTransfer: NodeWorkspaceTransferService;
   runWorkspaceCommand: (
     command: WorkerWorkspaceCommand & { resetWorkspace?: boolean; sessionKey?: string },
@@ -88,6 +89,7 @@ export function createNodeWorkerWorkspaceActions(params: {
   const quiesceWorkspace = createWorkerWorkspaceQuiescence({
     ownerSignal: params.ownerSignal,
     sharedHost: true,
+    nativeWatchdog: params.supportsNativeQuiescence,
     runWorkspaceCommand: exec,
   });
   const validateRestoredWorkspace = async (authorize?: () => void): Promise<void> => {

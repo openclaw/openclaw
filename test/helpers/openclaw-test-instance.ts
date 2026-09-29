@@ -43,6 +43,8 @@ type OpenClawTestInstanceOptions = {
   cwd?: string;
   entrypoint?: string[];
   port?: number;
+  /** Set false for absent-Gateway diagnostics; cooperative port claims remain held. */
+  reserveIdlePort?: boolean;
   gatewayToken?: string;
   hookToken?: string;
   config?: Record<string, unknown>;
@@ -804,6 +806,9 @@ export async function createOpenClawTestInstance(
         options.config,
       ),
     );
+    if (options.reserveIdlePort === false) {
+      await verifyCleanup(releasePort);
+    }
     signal?.throwIfAborted();
   } catch (error) {
     // Neither owner is exposed until configuration succeeds; roll both back,
@@ -833,7 +838,12 @@ export async function createOpenClawTestInstance(
   let child: { process: OpenClawTestProcess; ready: boolean } | undefined;
   const commands = new Set<Promise<OpenClawTestInstanceCommandResult>>();
   const reserveIdlePort = async () => {
-    if (options.port === undefined && acceptingWork && !reservation) {
+    if (
+      options.reserveIdlePort !== false &&
+      options.port === undefined &&
+      acceptingWork &&
+      !reservation
+    ) {
       reservation = await reserveGatewayPort(port, options.verifyCleanup);
     }
   };

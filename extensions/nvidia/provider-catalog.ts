@@ -13,7 +13,7 @@ import {
   type LookupFn,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalObjectRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const NVIDIA_DEFAULT_MODEL_ID = "nvidia/nemotron-3-ultra-550b-a55b";
@@ -45,13 +45,6 @@ const DEPRECATED_NVIDIA_MODEL_IDS = new Set<string>(
     .filter((model) => "status" in model && model.status === "deprecated")
     .map((model) => model.id),
 );
-
-type NvidiaFeaturedModel = {
-  model: string;
-  "model-name": string;
-  context: number;
-  "max-output": number;
-};
 
 const lookupNvidiaFeaturedModelHostname = (async (
   hostname: string,
@@ -211,10 +204,10 @@ function applyNvidiaModelDefaults(models: ModelDefinitionConfig[]): ModelDefinit
 }
 
 function parseNvidiaFeaturedModel(row: unknown): ModelDefinitionConfig | null {
-  if (!row || typeof row !== "object") {
+  const entry = asOptionalObjectRecord(row);
+  if (!entry) {
     return null;
   }
-  const entry = row as Partial<NvidiaFeaturedModel>;
   if (
     typeof entry.model !== "string" ||
     typeof entry["model-name"] !== "string" ||

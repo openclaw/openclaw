@@ -150,6 +150,7 @@ async function steerWithTranscriptLifecycle(
   onQueueAccepted?: (accepted: boolean) => void,
   canInject?: () => boolean,
   currentInboundContext?: CurrentInboundPromptContext,
+  onQueueSettled?: () => void,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -176,6 +177,7 @@ async function steerWithTranscriptLifecycle(
       unsubscribe?.();
       unsubscribePersistenceFailure?.();
       abortSignal?.removeEventListener("abort", onAbort);
+      onQueueSettled?.();
       if (err) {
         reject(toErrorObject(err, "Non-Error rejection"));
         return;
@@ -349,9 +351,10 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     (await claimEmbeddedPendingUserInputAnswer(text, options, sessionKey, canInject, authority))
   ) {
     options?.onQueueAccepted?.(true);
+    options?.onQueueSettled?.();
     return;
   }
-  if (options?.waitForTranscriptCommit === undefined) {
+  if (!options || (options.waitForTranscriptCommit === undefined && !options.onQueueSettled)) {
     try {
       await steerActiveSession(
         activeSession,
@@ -376,7 +379,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
       activeSession,
       text,
       options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS,
-      options.waitForTranscriptCommit,
+      options.waitForTranscriptCommit === true,
       options.userTurnTranscriptRecorder,
       options.images,
       options.media,
@@ -386,6 +389,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
       options.onQueueAccepted,
       canInject,
       options.currentInboundContext,
+      options.onQueueSettled,
     );
   } catch (error) {
     if (error instanceof EmbeddedSteeringAcceptedUnconfirmedError) {

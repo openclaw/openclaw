@@ -73,7 +73,6 @@ import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 export type SubagentAnnounceDirectParams = {
   requesterSessionKey: string;
   requesterAgentId?: string;
-  requesterRunTimeoutSeconds?: number;
   targetRequesterSessionKey: string;
   triggerMessage: string;
   internalEvents?: AgentInternalEvent[];
@@ -375,7 +374,6 @@ export async function sendSubagentAnnounceDirectly(
     const directAgentParams: Record<string, unknown> = {
       ...(parentOnly ? { expectedExistingSessionId: params.completionRequesterSessionId } : {}),
       sessionKey: canonicalRequesterSessionKey,
-      timeout: params.requesterRunTimeoutSeconds,
       message: params.triggerMessage,
       deliver: shouldDeliverAgentFinal,
       bestEffortDeliver: params.bestEffortDeliver,
@@ -445,19 +443,29 @@ export async function sendSubagentAnnounceDirectly(
                 settleWakeSourceSessionKeys: params.settleWakeSourceSessionKeys,
                 ...(parentOnly ? { privateCompletion: true as const } : {}),
                 delegatedToolPolicyHandoff:
-                  isSubagentCompletion &&
-                  trustedCompletionEvent &&
+                  ((isSubagentCompletion && trustedCompletionEvent) ||
+                    (sourceToolId === "subagent_settle" &&
+                      params.settleWakeSourceSessionKeys?.length &&
+                      params.isSourceSessionEffectsAllowed)) &&
                   params.sourceSessionKey &&
                   requesterActivity.sessionId &&
                   params.isSourceSessionEffectsAllowed?.() !== false
                     ? {
                         sourceSessionKey: params.sourceSessionKey,
-                        ...(trustedCompletionEvent.childSessionId
+                        ...(trustedCompletionEvent?.childSessionId
                           ? { sourceSessionId: trustedCompletionEvent.childSessionId }
                           : {}),
                         targetSessionKey: canonicalRequesterSessionKey,
                         targetSessionId: requesterActivity.sessionId,
                         idempotencyKey: params.directIdempotencyKey,
+                        ...(sourceToolId === "subagent_settle" && params.settleWakeSourceSessionKeys
+                          ? {
+                              settleBatch: {
+                                sourceSessionKeys: params.settleWakeSourceSessionKeys,
+                                isCurrent: isCompletionDeliveryAllowed,
+                              },
+                            }
+                          : {}),
                       }
                     : undefined,
                 expectFinal: true,

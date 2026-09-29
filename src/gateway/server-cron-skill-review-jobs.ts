@@ -32,62 +32,49 @@ export async function reconcileSkillCollectionReviewJobs(params: {
     jobs,
     skillCollectionReviewMonitorAgentId,
   );
-  // Let I/O run between mutations, then fence stale passes before wrappers
-  // that can stop process owners ahead of their database commit guard.
-  for (const { agentId, job } of duplicates) {
+  const runMutation = async (
+    agentId: string,
+    failureMessage: string,
+    mutate: () => Promise<unknown>,
+  ) => {
+    // Fence after yielding: wrappers can stop process owners before their commit guard.
     await yieldToEventLoop();
     params.commitGuard?.();
     try {
-      await params.cron.remove(job.id, {
-        systemOwned: true,
-        ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
-      });
+      await mutate();
     } catch (error) {
       params.commitGuard?.();
       ok = false;
-      params.logger.warn(
-        { agentId, err: String(error) },
-        "cron-skill-review: duplicate monitor cleanup failed",
-      );
+      params.logger.warn({ agentId, err: String(error) }, failureMessage);
     }
+  };
+  for (const { agentId, job } of duplicates) {
+    await runMutation(agentId, "cron-skill-review: duplicate monitor cleanup failed", () =>
+      params.cron.remove(job.id, {
+        systemOwned: true,
+        ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
+      }),
+    );
   }
   for (const spec of specs) {
-    await yieldToEventLoop();
-    params.commitGuard?.();
-    retained.delete(spec.agentId);
-    try {
-      await params.cron.add(spec.input, {
+    await runMutation(spec.agentId, "cron-skill-review: monitor convergence failed", () => {
+      retained.delete(spec.agentId);
+      return params.cron.add(spec.input, {
         enabledExplicit: true,
         systemOwned: true,
         matchesExisting: (job) => skillCollectionReviewMonitorAgentId(job) === spec.agentId,
         ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
       });
-    } catch (error) {
-      params.commitGuard?.();
-      ok = false;
-      params.logger.warn(
-        { agentId: spec.agentId, err: String(error) },
-        "cron-skill-review: monitor convergence failed",
-      );
-    }
+    });
   }
 
   for (const [agentId, job] of retained) {
-    await yieldToEventLoop();
-    params.commitGuard?.();
-    try {
-      await params.cron.remove(job.id, {
+    await runMutation(agentId, "cron-skill-review: stale monitor cleanup failed", () =>
+      params.cron.remove(job.id, {
         systemOwned: true,
         ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
-      });
-    } catch (error) {
-      params.commitGuard?.();
-      ok = false;
-      params.logger.warn(
-        { agentId, err: String(error) },
-        "cron-skill-review: stale monitor cleanup failed",
-      );
-    }
+      }),
+    );
   }
   return { ok };
 }

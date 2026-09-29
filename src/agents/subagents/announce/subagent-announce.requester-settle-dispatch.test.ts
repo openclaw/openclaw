@@ -162,20 +162,16 @@ describe("requester settle dispatch deadline", () => {
     vi.useRealTimers();
   });
 
-  it.each([
-    { afterRequesterYield: false, runTimeoutSeconds: 0 },
-    { afterRequesterYield: true, runTimeoutSeconds: 600 },
-    { afterRequesterYield: true, runTimeoutSeconds: undefined },
-  ])(
-    "wakes a nested yielded requester once with its $runTimeoutSeconds-second budget (child completed before yield=$afterRequesterYield)",
-    async ({ afterRequesterYield, runTimeoutSeconds }) => {
+  it.each([false, true])(
+    "wakes a nested yielded requester once (child completed before yield=%s)",
+    async (afterRequesterYield) => {
       const requesterSessionKey = "agent:main:subagent:middle";
       registryRead.getLatestLiveSubagentRunByChildSessionKey.mockReturnValue({
         ...settledChild(),
         runId: "yielded-requester",
         childSessionKey: requesterSessionKey,
         pauseReason: "sessions_yield",
-        runTimeoutSeconds,
+        runTimeoutSeconds: 0,
       });
       const child = settledChild();
       child.requesterSessionKey = requesterSessionKey;
@@ -223,6 +219,7 @@ describe("requester settle dispatch deadline", () => {
         }
       });
       const params = {
+        isSourceCurrent: () => true,
         requesterSessionKey,
         settledEntry: child,
         transitionBatch: (
@@ -241,7 +238,6 @@ describe("requester settle dispatch deadline", () => {
         expect.objectContaining({
           targetRequesterSessionKey: requesterSessionKey,
           requesterIsSubagent: true,
-          requesterRunTimeoutSeconds: runTimeoutSeconds ?? 0,
           requireVisibleReply: true,
           sourceTool: "subagent_settle",
           triggerMessage: expect.stringContaining("child result"),
@@ -270,6 +266,7 @@ describe("requester settle dispatch deadline", () => {
 
     await expect(
       maybeWakeRequesterAfterAllChildrenSettled({
+        isSourceCurrent: () => true,
         requesterSessionKey: REQUESTER_KEY,
         settledEntry: retired,
         transitionBatch,
@@ -310,6 +307,7 @@ describe("requester settle dispatch deadline", () => {
       });
       const wake = () =>
         maybeWakeRequesterAfterAllChildrenSettled({
+          isSourceCurrent: () => true,
           requesterSessionKey: REQUESTER_KEY,
           settledEntry: child,
           transitionBatch: (batch, state) => {
@@ -357,6 +355,7 @@ describe("requester settle dispatch deadline", () => {
     const loaded = createDeferredCore();
     const pending = loaded.promise.then(() =>
       maybeWakeRequesterAfterAllChildrenSettled({
+        isSourceCurrent: () => true,
         requesterSessionKey: REQUESTER_KEY,
         settledEntry: retired,
         transitionBatch,
@@ -377,6 +376,7 @@ describe("requester settle dispatch deadline", () => {
     registryRead.listSubagentRunsForRequester.mockReturnValue([replacement]);
     await expect(
       maybeWakeRequesterAfterAllChildrenSettled({
+        isSourceCurrent: () => true,
         requesterSessionKey: REQUESTER_KEY,
         settledEntry: replacement,
         transitionBatch,
@@ -424,6 +424,7 @@ describe("requester settle dispatch deadline", () => {
         .mockImplementationOnce(async () => await replacementDone.promise);
       const wake = (entry: SubagentRunRecord) =>
         maybeWakeRequesterAfterAllChildrenSettled({
+          isSourceCurrent: () => true,
           requesterSessionKey: REQUESTER_KEY,
           settledEntry: entry,
           transitionBatch: (batch, state) => {
@@ -552,6 +553,7 @@ describe("requester settle dispatch deadline", () => {
       onCommitted?.();
     });
     const wakeParams = {
+      isSourceCurrent: () => true,
       requesterSessionKey: REQUESTER_KEY,
       settledEntry: child,
       transitionBatch: (
@@ -690,6 +692,7 @@ describe("requester settle dispatch deadline", () => {
         },
         () =>
           maybeWakeRequesterAfterAllChildrenSettled({
+            isSourceCurrent: () => true,
             requesterSessionKey: REQUESTER_KEY,
             settledEntry: child,
             signal: stop.signal,
@@ -863,6 +866,7 @@ describe("requester settle dispatch deadline", () => {
         },
         () =>
           maybeWakeRequesterAfterAllChildrenSettled({
+            isSourceCurrent: () => true,
             requesterSessionKey: REQUESTER_KEY,
             settledEntry: child,
             transitionBatch,

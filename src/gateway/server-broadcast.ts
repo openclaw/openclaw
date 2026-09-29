@@ -27,6 +27,7 @@ import {
   modelMetadataInvalidationFragment,
 } from "./server-broadcast-scopes.js";
 import type {
+  SessionEventProjection,
   GatewayBroadcastFn,
   GatewayBroadcastOpts,
   GatewayBroadcastToConnIdsFn,
@@ -186,13 +187,6 @@ function frameWithSequence(
   return `{"type":"event","event":${base.eventJSON}${payload},"seq":${seq}${base.stateVersionFragment}${recipient}}`;
 }
 
-export type SessionEventProjection = {
-  payload: unknown;
-  /** Certifies a fresh, mutable payload envelope and row bytes for this publication. */
-  serializeSession?: () => string;
-  delivered?: () => void;
-};
-
 export function createGatewayBroadcaster(params: {
   clients: GatewayClientRegistry;
   // Reused arrays are immutable snapshots; the projection still checks each recipient's authority.
@@ -202,7 +196,11 @@ export function createGatewayBroadcaster(params: {
   prepareSessionEventProjection?: (
     event: string,
     payload: unknown,
-    scope: { sessionKeys: readonly string[]; agentId?: string },
+    scope: {
+      sessionKeys: readonly string[];
+      agentId?: string;
+      prepareSessionProjection?: GatewayBroadcastOpts["prepareSessionProjection"];
+    },
   ) => ((client: GatewayWsClient) => SessionEventProjection | undefined) | undefined;
   sessionMessageSubscribers?: SessionMessageSubscriberRegistry;
   canReceiveSessionEvent?: (
@@ -281,7 +279,7 @@ export function createGatewayBroadcaster(params: {
     let outboundEventLogged = false;
     let lastFrameSequence = 0;
     let lastFrameRecipientProfileId: string | undefined;
-    let lastFrame: string | undefined;
+    let lastFrame: string | Buffer | undefined;
     let lastPayloadFragment: string | undefined;
     const frames: PreparedFrames = retained?.frames ?? {};
     // Private coalescers preserve inputs; identical pending histories can share this merge.
@@ -563,7 +561,7 @@ export function createGatewayBroadcaster(params: {
         useDelta && projection
           ? (frames.delta ??= frameBaseFor(projection.delta(payload)))
           : getFrameBase();
-      let frame: string;
+      let frame: string | Buffer;
       let delivered: (() => void) | undefined;
       try {
         if (!sessionProjectionPrepared) {
@@ -587,6 +585,9 @@ export function createGatewayBroadcaster(params: {
           projectSession = params.prepareSessionEventProjection?.(event, payload, {
             sessionKeys,
             agentId,
+            ...(opts?.prepareSessionProjection
+              ? { prepareSessionProjection: opts.prepareSessionProjection }
+              : {}),
           });
           skipSourcePayload = canSkipSourcePayload && projectSession !== undefined;
           sessionProjectionPrepared = true;
@@ -641,6 +642,10 @@ export function createGatewayBroadcaster(params: {
         } else {
           frame = frameWithSequence(base, nextSeq, payloadFragment, recipientProfileId);
           if (!presencePayload && !projectSession) {
+            // Share UTF-8 bytes too: ws otherwise encodes the same string for every socket.
+            if (!retained && (targetConnIds?.size ?? params.clients.size) > 1) {
+              frame = Buffer.from(frame);
+            }
             lastFrameSequence = nextSeq;
             lastFrameRecipientProfileId = recipientProfileId;
             lastPayloadFragment = payloadFragment;
@@ -682,7 +687,11 @@ export function createGatewayBroadcaster(params: {
       try {
         // Publish the baseline before send can reenter; failures retire this transport.
         delivered?.();
-        state.socket.send(frame, sent);
+        if (typeof frame === "string") {
+          state.socket.send(frame, sent);
+        } else {
+          state.socket.send(frame, { binary: false }, sent);
+        }
       } catch (err) {
         sent(err instanceof Error ? err : new Error(String(err)));
       }

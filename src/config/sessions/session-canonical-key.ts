@@ -40,12 +40,15 @@ import {
   hasSqliteSessionOwnerColumns,
   projectSqliteSessionOwner,
 } from "./session-accessor.sqlite-owner-projection.js";
-import { sessionEntryMetadataJson } from "./session-accessor.sqlite-status.js";
 import {
   canonicalSessionKeyMigrationRequiredError,
   validateCanonicalSessionRow,
 } from "./session-canonical-row.js";
 import { deferCanonicalSessionValidation } from "./session-canonical-validation-deferral.js";
+import {
+  attachSessionEntrySnapshots,
+  sessionEntrySnapshotColumns,
+} from "./session-entry-snapshots.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
@@ -368,39 +371,36 @@ export function assertCanonicalSessionEntryLineageWrite(entry: SessionEntry): vo
 /** Query shape shared by complete inventories and bounded canonical validation. */
 export function canonicalSessionValidationQuery(
   database: { db: DatabaseSync },
-  options: { fullEntries?: boolean; metadata?: boolean } = {},
+  options: { metadata?: boolean } = {},
 ) {
-  return (
-    getNodeSqliteKysely<CanonicalSessionDatabase>(database.db)
-      .selectFrom("session_nodes")
-      .leftJoin("session_windows as retained_window", (join) =>
-        join
-          .onRef("retained_window.session_id", "=", "session_nodes.current_session_id")
-          .onRef("retained_window.session_key", "=", "session_nodes.session_key"),
-      )
-      .select([
-        "session_nodes.session_key",
-        "session_nodes.current_session_id",
-        "session_nodes.entry_valid",
-        "session_nodes.fork_source_session_key",
-        "session_nodes.parent_session_key",
-        "session_nodes.spawned_by",
-        "retained_window.session_id as retained_window_id",
-      ])
-      // Key validation needs metadata; Doctor visitors still own complete saved entries.
-      .select(options.fullEntries ? "session_nodes.entry_json" : sessionEntryMetadataJson)
-      .$if(Boolean(options.metadata), (query) => query.select("session_nodes.updated_at"))
-      .$if(Boolean(options.metadata) && hasSqliteSessionOwnerColumns(database.db), (query) =>
-        query.select([
-          "session_nodes.owner_actor_type",
-          "session_nodes.owner_actor_id",
-          "session_nodes.owner_assigned_by_type",
-          "session_nodes.owner_assigned_by_id",
-          "session_nodes.owner_assigned_at",
-        ]),
-      )
-      .orderBy("session_nodes.session_key")
-  );
+  return getNodeSqliteKysely<CanonicalSessionDatabase>(database.db)
+    .selectFrom("session_nodes")
+    .leftJoin("session_windows as retained_window", (join) =>
+      join
+        .onRef("retained_window.session_id", "=", "session_nodes.current_session_id")
+        .onRef("retained_window.session_key", "=", "session_nodes.session_key"),
+    )
+    .select([
+      "session_nodes.session_key",
+      "session_nodes.current_session_id",
+      "session_nodes.entry_valid",
+      "session_nodes.entry_json",
+      "session_nodes.fork_source_session_key",
+      "session_nodes.parent_session_key",
+      "session_nodes.spawned_by",
+      "retained_window.session_id as retained_window_id",
+    ])
+    .$if(Boolean(options.metadata), (query) => query.select("session_nodes.updated_at"))
+    .$if(Boolean(options.metadata) && hasSqliteSessionOwnerColumns(database.db), (query) =>
+      query.select([
+        "session_nodes.owner_actor_type",
+        "session_nodes.owner_actor_id",
+        "session_nodes.owner_assigned_by_type",
+        "session_nodes.owner_assigned_by_id",
+        "session_nodes.owner_assigned_at",
+      ]),
+    )
+    .orderBy("session_nodes.session_key");
 }
 
 /** Older supported maintenance readers keep their existing full-validation path. */
@@ -424,9 +424,8 @@ export function scanCanonicalSqliteSessionEntries(
   for (const row of iterateSqliteQuerySync(
     database.db,
     canonicalSessionValidationQuery(database, {
-      fullEntries: Boolean(visit),
       metadata: Boolean(metadata),
-    }),
+    }).$if(Boolean(visit), (query) => query.select(sessionEntrySnapshotColumns)),
   )) {
     // Retained windows have no entry, but their keys remain part of a listing snapshot.
     metadata?.keys.push(row.session_key);
@@ -435,12 +434,18 @@ export function scanCanonicalSqliteSessionEntries(
       continue;
     }
     if (metadata && entry.updatedAt === row.updated_at) {
-      // List decoding also checks the row timestamp and strips SQL-fallback prompt payloads;
-      // neither rule belongs to canonical validation or Doctor's complete-entry visitor.
-      const { skillsSnapshot: _skills, systemPromptReport: _report, ...listEntry } = entry;
+      // Raw repair rows can retain unsplit snapshots; metadata views still omit them.
+      const {
+        sessionDiffBaseline: _baseline,
+        skillsSnapshot: _skills,
+        systemPromptReport: _report,
+        ...listEntry
+      } = entry;
       metadata.entries.set(row.session_key, projectSqliteSessionOwner(listEntry, row));
     }
-    visit?.({ entry, sessionKey: row.session_key });
+    if (visit) {
+      visit({ entry: attachSessionEntrySnapshots(entry, row), sessionKey: row.session_key });
+    }
     count += 1;
   }
   return count;

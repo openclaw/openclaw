@@ -381,10 +381,10 @@ export function createPageState(
     ) {
       autoPromptNotificationsOnSend(context);
     }
-    return handleSendChat(state, messageOverride, options as never, submissionAction);
+    return handleSendChat(state, messageOverride, options, submissionAction);
   };
   state.handleAbortChat = async (options) => {
-    await handleAbortChat(state, options as never);
+    await handleAbortChat(state, options);
     renderLifecycle.invalidate();
   };
   state.removeQueuedMessage = (id) => {

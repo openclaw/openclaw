@@ -1,4 +1,5 @@
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import { resolveCronCompletionStatus } from "../completion-status.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
@@ -48,26 +49,15 @@ export type PreparedManualRun =
       ran: false;
       reason: "already-running" | "disabled" | "not-due" | "invalid-spec" | "stopped" | "ownerless";
     }
-  | {
+  | (ManualRunOptions & {
       ok: true;
       ran: true;
       jobId: string;
-      runId?: string;
-      terminalTracker?: ManualRunTerminalTracker;
-      owningCronLaneTaskMarker?: CommandLaneTaskMarker;
-      commitGuard?: () => void;
       reservationAt: number;
       scheduleOwnershipAtMs: number;
       reservationIdentity: object;
       wasEnabled: boolean;
-      onExit?: OnExitRunOptions;
-      payload?: CronPayload;
-      evaluateTrigger?: boolean;
-      streamBatch?: string;
-      streamScheduleKey?: string;
-      streamSourceIdentity?: string;
-      onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
-    }
+    })
   | { ok: false };
 
 export type ActivatedManualRun = Extract<PreparedManualRun, { ran: true }> & {
@@ -77,6 +67,7 @@ export type ActivatedManualRun = Extract<PreparedManualRun, { ran: true }> & {
   admittedJob: CronJob;
   executionJob: CronJob;
   runReceipt: CronRunReceiptHandle;
+  runReceiptContext: OpenClawStateWorkerContext;
 };
 
 export type OnExitRunOptions = {
@@ -376,13 +367,14 @@ export async function prepareManualRun(
             ? {
                 onExit: {
                   commitGuard: onExit.commitGuard,
-                  onReserved: (reservedJob: CronJob, runReceipt: CronRunReceiptHandle) => {
+                  onReserved: (reservedJob, runReceipt, runReceiptContext) => {
                     reservationIdentity = reserveQueuedCronRun(
                       state,
                       reservedJob.id,
                       reservationAt,
                       {
                         runReceipt,
+                        runReceiptContext,
                         preserveWhenDisabled: true,
                         onExit: true,
                         lifecycleGeneration: generation,
@@ -416,6 +408,7 @@ export async function prepareManualRun(
     const reservedJob = reserved.job;
     reservationIdentity ??= reserveQueuedCronRun(state, reservedJob.id, reservationAt, {
       runReceipt: reserved.runReceipt,
+      runReceiptContext: reserved.runReceiptContext,
       preserveWhenDisabled: mode === "force" && !isJobEnabled(job),
       lifecycleGeneration: generation,
     });
@@ -585,6 +578,7 @@ export async function activatePreparedManualRun(
       admittedJob,
       executionJob,
       runReceipt: activation.runReceipt,
+      runReceiptContext: activation.runReceiptContext,
     } as const;
   });
 }

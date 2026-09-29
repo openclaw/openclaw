@@ -238,6 +238,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
 
     const runPromise = runCronIsolatedAgentTurn(
       makeParams({
+        sessionKey: "existing-cron-session",
         job: makeJob({ sessionTarget: "session:existing-cron-session" }),
         onExecutionPhase: (info: unknown) => phases.push(info),
       }),
@@ -370,6 +371,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
 
       const result = await runCronIsolatedAgentTurn(
         makeParams({
+          sessionKey: "existing-cron-session",
           job: makeJob({ sessionTarget: "session:existing-cron-session" }),
         }),
       );
@@ -575,6 +577,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
           },
         },
         job: jobWithoutModel,
+        sessionKey: "existing-cron-session",
       }),
     );
 

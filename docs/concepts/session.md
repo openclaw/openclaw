@@ -350,8 +350,8 @@ and deleting unneeded sessions. Checks resume on subsequent activity;
 `openclaw sessions cleanup --enforce` remains available immediately.
 
 Cleanup first tries to truncate the WAL without waiting for readers. If readers
-prevent truncation, a complete PASSIVE checkpoint is sufficient: every observed
-frame must have reached the main database, even if the WAL file remains allocated.
+prevent truncation, a complete PASSIVE checkpoint is sufficient: frames relevant
+to cleanup must have reached the main database, even if the WAL file remains allocated.
 Retained WAL bytes still count toward the physical budget. Successful cleanup
 logs one outcome with the before/after bytes and removal counts.
 
@@ -359,10 +359,13 @@ An incomplete SQLite WAL checkpoint is a separate deferral. Cleanup preserves
 archives and history instead of deleting more data behind the blocked checkpoint.
 The result records `deferredReason: "checkpoint-incomplete"`, WAL bytes before and
 after, and the checkpoint outcome. Automatic and manual budget passes remain
-deferred until the checkpoint owner observes a completed checkpoint; elapsed time
-or a budget change alone does not retry pruning. Normal periodic checkpointing
-continues, and subsequent activity can resume cleanup after recovery, including
-after a system clock correction.
+deferred until the checkpoint owner records completion after the pending cleanup
+work. Newer frames from concurrent writes do not erase that completion. Each SQLite cleanup
+deletion or vacuum commit requires a new completion before further pruning, so a
+reader pinning those changes still defers cleanup. Ordering uses monotonic time;
+elapsed time, a budget change, or a system clock correction cannot release the gate.
+Normal periodic checkpointing continues, and subsequent activity can resume cleanup
+after recovery.
 
 Look for `session history disk budget deferred until a completed WAL checkpoint is observed`
 in the Gateway log. Its checkpoint fields include bounded operation names for

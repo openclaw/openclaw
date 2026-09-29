@@ -26,15 +26,7 @@ export function registerStaleRequesterWakeBatchTests({
   settleOwnedWork: () => Promise<void> | undefined;
 }) {
   const readPersistedRun = (runId: string) => loadSubagentRegistryFromSqlite().get(runId);
-  it.each([
-    "transition",
-    "completion",
-    "rejection",
-    "closed-empty",
-    "closed-transition",
-    "closed-retryable",
-    "closed-permanent",
-  ] as const)(
+  it.each(["transition", "completion", "rejection", "closed-empty"] as const)(
     "rejects the whole stale batch when only a sibling closes or is replaced: %s",
     async (settlement) => {
       const { mod, requesterSettleModule, bindGatewayContextResolver } = getModules();
@@ -65,14 +57,14 @@ export function registerStaleRequesterWakeBatchTests({
               "maybeWakeRequesterAfterAllChildrenSettled",
             ).mockImplementation(wakeRequester);
             saveSubagentRegistryToSqlite(new Map(batch.map((entry) => [entry.runId, entry])));
-            mod.initSubagentRegistry();
+            await mod.initSubagentRegistry();
             const anchor = mod.getSubagentRunByRunId("run-batch-anchor")!;
             const sibling = mod.getSubagentRunByRunId("run-batch-sibling")!;
             bindGatewayContextResolver(anchor, () => anchorGateway as never);
             bindGatewayContextResolver(sibling, () =>
               siblingGatewayOpen ? (anchorGateway as never) : undefined,
             );
-            mod.activateSubagentRegistry(() => anchorGateway as never);
+            await mod.activateSubagentRegistry(() => anchorGateway as never);
             await waitForCalls(1);
             expect(wakeRequester).toHaveBeenCalledOnce();
             expect(oldParams?.settledEntry).toBe(anchor);
@@ -80,7 +72,7 @@ export function registerStaleRequesterWakeBatchTests({
             siblingGatewayOpen = false;
             const beforeActivation = settlement.startsWith("closed-");
             if (!beforeActivation) {
-              mod.activateSubagentRegistry(() => nextGateway as never);
+              await mod.activateSubagentRegistry(() => nextGateway as never);
             }
             const replacement = mod.getSubagentRunByRunId(sibling.runId)!;
             expect(mod.getSubagentRunByRunId(anchor.runId)).toBe(anchor);
@@ -97,18 +89,7 @@ export function registerStaleRequesterWakeBatchTests({
               oldDone.reject(new Error("old mixed-owner dispatch failed"));
               await vi.advanceTimersByTimeAsync(0);
             } else {
-              await oldParams!.completeBatch(
-                [anchor, sibling],
-                1,
-                settlement === "completion" || settlement === "closed-empty"
-                  ? undefined
-                  : {
-                      delivered: false,
-                      path: "direct",
-                      disposition:
-                        settlement === "closed-permanent" ? "permanent_failure" : "retryable",
-                    },
-              );
+              await oldParams!.completeBatch([anchor, sibling], 1);
             }
             expect([anchor, replacement].map((entry) => entry.requesterSettleWake)).toEqual(
               expected,
@@ -118,7 +99,7 @@ export function registerStaleRequesterWakeBatchTests({
               oldDone.resolve(false);
               await settleOwnedWork();
               if (beforeActivation) {
-                mod.activateSubagentRegistry(() => nextGateway as never);
+                await mod.activateSubagentRegistry(() => nextGateway as never);
                 await settleOwnedWork();
               }
               // The old no-wake decision must not clear only the surviving member
