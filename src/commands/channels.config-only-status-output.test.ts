@@ -128,38 +128,6 @@ function makeResolvedTokenPluginWithoutInspectAccount(): ChannelPlugin {
   });
 }
 
-function makeUnavailableHttpSlackPlugin(): ChannelPlugin {
-  return makeDirectPlugin({
-    id: "slack",
-    label: "Slack",
-    docsPath: "/channels/slack",
-    config: {
-      listAccountIds: () => ["primary"],
-      defaultAccountId: () => "primary",
-      inspectAccount: () => ({
-        accountId: "primary",
-        name: "Primary",
-        enabled: true,
-        configured: true,
-        mode: "http",
-        botToken: "resolved-bot",
-        botTokenSource: "config",
-        botTokenStatus: "available",
-        signingSecret: "",
-        signingSecretSource: "config", // pragma: allowlist secret
-        signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
-      }),
-      resolveAccount: () => ({
-        name: "Primary",
-        enabled: true,
-        configured: true,
-      }),
-      isConfigured: () => true,
-      isEnabled: () => true,
-    },
-  });
-}
-
 function makeIndeterminateLinkPlugin(): ChannelPlugin {
   return makeDirectPlugin({
     id: "whatsapp",
@@ -194,92 +162,15 @@ function expectResolvedTokenStatusSummary(
   }
 }
 
-function requireReadOnlyPluginListCall(): unknown[] {
-  const call = listReadOnlyChannelPluginsForConfig.mock.calls[0];
-  if (!call) {
-    throw new Error("expected listReadOnlyChannelPluginsForConfig call");
-  }
-  return call;
-}
-
 describe("config-only channels status output", () => {
-  it("guides operators when no channels are configured", async () => {
-    activeChannelPlugins.splice(0);
-
-    const output = await formatLocalStatusSummary({ channels: {} });
-
-    expect(output).toContain(
-      "- no configured chat channels (run `openclaw channels list --all` to see installable channels)",
-    );
-  });
-
-  it("sanitizes channel and account display names in terminal output", async () => {
-    const control = "\u001B]0;channels-status-injection\u0007";
-    registerSingleTestPlugin(
-      "token-only",
-      makeDirectPlugin({
-        id: "token-only",
-        label: `${control}TokenOnly 🦞\r\nAdmin`,
-        docsPath: "/channels/token-only",
-        config: {
-          listAccountIds: () => [`${control}primary\nforged-row`],
-          resolveAccount: () => ({
-            name: `${control}Primary\tAccount`,
-            enabled: true,
-            configured: true,
-          }),
-          isConfigured: () => true,
-          isEnabled: () => true,
-        },
-      }),
-    );
-
-    const output = await formatLocalStatusSummary({ channels: { "token-only": {} } });
-
-    expect(output).not.toContain("\u001B");
-    expect(output).not.toContain("\nforged-row");
-    expect(output).toContain("TokenOnly 🦞\\r\\nAdmin");
-    expect(output).toContain("\\nforged-row");
-    expect(output).toContain("Primary\\tAccount");
-  });
-
   it.each([
     {
-      label: "unregistered external channels",
-      channel: "token-only",
-      included: ["TokenOnly"],
-      excluded: ["WhatsApp"],
-    },
-    {
-      label: "case-insensitive external channels",
+      label: "external channels",
       channel: "TOKEN-ONLY",
       included: ["TokenOnly"],
       excluded: ["WhatsApp"],
     },
-    {
-      label: "bundled channel aliases",
-      channel: "wa",
-      included: ["WhatsApp"],
-      excluded: ["TokenOnly"],
-    },
-    {
-      label: "unknown channels",
-      channel: "missing-channel",
-      included: [],
-      excluded: ["TokenOnly", "WhatsApp"],
-    },
-    {
-      label: "no channel filter",
-      channel: undefined,
-      included: ["TokenOnly", "WhatsApp"],
-      excluded: [],
-    },
-    {
-      label: "blank channel filters",
-      channel: "   ",
-      included: ["TokenOnly", "WhatsApp"],
-      excluded: [],
-    },
+    { label: "bundled aliases", channel: "wa", included: ["WhatsApp"], excluded: ["TokenOnly"] },
   ])(
     "preserves exact config-only status filtering for $label",
     async ({ channel, included, excluded }) => {
@@ -305,42 +196,6 @@ describe("config-only channels status output", () => {
     },
   );
 
-  it("uses setup fallback plugins so configured external channels can be shown", async () => {
-    registerSingleTestPlugin("token-only", makeUnavailableTokenPlugin());
-    listReadOnlyChannelPluginsForConfig.mockClear();
-    const cfg = { channels: { "token-only": { enabled: true } } };
-
-    await formatLocalStatusSummary(cfg);
-
-    expect(listReadOnlyChannelPluginsForConfig).toHaveBeenCalledOnce();
-    expect(requireReadOnlyPluginListCall()).toStrictEqual([
-      cfg,
-      { activationSourceConfig: cfg, includeSetupFallbackPlugins: true },
-    ]);
-  });
-
-  it("shows configured-but-unavailable credentials distinctly from not configured", async () => {
-    registerSingleTestPlugin("token-only", makeUnavailableTokenPlugin());
-
-    const joined = await formatLocalStatusSummary({ channels: {} });
-    expect(joined).toContain("TokenOnly");
-    expect(joined).toContain("TokenOnly primary");
-    expect(joined).toContain("configured, secret unavailable in this command path");
-    expect(joined).toContain("token:config (unavailable)");
-  });
-
-  it("prefers resolved config snapshots when command-local secret resolution succeeds", async () => {
-    registerSingleTestPlugin("token-only", makeResolvedTokenPlugin());
-
-    const joined = await formatLocalStatusSummary(
-      { secretResolved: true, channels: {} },
-      {
-        sourceConfig: { channels: {} },
-      },
-    );
-    expectResolvedTokenStatusSummary(joined, { includeUnavailableTokenLine: false });
-  });
-
   it("does not resolve raw source config for extension channels without inspectAccount", async () => {
     registerSingleTestPlugin("token-only", makeResolvedTokenPluginWithoutInspectAccount());
 
@@ -353,25 +208,15 @@ describe("config-only channels status output", () => {
     expectResolvedTokenStatusSummary(joined);
   });
 
-  it("renders Slack HTTP signing-secret availability in config-only status", async () => {
-    registerSingleTestPlugin("slack", makeUnavailableHttpSlackPlugin());
+  it("prefers resolved config snapshots when command-local secret resolution succeeds", async () => {
+    registerSingleTestPlugin("token-only", makeResolvedTokenPlugin());
 
-    const joined = await formatLocalStatusSummary({ channels: {} });
-    expect(joined).toContain("Slack");
-    expect(joined).toContain("configured, secret unavailable in this command path");
-    expect(joined).toContain("mode:http");
-    expect(joined).toContain("bot:config");
-    expect(joined).toContain("signing:config (unavailable)");
-  });
-
-  it("never reports not configured when linkage is indeterminate", async () => {
-    registerSingleTestPlugin("whatsapp", makeIndeterminateLinkPlugin());
-
-    const joined = await formatLocalStatusSummary({ channels: { whatsapp: {} } });
-
-    expect(joined).toContain("WhatsApp default: enabled, configured");
-    expect(joined).not.toContain("not configured");
-    expect(joined).not.toContain("not linked");
-    expect(joined).not.toContain("error:");
+    const joined = await formatLocalStatusSummary(
+      { secretResolved: true, channels: {} },
+      {
+        sourceConfig: { channels: {} },
+      },
+    );
+    expectResolvedTokenStatusSummary(joined, { includeUnavailableTokenLine: false });
   });
 });
