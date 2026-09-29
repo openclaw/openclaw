@@ -180,12 +180,16 @@ beforeEach(() => {
   boundary.admission.mockReturnValue({ kind: "recovery", runs: [] });
   boundary.gatewayAcquire.mockImplementation(() => ({
     release: boundary.release,
-    assertCurrent: boundary.ownerAssert,
+    assertCurrent: (assertPolicy?: () => void) => {
+      boundary.ownerAssert();
+      assertPolicy?.();
+    },
     run<T>(operation: () => T): T {
       boundary.ownerAssert();
       return operation();
     },
   }));
+  vi.stubEnv("OPENCLAW_PROFILE", "default");
   vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/doctor-state");
   vi.stubEnv("OPENCLAW_CONFIG_PATH", "/synthetic/doctor-state/openclaw.json");
   vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
@@ -211,6 +215,7 @@ beforeEach(() => {
     windowsTaskAutoStartRecovery: {
       suspended: Promise.resolve(true),
       beginMutation: () => {},
+      assertRecoveryCurrent: () => {},
       restore: boundary.resume,
       handoff: () => {},
       complete: boundary.complete,

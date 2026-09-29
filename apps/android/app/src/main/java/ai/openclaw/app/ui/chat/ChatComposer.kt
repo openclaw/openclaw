@@ -262,10 +262,8 @@ internal class ChatComposerMediaCheckpoint(
   }
 
   fun consume(requestId: String? = null): ChatComposerMediaLease? {
-    if (this.requestId != requestId) return null
-    val capturedOwner = owner ?: return null
-    val capturedAuthorizationId = mediaAuthorizationId ?: return null
-    return ChatComposerMediaLease(capturedOwner, capturedAuthorizationId).also { clear() }
+    if (this.requestId != requestId || owner == null || mediaAuthorizationId == null) return null
+    return clear()
   }
 
   fun clear(): ChatComposerMediaLease? {

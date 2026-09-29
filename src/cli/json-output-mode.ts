@@ -1,9 +1,13 @@
 // Early JSON-output detection and console-log routing for parseable CLI stdout.
+import { withNoteOutput } from "../../packages/terminal-core/src/note-output.js";
 import { loggingState } from "../logging/state.js";
 import { isConfigSetJsonParseOnly } from "./config-output-mode.js";
 import { resolveCliParentCommandPath } from "./parent-command-path.js";
 
 let resolvedJsonOutputMode: boolean | null = null;
+// Read at write time so preaction refinement and later routeLogsToStderr() calls also move notes.
+const noteOutputForConsoleRouting = () =>
+  loggingState.forceConsoleToStderr ? process.stderr : process.stdout;
 
 /** Detects CLI JSON mode before Commander parses options, stopping at the argv sentinel. */
 export function hasJsonOutputFlag(argv: readonly string[]): boolean {
@@ -29,7 +33,7 @@ export function isJsonOutputModeActive(argv: readonly string[]): boolean {
   );
 }
 
-/** Keeps structured JSON stdout clean by routing incidental console logs to stderr. */
+/** Keeps structured JSON stdout clean by routing incidental console logs and notes to stderr. */
 export async function withConsoleLogsRoutedToStderrForJson<T>(
   argv: readonly string[],
   run: () => Promise<T>,
@@ -41,7 +45,7 @@ export async function withConsoleLogsRoutedToStderrForJson<T>(
 ): Promise<T> {
   const forceStderr = hasJsonOutputFlag(argv) || options.machineOutput;
   if (!forceStderr && !options.restoreChanges) {
-    return run();
+    return withNoteOutput(noteOutputForConsoleRouting, run);
   }
   const previousForceStderr = loggingState.forceConsoleToStderr;
   const previousEarlyRestore = loggingState.earlyConsoleRoutingRestore;
@@ -52,7 +56,7 @@ export async function withConsoleLogsRoutedToStderrForJson<T>(
     loggingState.forceConsoleToStderr = true;
   }
   try {
-    return await run();
+    return await withNoteOutput(noteOutputForConsoleRouting, run);
   } finally {
     if (!options.retainRoutingUntilProcessExit) {
       // Restore the process-wide logging switch so nested/serial CLI calls keep their own output mode.

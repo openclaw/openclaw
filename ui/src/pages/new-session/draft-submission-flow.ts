@@ -414,12 +414,12 @@ export class DraftSubmissionFlow {
       this.callbacks.requestUpdate();
       return;
     }
-    const preparedTitle = this.callbacks.takePreparedTitle?.();
     this.blockedSubmitGate = null;
     const input = prepareDraftSubmission(context, this, this.place, startup, background);
     if (!input) {
       return;
     }
+    const preparedTitle = this.callbacks.takePreparedTitle?.();
     const requestId = ++this.submitRequestToken;
     const submittedDraft = this.draftPersistence.captureSubmission();
     const submittedAt = startup?.startedAt ?? Date.now();
@@ -522,7 +522,7 @@ export class DraftSubmissionFlow {
       }
       const submissionPlacementRecovery = placementTarget ? this.pendingPlacement.capture() : null;
       if (placementTarget && !submissionPlacementRecovery) {
-        this.setPlacementRecoveryUnavailable();
+        this.setPlacementRecoveryUnavailable("creating");
         return;
       }
       if (input.apiAttachments?.length) {
@@ -583,7 +583,7 @@ export class DraftSubmissionFlow {
             this.gateway.recoveryScope === input.recoveryScope,
           clearRecovery: () => this.clearPendingPlacementRecovery(),
           setError: (error) => this.setError(error),
-          onRecoveryUnavailable: () => this.setPlacementRecoveryUnavailable(),
+          onRecoveryUnavailable: () => this.setPlacementRecoveryUnavailable("created"),
           clearDraft: () => {
             retainSubmittedSession(result.key);
             return this.clearSubmittedDraft(true, submittedDraft);
@@ -703,10 +703,13 @@ export class DraftSubmissionFlow {
 
   private placement = () => resolveDraftSessionPlacement(this.pendingPlacement, this.place);
 
-  private setPlacementRecoveryUnavailable() {
-    this.error = t("newSession.placementStartFailed", {
-      error: "placement recovery storage is unavailable",
-    });
+  private setPlacementRecoveryUnavailable(phase: "creating" | "created") {
+    this.error =
+      phase === "creating"
+        ? t("newSession.placementCreateFailed")
+        : t("newSession.placementStartFailed", {
+            error: "placement recovery storage is unavailable",
+          });
   }
 
   private applyRecoveryDraft(recovery: SessionPlacementRecovery | null) {

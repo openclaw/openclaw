@@ -3,7 +3,6 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { resolveStateDir } from "../config/state-dir.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -26,6 +25,7 @@ import {
   resolvePluginSourceCaptureFallbackPrefix,
   resolvePluginSourceCapturesDirectory,
 } from "./plugin-source-capture-path.js";
+import { resolvePluginSourceCaptureStateDir } from "./plugin-source-capture-state-dir.js";
 
 const CAPTURE_GRACE_MS = 60 * 60 * 1_000;
 
@@ -265,6 +265,13 @@ async function reclaimInstances(
   }
   const cutoff = Date.now() - CAPTURE_GRACE_MS;
   let legacyAllowed: boolean | undefined;
+  const lstatIfPresent = (file: string) =>
+    fsPromises.lstat(file).catch((error: unknown) => {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        throw error;
+      }
+      return undefined;
+    });
   for (const entry of entries) {
     if (
       !entry.isDirectory() ||
@@ -288,20 +295,8 @@ async function reclaimInstances(
         continue;
       }
       const tokenPath = path.join(canonical, SQLITE_STAGING_TOKEN_FILES[0]);
-      const nativeStat = await fsPromises
-        .lstat(path.join(canonical, "native"))
-        .catch((error: unknown) => {
-          if (!hasErrnoCode(error, "ENOENT")) {
-            throw error;
-          }
-          return undefined;
-        });
-      const tokenStat = await fsPromises.lstat(tokenPath).catch((error: unknown) => {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
-        return undefined;
-      });
+      const nativeStat = await lstatIfPresent(path.join(canonical, "native"));
+      const tokenStat = await lstatIfPresent(tokenPath);
       if (legacy && tokenStat) {
         continue;
       }
@@ -322,6 +317,11 @@ async function reclaimInstances(
             legacyAllowed = "error" in census || census.pids.length === 0;
           }
           if (!legacyAllowed) {
+            continue;
+          }
+          // The census excludes foreign-UID processes, not their scratch. Recheck
+          // ownership after inspection, even when an elevated process could remove it.
+          if (process.getuid && (await fsPromises.lstat(canonical)).uid !== process.getuid()) {
             continue;
           }
         }
@@ -582,8 +582,8 @@ function scheduleCaptureCleanup(key: string, instance: Instance): void {
 }
 
 /** Artifact custody survives until every producer and metadata owner releases it. */
-export function retainPluginSourceCaptureInstance(stateDir = resolveStateDir()) {
-  const key = path.resolve(stateDir);
+export function retainPluginSourceCaptureInstance(stateDir?: string) {
+  const key = resolvePluginSourceCaptureStateDir(stateDir);
   const maintenance = pluginSourceCaptureMaintenance.getStore();
   const scheduler = maintenance?.scheduler;
   scheduler?.signal.throwIfAborted();
@@ -682,7 +682,7 @@ export function retainPluginSourceCaptureInstance(stateDir = resolveStateDir()) 
 }
 
 /** Native snapshots become durable only after their installed-index receipt is published. */
-export function createPluginNativeCaptureRoot(stateDir = resolveStateDir()) {
+export function createPluginNativeCaptureRoot(stateDir?: string) {
   const instance = retainPluginSourceCaptureInstance(stateDir);
   try {
     const root = instance.createNativeDirectory();

@@ -109,11 +109,7 @@
   padding: 0.15em 0.4em;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: rgba(0, 0, 0, 0.12);
-}
-
-:root[data-theme-mode="light"] .sidebar-markdown :where(:not(pre, a.markdown-file-link) > code) {
-  background: rgba(0, 0, 0, 0.06);
+  background: var(--bg-muted);
 }
 
 .sidebar-markdown pre {
@@ -122,7 +118,7 @@
   overflow-x: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: rgba(0, 0, 0, 0.12);
+  background: var(--bg-muted);
   font-family: var(--mono);
 }
 
@@ -137,10 +133,6 @@
    it gets line-level bidi resolution. */
 .sidebar-markdown-reader pre {
   unicode-bidi: plaintext;
-}
-
-:root[data-theme-mode="light"] .sidebar-markdown pre {
-  background: rgba(0, 0, 0, 0.04);
 }
 
 .sidebar-markdown pre:has(> code.markdown-block-art) {
@@ -179,12 +171,8 @@
   border-start-end-radius: var(--radius-sm);
   border-end-end-radius: var(--radius-sm);
   border-end-start-radius: 0;
-  background: rgba(255, 255, 255, 0.02);
+  background: color-mix(in srgb, var(--text) 3%, transparent);
   color: var(--muted);
-}
-
-:root[data-theme-mode="light"] .sidebar-markdown :where(blockquote) {
-  background: rgba(0, 0, 0, 0.025);
 }
 
 .sidebar-markdown :where(blockquote blockquote) {

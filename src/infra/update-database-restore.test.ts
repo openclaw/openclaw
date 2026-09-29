@@ -368,6 +368,7 @@ it.each([false, true])(
       });
       if (foreignWrite) {
         expect(displaced).toBeNull();
+        expect(fixture.backup.restoreRefusal).toContain(fixture.agent.path);
         await assertUnchanged();
       } else {
         expect(displaced).not.toBeNull();

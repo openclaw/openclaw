@@ -25,6 +25,7 @@ import {
   handleNodeWorkspaceTransferHttpRequest,
 } from "./node-workspace-transfer-http.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
+import { transferOwner } from "./node-workspace-transfer.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -49,15 +50,7 @@ describe("workspace upload cancellation", () => {
     const owner = new AbortController();
     const service = createNodeWorkspaceTransferService({
       temporaryRoot: path.join(root, "transfers"),
-      getOwner: () => ({
-        credential: { ownerEpoch: 1, sessionId: "session" },
-        environment: {
-          ownerEpoch: 1,
-          attachedSessionIds: ["session"],
-          destroyRequestedAtMs: null,
-          state: "attached",
-        },
-      }),
+      getOwner: () => transferOwner("session"),
     });
     const { snapshot } = await service.prepareSync({
       environmentId: "environment",
@@ -279,15 +272,7 @@ describe("attachment transfer revocation", () => {
       }
     };
     const service = createNodeWorkspaceTransferService({
-      getOwner: () => ({
-        credential: { ownerEpoch: 1, sessionId: "session", expiresAtMs: Date.now() + 60_000 },
-        environment: {
-          ownerEpoch: 1,
-          attachedSessionIds: ["session"],
-          destroyRequestedAtMs: null,
-          state: "attached",
-        },
-      }),
+      getOwner: () => transferOwner("session", 1, Date.now() + 60_000),
       temporaryRoot: path.join(root, "transfer-tmp"),
     });
     await service.prepareSync({
@@ -495,15 +480,7 @@ describe("durable credential revocation fencing", () => {
   const makeService = (root: string) =>
     createNodeWorkspaceTransferService({
       temporaryRoot: path.join(root, "transfers"),
-      getOwner: () => ({
-        credential: { ownerEpoch: 1, sessionId: "session" },
-        environment: {
-          ownerEpoch: 1,
-          attachedSessionIds: ["session"],
-          destroyRequestedAtMs: null,
-          state: "attached",
-        },
-      }),
+      getOwner: () => transferOwner("session"),
     });
 
   it("fenceEnvironment aborts capability signals and denies new admissions", async () => {

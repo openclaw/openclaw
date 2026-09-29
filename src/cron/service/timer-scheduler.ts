@@ -1,4 +1,5 @@
 import pMap, { pMapSkip } from "p-map";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimestamp } from "../../logging/timestamps.js";
@@ -28,7 +29,6 @@ import {
   persistQueuedCronRunReservations,
   releaseQueuedCronRun,
   reserveQueuedCronRun,
-  resolveRunConcurrency,
   setCronRunCapacityListener,
   tryAcquireCronRunSlots,
 } from "./run-admission.js";
@@ -243,6 +243,9 @@ async function onAdmittedTimer(state: CronServiceState) {
         collectRunnableJobs(state, dueCheckNow),
         dueCheckNow,
       );
+      if (state.stopped || state.startupCatchup || state.lifecycleGeneration !== generation) {
+        return [];
+      }
 
       if (due.length === 0) {
         if (!state.store?.jobs.some((job) => needsCronTimerMaintenance(job, dueCheckNow))) {
@@ -293,6 +296,7 @@ async function onAdmittedTimer(state: CronServiceState) {
           reservedAtMs: now,
           reservationIdentity: reserveQueuedCronRun(state, job.id, now, {
             runReceipt,
+            lifecycleGeneration: generation,
           }),
           releaseAdmission: admissionReleases[index]!,
         }));
@@ -328,7 +332,7 @@ async function onAdmittedTimer(state: CronServiceState) {
       }
     }
 
-    const concurrency = Math.min(resolveRunConcurrency(), Math.max(1, dueJobs.length));
+    const concurrency = Math.min(DEFAULT_CRON_MAX_CONCURRENT_RUNS, Math.max(1, dueJobs.length));
     capacityRechecks.initializeActivations(dueJobs.length, allowEmptyCapacityRecheck);
     const completedOutcomeDrain = createCompletedCronRunOutcomeDrain(state);
     const claimedIndexes = new Set<number>();

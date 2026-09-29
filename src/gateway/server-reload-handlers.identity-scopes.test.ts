@@ -33,7 +33,7 @@ import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { resolveGatewayAuthPolicyGeneration } from "./auth-policy.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createChannelManager } from "./server-channels.js";
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
@@ -42,6 +42,7 @@ import {
   createDefaultGatewayReloadState,
   createDirectConfigWriteFixture,
   createConfigWriteNotification,
+  createTestConfigRevisionProjector,
   publishConfigWrite,
 } from "./server-reload-handlers.config.test-support.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-managed.js";
@@ -124,7 +125,10 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
         avatarRevision: "1",
         updatedAt: 1,
       },
-      authPolicyGeneration: resolveGatewayAuthPolicyGeneration(initialConfig, identity),
+      authPolicy: captureGatewayAuthPolicy(initialConfig, {
+        role: "operator",
+        verifiedIdentity: identity,
+      }),
     };
     const generation = new SharedGatewaySessionGenerationState({
       current: undefined,
@@ -132,6 +136,7 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
     });
     let state = createDefaultGatewayReloadState();
     const channelManager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: () => initialConfig,
       getPluginRegistry: () => registry,
       channelLogs: {},
@@ -142,10 +147,7 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
     const reloader = startManagedGatewayConfigReloader({
       scheduler: createTestGatewayScheduler("fake-timers"),
       getPluginRegistry: () => registry,
-      configRevisionProjector: {
-        projectRawHash: (hash) => hash,
-        projectResolvedHash: (hash) => hash,
-      },
+      configRevisionProjector: createTestConfigRevisionProjector(),
       minimalTestGateway: false,
       initialConfig,
       initialCompareConfig: initialConfig,

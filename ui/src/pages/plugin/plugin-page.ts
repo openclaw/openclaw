@@ -12,6 +12,7 @@ import {
 } from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -692,7 +693,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         return nothing;
       }
       return html`
-        <section class="plugin-tab-embed">
+        <section class="plugin-tab-embed" ${shellLayoutTraits({ pluginEmbed: true })}>
           ${keyed(
             this.pluginFrameGeneration,
             html`<iframe

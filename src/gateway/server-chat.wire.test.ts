@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { afterEach, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
 import { createCliEventHandlers } from "../agents/cli-runner/execute-events.js";
 import { createCliToolTracking } from "../agents/cli-runner/execute-tool-tracking.js";
@@ -62,10 +63,17 @@ function connect(
   clients: GatewayClientRegistry,
   connId: string,
   completeWrite: (callback?: () => void) => void = (callback) => callback?.(),
+  caps: string[] = [],
 ) {
   const frames: Array<{
     event: string;
-    payload: { message?: unknown; data?: { text?: string; delta?: string }; state?: string };
+    seq: number;
+    payload: {
+      stream?: string;
+      message?: unknown;
+      data?: { text?: string; delta?: string };
+      state?: string;
+    };
   }> = [];
   const socket = Object.assign(new EventEmitter(), {
     readyState: 1,
@@ -91,6 +99,7 @@ function connect(
       client: { id: "test", version: "test", platform: "test", mode: "test" },
       role: "operator",
       scopes: ["operator.read"],
+      caps,
     },
   } satisfies GatewayWsClient);
   return frames;
@@ -98,11 +107,73 @@ function connect(
 
 afterEach(() => vi.useRealTimers());
 
+it("keeps non-text agent events for chat-only clients", () => {
+  vi.useFakeTimers();
+  const harness = createHarness();
+  const clients = new GatewayClientRegistry();
+  const legacy = connect(clients, "legacy");
+  const chatOnly = connect(clients, "chat-only", undefined, [
+    GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT,
+  ]);
+  const onBroadcast = vi.fn();
+  const broadcaster = createGatewayBroadcaster({
+    clients,
+    onBroadcast,
+    canReceiveSessionEvent: () => true,
+  });
+  harness.broadcast.mockImplementation(broadcaster.broadcast);
+  harness.broadcastToConnIds.mockImplementation(broadcaster.broadcastToConnIds);
+  const runId = "progress-run";
+  registerChatRun(harness.chatRunState, runId, "agent:main:progress", runId);
+  harness.toolEventRecipients.add(runId, "legacy");
+  harness.toolEventRecipients.add(runId, "chat-only");
+  const events: Array<Pick<AgentEventRuntimePayload, "stream" | "data">> = [
+    { stream: "assistant", data: { text: "Hello", delta: "Hello" } },
+    { stream: "tool", data: { phase: "start", name: "read", toolCallId: "tool-1" } },
+    { stream: "item", data: answerCandidate("candidate", "Progress") },
+    { stream: "usage", data: { outputTokens: 1 } },
+    { stream: "run_status", data: { phase: "retrying", message: "Retrying" } },
+    { stream: "plan", data: { phase: "update", steps: [] } },
+    { stream: "approval", data: { phase: "requested", approvalId: "approval-1" } },
+    { stream: "thinking", data: { text: "Thinking" } },
+    { stream: "assistant", data: { mediaUrl: "https://example.com/image.png" } },
+    { stream: "lifecycle", data: { phase: "finishing" } },
+  ];
+  try {
+    events.forEach(({ stream, data }, index) =>
+      emitAgentEvent(harness.handler, runId, stream, data, { seq: index + 1 }),
+    );
+    harness.chatRunState.flushPendingText(runId);
+    const progress = chatOnly.filter(({ event }) => event === "agent");
+    expect(progress.map(({ payload }) => payload.stream)).toEqual(
+      events.slice(1).map(({ stream }) => stream),
+    );
+    expect(progress.map(({ payload }) => payload)).toEqual(
+      legacy
+        .filter(({ event }) => event === "agent")
+        .slice(1)
+        .map(({ payload }) => payload),
+    );
+    expect(onBroadcast).toHaveBeenCalledWith(
+      "agent",
+      expect.objectContaining({ stream: "assistant", data: { text: "Hello", delta: "Hello" } }),
+      expect.any(Object),
+    );
+    expect(chatOnly.map(({ seq }) => seq)).toEqual(chatOnly.map((_, index) => index + 1));
+  } finally {
+    harness.handler.dispose();
+    harness.chatRunState.clear();
+  }
+});
+
 it("sends append-only wire text while retaining snapshots for observers and late recipients", () => {
   vi.useFakeTimers();
   const harness = createHarness();
   const clients = new GatewayClientRegistry();
   const frames = connect(clients, "first");
+  const chatOnly = connect(clients, "chat-only", undefined, [
+    GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT,
+  ]);
   let visible = true;
   const broadcaster = createGatewayBroadcaster({
     clients,
@@ -161,6 +232,12 @@ it("sends append-only wire text while retaining snapshots for observers and late
       state: "final",
       message: { content: [{ type: "text", text: "Reset!\n\nOther\n\nReset! again" }] },
     });
+    expect(chatOnly.map(({ event, payload }) => ({ event, payload }))).toEqual(
+      frames
+        .filter(({ event, payload }) => event !== "agent" || payload.stream !== "assistant")
+        .map(({ event, payload }) => ({ event, payload })),
+    );
+    expect(chatOnly.map(({ seq }) => seq)).toEqual(chatOnly.map((_, index) => index + 1));
   } finally {
     handler.dispose();
     chatRunState.clear();
@@ -241,6 +318,9 @@ it.each([true, false])("re-baselines after an upstream sequence gap (visible=%s)
   const harness = createHarness();
   const clients = new GatewayClientRegistry();
   const frames = connect(clients, "gap-reader");
+  const chatOnly = connect(clients, "chat-only", undefined, [
+    GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT,
+  ]);
   const broadcaster = createGatewayBroadcaster({ clients });
   harness.broadcast.mockImplementation(broadcaster.broadcast);
   harness.broadcastToConnIds.mockImplementation(broadcaster.broadcastToConnIds);
@@ -248,6 +328,7 @@ it.each([true, false])("re-baselines after an upstream sequence gap (visible=%s)
   const runId = "gap-run";
   const sessionKey = "agent:main:gap-proof";
   harness.sessionMessageSubscribers.subscribe("gap-reader", sessionKey);
+  harness.sessionMessageSubscribers.subscribe("chat-only", sessionKey);
   const emit = (seq: number, text: string, delta: string) => {
     const event: AgentEventRuntimePayload = {
       runId,
@@ -276,6 +357,11 @@ it.each([true, false])("re-baselines after an upstream sequence gap (visible=%s)
       phase: "commentary",
       delta: "E",
     });
+    expect(chatOnly.some(({ payload }) => payload.stream === "assistant")).toBe(false);
+    expect(chatOnly.filter(({ event }) => event === "chat").map(({ payload }) => payload)).toEqual(
+      frames.filter(({ event }) => event === "chat").map(({ payload }) => payload),
+    );
+    expect(chatOnly.map(({ seq }) => seq)).toEqual(chatOnly.map((_, index) => index + 1));
   } finally {
     handler.dispose();
     chatRunState.clear();

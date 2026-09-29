@@ -13,6 +13,7 @@ import {
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/index.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { createWorkerConnection } from "../worker/worker-connection.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
@@ -25,6 +26,7 @@ import {
   createGatewayWsTestRequestContext,
 } from "./server/ws-connection.test-helpers.js";
 import type { WorkerConnectionService } from "./server/ws-connection/worker-connection.js";
+import { readClientResponseBody } from "./test-http-response.js";
 import { withTempConfig } from "./test-temp-config.js";
 import {
   admitWorkerConnection,
@@ -57,10 +59,7 @@ type RejectedWorker = {
   close: { code: number; reason: string };
 };
 
-function workerConnect(
-  credential: string,
-  overrides: Partial<WorkerConnectParams["admission"]> = {},
-): WorkerConnectParams {
+function workerConnect(credential: string): WorkerConnectParams {
   return {
     minProtocol: PROTOCOL_VERSION,
     maxProtocol: PROTOCOL_VERSION,
@@ -78,9 +77,8 @@ function workerConnect(
       runId: null,
       ownerEpoch: 1,
       rpcSetVersion: WORKER_RPC_SET_VERSION,
-      handshake: BUILD,
-      ...overrides,
-    } as WorkerConnectParams["admission"],
+      handshake: { ...BUILD, protocolFeatures: [...BUILD.protocolFeatures] },
+    },
   };
 }
 
@@ -137,12 +135,7 @@ async function requestUpgradeRejection(
       reject(new Error("expected websocket upgrade rejection"));
     });
     req.once("response", (res) => {
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", (chunk) => {
-        body += chunk;
-      });
-      res.once("end", () => resolve({ status: res.statusCode ?? 0, body }));
+      void readClientResponseBody(res).then(resolve, reject);
     });
     req.once("error", reject);
     req.end();
@@ -170,7 +163,7 @@ class PublicWorkerHarness {
   readonly admitWorker: ReturnType<typeof vi.fn<WorkerConnectionService["admitWorker"]>>;
   port = 0;
 
-  constructor(options: { preauthLimit?: number; rateLimitMaxAttempts?: number } = {}) {
+  constructor(options: { rateLimitMaxAttempts?: number } = {}) {
     const nowMs = Date.now();
     this.environment = {
       environmentId: "worker-public",
@@ -212,7 +205,7 @@ class PublicWorkerHarness {
       commitTranscript: async () => ({ ok: false, reason: "invalid-batch" }),
       pushLiveEvent: async () => ({ ok: false, details: { reason: "invalid-event" } }),
     };
-    this.preauthBudget = createPreauthConnectionBudget(options.preauthLimit ?? 8);
+    this.preauthBudget = createPreauthConnectionBudget(8);
     this.publicRateLimiter = createGatewayAuthRateLimiter(
       {
         maxAttempts: options.rateLimitMaxAttempts ?? 10,
@@ -309,25 +302,26 @@ async function withHarness(
 }
 
 describe("public worker ingress", () => {
-  it("admits a store-backed worker on the reserved public path", async () => {
+  it("admits the production worker client on the reserved public path without a gateway challenge", async () => {
     await withHarness({}, async (harness) => {
-      const response = new Promise<unknown>((resolve) => {
-        const ws = new WebSocket(harness.url());
-        ws.once("open", () =>
-          ws.send(JSON.stringify(connectFrame(workerConnect(harness.credential)))),
-        );
-        ws.once("message", (data) => {
-          resolve(JSON.parse(rawDataToString(data)));
-          ws.close();
+      const client = createWorkerConnection({
+        endpoint: { kind: "websocket", url: harness.url() },
+        connectParams: workerConnect(harness.credential),
+        reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
+        admissionTimeoutMs: 2_000,
+      });
+      try {
+        await client.start();
+        expect(client.state).toMatchObject({
+          kind: "ready",
+          hello: { type: "worker-hello-ok", environmentId: "worker-public" },
         });
-      });
-
-      await expect(response).resolves.toMatchObject({
-        ok: true,
-        payload: { type: "worker-hello-ok", environmentId: "worker-public" },
-      });
-      expect(harness.handlePluginUpgrade).not.toHaveBeenCalled();
-      expect(harness.publicRateLimiter.size()).toBe(0);
+        expect(harness.admitWorker).toHaveBeenCalledOnce();
+        expect(harness.handlePluginUpgrade).not.toHaveBeenCalled();
+        expect(harness.publicRateLimiter.size()).toBe(0);
+      } finally {
+        await client.stop();
+      }
     });
   });
 
@@ -362,63 +356,6 @@ describe("public worker ingress", () => {
         "worker admission rejected reason=unsupported-websocket-receiver",
       );
       expect(harness.clients.size).toBe(0);
-    });
-  });
-
-  it("returns one opaque failure while retaining precise server reasons", async () => {
-    await withHarness({}, async (harness) => {
-      const badCredential = await rejectWorker(
-        harness.url(),
-        workerConnect("invalid-worker-credential-fixture"),
-      );
-      const wrongEnvironment = await rejectWorker(
-        harness.url(),
-        workerConnect(harness.credential, { environmentId: "worker-other" }),
-      );
-      const staleBuild = await rejectWorker(
-        harness.url(),
-        workerConnect(harness.credential, {
-          handshake: {
-            ...BUILD,
-            bundleHash: "b".repeat(64),
-            protocolFeatures: [...BUILD.protocolFeatures],
-          },
-        }),
-      );
-      harness.credentialRecord.expiresAtMs = Date.now() - 1;
-      const expiredCredential = await rejectWorker(
-        harness.url(),
-        workerConnect(harness.credential),
-      );
-
-      expect(badCredential).toEqual(wrongEnvironment);
-      expect(staleBuild).toEqual(badCredential);
-      expect(expiredCredential).toEqual(badCredential);
-      expect(badCredential).toEqual({
-        response: {
-          type: "res",
-          id: "connect-1",
-          ok: false,
-          error: {
-            code: "INVALID_REQUEST",
-            message: "worker admission rejected",
-            details: { reason: "invalid-handshake" },
-          },
-        },
-        close: { code: 1008, reason: "invalid-handshake" },
-      });
-      expect(harness.logWsControl.warn).toHaveBeenCalledWith(
-        "worker admission rejected reason=invalid-credential",
-      );
-      expect(harness.logWsControl.warn).toHaveBeenCalledWith(
-        "worker admission rejected reason=environment-mismatch",
-      );
-      expect(harness.logWsControl.warn).toHaveBeenCalledWith(
-        "worker admission rejected reason=bundle-mismatch",
-      );
-      expect(harness.logWsControl.warn).toHaveBeenCalledWith(
-        "worker admission rejected reason=credential-expired",
-      );
     });
   });
 

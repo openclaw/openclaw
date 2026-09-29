@@ -159,6 +159,10 @@ export async function restoreUpdateDatabaseBackup(params: {
           });
           assertOwned();
           if (!isDeepStrictEqual(generations, params.expectedGenerations)) {
+            const changed = paths.filter(
+              (file) => generations[file] !== params.expectedGenerations?.[file],
+            );
+            backup.restoreRefusal = `Databases changed after ${backup.migration?.name ?? "snapshot capture"}: ${changed.join(", ")}; restoring the backup would discard later writes`;
             return null;
           }
         }

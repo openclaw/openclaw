@@ -184,7 +184,11 @@ final class WebChatManager {
         let route = WebChatRoute(sessionKey: sessionKey, agentID: agentID)
         if !newWindow,
            let instance = self.gatewayWindowOrder.reversed().lazy.compactMap({ self.gatewayWindows[$0] })
-               .first(where: { $0.target == .primary && $0.route == route })
+               .first(where: {
+                   $0.target == .primary && $0.route == route &&
+                       (draft?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false ||
+                           $0.controller.acceptsNativeDraft)
+               })
         {
             instance.controller.applyDraftIfEmpty(draft)
             instance.controller.show()
@@ -298,6 +302,7 @@ final class WebChatManager {
             agentID: route.agentID,
             connection: connection,
             gatewayID: chatStoreID,
+            gatewayTarget: target,
             windowTitle: "\(name) — OpenClaw",
             windowAutosaveName: "OpenClawChatWindow-\(autosaveID)")
         self.install(controller, target: target, route: route, connection: connection)
@@ -539,20 +544,14 @@ final class WebChatManager {
                 if visible {
                     let subscribe = OpenClawChatGatewayRequests.subscribeSessions()
                     _ = try await connection.request(
-                        method: subscribe.method,
-                        params: subscribe.params,
-                        timeoutMs: subscribe.timeoutMs,
-                        ifCurrentServerLease: lease)
+                        subscribe, ifCurrentServerLease: lease)
                 }
                 guard !Task.isCancelled,
                       self.sessionObserverOwners.isVisible(connection: connectionID) == visible
                 else { return }
                 let request = OpenClawChatGatewayRequests.setSessionObserverVisibility(visible)
                 _ = try await connection.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs,
-                    ifCurrentServerLease: lease)
+                    request, ifCurrentServerLease: lease)
                 guard !Task.isCancelled else { return }
                 if visible {
                     self.sessionObserverDeclarations[connectionID] = (lease: lease, visible: true)

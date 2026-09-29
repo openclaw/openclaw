@@ -45,7 +45,7 @@ function makeParams(): RunCronAgentTurnParams {
       state: {},
     },
     message: "summarize",
-    sessionKey: "cron:cli-diagnostic",
+    sessionKey: "existing-cron-session",
   };
 }
 

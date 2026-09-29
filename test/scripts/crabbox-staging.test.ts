@@ -819,6 +819,68 @@ console.log(JSON.stringify(stage));`);
       }),
   );
 
+  it.for([true, false].flatMap((receipt) => [true, false].map((locked) => ({ receipt, locked }))))(
+    "retires an old disposal when a recorded successor reuses its inode (receipt=$receipt, locked=$locked)",
+    async ({ receipt, locked }) =>
+      withFixture(async (f) => {
+        const newcomer = join(f.root, "new-repository");
+        mkdirSync(newcomer);
+        f.initialize(newcomer);
+        const initial = await f.program(`${seedMirror}
+const owner=createMirrorStaging(ctx.staging,ctx.repository);const source=seed(owner);
+if(${receipt})owner.finish();
+const stage={root:owner.staging.root,source,receipt:JSON.parse(fs.readFileSync(join(owner.staging.root,'staging.json'),'utf8'))};
+if(!${receipt})owner.discard();
+for(let i=1;i<32;i++)fs.mkdirSync(join(ctx.staging,'mirrors',String(i).padStart(64,'0')),{mode:0o700});
+console.log(JSON.stringify(stage));`);
+        expect(initial.status, initial.stderr).toBe(0);
+        const victim = JSON.parse(initial.stdout) as Stage;
+        const key = readdirSync(join(f.staging, "mirrors")).find((name) =>
+          existsSync(join(f.staging, "mirrors", name, "stage")),
+        )!;
+        const slot = join(f.staging, "mirrors", key);
+        const before = lstatSync(slot);
+        const saved = join(f.root, "empty-original-slot");
+        const tombstone = join(
+          f.staging,
+          basename(victim.root).replace(victim.receipt.id, "disposal-" + victim.receipt.id),
+        );
+        // Preserve the actual empty inode at removal, then let the real allocator
+        // reuse it. Receipts and generation IDs still come from production code.
+        const interrupted = await f.program(
+          `createMirrorStaging(ctx.staging,${JSON.stringify(newcomer)});throw new Error('disposal was not interrupted');`,
+          `const remove=fs.rmdirSync;fs.rmdirSync=(path,...args)=>{if(path===${JSON.stringify(slot)}){fs.renameSync(path,${JSON.stringify(saved)});process.kill(process.pid,'SIGKILL');}return remove(path,...args);};`,
+        );
+        expect(interrupted.signal, interrupted.stderr).toBe("SIGKILL");
+        expect(existsSync(victim.root)).toBe(false);
+        expect(existsSync(tombstone)).toBe(true);
+        expect(readdirSync(saved)).toEqual([]);
+        const allocated = await f.program(
+          `${seedMirror}
+const owner=createMirrorStaging(ctx.staging,ctx.repository);const source=seed(owner);owner.finish();
+console.log(JSON.stringify({root:owner.staging.root,source,receipt:JSON.parse(fs.readFileSync(join(owner.staging.root,'staging.json'),'utf8'))}));`,
+          `const mkdir=fs.mkdirSync;fs.mkdirSync=(path,...args)=>{if(path===${JSON.stringify(slot)}){fs.renameSync(${JSON.stringify(saved)},path);return;}return mkdir(path,...args);};`,
+        );
+        expect(allocated.status, allocated.stderr).toBe(0);
+        const successor = JSON.parse(allocated.stdout) as Stage;
+        expect(successor.receipt.id).not.toBe(victim.receipt.id);
+        expect(lstatSync(slot)).toMatchObject({ dev: before.dev, ino: before.ino });
+        const release = locked ? holdDatabase(join(slot, "lock")) : () => {};
+        try {
+          const recovered = await f.recover(victim);
+          expect(recovered.report.recovered).toBe(true);
+          expect(existsSync(tombstone)).toBe(false);
+          expect(lstatSync(slot)).toMatchObject({ dev: before.dev, ino: before.ino });
+          expect(f.receipt(successor)).toEqual(successor.receipt);
+          expect(readFileSync(join(successor.source, "source.txt"), "utf8")).toBe(
+            "uncommitted mirror source\n",
+          );
+        } finally {
+          release();
+        }
+      }),
+  );
+
   it("seals and reuses a large cache database with bounded read buffers", async () =>
     withFixture(async (f) => {
       const result = await f.program(`${seedMirror}

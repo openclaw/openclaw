@@ -112,13 +112,13 @@ function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): strin
 }
 
 export function noteDoctorHookConfigWarnings(cfg: OpenClawConfig, configPath: string): void {
-  const hookTransformsDirWarnings = collectInvalidHookTransformsDirWarnings(cfg, configPath);
-  if (hookTransformsDirWarnings.length > 0) {
-    note(sanitizeDoctorNote(hookTransformsDirWarnings.join("\n")), "Doctor warnings");
-  }
-  const unsupportedInternalHookEntryWarnings = collectUnsupportedInternalHookEntryWarnings(cfg);
-  if (unsupportedInternalHookEntryWarnings.length > 0) {
-    note(sanitizeDoctorNote(unsupportedInternalHookEntryWarnings.join("\n")), "Doctor warnings");
+  for (const warnings of [
+    collectInvalidHookTransformsDirWarnings(cfg, configPath),
+    collectUnsupportedInternalHookEntryWarnings(cfg),
+  ]) {
+    if (warnings.length > 0) {
+      note(sanitizeDoctorNote(warnings.join("\n")), "Doctor warnings");
+    }
   }
 }
 
@@ -137,9 +137,6 @@ export function noteMissingDefaultAgentOwner(cfg: OpenClawConfig): void {
 
 /** Formats a parsed config issue path into a user-facing dotted path. */
 export function formatConfigKeyPath(parts: Array<string | number>): string {
-  if (parts.length === 0) {
-    return "<root>";
-  }
   let out = "";
   for (const part of parts) {
     if (typeof part === "number") {
@@ -165,14 +162,10 @@ export function resolveConfigPathTarget(root: unknown, pathLocal: Array<string |
       current = current[part];
       continue;
     }
-    if (!current || typeof current !== "object" || Array.isArray(current)) {
+    if (!isRecord(current) || !(part in current)) {
       return null;
     }
-    const record = current as Record<string, unknown>;
-    if (!(part in record)) {
-      return null;
-    }
-    current = record[part];
+    current = current[part];
   }
   return current;
 }
@@ -213,16 +206,15 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
     }
     const issuePath = issue.path.filter((part) => typeof part !== "symbol");
     const target = resolveConfigPathTarget(next, issuePath);
-    if (!target || typeof target !== "object" || Array.isArray(target)) {
+    if (!isRecord(target)) {
       continue;
     }
-    const record = target as Record<string, unknown>;
     const parentKey =
       issuePath.length === 1 && typeof issuePath[0] === "string" ? issuePath[0] : undefined;
     const protectedSet =
       issuePath.length === 0 ? undefined : parentKey ? STRIP_PROTECTED_KEYS[parentKey] : undefined;
     for (const key of issue.keys) {
-      if (typeof key !== "string" || !(key in record)) {
+      if (!(key in target)) {
         continue;
       }
       // $include is authored parser syntax at every object depth, not a schema field.
@@ -233,7 +225,7 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
       if (protectedSet?.has(key)) {
         continue;
       }
-      delete record[key];
+      delete target[key];
       removed.push(formatConfigKeyPath([...issuePath, key]));
     }
   }
@@ -289,12 +281,11 @@ function isImplicitFallbackClobber(model: unknown): boolean {
   if (typeof model === "string") {
     return primary !== undefined;
   }
-  if (model !== null && typeof model === "object" && !Array.isArray(model)) {
-    const obj = model as Record<string, unknown>;
+  if (isRecord(model)) {
     // Object with primary but no fallbacks key — intent is ambiguous; warn.
     // Object with fallbacks: [] — explicit no-fallbacks; no warn.
     return (
-      Object.hasOwn(obj, "primary") && !Object.hasOwn(obj, "fallbacks") && primary !== undefined
+      Object.hasOwn(model, "primary") && !Object.hasOwn(model, "fallbacks") && primary !== undefined
     );
   }
   return false;

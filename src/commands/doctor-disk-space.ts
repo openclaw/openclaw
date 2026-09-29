@@ -56,10 +56,14 @@ function buildDiskSpaceWarnings(params: {
   return warnings;
 }
 
-function collectDiskSpaceWarnings(params: {
+type DiskSpaceHealthOptions = {
   env?: NodeJS.ProcessEnv;
   readDiskSpace?: (targetPath: string) => { availableBytes: number } | null;
-}): { availableBytes: number; stateDir: string; warnings: readonly string[] } | null {
+};
+
+function collectDiskSpaceWarnings(
+  params: DiskSpaceHealthOptions = {},
+): { availableBytes: number; stateDir: string; warnings: readonly string[] } | null {
   const env = params.env ?? process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   const stateDir = resolveStateDir(env, homedir);
@@ -87,14 +91,10 @@ function collectDiskSpaceWarnings(params: {
 }
 
 /** Collects read-only structured findings for low disk space around the state directory. */
-export function collectDiskSpaceHealthFindings(deps?: {
-  env?: NodeJS.ProcessEnv;
-  readDiskSpace?: (targetPath: string) => { availableBytes: number } | null;
-}): readonly HealthFinding[] {
-  const result = collectDiskSpaceWarnings({
-    env: deps?.env,
-    readDiskSpace: deps?.readDiskSpace,
-  });
+export function collectDiskSpaceHealthFindings(
+  deps?: DiskSpaceHealthOptions,
+): readonly HealthFinding[] {
+  const result = collectDiskSpaceWarnings(deps);
   if (!result || result.warnings.length === 0) {
     return [];
   }
@@ -114,14 +114,8 @@ export function collectDiskSpaceHealthFindings(deps?: {
   ];
 }
 
-export function noteDiskSpace(deps?: {
-  env?: NodeJS.ProcessEnv;
-  readDiskSpace?: (targetPath: string) => { availableBytes: number } | null;
-}): void {
-  const result = collectDiskSpaceWarnings({
-    env: deps?.env,
-    readDiskSpace: deps?.readDiskSpace,
-  });
+export function noteDiskSpace(deps?: DiskSpaceHealthOptions): void {
+  const result = collectDiskSpaceWarnings(deps);
   if (!result || result.warnings.length === 0) {
     return;
   }

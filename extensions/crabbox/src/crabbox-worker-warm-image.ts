@@ -578,7 +578,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       openStore().notePreparedDemand(id, preparation),
 
     async release(context: LeaseContext) {
-      // Only confirmed stop releases this hold: enrollment success may itself be a lost response,
+      // Only confirmed stop or absence releases this hold: enrollment success may be a lost response,
       // and replay still needs the original checkpoint catalog entry and native artifact.
       const owner = await lookupLease(context.id);
       if (!owner) {

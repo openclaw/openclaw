@@ -12,9 +12,9 @@ import { resolveExecCode, resolveExecTitle } from "../../../../src/agents/tool-d
 import {
   buildWriteDiffLines,
   computeLineDiff,
-  countTextLines,
   joinDiffSections,
   parseDiffDetailsString,
+  splitDiffLines,
   type DiffLine,
   type DiffStat,
 } from "./tool-call-diff.ts";
@@ -345,7 +345,7 @@ function buildToolCallView(
       // Present details need created=true before zero removals are authoritative.
       ...(details && details.created !== true
         ? {}
-        : { stat: { added: countTextLines(content), removed: 0 } }),
+        : { stat: { added: splitDiffLines(content).length, removed: 0 } }),
     };
   }
 

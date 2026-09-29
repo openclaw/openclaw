@@ -12,6 +12,7 @@ import {
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   asOptionalRecord,
+  isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -191,10 +192,7 @@ function readKimiBaseUrl(
   }
   const providers = asOptionalRecord(config.providers);
   for (const [id, value] of Object.entries(providers ?? {})) {
-    if (
-      normalizeHermesCustomProviderId(id) === normalizeHermesCustomProviderId(provider) &&
-      asOptionalRecord(value)
-    ) {
+    if (normalizeHermesCustomProviderId(id) === normalizeHermesCustomProviderId(provider)) {
       const providerBaseUrl = readBaseUrl(asOptionalRecord(value));
       if (providerBaseUrl) {
         return providerBaseUrl;
@@ -245,9 +243,7 @@ function hasExplicitHermesProvider(config: Record<string, unknown>, provider: st
   }
   const providers = config.providers;
   if (
-    providers &&
-    typeof providers === "object" &&
-    !Array.isArray(providers) &&
+    isRecord(providers) &&
     Object.keys(providers).some((id) => normalizeHermesCustomProviderId(id) === normalized)
   ) {
     return true;
@@ -255,11 +251,10 @@ function hasExplicitHermesProvider(config: Record<string, unknown>, provider: st
   return (
     Array.isArray(config.custom_providers) &&
     config.custom_providers.some((entry) => {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      if (!isRecord(entry)) {
         return false;
       }
-      const record = entry as Record<string, unknown>;
-      const id = normalizeOptionalString(record.name) ?? normalizeOptionalString(record.id);
+      const id = normalizeOptionalString(entry.name) ?? normalizeOptionalString(entry.id);
       return id ? normalizeHermesCustomProviderId(id) === normalized : false;
     })
   );
@@ -319,15 +314,13 @@ export function resolveHermesModelRef(
     const provider = normalizeOptionalString(config.provider);
     return joinHermesProviderModel(config, provider, rawModel, env);
   }
-  if (model && typeof model === "object" && !Array.isArray(model)) {
-    const modelRecord = model as Record<string, unknown>;
-    const rawModel =
-      normalizeOptionalString(modelRecord.default) ?? normalizeOptionalString(modelRecord.model);
+  if (isRecord(model)) {
+    const rawModel = normalizeOptionalString(model.default) ?? normalizeOptionalString(model.model);
     const hasCustomEndpoint = Boolean(
-      normalizeOptionalString(modelRecord.base_url) ?? normalizeOptionalString(modelRecord.baseUrl),
+      normalizeOptionalString(model.base_url) ?? normalizeOptionalString(model.baseUrl),
     );
     const provider =
-      normalizeOptionalString(modelRecord.provider) ?? (hasCustomEndpoint ? "custom" : undefined);
+      normalizeOptionalString(model.provider) ?? (hasCustomEndpoint ? "custom" : undefined);
     return rawModel ? joinHermesProviderModel(config, provider, rawModel, env) : undefined;
   }
   const rootModel =

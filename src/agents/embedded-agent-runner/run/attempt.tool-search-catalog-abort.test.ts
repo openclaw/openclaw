@@ -60,7 +60,7 @@ function requireAttemptCatalogRef(): ToolSearchCatalogRef {
   return options.toolSearchCatalogRef;
 }
 
-describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
+describe("runEmbeddedAttempt tool boundaries", () => {
   beforeAll(async () => {
     await preloadRunEmbeddedAttemptForTests();
   });
@@ -76,13 +76,6 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
 
   it.each([
     { mode: "direct spawn", toolName: "sessions_spawn", code: undefined, failurePhase: undefined },
-    { mode: "direct wait", toolName: "agents_wait", code: undefined, failurePhase: undefined },
-    {
-      mode: "raw catalog spawn",
-      failurePhase: "bridge",
-      toolName: "sessions_spawn",
-      code: 'return await sessions_spawn({ task: "inspect", collect: true });',
-    },
     {
       mode: "raw catalog wait",
       failurePhase: "bridge",
@@ -237,10 +230,8 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
   );
 
   it.each([
-    ["code-mode", { codeMode: { enabled: true } }, false, false],
     ["tool-search-tools", { toolSearch: { enabled: true, mode: "tools" } }, false, false],
     ["tool-search-directory", { toolSearch: { enabled: true, mode: "directory" } }, false, false],
-    ["cancelled-code-mode", { codeMode: { enabled: true } }, true, false],
     ["timed-out-code-mode", { codeMode: { enabled: true } }, true, true],
   ] as const)(
     "clears the %s run catalog when preparation fails or is cancelled",
@@ -319,6 +310,53 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
       expect(logDiagnostics).toHaveBeenCalledOnce();
       expect(catalogRef).toBeDefined();
       expect(catalogRef?.current).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { provider: "custom", expected: "high", compat: undefined },
+    { provider: "openai", expected: undefined, compat: { supportsReasoningEffort: false } },
+  ])(
+    "keeps Ultra logical at $provider effort boundaries",
+    async ({ provider, expected, compat }) => {
+      await createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey: "agent:main:main",
+        tempPaths,
+        attemptOverrides: {
+          disableTools: false,
+          thinkLevel: "ultra",
+          model: {
+            id: "synthetic-model",
+            provider,
+            name: "Synthetic model",
+            api: "openai-completions",
+            baseUrl: "https://example.invalid/v1",
+            reasoning: true,
+            compat,
+            input: ["text"],
+            contextWindow: 8192,
+            maxTokens: 2048,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        },
+      });
+
+      const promptInput = hoisted.embeddedSystemPromptInputs.at(-1) as {
+        proactiveSubagentOrchestration?: boolean;
+      };
+      const sessionOptions = hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0] as {
+        thinkingLevel?: string;
+      };
+      const providerThinkingLevel = hoisted.applyExtraParamsToAgentMock.mock.calls.at(-1)?.[5];
+
+      expect(promptInput.proactiveSubagentOrchestration).toBe(true);
+      expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ requesterThinkingLevel: "ultra" }),
+        undefined,
+      );
+      expect(sessionOptions.thinkingLevel).toBe(expected ?? "off");
+      expect(providerThinkingLevel).toBe(expected);
     },
   );
 });

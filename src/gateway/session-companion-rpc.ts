@@ -67,7 +67,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
     "sessions.companion.ask",
     validateSessionsCompanionAskParams,
     async ({ params, respond, client, context, signal, hasCurrentClientAuthority }) => {
-      const { sessionKey, agentId, question, attachments } = params;
+      const { sessionKey, agentId, question, selectionContext, attachments } = params;
       if (!question.trim()) {
         respond(
           false,
@@ -133,6 +133,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
           sessionKey: target.sessionKey,
           agentId: target.agentId,
           question,
+          ...(selectionContext ? { selectionContext } : {}),
           ...(originalAttachments ? { attachments: originalAttachments } : {}),
           connId,
           assertSourceCurrent,

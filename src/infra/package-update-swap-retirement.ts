@@ -16,6 +16,7 @@ export async function retireVerifiedPackageSwap(params: {
   hadPackage: boolean;
   previousRoot: PackageRootIntegrityFingerprint | undefined;
   backupRoot: string;
+  databaseBackupRoot: string | undefined;
   launchers: PackageLauncherBackup;
   packageBackedUp: boolean;
   globalRoot: string;
@@ -41,24 +42,47 @@ export async function retireVerifiedPackageSwap(params: {
   // The filesystem fallback can recheck an assertion after catching it.
   // A later successful read cannot turn that authority failure into cleanup.
   const assertRetirementCurrent = retainMutationAuthority(assertCurrent);
+  const cleanupStartedAt = performance.now();
+  const cleanupDeadlineAtMs = cleanupStartedAt + UPDATE_CLEANUP_BUDGET_MS;
   if (activation) {
     await activation.retire();
     // The anchor and helper are retired; only the executor fence remains.
     assertRetirementCurrent();
-    return undefined;
+  } else {
+    const linkRetention =
+      rootLink && packageBackedUp ? await rootLink.retire(assertRetirementCurrent) : null;
+    assertRetirementCurrent();
+    if (linkRetention) {
+      return { ...step(1, null, linkRetention), name: "package-backup-retention" };
+    }
+    if (hadPackage && previousRoot?.kind !== "link") {
+      const message = await discardPackageUpdateBackup(
+        backupRoot,
+        "old package",
+        params.globalRoot,
+        assertRetirementCurrent,
+        cleanupDeadlineAtMs,
+      );
+      if (message) {
+        messages.push(message);
+      }
+    }
+    const launcherCleanup = await discardPackageLauncherBackup(
+      launchers,
+      params.globalRoot,
+      assertRetirementCurrent,
+      cleanupDeadlineAtMs,
+    );
+    if (launcherCleanup) {
+      messages.push(launcherCleanup);
+    }
   }
-  const cleanupStartedAt = performance.now();
-  const cleanupDeadlineAtMs = cleanupStartedAt + UPDATE_CLEANUP_BUDGET_MS;
-  const linkRetention =
-    rootLink && packageBackedUp ? await rootLink.retire(assertRetirementCurrent) : null;
-  assertRetirementCurrent();
-  if (linkRetention) {
-    return { ...step(1, null, linkRetention), name: "package-backup-retention" };
-  }
-  if (hadPackage && previousRoot?.kind !== "link") {
+  // Verified activation ends automatic database restoration, so the snapshots
+  // share the retired package backup's lifetime.
+  if (params.databaseBackupRoot) {
     const message = await discardPackageUpdateBackup(
-      backupRoot,
-      "old package",
+      `${params.databaseBackupRoot}.databases`,
+      "pre-migration database snapshots",
       params.globalRoot,
       assertRetirementCurrent,
       cleanupDeadlineAtMs,
@@ -66,15 +90,6 @@ export async function retireVerifiedPackageSwap(params: {
     if (message) {
       messages.push(message);
     }
-  }
-  const launcherCleanup = await discardPackageLauncherBackup(
-    launchers,
-    params.globalRoot,
-    assertRetirementCurrent,
-    cleanupDeadlineAtMs,
-  );
-  if (launcherCleanup) {
-    messages.push(launcherCleanup);
   }
   // Capture authority loss during the final filesystem await in the
   // retirement outcome, not only in the caller's later publication check.

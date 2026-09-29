@@ -10,6 +10,10 @@ import type {
   SpawnInput,
 } from "../process/supervisor/types.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { resolveStreamStopReason } from "./cron-stream-watchers.js";
 import {
   createCronStreamWatcherFixture,
@@ -23,6 +27,88 @@ import {
 describe("cron stream watchers", () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("marks a source stable once after a late scheduler wake", async () => {
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const { fake, updateState, watchers } = createCronStreamWatcherFixture({ scheduler });
+    try {
+      await watchers.start(job({ state: { streamConsecutiveFailures: 4 } }));
+      clock.setTime(180_000);
+      await clock.wake();
+      await clock.advanceBy(60_000);
+      expect(watchers.inspect("stream-job")?.consecutiveFailures).toBe(0);
+      expect(
+        updateState.mock.calls.filter(([, patch]) => patch.streamConsecutiveFailures === 0),
+      ).toHaveLength(1);
+      expect(fake.spawn).toHaveBeenCalledOnce();
+      expect(scheduler.nextWakeAtMs).toBeNull();
+    } finally {
+      await watchers.stopAll("shutdown");
+      await scheduler.stop();
+    }
+  });
+
+  it("restarts once after sleeping past source backoff and cancels the next deadline on stop", async () => {
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const { fake, watchers } = createCronStreamWatcherFixture({
+      scheduler,
+      retryBackoffMs: [1_000],
+    });
+    try {
+      await watchers.start(job());
+      fake.exits[0]?.(exitResult());
+      await settle();
+      await settle();
+      expect(watchers.inspect("stream-job")?.state).toBe("backoff");
+      clock.setTime(300_000);
+      await clock.wake();
+      await clock.advanceBy(0);
+      expect(fake.spawn).toHaveBeenCalledTimes(2);
+      expect(watchers.inspect("stream-job")?.state).toBe("running");
+      await watchers.stopAll("shutdown");
+      await clock.advanceBy(60_000);
+      expect(fake.spawn).toHaveBeenCalledTimes(2);
+      expect(scheduler.nextWakeAtMs).toBeNull();
+    } finally {
+      await watchers.stopAll("shutdown");
+      await scheduler.stop();
+    }
+  });
+
+  it("joins a scheduled stability write while the source owner stops", async () => {
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const writing = createDeferred();
+    const releaseWrite = createDeferred();
+    const { watchers } = createCronStreamWatcherFixture({
+      scheduler,
+      updateState: vi.fn(async (_id: string, patch: Partial<CronJob["state"]>) => {
+        if (patch.streamStatus === "running" && patch.streamConsecutiveFailures === 0) {
+          writing.resolve();
+          await releaseWrite.promise;
+        }
+      }),
+    });
+    await watchers.start(job({ state: { streamConsecutiveFailures: 4 } }));
+    const wake = clock.advanceBy(60_000);
+    await writing.promise;
+    let stopped = false;
+    const stoppingScheduler = scheduler.stop().then(() => {
+      stopped = true;
+    });
+    const stoppingSource = watchers.stopAll("shutdown");
+    try {
+      await settle();
+      expect(stopped).toBe(false);
+    } finally {
+      releaseWrite.resolve();
+      await Promise.all([wake, stoppingSource, stoppingScheduler]);
+    }
+    expect(watchers.inspect("stream-job")?.state).toBe("stopped");
+    expect(scheduler.nextWakeAtMs).toBeNull();
   });
 
   it("keeps lifecycle ownership when a diagnostic state write fails", async () => {

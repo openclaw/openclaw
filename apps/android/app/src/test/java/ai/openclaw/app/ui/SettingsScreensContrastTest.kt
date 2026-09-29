@@ -385,6 +385,8 @@ class SettingsScreensContrastTest {
     previousRuntime = app.peekRuntime()
     NativeStringResources.install(app)
     NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags("fr"))
+    val plainPrefs = app.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().putString("node.instanceId", "9f294b46-53d6-4eda-9d9e-4db361727e0a").commit()
     val prefs = SecurePrefs(app, app.getSharedPreferences("typography-${UUID.randomUUID()}", Context.MODE_PRIVATE))
     prefs.setManualHost("wss://gateway.example.test")
     prefs.setManualPort(443)

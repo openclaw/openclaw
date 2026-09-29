@@ -20,11 +20,7 @@ import {
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { projectGatewayUrlForDiagnostics } from "../gateway/connection-details.js";
 import { normalizeAgentIdStrict, parseAgentSessionKey } from "../routing/session-key.js";
-import {
-  parseSessionTargetInput,
-  SessionTargetParseError,
-  type SessionTargetInput,
-} from "./session-ref.js";
+import { parseSessionTargetInput, SessionTargetParseError } from "./session-ref.js";
 
 export type SessionTargetGateway = {
   config?: OpenClawConfig;
@@ -39,10 +35,6 @@ type ResolvedSessionTarget = {
   agentId: string;
   gateway: SessionTargetGateway;
 };
-
-function gatewayUrlForTarget(target: SessionTargetInput): string | undefined {
-  return target.kind === "url" ? `${target.origin}${target.basePath}` : undefined;
-}
 
 export async function callSessionTargetGateway<T>(params: {
   gateway: SessionTargetGateway;
@@ -186,7 +178,7 @@ export async function resolveSessionTarget(params: {
   requiredScope?: "operator.read" | "operator.admin";
 }): Promise<ResolvedSessionTarget> {
   const parsed = parseSessionTargetInput(params.raw);
-  const targetUrl = gatewayUrlForTarget(parsed);
+  const targetUrl = parsed.kind === "url" ? `${parsed.origin}${parsed.basePath}` : undefined;
   if (targetUrl && params.gateway?.url) {
     throw new Error("pass one target: use either the session URL or --url, not both");
   }

@@ -23,16 +23,22 @@ import {
   type SessionTranscriptInitializationPublication,
   type SessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.types.js";
-import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
+  commitIncognitoSessionSharingFacts,
+  commitIncognitoSessionSharingField,
+  publishIncognitoSessionEntryChange,
+  stageIncognitoSharingPublication,
+} from "./session-accessor.sqlite-incognito-sharing.js";
+import {
+  publishRetainedSessionGeneration,
   reconcileSessionSharingAcquisition,
+  updateSessionSharingField,
   recordAcquiringSessionEntry,
   recordAcquiringSessionMember,
   type CommittedSessionSharingFacts,
   type PreparedSessionSharingRead,
   type SessionSharingRetentionRequest,
 } from "./session-accessor.sqlite-sharing-acquisition.js";
-import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { SessionEntry } from "./types.js";
 
 type CreationDatabase =
@@ -134,6 +140,30 @@ export function emitPreparedSessionSharingChange(
   };
   preparedSharingChanges.changes.set(change, receipt);
   sessionChanges.emit(change, database.db);
+}
+
+/** A committed metadata-only worker write invalidates caches without changing retained identity. */
+export function publishSessionEntryWorkerMetadataInvalidation(params: {
+  agentId: string;
+  storePath: string;
+  databaseIdentity: string;
+  sessionKey: string;
+}): void {
+  invalidateOpenClawAgentWritableProjections(params.databaseIdentity, (database) =>
+    sessionEntryCaches.delete(database),
+  );
+  invalidateOpenClawAgentReadOnlyProjections(params.databaseIdentity, (database) =>
+    sessionEntryCaches.delete(database),
+  );
+  const change: SessionRowChange = {
+    agentId: params.agentId,
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    scope: "session-entry",
+    facts: { kind: "unchanged" },
+  };
+  preparedSharingChanges.changes.set(change, undefined);
+  sessionChanges.emit(change);
 }
 
 function assertCreationCurrent(
@@ -281,7 +311,7 @@ export function publishSessionEntryPlaceholderInsertion(
         read.facts = facts;
       }
       if (incognito) {
-        incognitoSharingState(database.db).entries.set(sessionKey, facts ?? null);
+        commitIncognitoSessionSharingFacts(database.db, sessionKey, facts ?? null);
       }
       sessionEntryCaches.delete(database.db);
       receipt.committed = staged;
@@ -352,29 +382,9 @@ export function retainPreparedSessionGenerationFacts(params: {
   const retained = retainPreparedSessionSharingFacts({
     ...params,
     membership: new Set(),
-    generation: { current: params.entry ?? null },
+    generation: { current: params.entry ?? null, initiallyAbsent: params.entry ? undefined : true },
   });
   return { readCurrent: retained.readGeneration, release: retained.release };
-}
-
-function publishRetainedSessionGeneration(
-  read: PreparedSessionSharingRead,
-  entry: SessionSharingEntry | undefined,
-  known: boolean,
-) {
-  const generation = read.generation;
-  if (!generation?.current) {
-    return;
-  }
-  if (!known) {
-    generation.current = undefined;
-  } else if (
-    !entry ||
-    generation.current.sessionId !== entry.sessionId ||
-    generation.current.lifecycleRevision !== entry.lifecycleRevision
-  ) {
-    generation.current = null;
-  }
 }
 
 function retainedSharingReads(database: SessionEntryCacheDatabase, sessionKey: string) {
@@ -383,43 +393,6 @@ function retainedSharingReads(database: SessionEntryCacheDatabase, sessionKey: s
     ? preparedSharingReads.get(`file:${identity}\0${sessionKey}`)
     : undefined;
 }
-// Process-held stores cannot be reopened in a worker. Their existing writer publishes
-// content-free metadata, bounded by live entries and the native database's lifetime.
-const incognitoSharingEntries = resolveGlobalSingleton(
-  Symbol.for("openclaw.incognitoSessionSharingEntries"),
-  () =>
-    new WeakMap<
-      DatabaseSync,
-      {
-        entries: Map<string, CommittedSessionSharingFacts | null>;
-        pending: Map<string, Set<object>>;
-      }
-    >(),
-);
-
-function incognitoSharingState(database: DatabaseSync) {
-  let state = incognitoSharingEntries.get(database);
-  if (!state) {
-    state = { entries: new Map(), pending: new Map() };
-    incognitoSharingEntries.set(database, state);
-  }
-  return state;
-}
-
-function stageIncognitoSharingPublication(database: DatabaseSync, sessionKey: string) {
-  const state = incognitoSharingState(database);
-  const token = {};
-  const pending = state.pending.get(sessionKey) ?? new Set<object>();
-  state.pending.set(sessionKey, pending);
-  pending.add(token);
-  return () => {
-    pending.delete(token);
-    if (pending.size === 0) {
-      state.pending.delete(sessionKey);
-    }
-  };
-}
-
 function stageSessionSharingPublication(database: SessionEntryCacheDatabase, sessionKey: string) {
   const releaseIncognito = !database.db.location()
     ? stageIncognitoSharingPublication(database.db, sessionKey)
@@ -437,16 +410,30 @@ function stageSessionSharingPublication(database: SessionEntryCacheDatabase, ses
   };
 }
 
-export function readCommittedIncognitoSessionSharing(database: DatabaseSync, sessionKey: string) {
-  const state = incognitoSharingEntries.get(database);
-  if (state?.pending.has(sessionKey)) {
-    throw new Error("Incognito session sharing publication is pending");
-  }
-  const current = state?.entries.get(sessionKey);
-  if (current === null) {
-    throw new Error("Incognito session sharing projection is unavailable");
-  }
-  return current;
+function publishSessionSharingFieldChange(
+  database: SessionEntryCacheDatabase & { path: string },
+  sessionKey: string,
+  change: Extract<SessionRowFacts, { kind: "member" | "owner" }>,
+): void {
+  publishTrackedCacheUpdate(
+    database,
+    () => {
+      for (const read of retainedSharingReads(database, sessionKey) ?? []) {
+        if (read.acquisition) {
+          if (change.kind === "member") {
+            recordAcquiringSessionMember(read.acquisition, change);
+          } else {
+            // A pending worker snapshot cannot establish which assignment it read.
+            recordAcquiringSessionEntry(read.acquisition, undefined, undefined);
+          }
+        } else if (read.facts) {
+          read.facts = updateSessionSharingField(read.facts, change);
+        }
+      }
+      commitIncognitoSessionSharingField(database.db, sessionKey, change);
+    },
+    () => stageSessionSharingPublication(database, sessionKey),
+  );
 }
 
 export function publishSessionSharingMemberChange(
@@ -455,40 +442,7 @@ export function publishSessionSharingMemberChange(
   member: Extract<SessionRowFacts, { kind: "member" }>,
   agentId = database.agentId,
 ): void {
-  const incognito = !database.db.location();
-  publishTrackedCacheUpdate(
-    database,
-    () => {
-      const update = (facts: CommittedSessionSharingFacts): CommittedSessionSharingFacts => {
-        // A legacy synchronous replacement can commit before a worker reply reaches this owner.
-        if (facts.entry?.sessionId !== member.sessionId) {
-          return facts;
-        }
-        const membership = new Set(facts.membership);
-        if (member.present) {
-          membership.add(member.identityId);
-        } else {
-          membership.delete(member.identityId);
-        }
-        return { ...facts, membership };
-      };
-      for (const read of retainedSharingReads(database, sessionKey) ?? []) {
-        const acquisition = read.acquisition;
-        if (acquisition) {
-          recordAcquiringSessionMember(acquisition, member);
-        } else if (read.facts) {
-          read.facts = update(read.facts);
-        }
-      }
-      if (incognito) {
-        const current = incognitoSharingEntries.get(database.db)?.entries.get(sessionKey);
-        if (current) {
-          incognitoSharingEntries.get(database.db)?.entries.set(sessionKey, update(current));
-        }
-      }
-    },
-    () => stageSessionSharingPublication(database, sessionKey),
-  );
+  publishSessionSharingFieldChange(database, sessionKey, member);
   emitPreparedSessionSharingChange(database, sessionKey, agentId, member);
 }
 /** Publish sharing state before the listing projection and its public change event. */
@@ -502,6 +456,10 @@ export function publishSessionSharingEntryChange(
   },
 ): void {
   const facts = update.facts;
+  if (facts?.kind === "owner") {
+    publishSessionSharingFieldChange(database, update.sessionKey, facts);
+    return;
+  }
   const sharingUnchanged =
     facts?.kind === "unchanged" || facts?.kind === "participants" || facts?.kind === "category";
   const incognito = !database.db.location();
@@ -536,36 +494,7 @@ export function publishSessionSharingEntryChange(
     );
   }
   if (incognito && !sharingUnchanged) {
-    let current: CommittedSessionSharingFacts | null | undefined;
-    try {
-      const entry =
-        update.entry ?? readExactSessionEntryRow(database, update.sessionKey, "list")?.entry;
-      current = entry
-        ? {
-            entry: projectSessionSharingEntry(entry),
-            membership: new Set(
-              listSessionMembersInDatabase(database, update.sessionKey).map(
-                (member) => member.identityId,
-              ),
-            ),
-          }
-        : undefined;
-    } catch {
-      // Failed projection cannot establish absence for a later creation attempt.
-      current = null;
-    }
-    const state = incognitoSharingState(database.db);
-    publishTrackedCacheUpdate(
-      database,
-      () => {
-        if (current !== undefined) {
-          state.entries.set(update.sessionKey, current);
-        } else {
-          state.entries.delete(update.sessionKey);
-        }
-      },
-      () => stageIncognitoSharingPublication(database.db, update.sessionKey),
-    );
+    publishIncognitoSessionEntryChange(database, update);
   }
 }
 

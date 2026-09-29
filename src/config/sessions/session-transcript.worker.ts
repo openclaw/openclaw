@@ -200,6 +200,17 @@ serveOwnedWorkerTasks(
           };
         });
       }
+      if (request.kind === "session-archive-presence") {
+        const { readTranscriptArchivePresenceInWorker } =
+          await import("./session-accessor.sqlite-archive-read.js");
+        return await withHistoryDatabase(request.database, request.kind, () => ({
+          kind: "session-archive-presence" as const,
+          registered: readTranscriptArchivePresenceInWorker({
+            ...request,
+            env: cloneEnvWithPlatformSemantics(request.env),
+          }),
+        }));
+      }
       if (request.kind === "session-archive-pruning") {
         const { readSessionArchivePruningInWorker } =
           await import("./session-history-archive-pruning.worker.js");
@@ -276,6 +287,12 @@ serveOwnedWorkerTasks(
         const { readSessionRowDatabaseFacts } = await import("./session-entry-read.worker.js");
         return await withHistoryDatabase(request.database, request.kind, () =>
           readSessionRowDatabaseFacts(request),
+        );
+      }
+      if (request.kind === "session-entry-current") {
+        const { readSessionEntryCurrentFacts } = await import("./session-entry-read.worker.js");
+        return await withHistoryDatabase(request.database, request.kind, () =>
+          readSessionEntryCurrentFacts(request),
         );
       }
       if (request.kind === "session-row-backfill") {

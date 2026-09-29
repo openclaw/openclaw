@@ -48,7 +48,7 @@ extension OpenClawChatViewModel {
         nextThinkingSelectionRequestID &+= 1
         let requestID = nextThinkingSelectionRequestID
         latestThinkingSelectionRequestIDsByTarget[target] = requestID
-        thinkingPreferenceRequests[requestID] = .pending(ThinkingPreferenceState(
+        thinkingPreferenceRequests[requestID] = .pending(PreferenceState(
             level: next,
             isExplicit: !clearsOverride))
         self.reconcileThinkingPreferenceRequests()
@@ -76,7 +76,7 @@ extension OpenClawChatViewModel {
                 self.acceptedThinkingOverrideClearedByTarget[target] = clearsOverride
                 self.lastSuccessfulSettingsPatchRequestIDsByTarget[target] = settingsRequestID
                 self.lastSuccessfulThinkingOverrideClearedByTarget[target] = clearsOverride
-                self.thinkingPreferenceRequests[requestID] = .succeeded(ThinkingPreferenceState(
+                self.thinkingPreferenceRequests[requestID] = .succeeded(PreferenceState(
                     level: acceptedLevel,
                     isExplicit: !clearsOverride))
                 self.reconcileThinkingPreferenceRequests()
@@ -158,13 +158,9 @@ extension OpenClawChatViewModel {
     }
 
     private func reconcileThinkingPreferenceRequests() {
-        let requestIDs = self.thinkingPreferenceRequests.keys.sorted(by: >)
-        let resolved = requestIDs.compactMap { requestID -> ThinkingPreferenceState? in
-            switch self.thinkingPreferenceRequests[requestID] {
-            case let .pending(state), let .succeeded(state): state
-            case .failed, .none: nil
-            }
-        }.first ?? self.confirmedThinkingPreference
+        let resolved = self.thinkingPreferenceRequests.keys.sorted(by: >)
+            .compactMap { self.thinkingPreferenceRequests[$0]?.state }
+            .first ?? self.confirmedThinkingPreference
         if resolved != self.emittedThinkingPreference {
             self.emittedThinkingPreference = resolved
             self.onThinkingLevelChanged?(resolved.level)
@@ -179,7 +175,7 @@ extension OpenClawChatViewModel {
     }
 
     func recordAuthoritativeInheritedThinkingPreference(_ level: String) {
-        self.confirmedThinkingPreference = ThinkingPreferenceState(level: level, isExplicit: false)
+        self.confirmedThinkingPreference = PreferenceState(level: level, isExplicit: false)
     }
 
     func updateCurrentSessionThinkingLevels(
@@ -355,14 +351,14 @@ extension OpenClawChatViewModel {
     private func sessionModelChoice(
         for currentSession: OpenClawChatSessionEntry?) -> OpenClawChatModelChoice?
     {
-        if Self.normalizedModelIdentityComponent(currentSession?.model) != nil {
+        if ChatPayloadDecoding.trimmedNonEmptyString(currentSession?.model) != nil {
             return self.modelChoice(modelID: currentSession?.model, provider: currentSession?.modelProvider)
         }
         return self.modelChoice(modelID: sessionDefaults?.model, provider: sessionDefaults?.modelProvider)
     }
 
     private func modelChoice(modelID: String?, provider: String?) -> OpenClawChatModelChoice? {
-        guard let modelID = Self.normalizedModelIdentityComponent(modelID) else { return nil }
+        guard let modelID = ChatPayloadDecoding.trimmedNonEmptyString(modelID) else { return nil }
         let provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let provider, !provider.isEmpty {
             let prefix = "\(provider)/"
