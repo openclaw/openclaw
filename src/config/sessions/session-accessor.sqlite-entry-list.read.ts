@@ -18,7 +18,6 @@ import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js"
 import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
 import { validateDeliveryCanonicalSessionEntry } from "./session-accessor.sqlite-entry-read.js";
 import {
-  cloneSessionEntry,
   resolveSqliteScope,
   toDatabaseOptions,
   type ResolvedSqliteScope,
@@ -192,7 +191,7 @@ function* iterateSessionEntriesForListing(
     // Full snapshots own their nested values; list snapshots may share cached entries.
     yield {
       sessionKey,
-      entry: cloneEntries ? cloneSessionEntry(entry) : entry,
+      entry: cloneEntries ? structuredClone(entry) : entry,
     };
   }
 }

@@ -177,8 +177,13 @@ suite.define(() => {
         );
         for (const agent of agentsList.agents) {
           const group = sidebar.locator(`[data-agent-group="${agent.id}"]`);
+          const pin = sidebar.locator(
+            `.sidebar-nav [data-session-key="agent:${agent.id}:project"]`,
+          );
+          expect(await pin.count()).toBe(1);
+          expect(await pin.textContent()).toContain(`${agent.name} project`);
+          expect(await pin.locator(".identity-avatar--agent").count()).toBe(1);
           expect(await group.locator(".sidebar-recent-session").allTextContents()).toEqual([
-            expect.stringContaining(`${agent.name} project`),
             expect.stringContaining(`${agent.name} notes`),
           ]);
           expect(
@@ -341,7 +346,7 @@ suite.define(() => {
         await expect.poll(() => sessionRows.count()).toBe(8);
 
         await sidebar.locator('[data-agent-collapse="bloom"]').click();
-        await expect.poll(() => sessionRows.count()).toBe(6);
+        await expect.poll(() => sessionRows.count()).toBe(7);
         expect(new URL(page.url()).pathname).toBe("/chat/forge/notes");
         await page.reload();
         await expect.poll(() => headers.count()).toBe(4);
@@ -350,7 +355,7 @@ suite.define(() => {
             sidebar.locator('[data-agent-collapse="bloom"]').getAttribute("aria-expanded"),
           )
           .toBe("false");
-        await expect.poll(() => sessionRows.count()).toBe(6);
+        await expect.poll(() => sessionRows.count()).toBe(7);
         await expectWorkspace();
         const forgeGroup = sidebar.locator('[data-agent-group="forge"]');
         const actions = forgeGroup.locator(".sidebar-agent-roster__actions");

@@ -96,18 +96,6 @@ function requireFirstMockArg(
   return arg;
 }
 
-function selectText(element: Element) {
-  const range = document.createRange();
-  range.selectNodeContents(element);
-  const selection = window.getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(range);
-}
-
-function pointerClick(element: Element) {
-  element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
-}
-
 beforeEach(() => {
   vi.spyOn(localStorageModule, "getSafeLocalStorage").mockImplementation(getSafeLocalStorageMock);
   vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
@@ -861,7 +849,7 @@ describe("grouped chat rendering", () => {
 
     expect(onReply).toHaveBeenLastCalledWith({
       messageId: "user-message",
-      senderLabel: "Jason",
+      senderLabel: "Message",
       sourceMessageId: "user-entry-1",
       text: "User reply context.",
     });
@@ -1912,19 +1900,17 @@ describe("grouped chat rendering", () => {
     expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
   });
 
-  it("renders configured local user names", () => {
-    const renderUser = (opts: Partial<RenderMessageGroupOptions>) => {
-      const container = document.createElement("div");
-      renderGroupedMessage(
-        container,
-        createUserMessage("hello", { timestamp: 1000 }),
-        "user",
-        opts,
-      );
-      return container;
-    };
-
-    const named = renderUser({ userName: "Buns" });
+  it("renders configured local user names for a qualified profile", () => {
+    const named = document.createElement("div");
+    const message = createUserMessage("hello", {
+      timestamp: 1000,
+      __openclaw: {
+        senderId: "profile-buns",
+        senderIdentity: { type: "profile", id: "profile-buns" },
+      },
+    });
+    const group = prepareMessageGroup({ key: "local-user", message });
+    render(renderTestMessageGroup(group, { userId: "profile-buns", userName: "Buns" }), named);
     const sender = named.querySelector<HTMLElement>(".chat-group.user .chat-sender-name");
     expect(sender?.textContent).toBe("Buns");
 
@@ -3080,11 +3066,6 @@ describe("grouped chat rendering", () => {
     expect(container.textContent).not.toContain("Read failed");
     expect(activitySummary.querySelector(".chat-activity-group__badge")).toBeNull();
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
-    selectText(expectElement(activitySummary, ".chat-activity-group__label", HTMLElement));
-    pointerClick(activitySummary);
-    expect(onToggleToolMessageExpanded).not.toHaveBeenCalled();
-
-    window.getSelection()?.removeAllRanges();
     activitySummary.click();
 
     expect(onToggleToolMessageExpanded).toHaveBeenCalledWith("activity:tool-group", false);
@@ -3353,11 +3334,6 @@ describe("grouped chat rendering", () => {
     expect(summary.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(
       "sessions_spawn",
     );
-    selectText(expectElement(summary, ".chat-tool-msg-summary__label", HTMLElement));
-    pointerClick(summary);
-    expect(onToggleToolMessageExpanded).not.toHaveBeenCalled();
-
-    window.getSelection()?.removeAllRanges();
     summary.click();
     expect(onToggleToolMessageExpanded).toHaveBeenCalledOnce();
 

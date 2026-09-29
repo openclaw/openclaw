@@ -215,10 +215,10 @@ message alongside `status: "failed"`, so the agent can choose the next action.
 
 ## Examples
 
-Run a long task and poll later:
+Run a task longer than the default 10000 ms yield window and poll later:
 
 ```json
-{ "tool": "exec", "command": "sleep 5 && echo done", "yieldMs": 1000 }
+{ "tool": "exec", "command": "sleep 30 && echo done" }
 ```
 
 ```json

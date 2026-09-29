@@ -154,27 +154,18 @@ class CallLogHandler internal constructor(
 ) {
   fun handleCallLogSearch(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasReadPermission(appContext)) {
-      return GatewaySession.InvokeResult.error(
-        code = "CALL_LOG_PERMISSION_REQUIRED",
-        message = "CALL_LOG_PERMISSION_REQUIRED: grant Call Log permission",
-      )
+      return nodeInvokeError("CALL_LOG_PERMISSION_REQUIRED", "grant Call Log permission")
     }
 
     val request =
       parseSearchRequest(paramsJson)
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: expected JSON object",
-        )
+        ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object")
 
     return try {
       val callLogs = dataSource.search(appContext, request)
       GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("callLogs" to callLogs)))
     } catch (err: Throwable) {
-      GatewaySession.InvokeResult.error(
-        code = "CALL_LOG_UNAVAILABLE",
-        message = "CALL_LOG_UNAVAILABLE: ${err.message ?: "call log query failed"}",
-      )
+      nodeInvokeError("CALL_LOG_UNAVAILABLE", err.message ?: "call log query failed")
     }
   }
 

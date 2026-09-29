@@ -475,7 +475,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     }
     credentialBroker.clear();
     options.liveEvents?.clear();
-    options.stopNodeWorkerBundleTransfers?.();
+    await options.stopNodeWorkerBundleTransfers?.();
     try {
       await joinWorkerTunnelStops([
         environmentAccess.stopAllTunnels(),
@@ -610,6 +610,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     list: environmentAccess.list,
     readPreparedPoolSummary: preparedPool.summary,
     readReadyWorkerTarget: preparedPool.target,
+    readRuntimeRefresh: providerLifecycle.readRuntimeRefresh,
     supportsProviderExecutionMode: providerSupportsExecutionMode,
     supportsExecutionMode: (profileId: string, mode: WorkerExecutionMode) => {
       const profile = options.getConfig().cloudWorkers?.profiles?.[profileId];

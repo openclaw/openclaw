@@ -47,7 +47,7 @@ export async function runStatusJsonCommand(params: {
     .catch((error: unknown) =>
       reportStatusScanFailure(error, params.runtime, params.opts.timeoutMs),
     );
-  const updateRunStatus = readUpdateRunStatus();
+  const updateRunStatus = await readUpdateRunStatus();
   writeRuntimeJson(params.runtime, {
     ...(await resolveStatusJsonOutput({
       scan,

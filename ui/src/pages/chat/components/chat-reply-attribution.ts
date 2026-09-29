@@ -94,7 +94,7 @@ function resolveTarget(
   if ((result && "missing" in result) || (reserves && !known && oversized)) {
     return reserves ? { state: "unavailable", name: known } : NO_REPLY_LINE;
   }
-  // A source without sender provenance is the local user only in a 1:1 thread;
+  // A source without sender provenance keeps its neutral label in a 1:1 thread;
   // shared, only its snapshot can name it. A shared sender with an id but no
   // name keeps the snapshot's name before its raw id, never the viewer fallback.
   const sender = preview?.sender;
@@ -119,7 +119,9 @@ function resolveTarget(
     context &&
     !context.replyShared &&
     ((context.replyTurnSource && persistedMessageEntryId(context.replyTurnSource.message) === id) ||
-      (context.runId && preview?.turnRunId === context.runId));
+      (context.runId && preview?.turnRunId === context.runId) ||
+      // Without the turn's prompt, an original with no author or run may be that prompt.
+      (!context.replyTurnSource && preview && !preview.sender && !preview.turnRunId));
   if (name && !ownPrompt) {
     return {
       state: "named",

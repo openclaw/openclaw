@@ -265,6 +265,9 @@ describe("production lint suppressions", () => {
         "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
         "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
         "src/utils/run-with-concurrency.ts|typescript/prefer-promise-reject-errors|1",
+        // Native host bridges are not EventTargets or Window.postMessage endpoints.
+        "ui/src/app/native-gateway-auth.ts|unicorn/prefer-add-event-listener|1",
+        "ui/src/app/native-gateway-auth.ts|unicorn/require-post-message-target-origin|2",
         "ui/src/components/mascot-canvas.ts|unicorn/no-array-fill-with-reference-type|1",
       ]),
     );

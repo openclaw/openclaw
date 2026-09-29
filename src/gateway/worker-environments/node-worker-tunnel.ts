@@ -6,9 +6,10 @@ import {
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
 } from "../../infra/node-commands.js";
 import {
-  formatNodeRunnerUpdateRequired,
+  formatNodeRunnerInventoryIssue,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+  resolveNodeWorkerLaunchToolNames,
 } from "../../infra/node-runner-inventory.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SpawnResult } from "../../process/exec.js";
@@ -351,6 +352,10 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       ownerEpoch: entry.ownerEpoch,
       measureLaunchTurn: (plan, claim) =>
         measureNodeWorkerLaunchBytes(entry.deviceId, buildLaunchInput(plan, claim)),
+      readLaunchToolNames: async () => {
+        const node = await options.getTransport()?.getCurrentNode(entry.deviceId);
+        return resolveNodeWorkerLaunchToolNames(node?.workerHost);
+      },
       launchTurn: async (request) => {
         if (entry.executionMode !== "worker-turn") {
           throw new Error("remote-exec environments do not launch embedded worker turns");
@@ -441,7 +446,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           const { transport, node } = await findNode(entry, signal);
           if (node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION) {
             throw new Error(
-              formatNodeRunnerUpdateRequired(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),
+              formatNodeRunnerInventoryIssue(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),
             );
           }
           // Retirement retains only authority to stop this exact old scope, including after

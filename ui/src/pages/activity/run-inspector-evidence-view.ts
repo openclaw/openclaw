@@ -123,7 +123,11 @@ export function renderRunInspectorPagination(
 function renderReceiptDetail(receipt: DecisionReceiptDisplayV1) {
   const coverage = receipt.enforcement.coverageState;
   return html`
-    <article class="run-inspector__receipt-detail" aria-labelledby="run-inspector-receipt-detail">
+    <article
+      class="run-inspector__receipt-detail"
+      data-receipt-selector-id=${receipt.selectorId}
+      aria-labelledby="run-inspector-receipt-detail"
+    >
       <h4 id="run-inspector-receipt-detail">
         ${t("activity.runInspector.decisions.detailHeading")}
       </h4>

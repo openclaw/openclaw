@@ -13,7 +13,11 @@ import {
   hasPendingSubagentRetirementPublication,
   waitForSubagentRetirementPublication,
 } from "./subagent-registry-memory.js";
-import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
+import {
+  SubagentRegistryWriteError,
+  assertSubagentRegistryWriteOutcomeKnown,
+  waitForPendingSubagentKillClaim,
+} from "./subagent-registry-persistence.js";
 import { waitForQueuedSubagentClaim } from "./subagent-registry-queued-registration-wait.js";
 import { createQueuedRegistrationSettlement } from "./subagent-registry-queued-settlement.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
@@ -68,6 +72,7 @@ export function registerRequiredQueuedSubagent(params: {
     );
   const assertRegistryCurrent = () => {
     context.admission.assertCurrent();
+    assertSubagentRegistryWriteOutcomeKnown([runId], context.admission);
     if (
       captureOpenClawStateWorkerContext().admission.identity.key !==
         context.admission.identity.key ||
@@ -89,7 +94,11 @@ export function registerRequiredQueuedSubagent(params: {
     (entry.execution.status !== "queued" &&
       entry.execution !== publishedTerminalExecution &&
       !entry.killIntent);
-  const pendingClaim = () => exactEntry() && Boolean(entry.killIntent) && !confirmedTakeover();
+  const pendingClaim = () =>
+    registryCurrent() &&
+    exactEntry() &&
+    !confirmedTakeover() &&
+    Boolean(entry.killIntent || waitForPendingSubagentKillClaim(entry, context.admission));
   const waitForClaim = (): Promise<void> | undefined => {
     if (!pendingClaim()) {
       return undefined;
@@ -97,6 +106,15 @@ export function registerRequiredQueuedSubagent(params: {
     return (async () => {
       try {
         while (pendingClaim()) {
+          const pending = waitForPendingSubagentKillClaim(entry, context.admission);
+          if (pending) {
+            await pending;
+            assertRegistryCurrent();
+            if (!exactEntry()) {
+              return;
+            }
+            continue;
+          }
           await waitForQueuedSubagentClaim({
             assertCurrent: assertRegistryCurrent,
             pending: pendingClaim,
@@ -120,6 +138,7 @@ export function registerRequiredQueuedSubagent(params: {
     entry.execution.status === "queued" &&
     entry.execution.endedAt === undefined &&
     !entry.killIntent &&
+    !waitForPendingSubagentKillClaim(entry, context.admission) &&
     !entry.killReconciliation;
   const assertLaunchCurrent = () => {
     if (!ownsQueuedIntent()) {

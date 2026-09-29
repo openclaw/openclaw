@@ -25,7 +25,7 @@ import {
 } from "./server.auth.test-helpers.js";
 
 export function registerControlUiPairingSuite(): void {
-  test("keeps pending Control UI operator pairing reconnecting without enabling ordinary node retries", async () => {
+  test("keeps pending Control UI operator and node pairing reconnecting", async () => {
     const { mutateConfigFile } = await import("../config/config.js");
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
     const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
@@ -134,10 +134,10 @@ export function registerControlUiPairingSuite(): void {
         code: "PAIRING_REQUIRED",
         reason: "not-paired",
         requestId: expect.any(String),
+        recommendedNextStep: "wait_then_retry",
+        retryable: true,
+        pauseReconnect: false,
       });
-      expect(response.error?.details).not.toHaveProperty("recommendedNextStep");
-      expect(response.error?.details).not.toHaveProperty("retryable");
-      expect(response.error?.details).not.toHaveProperty("pauseReconnect");
     });
   });
 

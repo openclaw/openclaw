@@ -2,22 +2,12 @@ import {
   formatCacheMisses,
   formatRuntimeCacheCount as formatOptionalCount,
 } from "./agentic-parity-cache-usage.js";
-import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
+import type { QaParitySuiteSummary } from "./agentic-parity-report.js";
+import type { RuntimeId } from "./runtime-id.js";
+import type { RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 import { normalizeRuntimePair, resolveRuntimeParityUsagePolicy } from "./runtime-parity.js";
 
 type ProcessedTokenEvidence = "measured" | "derived" | "unavailable";
-
-export type TokenEfficiencySuiteSummary = {
-  scenarios: Array<{
-    name: string;
-    status: "pass" | "fail" | "skip";
-    runtimeParity?: RuntimeParityResult;
-  }>;
-  run?: {
-    providerMode?: string;
-    runtimePair?: [RuntimeId, RuntimeId] | null;
-  };
-};
 
 const DEFAULT_THRESHOLD_PERCENT = 15;
 const ZERO_AGGREGATE_RUNTIME = {
@@ -281,7 +271,7 @@ function liveUsageShapeFailures(
 }
 
 export function buildTokenEfficiencyReport(params: {
-  summary: TokenEfficiencySuiteSummary;
+  summary: QaParitySuiteSummary;
   generatedAt?: string;
   thresholdPercent?: number;
 }) {

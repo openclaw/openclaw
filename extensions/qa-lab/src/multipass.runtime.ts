@@ -12,7 +12,7 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { QaProviderMode } from "./model-selection.js";
 import { resolveQaForwardedLiveEnv, resolveQaLiveProviderConfigPath } from "./providers/env.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
-import type { RuntimeId } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
 import { shellQuote } from "./shell-quote.js";
 
 const MULTIPASS_MOUNTED_REPO_PATH = "/workspace/openclaw-host";
@@ -88,10 +88,6 @@ async function execFileAsync(file: string, args: string[], options: ExecFileOpti
   }
 }
 
-function resolveRealPath(value: string) {
-  return fs.realpathSync.native?.(value) ?? fs.realpathSync(value);
-}
-
 function resolveExistingPath(value: string) {
   let currentPath = value;
   while (!fs.existsSync(currentPath)) {
@@ -119,9 +115,9 @@ function resolveMountedOutputPath(repoRoot: string, hostPath: string) {
     );
   }
 
-  const realRepoRoot = resolveRealPath(repoRoot);
+  const realRepoRoot = fs.realpathSync.native(repoRoot);
   const existingHostPath = resolveExistingPath(hostPath);
-  const realExistingHostPath = resolveRealPath(existingHostPath);
+  const realExistingHostPath = fs.realpathSync.native(existingHostPath);
   if (!isPathInside(realRepoRoot, realExistingHostPath)) {
     throw new Error(
       `qa suite --runner multipass requires --output-dir to stay under the repo root (${repoRoot}), got ${hostPath}.`,

@@ -228,7 +228,7 @@ function groupChatItems(
     const { item, normalized } = prepared;
     const role = normalizeRoleForGrouping(normalized.role);
     // Classify after content projection and keep the fact with its group; later
-    // presentation passes reuse it, while a rebuild sees in-place message changes.
+    // presentation passes reuse it; replacing a message refreshes its facts.
     const visibleContent = resolveMessageVisibleContent(item.message, normalized);
     const source = {
       message: item.message,

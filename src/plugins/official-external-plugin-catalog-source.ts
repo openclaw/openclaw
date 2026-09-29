@@ -84,6 +84,19 @@ export function isOfficialExternalPluginCatalogSequence(value: unknown): value i
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
+/** Compare authenticated feed ordering in both remote admission and snapshot writes. */
+export function isOfficialExternalPluginCatalogRollback(params: {
+  candidate: { sequence: number; generatedAt?: string };
+  current: { sequence: number; generatedAt?: string };
+}): boolean {
+  const { candidate, current } = params;
+  return candidate.sequence !== current.sequence
+    ? candidate.sequence < current.sequence
+    : candidate.generatedAt !== undefined &&
+        current.generatedAt !== undefined &&
+        Date.parse(candidate.generatedAt) < Date.parse(current.generatedAt);
+}
+
 export function isOfficialExternalPluginCatalogFeed(
   raw: unknown,
 ): raw is OfficialExternalPluginCatalogFeed {
@@ -113,25 +126,16 @@ export function isOfficialExternalPluginCatalogFeed(
 export function parseOfficialExternalPluginCatalogEntries(
   raw: unknown,
 ): OfficialExternalPluginCatalogEntry[] {
-  if (Array.isArray(raw)) {
-    return raw.filter((entry): entry is OfficialExternalPluginCatalogEntry => isRecord(entry));
-  }
-  if (isOfficialExternalPluginCatalogFeed(raw)) {
-    return raw.entries.filter((entry): entry is OfficialExternalPluginCatalogEntry =>
-      isRecord(entry),
-    );
-  }
-  if (!isRecord(raw)) {
-    return [];
-  }
-  if ("schemaVersion" in raw) {
-    return [];
-  }
-  const list = raw.entries ?? raw.packages ?? raw.plugins;
-  if (!Array.isArray(list)) {
-    return [];
-  }
-  return list.filter((entry): entry is OfficialExternalPluginCatalogEntry => isRecord(entry));
+  const entries = Array.isArray(raw)
+    ? raw
+    : isOfficialExternalPluginCatalogFeed(raw)
+      ? raw.entries
+      : isRecord(raw) && !("schemaVersion" in raw)
+        ? (raw.entries ?? raw.packages ?? raw.plugins)
+        : undefined;
+  return Array.isArray(entries)
+    ? entries.filter((entry): entry is OfficialExternalPluginCatalogEntry => isRecord(entry))
+    : [];
 }
 
 export function resolveOfficialExternalPluginCatalogProfileConfig(

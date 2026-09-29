@@ -1,4 +1,7 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  createLazyRuntimeModule,
+  createLazyRuntimeSurface,
+} from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   AnyAgentTool,
   OpenClawPluginApi,
@@ -19,17 +22,15 @@ const loadOllamaNodeInference = createLazyRuntimeModule(() => import("./node-inf
 function createLazyNodeHostCommand(
   command: (typeof OLLAMA_NODE_INFERENCE_COMMANDS)[number],
 ): OpenClawPluginNodeHostCommand {
-  let runtimeCommandPromise: Promise<OpenClawPluginNodeHostCommand> | undefined;
-  const loadRuntimeCommand = () =>
-    (runtimeCommandPromise ??= loadOllamaNodeInference().then((runtime) => {
-      const runtimeCommand = runtime
-        .createOllamaNodeHostCommands()
-        .find((candidate) => candidate.command === command);
-      if (!runtimeCommand) {
-        throw new Error(`Ollama node inference runtime missing ${command}`);
-      }
-      return runtimeCommand;
-    }));
+  const loadRuntimeCommand = createLazyRuntimeSurface(loadOllamaNodeInference, (runtime) => {
+    const runtimeCommand = runtime
+      .createOllamaNodeHostCommands()
+      .find((candidate) => candidate.command === command);
+    if (!runtimeCommand) {
+      throw new Error(`Ollama node inference runtime missing ${command}`);
+    }
+    return runtimeCommand;
+  });
   return {
     command,
     cap: OLLAMA_NODE_INFERENCE_CAPABILITY,
@@ -57,11 +58,9 @@ export function createOllamaNodeInvokePolicy(): OpenClawPluginNodeInvokePolicy {
 }
 
 export function createLazyOllamaNodeInferenceTool(api: OpenClawPluginApi): AnyAgentTool {
-  let toolPromise: Promise<AnyAgentTool> | undefined;
-  const loadTool = () =>
-    (toolPromise ??= loadOllamaNodeInference().then((runtime) =>
-      runtime.createOllamaNodeInferenceTool(api),
-    ));
+  const loadTool = createLazyRuntimeSurface(loadOllamaNodeInference, (runtime) =>
+    runtime.createOllamaNodeInferenceTool(api),
+  );
   return {
     ...ollamaNodeInferenceToolDefinition,
     execute: async (...args) => {

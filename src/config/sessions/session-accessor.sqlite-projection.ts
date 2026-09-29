@@ -34,7 +34,6 @@ import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equal
 import {
   deleteLegacySessionEntryRows,
   deleteSessionEntryRows,
-  readExactSessionEntryJson,
   readExactSessionEntryRow,
   readSessionEntryCount,
   readSessionEntryStore,
@@ -48,6 +47,7 @@ import {
 } from "./session-accessor.sqlite-identity.js";
 import {
   assertPlannedLifecycleArtifactEntriesUnchanged,
+  assertRawSessionEntryRemovalUnchanged,
   collectProjectedReferencedSessionIds,
   collectSessionStateIdsForEntry,
   deleteMaterializedSessionStatePlans,
@@ -68,7 +68,6 @@ import {
 } from "./session-accessor.sqlite-maintenance.js";
 import { appendSessionResetBoundary } from "./session-accessor.sqlite-reset-boundary.js";
 import {
-  cloneSessionEntry,
   captureLifecycleDatabaseScope,
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
@@ -172,7 +171,7 @@ export async function applySessionStoreProjection<T>(params: {
                   for (const sessionKey of changedKeys) {
                     const entry = projected[sessionKey];
                     if (entry) {
-                      writeSessionEntry(transactionDb, sessionKey, cloneSessionEntry(entry), {
+                      writeSessionEntry(transactionDb, sessionKey, structuredClone(entry), {
                         previousEntry: before[sessionKey] ?? null,
                       });
                     } else {
@@ -212,8 +211,7 @@ function readProjectedRemovalEntry(
   projected: ProjectedLifecycleMutation["removals"][number],
   allowCanonicalRepair = false,
 ): SessionEntry | undefined {
-  const expectedRawEntryJson = projected.removal.expectedRawEntryJson;
-  if (expectedRawEntryJson === undefined) {
+  if (projected.removal.expectedRawEntryJson === undefined) {
     return (
       allowCanonicalRepair
         ? readExactSessionEntryRowForCanonicalRepair(database, projected.sessionKey, {
@@ -222,11 +220,7 @@ function readProjectedRemovalEntry(
         : readExactSessionEntryRow(database, projected.sessionKey)
     )?.entry;
   }
-  if (readExactSessionEntryJson(database, projected.sessionKey) !== expectedRawEntryJson) {
-    throw new Error(
-      `SQLite session entry changed before raw lifecycle removal for ${projected.sessionKey}`,
-    );
-  }
+  assertRawSessionEntryRemovalUnchanged(database, projected.sessionKey, projected.removal);
   return projected.expectedEntry;
 }
 
@@ -611,7 +605,7 @@ export async function purgeDeletedAgentSessionEntries(
         if (!entry) {
           continue;
         }
-        entryRemovals.push({ expectedEntry: cloneSessionEntry(entry), sessionKey });
+        entryRemovals.push({ expectedEntry: structuredClone(entry), sessionKey });
         removedEntriesToArchive.push(entry);
         delete remainingStore[sessionKey];
       }
@@ -707,5 +701,3 @@ export async function purgeDeletedAgentSessionEntries(
   ];
   emitArchivedTranscriptUpdates(archivedTranscripts);
 }
-
-/** Fully replaces rows for one transcript in the additive SQLite transcript store. */

@@ -6,6 +6,7 @@ import {
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { runOpenClawAgentWriteWithYieldingAdmission } from "../../state/openclaw-agent-db-transaction.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
   isIncognitoOpenClawAgentSqlitePath,
@@ -56,7 +57,6 @@ import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-ide
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import { createFallbackSessionEntry } from "./session-accessor.sqlite-normalize.js";
 import {
-  cloneSessionEntry,
   getSessionKysely,
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
@@ -81,6 +81,7 @@ import {
 } from "./session-canonical-key.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
+import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -159,7 +160,7 @@ export function listSessionChildEntriesReadOnly(
             "current_session_id",
             "updated_at",
           ])
-        : db.selectFrom("session_nodes").selectAll();
+        : db.selectFrom("session_nodes").selectAll().select(sessionEntrySnapshotColumns);
     // Separate indexed lookups avoid a whole-store scan chosen for OR with ordering.
     const sessionKeys = db.selectFrom("session_nodes").select("session_key");
     const childKeys = sessionKeys
@@ -472,11 +473,11 @@ async function patchSqliteSessionEntrySnapshot(
         }
         let contextEntry = existing;
         let contextEntryBorrowed = true;
-        const patch = await params.update(cloneSessionEntry(writeBase), {
+        const patch = await params.update(structuredClone(writeBase), {
           // Most updaters ignore context; detach its snapshot only when they consume it.
           get existingEntry() {
             if (contextEntryBorrowed) {
-              contextEntry = contextEntry ? cloneSessionEntry(contextEntry) : undefined;
+              contextEntry = contextEntry ? structuredClone(contextEntry) : undefined;
               contextEntryBorrowed = false;
             }
             return contextEntry;
@@ -492,7 +493,7 @@ async function patchSqliteSessionEntrySnapshot(
         const merged = !creationPatch
           ? undefined
           : options.replaceEntry
-            ? cloneSessionEntry(patch as SessionEntry)
+            ? structuredClone(patch as SessionEntry)
             : options.preserveActivity
               ? mergeSessionEntryPreserveActivity(mergeBase, creationPatch)
               : mergeSessionEntry(mergeBase, creationPatch);
@@ -505,10 +506,10 @@ async function patchSqliteSessionEntrySnapshot(
                 previous: writeBase,
                 sessionKey,
               });
-        // The updater may dispose the prepared handle; re-admit before the synchronous commit.
-        return withDatabase(() => {
+        // The updater may dispose the prepared handle; re-admit before waiting for the write lock.
+        return withDatabase(async () => {
           let result: SessionEntry | null = null;
-          const publish = runOpenClawAgentWriteTransaction(
+          const publish = await runOpenClawAgentWriteWithYieldingAdmission(
             (writeDatabase) => {
               assertCapturedSource(writeDatabase);
               if (options.shouldCommit?.() === false) {
@@ -541,7 +542,7 @@ async function patchSqliteSessionEntrySnapshot(
           );
           try {
             if (next && result) {
-              options.onCommitted?.(cloneSessionEntry(result));
+              options.onCommitted?.(structuredClone(result));
             }
           } finally {
             publish?.();

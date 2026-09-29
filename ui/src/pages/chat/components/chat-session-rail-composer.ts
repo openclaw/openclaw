@@ -17,6 +17,15 @@ import {
   scheduleTextareaHeightAdjustment,
 } from "./chat-composer-dom.ts";
 
+export function sessionRailQuestion(companion: ChatSessionCompanionThread): string {
+  return (
+    companion.draft.trim() ||
+    (companion.attachments?.some((attachment) => attachment.mimeType.startsWith("image/"))
+      ? t("chat.rail.askImageQuestion")
+      : "")
+  );
+}
+
 export function createSessionRailComposer(options: {
   submit: () => void;
   onDraftChange: (draft: string) => void;
@@ -123,7 +132,7 @@ export function renderSessionRailComposer(options: {
               class="chat-send-btn"
               type="submit"
               aria-label=${t("chat.rail.askSubmit")}
-              ?disabled=${!connected || pending || Boolean(attachmentProps.attachmentReads?.pendingReads) || (!companion.draft.trim() && !companion.attachments?.length)}
+              ?disabled=${!connected || pending || Boolean(attachmentProps.attachmentReads?.pendingReads) || !sessionRailQuestion(companion)}
             >
               ${icons.arrowUp}
             </button>

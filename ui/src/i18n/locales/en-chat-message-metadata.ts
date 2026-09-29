@@ -64,6 +64,7 @@ const enChatMessageMetadata = {
       showMore: en.chat.messages.showMore,
       tooLargeToDisplay: en.chat.messages.tooLargeToDisplay,
       unknownDate: "Unknown date",
+      unattributedSender: en.chat.messages.unattributedSender,
       toolSender: en.chat.messages.toolSender,
       errorSender: en.chat.messages.errorSender,
       forwardedFrom: "From",

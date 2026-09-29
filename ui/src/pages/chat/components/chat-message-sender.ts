@@ -61,7 +61,7 @@ export function resolveMessageGroupSenderLabel(
   return normalizedRole === "user"
     ? isOwnSenderGroup(group, opts.userId)
       ? resolvedUserName
-      : (userLabel ?? resolvedUserName)
+      : (userLabel ?? t("chat.messages.unattributedSender"))
     : normalizedRole === "assistant"
       ? (userLabel ?? opts.assistantName ?? "Assistant")
       : normalizedRole === "tool"

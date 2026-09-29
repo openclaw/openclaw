@@ -26,7 +26,6 @@ import { isRecord, resolveUserPath } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
-import { formatRawChannelConfigIssueMessage } from "./validation-channel-rules.js";
 import {
   validatePreparedPluginSchemaValue,
   type PreparedPluginSchemaValidations,
@@ -38,7 +37,7 @@ export function formatChannelConfigIssueMessage(message: string, pluginId?: stri
   const safePluginId = pluginId ? sanitizeForLog(pluginId).trim() : "";
   return safePluginId
     ? `invalid config for plugin ${safePluginId}: ${message}`
-    : formatRawChannelConfigIssueMessage(message);
+    : `invalid config: ${message}`;
 }
 
 /** Deferred channel settings remain authored inputs until their owning plugin can validate them. */

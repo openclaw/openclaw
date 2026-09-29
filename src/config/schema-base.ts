@@ -5,7 +5,6 @@ import { buildBaseHints, mapSensitivePaths } from "./schema.hints.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import {
   asSchemaObject,
-  cloneSchema,
   type ConfigJsonSchemaObject as JsonSchemaObject,
   type ConfigSchemaResponse,
 } from "./schema.shared.js";
@@ -137,8 +136,8 @@ export function computeBaseConfigSchemaResponse(params?: {
 }): ConfigSchemaResponse {
   const stablePayload = computeBaseConfigSchemaStablePayload();
   return {
-    schema: cloneSchema(stablePayload.schema),
-    uiHints: cloneSchema(stablePayload.uiHints),
+    schema: structuredClone(stablePayload.schema),
+    uiHints: structuredClone(stablePayload.uiHints),
     version: stablePayload.version,
     generatedAt: params?.generatedAt ?? new Date().toISOString(),
   };

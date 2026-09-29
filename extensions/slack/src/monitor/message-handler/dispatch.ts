@@ -447,6 +447,7 @@ async function dispatchSlackMessageWithSetup(
       record: prepared.turn.record,
       botLoopProtection: resolveSlackBotLoopProtection(prepared),
       replyOptions: {
+        onVisibleWorkSessions: progress.onVisibleWorkSessions,
         groupThreadReplyFormatter: formatSlackGroupThreadReply,
         // Followups can outlive this dispatch and retain their own source address.
         queuedDeliveryCorrelations: [{ begin: beginSessionRun }],

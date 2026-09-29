@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listDevicePairing } from "../../infra/device-pairing.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { NodeRegistry } from "../node-registry.js";
 import { environmentsHandlers } from "./environments.js";
 import { pairedNodeDevice } from "./environments.test-support.js";
@@ -7,6 +9,7 @@ import { pairedNodeDevice } from "./environments.test-support.js";
 const registries: NodeRegistry[] = [];
 
 afterEach(() => {
+  resetPluginRuntimeStateForTest();
   for (const registry of registries.splice(0)) {
     for (const node of registry.listConnected()) {
       registry.unregister(node.connId);
@@ -36,6 +39,18 @@ vi.mock("../worker-environments/placement-capabilities.js", () => ({
 
 beforeEach(() => {
   vi.mocked(listDevicePairing).mockResolvedValue({ pending: [], paired: [] });
+  const plugins = createEmptyPluginRegistry();
+  plugins.nodeHostCommands.push({
+    pluginId: "codex",
+    source: "test/codex",
+    command: {
+      command: "codex.exec-server.stdio.v1",
+      cap: "codex.exec-server",
+      dangerous: true,
+      handle: async () => "{}",
+    },
+  });
+  setActivePluginRegistry(plugins);
 });
 
 describe("node environment command authority", () => {
@@ -97,7 +112,7 @@ describe("node environment command authority", () => {
       state: "unauthorized",
     },
     {
-      name: "command not declared by the node",
+      name: "missing Codex plugin command on the node",
       declared: [],
       approved: [],
       allow: ["codex.exec-server.stdio.v1"],
@@ -177,7 +192,7 @@ describe("node environment command authority", () => {
             id: string;
             capabilities?: string[];
             invocableCommands?: string[];
-            requiredNodeCommand?: { command: string; state: string };
+            requiredNodeCommand?: { command: string; state: string; message?: string };
           }>;
         }
       | undefined;
@@ -186,10 +201,28 @@ describe("node environment command authority", () => {
     );
 
     expect(listed?.invocableCommands ?? []).toEqual(expected);
-    expect(listed?.requiredNodeCommand).toEqual({
+    expect(listed?.requiredNodeCommand).toMatchObject({
       command: "codex.exec-server.stdio.v1",
       state,
     });
+    if (state === "invocable") {
+      expect(listed?.requiredNodeCommand).not.toHaveProperty("message");
+    } else {
+      const remediation =
+        state === "pending-approval"
+          ? "openclaw nodes approve <requestId>"
+          : state === "unauthorized"
+            ? "gateway.nodes.commands.deny"
+            : "openclaw plugins enable codex";
+      expect(listed?.requiredNodeCommand?.message).toContain(remediation);
+      if (state === "undeclared") {
+        expect(listed?.requiredNodeCommand?.message).toContain(
+          "openclaw plugins install @openclaw/codex",
+        );
+        expect(listed?.requiredNodeCommand?.message).toContain("on that node");
+        expect(listed?.requiredNodeCommand?.message).not.toContain("gateway.nodes.commands.allow");
+      }
+    }
     for (const command of node.commands) {
       expect(listed?.capabilities).toContain(command);
     }

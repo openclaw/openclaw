@@ -10,11 +10,11 @@ import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent-runner/types.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
+import { resolveLoadedSessionThreadInfo } from "../channels/plugins/session-thread-info-loaded.js";
 import {
   buildSessionCreationStamp,
   inheritSessionCreationPolicy,
 } from "../config/sessions/session-entry-provenance.js";
-import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeLogger, PluginRuntimeCore } from "../plugins/runtime/types-core.js";
@@ -98,7 +98,7 @@ export function assertRealtimeVoiceAgentConsultModelSelectionUnlocked(params: {
   if (requesterSessionKey && (!requesterAgentId || requesterAgentId === targetAgentId)) {
     const requesterAgent = requesterAgentId ?? params.agentId;
     remember(requesterSessionKey, requesterAgent);
-    const { baseSessionKey } = parseSessionThreadInfoFast(requesterSessionKey);
+    const { baseSessionKey } = resolveLoadedSessionThreadInfo(requesterSessionKey);
     if (baseSessionKey && baseSessionKey !== requesterSessionKey) {
       remember(baseSessionKey, requesterAgent);
     }
@@ -153,7 +153,7 @@ function resolveRealtimeVoiceAgentDeliveryContext(params: {
     // This preserves channel/account/thread routing when a voice bridge delegates back to agent.
     const candidates: Array<{ sessionKey: string; storePath?: string }> = [];
     if (requesterSessionKey) {
-      const { baseSessionKey } = parseSessionThreadInfoFast(requesterSessionKey);
+      const { baseSessionKey } = resolveLoadedSessionThreadInfo(requesterSessionKey);
       for (const key of [requesterSessionKey, baseSessionKey]) {
         if (key) {
           candidates.push({ sessionKey: key });

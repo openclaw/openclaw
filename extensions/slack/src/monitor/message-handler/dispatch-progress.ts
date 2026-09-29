@@ -480,7 +480,7 @@ export function createSlackProgressRuntime(runtimeParams: {
   const buildNativeProgressCompletionChunks = (finalInProgressStatus: "complete" | "error") => {
     const snapshot = progressDraft.getSnapshot();
     const lines = resolveNativeProgressLines(snapshot);
-    const sessionUrl = progressCard.resolveSessionUrl();
+    const sessionLinks = progressCard.resolveSessionLinks();
     const narrationUpdate = resolveNarrationUpdate(resolveNativeProgressNarration(snapshot));
     const hasRetirableNativeTasks = [...nativeStreamSnapshot.tasks.values()].some(
       (task) => task.status !== "complete" && task.status !== "error",
@@ -491,7 +491,7 @@ export function createSlackProgressRuntime(runtimeParams: {
       !hasRetirableNativeTasks &&
       !snapshot.diffStat &&
       !narrationUpdate.delta &&
-      !sessionUrl
+      sessionLinks.length === 0
     ) {
       return undefined;
     }
@@ -506,7 +506,7 @@ export function createSlackProgressRuntime(runtimeParams: {
         summaryRow: !previewToolProgressEnabled,
         finalInProgressStatus,
         diffStat: snapshot.diffStat,
-        sessionUrl,
+        sessionLinks,
       }),
     }).chunks;
     // Terminal appends, silent closeout, and queued rotation share this
@@ -737,6 +737,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     deliverNativeFinal,
     dropDetachedProgressCards,
     finalizeDraftProgressCard: progressCard.finalize,
+    onVisibleWorkSessions: progressCard.onVisibleWorkSessions,
     onDraftBoundary,
     onQueuedFollowupAdmitted,
     onQueuedFollowupSettled,

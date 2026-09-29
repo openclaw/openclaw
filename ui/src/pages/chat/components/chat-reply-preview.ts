@@ -36,9 +36,11 @@ type ReplyPreviewProps = Omit<
   userId?: string | null;
   userName?: string | null;
   senderAgentAvatars?: ReadonlyMap<string, string | null>;
+  // The thread's full accessor passes through; only read and status are used.
   replyMessageAccess?: {
     read: (messageId: string) => unknown;
     status?: (messageId: string) => ReplyMessageStatus | undefined;
+    [key: string]: unknown;
   };
 };
 
