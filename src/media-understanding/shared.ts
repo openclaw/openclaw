@@ -369,7 +369,7 @@ type ResolvedProviderHttpRequestConfigWithOriginTrust = ResolvedProviderHttpRequ
   trustConfiguredBaseUrlOrigin: boolean;
 };
 
-function resolveProviderHttpRequestConfigWithOriginTrustInternal(params: {
+export function resolveProviderHttpRequestConfigWithOriginTrust(params: {
   baseUrl?: string;
   defaultBaseUrl: string;
   allowPrivateNetwork?: boolean;
@@ -411,21 +411,15 @@ function resolveProviderHttpRequestConfigWithOriginTrustInternal(params: {
 }
 
 export function resolveProviderHttpRequestConfig(
-  params: Parameters<typeof resolveProviderHttpRequestConfigWithOriginTrustInternal>[0],
+  params: Parameters<typeof resolveProviderHttpRequestConfigWithOriginTrust>[0],
 ): ResolvedProviderHttpRequestConfig {
-  const resolved = resolveProviderHttpRequestConfigWithOriginTrustInternal(params);
+  const resolved = resolveProviderHttpRequestConfigWithOriginTrust(params);
   return {
     baseUrl: resolved.baseUrl,
     allowPrivateNetwork: resolved.allowPrivateNetwork,
     headers: resolved.headers,
     dispatcherPolicy: resolved.dispatcherPolicy,
   };
-}
-
-export function resolveProviderHttpRequestConfigWithOriginTrust(
-  params: Parameters<typeof resolveProviderHttpRequestConfigWithOriginTrustInternal>[0],
-): ResolvedProviderHttpRequestConfigWithOriginTrust {
-  return resolveProviderHttpRequestConfigWithOriginTrustInternal(params);
 }
 
 export async function fetchWithTimeoutGuarded(
