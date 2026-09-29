@@ -208,10 +208,29 @@ describe("Phase E maintainer policy", () => {
     expect(source).not.toContain("GetSecurityDescriptorOwner(descriptor,&owner,nullptr)");
     expect(source).not.toContain("GetSecurityDescriptorGroup(descriptor,&group,nullptr)");
     expect(source).toContain("GetSecurityDescriptorSacl");
-    expect(source).toContain(
-      "DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION|LABEL_SECURITY_INFORMATION",
+    expect(source).toContain("DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION");
+    expect(source).toContain("SetSecurityInfo(object,SE_FILE_OBJECT,LABEL_SECURITY_INFORMATION");
+    expect(source).toContain('ScopedPrivilege restorePrivilege(L"SeRestorePrivilege")');
+    expect(source).not.toContain('ScopedPrivilege restorePrivilege(L"SeSecurityPrivilege")');
+    expect(source).not.toContain('ScopedPrivilege restorePrivilege(L"SeRelabelPrivilege")');
+    expect(source).toContain("TOKEN_ADJUST_PRIVILEGES|TOKEN_QUERY");
+    expect(source).toContain("PrivilegeEnabled(token_,luid_)!=wasEnabled_");
+    expect(source).toContain("PHASE_E_SECURITY_STATUS:%s:%s:%lu");
+    expect(source).toContain('"PHASE_E_ACL_SET_FAILED:"');
+    expect(source.match(/SecurityStatus\(objectName,/g)).toHaveLength(3);
+    expect(source.match(/throw SecuritySetFailure\(/g)).toHaveLength(3);
+    expect(source).toContain('SecurityStage(objectName,"owner-group:before-apply")');
+    expect(source).toContain('SecurityStage(objectName,"dacl:before-apply")');
+    expect(source).toContain('SecurityStage(objectName,"label:before-apply")');
+    expect(source.indexOf('"owner-group:before-apply"')).toBeLessThan(
+      source.indexOf('"dacl:before-apply"'),
     );
-    expect(source).toContain("expectedOwner,expectedGroup,expectedDacl,expectedLabel");
+    expect(source.indexOf('"dacl:before-apply"')).toBeLessThan(
+      source.indexOf('"label:before-apply"'),
+    );
+    expect(source).toContain("expectedOwner,expectedGroup,nullptr,nullptr");
+    expect(source).toContain("nullptr,nullptr,expectedDacl,nullptr");
+    expect(source).toContain("nullptr,nullptr,nullptr,expectedLabel");
     expect(source).toContain("CopySid(ownerLength,ownerBytes.data(),owner)");
     expect(source).toContain("IsValidAcl(dacl)");
     expect(source).toContain("EqualSid(expectedOwner,actualOwner)");

@@ -113,6 +113,83 @@ static void SecurityStage(const char* object, const char* stage) {
   fprintf(stderr, "PHASE_E_SECURITY_STAGE:%s:%s\n", object, stage);
   fflush(stderr);
 }
+static void SecurityStatus(const char* object, const char* component, DWORD status) {
+  fprintf(stderr, "PHASE_E_SECURITY_STATUS:%s:%s:%lu\n", object, component,
+          static_cast<unsigned long>(status));
+  fflush(stderr);
+}
+static std::string SecuritySetFailure(const char* component, DWORD status) {
+  return std::string("PHASE_E_ACL_SET_FAILED:") + component + ":" +
+         std::to_string(static_cast<unsigned long>(status));
+}
+static bool PrivilegeEnabled(HANDLE token, const LUID& luid) {
+  PRIVILEGE_SET privileges{};
+  privileges.PrivilegeCount=1;
+  privileges.Control=PRIVILEGE_SET_ALL_NECESSARY;
+  privileges.Privilege[0].Luid=luid;
+  privileges.Privilege[0].Attributes=SE_PRIVILEGE_ENABLED;
+  BOOL enabled=FALSE;
+  if(!PrivilegeCheck(token,&privileges,&enabled))
+    throw std::string("PHASE_E_PRIVILEGE_QUERY_FAILED");
+  return enabled==TRUE;
+}
+class ScopedPrivilege {
+ public:
+  explicit ScopedPrivilege(const wchar_t* name) {
+    if(!OpenProcessToken(GetCurrentProcess(),TOKEN_ADJUST_PRIVILEGES|TOKEN_QUERY,&token_))
+      throw std::string("PHASE_E_PRIVILEGE_ENABLE_FAILED");
+    if(!LookupPrivilegeValueW(nullptr,name,&luid_)) {
+      CloseHandle(token_); token_=nullptr;
+      throw std::string("PHASE_E_PRIVILEGE_ENABLE_FAILED");
+    }
+    try { wasEnabled_=PrivilegeEnabled(token_,luid_); }
+    catch(...) { CloseHandle(token_); token_=nullptr; throw; }
+    TOKEN_PRIVILEGES requested{};
+    requested.PrivilegeCount=1;
+    requested.Privileges[0].Luid=luid_;
+    requested.Privileges[0].Attributes=SE_PRIVILEGE_ENABLED;
+    DWORD previousLength=sizeof(previous_);
+    SetLastError(ERROR_SUCCESS);
+    if(!AdjustTokenPrivileges(token_,FALSE,&requested,sizeof(previous_),&previous_,&previousLength) ||
+       GetLastError()!=ERROR_SUCCESS) {
+      CloseHandle(token_); token_=nullptr;
+      throw std::string("PHASE_E_PRIVILEGE_ENABLE_FAILED");
+    }
+    active_=true;
+    bool enabled=false;
+    try { enabled=PrivilegeEnabled(token_,luid_); }
+    catch(...) {
+      RestoreNoThrow(); CloseHandle(token_); token_=nullptr;
+      throw;
+    }
+    if(!enabled) {
+      RestoreNoThrow(); CloseHandle(token_); token_=nullptr;
+      throw std::string("PHASE_E_PRIVILEGE_ENABLE_FAILED");
+    }
+  }
+  ~ScopedPrivilege() { RestoreNoThrow(); if(token_)CloseHandle(token_); }
+  ScopedPrivilege(const ScopedPrivilege&)=delete;
+  ScopedPrivilege& operator=(const ScopedPrivilege&)=delete;
+  void Restore() {
+    if(!active_)return;
+    if(!AdjustTokenPrivileges(token_,FALSE,&previous_,0,nullptr,nullptr))
+      throw std::string("PHASE_E_PRIVILEGE_RESTORE_FAILED");
+    if(PrivilegeEnabled(token_,luid_)!=wasEnabled_)
+      throw std::string("PHASE_E_PRIVILEGE_RESTORE_FAILED");
+    active_=false;
+  }
+ private:
+  void RestoreNoThrow() noexcept {
+    if(active_&&token_) {
+      AdjustTokenPrivileges(token_,FALSE,&previous_,0,nullptr,nullptr);
+      active_=false;
+    }
+  }
+  HANDLE token_=nullptr;
+  LUID luid_{};
+  TOKEN_PRIVILEGES previous_{};
+  bool wasEnabled_=false,active_=false;
+};
 static void ApplyAndVerifySecurity(HANDLE object, const wchar_t* sddl,
                                    const char* objectName) {
   PSECURITY_DESCRIPTOR descriptor=nullptr;
@@ -152,12 +229,30 @@ static void ApplyAndVerifySecurity(HANDLE object, const wchar_t* sddl,
   PSID expectedGroup=reinterpret_cast<PSID>(groupBytes.data());
   PACL expectedDacl=reinterpret_cast<PACL>(daclBytes.data());
   PACL expectedLabel=reinterpret_cast<PACL>(labelBytes.data());
-  SecurityStage(objectName,"before-apply");
+  SecurityStage(objectName,"owner-group:before-apply");
+  // SeRestorePrivilege is scoped to the owner/group write so SYSTEM remains
+  // assignable without broadening the DACL or label operations.
+  ScopedPrivilege restorePrivilege(L"SeRestorePrivilege");
   DWORD status=SetSecurityInfo(object,SE_FILE_OBJECT,
-    OWNER_SECURITY_INFORMATION|GROUP_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION|LABEL_SECURITY_INFORMATION,
-    expectedOwner,expectedGroup,expectedDacl,expectedLabel);
-  if(status!=ERROR_SUCCESS) throw std::string("PHASE_E_ACL_SET_FAILED");
-  SecurityStage(objectName,"after-apply");
+    OWNER_SECURITY_INFORMATION|GROUP_SECURITY_INFORMATION,
+    expectedOwner,expectedGroup,nullptr,nullptr);
+  SecurityStatus(objectName,"owner-group",status);
+  restorePrivilege.Restore();
+  if(status!=ERROR_SUCCESS) throw SecuritySetFailure("owner-group",status);
+  SecurityStage(objectName,"owner-group:after-apply");
+  SecurityStage(objectName,"dacl:before-apply");
+  status=SetSecurityInfo(object,SE_FILE_OBJECT,
+    DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION,
+    nullptr,nullptr,expectedDacl,nullptr);
+  SecurityStatus(objectName,"dacl",status);
+  if(status!=ERROR_SUCCESS) throw SecuritySetFailure("dacl",status);
+  SecurityStage(objectName,"dacl:after-apply");
+  SecurityStage(objectName,"label:before-apply");
+  status=SetSecurityInfo(object,SE_FILE_OBJECT,LABEL_SECURITY_INFORMATION,
+    nullptr,nullptr,nullptr,expectedLabel);
+  SecurityStatus(objectName,"label",status);
+  if(status!=ERROR_SUCCESS) throw SecuritySetFailure("label",status);
+  SecurityStage(objectName,"label:after-apply");
   PSECURITY_DESCRIPTOR actual=nullptr; PACL actualDacl=nullptr, actualLabel=nullptr;
   PSID actualOwner=nullptr, actualGroup=nullptr;
   status=GetSecurityInfo(object,SE_FILE_OBJECT,
