@@ -426,6 +426,11 @@ still use them. `openclaw update` still runs Doctor after installing the candida
 after a manual package replacement, run `openclaw doctor --fix` before restarting
 the Gateway.
 
+During a marked Windows 2026.9.4 update, package lifecycle also asks Doctor's
+read-only schema preflight to reject an incompatible shared-state upgrade before
+activation. It does not migrate operator state. Independent package installation
+does not run this legacy-updater check.
+
 The fresh post-core continuation runs repairing Doctor before plugin convergence,
 including when an older updater already ran Doctor without `--fix`. This completes
 pending legacy state even when the configuration itself needs no repair.

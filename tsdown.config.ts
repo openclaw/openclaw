@@ -446,6 +446,7 @@ function buildCoreDistEntries(): Record<string, string> {
     index: "src/index.ts",
     entry: "src/entry.ts",
     "infra/package-lifecycle": "src/infra/package-lifecycle.ts",
+    "commands/doctor-update-schema-guard": "src/commands/doctor-update-schema-guard.ts",
     "crabbox-wrapper": "scripts/crabbox-wrapper.mts",
     "docker-healthcheck": "src/docker-healthcheck.ts",
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
