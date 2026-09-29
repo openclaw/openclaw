@@ -382,15 +382,7 @@ export async function monitorMSTeamsProvider(
             pollId: vote.pollId,
             error: formatUnknownError(err),
           });
-          return {
-            statusCode: 500,
-            type: "application/vnd.microsoft.error",
-            value: {
-              code: "RECORD_VOTE_FAILED",
-              message: "Could not record vote.",
-              innerHttpError: { statusCode: 500, body: null },
-            },
-          };
+          return cardActionError("RECORD_VOTE_FAILED", "Could not record vote.");
         }
       }
       // The SDK has already authenticated this invoke. Acknowledge only after
@@ -399,15 +391,7 @@ export async function monitorMSTeamsProvider(
       return cardActionMessage("OK");
     } catch (err) {
       log.error("msteams card.action failed", { error: formatUnknownError(err) });
-      return {
-        statusCode: 500,
-        type: "application/vnd.microsoft.error",
-        value: {
-          code: "CARD_ACTION_FAILED",
-          message: "Card action failed.",
-          innerHttpError: { statusCode: 500, body: null },
-        },
-      };
+      return cardActionError("CARD_ACTION_FAILED", "Card action failed.");
     }
   });
 
@@ -613,6 +597,18 @@ export async function monitorMSTeamsProvider(
 
 function cardActionMessage(value: string): MSTeamsCardActionResponse {
   return { statusCode: 200, type: "application/vnd.microsoft.activity.message", value };
+}
+
+function cardActionError(code: string, message: string): MSTeamsCardActionResponse {
+  return {
+    statusCode: 500,
+    type: "application/vnd.microsoft.error",
+    value: {
+      code,
+      message,
+      innerHttpError: { statusCode: 500, body: null },
+    },
+  };
 }
 
 /**

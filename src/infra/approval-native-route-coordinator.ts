@@ -3,6 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type {
   ChannelApprovalNativeDeliveryPlan,
   ChannelApprovalNativePlannedTarget,
@@ -105,7 +106,7 @@ function clearApprovalRouteSelection(
 }
 
 function routeGroupKey(runtime: ApprovalRouteRuntimeRecord): string {
-  return normalizeChannel(runtime.channel) || runtime.runtimeId;
+  return normalizeLowercaseStringOrEmpty(runtime.channel) || runtime.runtimeId;
 }
 
 function createApprovalRouteSelection(
@@ -197,10 +198,6 @@ function resolveApprovalRouteSelection(
 
 const defaultCoordinatorState = createApprovalNativeRouteCoordinatorState();
 const MAX_APPROVAL_ROUTE_NOTICE_TTL_MS = 5 * 60_000;
-
-function normalizeChannel(value?: string | null): string {
-  return normalizeLowercaseStringOrEmpty(value);
-}
 
 function clearPendingApprovalRouteNotice(
   state: ApprovalNativeRouteCoordinatorState,
@@ -294,7 +291,7 @@ function readAllowedDecisionStrings(request: ApprovalRequest): string[] | undefi
   if (!Array.isArray(allowedDecisions)) {
     return undefined;
   }
-  return allowedDecisions.filter((value): value is string => typeof value === "string");
+  return filterStringEntries(allowedDecisions);
 }
 
 function resolveApprovalRouteNotice(params: {
@@ -305,12 +302,15 @@ function resolveApprovalRouteNotice(params: {
   missingSelectedRuntime: boolean;
 }): { requestGateway: GatewayRequestFn; target: RouteNoticeTarget; text: string } | null {
   const explicitTarget = resolveRouteNoticeTargetFromRequest(params.request);
-  const originChannel = normalizeChannel(
+  const originChannel = normalizeLowercaseStringOrEmpty(
     explicitTarget?.channel ?? params.request.request.turnSourceChannel,
   );
   const fallbackTarget =
     params.reports
-      .filter((report) => normalizeChannel(report.channel) === originChannel || !originChannel)
+      .filter(
+        (report) =>
+          normalizeLowercaseStringOrEmpty(report.channel) === originChannel || !originChannel,
+      )
       .map(resolveFallbackRouteNoticeTarget)
       .find((target) => target !== null) ?? null;
   const target = explicitTarget
@@ -359,7 +359,7 @@ function resolveApprovalRouteNotice(params: {
   // If any same-channel runtime already delivered into the origin chat, every
   // other fallback delivery becomes supplemental and should not trigger a notice.
   const originDelivered = params.reports.some((report) => {
-    if (originChannel && normalizeChannel(report.channel) !== originChannel) {
+    if (originChannel && normalizeLowercaseStringOrEmpty(report.channel) !== originChannel) {
       return false;
     }
     return didReportDeliverToOrigin(report, originAccountId);
@@ -372,7 +372,7 @@ function resolveApprovalRouteNotice(params: {
     if (!report.channelLabel || report.deliveredTargets.length === 0) {
       return [];
     }
-    const reportChannel = normalizeChannel(report.channel);
+    const reportChannel = normalizeLowercaseStringOrEmpty(report.channel);
     if (
       originChannel &&
       reportChannel === originChannel &&
@@ -433,13 +433,13 @@ function hasActiveApprovalNativeRouteRuntimeForState(
     accountId?: string | null;
   },
 ): boolean {
-  const channel = normalizeChannel(params.channel);
+  const channel = normalizeLowercaseStringOrEmpty(params.channel);
   const accountId = normalizeOptionalString(params.accountId);
   const matchingRuntimes = Array.from(state.activeRuntimes.values()).filter((runtime) => {
     if (!runtime.handledKinds.has(params.approvalKind)) {
       return false;
     }
-    if (channel && normalizeChannel(runtime.channel) !== channel) {
+    if (channel && normalizeLowercaseStringOrEmpty(runtime.channel) !== channel) {
       return false;
     }
     const runtimeAccountId = normalizeOptionalString(runtime.accountId);

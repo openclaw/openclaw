@@ -20,6 +20,7 @@ import {
   type InstalledPluginIndex,
 } from "../plugins/installed-plugin-index.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { sha256FileSync } from "./crypto-digest.js";
 import {
   LEGACY_DELIVERY_QUEUE_DIRS,
   listLegacyDeliveryQueueFiles,
@@ -31,7 +32,6 @@ import {
   inferDeliveryQueueFailureRetention,
   projectDeliveryQueueTerminalEntry,
 } from "./delivery-queue-sqlite.types.js";
-import { hashFileDescriptorSync } from "./file-descriptor.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { migrationFileExists } from "./state-migrations.fs.js";
 import {
@@ -57,15 +57,6 @@ type LegacyArchiveResolution = {
   action: "archived" | "removed";
 };
 
-function hashLegacyArchiveSource(sourcePath: string): string {
-  const fd = fs.openSync(sourcePath, "r");
-  try {
-    return hashFileDescriptorSync(fd).sha256;
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
 function archiveLegacyFileSource(params: {
   sourcePath: string;
   label: string;
@@ -82,8 +73,8 @@ function archiveLegacyFileSource(params: {
         return { targetPath, action: "archived" };
       }
       // Legacy sources can exceed whole-file allocation limits; hash only collisions.
-      sourceSha256 ??= hashLegacyArchiveSource(params.sourcePath);
-      if (sourceSha256 === hashLegacyArchiveSource(targetPath)) {
+      sourceSha256 ??= sha256FileSync(params.sourcePath);
+      if (sourceSha256 === sha256FileSync(targetPath)) {
         fs.rmSync(params.sourcePath, { force: true });
         return { targetPath, action: "removed" };
       }

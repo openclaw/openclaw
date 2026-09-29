@@ -30,6 +30,7 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import { msteamsDirectoryContractPlugin } from "../directory-contract-api.js";
 import type {
@@ -719,16 +720,13 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                 if (!emoji) {
                   return {
                     isError: true,
-                    content: [
+                    ...textResult(
+                      `React requires an emoji (reaction type). Valid types: ${MSTEAMS_REACTION_TYPES.join(", ")}.`,
                       {
-                        type: "text" as const,
-                        text: `React requires an emoji (reaction type). Valid types: ${MSTEAMS_REACTION_TYPES.join(", ")}.`,
+                        error: "React requires an emoji (reaction type).",
+                        validTypes: [...MSTEAMS_REACTION_TYPES],
                       },
-                    ],
-                    details: {
-                      error: "React requires an emoji (reaction type).",
-                      validTypes: [...MSTEAMS_REACTION_TYPES],
-                    },
+                    ),
                   };
                 }
                 const to = await authorizeActionTarget(target.to);

@@ -1,4 +1,5 @@
 import {
+  hasNonEmptyString,
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
@@ -630,9 +631,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
               payload &&
               typeof payload === "object" &&
               Array.isArray((payload as { runIds?: unknown[] }).runIds)
-                ? (payload as { runIds: unknown[] }).runIds.filter((value): value is string =>
-                    Boolean(normalizeOptionalString(value)),
-                  )
+                ? (payload as { runIds: unknown[] }).runIds.filter(hasNonEmptyString)
                 : [];
             const firstAbortedRunId = runIds[0] ?? null;
             abortedRunIds = runIds;

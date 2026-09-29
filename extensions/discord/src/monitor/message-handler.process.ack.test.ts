@@ -1,5 +1,6 @@
 import { DEFAULT_EMOJIS, DEFAULT_TIMING } from "openclaw/plugin-sdk/channel-feedback";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi, onTestFinished } from "vitest";
 import {
   BASE_CHANNEL_ROUTE,
@@ -50,28 +51,52 @@ const failedFinalReceipt = {
 };
 
 describe("processDiscordMessage ack reactions", () => {
-  it("uses separate REST clients for feedback and reply delivery", async () => {
-    const feedbackRest = {};
-    const deliveryRest = {};
-    const client = (rest: object) => ({
-      token: "",
-      rest,
-      account: { accountId: "default", config: {} },
-    });
-    createDiscordRestClientSpy
-      .mockReturnValueOnce(client(feedbackRest))
-      .mockReturnValueOnce(client(deliveryRest));
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.dispatcher.sendFinalReply({ text: "hello" });
-      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
-    });
-    await runProcessDiscordMessage(await createAutomaticSourceDeliveryContext());
-    const reaction = firstMockCall(sendMocks.reactMessageDiscord, "ack reaction");
-    const delivery = firstMockCall(deliverDiscordReply, "reply delivery");
-    expect(requireRecord(reaction[3], "feedback options").rest).toBe(feedbackRest);
-    expect(requireRecord(delivery[0], "delivery params").rest).toBe(deliveryRest);
-    expect(feedbackRest).not.toBe(deliveryRest);
-  });
+  it.each([
+    [1, "discord: delivered 1 reply to channel:c1"],
+    [2, "discord: delivered 2 replies to channel:c1"],
+  ] as const)(
+    "uses separate REST clients and reports %i delivered replies",
+    async (finalCount, diagnostic) => {
+      const verbose = vi.spyOn(runtimeEnv, "shouldLogVerbose").mockReturnValue(true);
+      onTestFinished(() => verbose.mockRestore());
+      const feedbackRest = {};
+      const deliveryRest = {};
+      const client = (rest: object) => ({
+        token: "",
+        rest,
+        account: { accountId: "default", config: {} },
+      });
+      createDiscordRestClientSpy
+        .mockReturnValueOnce(client(feedbackRest))
+        .mockReturnValueOnce(client(deliveryRest));
+      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        for (let index = 0; index < finalCount; index += 1) {
+          await params?.dispatcher.sendFinalReply({ text: `hello ${index}` });
+        }
+        await params?.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: { final: finalCount, tool: 0, block: 0 },
+          settledReceipt: {
+            counts: {
+              tool: emptyCounts,
+              block: emptyCounts,
+              final: { ...emptyCounts, delivered: finalCount },
+            },
+            anyVisibleDelivered: true,
+          },
+        };
+      });
+      await runProcessDiscordMessage(await createAutomaticSourceDeliveryContext());
+      const reaction = firstMockCall(sendMocks.reactMessageDiscord, "ack reaction");
+      const delivery = firstMockCall(deliverDiscordReply, "reply delivery");
+      expect(requireRecord(reaction[3], "feedback options").rest).toBe(feedbackRest);
+      expect(requireRecord(delivery[0], "delivery params").rest).toBe(deliveryRest);
+      expect(feedbackRest).not.toBe(deliveryRest);
+      expect(deliverDiscordReply).toHaveBeenCalledTimes(finalCount);
+      expect(logVerbose).toHaveBeenCalledWith(diagnostic);
+    },
+  );
 
   it.each([
     {

@@ -1,5 +1,5 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
-import { stableStringify } from "@openclaw/normalization-core";
+import { filterStringEntries, stableStringify } from "@openclaw/normalization-core";
 import {
   listAgentEntries,
   listAgentIds,
@@ -100,12 +100,7 @@ function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
       typeof server?.url === "string"
         ? redactSensitiveUrlLikeString(server.url)
         : typeof server?.command === "string"
-          ? redactSensitiveArgv([
-              server.command,
-              ...(Array.isArray(server.args)
-                ? server.args.filter((arg): arg is string => typeof arg === "string")
-                : []),
-            ]).join(" ")
+          ? redactSensitiveArgv([server.command, ...filterStringEntries(server.args)]).join(" ")
           : "invalid declaration";
     runtime.log(`  MCP ${action.id}: ${target}`);
   }
@@ -395,8 +390,6 @@ export async function runClawsAddCommand(
           },
         ],
       };
-    } else {
-      resumableInstallRecord = resumeRecord;
     }
   }
 

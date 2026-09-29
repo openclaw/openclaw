@@ -263,18 +263,14 @@ function marketplaceEntryGitRef(source: MarketplaceEntrySource): string | undefi
   }
 }
 
-function isMutableGitDerivedSource(ref: string | undefined): boolean {
-  return !isImmutableGitCommitRef(ref);
-}
-
 function marketplaceInstallPolicySource(params: {
   marketplaceOrigin: MarketplaceManifestOrigin;
   marketplaceRef?: string;
   resolvedPath: string;
   source: MarketplaceEntrySource;
 }): InstallPolicySource {
-  const marketplaceMutable = isMutableGitDerivedSource(params.marketplaceRef);
-  const entryMutable = isMutableGitDerivedSource(marketplaceEntryGitRef(params.source));
+  const marketplaceMutable = !isImmutableGitCommitRef(params.marketplaceRef);
+  const entryMutable = !isImmutableGitCommitRef(marketplaceEntryGitRef(params.source));
   if (resolveArchiveKind(params.resolvedPath)) {
     if (
       params.marketplaceOrigin === "remote" &&

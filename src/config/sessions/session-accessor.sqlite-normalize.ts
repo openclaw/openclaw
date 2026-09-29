@@ -18,3 +18,18 @@ export function normalizeSessionRowChatType(value: unknown): "direct" | "group" 
   }
   return null;
 }
+
+export function resolveSqliteSessionScope(
+  entry: { chatType?: unknown },
+  sessionKey: string,
+): "conversation" | "shared-main" | "group" | "channel" {
+  const chatType = normalizeSessionRowChatType(entry.chatType);
+  const normalizedKey = sessionKey.trim().toLowerCase();
+  if (chatType === "direct" && (normalizedKey === "main" || normalizedKey.endsWith(":main"))) {
+    return "shared-main";
+  }
+  if (chatType === "group" || chatType === "channel") {
+    return chatType;
+  }
+  return "conversation";
+}

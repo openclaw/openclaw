@@ -5,6 +5,10 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as migratedText } from "@openclaw/normalization-core/string-coerce";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import {
+  normalizeSessionRowChatType,
+  resolveSqliteSessionScope,
+} from "../config/sessions/session-accessor.sqlite-normalize.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { migratedSessionColumn } from "./openclaw-agent-db-schema-helpers.js";
@@ -143,13 +147,6 @@ function parseMigratedSessionEntry(value: unknown): MigratedSessionEntry | null 
   return safeParseJsonRecord(value) ?? null;
 }
 
-function migratedChatType(value: unknown): "direct" | "group" | "channel" | null {
-  if (value === "direct" || value === "group" || value === "channel") {
-    return value;
-  }
-  return null;
-}
-
 function migratedStatus(value: unknown): SessionRunStatus | null {
   if (
     value === "running" ||
@@ -161,21 +158,6 @@ function migratedStatus(value: unknown): SessionRunStatus | null {
     return value;
   }
   return null;
-}
-
-function migratedSessionScope(
-  entry: MigratedSessionEntry,
-  sessionKey: string,
-): "conversation" | "shared-main" | "group" | "channel" {
-  const chatType = migratedChatType(entry.chatType);
-  const normalizedKey = sessionKey.trim().toLowerCase();
-  if (chatType === "direct" && (normalizedKey === "main" || normalizedKey.endsWith(":main"))) {
-    return "shared-main";
-  }
-  if (chatType === "group" || chatType === "channel") {
-    return chatType;
-  }
-  return "conversation";
 }
 
 function migratedEntryChannel(entry: MigratedSessionEntry): string | null {
@@ -271,11 +253,11 @@ export function backfillOpenClawAgentSchema(db: DatabaseSync, previousVersion: n
       continue;
     }
     update.run(
-      migratedSessionScope(entry, sessionKey),
+      resolveSqliteSessionScope(entry, sessionKey),
       asFiniteNumber(entry.startedAt) ?? null,
       asFiniteNumber(entry.endedAt) ?? null,
       migratedStatus(entry.status),
-      migratedChatType(entry.chatType),
+      normalizeSessionRowChatType(entry.chatType),
       migratedEntryChannel(entry),
       migratedEntryAccountId(entry),
       migratedText(entry.modelProvider),

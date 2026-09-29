@@ -143,6 +143,12 @@ export function emitPreparedSessionSharingChange(
   sessionChanges.emit(change, database.db);
 }
 
+function invalidateSessionEntryProjections(params: { databaseIdentity: string }): void {
+  const invalidate = (database: DatabaseSync) => sessionEntryCaches.delete(database);
+  invalidateOpenClawAgentWritableProjections(params.databaseIdentity, invalidate);
+  invalidateOpenClawAgentReadOnlyProjections(params.databaseIdentity, invalidate);
+}
+
 /** A committed metadata-only worker write invalidates caches without changing retained identity. */
 export function publishSessionEntryWorkerMetadataInvalidation(params: {
   agentId: string;
@@ -150,12 +156,7 @@ export function publishSessionEntryWorkerMetadataInvalidation(params: {
   databaseIdentity: string;
   sessionKey: string;
 }): void {
-  invalidateOpenClawAgentWritableProjections(params.databaseIdentity, (database) =>
-    sessionEntryCaches.delete(database),
-  );
-  invalidateOpenClawAgentReadOnlyProjections(params.databaseIdentity, (database) =>
-    sessionEntryCaches.delete(database),
-  );
+  invalidateSessionEntryProjections(params);
   const change: SessionRowChange = {
     agentId: params.agentId,
     storePath: params.storePath,
@@ -544,12 +545,7 @@ export function publishSessionEntryWorkerInvalidations(
     changes.push(change);
   }
   if (keys.length > 0) {
-    invalidateOpenClawAgentWritableProjections(params.databaseIdentity, (database) =>
-      sessionEntryCaches.delete(database),
-    );
-    invalidateOpenClawAgentReadOnlyProjections(params.databaseIdentity, (database) =>
-      sessionEntryCaches.delete(database),
-    );
+    invalidateSessionEntryProjections(params);
   }
   sessionChanges.emitBatch(changes, undefined, beforePublicNotifications);
 }
@@ -630,12 +626,7 @@ export function retainSessionEntryWorkerPublication(params: {
         ]),
       ];
       if (changed.length) {
-        invalidateOpenClawAgentWritableProjections(params.databaseIdentity, (database) =>
-          sessionEntryCaches.delete(database),
-        );
-        invalidateOpenClawAgentReadOnlyProjections(params.databaseIdentity, (database) =>
-          sessionEntryCaches.delete(database),
-        );
+        invalidateSessionEntryProjections(params);
       }
       const changes: SessionRowChange[] = [];
       for (const sessionKey of changed) {

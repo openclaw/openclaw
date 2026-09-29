@@ -713,7 +713,6 @@ export function createSlackProgressRuntime(runtimeParams: {
     useDraftProgressCard,
     useNativeProgressStreaming,
     progressDraftActive,
-    previewToolProgressEnabled,
     preambleOnlyProgress,
     suppressDefaultToolProgressMessages,
     progressDraft,

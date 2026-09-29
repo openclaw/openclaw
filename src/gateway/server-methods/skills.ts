@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   ErrorCodes,
   errorShape,
@@ -102,12 +103,6 @@ function projectGatewaySkillProposalReadResult(proposal: SkillProposalReadResult
         }
       : {}),
   };
-}
-
-function collectClawHubTrustWarnings(results: Array<{ warning?: string }>): string[] {
-  return results
-    .map((result) => normalizeOptionalString(result.warning))
-    .filter((warning): warning is string => Boolean(warning));
 }
 
 function buildRevisionAgentInstruction(proposal: SkillProposalReadResult) {
@@ -532,7 +527,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         config: resolved.cfg,
       });
       const errors = results.filter((result) => !result.ok);
-      const warnings = collectClawHubTrustWarnings(results);
+      const warnings = normalizeTrimmedStringList(results.map((result) => result.warning));
       respond(
         errors.length === 0,
         {
