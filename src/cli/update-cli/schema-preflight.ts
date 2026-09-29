@@ -16,6 +16,7 @@ import {
   type OpenClawDatabaseSchemaPreflight,
 } from "../../state/openclaw-database-preflight.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { isArtifactPreservingStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { UpdatePreMutationError } from "./shared.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
@@ -83,7 +84,7 @@ async function checkTargetDatabaseSchemas(
   return preflightOpenClawDatabaseSchemas({
     env: context.env,
     supportedVersions,
-    preserveSourceArtifacts: false,
+    preserveSourceArtifacts: isArtifactPreservingStateRead(),
     // Include default on-disk stores that update-time Doctor can later touch,
     // without resolving configured candidates into writable migration owners.
     configuredAgentDatabaseTargets: [],
