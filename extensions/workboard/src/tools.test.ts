@@ -641,4 +641,59 @@ describe("workboard tools", () => {
     );
     expect(claimed.card).toMatchObject({ status: "review" });
   });
+
+  it("accepts cardId as an alias for id on mutation tools", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const tools = new Map(
+      createWorkboardTools({ store, context: { agentId: "agent-b" } }).map((tool) => [
+        tool.name,
+        tool,
+      ]),
+    );
+    const card = await store.create({ title: "Alias card", status: "todo" });
+
+    // Move using cardId alias instead of id — should succeed.
+    const moved = readPayload(
+      await tools.get("workboard_move")?.execute("alias-move", {
+        cardId: card.id,
+        status: "ready",
+      }),
+    );
+    expect(moved.card).toMatchObject({ status: "ready" });
+
+    // Comment using cardId alias.
+    const commented = readPayload(
+      await tools.get("workboard_comment")?.execute("alias-comment", {
+        cardId: card.id,
+        body: "comment via cardId alias",
+      }),
+    );
+    expect(commented.card).toBeDefined();
+
+    // Neither id nor cardId provided should fail with a clear message.
+    await expect(
+      tools.get("workboard_move")?.execute("alias-missing", {
+        status: "ready",
+      }),
+    ).rejects.toThrow(/card id is required/);
+  });
+
+  it("accepts cancelled as a terminal status in workboard_move", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const tools = new Map(
+      createWorkboardTools({ store, context: { agentId: "agent-c" } }).map((tool) => [
+        tool.name,
+        tool,
+      ]),
+    );
+    const card = await store.create({ title: "Cancel target", status: "todo" });
+
+    const cancelled = readPayload(
+      await tools.get("workboard_move")?.execute("cancel-call", {
+        id: card.id,
+        status: "cancelled",
+      }),
+    );
+    expect(cancelled.card).toMatchObject({ status: "cancelled" });
+  });
 });

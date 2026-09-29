@@ -8,6 +8,7 @@ export const WORKBOARD_STATUSES = [
   "review",
   "blocked",
   "done",
+  "cancelled",
 ] as const;
 
 export const WORKBOARD_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
