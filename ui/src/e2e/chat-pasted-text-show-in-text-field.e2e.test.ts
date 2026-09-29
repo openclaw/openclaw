@@ -210,7 +210,9 @@ suite.define(() => {
       await page.keyboard.press("Enter");
       const preview = page.locator("openclaw-chat-detail-panel:visible");
       await preview.waitFor({ state: "visible" });
-      expect(await page.locator("openclaw-chat-pasted-text openclaw-tooltip").count()).toBe(0);
+      expect(await chip.evaluate((element) => element.closest("openclaw-tooltip") === null)).toBe(
+        true,
+      );
       const content = preview.locator(".sidebar-attachment-preview__text");
       await expect.poll(() => content.textContent()).toBe(pastedText);
       expect(await content.evaluate((element) => getComputedStyle(element).fontFamily)).toMatch(
