@@ -21,8 +21,8 @@ import {
 import { resolveZalouserAccountSync } from "./accounts.js";
 import {
   createRawZalouserMessageFromNormalized,
-  waitForZalouserIngressVerdict,
-  withZalouserIngressTestQueue,
+  observeZalouserIngressVerdict,
+  useZalouserMonitorTestQueue,
 } from "./ingress.test-support.js";
 import { monitorZalouserProvider } from "./monitor.js";
 import { setZalouserRuntime } from "./runtime.js";
@@ -34,6 +34,8 @@ import {
   createZalouserRuntimeEnv,
 } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
+
+const withMonitorIngressQueue = useZalouserMonitorTestQueue();
 
 function createAccount(): ResolvedZalouserAccount {
   return {
@@ -327,21 +329,19 @@ async function processMessageThroughMonitor(params: {
         config: { ...params.account.config, historyLimit: params.historyState.historyLimit },
       }
     : params.account;
-  await withZalouserIngressTestQueue(async (ingressQueue) => {
+  await withMonitorIngressQueue(async (ingressQueue) => {
     const abortController = new AbortController();
-    let resolveProcessed: (() => void) | undefined;
-    const processed = new Promise<void>((resolve) => {
-      resolveProcessed = resolve;
-    });
+    const { promise: processed, resolve: resolveProcessed } = Promise.withResolvers<void>();
     startZaloListenerMock.mockImplementationOnce(async (listenerParams) => {
       for (const message of messages) {
-        await listenerParams.onMessage(createRawZalouserMessageFromNormalized(message));
         if (!message.msgId) {
           throw new Error("Zalouser monitor test message requires msgId");
         }
-        await waitForZalouserIngressVerdict(ingressQueue, message.msgId, "completed");
+        const terminal = observeZalouserIngressVerdict(ingressQueue, message.msgId, "completed");
+        await listenerParams.onMessage(createRawZalouserMessageFromNormalized(message));
+        await terminal;
       }
-      resolveProcessed?.();
+      resolveProcessed();
       return { stop: vi.fn() };
     });
     const run = monitorZalouserProvider({
@@ -352,9 +352,12 @@ async function processMessageThroughMonitor(params: {
       statusSink: params.statusSink,
       ingressQueue,
     });
-    await processed;
-    abortController.abort();
-    await run;
+    try {
+      await Promise.race([processed, run]);
+    } finally {
+      abortController.abort();
+      await run;
+    }
   });
 }
 
@@ -427,7 +430,7 @@ describe("zalouser monitor group mention gating", () => {
     installRuntime({ commandAuthorized: false });
     const abortController = new AbortController();
     abortController.abort();
-    await withZalouserIngressTestQueue(async (ingressQueue) => {
+    await withMonitorIngressQueue(async (ingressQueue) => {
       await monitorZalouserProvider({
         account: {
           ...createAccount(),
