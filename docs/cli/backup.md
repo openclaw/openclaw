@@ -134,9 +134,13 @@ not create captures, change retention, or change ordinary backup sanitization.
 
 Use `openclaw backup sqlite` when you need a portable artifact for one OpenClaw-owned SQLite database instead of a broad state archive.
 
-Snapshot creation accepts exactly one named source. Agent sources always use
-the current configuration's resolved `<agentDir>/openclaw-agent.sqlite`, even
-when `agentDir` is outside the state directory:
+Snapshot creation accepts exactly one named source. Agent sources prefer the
+canonical Gateway session database at
+`<stateDir>/agents/<agentId>/agent/openclaw-agent.sqlite`, which the Gateway
+always uses regardless of `agentDir`; when that file does not exist, the source
+falls back to the configured `<agentDir>/openclaw-agent.sqlite`. Full archive
+backups are unaffected: they snapshot every distinct database an agent owns,
+under both locations.
 
 | Command                                                         | Database               |
 | --------------------------------------------------------------- | ---------------------- |
@@ -220,7 +224,7 @@ backed up. The command reports that agent as degraded in CLI warnings, JSON
 has never been backed up. Explicit `--agent <id>` selections still fail if the
 selected database cannot be copied, and a run with no copyable databases fails.
 
-You can also select `--global`, repeat `--agent <id>`, or combine the shared database with selected agents. Explicit agent selections, `--all`, and scheduled backups resolve each database from its configured `agentDir`; historical artifact verification and restore use the artifact's recorded agent id without requiring that agent to remain in the current configuration. Snapshot creation uses the same online backup, sanitizer, `VACUUM`, owner validation, and integrity checks as `backup sqlite create`; it never reads live SQLite files directly. Rows and schema entries have deterministic ordering, and integers and blobs use lossless encodings. The command creates one commit named `openclaw backup <ISO8601>`. If the database content is unchanged, it prints `no changes` and creates no commit.
+You can also select `--global`, repeat `--agent <id>`, or combine the shared database with selected agents. Explicit agent selections, `--all`, and scheduled backups resolve each database like `backup sqlite create --agent`: the canonical Gateway session database first, then the configured `agentDir` location; historical artifact verification and restore use the artifact's recorded agent id without requiring that agent to remain in the current configuration. Snapshot creation uses the same online backup, sanitizer, `VACUUM`, owner validation, and integrity checks as `backup sqlite create`; it never reads live SQLite files directly. Rows and schema entries have deterministic ordering, and integers and blobs use lossless encodings. The command creates one commit named `openclaw backup <ISO8601>`. If the database content is unchanged, it prints `no changes` and creates no commit.
 
 Git staging is restricted to the backup-owned `global` and `agents` paths;
 unrelated files elsewhere in an adopted repository are never staged.

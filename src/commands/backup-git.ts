@@ -19,7 +19,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { shortenHomePath } from "../utils.js";
 import {
   recordBackupOutcomeBestEffort,
-  resolveBackupAgentRoot,
+  resolveBackupAgentSnapshotPath,
   resolveRequiredBackupPath,
 } from "./backup-shared.js";
 
@@ -66,7 +66,12 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
     const agentIds = options.all
       ? listAgentIds(config).toSorted()
       : normalizedAgents.map((agent) => resolveConfiguredAgentId(config, agent));
-    agents = await Promise.all(agentIds.map((agentId) => resolveBackupAgentRoot(config, agentId)));
+    agents = await Promise.all(
+      agentIds.map(async (agentId) => ({
+        agentId,
+        databasePath: await resolveBackupAgentSnapshotPath(config, agentId),
+      })),
+    );
   }
   const databases: Array<{
     path: string;

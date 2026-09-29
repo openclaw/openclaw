@@ -11,9 +11,11 @@ title: "Backups"
 
 OpenClaw keeps its authoritative state in SQLite: one global control-plane
 database under the state directory (usually `~/.openclaw`), plus one database
-per configured agent at `<agentDir>/openclaw-agent.sqlite`. Agent directories
-default to locations under the state directory but can be configured outside
-it. See [Database schemas](/reference/database-schemas) for the exact layout.
+per configured agent at `<agentDir>/openclaw-agent.sqlite` for agent-scoped
+stores and at `<stateDir>/agents/<agentId>/agent/openclaw-agent.sqlite` for
+Gateway sessions. Agent directories default to locations under the state
+directory but can be configured outside it, in which case both files may exist
+for one agent; backups cover both. See [Database schemas](/reference/database-schemas) for the exact layout.
 This guide covers protecting that state: one-off archives, per-database
 snapshots, scheduling, offsite copies, and continuous replication for installs
 that should not re-upload whole databases on every backup.
@@ -104,9 +106,10 @@ Each run publishes one verified snapshot directory (`manifest.json` plus
 deleted-page remnants do not inflate them, and every snapshot records a
 SHA-256 that `openclaw backup sqlite verify` rechecks later.
 
-`--agent <id>` resolves the database from that agent's configured `agentDir`,
-including roots outside the state directory. The same owner-derived lookup
-applies to explicit Git agent backups, `--all`, and scheduled Git backups.
+`--agent <id>` prefers the canonical Gateway session database under
+`<stateDir>/agents/<id>/agent/`, falling back to that agent's configured
+`agentDir` when no canonical database exists. The same lookup applies to
+explicit Git agent backups, `--all`, and scheduled Git backups.
 Verifying or restoring a historical artifact by agent id does not require that
 agent to exist in the current configuration.
 

@@ -17,7 +17,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { shortenHomePath } from "../utils.js";
 import {
   recordBackupOutcomeBestEffort,
-  resolveBackupAgentRoot,
+  resolveBackupAgentSnapshotPath,
   resolveRequiredBackupPath,
 } from "./backup-shared.js";
 
@@ -211,10 +211,10 @@ async function resolveSnapshotDatabase(
   }
   const config = getRuntimeConfig({ skipPluginValidation: true });
   const agentId = resolveConfiguredAgentId(config, normalizeAgentId(rawAgentId));
-  const agentRoot = await resolveBackupAgentRoot(config, agentId);
-  assertNotUpdateCapturePath(agentRoot.databasePath, resolveStateDir());
+  const databasePath = await resolveBackupAgentSnapshotPath(config, agentId);
+  assertNotUpdateCapturePath(databasePath, resolveStateDir());
   return {
-    path: await fs.realpath(agentRoot.databasePath),
+    path: await fs.realpath(databasePath),
     identity: { role: "agent", agentId },
   };
 }
