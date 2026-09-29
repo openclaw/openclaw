@@ -65,19 +65,6 @@ const foregroundReplyLeases = createKeyedFifoLeaseRegistry(
   Symbol.for("openclaw.foregroundReplyFences"),
 );
 
-function applyRuntimeToolsAllow(
-  replyOptions: InternalDispatchReplyOptions | undefined,
-  toolsAllow: string[] | undefined,
-): InternalDispatchReplyOptions | undefined {
-  if (toolsAllow === undefined) {
-    return replyOptions;
-  }
-  return {
-    ...replyOptions,
-    toolsAllow,
-  };
-}
-
 function resolveForegroundReplyOrderKey(finalized: FinalizedMsgContext): string | undefined {
   const sessionKey = normalizeOptionalString(finalized.SessionKey);
   const channel =
@@ -234,7 +221,10 @@ export async function dispatchInboundMessage(params: {
   outboundHooks?: "enabled" | "disabled";
   onSettled?: () => void | Promise<void>;
 }): Promise<DispatchInboundResult> {
-  const replyOptions = applyRuntimeToolsAllow(params.replyOptions, params.toolsAllow);
+  const replyOptions =
+    params.toolsAllow === undefined
+      ? params.replyOptions
+      : { ...params.replyOptions, toolsAllow: params.toolsAllow };
   const replyPayloadRunState = params.replyPayloadRunState ?? {
     runId: replyOptions?.runId,
   };
