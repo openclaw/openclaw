@@ -2094,7 +2094,7 @@ src/config/channel-alias-migration.ts	2
 src/config/channel-capabilities.ts	2
 src/config/channel-config-metadata.ts	1
 src/config/channel-doctor-helpers.ts	5
-src/config/config-env-vars.ts	5
+src/config/config-env-vars.ts	2
 src/config/config-journal-snapshot.ts	2
 src/config/context-visibility.ts	1
 src/config/defaults.ts	6
@@ -2103,7 +2103,6 @@ src/config/docs-config-examples.ts	1
 src/config/gateway-dispatch-config.ts	2
 src/config/group-policy.ts	1
 src/config/implicit-mentions.ts	1
-src/config/includes-scan.ts	1
 src/config/io.audit.ts	2
 src/config/io.load.ts	2
 src/config/io.observe-recovery.ts	7
@@ -2175,7 +2174,6 @@ src/config/sessions/types.ts	1
 src/config/talk.ts	1
 src/config/validation-channel-rules.ts	1
 src/config/validation-core.ts	3
-src/config/validation-issues.ts	1
 src/config/validation-plugin-config.ts	2
 src/config/validation.ts	1
 src/config/zod-schema.channel-messaging-common.ts	11
