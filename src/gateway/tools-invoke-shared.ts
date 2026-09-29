@@ -158,6 +158,9 @@ function mergeActionIntoArgsIfSupported(params: {
   return hasAction ? { ...args, action } : args;
 }
 
+/** A warm MCP tool lost live admission while its invocation awaited. */
+class ToolNoLongerAvailableError extends Error {}
+
 function resolveToolInputErrorStatus(err: unknown): number | null {
   if (err instanceof SessionMutationAuthorizationChangedError) {
     return 403;
@@ -366,9 +369,13 @@ async function invokeGatewayToolWithSignal(
   ) {
     return failure(400, "invalid_request", AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
   }
-  const resolveTools = (disablePluginTools: boolean, additionalTools?: readonly AnyAgentTool[]) =>
+  const resolveTools = (
+    disablePluginTools: boolean,
+    additionalTools?: readonly AnyAgentTool[],
+    cfg = params.cfg,
+  ) =>
     resolveGatewayScopedTools({
-      cfg: params.cfg,
+      cfg,
       sessionKey,
       sessionId: sessionEntry?.sessionId,
       agentId: selectedAgentId,
@@ -403,6 +410,7 @@ async function invokeGatewayToolWithSignal(
   }
   let tool = tools.find((candidate) => candidate.name === toolName);
   let mcpTools: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
+  let isMcpToolAdmitted: (() => boolean) | undefined;
   try {
     if (!tool && sessionEntry?.sessionId) {
       // A standalone caller may invoke an already-discovered session tool,
@@ -450,6 +458,30 @@ async function invokeGatewayToolWithSignal(
             ) {
               tool = undefined;
             }
+            // Hooks and authority capture await, so a reload or session patch can
+            // land first; re-admit against live state right before the MCP call.
+            isMcpToolAdmitted = () => {
+              const liveCfg = getRuntimeConfig();
+              const liveEntry = loadGatewaySessionEntryReadOnly(sessionKey, {
+                agentId: selectedAgentId,
+              }).entry;
+              if (
+                !liveEntry?.sessionId ||
+                peekSessionMcpRuntime({ sessionId: liveEntry.sessionId, sessionKey }) !== runtime
+              ) {
+                return false;
+              }
+              const live = resolveTools(false, [candidate], liveCfg);
+              return (
+                runtime.configFingerprint ===
+                  resolveSessionMcpConfigSummary({
+                    cfg: liveCfg,
+                    workspaceDir: runtime.workspaceDir,
+                    toolOverrides: liveEntry.toolOverrides,
+                    toolDenylist: live.mcpConfigToolDenylist,
+                  }).fingerprint && live.tools.some((liveTool) => liveTool.name === toolName)
+              );
+            };
           }
         }
       }
@@ -457,6 +489,7 @@ async function invokeGatewayToolWithSignal(
     if (!tool) {
       return failure(404, "not_found", `Tool not available: ${toolName}`);
     }
+    const selectedTool = tool;
     const idempotencyKey = normalizeOptionalString(params.input.idempotencyKey);
     const toolCallId = idempotencyKey
       ? `${params.toolCallIdPrefix}-${conversationReadOrigin}-${idempotencyKey}`
@@ -499,7 +532,10 @@ async function invokeGatewayToolWithSignal(
       async () => {
         assertInvocationCurrent();
         assertCapturedInputCommitAllowed();
-        return await tool.execute?.(toolCallId, hookResult.params, params.signal);
+        if (isMcpToolAdmitted?.() === false) {
+          throw new ToolNoLongerAvailableError();
+        }
+        return await selectedTool.execute?.(toolCallId, hookResult.params, params.signal);
       },
     );
     return {
@@ -510,6 +546,9 @@ async function invokeGatewayToolWithSignal(
       result,
     };
   } catch (err) {
+    if (err instanceof ToolNoLongerAvailableError) {
+      return failure(404, "not_found", `Tool not available: ${toolName}`);
+    }
     const inputStatus = resolveToolInputErrorStatus(err);
     if (inputStatus !== null) {
       return failure(
