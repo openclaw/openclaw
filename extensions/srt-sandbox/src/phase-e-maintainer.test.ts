@@ -205,6 +205,15 @@ describe("Phase E maintainer policy", () => {
     expect(source).toContain('FwpmStatus(i,"filter-add",status)');
     expect(source).toContain('FwpmStage(i,"after-filter-add")');
   });
+  it("uses a legal and ownership-verified WFP filter weight", async () => {
+    const source = await import("node:fs/promises").then((fs) =>
+      fs.readFile(new URL("../native/phase-e-maintainer.cc", import.meta.url), "utf8"),
+    );
+    expect(source).toContain("constexpr UINT8 kFwpmFilterWeight = 8");
+    expect(source).toContain("filter.weight.uint8=kFwpmFilterWeight");
+    expect(source).toContain("filter->weight.uint8!=kFwpmFilterWeight");
+    expect(source).not.toContain("filter.weight.uint8=0x80");
+  });
   it("uses one locale-independent SID JSON conversion at native fact boundaries", async () => {
     const source = await import("node:fs/promises").then((fs) =>
       fs.readFile(new URL("../native/phase-e-maintainer.cc", import.meta.url), "utf8"),
