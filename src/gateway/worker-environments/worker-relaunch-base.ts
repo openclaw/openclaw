@@ -43,6 +43,7 @@ export function classifyWorkerRelaunchSuffix(params: {
     return { kind: "at-admission" };
   }
   let sawToolActivity = false;
+  let lastMessage: Extract<BranchEntry, { type: "message" }> | undefined;
   for (const entry of suffix) {
     if (entry.type !== "message" || readCommittedRunId(entry) !== params.runId) {
       return { kind: "foreign" };
@@ -50,15 +51,15 @@ export function classifyWorkerRelaunchSuffix(params: {
     if (entry.message.role === "toolResult") {
       sawToolActivity = true;
     }
+    lastMessage = entry;
   }
   if (sawToolActivity) {
     return { kind: "self-tool-activity" };
   }
-  const last = suffix[suffix.length - 1];
-  if (!last || last.message.role !== "assistant") {
+  if (!lastMessage || lastMessage.message.role !== "assistant") {
     return { kind: "foreign" };
   }
-  return { kind: "self-terminal-error", baseLeafId: last.id };
+  return { kind: "self-terminal-error", baseLeafId: lastMessage.id };
 }
 
 /**
