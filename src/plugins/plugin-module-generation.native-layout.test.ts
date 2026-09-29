@@ -8,6 +8,52 @@ import { createPluginModuleGenerationTestHarness } from "./plugin-module-generat
 const { fixture, host } = createPluginModuleGenerationTestHarness();
 
 describe("native package library layout", () => {
+  it("retains native require.resolve peers across dependency generations and disposal", async () => {
+    const dependencies = Object.fromEntries(
+      Array.from({ length: 2 }, (_, index) => [`fixture-${index}`, "1.0.0"]),
+    );
+    const files: Record<string, string> = {
+      "package.json": JSON.stringify({ dependencies }),
+      "entry.cjs": "module.exports = require('fixture-1');",
+    };
+    for (const name of Object.keys(dependencies)) {
+      files[`node_modules/${name}/package.json`] = JSON.stringify({
+        name,
+        main: "index.cjs",
+      });
+      files[`node_modules/${name}/index.cjs`] = "exports.value = 'unused';";
+    }
+    files["node_modules/fixture-1/index.cjs"] = `
+      exports.resolve = () => require.resolve('./peer.cjs');
+      exports.read = () => require('./peer.cjs').value;`;
+    const peer = "node_modules/fixture-1/peer.cjs";
+    const before = "exports.value = 'before';";
+    const after = "exports.value = 'after';";
+    files[peer] = before;
+    const root = fixture(files);
+    type Plugin = { resolve(): string; read(): string };
+    const firstHost = host(root);
+    const first = firstHost.load("entry.cjs") as Plugin;
+    const firstPath = first.resolve();
+    expect(first.resolve()).toBe(firstPath);
+    expect(firstPath).not.toBe(path.join(root, peer));
+    expect(fs.readFileSync(firstPath, "utf8")).toBe(before);
+    expect(first.read()).toBe("before");
+    fs.writeFileSync(path.join(root, peer), after);
+    const second = host(root).load("entry.cjs") as Plugin;
+    const secondPath = second.resolve();
+    expect(secondPath).not.toBe(firstPath);
+    expect(fs.readFileSync(secondPath, "utf8")).toBe(after);
+    expect(second.read()).toBe("after");
+    expect(first.resolve()).toBe(firstPath);
+    expect(fs.readFileSync(firstPath, "utf8")).toBe(before);
+    expect(first.read()).toBe("before");
+    await firstHost.dispose();
+    expect(second.resolve()).toBe(secondPath);
+    expect(fs.readFileSync(secondPath, "utf8")).toBe(after);
+    expect(second.read()).toBe("after");
+  });
+
   it.each(["", "lib", "build/Release"])(
     "preserves package-relative libraries for an addon in '%s' across generations",
     async (directory) => {

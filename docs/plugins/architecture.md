@@ -221,6 +221,13 @@ Node conditions select the target from that captured metadata. Legacy packages
 without an exports map also admit their existing main or index entry without
 executing unselected code. Native entries reuse the recorded admission below.
 The selected package's remaining body is captured before execution.
+Captured files retain their eligible package's source root beside their source
+identity, so repeated native module lookups reuse the live generation's package
+map rather than scanning its dependencies. Disposal removes those live owners
+without discarding source-validation facts. Files without a recorded eligible
+owner still use package lookup, including dependency links registered later.
+This changes no stored data or update migration; native admission and recovery
+retain the same source boundaries.
 Dependency links retain existing nested installation locations. Dependencies installed
 beside a package remain siblings in the capture, including optional platform packages
 whose native assets are read through relative filesystem paths. Other ancestor

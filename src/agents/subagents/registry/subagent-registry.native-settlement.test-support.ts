@@ -15,7 +15,11 @@ import {
   type SubagentRegistryHarness,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
-import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
+import {
+  SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_ERROR,
+  SUBAGENT_ENDED_REASON_KILLED,
+} from "./subagent-lifecycle-events.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -233,6 +237,56 @@ export function registerForcedCollectorCompletionSettlementTests({
   getLifecycleHandler: () => (event: Pick<AgentEventPayload, "runId" | "stream" | "data">) => void;
   mockPendingAgentWait: () => void;
 }): void {
+  it.each([{ stopReason: "aborted" }])(
+    "settles a collector yield seen through agent.wait without canceling it: %o",
+    async (extra) => {
+      const mod = getRegistry();
+      const runId = "run-wait-collector-yield";
+      mockGatewayMethods(mocks.callGateway, {
+        "agent.wait": {
+          status: "ok",
+          startedAt: 111,
+          endedAt: 222,
+          livenessState: "paused",
+          yielded: true,
+          ...extra,
+        },
+      });
+
+      const settleRootWork = observeRootWork();
+      try {
+        await mod.registerSubagentRun({
+          runId,
+          childSessionKey: "agent:main:subagent:wait-collector-yield",
+          task: "collect through the wait observation",
+          expectsCompletionMessage: false,
+          collect: true,
+          outputSchema: { type: "object" },
+          swarmRequesterSessionKey: "agent:main:main",
+        });
+        // Let the wait promise enter its owned completion work before joining that work.
+        await vi.advanceTimersByTimeAsync(0);
+      } finally {
+        await settleRootWork();
+      }
+
+      await waitForFast(() => {
+        expect(findRequesterRun(runId)).toMatchObject({
+          execution: { status: "terminal", endedAt: 222, outcome: { status: "ok" } },
+          endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+          collectorCompletion: {
+            status: "failed",
+            schemaError: "structured_output was not called",
+          },
+        });
+      });
+      // A yield terminal can also look aborted (#92448); settling it must never
+      // turn the collector yield into a cancellation notice.
+      expect(findRequesterRun(runId)?.pauseReason).toBeUndefined();
+      expect(findRequesterRun(runId)?.endedReason).not.toBe(SUBAGENT_ENDED_REASON_KILLED);
+    },
+  );
+
   it.each([
     { observation: "wait", schema: false, captured: false },
     { observation: "lifecycle", schema: true, captured: true },

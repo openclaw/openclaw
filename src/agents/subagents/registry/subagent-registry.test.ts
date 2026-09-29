@@ -2115,53 +2115,6 @@ describe("subagent registry seam flow", () => {
     });
   });
 
-  it.each([{ stopReason: "aborted" }])(
-    "settles a collector yield seen through agent.wait without canceling it: %o",
-    async (extra) => {
-      const runId = "run-wait-collector-yield";
-      mockGatewayMethods(mocks.callGateway, {
-        "agent.wait": {
-          status: "ok",
-          startedAt: 111,
-          endedAt: 222,
-          livenessState: "paused",
-          yielded: true,
-          ...extra,
-        },
-      });
-
-      const settleRootWork = observeRootWork();
-      try {
-        await mod.registerSubagentRun({
-          runId,
-          childSessionKey: "agent:main:subagent:wait-collector-yield",
-          task: "collect through the wait observation",
-          expectsCompletionMessage: false,
-          collect: true,
-          outputSchema: { type: "object" },
-          swarmRequesterSessionKey: "agent:main:main",
-        });
-      } finally {
-        await settleRootWork();
-      }
-
-      await waitForFast(() => {
-        expect(findRequesterRun(runId)).toMatchObject({
-          execution: { status: "terminal", endedAt: 222, outcome: { status: "ok" } },
-          endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-          collectorCompletion: {
-            status: "failed",
-            schemaError: "structured_output was not called",
-          },
-        });
-      });
-      // A yield terminal can also look aborted (#92448); settling it must never
-      // turn the collector yield into a cancellation notice.
-      expect(findRequesterRun(runId)?.pauseReason).toBeUndefined();
-      expect(findRequesterRun(runId)?.endedReason).not.toBe(SUBAGENT_ENDED_REASON_KILLED);
-    },
-  );
-
   registerForcedCollectorCompletionSettlementTests({
     getRegistry: () => mod,
     mocks,

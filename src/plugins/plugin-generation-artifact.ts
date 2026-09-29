@@ -9,6 +9,7 @@ import { createJiti } from "./jiti-factory.js";
 import {
   createPluginGenerationFileCapture,
   createPluginSourceLinkCapture,
+  type PluginCapturedSource,
 } from "./plugin-generation-file-capture.js";
 import { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import { createPluginGenerationSourceLookup } from "./plugin-generation-source-lookup.js";
@@ -52,7 +53,7 @@ export function capturePluginGenerationArtifact(
   const directory = sourceCapture.directory;
   const packages = new Map<string, PluginPackageCapture>();
   const capturedPaths = new Map<string, string>();
-  const originalSources = new Map<string, string>();
+  const originalSources = new Map<string, PluginCapturedSource>();
   const hardlinkedSources = new Set<string>();
   const nativeAdmission = createPluginNativeAdmission(
     rootDir,
@@ -62,7 +63,7 @@ export function capturePluginGenerationArtifact(
     sourceCapture.outputRoot,
   );
   const metadataCapture = createPluginPackageMetadataCapture({
-    sourceForCaptured: (filename) => originalSources.get(filename),
+    sourceForCaptured: (filename) => originalSources.get(filename)?.source,
     packageForFile: (filename) => packageForFile(filename),
     isRetainedReference: nativeAdmission.isRetainedReference,
     resolveSource: nativeAdmission.resolvePreparedSource,
@@ -304,7 +305,7 @@ export function capturePluginGenerationArtifact(
           const filename = fileURLToPath(url);
           const captured = moduleSource?.(filename) ?? filename;
           url.pathname = pathToFileURL(
-            originalSources.get(captured) ??
+            originalSources.get(captured)?.source ??
               nativeAdmission.sourceForPrepared(captured) ??
               captured,
           ).pathname;
@@ -572,8 +573,13 @@ export function capturePluginGenerationArtifact(
     execute?.(() =>
       capturePluginModuleSource(filename, (root, source) => copyPackage(root, source, false, true)),
     );
-  const packageForFile = (filename: string) =>
-    findPluginCapturedPackage(packages, filename, directory)?.owner;
+  const packageForFile = (filename: string) => {
+    const root = originalSources.get(filename)?.packageSourceRoot;
+    // Recorded eligibility survives disposal, but only the live package map grants ownership.
+    return root
+      ? packages.get(root)
+      : findPluginCapturedPackage(packages, filename, directory)?.owner;
+  };
 
   try {
     const sourceRoot = fs.realpathSync(rootDir);
@@ -618,7 +624,7 @@ export function capturePluginGenerationArtifact(
         }
         nativeAdmission.reconcileSourceInputs(inputs);
       },
-      sourceForCaptured: (file: string) => originalSources.get(path.resolve(file)),
+      sourceForCaptured: (file: string) => originalSources.get(path.resolve(file))?.source,
       boundaryRoot: directory,
       // The receipt attests the initial snapshot; first-demand inputs extend only its identity ledger.
       sourceDigest: initialReceipt.sourceDigest,
@@ -638,7 +644,7 @@ export function capturePluginGenerationArtifact(
       assertModuleAvailable,
       prepareModule: (filename: string) => {
         const owner = packageForFile(filename);
-        const source = originalSources.get(filename);
+        const source = originalSources.get(filename)?.source;
         const needsEntry =
           execute && source && /\.[cm]?[jt]sx?$/.test(source) && !moduleCaptures.has(filename);
         if (!owner || ((owner.state === "entry" || owner.state === "body") && !needsEntry)) {

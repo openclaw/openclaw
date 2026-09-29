@@ -11,6 +11,7 @@ import {
   resumableClaudeCatalog,
 } from "./claude-sessions.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForCommittedChatLayout } from "./settle.test-support.ts";
 import {
   captureTopVisibleVirtualRow,
   expectPaintedVirtualRowAnchor,
@@ -632,6 +633,7 @@ suite.define(() => {
       .poll(() => page.getByText("This session is on a paired device and is view-only.").count())
       .toBe(1);
     const expectCenteredLayout = async (screenshotName: string) => {
+      await waitForCommittedChatLayout(catalogPane.locator(".agent-chat__composer-shell"));
       const [workbenchBox, threadBox, composerBox] = await Promise.all([
         catalogPane.locator(".chat-workbench").boundingBox(),
         catalogPane.locator(".chat-thread-inner").boundingBox(),

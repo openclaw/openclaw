@@ -13,7 +13,7 @@ afterEach(() => {
   }
 });
 
-it("keeps unrelated module preparation independent of captured dependency count", () => {
+it("keeps module ownership work independent of captured dependency count", () => {
   const fixture = temp.make("plugin-foreign-ownership-");
   const foreign = path.join(fixture, "foreign.mjs");
   fs.writeFileSync(foreign, "export const value = 1;");
@@ -33,18 +33,46 @@ it("keeps unrelated module preparation independent of captured dependency count"
     fs.writeFileSync(path.join(root, "index.js"), "exports.value = 1;");
     const artifact = capturePluginGenerationArtifact(root);
     artifacts.push(artifact);
-    const relative = vi.spyOn(path, "relative");
-    const startsWith = vi.spyOn(String.prototype, "startsWith");
-    const additions = artifact.prepareModule(foreign);
-    const comparisons = relative.mock.calls.length + startsWith.mock.calls.length;
-    relative.mockRestore();
-    startsWith.mockRestore();
-    expect(additions).toEqual([]);
-    return comparisons;
+    const sourceRoot = dependencyCount
+      ? path.join(root, "node_modules", `fixture-${dependencyCount - 1}`)
+      : root;
+    const expectedRoot = artifact.sourceAliases[sourceRoot];
+    if (!expectedRoot) {
+      throw new Error("Captured package root is missing");
+    }
+    const captured = path.join(expectedRoot, "index.js");
+    expect(fs.readFileSync(captured, "utf8")).toBe("exports.value = 1;");
+    const observed = (() => {
+      const relative = vi.spyOn(path, "relative");
+      const startsWith = vi.spyOn(String.prototype, "startsWith");
+      try {
+        const foreignAdditions = artifact.prepareModule(foreign);
+        const foreignComparisons = relative.mock.calls.length + startsWith.mock.calls.length;
+        const capturedRoot = artifact.moduleRoot(captured);
+        const capturedAdditions = artifact.prepareModule(captured);
+        const capturedComparisons =
+          relative.mock.calls.length + startsWith.mock.calls.length - foreignComparisons;
+        return {
+          foreignAdditions,
+          foreignComparisons,
+          capturedRoot,
+          capturedAdditions,
+          capturedComparisons,
+        };
+      } finally {
+        relative.mockRestore();
+        startsWith.mockRestore();
+      }
+    })();
+    expect(observed.foreignAdditions).toEqual([]);
+    expect(observed.capturedRoot).toBe(expectedRoot);
+    expect(observed.capturedAdditions).toEqual([]);
+    return observed;
   };
   const empty = countPathComparisons(0);
   const populated = countPathComparisons(24);
   // Compare work growth instead of wall time: native resolver hooks run this per import.
-  expect(populated).toBeLessThanOrEqual(empty + 1);
+  expect(populated.foreignComparisons).toBeLessThanOrEqual(empty.foreignComparisons + 1);
+  expect(populated.capturedComparisons).toBeLessThanOrEqual(empty.capturedComparisons + 1);
   expect(fs.readFileSync(foreign, "utf8")).toBe("export const value = 1;");
 });

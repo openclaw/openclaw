@@ -1,6 +1,24 @@
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
 
+/** Measure only the scrollport size committed by TranscriptLayoutOwner after resize. */
+export async function waitForCommittedChatLayout(member: Locator): Promise<void> {
+  await expect
+    .poll(() =>
+      member.evaluate((element) => {
+        const thread = element.closest(".chat-main__conversation")?.querySelector(".chat-thread");
+        const slot = thread?.parentElement;
+        return (
+          thread instanceof HTMLElement &&
+          Boolean(slot) &&
+          thread.offsetWidth === slot?.offsetWidth &&
+          thread.offsetHeight === slot?.offsetHeight
+        );
+      }),
+    )
+    .toBe(true);
+}
+
 type SettledFormControl =
   | { locator: Locator; value: string }
   | { locator: Locator; checked: boolean };

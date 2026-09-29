@@ -3,12 +3,17 @@ import path from "node:path";
 import { isPathInside } from "../infra/path-guards.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import type { createPluginNativeAdmission } from "./plugin-native-admission.js";
-import type { createPluginSourceCapture } from "./plugin-package-metadata-capture.js";
+import {
+  isPluginPackageFile,
+  type createPluginSourceCapture,
+} from "./plugin-package-metadata-capture.js";
 import { copyPluginSourceFile } from "./plugin-source-file.js";
 import {
   readPluginSourceDirectory,
   pluginSourceInputIdentity,
 } from "./plugin-source-verification.js";
+
+export type PluginCapturedSource = { source: string; packageSourceRoot?: string };
 
 export function createPluginSourceLinkCapture() {
   const links = new Set<string>();
@@ -48,7 +53,7 @@ export function createPluginGenerationFileCapture({
   directory: string;
   outputRoot?: string;
   capturedPaths: Map<string, string>;
-  originalSources: Map<string, string>;
+  originalSources: Map<string, PluginCapturedSource>;
   hardlinkedSources: Set<string>;
   sourceCapture: Pick<
     ReturnType<typeof createPluginSourceCapture>,
@@ -103,7 +108,10 @@ export function createPluginGenerationFileCapture({
       }
     };
     capturedPaths.set(path.resolve(source), target);
-    originalSources.set(target, path.resolve(source));
+    originalSources.set(target, {
+      source: path.resolve(source),
+      packageSourceRoot: isPluginPackageFile(destination, target) ? boundary : undefined,
+    });
     // SDK companion loaders receive copied paths; those exact aliases retain this owner.
     capturedPaths.set(target, target);
     if (!capturedPaths.has(real)) {
