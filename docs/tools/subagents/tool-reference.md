@@ -60,6 +60,9 @@ or a `sessions_send` follow-up preserve the recorded run timeout, including `0`
 for no timeout, while the recorded session identity still matches. A replaced
 session or a registration without a captured identity uses the ordinary agent
 timeout instead. Steering an active turn keeps that turn's existing budget.
+This includes rows persisted by v2026.9.6 without a captured identity: their next
+continuation uses `agents.defaults.timeoutSeconds` (default: 48 hours), even if
+their stored `runTimeoutSeconds` is `0`.
 Completion, give-up, and pause wakes use the requester's own timeout: its recorded
 sub-agent budget if registered, otherwise `agents.defaults.timeoutSeconds`
 (default: 48 hours). A child's timeout never becomes its requester's wake budget.
