@@ -245,6 +245,7 @@ describe("isSlackPluginApprovalAuthorizedSender", () => {
       expect(authorized(pluginReviewer, siblingTool)).toBe(true);
       expect(authorized(defaultReviewer, siblingTool)).toBe(false);
       expect(authorized(defaultReviewer, otherPlugin)).toBe(true);
+      expect(authorized(defaultReviewer, pluginRequest())).toBe(false);
       expect(authorized(legacyReviewer, otherPlugin)).toBe(false);
       expect(authorized(pluginReviewer, pluginRequest({ pluginKey: "calendar" }))).toBe(false);
     },
@@ -264,32 +265,5 @@ describe("isSlackPluginApprovalAuthorizedSender", () => {
     expect(isSlackPluginApprovalAuthorizedSender({ cfg, senderId: legacyReviewer, request })).toBe(
       false,
     );
-  });
-
-  it("uses the registered native tool owner and raw name without trusting the approval hook owner", () => {
-    installations.push(registerSlackInstallationState("default", "workspace", "T11111111"));
-    const cfg: OpenClawConfig = {
-      approvals: {
-        plugin: {
-          slack: {
-            approvers: [defaultReviewer],
-            plugins: {
-              diffs: {
-                approvers: [pluginReviewer],
-                tools: { diffs: { approvers: [toolReviewer] } },
-              },
-            },
-          },
-        },
-      },
-    };
-    const check = (request: PluginApprovalRequest, senderId: string) =>
-      isSlackPluginApprovalAuthorizedSender({ cfg, request, senderId });
-
-    expect(check(pluginRequest({ pluginKey: "diffs", tool: "diffs" }), toolReviewer)).toBe(true);
-    expect(check(pluginRequest({ pluginKey: "diffs", tool: "diffs" }), pluginReviewer)).toBe(false);
-    expect(check(pluginRequest({ pluginKey: "diffs" }), pluginReviewer)).toBe(false);
-    expect(check(pluginRequest(), defaultReviewer)).toBe(false);
-    expect(check(pluginRequest({ pluginKey: "other" }), defaultReviewer)).toBe(true);
   });
 });

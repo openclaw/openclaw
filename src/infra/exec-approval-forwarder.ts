@@ -74,7 +74,6 @@ type ApprovalRouteRequest = {
 type PendingApproval = {
   routeRequest: ApprovalRouteRequest;
   targets: ForwardTarget[];
-  approvalRequest: ApprovalRequestInput;
 };
 
 type ApprovalRenderContext = {
@@ -454,13 +453,6 @@ function createApprovalHandlers<
   const deliverResolved = async (resolved: TResolved, entry?: PendingApproval): Promise<void> => {
     const cfg = params.getConfig();
     const routeRequest = entry?.routeRequest ?? extractApprovalRouteRequest(resolved.request);
-    const approvalRequest =
-      entry?.approvalRequest ??
-      restoreApprovalRequestForSuppression({
-        approvalKind: params.strategy.kind,
-        id: resolved.id,
-        request: resolved.request,
-      });
     const targets =
       entry?.targets ??
       (routeRequest
@@ -468,7 +460,11 @@ function createApprovalHandlers<
             cfg,
             config: params.strategy.config(cfg),
             routeRequest,
-            approvalRequest,
+            approvalRequest: restoreApprovalRequestForSuppression({
+              approvalKind: params.strategy.kind,
+              id: resolved.id,
+              request: resolved.request,
+            }),
           })
         : []);
     if (!targets.length) {
@@ -493,11 +489,7 @@ function createApprovalHandlers<
     const requestId = request.id;
     const routeRequest = extractApprovalRouteRequest(request.request) ?? {};
     // Register before route lookup so a fast resolution cannot overtake and resurrect delivery.
-    const pendingEntry = pending.begin(requestId, {
-      routeRequest,
-      targets: [],
-      approvalRequest: request,
-    });
+    const pendingEntry = pending.begin(requestId, { routeRequest, targets: [] });
     let filteredTargets: ForwardTarget[];
     try {
       filteredTargets = await resolveTargets({
@@ -515,7 +507,7 @@ function createApprovalHandlers<
       return false;
     }
 
-    pendingEntry.value = { routeRequest, targets: filteredTargets, approvalRequest: request };
+    pendingEntry.value = { routeRequest, targets: filteredTargets };
     const buildExpiredText = params.strategy.buildExpiredText;
     if (buildExpiredText) {
       const expiresInMs = Math.max(0, request.expiresAtMs - params.nowMs());

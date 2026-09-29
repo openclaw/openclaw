@@ -77,18 +77,6 @@ const slackApproval = createChannelApprovalAuth({
 export const getSlackApprovalApprovers = slackApproval.resolveApprovers;
 const isSlackApprovalAuthorizedSender = slackApproval.isAuthorizedSender;
 
-export function hasConfiguredSlackPluginApprovalApprovers(params: SlackApprovalContext): boolean {
-  const policy = params.cfg.approvals?.plugin?.slack;
-  return (
-    (policy?.approvers?.length ?? 0) > 0 ||
-    Object.values(policy?.plugins ?? {}).some(
-      (plugin) =>
-        (plugin.approvers?.length ?? 0) > 0 ||
-        Object.values(plugin.tools ?? {}).some((tool) => tool.approvers.length > 0),
-    )
-  );
-}
-
 export function isSlackPluginApprovalAuthorizedSender(
   params: SlackApprovalContext & {
     senderId?: string | null;
@@ -102,40 +90,44 @@ export function isSlackPluginApprovalAuthorizedSender(
       ? Boolean(params.senderId && normalizeSlackApproverTarget(params.senderId))
       : isSlackApprovalAuthorizedSender(params);
   }
-  const configured = resolvePluginApprovalSlackApprovers(params.cfg, params.request);
-  const accountId = resolveSlackAccount(params).accountId;
-  const installedTeamId = getSlackInstallationTeamId(accountId);
-  const originTeamId = resolveSlackApprovalOriginTeamId(params.request);
-  const installationKind = getSlackInstallationKind(accountId);
-  // A scoped decision needs a live bot identity; the request's origin alone
-  // cannot authorize a queued click after that installation stops.
-  if (
-    (installedTeamId &&
-      originTeamId &&
-      installedTeamId.toLowerCase() !== originTeamId.toLowerCase()) ||
-    (installationKind === "enterprise" && !originTeamId) ||
-    (configured !== undefined && !installedTeamId && installationKind !== "enterprise")
-  ) {
-    return false;
+  if (resolvePluginApprovalSlackApprovers(params.cfg, params.request) === undefined) {
+    return isSlackApprovalAuthorizedSender(params);
   }
-  return configured === undefined
-    ? isSlackApprovalAuthorizedSender(params)
-    : Boolean(
-        params.senderId &&
-        // Custody must count only reviewers in the bot's authenticated workspace.
-        slackApprovalTargetMatches(params.senderId, configured, installedTeamId ?? originTeamId),
-      );
+  const teamId = resolveSlackApprovalTeamId({ ...params, request: params.request });
+  return Boolean(
+    params.senderId &&
+    slackApprovalTargetMatches(
+      params.senderId,
+      getSlackApprovalApproversForTeam({ ...params, teamId }),
+      teamId,
+    ),
+  );
 }
 
 export function getSlackApprovalApproversForTeam(
   params: SlackApprovalContext & { teamId: string | undefined; request?: PluginApprovalRequest },
 ): string[] {
-  // Potential routing retains qualified selectors, but concrete delivery must
-  // bind them to the validated request workspace before it creates any DM.
-  const approvers = params.request
-    ? (resolvePluginApprovalSlackApprovers(params.cfg, params.request) ??
-      getSlackApprovalApprovers(params))
-    : getSlackApprovalApprovers(params);
+  const configured = params.request
+    ? resolvePluginApprovalSlackApprovers(params.cfg, params.request)
+    : undefined;
+  if (params.request) {
+    const accountId = resolveSlackAccount(params).accountId;
+    const installedTeamId = getSlackInstallationTeamId(accountId);
+    const originTeamId = resolveSlackApprovalOriginTeamId(params.request);
+    const enterprise = getSlackInstallationKind(accountId) === "enterprise";
+    // Routing and custody use the same workspace-filtered list. A configured
+    // policy needs the bot's live identity, not merely a claimed request origin.
+    if (
+      (installedTeamId &&
+        originTeamId &&
+        installedTeamId.toLowerCase() !== originTeamId.toLowerCase()) ||
+      (enterprise && !originTeamId) ||
+      (configured !== undefined && !installedTeamId && !enterprise)
+    ) {
+      return [];
+    }
+  }
+  const approvers = configured ?? getSlackApprovalApprovers(params);
   return resolveApprovalApprovers({
     allowFrom: resolveSlackUserAllowListForTeam({
       allowList: [...approvers],
@@ -143,4 +135,15 @@ export function getSlackApprovalApproversForTeam(
     }),
     normalizeApprover: normalizeSlackApproverTarget,
   });
+}
+
+export function resolveSlackApprovalTeamId(
+  params: SlackApprovalContext & {
+    request: { request: { turnSourceChannel?: string | null; turnSourceTo?: string | null } };
+  },
+): string | undefined {
+  return (
+    getSlackInstallationTeamId(resolveSlackAccount(params).accountId) ??
+    resolveSlackApprovalOriginTeamId(params.request)
+  );
 }

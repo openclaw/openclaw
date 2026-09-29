@@ -12,6 +12,7 @@ import { listSlackAccountIds } from "./accounts.js";
 import {
   getSlackApprovalApproversForTeam,
   isSlackPluginApprovalAuthorizedSender,
+  resolveSlackApprovalTeamId,
 } from "./approval-auth.js";
 import {
   isSlackAnyNativeApprovalClientEnabled,
@@ -21,7 +22,6 @@ import {
   resolveSlackApproverDmTargets,
   resolveSessionSlackOriginTarget,
   resolveSlackFallbackOriginTarget,
-  resolveSlackApprovalTeamId,
   resolveTurnSourceSlackOriginTarget,
   shouldHandleSlackNativeApprovalRequest,
   shouldHandleSlackPluginViaForwardingSession,
