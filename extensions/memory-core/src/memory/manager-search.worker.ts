@@ -10,7 +10,7 @@ import {
   withOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { serveWorkerTasks } from "openclaw/plugin-sdk/worker-task-server";
-import { bm25RankToScore, buildFtsQuery } from "./keyword-query.js";
+import { bm25RankToScore, buildFtsQuery, buildPathFtsQuery } from "./keyword-query.js";
 import {
   readMemoryRetrievalIndexState,
   readMemoryRecallData,
@@ -149,7 +149,7 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
     const path = await searchPathKeyword({
       ...request.query.path,
       db,
-      buildFtsQuery,
+      buildFtsQuery: buildPathFtsQuery,
       bm25RankToScore,
     })
       .then((rows) => ({ rows }))

@@ -14,6 +14,12 @@ export function buildFtsQuery(raw: string): string | null {
   return terms.map(quoteMatchTerm).join(" OR ");
 }
 
+export function buildPathFtsQuery(raw: string): string | null {
+  // Filename search keeps strict token matching: an OR-joined extension token
+  // such as "md" would match every unrelated ".md" path.
+  return buildMatchQueryFromTerms(normalizeStringEntries(raw.match(/[\p{L}\p{N}_]+/gu) ?? []));
+}
+
 export function buildMatchQueryFromTerms(terms: string[]): string | null {
   if (terms.length === 0) {
     return null;

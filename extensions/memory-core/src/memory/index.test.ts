@@ -225,8 +225,12 @@ describe("memory index", () => {
         minScore: 0,
         sources: ["memory"],
       });
-      expect(bodyHits[0]?.snippet).toContain("Alpha deploy preference.");
-      expect(bodyHits[0]?.snippet).not.toContain("<!--");
+      // OR-joined keyword recall can rank the shorter "Beta deploy preference."
+      // chunk first via BM25 length normalization; locate the Alpha entry among
+      // the hits instead of pinning it to the top slot.
+      const alphaHit = bodyHits.find((hit) => hit.snippet.includes("Alpha deploy preference."));
+      expect(alphaHit?.snippet).toContain("Alpha deploy preference.");
+      expect(alphaHit?.snippet).not.toContain("<!--");
     } finally {
       await manager.close?.();
     }
