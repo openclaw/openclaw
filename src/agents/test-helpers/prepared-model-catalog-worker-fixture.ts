@@ -81,6 +81,7 @@ export function usePreparedCatalogWorkerFixtures() {
   });
   return {
     makeTempDir: (prefix: string) => tempDirs.make(prefix),
+    getCreatedWorkerCount: () => workers.size,
     retireAfterTest: (retire: () => void | Promise<void>) => {
       retirements.add(retire);
     },
