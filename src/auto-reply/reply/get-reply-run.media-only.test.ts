@@ -606,7 +606,7 @@ describe("runPreparedReply media-only handling", () => {
       expect(ensureSkillSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({
           workspaceDir: "/tmp/agent-workspace",
-          executionWorkspaceDir: "/tmp/project/packages/app",
+          executionWorkspaceDir: "/tmp/session-worktree",
         }),
       );
     } finally {
