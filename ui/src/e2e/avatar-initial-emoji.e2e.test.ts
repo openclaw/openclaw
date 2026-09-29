@@ -233,13 +233,27 @@ suite.define(() => {
         await picker.getByRole("button", { name: "dolphin", exact: true }).click();
         await expect.poll(() => emojiInput.inputValue()).toBe("🐬");
         await screenshot(page, "04-agents-emoji-selected.png");
-        await emojiInput.fill("🪿");
-        await expect.poll(() => emojiInput.inputValue()).toBe("🪿");
+        await emojiInput.fill("🪿".repeat(20));
+        await expect.poll(() => emojiInput.inputValue()).toBe("🪿".repeat(4));
+        const beforeBoundedSave = (await gateway.getRequests("agents.update")).length;
         await page
           .locator(".agent-identity-editor__actions")
           .getByRole("button", { name: "Save" })
           .click();
-        const update = await gateway.waitForRequest("agents.update");
+        const boundedUpdate = await gateway.waitForRequest("agents.update", {
+          after: beforeBoundedSave,
+        });
+        expect(boundedUpdate.params).toMatchObject({ agentId: "emoji", emoji: "🪿".repeat(4) });
+        await emojiInput.fill("👨‍👩‍👧‍👦".repeat(3));
+        await expect.poll(() => emojiInput.inputValue()).toBe("👨‍👩‍👧‍👦");
+        await emojiInput.fill("🪿");
+        await expect.poll(() => emojiInput.inputValue()).toBe("🪿");
+        const beforeTypedSave = (await gateway.getRequests("agents.update")).length;
+        await page
+          .locator(".agent-identity-editor__actions")
+          .getByRole("button", { name: "Save" })
+          .click();
+        const update = await gateway.waitForRequest("agents.update", { after: beforeTypedSave });
         expect(update.params).toMatchObject({ agentId: "emoji", emoji: "🪿" });
         await expect
           .poll(() =>

@@ -152,6 +152,21 @@ export function renderAgentOverview(params: {
     (identityDraft.name !== null && !identityDraft.name.trim()) ||
     (identityDraft.emoji !== null && !identityDraft.emoji.trim());
   const identityBusy = params.identitySaving || !params.canUpdateIdentity;
+  const limitEmoji = (value: string) => {
+    let result = "";
+    for (const { segment } of new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(
+      value,
+    )) {
+      if (result && result.length + segment.length > 8) {
+        break;
+      }
+      if (!result && segment.length > 8) {
+        return segment;
+      }
+      result += segment;
+    }
+    return result;
+  };
 
   const handleAvatarFileSelect = (e: Event) => {
     const input = e.target as HTMLInputElement;
@@ -195,19 +210,22 @@ export function renderAgentOverview(params: {
                   <div class="agent-identity-editor__emoji-control">
                     <input
                       type="text"
+                      maxlength="64"
                       aria-label=${t("agents.identity.emoji")}
                       .value=${identityEmoji}
                       ?disabled=${identityBusy}
                       @input=${(event: Event) => {
                         if (event.currentTarget instanceof HTMLInputElement) {
-                          params.onIdentityFieldChange("emoji", event.currentTarget.value);
+                          const emoji = limitEmoji(event.currentTarget.value);
+                          event.currentTarget.value = emoji;
+                          params.onIdentityFieldChange("emoji", emoji);
                         }
                       }}
                     />
                     <openclaw-agent-emoji-picker
                       .value=${identityEmoji}
                       .disabled=${identityBusy}
-                      .onSelect=${(emoji: string) => params.onIdentityFieldChange("emoji", emoji)}
+                      .onSelect=${(emoji: string) => params.onIdentityFieldChange("emoji", limitEmoji(emoji))}
                     ></openclaw-agent-emoji-picker>
                   </div>
                 </div>
