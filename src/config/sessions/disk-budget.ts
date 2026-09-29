@@ -77,11 +77,9 @@ function measureStoreEntryChunkBytes(key: string, entry: SessionEntry): number {
 }
 
 function buildStoreEntryChunkSizeMap(store: Record<string, SessionEntry>): Map<string, number> {
-  const out = new Map<string, number>();
-  for (const [key, entry] of Object.entries(store)) {
-    out.set(key, measureStoreEntryChunkBytes(key, entry));
-  }
-  return out;
+  return new Map(
+    Object.entries(store).map(([key, entry]) => [key, measureStoreEntryChunkBytes(key, entry)]),
+  );
 }
 
 function resolveProjectedPromptBlobHash(entry: SessionEntry | undefined): string | undefined {
@@ -89,28 +87,17 @@ function resolveProjectedPromptBlobHash(entry: SessionEntry | undefined): string
   return ref?.algorithm === "sha256" && typeof ref.hash === "string" ? ref.hash : undefined;
 }
 
-function buildProjectedPromptBlobRefCounts(
+function buildSessionEntryRefCounts(
   store: Record<string, SessionEntry>,
+  resolveReference: (entry: SessionEntry) => string | undefined,
 ): Map<string, number> {
   const counts = new Map<string, number>();
   for (const entry of Object.values(store)) {
-    const hash = resolveProjectedPromptBlobHash(entry);
-    if (!hash) {
+    const reference = resolveReference(entry);
+    if (!reference) {
       continue;
     }
-    counts.set(hash, (counts.get(hash) ?? 0) + 1);
-  }
-  return counts;
-}
-
-function buildSessionIdRefCounts(store: Record<string, SessionEntry>): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const entry of Object.values(store)) {
-    const sessionId = entry?.sessionId;
-    if (!sessionId) {
-      continue;
-    }
-    counts.set(sessionId, (counts.get(sessionId) ?? 0) + 1);
+    counts.set(reference, (counts.get(reference) ?? 0) + 1);
   }
   return counts;
 }
@@ -278,18 +265,6 @@ function isUnreferencedSessionArtifactFile(
 // durable promptRef that is about to be committed by another writer.
 const SESSION_PROMPT_BLOB_UNREFERENCED_GRACE_MS = SESSION_STORE_TEMP_STALE_MS;
 
-function isUnreferencedPromptBlobFileRemovable(
-  file: Pick<SessionsDirFileStat, "name" | "mtimeMs">,
-  projectedPromptBlobRefCounts: ReadonlyMap<string, number>,
-  cutoffMs: number,
-): boolean {
-  if (file.mtimeMs > cutoffMs) {
-    return false;
-  }
-  const hash = resolvePromptBlobFileHash(file);
-  return hash ? !projectedPromptBlobRefCounts.has(hash) : false;
-}
-
 function isPromptBlobArtifactRemovable(
   file: Pick<SessionsDirFileStat, "name" | "mtimeMs">,
   projectedPromptBlobRefCounts: ReadonlyMap<string, number>,
@@ -299,11 +274,11 @@ function isPromptBlobArtifactRemovable(
   if (isSessionPromptBlobTempArtifactName(file.name)) {
     return file.mtimeMs <= tempCutoffMs;
   }
-  return isUnreferencedPromptBlobFileRemovable(
-    file,
-    projectedPromptBlobRefCounts,
-    promptBlobCutoffMs,
-  );
+  if (file.mtimeMs > promptBlobCutoffMs) {
+    return false;
+  }
+  const hash = resolvePromptBlobFileHash(file);
+  return hash ? !projectedPromptBlobRefCounts.has(hash) : false;
 }
 
 function isDiskBudgetRemovableSessionFile(
@@ -397,11 +372,12 @@ export async function pruneUnreferencedSessionArtifacts(params: {
   // prompt blobs are judged against the bytes that would actually hit disk.
   const projectedPromptBlobRefCounts =
     promptBlobFiles.length > 0
-      ? buildProjectedPromptBlobRefCounts(
+      ? buildSessionEntryRefCounts(
           projectSessionStoreForPersistence({
             storePath: params.storePath,
             store: params.store,
           }).store,
+          resolveProjectedPromptBlobHash,
         )
       : new Map<string, number>();
   const storeBasename = path.basename(params.storePath);
@@ -516,7 +492,10 @@ export async function enforceSessionDiskBudget(params: {
       projectedPromptBlobBytesByHash.set(hash, blob.ref.bytes);
     }
   }
-  const projectedPromptBlobRefCounts = buildProjectedPromptBlobRefCounts(projectedStore);
+  const projectedPromptBlobRefCounts = buildSessionEntryRefCounts(
+    projectedStore,
+    resolveProjectedPromptBlobHash,
+  );
   const projectedPromptBlobBytes = [...projectedPromptBlobBytesByHash.values()].reduce(
     (sum, bytes) => sum + bytes,
     0,
@@ -572,14 +551,14 @@ export async function enforceSessionDiskBudget(params: {
   const promptBlobOrphanCutoffMs = Date.now() - SESSION_PROMPT_BLOB_UNREFERENCED_GRACE_MS;
   const storeBasename = path.basename(params.storePath);
   const unreferencedPromptBlobQueue = promptBlobFiles
-    .filter((file) => {
-      return isPromptBlobArtifactRemovable(
+    .filter((file) =>
+      isPromptBlobArtifactRemovable(
         file,
         projectedPromptBlobRefCounts,
         promptBlobOrphanCutoffMs,
         tempStaleCutoffMs,
-      );
-    })
+      ),
+    )
     .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
   // Cheapest cleanup first: orphaned prompt blobs can relieve pressure without losing sessions.
   for (const file of unreferencedPromptBlobQueue) {
@@ -622,7 +601,10 @@ export async function enforceSessionDiskBudget(params: {
 
   if (total > highWaterBytes) {
     const activeSessionKey = normalizeOptionalLowercaseString(params.activeSessionKey);
-    const sessionIdRefCounts = buildSessionIdRefCounts(params.store);
+    const sessionIdRefCounts = buildSessionEntryRefCounts(
+      params.store,
+      (entry) => entry?.sessionId,
+    );
     const entryChunkBytesByKey = buildStoreEntryChunkSizeMap(projectedStore);
     const keys = Object.keys(params.store)
       .filter((key) =>

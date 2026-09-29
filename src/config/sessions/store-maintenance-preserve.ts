@@ -3,8 +3,8 @@ import {
   collectActiveSessionWorkAdmissions,
   collectActiveSessionLifecycleMutationIdentities,
 } from "../../sessions/session-lifecycle-admission.js";
-import { normalizeStoreSessionKey } from "./store-entry.js";
 import {
+  addSessionMaintenancePreserveKeys,
   collectSessionWorkAdmissionKeysFromSnapshot,
   resolveSessionMaintenancePreserveKeys,
   type SessionMaintenancePreservationSnapshot,
@@ -24,18 +24,6 @@ export function registerSessionMaintenancePreserveKeysProvider(
   return () => {
     preserveKeysProviders.delete(provider);
   };
-}
-
-function addSessionMaintenancePreserveKeys(
-  keys: Set<string>,
-  values: Iterable<string | undefined> | undefined,
-): void {
-  for (const value of values ?? []) {
-    const normalized = normalizeStoreSessionKey(value ?? "");
-    if (normalized) {
-      keys.add(normalized);
-    }
-  }
 }
 
 /** Collects normalized session keys that maintenance/pruning must preserve. */
