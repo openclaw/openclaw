@@ -6137,6 +6137,51 @@ describe("prepareCliRunContext", () => {
     });
   });
 
+  it("resets a drifted warm claude-cli binding instead of pinning its live child", async () => {
+    await withAuthenticatedHistory("claude-cli", async (prepare) => {
+      const { dir } = fixture.session;
+      fixture.appendTranscript({
+        id: "msg-drift-1",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: makeUserMessage("earlier drifted context", 1),
+      });
+      setCliBackendForPrepareTest({
+        liveSession: true,
+        reseedFromRawTranscriptWhenUncompacted: true,
+      });
+      const transcriptCheck = vi.fn(async () => false);
+      const orphanCheck = vi.fn(async () => true);
+      const getLiveSessionGeneration = vi.fn(() => "drift-live-generation");
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+        getCliLiveSessionGeneration: getLiveSessionGeneration,
+      });
+
+      const context = await prepare({
+        sessionKey: "agent:main:telegram:direct:peer",
+        prompt: "drifted follow-up",
+        provider: "claude-cli",
+        model: "opus",
+        cliSessionBinding: {
+          sessionId: "drifted-claude-sid",
+          extraSystemPromptHash: "stale-extra-prompt-hash",
+        },
+        cliSessionId: "drifted-claude-sid",
+      });
+
+      expect(transcriptCheck).toHaveBeenCalledWith({
+        sessionId: "drifted-claude-sid",
+        workspaceDir: dir,
+      });
+      expect(context.reusableCliSession).toEqual({
+        mode: "invalidate",
+        invalidatedReason: "system-prompt",
+      });
+    });
+  });
+
   it("disables Claude live transport while preserving native transcript resume", async () => {
     setCliBackendForPrepareTest({ liveSession: true });
     const transcriptCheck = vi.fn(async () => true);
