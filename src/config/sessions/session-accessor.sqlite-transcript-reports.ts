@@ -12,6 +12,7 @@ import type { SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
@@ -57,6 +58,11 @@ import type {
   TranscriptReportWorkerOperations,
   TranscriptReportWorkerTarget,
 } from "./session-accessor.sqlite-transcript-reports.worker.js";
+import {
+  confirmTranscriptSteeringInTransaction,
+  resolveTranscriptSteeringConfirmationRefusal,
+  type TranscriptSteeringConfirmation,
+} from "./session-accessor.sqlite-transcript-steering.kernel.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
 import type { SessionEntryCurrentCheck } from "./session-entry-current.types.js";
@@ -109,16 +115,24 @@ async function settleReportOperation<T>(
 async function withNativeCurrentTranscript<T>(
   scope: SessionTranscriptWriteScope,
   run: (database: OpenClawAgentDatabase, resolved: ResolvedTranscriptScope) => T,
+  options: {
+    kind?: "steering.confirm";
+    onCommitted?: (result: T) => void;
+  } = {},
 ): Promise<Result<T, TranscriptAppendRefusal>> {
   const fenced = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fenced);
+  const resolveRefusal =
+    options.kind === "steering.confirm"
+      ? resolveTranscriptSteeringConfirmationRefusal
+      : resolveTranscriptAppendRefusal;
   return runExclusiveSqliteSessionWrite(
     resolved,
-    async () =>
-      runOpenClawAgentWriteTransaction(
+    async () => {
+      const result = runOpenClawAgentWriteTransaction<Result<T, TranscriptAppendRefusal>>(
         (database) => {
           assertOwnedTranscriptWriteCommit(fenced);
-          const refusal = resolveTranscriptAppendRefusal(
+          const refusal = resolveRefusal(
             readSessionEntryRow(database, resolved.sessionKey, "list")?.entry,
             resolved,
             fenced,
@@ -129,9 +143,9 @@ async function withNativeCurrentTranscript<T>(
             }
             return err(refusal);
           }
-          const result = run(database, resolved);
+          const report = run(database, resolved);
           assertOwnedTranscriptWriteCommit(fenced);
-          const rebound = resolveTranscriptAppendRefusal(
+          const rebound = resolveRefusal(
             readSessionEntryRow(database, resolved.sessionKey, "list")?.entry,
             resolved,
             fenced,
@@ -139,11 +153,16 @@ async function withNativeCurrentTranscript<T>(
           if (rebound) {
             throw new SessionTranscriptWriterClaimReboundError(rebound);
           }
-          return ok(result);
+          return ok(report);
         },
         toDatabaseOptions(resolved),
         { operationLabel: "session.transcript.report" },
-      ),
+      );
+      if (result.ok) {
+        options.onCommitted?.(result.value);
+      }
+      return result;
+    },
     "session.transcript.report",
   );
 }
@@ -356,6 +375,48 @@ function isProcessHeldTranscript(scope: SessionTranscriptWriteScope): boolean {
       }),
     )
   );
+}
+
+/** Capture and publish recorder facts within the canonical writer's FIFO interval. */
+export async function confirmSessionTranscriptSteering(params: {
+  admission: UserTurnTranscriptAdmissionReceipt;
+  targetRunId: string;
+  prepareForegroundAdmission: () => UserTurnTranscriptAdmissionReceipt | undefined;
+  onConfirmed: (result: TranscriptSteeringConfirmation) => void;
+}): Promise<TranscriptSteeringConfirmation | null> {
+  const { admission, targetRunId } = params;
+  const captureInput = () => ({
+    admission,
+    targetRunId,
+    foregroundAdmission: params.prepareForegroundAdmission(),
+  });
+  const publishConfirmation = (result: TranscriptSteeringConfirmation | null) => {
+    if (result) {
+      params.onConfirmed(result);
+    }
+    return result;
+  };
+  const result = isProcessHeldTranscript(admission)
+    ? await withNativeCurrentTranscript(
+        admission,
+        (database, resolved) =>
+          confirmTranscriptSteeringInTransaction(database, resolved, captureInput()),
+        { kind: "steering.confirm", onCommitted: publishConfirmation },
+      )
+    : await withReportWorker(admission, "read", async (operation, _assertCurrent, publish) => {
+        const confirmed = await operation.execute({
+          type: "steering.confirm",
+          input: captureInput(),
+        });
+        if (!confirmed.ok) {
+          return confirmed;
+        }
+        const receipt = confirmed.value.steering ?? null;
+        publishConfirmation(receipt);
+        publish(confirmed.value);
+        return ok(receipt);
+      });
+  return result.ok ? result.value : null;
 }
 
 /** Fills a hot transcript only when its settled registered producer left no authoritative answer. */

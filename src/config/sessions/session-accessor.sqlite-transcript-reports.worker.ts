@@ -39,9 +39,16 @@ import {
   type TranscriptReportSelection,
 } from "./session-accessor.sqlite-transcript-reports.kernel.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import {
+  confirmTranscriptSteeringInTransaction,
+  resolveTranscriptSteeringConfirmationRefusal,
+  type TranscriptSteeringConfirmation,
+  type TranscriptSteeringConfirmationInput,
+} from "./session-accessor.sqlite-transcript-steering.kernel.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
 import { requestSessionEntryCurrentAdmission } from "./session-entry-current-admission.worker.js";
 import type { SessionEntryCurrentSource } from "./session-entry-current.types.js";
+import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import { SessionTranscriptWriterClaimReboundError } from "./transcript-write-context.js";
 
 export type TranscriptReportWorkerTarget = {
@@ -57,8 +64,13 @@ type ReportCommit = {
   cliHistoryChanged?: boolean;
   abortedPartial?: AbortedSessionTranscriptPartialResult;
   sessionEntryChanged?: boolean;
+  steering?: TranscriptSteeringConfirmation | null;
 };
 export type TranscriptReportWorkerOperations = {
+  "steering.confirm": {
+    input: TranscriptSteeringConfirmationInput;
+    output: Result<ReportCommit, TranscriptAppendRefusal>;
+  };
   abortedPartial: {
     input: AbortedSessionTranscriptPartial & {
       preparedMessage: PreparedTranscriptMessageAppend<Record<string, unknown>>;
@@ -126,8 +138,10 @@ export function bindSqliteWorkerBackend(
     }
     assertTransactionUsable(database.db);
   };
-  const readRefusal = () =>
-    resolveTranscriptAppendRefusal(
+  const readRefusal = (kind?: "steering.confirm") =>
+    (kind === "steering.confirm"
+      ? resolveTranscriptSteeringConfirmationRefusal
+      : resolveTranscriptAppendRefusal)(
       readSessionEntryRow(database, resolved.sessionKey, "list")?.entry,
       resolved,
       { ...resolved, ...fence },
@@ -164,7 +178,9 @@ export function bindSqliteWorkerBackend(
             throw new Error("Transcript report lost its canonical database owner");
           }
           admit("transaction");
-          const refusal = readRefusal();
+          const refusal = readRefusal(
+            command.type === "steering.confirm" ? command.type : undefined,
+          );
           if (refusal) {
             admit("commit");
             return err(refusal);
@@ -181,7 +197,16 @@ export function bindSqliteWorkerBackend(
             },
           };
           let abortedPartial: AbortedSessionTranscriptPartialResult | undefined;
-          if (command.type === "abortedPartial") {
+          let steering: TranscriptSteeringConfirmation | null | undefined;
+          if (command.type === "steering.confirm") {
+            steering = confirmTranscriptSteeringInTransaction(database, resolved, command.input, {
+              scheduleProjectionReconcile: false,
+            });
+            projectionNeedsReconcile = sessionTranscriptIndexNeedsReconcile(
+              database.db,
+              resolved.sessionId,
+            );
+          } else if (command.type === "abortedPartial") {
             abortedPartial = appendAbortedSessionTranscriptPartialInTransaction(
               database,
               resolved,
@@ -248,7 +273,9 @@ export function bindSqliteWorkerBackend(
                   authorizeCommit,
                 )
               : false;
-          const rebound = readRefusal();
+          const rebound = readRefusal(
+            command.type === "steering.confirm" ? command.type : undefined,
+          );
           if (rebound) {
             throw new SessionTranscriptWriterClaimReboundError(rebound);
           }
@@ -257,6 +284,7 @@ export function bindSqliteWorkerBackend(
             committed: true,
             projectionNeedsReconcile,
             cliHistoryChanged,
+            ...(steering !== undefined ? { steering } : {}),
             ...(abortedPartial
               ? {
                   abortedPartial,

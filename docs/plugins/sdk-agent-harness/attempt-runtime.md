@@ -67,6 +67,40 @@ is supported. Once upstream supplies a final-dispatch assertion, migrate
 Copilot to V2 and remove this internal V1 reliance; do not add an unchecked
 fallback or shorten the shipped API's deprecation window.
 
+### Confirm accepted steering
+
+After the native runtime accepts a steering input, await the steering recorder's
+optional `UserTurnTranscriptRecorder.confirmSteerTargetRunIdForPersistence`
+callback. Pass the accepted target run ID and the original foreground recorder
+from the attempt when its admission must remain usable for retries:
+
+```typescript
+await options.userTurnTranscriptRecorder?.confirmSteerTargetRunIdForPersistence?.(
+  params.runId,
+  params.userTurnTranscriptRecorder,
+);
+```
+
+Call this after actual acceptance, never merely because input entered a local
+queue or when it was rejected or canceled before acceptance. The callback waits
+for pending recorder persistence before updating committed steering target-run
+metadata. It does not grant injection or execution authority; keep the
+guarded-injection checks above.
+
+The host recognizes the foreground recorder by its original object identity.
+Copied recorders or receipt fields do not carry that ownership. It refreshes only
+an unchanged, unblocked foreground admission whose active entry precedes the
+steering entry in the same agent, store, and session. Both anchors must match the
+foreground admission's current transcript generation. A successful confirmation
+updates that admission's generation while preserving its original prefix;
+later steering stays outside the foreground retry's model context. Stale,
+rewritten, reordered, or already-steered foreground admissions are not refreshed.
+
+Both the callback and its `foregroundRecorder` argument remain optional. Existing
+one-argument implementations and callers remain source-compatible. Older hosts
+retain their existing confirmation behavior; preserving the foreground admission
+requires host support for the second argument.
+
 ## Tool-result middleware
 
 Bundled plugins and explicitly enabled installed plugins with matching

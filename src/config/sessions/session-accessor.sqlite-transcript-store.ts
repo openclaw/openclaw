@@ -464,7 +464,7 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
     expectedEventJson: string;
     seq: number;
   }[],
-  options: { legacyTextStorage?: boolean } = {},
+  options: { legacyTextStorage?: boolean; scheduleProjectionReconcile?: boolean } = {},
 ): void {
   if (rows.length === 0) {
     return;
@@ -530,7 +530,12 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
       // cannot inspect an older TEXT-only transcript table during this repair.
       markSessionTranscriptIndexDirtyInTransaction(database.db, resolved.sessionId);
     } else {
-      reconcileRewrittenTranscriptIndex(database, resolved.sessionId, rebuildSynchronously);
+      reconcileRewrittenTranscriptIndex(
+        database,
+        resolved.sessionId,
+        rebuildSynchronously,
+        options.scheduleProjectionReconcile,
+      );
     }
   }
 }
@@ -557,12 +562,13 @@ function reconcileRewrittenTranscriptIndex(
   database: OpenClawAgentDatabase,
   sessionId: string,
   rebuildSynchronously: boolean,
+  scheduleProjectionReconcile = true,
 ): void {
   // Dirty state revokes prepared claims and hides old rows; reconcile alone owns their deletion.
   markSessionTranscriptIndexDirtyInTransaction(database.db, sessionId);
   if (rebuildSynchronously) {
     reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
-  } else {
+  } else if (scheduleProjectionReconcile) {
     scheduleTranscriptProjectionReconcile(database, sessionId, true, {});
   }
 }

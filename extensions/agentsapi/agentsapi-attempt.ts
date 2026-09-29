@@ -197,6 +197,10 @@ export async function runAgentsApiAttempt(
         },
       );
       options?.userTurnTranscriptRecorder?.markSentToProvider?.();
+      await options?.userTurnTranscriptRecorder?.confirmSteerTargetRunIdForPersistence?.(
+        params.runId,
+        params.userTurnTranscriptRecorder,
+      );
     },
     isStreaming: () => native?.isAvailable() ?? false,
     isStopped: () => controller.signal.aborted || (native?.isSettled() ?? false),

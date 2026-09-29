@@ -220,8 +220,11 @@ export type UserTurnTranscriptRecorder = {
   finishPendingInput?: (disposition: "cancelled" | "interrupted") => void;
   /** Replaces generated current-turn text before runtime persistence/provider submission. */
   replaceTextBeforePersistence?: (text: string) => void;
-  /** Confirms exact-run steering provenance after transcript commitment is proven. */
-  confirmSteerTargetRunIdForPersistence?: (targetRunId: string) => Promise<void>;
+  /** Confirms committed steering, preserving a verified earlier foreground admission when supplied. */
+  confirmSteerTargetRunIdForPersistence?: (
+    targetRunId: string,
+    foregroundRecorder?: UserTurnTranscriptRecorder,
+  ) => Promise<void>;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
   getAdmissionReceipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
   /** Persistence and `waitForRuntimePersistence` settle the handler's write and reject on its failure. */

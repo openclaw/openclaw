@@ -1,20 +1,43 @@
 import path from "node:path";
 import type { AgentSession } from "openai/resources/beta/agents/agents";
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  queueAgentHarnessMessage,
+  type AgentHarnessAttemptParamsV2,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  createMockPluginRegistry,
+  initializeGlobalHookRunner,
+  loadUserTurnTranscriptRecorderFactoryForTest,
+  resetGlobalHookRunner,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
+import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient, type AgentsApiItem } from "./agentsapi-client.js";
 
-const { createSession } = vi.hoisted(() => ({
+const { createSession, registerRun } = vi.hoisted(() => ({
   createSession: vi.fn<typeof import("./agentsapi-session.js").createAgentsApiSession>(),
+  registerRun:
+    vi.fn<typeof import("openclaw/plugin-sdk/agent-harness-runtime").setActiveEmbeddedRun>(),
 }));
 
 vi.mock("./agentsapi-session.js", () => ({ createAgentsApiSession: createSession }));
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+  return {
+    ...actual,
+    setActiveEmbeddedRun: (...args: Parameters<typeof actual.setActiveEmbeddedRun>) => {
+      registerRun(...args);
+      return actual.setActiveEmbeddedRun(...args);
+    },
+  };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -45,6 +68,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   createSession.mockReset();
+  registerRun.mockReset();
+  resetGlobalHookRunner();
   closeOpenClawAgentDatabasesForTest();
 });
 
@@ -109,12 +134,109 @@ describe("Agents API completed reply settlement", () => {
   );
 });
 
+describe("Agents API steering retry admission", () => {
+  it("reopens the foreground admission after accepted steering and a failed attempt", async () => {
+    const fixture = await createAttempt();
+    const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+    const foreground = createRecorder({
+      target: fixture.target,
+      input: { text: fixture.params.prompt, idempotencyKey: "foreground-user" },
+    });
+    await foreground.persistApproved();
+    fixture.params.userTurnTranscriptRecorder = foreground;
+    fixture.params.toolAuthorityFingerprint = "fixture-steering-authority";
+    const steering = createRecorder({
+      target: fixture.target,
+      input: { text: "Use the updated result.", idempotencyKey: "steering-user" },
+    });
+    const promptHook = vi.fn().mockReturnValue({});
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_prompt_build", handler: promptHook }]),
+    );
+    vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue();
+    vi.spyOn(AgentsApiClient.prototype, "artifacts").mockResolvedValue([]);
+    const started = createDeferred<void>();
+    const finish = createDeferred<void>();
+    const failure = new Error("fixture rate_limit_exceeded");
+    createSession.mockImplementationOnce(() => ({
+      isAvailable: () => true,
+      isSettled: () => false,
+      wasSubmitted: () => true,
+      queueMessage: async (_text, persistInput) => {
+        await persistInput?.();
+      },
+      readUsageTurns: async () => [],
+      run: async (_prompt, persistInput, onSubmitted) => {
+        await persistInput();
+        onSubmitted();
+        started.resolve();
+        await finish.promise;
+        throw failure;
+      },
+      close: async () => {},
+      reconcileAfterClose: async () => undefined,
+    }));
+
+    const first = fixture.run();
+    try {
+      await Promise.race([
+        started.promise,
+        first.then((result) => {
+          throw new Error("Agents API attempt settled before native start", {
+            cause: result.terminal,
+          });
+        }),
+      ]);
+      const handle = registerRun.mock.calls.at(-1)?.[1];
+      if (!handle) {
+        throw new Error("Expected the registered Agents API run");
+      }
+      const queue = vi.spyOn(handle, "queueMessage");
+      expect(
+        queueAgentHarnessMessage(fixture.params.sessionId, "Use the updated result.", {
+          isInboundUserMessage: true,
+          toolAuthorityFingerprint: fixture.params.toolAuthorityFingerprint,
+          waitForTranscriptCommit: true,
+          userTurnTranscriptRecorder: steering,
+        }),
+      ).toBe(true);
+      await queue.mock.results[0]?.value;
+      // Reply ownership confirms adoption after the registered backend accepts input.
+      await steering.confirmSteerTargetRunIdForPersistence?.(fixture.params.runId);
+    } finally {
+      finish.resolve();
+      await first;
+    }
+    expect((await first).terminal).toEqual({ kind: "failed", source: "prompt", error: failure });
+
+    const retried = await fixture.run();
+
+    expect(retried.terminal).toEqual({ kind: "ok" });
+    expect(retried.assistantTexts).toEqual(["The completed answer."]);
+    expect(promptHook).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ currentUserMessage: fixture.params.prompt, messages: [] }),
+      expect.anything(),
+    );
+    expect(retried.messagesSnapshot).toEqual([
+      expect.objectContaining({ role: "user", content: fixture.params.prompt }),
+      expect.objectContaining({
+        role: "user",
+        content: "Use the updated result.",
+        __openclaw: expect.objectContaining({ steerTargetRunId: fixture.params.runId }),
+      }),
+      retried.currentAttemptCompletedAssistant,
+    ]);
+  });
+});
+
 async function createAttempt() {
   const workspaceDir = tempDirs.make("agentsapi-completed-reply-");
   const target = {
     agentId: "main",
     sessionId: "artifact-reply",
     sessionKey: "agent:main:artifact-reply",
+    sessionEntry: undefined,
     storePath: path.join(workspaceDir, "openclaw-agent.sqlite"),
   };
   await upsertSessionEntry({
@@ -129,6 +251,7 @@ async function createAttempt() {
     }
   };
   const authStorage = AuthStorage.inMemory();
+  let binding: AgentsApiBinding | undefined;
   const onPartialReply = vi.fn<NonNullable<AgentHarnessAttemptParamsV2["onPartialReply"]>>();
   const params: AgentHarnessAttemptParamsV2 = {
     ...target,
@@ -184,8 +307,10 @@ async function createAttempt() {
     run: () =>
       runAgentsApiAttempt(
         params,
-        undefined,
-        async () => {},
+        binding,
+        async (next) => {
+          binding = next;
+        },
         assertCurrent,
         () => {},
         target,

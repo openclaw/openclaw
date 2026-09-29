@@ -1,16 +1,22 @@
 // User turn transcript tests cover transcript extraction for user turns.
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
+  loadTranscriptEvents,
   persistSessionTranscriptTurn,
   replaceSessionEntry,
+  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { readSessionTranscriptModelContext } from "../config/sessions/session-accessor.sqlite-model-context.js";
+import {
+  runWithSessionTranscriptReadFence,
+  SessionTranscriptReadFenceError,
+} from "../config/sessions/session-transcript-read-fence.js";
 import { transcriptMessage } from "../config/sessions/transcript-message.test-support.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { readPendingUserTurnTranscriptAdmission } from "./user-turn-transcript-admission.js";
 import {
   buildLateMediaAttachedProjection,
@@ -502,60 +508,169 @@ describe("user turn transcript persistence", () => {
       },
     );
 
-    it("adds confirmed steering provenance after runtime persistence", async () => {
-      const dir = tempDirs.make("openclaw-user-turn-recorder-confirm-steer-");
-      const target = createSqliteTranscriptTarget({ dir });
-      const input = {
-        text: "tighten the answer",
-        idempotencyKey: "confirm-steer:user",
-        sender: { id: "operator-1", name: "Operator" },
-      };
-      const recorder = createUserTurnTranscriptRecorder({ input, target });
-      const persisted = await persistUserTurnTranscript({ ...target, input });
-      expect(persisted).toBeDefined();
-      recorder.markRuntimePersisted(persisted?.message, persisted?.admission);
-      const initialGeneration = recorder.getAdmissionReceipt()?.generation;
+    it.each([
+      { confirmationOrder: "sequential", incognito: false, registered: true },
+      { confirmationOrder: "concurrent", incognito: false, registered: true },
+      { confirmationOrder: "concurrent", incognito: true, registered: true },
+      { confirmationOrder: "concurrent", incognito: false, registered: false },
+    ] as const)(
+      "preserves context after $confirmationOrder steering confirmations (incognito=$incognito registered=$registered)",
+      async ({ confirmationOrder, incognito, registered }) => {
+        const dir = tempDirs.make("openclaw-user-turn-recorder-confirm-steer-");
+        const target = createSqliteTranscriptTarget({
+          dir,
+          ...(incognito ? { sessionKey: "agent:main:dashboard:incognito-reports" } : {}),
+        });
+        if (registered) {
+          await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+        }
+        await persistUserTurnTranscript({ ...target, input: { text: "earlier request" } });
+        const activeRecorder = createUserTurnTranscriptRecorder({
+          input: { text: "active request", idempotencyKey: "active:user" },
+          target,
+        });
+        await activeRecorder.persistApproved();
+        activeRecorder.markSentToProvider?.();
+        const activeAdmission = activeRecorder.getAdmissionReceipt();
+        if (!activeAdmission) {
+          throw new Error("missing active admission");
+        }
+        const readActiveContext = () =>
+          runWithSessionTranscriptReadFence(activeRecorder.getAdmissionReceipt(), () =>
+            readSessionTranscriptModelContext(target).events.flatMap((event) =>
+              isRecord(event) && event.type === "message" ? [event.message] : [],
+            ),
+          );
+        const expectedHistory = [
+          expect.objectContaining({ role: "user", content: "earlier request" }),
+        ];
+        expect(readActiveContext()).toEqual(expectedHistory);
+        const steering = ["tighten the answer", "include a concrete example"].map((text, index) => {
+          const input = {
+            text,
+            idempotencyKey: `confirm-steer:${index}`,
+            sender: { id: "operator-1", name: "Operator" },
+          };
+          return { input, recorder: createUserTurnTranscriptRecorder({ input, target }) };
+        });
+        for (const { input, recorder } of steering) {
+          const persisted = await persistUserTurnTranscript({ ...target, input });
+          expect(persisted).toBeDefined();
+          recorder.markRuntimePersisted(persisted?.message, persisted?.admission);
+        }
+        if (confirmationOrder === "sequential") {
+          for (const { recorder } of steering) {
+            await recorder.confirmSteerTargetRunIdForPersistence?.("active-run", activeRecorder);
+          }
+        } else {
+          await Promise.all(
+            steering.map(async ({ recorder }) => {
+              await recorder.confirmSteerTargetRunIdForPersistence?.("active-run", activeRecorder);
+            }),
+          );
+        }
 
-      const admission = recorder.getAdmissionReceipt();
-      if (!admission) {
-        throw new Error("missing persisted admission");
-      }
-      const { db } = openOpenClawAgentDatabase({
-        agentId: target.agentId,
-        path: admission.storePath,
-      });
-      const work = trackSqliteStatementExecutions(db, ["fts", "size"], (sql) =>
-        /\bsession_transcript_fts\b/i.test(sql)
-          ? "fts"
-          : sql.includes("octet_length")
-            ? "size"
-            : null,
-      );
-      try {
-        await recorder.confirmSteerTargetRunIdForPersistence?.("active-run");
-      } finally {
-        work.restore();
-      }
-      expect(work.counts).toEqual({ fts: 0, size: 0 });
+        expect(readActiveContext()).toEqual(expectedHistory);
+        expect(() =>
+          runWithSessionTranscriptReadFence(activeAdmission, () =>
+            readSessionTranscriptModelContext(target),
+          ),
+        ).toThrow(SessionTranscriptReadFenceError);
+        await expect(readTranscriptMessages(target)).resolves.toEqual([
+          expect.objectContaining({ role: "user", content: "earlier request" }),
+          expect.objectContaining({ role: "user", content: "active request" }),
+          ...steering.map(({ input }) =>
+            expect.objectContaining({
+              role: "user",
+              content: input.text,
+              __openclaw: {
+                senderId: "operator-1",
+                senderName: "Operator",
+                steerTargetRunId: "active-run",
+              },
+            }),
+          ),
+        ]);
+      },
+    );
 
-      expect(recorder.getAdmissionReceipt()?.generation).not.toBe(initialGeneration);
-      expect(recorder.getPersistedMessage?.()).toMatchObject({
-        __openclaw: {
-          senderId: "operator-1",
-          senderName: "Operator",
-          steerTargetRunId: "active-run",
-        },
-      });
-      await expect(readTranscriptMessages(target)).resolves.toEqual([
-        expect.objectContaining({
-          __openclaw: {
-            senderId: "operator-1",
-            senderName: "Operator",
-            steerTargetRunId: "active-run",
-          },
-        }),
-      ]);
-    });
+    it.each(["rewritten", "copied", "foreign", "rebound"] as const)(
+      "preserves transcript integrity for a %s steering confirmation",
+      async (foreground) => {
+        const dir = tempDirs.make("openclaw-user-turn-recorder-confirm-steer-fence-");
+        const target = createSqliteTranscriptTarget({ dir });
+        await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+        await persistUserTurnTranscript({ ...target, input: { text: "earlier request" } });
+        const activeRecorder = createUserTurnTranscriptRecorder({
+          input: { text: "active request", idempotencyKey: "active:user" },
+          target,
+        });
+        await activeRecorder.persistApproved();
+        activeRecorder.markSentToProvider?.();
+        const readActiveContext = () =>
+          runWithSessionTranscriptReadFence(activeRecorder.getAdmissionReceipt(), () =>
+            readSessionTranscriptModelContext(target).events.flatMap((event) =>
+              isRecord(event) && event.type === "message" ? [event.message] : [],
+            ),
+          );
+        expect(readActiveContext()).toEqual([
+          expect.objectContaining({ role: "user", content: "earlier request" }),
+        ]);
+
+        let foregroundRecorder = activeRecorder;
+        let foregroundTarget = target;
+        if (foreground === "rewritten") {
+          await replaceTranscriptEvents(target, await loadTranscriptEvents(target));
+          expect(readActiveContext).toThrow(SessionTranscriptReadFenceError);
+        } else if (foreground === "copied") {
+          foregroundRecorder = { ...activeRecorder };
+        } else if (foreground === "foreign") {
+          foregroundTarget = createSqliteTranscriptTarget({
+            dir,
+            sessionId: "foreign-session",
+            sessionKey: "agent:main:foreign",
+          });
+          await replaceSessionEntry(foregroundTarget, {
+            sessionId: foregroundTarget.sessionId,
+            updatedAt: 1,
+          });
+          foregroundRecorder = createUserTurnTranscriptRecorder({
+            input: { text: "foreign request", idempotencyKey: "foreign:user" },
+            target: foregroundTarget,
+          });
+          await foregroundRecorder.persistApproved();
+          foregroundRecorder.markSentToProvider?.();
+        }
+
+        const recorder = createUserTurnTranscriptRecorder({
+          input: { text: "tighten the answer", idempotencyKey: "confirm-steer:user" },
+          target,
+        });
+        await recorder.persistApproved();
+        if (foreground === "rebound") {
+          const before = await readTranscriptMessages(target);
+          await replaceSessionEntry(target, { sessionId: "replacement-session", updatedAt: 2 });
+          await recorder.confirmSteerTargetRunIdForPersistence?.("active-run", foregroundRecorder);
+          await expect(readTranscriptMessages(target)).resolves.toEqual(before);
+          return;
+        }
+        await recorder.confirmSteerTargetRunIdForPersistence?.("active-run", foregroundRecorder);
+
+        expect(readActiveContext).toThrow(SessionTranscriptReadFenceError);
+        expect(recorder.getPersistedMessage?.()).toMatchObject({
+          __openclaw: { steerTargetRunId: "active-run" },
+        });
+        if (foreground === "foreign") {
+          const history = runWithSessionTranscriptReadFence(
+            foregroundRecorder.getAdmissionReceipt(),
+            () => readSessionTranscriptModelContext(foregroundTarget),
+          );
+          expect(
+            history.events.filter((event) => isRecord(event) && event.type === "message"),
+          ).toEqual([]);
+        }
+      },
+    );
 
     it("waits for a deferred projection rebuild before returning admission identity", async () => {
       const dir = tempDirs.make("openclaw-user-turn-recorder-projection-");

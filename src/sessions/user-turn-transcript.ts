@@ -7,10 +7,8 @@ import {
   persistSessionTranscriptTurn,
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
-  publishTranscriptUpdate,
   readActiveTranscriptEntryAnchor,
   resolveSessionTranscriptRuntimeTarget,
-  rewriteTranscriptMessageAtAnchor,
   type TranscriptEntryAnchor,
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
@@ -20,6 +18,7 @@ import {
   registerUserTurnTranscriptAdmissionOwner,
   resolveUserTurnTranscriptAdmission,
 } from "./user-turn-transcript-admission.js";
+import { confirmPersistedSteerTargetRunId } from "./user-turn-transcript-steering.js";
 import {
   buildLateResolvedMediaMessage,
   isUserMessage,
@@ -172,39 +171,6 @@ async function resolveUserTurnTranscriptTarget(
   target: UserTurnTranscriptTargetResolver,
 ): Promise<UserTurnTranscriptTarget | undefined> {
   return typeof target === "function" ? await target() : target;
-}
-
-async function confirmPersistedSteerTargetRunId(params: {
-  admission: UserTurnTranscriptAdmissionReceipt;
-  targetRunId: string;
-}): Promise<
-  | {
-      admission: UserTurnTranscriptAdmissionReceipt;
-      message: PersistedUserTurnMessage;
-    }
-  | undefined
-> {
-  const rewritten = await rewriteTranscriptMessageAtAnchor(params.admission, (message) => {
-    if (!isUserMessage(message)) {
-      return undefined;
-    }
-    const currentTarget = normalizePersistedSteerTargetRunId(
-      message["__openclaw"]?.steerTargetRunId,
-    );
-    return currentTarget === params.targetRunId
-      ? undefined
-      : rewritePersistedSteerTargetRunId(message, params.targetRunId);
-  });
-  if (!rewritten) {
-    return undefined;
-  }
-  const admission = { ...params.admission, generation: rewritten.generation };
-  await publishTranscriptUpdate(admission, {
-    message: rewritten.message,
-    messageId: admission.entryId,
-    messageSeq: admission.activeMessagePosition + 1,
-  });
-  return { admission, message: rewritten.message };
 }
 
 export function createUserTurnTranscriptRecorder(
@@ -619,7 +585,7 @@ export function createUserTurnTranscriptRecorder(
       message = applyMessageOverrides(message);
       resolvedMessagePromise = undefined;
     },
-    confirmSteerTargetRunIdForPersistence: async (targetRunId) => {
+    confirmSteerTargetRunIdForPersistence: async (targetRunId, foregroundRecorder) => {
       const normalizedTargetRunId = normalizePersistedSteerTargetRunId(targetRunId);
       if (!normalizedTargetRunId || confirmedSteerTargetRunId === normalizedTargetRunId) {
         return;
@@ -638,6 +604,7 @@ export function createUserTurnTranscriptRecorder(
         const confirmed = await confirmPersistedSteerTargetRunId({
           admission: admissionReceipt,
           targetRunId: normalizedTargetRunId,
+          foregroundRecorder,
         });
         if (!confirmed) {
           return;

@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { asOptionalRecord, expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
@@ -1183,6 +1183,10 @@ beforeAll(() => {
   suiteFixtureEnv = suiteResources.env;
   mockState.storePath = suiteDatabasePath;
   suiteResources.open();
+});
+
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", suiteFixtureRoot);
 });
 
 afterEach(async () => {
