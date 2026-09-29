@@ -103,15 +103,7 @@ function parseConnectTarget(rawTarget: string | undefined): ConnectTarget {
   return { hostname: normalizeHostname(target.hostname), port };
 }
 
-function parseProxyToken(token: string): Buffer | undefined {
-  if (!/^[A-Za-z0-9_-]{43}$/u.test(token)) {
-    return undefined;
-  }
-  const bytes = Buffer.from(token, "base64url");
-  return bytes.length === 32 && bytes.toString("base64url") === token ? bytes : undefined;
-}
-
-function parseBasicProxyPassword(header: string | string[] | undefined): string | undefined {
+function parseBasicProxyToken(header: string | string[] | undefined): Buffer | undefined {
   if (typeof header !== "string") {
     return undefined;
   }
@@ -129,7 +121,12 @@ function parseBasicProxyPassword(header: string | string[] | undefined): string 
   if (colon === -1 || decoded.slice(0, colon) !== PROXY_AUTH_USERNAME) {
     return undefined;
   }
-  return decoded.slice(colon + 1);
+  const token = decoded.slice(colon + 1);
+  if (!/^[A-Za-z0-9_-]{43}$/u.test(token)) {
+    return undefined;
+  }
+  const bytes = Buffer.from(token, "base64url");
+  return bytes.length === 32 && bytes.toString("base64url") === token ? bytes : undefined;
 }
 
 function sendProxyAuthRequired(socket: Duplex): void {
@@ -308,11 +305,7 @@ export async function startSecretEgressProxyServer(params: {
     if (rawHeader === undefined) {
       return "missing-proxy-auth";
     }
-    const password = parseBasicProxyPassword(rawHeader);
-    if (!password) {
-      return "invalid-proxy-auth";
-    }
-    const candidate = parseProxyToken(password);
+    const candidate = parseBasicProxyToken(rawHeader);
     if (!candidate) {
       return "invalid-proxy-auth";
     }
