@@ -101,6 +101,40 @@ describe("Google project voices", () => {
     expect(secondUrl).toContain("page_token=page-2");
   });
 
+  it.each([true, false])(
+    "preserves the capped catalog when the last page has more results: %s",
+    async (hasMore) => {
+      for (let page = 1; page <= 10; page += 1) {
+        fetchWithTimeoutMock.mockResolvedValueOnce(
+          jsonResponse({
+            voices: [{ id: `voice_${page}`, display_name: `Stored ${page}`, type: "prompted" }],
+            ...(page < 10 || hasMore ? { next_page_token: `page-${page + 1}` } : {}),
+          }),
+        );
+      }
+      const provider = buildGoogleSpeechProvider();
+      const voices = await provider.listVoices?.({
+        providerConfig: { apiKey: "test-key" },
+        timeoutMs: 5_000,
+      });
+      expect(voices?.filter((voice) => voice.stored).map((voice) => voice.id)).toEqual([
+        "voice_1",
+        "voice_2",
+        "voice_3",
+        "voice_4",
+        "voice_5",
+        "voice_6",
+        "voice_7",
+        "voice_8",
+        "voice_9",
+        "voice_10",
+      ]);
+      expect(voices?.some((voice) => voice.id === "Kore")).toBe(true);
+      expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(10);
+      expect(voices?.projectListingIncomplete === true).toBe(hasMore);
+    },
+  );
+
   it("stores a prompted voice and returns the preview", async () => {
     const preview = Buffer.from("preview-wav");
     const release = vi.fn(async () => {});

@@ -270,7 +270,7 @@ async function listGoogleProjectVoices(params: {
   baseUrl?: string;
   request?: GoogleHttpRequest;
   timeoutMs: number;
-}): Promise<SpeechVoiceOption[]> {
+}): Promise<SpeechListVoicesResult> {
   const http = await resolveGoogleVoiceHttp(params);
   const voices: SpeechVoiceOption[] = [];
   const seen = new Set<string>();
@@ -300,7 +300,7 @@ async function listGoogleProjectVoices(params: {
       break;
     }
   }
-  return voices;
+  return pageToken ? markProjectVoiceListingIncomplete(voices) : voices;
 }
 
 function assertDesignInput(params: GoogleVoiceDesignRequest): {
@@ -360,7 +360,7 @@ function staticGoogleVoices(): SpeechVoiceOption[] {
   return GOOGLE_PREBUILT_VOICES.map((voice) => ({ id: voice, name: voice }));
 }
 
-function mergeGoogleVoiceCatalog(project: SpeechVoiceOption[]): SpeechVoiceOption[] {
+function mergeGoogleVoiceCatalog(project: SpeechListVoicesResult): SpeechListVoicesResult {
   const seen = new Set<string>();
   const merged: SpeechVoiceOption[] = [];
   for (const voice of [...project, ...staticGoogleVoices()]) {
@@ -370,7 +370,7 @@ function mergeGoogleVoiceCatalog(project: SpeechVoiceOption[]): SpeechVoiceOptio
     seen.add(voice.id);
     merged.push(voice);
   }
-  return merged;
+  return project.projectListingIncomplete ? markProjectVoiceListingIncomplete(merged) : merged;
 }
 
 function markProjectVoiceListingIncomplete(voices: SpeechVoiceOption[]): SpeechListVoicesResult {
