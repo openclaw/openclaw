@@ -1,12 +1,17 @@
 // Agent cron-tool write safety and optimistic update orchestration.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../../utils.js";
+import type { ResolvedExecDefaults } from "../exec-defaults.js";
 import {
   assertInheritedCronToolCaptureReady,
   CRON_CREATOR_AUTHORITY_RECOVERY_MESSAGE,
+  cronMutationRequiresStreamExecAuthority,
+  cronUpdateRequiresStreamExecAuthority,
+  hasCronCreatorGatewayExecTool,
   INCOMPLETE_CRON_CREATOR_AUTHORITY_MESSAGE,
   isCronCreatorToolCaptureComplete,
   planCronJobUpdatePatch,
+  resolveCronCreatorExecToolTarget,
 } from "./cron-tool-creator-cap.js";
 import type {
   CronCreatorToolAllowlistEntry,
@@ -15,6 +20,31 @@ import type {
   GatewayToolCaller,
 } from "./cron-tool.types.js";
 import type { GatewayCallOptions } from "./gateway.js";
+
+const CRON_STREAM_EXEC_AUTHORITY_ERROR =
+  "automation stream commands require the creator turn to have unattended full Gateway exec authority; use the CLI or Gateway API from an operator context instead.";
+
+export function assertCronStreamExecAuthority(params: {
+  value: unknown;
+  required?: boolean;
+  creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined;
+  execDefaults: ResolvedExecDefaults | undefined;
+}): void {
+  if (!(params.required ?? cronMutationRequiresStreamExecAuthority(params.value))) {
+    return;
+  }
+  const pinnedTarget = resolveCronCreatorExecToolTarget(params.creatorToolAllowlist);
+  const effectiveAsk = pinnedTarget?.ask ?? params.execDefaults?.ask;
+  if (
+    !params.execDefaults ||
+    !hasCronCreatorGatewayExecTool(params.creatorToolAllowlist) ||
+    params.execDefaults.effectiveHost !== "gateway" ||
+    params.execDefaults.security !== "full" ||
+    effectiveAsk !== "off"
+  ) {
+    throw new Error(CRON_STREAM_EXEC_AUTHORITY_ERROR);
+  }
+}
 
 export function assertNoCronShellExecution(value: unknown): void {
   if (!isRecord(value)) {
@@ -32,8 +62,8 @@ export function assertNoCronShellExecution(value: unknown): void {
       "automation on-exit schedules cannot be created or edited through the agent automations tool; use the CLI or Gateway API.",
     );
   }
-  // Stream argv is authorized by the Gateway's cron.triggers.enabled gate,
-  // matching trigger-script trust rather than ordinary agent exec policy.
+  // Stream argv has a separate unattended Gateway exec-authority check below;
+  // keep it out of this blanket operator-only payload/schedule prohibition.
 }
 
 export function assertCronCreatorAuthorityResolutionAvailable(params: {
@@ -65,6 +95,7 @@ async function prepareCronJobUpdateForGateway(
   patch: Record<string, unknown>;
   expectedConfigRevision?: string;
   resolvedAuthority?: CronCreatorToolAuthoritySnapshot;
+  streamExecAuthorityRequired: boolean;
 }> {
   params.operationSignal?.throwIfAborted();
   const initialPlan = planCronJobUpdatePatch({
@@ -73,14 +104,18 @@ async function prepareCronJobUpdateForGateway(
     creatorAuthorityComplete: params.creatorAuthorityComplete,
   });
   if (initialPlan.kind === "ready") {
-    return { patch: initialPlan.patch };
+    return { patch: initialPlan.patch, streamExecAuthorityRequired: false };
   }
 
   const existing = await params.callGateway("cron.get", params.gatewayOpts, { id: params.id });
   params.operationSignal?.throwIfAborted();
   const existingRecord = isRecord(existing) ? existing : undefined;
   const expectedConfigRevision = existingRecord?.configRevision;
-  if (typeof expectedConfigRevision !== "string" || expectedConfigRevision.length === 0) {
+  if (
+    !existingRecord ||
+    typeof expectedConfigRevision !== "string" ||
+    expectedConfigRevision.length === 0
+  ) {
     throw new Error(
       "cron.get response is missing configRevision; restart the Gateway before retrying this update",
     );
@@ -116,7 +151,15 @@ async function prepareCronJobUpdateForGateway(
   if (finalPlan.kind !== "ready") {
     throw new Error("cron update patch planning did not use the loaded job");
   }
-  return { patch: finalPlan.patch, expectedConfigRevision, resolvedAuthority };
+  return {
+    patch: finalPlan.patch,
+    expectedConfigRevision,
+    resolvedAuthority,
+    streamExecAuthorityRequired: cronUpdateRequiresStreamExecAuthority(
+      finalPlan.patch,
+      existingRecord,
+    ),
+  };
 }
 
 function isCronJobConfigRevisionConflict(error: unknown): boolean {
@@ -146,6 +189,7 @@ export async function updateCronJobFromAgentTool(params: {
   callGateway: GatewayToolCaller;
   operationSignal?: AbortSignal;
   creatorAuthorityUnavailableReason?: "queued-local-operator-configured-mcp";
+  resolveStreamExecDefaults?: () => ResolvedExecDefaults;
 }): Promise<unknown> {
   const callerIncludedPayloadPatch = isRecord(params.patch.payload);
   let creatorAuthorityPromise: Promise<CronCreatorToolAuthoritySnapshot> | undefined;
@@ -163,10 +207,18 @@ export async function updateCronJobFromAgentTool(params: {
         params.creatorAuthorityUnavailableReason === undefined,
       resolveCreatorToolAuthority,
     });
-    if (callerIncludedPayloadPatch && !params.adminManagement) {
+    if (!params.adminManagement && callerIncludedPayloadPatch) {
       // Kind-less caller payloads inherit the stored kind above. Recheck those
       // edits, but not a toolsAllow cap synthesized internally.
       assertNoCronShellExecution(prepared.patch);
+    }
+    if (prepared.streamExecAuthorityRequired) {
+      assertCronStreamExecAuthority({
+        value: prepared.patch,
+        required: true,
+        creatorToolAllowlist: prepared.resolvedAuthority?.tools ?? params.creatorToolAllowlist,
+        execDefaults: params.resolveStreamExecDefaults?.(),
+      });
     }
     assertInheritedCronToolCaptureReady(
       prepared.patch,

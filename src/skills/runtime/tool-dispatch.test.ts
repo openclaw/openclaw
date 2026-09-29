@@ -138,7 +138,7 @@ describe("resolveSkillDispatchTools", () => {
     expect(args?.cronCreatorToolAllowlist).toEqual([
       { name: "read" },
       { name: "automations" },
-      { name: "exec" },
+      { name: "exec", execOrigin: "openclaw" },
       { name: "conversations_send" },
     ]);
   });

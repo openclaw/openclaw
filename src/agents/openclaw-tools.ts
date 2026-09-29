@@ -389,6 +389,9 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             agentId: sessionAgentId,
             agentAccountId: gatewayCallerAccountId,
             config: options?.config,
+            execSession: options?.execSession,
+            execOverrides: options?.execOverrides,
+            sandboxed: options?.sandboxed,
             currentDeliveryContext: {
               channel: options?.agentChannel,
               to: options?.currentChannelId ?? options?.agentTo,

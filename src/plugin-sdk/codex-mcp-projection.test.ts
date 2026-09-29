@@ -41,7 +41,7 @@ describe("codex MCP projection", () => {
       nativeToolSurfaceEnabled: true,
     });
 
-    expect(tools).toEqual([{ name: "read" }, { name: "exec" }]);
+    expect(tools).toEqual([{ name: "read" }, { name: "exec", execOrigin: "native" }]);
   });
 
   it("never projects conditionally available write, edit, apply_patch, or process from native mode", async () => {

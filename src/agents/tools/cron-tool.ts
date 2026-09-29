@@ -16,6 +16,7 @@ import {
   bindCronManagementGrant,
   bindCronRequesterGrant,
 } from "../cron-creator-authority-context.js";
+import { resolveExecDefaults } from "../exec-defaults.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
@@ -42,6 +43,7 @@ import {
   assertInheritedCronToolCaptureReady,
   capCronJobToolsAllowOnCreate,
   cronCreateRequiresCreatorAuthority,
+  cronCreateRequiresStreamExecAuthority,
   resolveCronCreatorExecToolTarget,
 } from "./cron-tool-creator-cap.js";
 import { CronToolOutputSchema } from "./cron-tool-output-schema.js";
@@ -53,6 +55,7 @@ import {
 import { listCronSelfJob } from "./cron-tool-self-list.js";
 import {
   assertCronCreatorAuthorityResolutionAvailable,
+  assertCronStreamExecAuthority,
   assertNoCronShellExecution,
   updateCronJobFromAgentTool,
 } from "./cron-tool-write.js";
@@ -180,7 +183,7 @@ function isOlderGatewayWithoutCompactCronList(error: unknown): boolean {
 
 function buildCronToolDescription(params: { triggersEnabled: boolean }): string {
   const streamScheduleLine = params.triggersEnabled
-    ? '\n- {kind:"stream",command:[argv]}: fires on supervised process output; disabled only when cron.triggers.enabled=false.'
+    ? '\n- {kind:"stream",command:[argv]}: fires on supervised Gateway process output; agent creation and command/cwd edits require the creator turn to expose exec with security=full and ask=off on the Gateway; otherwise use the CLI or Gateway API. Disabled when cron.triggers.enabled=false.'
     : "";
   const scriptPayloadLine = params.triggersEnabled
     ? '\n- {kind:"script",script}: main|isolated only; disabled only when cron.triggers.enabled=false.'
@@ -223,6 +226,15 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
 
 export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
   const gatewayCall = deps?.callGatewayTool ?? callGatewayTool;
+  const resolveStreamExecDefaults = () =>
+    (deps?.resolveExecDefaults ?? resolveExecDefaults)({
+      cfg: opts?.config,
+      sessionEntry: opts?.execSession,
+      execOverrides: opts?.execOverrides,
+      agentId: opts?.agentId,
+      sessionKey: opts?.agentSessionKey,
+      sandboxAvailable: opts?.sandboxed,
+    });
   const managementAuthority = bindCronManagementGrant(opts?.runId);
   const requesterAuthority = bindCronRequesterGrant(opts?.runId);
   // Trigger-gated surfaces default on, matching cron/service/jobs-validation.ts.
@@ -473,6 +485,14 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             const creatorToolAllowlistCaptureRef = resolvedAuthority
               ? { value: resolvedAuthority.provenance }
               : opts?.creatorToolAllowlistCaptureRef;
+            if (cronCreateRequiresStreamExecAuthority(job)) {
+              assertCronStreamExecAuthority({
+                value: job,
+                required: true,
+                creatorToolAllowlist,
+                execDefaults: resolveStreamExecDefaults(),
+              });
+            }
             capCronJobToolsAllowOnCreate(job, creatorToolAllowlist);
             assertInheritedCronToolCaptureReady(job, creatorToolAllowlistCaptureRef);
             const { mainKey, alias } = resolveMainSessionAlias(runtimeConfig);
@@ -576,9 +596,9 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
               throw new Error("job required");
             }
-            // Admin patches still need stored-payload inference, but must not
-            // recapture the creator's execution authority.
-            const creatorOptions = managementAuthority ? undefined : opts;
+            // Admin patches still need stored-payload inference and current
+            // stream exec policy, but must not recapture creator authority.
+            const creatorOptions = opts;
             return jsonResult(
               await updateCronJobFromAgentTool({
                 id,
@@ -586,7 +606,9 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                 adminManagement: Boolean(managementAuthority),
                 creatorToolAllowlist: creatorOptions?.creatorToolAllowlist,
                 creatorToolAllowlistCaptureRef: creatorOptions?.creatorToolAllowlistCaptureRef,
-                resolveCreatorToolAuthority: creatorOptions?.resolveCreatorToolAuthority,
+                resolveCreatorToolAuthority: managementAuthority
+                  ? undefined
+                  : creatorOptions?.resolveCreatorToolAuthority,
                 withCreatorAuthorityProvenance:
                   !managementAuthority && callerIdentity
                     ? withCreatorAuthorityProvenance
@@ -594,8 +616,10 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                 gatewayOpts,
                 callGateway,
                 operationSignal,
-                creatorAuthorityUnavailableReason:
-                  creatorOptions?.creatorAuthorityUnavailableReason,
+                creatorAuthorityUnavailableReason: managementAuthority
+                  ? undefined
+                  : creatorOptions?.creatorAuthorityUnavailableReason,
+                resolveStreamExecDefaults,
               }),
             );
           }

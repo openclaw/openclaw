@@ -26,6 +26,7 @@ async function withAdminTool(
   origin: "unknown" | "channel-owner",
   run: (tool: ReturnType<typeof createCronTool>, calls: Array<[string, unknown]>) => Promise<void>,
   payload?: Record<string, unknown>,
+  storedJob?: Record<string, unknown>,
 ) {
   const runId = "admin-management-tool-run";
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
@@ -70,7 +71,9 @@ async function withAdminTool(
                   getCronManagementAuthority(identity)!();
                   calls.push([method, params]);
                   return (
-                    method === "cron.get" ? { id: jobId, configRevision, payload } : { id: jobId }
+                    method === "cron.get"
+                      ? { id: jobId, configRevision, payload, ...storedJob }
+                      : { id: jobId }
                   ) as T;
                 },
               );
@@ -101,6 +104,44 @@ describe("admin automation management", () => {
       });
     },
   );
+
+  it("does not expose stream creation through a management grant", async () => {
+    await withAdminTool("unknown", async (tool, calls) => {
+      await expect(
+        tool.execute("stream-add", {
+          action: "add",
+          job: {
+            name: "watch events",
+            schedule: { kind: "stream", command: ["node", "events.mjs"] },
+            payload: { kind: "agentTurn", message: "handle events" },
+          },
+        }),
+      ).rejects.toThrow("can only list, get, update, run, or remove automations");
+      expect(calls).toEqual([]);
+    });
+  });
+
+  it("requires stream exec authority for management-grant activation", async () => {
+    await withAdminTool(
+      "unknown",
+      async (tool, calls) => {
+        await expect(
+          tool.execute("stream-enable", {
+            action: "update",
+            jobId,
+            job: { enabled: true },
+          }),
+        ).rejects.toThrow("unattended full Gateway exec authority");
+        expect(calls).toEqual([["cron.get", { id: jobId }]]);
+      },
+      undefined,
+      {
+        enabled: false,
+        schedule: { kind: "stream", command: ["node", "events.mjs"] },
+        state: {},
+      },
+    );
+  });
 
   it("inherits a stored command kind when clearing its timeout", async () => {
     await withAdminTool(

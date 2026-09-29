@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { cronStreamScheduleKey, type CronStreamSchedule } from "../../cron/stream-schedule.js";
 import { isRecord } from "../../utils.js";
 import { readCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import { createToolPolicyMatcher } from "../tool-policy-match.js";
@@ -120,6 +122,7 @@ export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: s
       name,
       ...(pluginId ? { pluginId } : {}),
       ...(aliasName && aliasName !== name ? { aliasName } : {}),
+      ...(name === "exec" ? { execOrigin: "openclaw" as const } : {}),
       ...(projection?.execTarget ? { execTarget: { ...projection.execTarget } } : {}),
     });
   }
@@ -134,8 +137,12 @@ export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: s
     }
     captured.set(
       name,
-      name === "exec" && options.nativeExecTarget
-        ? { name, execTarget: { ...options.nativeExecTarget } }
+      name === "exec"
+        ? {
+            name,
+            execOrigin: "native" as const,
+            ...(options.nativeExecTarget ? { execTarget: { ...options.nativeExecTarget } } : {}),
+          }
         : { name },
     );
   }
@@ -170,6 +177,8 @@ function normalizeCronCreatorToolsAllow(
       typeof tool.pluginId === "string" ? normalizeToolPolicyName(tool.pluginId) : undefined;
     const aliasName =
       typeof tool.aliasName === "string" ? normalizeToolPolicyName(tool.aliasName) : undefined;
+    const execOrigin: NormalizedCronCreatorTool["execOrigin"] =
+      tool.execOrigin === "openclaw" || tool.execOrigin === "native" ? tool.execOrigin : undefined;
     const execTarget: NormalizedCronCreatorTool["execTarget"] =
       tool.execTarget?.host === "gateway"
         ? {
@@ -181,6 +190,7 @@ function normalizeCronCreatorToolsAllow(
       name,
       ...(pluginId ? { pluginId } : {}),
       ...(aliasName && aliasName !== name ? { aliasName } : {}),
+      ...(execOrigin ? { execOrigin } : {}),
       ...(execTarget ? { execTarget } : {}),
     });
   }
@@ -195,6 +205,117 @@ export function resolveCronCreatorExecToolTarget(
     (tool) => tool.name === "exec",
   );
   return execEntry?.execTarget ? { ...execEntry.execTarget } : undefined;
+}
+
+/** Requires exec authority whose captured runtime can actually target the Gateway. */
+export function hasCronCreatorGatewayExecTool(
+  entries: readonly CronCreatorToolAllowlistEntry[] | undefined,
+): boolean {
+  return normalizeCronCreatorToolsAllow(entries ?? []).some(
+    (tool) =>
+      tool.name === "exec" &&
+      (tool.execOrigin === "openclaw" ||
+        (tool.execOrigin === "native" && tool.execTarget?.host === "gateway")),
+  );
+}
+
+function isCronStreamSchedule(value: unknown): value is CronStreamSchedule {
+  if (
+    !isRecord(value) ||
+    typeof value.kind !== "string" ||
+    normalizeToolPolicyName(value.kind) !== "stream"
+  ) {
+    return false;
+  }
+  return (
+    Array.isArray(value.command) &&
+    value.command.length > 0 &&
+    value.command.every((entry): entry is string => typeof entry === "string")
+  );
+}
+
+export function cronCreateRequiresStreamExecAuthority(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const schedule = isRecord(value.schedule) ? value.schedule : undefined;
+  return typeof schedule?.kind === "string" && normalizeToolPolicyName(schedule.kind) === "stream";
+}
+
+export function cronMutationRequiresStreamExecAuthority(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const schedule = isRecord(value.schedule) ? value.schedule : undefined;
+  if (!schedule) {
+    return false;
+  }
+  const scheduleKind =
+    typeof schedule.kind === "string" ? normalizeToolPolicyName(schedule.kind) : undefined;
+  if (scheduleKind !== undefined && scheduleKind !== "stream") {
+    return false;
+  }
+  // command/cwd may arrive without kind on an update and inherit a stored
+  // stream schedule. Treat them as stream-authoring until current state proves
+  // otherwise; create inputs use the kind-specific classifier above.
+  return (
+    scheduleKind === "stream" ||
+    Object.hasOwn(schedule, "command") ||
+    Object.hasOwn(schedule, "cwd")
+  );
+}
+
+function cronPatchClearsStreamRestartExhaustion(patch: Record<string, unknown>): boolean {
+  const state = isRecord(patch.state) ? patch.state : undefined;
+  return state?.streamRestartExhausted === false;
+}
+
+function cronUpdateNeedsCurrentJobForStreamAuthority(patch: Record<string, unknown>): boolean {
+  return (
+    patch.enabled === true ||
+    cronPatchClearsStreamRestartExhaustion(patch) ||
+    cronMutationRequiresStreamExecAuthority(patch)
+  );
+}
+
+/** Whether this update authors or activates a stream source relative to stored state. */
+export function cronUpdateRequiresStreamExecAuthority(
+  patch: Record<string, unknown>,
+  currentJob: Record<string, unknown>,
+): boolean {
+  const currentSchedule = isRecord(currentJob.schedule) ? currentJob.schedule : undefined;
+  const proposedSchedule = isRecord(patch.schedule) ? patch.schedule : undefined;
+  const currentScheduleKind =
+    typeof currentSchedule?.kind === "string"
+      ? normalizeToolPolicyName(currentSchedule.kind)
+      : undefined;
+  const proposedScheduleKind =
+    typeof proposedSchedule?.kind === "string"
+      ? normalizeToolPolicyName(proposedSchedule.kind)
+      : undefined;
+  const targetsStream =
+    proposedScheduleKind === "stream" ||
+    (proposedScheduleKind === undefined && currentScheduleKind === "stream");
+  // Any explicit enable can clear exhaustion at commit time. Runtime state is
+  // not part of configRevision, so authorize this independent of the earlier
+  // state read to close the read/commit exhaustion race.
+  const activatesStoredStream = patch.enabled === true && targetsStream;
+  const recoversStoredStream = cronPatchClearsStreamRestartExhaustion(patch) && targetsStream;
+  const replacementChangesStreamSource = (() => {
+    if (proposedSchedule === undefined || !targetsStream) {
+      return false;
+    }
+    if (proposedScheduleKind !== "stream" || currentScheduleKind !== "stream") {
+      return !isDeepStrictEqual(proposedSchedule, currentSchedule);
+    }
+    if (!isCronStreamSchedule(proposedSchedule) || !isCronStreamSchedule(currentSchedule)) {
+      return true;
+    }
+    return cronStreamScheduleKey(proposedSchedule) !== cronStreamScheduleKey(currentSchedule);
+  })();
+  const authorsStream =
+    cronMutationRequiresStreamExecAuthority(patch) && replacementChangesStreamSource;
+  return activatesStoredStream || recoversStoredStream || authorsStream;
 }
 
 function hasCronTriggerScript(value: unknown): boolean {
@@ -250,6 +371,9 @@ export function cronCreateRequiresCreatorAuthority(
 ): boolean {
   if (!isRecord(value)) {
     return false;
+  }
+  if (cronCreateRequiresStreamExecAuthority(value)) {
+    return true;
   }
   const payload = isRecord(value.payload) ? value.payload : undefined;
   const explicitToolsAllow = classifyExplicitToolsAllow(payload);
@@ -352,6 +476,16 @@ export function planCronJobUpdatePatch(params: {
 }): CronJobUpdatePatchPlan {
   const patch = structuredClone(params.patch);
   const payload = isRecord(patch.payload) ? patch.payload : undefined;
+  if (cronUpdateNeedsCurrentJobForStreamAuthority(patch) && !params.currentJob) {
+    return { kind: "needs-current-job" };
+  }
+  if (
+    params.creatorAuthorityComplete === false &&
+    params.currentJob &&
+    cronUpdateRequiresStreamExecAuthority(patch, params.currentJob)
+  ) {
+    return { kind: "needs-creator-authority" };
+  }
   const explicitPayloadKind = readCronPayloadKind(payload);
   const explicitToolsAllow = classifyExplicitToolsAllow(payload);
   if (payload === undefined && !Object.hasOwn(patch, "trigger")) {

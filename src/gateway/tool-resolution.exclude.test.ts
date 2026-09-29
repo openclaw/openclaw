@@ -938,7 +938,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(readCreateToolsArgs().cronCreatorToolAllowlist).toEqual([
       { name: "read" },
       { name: "automations" },
-      { name: "exec" },
+      { name: "exec", execOrigin: "openclaw" },
     ]);
   });
 
@@ -963,7 +963,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       { name: "write" },
       { name: "edit" },
       { name: "apply_patch" },
-      { name: "exec", execTarget: { host: "gateway" } },
+      { name: "exec", execOrigin: "native", execTarget: { host: "gateway" } },
       { name: "process" },
     ]);
   });
