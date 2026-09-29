@@ -292,10 +292,7 @@ function resolveFoundryReasoningEfforts(value?: string | null): string[] | undef
   if (normalized === "gpt-5-pro") {
     return ["high"];
   }
-  if (/^gpt-5\.[2-9](?:\.|-|$)/u.test(normalized)) {
-    return ["none", "low", "medium", "high"];
-  }
-  if (/^gpt-5\.1(?:-|$)/u.test(normalized)) {
+  if (/^gpt-5\.[2-9](?:\.|-|$)/u.test(normalized) || /^gpt-5\.1(?:-|$)/u.test(normalized)) {
     return ["none", "low", "medium", "high"];
   }
   if (/^gpt-5-codex(?:-|$)/u.test(normalized)) {
@@ -307,12 +304,7 @@ function resolveFoundryReasoningEfforts(value?: string | null): string[] | undef
   return ["low", "medium", "high"];
 }
 
-function buildFoundryThinkingLevelMap(
-  efforts: string[] | undefined,
-): Record<string, string | null> | undefined {
-  if (!efforts) {
-    return undefined;
-  }
+function buildFoundryThinkingLevelMap(efforts: string[]): Record<string, string | null> {
   const supported = new Set(efforts);
   return {
     off: supported.has("none") ? "none" : null,

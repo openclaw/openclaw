@@ -1,5 +1,3 @@
-// Config write flow helpers commit control-plane config edits, detect auth
-// changes, write restart sentinels, and schedule gateway restarts when required.
 import { isDeepStrictEqual } from "node:util";
 import {
   createConfigIO,
@@ -37,7 +35,6 @@ type ConfigWriteOptions = Awaited<
   ReturnType<typeof readConfigFileSnapshotForWrite>
 >["writeOptions"];
 
-/** Resolves the on-disk config path used in config method responses. */
 export function resolveGatewayConfigPath(snapshot?: Pick<ConfigWriteSnapshot, "path">): string {
   return snapshot?.path ?? createConfigIO().configPath;
 }
@@ -274,7 +271,6 @@ export async function commitGatewayConfigWrite(params: {
   };
 }
 
-/** Builds restart sentinel/queue state for config.patch and config.apply writes. */
 export async function resolveGatewayConfigRestartWriteResult(params: {
   requestParams: unknown;
   kind: RestartSentinelPayload["kind"];

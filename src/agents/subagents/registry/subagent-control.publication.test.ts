@@ -48,12 +48,13 @@ it.each(["replacement", "retirement"] as const)(
       cleanup: "keep",
     });
     const onResult = vi.fn();
-    const preparePublication = vi.fn(async () => {
+    const preparePublication = vi.fn(async (publish: () => void) => {
       if (transition === "replacement") {
         await writeSubagentSessionEntry({ ...target, sessionId: "successor-session" });
       } else {
         await removeSubagentSessionEntry(target);
       }
+      return publish();
     });
     const result = await killSubagentRunAdmin(
       {
@@ -65,7 +66,7 @@ it.each(["replacement", "retirement"] as const)(
       },
       {
         assertCurrent: () => {},
-        preparePublication: { prepare: preparePublication, needsPreparation: () => false },
+        preparePublication,
       },
     );
     expect(preparePublication).toHaveBeenCalledOnce();

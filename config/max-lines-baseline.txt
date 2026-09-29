@@ -302,8 +302,6 @@ src/agents/model-fallback.test.ts
 src/agents/model-selection-shared.ts
 src/agents/model-selection.test.ts
 src/agents/models.profiles.live.test.ts
-src/agents/openai-transport-stream.base.test.ts
-src/agents/openai-transport-stream.replay-and-tools.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts
 src/agents/provider-attribution.test.ts
@@ -454,7 +452,6 @@ src/config/plugin-auto-enable.core.test.ts
 src/config/redact-snapshot.test.ts
 src/config/schema.labels.ts
 src/config/schema.test.ts
-src/config/sessions/disk-budget.ts
 src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
 src/config/sessions/transcript.test.ts

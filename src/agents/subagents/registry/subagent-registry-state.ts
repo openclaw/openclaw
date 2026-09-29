@@ -25,6 +25,7 @@ import {
   applySubagentRunChanges,
   assertSubagentReadContext,
   captureSubagentFactsAdmission,
+  consumeFreshSubagentRuns,
   getSessionListLookup,
   getSubagentRunsSnapshot,
   indexedSnapshotRows,
@@ -41,6 +42,8 @@ import {
 } from "./subagent-registry-read-cache.js";
 import {
   prepareSubagentRunReadSnapshot,
+  prepareSubagentMaintenanceReadSnapshot,
+  prepareSubagentSessionRunReadSnapshot,
   type PreparedSubagentRunsRead,
   type SubagentRunReadSelection,
 } from "./subagent-registry-read-snapshot.js";
@@ -73,6 +76,7 @@ const persistedSubagentSessionListRunsReadCache: SubagentRunsCache<SubagentRunRe
 };
 const persistedSubagentMaintenanceRunsReadCache: SubagentRunsCache<SubagentRunMaintenanceRecord> = {
   state: {},
+  captureAdmission: captureSubagentFactsAdmission,
   load: () => loadSubagentMaintenanceRunsFromSqlite(),
   copy: projectSubagentRunForMaintenance,
   project: projectSubagentRunForMaintenance,
@@ -381,33 +385,38 @@ export function persistSubagentRunsToDiskAsyncOrThrow(
   });
 }
 
-export function restoreSubagentRunsFromDisk(params: {
+export async function restoreSubagentRunsFromDisk(params: {
   runs: Map<string, SubagentRunRecord>;
   mergeOnly?: boolean;
+  context?: OpenClawStateWorkerContext;
+  assertCurrent?: () => void;
 }) {
-  const restored = loadSubagentRegistryFromSqlite();
-  if (!params.mergeOnly) {
-    reconcileRetiredSubagentRegistryWrites(params.runs, restored);
-  }
-  supersedePendingSubagentRegistryWrites();
-  const keys = rememberPersistedSubagentRunsSnapshot(restored);
-  let added = 0;
-  for (const [runId, entry] of restored.entries()) {
-    if (params.mergeOnly && params.runs.has(runId)) {
-      continue;
+  const context = params.context ?? captureOpenClawStateWorkerContext();
+  return consumeFreshSubagentRuns(persistedSubagentRunsReadCache, context, (restored) => {
+    params.assertCurrent?.();
+    if (!params.mergeOnly) {
+      reconcileRetiredSubagentRegistryWrites(params.runs, restored);
     }
-    params.runs.set(runId, entry);
-    const notification = swarmNotification(entry);
-    if (notification) {
-      committedSwarmNotifications.set(runId, notification);
-    } else {
-      committedSwarmNotifications.delete(runId);
+    supersedePendingSubagentRegistryWrites();
+    const keys = rememberPersistedSubagentRunsSnapshot(restored);
+    let added = 0;
+    for (const [runId, entry] of restored.entries()) {
+      if (params.mergeOnly && params.runs.has(runId)) {
+        continue;
+      }
+      params.runs.set(runId, entry);
+      const notification = swarmNotification(entry);
+      if (notification) {
+        committedSwarmNotifications.set(runId, notification);
+      } else {
+        committedSwarmNotifications.delete(runId);
+      }
+      subagentRuns.commitOwnership(entry);
+      added += 1;
     }
-    subagentRuns.commitOwnership(entry);
-    added += 1;
-  }
-  emitSubagentRegistryPersisted(keys);
-  return added;
+    emitSubagentRegistryPersisted(keys);
+    return added;
+  });
 }
 
 export function getSubagentRunsSnapshotForRead(
@@ -447,6 +456,15 @@ export function getSubagentSessionListRunsSnapshotForChildSessions(
   return selected;
 }
 
+export function prepareSubagentMaintenanceRunsSnapshotForRead(
+  inMemoryRuns: Map<string, SubagentRunRecord>,
+) {
+  return prepareSubagentMaintenanceReadSnapshot(
+    inMemoryRuns,
+    persistedSubagentMaintenanceRunsReadCache,
+  );
+}
+
 export function getSubagentMaintenanceRunsSnapshotForRead(
   inMemoryRuns: Map<string, SubagentRunRecord>,
 ): Map<string, SubagentRunMaintenanceRecord> {
@@ -471,6 +489,17 @@ export async function withSubagentRunReadSnapshot<S extends SubagentRunReadSelec
       return result.value;
     }
   }
+}
+
+export function prepareSubagentRunsSnapshotForSessions(
+  inMemoryRuns: Map<string, SubagentRunRecord>,
+  sessionKeys: readonly string[],
+) {
+  return prepareSubagentSessionRunReadSnapshot({
+    inMemoryRuns,
+    sessionKeys,
+    fullCache: persistedSubagentRunsReadCache,
+  });
 }
 
 export async function prepareSubagentRunsSnapshotForRunIds(

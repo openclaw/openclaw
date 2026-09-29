@@ -58,7 +58,8 @@ function retireReader(reader: RetainedReader): void {
 }
 
 function scheduleReaderRetirement(reader: RetainedReader): void {
-  if (retainedReaders.get(reader.identity.key) !== reader) {
+  // Bun delegates the same TTL to pool idle retirement, after task custody is released.
+  if (process.versions.bun || retainedReaders.get(reader.identity.key) !== reader) {
     return;
   }
   clearTimeout(reader.idleTimer);
@@ -207,7 +208,7 @@ export function readOpenClawStateReadOnlyLocation<T>(
   retainConnection = false,
 ): OpenClawStateSettledRead<T> {
   const opening =
-    retainConnection && source === pathname && !snapshotRoot && !process.versions.bun
+    retainConnection && source === pathname && !snapshotRoot
       ? borrowStateReadConnection(pathname, expectedIdentity)
       : openStateReadConnectionResult(pathname, source, expectedIdentity, snapshotRoot, true);
   if (opening.status === "unavailable") {

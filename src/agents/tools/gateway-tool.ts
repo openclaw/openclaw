@@ -1,4 +1,3 @@
-/** Gateway config reads and operator-authorized self-updates. */
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
@@ -37,16 +36,12 @@ function getSnapshotConfig(snapshot: unknown): Record<string, unknown> {
   return config as Record<string, unknown>;
 }
 
-function splitGatewayConfigGetPath(path: string): string[] {
-  return path
+function resolveGatewayConfigGetPath(config: Record<string, unknown>, path: string): unknown {
+  const parts = path
     .trim()
     .replace(/\[(\d+)\]/g, ".$1")
     .split(".")
     .filter(Boolean);
-}
-
-function resolveGatewayConfigGetPath(config: Record<string, unknown>, path: string): unknown {
-  const parts = splitGatewayConfigGetPath(path);
   if (parts.length === 0) {
     return undefined;
   }

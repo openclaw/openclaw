@@ -38,6 +38,7 @@ import {
 import {
   commitRequesterWake,
   getPendingWakeCommit,
+  hasRequesterWakeOwner,
   rearmRequesterWakeAfterCommit,
   retryPendingWakeCommit,
   shouldReportRequesterSettleWakeFailure,
@@ -315,18 +316,6 @@ function retainScheduledRequesterSettleWakeTimer(
   return false;
 }
 
-function hasRequesterWakeOwner(
-  context: SubagentLifecycleWakeContext,
-  entry: SubagentRunRecord,
-): boolean {
-  const current = context.options.runs.get(entry.runId);
-  return (
-    current === entry ||
-    (current === undefined &&
-      getPendingWakeCommit(context, entry)?.isPublishedRetirement(entry) === true)
-  );
-}
-
 function scheduleRequesterSettleWakeRetry(
   context: SubagentLifecycleWakeContext,
   runId: string,
@@ -335,7 +324,11 @@ function scheduleRequesterSettleWakeRetry(
 ): void {
   const pending = getPendingWakeCommit(context, entry);
   const nextAttemptAt = pending?.nextAttemptAt ?? entry.requesterSettleWake?.nextAttemptAt;
-  if (nextAttemptAt === undefined || nextAttemptAt <= Date.now()) {
+  if (
+    pending?.initialTransfer?.blocked ||
+    nextAttemptAt === undefined ||
+    nextAttemptAt <= Date.now()
+  ) {
     return;
   }
   const rearmGeneration = pending?.generation ?? entry.requesterSettleWake?.rearmGeneration;
@@ -378,15 +371,18 @@ export function scheduleRequesterSettleWake(
   const admittedWake = entry.requesterSettleWake;
   const requesterSessionKey = entry.requesterSessionKey?.trim();
   if (
+    pendingAtAdmission?.initialTransfer?.blocked ||
     (!admittedWake && !pendingAtAdmission) ||
     entry.collect ||
     (!pendingAtAdmission &&
       isCompletedRequesterDeliveryBlocked(entry) &&
       admittedWake?.requesterYieldBatch !== true) ||
-    entry.execution.status === "running" ||
-    !hasSubagentRunEnded(entry) ||
+    (!pendingAtAdmission?.initialTransfer &&
+      (entry.execution.status === "running" || !hasSubagentRunEnded(entry))) ||
     !requesterSessionKey ||
-    (entry.requesterTurnRunId && entry.expectsCompletionMessage === true) ||
+    (!pendingAtAdmission?.initialTransfer &&
+      entry.requesterTurnRunId &&
+      entry.expectsCompletionMessage === true) ||
     context.scheduledRequesterSettleWakeRuns.has(entry)
   ) {
     return;
@@ -437,6 +433,9 @@ export function scheduleRequesterSettleWake(
             if (pending) {
               await retryPendingWakeCommit(context, pending);
               rearmRequesterWakeAfterCommit(context, pending, entry, isSourceCurrent);
+              if (pending.initialTransfer?.completed) {
+                context.pendingRequesterSettleWakeRearms.add(entry);
+              }
               return;
             }
             if (

@@ -11,6 +11,7 @@ import type {
   OpenClawPluginApi,
   ProviderNormalizeResolvedModelContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { resolveAwsSdkEnvVarName } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   buildProviderReplayFamilyHooks,
@@ -24,12 +25,12 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import { splitSystemPromptCacheBoundary } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveBedrockPromptCachePolicy,
   supportsBedrockClaudePromptCaching,
 } from "./bedrock-options.js";
 import { loadBedrockControlPlaneSdk, runBedrockControlPlaneRequest } from "./control-plane.js";
-import { resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { streamSimpleBedrock } from "./stream.runtime.js";
 import {
@@ -312,16 +313,8 @@ function injectBedrockCachePoints(
 }
 
 function patchMaxThinkingEffort(payload: Record<string, unknown>): void {
-  const fieldsValue = payload.additionalModelRequestFields;
-  const fields =
-    fieldsValue && typeof fieldsValue === "object" && !Array.isArray(fieldsValue)
-      ? (fieldsValue as Record<string, unknown>)
-      : {};
-  const outputConfigValue = fields.output_config;
-  const outputConfig =
-    outputConfigValue && typeof outputConfigValue === "object" && !Array.isArray(outputConfigValue)
-      ? (outputConfigValue as Record<string, unknown>)
-      : {};
+  const fields = asOptionalRecord(payload.additionalModelRequestFields) ?? {};
+  const outputConfig = asOptionalRecord(fields.output_config) ?? {};
   outputConfig.effort = "max";
   fields.output_config = outputConfig;
   payload.additionalModelRequestFields = fields;
@@ -467,7 +460,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
           },
         }),
     },
-    resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
+    resolveConfigApiKey: ({ env }) => resolveAwsSdkEnvVarName(env),
     normalizeResolvedModel: normalizeBedrockResolvedModel,
     supportsSystemPromptCacheBoundary: true,
     createStreamFn: ({ model }) =>

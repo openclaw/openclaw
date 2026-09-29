@@ -6,6 +6,7 @@ import {
   resolveMSTeamsSqliteStateEnv,
   toPluginJsonValue,
   withMSTeamsSqliteMutationLock,
+  type MSTeamsSqliteStateOptions,
 } from "./sqlite-state.js";
 
 /** TTL for persisted pending uploads (matches in-memory store). */
@@ -33,11 +34,7 @@ type PendingUploadChunkRecord = {
   dataBase64: string;
 };
 
-type PendingUploadsFsOptions = {
-  env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
-  stateDir?: string;
-  storePath?: string;
+type PendingUploadsFsOptions = MSTeamsSqliteStateOptions & {
   ttlMs?: number;
 };
 

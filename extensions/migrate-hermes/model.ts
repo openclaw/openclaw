@@ -37,34 +37,28 @@ const HERMES_PROVIDER_ALIASES: Record<string, string> = {
   copilot: "github-copilot",
   gemini: "google",
   github: "github-copilot",
-  "github-copilot": "github-copilot",
   "github-model": "github-copilot",
   "github-models": "github-copilot",
   glm: "zai",
-  google: "google",
   "google-ai-studio": "google",
   "google-gemini": "google",
   grok: "xai",
   kilo: "kilocode",
   "kilo-code": "kilocode",
   "kilo-gateway": "kilocode",
-  kimi: "kimi",
   "kimi-cn": "moonshot",
   "kimi-for-coding": "kimi",
   "kimi-coding": "kimi",
   "kimi-coding-cn": "moonshot",
   "moonshot-cn": "moonshot",
-  moonshot: "moonshot",
   "minimax-global": "minimax-portal",
   "minimax-cn": "minimax",
   "minimax-oauth": "minimax-portal",
-  "minimax-portal": "minimax-portal",
   minimax_oauth: "minimax-portal",
   "opencode-zen": "opencode",
   "openai-api": "openai",
   "openai-codex": "openai",
   dashscope: "qwen",
-  qwen: "qwen",
   "qwen-cli": "qwen",
   "qwen-oauth": "qwen",
   "qwen-portal": "qwen",
@@ -164,7 +158,7 @@ export function usesRetiredHermesQwenProvider(config: Record<string, unknown>): 
   ].some((value) => value !== undefined && isRetiredHermesQwenProviderValue(value));
 }
 
-function readBaseUrl(value: Record<string, unknown> | undefined): string | undefined {
+export function readHermesBaseUrl(value: Record<string, unknown> | undefined): string | undefined {
   return value
     ? (normalizeOptionalString(value.base_url) ??
         normalizeOptionalString(value.baseUrl) ??
@@ -185,7 +179,7 @@ function readKimiBaseUrl(
     selectedProvider &&
     HERMES_DYNAMIC_KIMI_PROVIDER_IDS.has(normalizeHermesCustomProviderId(selectedProvider))
   ) {
-    const modelBaseUrl = readBaseUrl(model);
+    const modelBaseUrl = readHermesBaseUrl(model);
     if (modelBaseUrl) {
       return modelBaseUrl;
     }
@@ -193,7 +187,7 @@ function readKimiBaseUrl(
   const providers = asOptionalRecord(config.providers);
   for (const [id, value] of Object.entries(providers ?? {})) {
     if (normalizeHermesCustomProviderId(id) === normalizeHermesCustomProviderId(provider)) {
-      const providerBaseUrl = readBaseUrl(asOptionalRecord(value));
+      const providerBaseUrl = readHermesBaseUrl(asOptionalRecord(value));
       if (providerBaseUrl) {
         return providerBaseUrl;
       }

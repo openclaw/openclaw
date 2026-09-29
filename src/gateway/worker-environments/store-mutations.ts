@@ -113,22 +113,13 @@ export function revokeCredential(db: DatabaseSync, environmentId: string): void 
   );
 }
 export function upsertCredential(db: DatabaseSync, credential: CredentialInsert): void {
+  const { environment_id: environmentId, ...values } = credential;
   executeSqliteQuerySync(
     db,
     queryWorkerEnvironmentStore(db)
       .insertInto("worker_environment_credentials")
-      .values(credential)
-      .onConflict((conflict) =>
-        conflict.column("environment_id").doUpdateSet({
-          credential_hash: credential.credential_hash,
-          bundle_hash: credential.bundle_hash,
-          session_id: credential.session_id,
-          rpc_set_version: credential.rpc_set_version,
-          owner_epoch: credential.owner_epoch,
-          expires_at_ms: credential.expires_at_ms,
-          delivered_at_ms: credential.delivered_at_ms,
-        }),
-      ),
+      .values({ environment_id: environmentId, ...values })
+      .onConflict((conflict) => conflict.column("environment_id").doUpdateSet(values)),
   );
 }
 export function credentialInsert(params: {

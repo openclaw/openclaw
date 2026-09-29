@@ -25,8 +25,6 @@ struct WatchReplySendResult: Equatable {
 }
 
 struct WatchExecApprovalSnapshotRequestToken: Hashable, Sendable {
-    let requestId: String
-    let gatewayStableID: String
     private let requestKey: WatchOpaqueUTF8Key
     private let gatewayKey: WatchOpaqueUTF8Key
 
@@ -34,19 +32,8 @@ struct WatchExecApprovalSnapshotRequestToken: Hashable, Sendable {
         guard !requestId.isEmpty,
               let gatewayStableID = WatchGatewayID.exact(gatewayStableID)
         else { return nil }
-        self.requestId = requestId
-        self.gatewayStableID = gatewayStableID
         self.requestKey = WatchOpaqueUTF8Key(requestId)
         self.gatewayKey = WatchOpaqueUTF8Key(gatewayStableID)
-    }
-
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.requestKey == rhs.requestKey && lhs.gatewayKey == rhs.gatewayKey
-    }
-
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(self.requestKey)
-        hasher.combine(self.gatewayKey)
     }
 
     func matchesGatewayStableID(_ gatewayStableID: String?) -> Bool {
@@ -61,7 +48,6 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
     private let session: WCSession?
     private let activationGate = WatchSessionActivationGate()
     private let execApprovalSnapshotAcknowledgmentLock = NSLock()
-    private var acceptedExecApprovalSnapshotRequests: Set<WatchExecApprovalSnapshotRequestToken> = []
     private var acceptedExecApprovalSnapshotRequestOrder: [WatchExecApprovalSnapshotRequestToken] = []
     private let directNodeSetupHandler: @MainActor @Sendable (String, Int64) -> Void
     @MainActor private var chatDeliveryTask: Task<Void, Never>?
@@ -300,8 +286,8 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         for token: WatchExecApprovalSnapshotRequestToken) -> Bool
     {
         self.execApprovalSnapshotAcknowledgmentLock.withLock {
-            guard self.acceptedExecApprovalSnapshotRequests.remove(token) != nil else { return false }
-            self.acceptedExecApprovalSnapshotRequestOrder.removeAll { $0 == token }
+            guard let index = self.acceptedExecApprovalSnapshotRequestOrder.firstIndex(of: token) else { return false }
+            self.acceptedExecApprovalSnapshotRequestOrder.remove(at: index)
             return true
         }
     }
@@ -311,8 +297,6 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             self.acceptedExecApprovalSnapshotRequestOrder.removeAll { token in
                 !token.matchesGatewayStableID(gatewayStableID)
             }
-            self.acceptedExecApprovalSnapshotRequests = Set(
-                self.acceptedExecApprovalSnapshotRequestOrder)
         }
     }
 
@@ -321,16 +305,15 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
               let token = WatchExecApprovalSnapshotRequestToken(
                   requestId: requestId,
                   gatewayStableID: snapshot.requestGatewayStableID),
-              WatchGatewayID.key(snapshot.gatewayStableID) == WatchGatewayID.key(token.gatewayStableID)
+              token.matchesGatewayStableID(snapshot.gatewayStableID)
         else { return }
         self.execApprovalSnapshotAcknowledgmentLock.withLock {
-            guard self.acceptedExecApprovalSnapshotRequests.insert(token).inserted else { return }
+            guard !self.acceptedExecApprovalSnapshotRequestOrder.contains(token) else { return }
             self.acceptedExecApprovalSnapshotRequestOrder.append(token)
             // Responses can arrive after their refresh task is cancelled. Bound retained
             // acknowledgments while keeping enough room for WatchConnectivity reordering.
             if self.acceptedExecApprovalSnapshotRequestOrder.count > Self.maxAcceptedExecApprovalSnapshotRequests {
-                let evicted = self.acceptedExecApprovalSnapshotRequestOrder.removeFirst()
-                self.acceptedExecApprovalSnapshotRequests.remove(evicted)
+                self.acceptedExecApprovalSnapshotRequestOrder.removeFirst()
             }
         }
     }

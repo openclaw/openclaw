@@ -194,7 +194,7 @@ struct AgentWorkspaceDirectoryList: View {
                 limit: nil)
             let data = try await self.appModel.operatorSession.request(
                 method: "agents.workspace.list",
-                paramsJSON: String(data: JSONEncoder().encode(params), encoding: .utf8) ?? "{}",
+                paramsJSON: String(bytes: JSONEncoder().encode(params), encoding: .utf8)!,
                 timeoutSeconds: 12)
             return try JSONDecoder().decode(AgentsWorkspaceListResult.self, from: data)
         } catch {
@@ -326,7 +326,7 @@ struct AgentWorkspaceFilePreview: View {
             let params = AgentsWorkspaceGetParams(agentid: self.agentId, path: self.path)
             let data = try await self.appModel.operatorSession.request(
                 method: "agents.workspace.get",
-                paramsJSON: String(data: JSONEncoder().encode(params), encoding: .utf8) ?? "{}",
+                paramsJSON: String(bytes: JSONEncoder().encode(params), encoding: .utf8)!,
                 timeoutSeconds: 20)
             self.file = try JSONDecoder().decode(AgentsWorkspaceGetResult.self, from: data).file
         } catch {

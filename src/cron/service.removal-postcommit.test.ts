@@ -168,7 +168,7 @@ describe("cron one-shot removal", () => {
 
       const database = openOpenClawStateDatabase().db;
       database.exec(`
-      CREATE TEMP TRIGGER reject_final_cron_job_delete
+      CREATE TRIGGER reject_final_cron_job_delete
       BEFORE DELETE ON cron_jobs
       WHEN OLD.store_key = '${cronStoreKey(storePath)}' AND OLD.job_id = '${job.id}'
       BEGIN

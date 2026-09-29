@@ -33,7 +33,6 @@ import {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
 } from "./subagent-registry-read.js";
-import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -328,15 +327,13 @@ export function registerPrivateCompletionSettlementTests({
         expect(entry.cleanupHandled).not.toBe(true);
         expect(entry.completion?.resultText).toBe("private child result");
         if (requesterYielded) {
-          markRequesterTurnYieldedInRuns({
+          await controller.markRequesterTurnYielded({
             requesterSessionKey: entry.requesterSessionKey,
             requesterTurnRunId: "run-requester",
-            runs,
-            persistOrThrow: () => undefined,
           });
         }
         expect(
-          controller.settleRequesterTurnAfterSessionSpawns({
+          await controller.settleRequesterTurnAfterSessionSpawns({
             requesterSessionKey: entry.requesterSessionKey,
             requesterTurnRunId: "run-requester",
             requesterYielded,

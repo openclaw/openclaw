@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { WorkerOptions } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
@@ -7,17 +8,30 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { setCleanupDeleteFault } from "./cleanup-service.delete-fault.test-support.js";
 import { resolveSessionWorkStartError } from "./lifecycle.js";
 
 const cleanupRace = vi.hoisted(() => ({
   afterPreview: undefined as (() => void) | undefined,
   postCommitFailureStorePath: undefined as string | undefined,
 }));
+
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  const { withCleanupDeleteFault } = await import("./cleanup-service.delete-fault.test-support.js");
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      constructor(filename: string | URL, options?: WorkerOptions) {
+        super(filename, withCleanupDeleteFault(options));
+      }
+    },
+  };
+});
 
 vi.mock("./disk-budget.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./disk-budget.js")>();
@@ -56,6 +70,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("sessions cleanup applied summary", () => {
   afterEach(async () => {
+    setCleanupDeleteFault(undefined);
     cleanupRace.afterPreview = undefined;
     cleanupRace.postCommitFailureStorePath = undefined;
     await closeOpenClawAgentDatabasesAsync();
@@ -397,6 +412,15 @@ describe("sessions cleanup applied summary", () => {
         storePath: path.join(rootDir, "agents", "work", "sessions", "sessions.json"),
       };
       const stores = [main, failing];
+      if (!lifecycleCommitted) {
+        setCleanupDeleteFault({
+          databasePath: resolveSqliteTargetFromSessionStorePath(failing.storePath, {
+            agentId: failing.agentId,
+          }).path!,
+          sessionId: failing.sessionId,
+          message: "injected second-store lifecycle failure",
+        });
+      }
       for (const store of stores) {
         await replaceSessionEntry(store, {
           sessionId: store.sessionId,
@@ -404,20 +428,8 @@ describe("sessions cleanup applied summary", () => {
         });
         appendTranscriptEventSync(store, { type: "proof", content: store.agentId });
       }
-      const failingSqlitePath = resolveSqliteTargetFromSessionStorePath(failing.storePath, {
-        agentId: failing.agentId,
-      }).path;
       if (lifecycleCommitted) {
         cleanupRace.postCommitFailureStorePath = failing.storePath;
-      } else {
-        openOpenClawAgentDatabase({ agentId: failing.agentId, path: failingSqlitePath }).db.exec(`
-          CREATE TEMP TRIGGER fail_second_store_delete
-          BEFORE DELETE ON main.session_windows
-          WHEN OLD.session_id = '${failing.sessionId}'
-          BEGIN
-            SELECT RAISE(ABORT, 'injected second-store lifecycle failure');
-          END;
-        `);
       }
 
       const outcome = await runSessionsCleanup({

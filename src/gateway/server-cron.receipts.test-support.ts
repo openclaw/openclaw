@@ -201,6 +201,8 @@ export function registerGatewayCronReceiptTests({
           expect(handoff.current().activeJobIds()).toEqual([]);
         }
         releaseRunner.resolve({ status: "ok", summary: "late cleanup completed" });
+        // Worker receipt completion must settle before the separate polling clock advances.
+        await vi.waitFor(() => expect(activeReceipt()).toBeUndefined());
         if (action === "run" || action === "replace") {
           // The registered receipt owner rechecks active fences every two seconds.
           await vi.advanceTimersByTimeAsync(2_000);
@@ -219,7 +221,6 @@ export function registerGatewayCronReceiptTests({
           expect(state.cron.getJob(job.id)?.enabled).toBe(false);
           expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
         } else {
-          await vi.waitFor(() => expect(activeReceipt()).toBeUndefined());
           expect(reserved).toHaveBeenCalledOnce();
           expect(runCommandJob).toHaveBeenCalledOnce();
         }

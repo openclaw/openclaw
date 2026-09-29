@@ -1,5 +1,5 @@
 import { normalizeLineAction } from "../actions.js";
-import { createCardBubble } from "./common.js";
+import { createCardBubble, createCardTitle } from "./common.js";
 import type {
   Action,
   CardAction,
@@ -28,15 +28,10 @@ export function createInfoCard(title: string, body: string, footer?: string): Fl
             cornerRadius: "2px",
           } as FlexBox,
           {
-            type: "text",
-            text: title,
-            weight: "bold",
-            size: "xl",
-            color: "#111111",
-            wrap: true,
+            ...createCardTitle(title),
             flex: 1,
             margin: "lg",
-          } as FlexText,
+          },
         ],
       } as FlexBox,
       // Body text in subtle container, only when there is a body to show:
@@ -132,14 +127,7 @@ export function createListCard(title: string, items: ListItem[]): FlexBubble {
   });
 
   return createCardBubble([
-    {
-      type: "text",
-      text: title,
-      weight: "bold",
-      size: "xl",
-      color: "#111111",
-      wrap: true,
-    } as FlexText,
+    createCardTitle(title),
     {
       type: "separator",
       margin: "lg",

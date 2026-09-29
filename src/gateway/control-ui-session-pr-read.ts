@@ -2,7 +2,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitCheckoutContext } from "../infra/git-read-operations.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
-import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { readUserProfileAliasRevision } from "../state/user-profile-events.js";
 import { resolveUserProfileId } from "../state/user-profiles.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
@@ -44,7 +43,7 @@ export type ControlUiSessionPrReadContext = {
 /** Git facts and cached snapshots belong to the recorded session and workspace source. */
 export function resolveControlUiSessionPrTarget(
   selected: SelectedSession,
-  preparedRepository?: GatewaySessionRow["repository"] | null,
+  preparedRepository: GatewaySessionRow["repository"] | null,
 ): ControlUiSessionPrTarget | undefined {
   const { cfg, agentId, canonicalKey, storePath, readSource, entry } = selected;
   if (!entry?.sessionId || !storePath || !readSource) {
@@ -52,12 +51,7 @@ export function resolveControlUiSessionPrTarget(
   }
   let source: ControlUiSessionPrTarget["source"];
   if (entry.repositoryWorkspaceId) {
-    let repository = preparedRepository;
-    if (repository === undefined) {
-      const workspace = getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId);
-      repository =
-        workspace?.agentId === agentId && workspace.sessionKey === canonicalKey ? workspace : null;
-    }
+    const repository = preparedRepository;
     const remote = repository ? parseGitHubRemoteUrl(repository.url) : null;
     source = remote && repository ? { ...remote, branch: repository.branch } : null;
   } else {
