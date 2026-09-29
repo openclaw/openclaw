@@ -79,14 +79,23 @@ final class OpenClawSnapshotUITests: XCTestCase {
             XCTAssertFalse(app.buttons["Scan QR to Pair"].exists)
         }
         guard let app = self.app else { return }
-        // After capture: the fixture never loads saved credentials, so editing them would overwrite the pair.
-        let password = app.secureTextFields["Gateway Password"]
-        for _ in 0..<8 where !password.isHittable {
+        // After capture: the fixture never loads the saved manual Gateway, so controls that would
+        // act on its route or credentials stay hidden down to the last row of the screen.
+        let savedGatewayControls = [
+            app.textFields["Host"],
+            app.buttons["Connect Manual"],
+            app.secureTextFields["Gateway Auth Token"],
+            app.secureTextFields["Gateway Password"],
+        ]
+        let resetOnboarding = app.buttons["Reset Onboarding"]
+        for _ in 0..<8 {
+            for control in savedGatewayControls {
+                XCTAssertFalse(control.exists)
+            }
+            if resetOnboarding.isHittable { break }
             app.swipeUp()
         }
-        XCTAssertTrue(password.isHittable)
-        XCTAssertFalse(app.secureTextFields["Gateway Auth Token"].isEnabled)
-        XCTAssertFalse(password.isEnabled)
+        XCTAssertTrue(resetOnboarding.isHittable)
     }
 
     func testWatchMessageDeliveryIsReachableFromSettings() throws {
