@@ -32,6 +32,7 @@ const completeId = "native-upgrade-complete";
 const phases = new Set([
   "seed-history",
   "seed-assignments",
+  "handoff",
   "recover",
   "close-loaded",
   "close-gone",
@@ -44,6 +45,7 @@ const subscriptions = new Map();
 const loaded = new Set();
 const closeTurns = new Map();
 let turnSequence = 0;
+let parentSequence = 0;
 let seededAssignments = false;
 let historyPruned = false;
 
@@ -52,7 +54,7 @@ function readPhase() {
   if (!phases.has(phase)) {
     throw new Error("Unknown native assignment fixture phase");
   }
-  if (!phase.startsWith("seed-") && !historyPruned) {
+  if (!phase.startsWith("seed-") && phase !== "handoff" && !historyPruned) {
     // Recovery must use the imported locator/result, not rediscover old spawn events.
     for (const turn of threads.get(parentId)?.turns ?? []) {
       turn.items = turn.items.filter((item) => item.type !== "collabAgentToolCall");
@@ -114,29 +116,34 @@ function thread(id) {
   return value;
 }
 
-function startThread(params, id = parentId) {
+function startThread(params, id) {
+  if (id === undefined) {
+    parentSequence += 1;
+    id = parentSequence === 1 ? parentId : `${parentId}-${parentSequence}`;
+  }
+  if (threads.has(id)) {
+    throw new Error("Synthetic thread/start must create a fresh thread");
+  }
   const response = createFakeThreadStartResponse({
     params,
     threadId: id,
     sessionId: "native-upgrade-provider-session",
     version,
   });
-  if (!threads.has(id)) {
-    response.thread.createdAt = Math.floor(Date.now() / 1000);
-    response.thread.updatedAt = response.thread.createdAt;
-    if (id !== parentId) {
-      response.thread.parentThreadId = parentId;
-      response.thread.source = {
-        subAgent: {
-          thread_spawn: { parent_thread_id: parentId, depth: 1, agent_path: `/root/${id}` },
-        },
-      };
-      response.thread.preview = "Synthetic native upgrade assignment";
-    }
-    threads.set(id, response.thread);
-    injectedItemsByThread.set(id, []);
-    threadConfigurations.set(id, { params: structuredClone(params), response });
+  response.thread.createdAt = Math.floor(Date.now() / 1000);
+  response.thread.updatedAt = response.thread.createdAt;
+  if (id === runningId || id === completeId) {
+    response.thread.parentThreadId = parentId;
+    response.thread.source = {
+      subAgent: {
+        thread_spawn: { parent_thread_id: parentId, depth: 1, agent_path: `/root/${id}` },
+      },
+    };
+    response.thread.preview = "Synthetic native upgrade assignment";
   }
+  threads.set(id, response.thread);
+  injectedItemsByThread.set(id, []);
+  threadConfigurations.set(id, { params: structuredClone(params), response });
   loaded.add(id);
   return { ...threadConfigurations.get(id).response, thread: thread(id) };
 }
@@ -255,15 +262,24 @@ function completeTurn(socket, phase, threadId, turn, text, status = "completed")
   notify(socket, phase, "thread/status/changed", { threadId, status: { type: "idle" } });
 }
 
-function collabItem(socket, phase, turn, item, method) {
+function collabItem(socket, phase, threadId, turn, item, method) {
   if (method === "item/completed") {
     turn.items.push(item);
   }
-  notify(socket, phase, method, { threadId: parentId, turnId: turn.id, item });
+  notify(socket, phase, method, { threadId, turnId: turn.id, item });
 }
 
-function runPhase(socket, phase, turn) {
-  if (phase === "seed-assignments") {
+function runPhase(socket, phase, threadId, turn, input) {
+  if (turn.status !== "inProgress") {
+    return;
+  }
+  if (
+    phase === "seed-assignments" &&
+    threadId === parentId &&
+    input.some(
+      (item) => item.type === "text" && item.text.includes("NATIVE_UPGRADE_SEED_ASSIGNMENTS"),
+    )
+  ) {
     if (seededAssignments) {
       throw new Error("Native assignments were already seeded");
     }
@@ -277,6 +293,7 @@ function runPhase(socket, phase, turn) {
       collabItem(
         socket,
         phase,
+        threadId,
         turn,
         {
           id: `spawn-${id}`,
@@ -297,21 +314,32 @@ function runPhase(socket, phase, turn) {
     }
     return;
   }
-  if (phase === "close-loaded" || phase === "close-gone") {
+  if (
+    (phase === "close-loaded" || phase === "close-gone") &&
+    input.some(
+      (item) =>
+        item.type === "text" &&
+        item.text.includes(`Continue the synthetic native upgrade fixture: ${phase}.`),
+    )
+  ) {
+    if (closeTurns.has(socket)) {
+      throw new Error("Native close confirmation is already pending on this connection");
+    }
     const item = {
       id: `${phase}-${turn.id}`,
       type: "collabAgentToolCall",
       tool: "closeAgent",
       status: "inProgress",
-      senderThreadId: parentId,
+      senderThreadId: threadId,
       receiverThreadIds: [runningId],
       agentsStates: {},
     };
-    closeTurns.set(socket, { phase, turn });
-    collabItem(socket, phase, turn, item, "item/started");
+    closeTurns.set(socket, { phase, threadId, turn });
+    collabItem(socket, phase, threadId, turn, item, "item/started");
     collabItem(
       socket,
       phase,
+      threadId,
       turn,
       {
         ...item,
@@ -325,7 +353,7 @@ function runPhase(socket, phase, turn) {
   completeTurn(
     socket,
     phase,
-    parentId,
+    threadId,
     turn,
     phase === "seed-history" ? "NATIVE_UPGRADE_RETAINED_HISTORY" : "NATIVE_UPGRADE_PARENT_OK",
   );
@@ -450,32 +478,41 @@ function handle(socket, phase, message) {
       return result({ status: removed ? "unsubscribed" : "notSubscribed" });
     }
     case "turn/start": {
-      if (params.threadId !== parentId) {
+      if ([runningId, completeId].includes(params.threadId)) {
         throw new Error("Only parent turns may be started through this fixture");
       }
       const turnId = `native-parent-turn-${++turnSequence}`;
-      const turn = startTurn(socket, phase, parentId, turnId);
+      const turn = startTurn(socket, phase, params.threadId, turnId);
       result({ turn });
       setImmediate(() => {
         try {
-          runPhase(socket, phase, turn);
+          runPhase(socket, phase, params.threadId, turn, params.input ?? []);
         } catch (error) {
           log("fixture-error", phase, { message: error.message });
-          completeTurn(socket, phase, parentId, turn, "NATIVE_UPGRADE_FIXTURE_ERROR", "failed");
+          completeTurn(
+            socket,
+            phase,
+            params.threadId,
+            turn,
+            "NATIVE_UPGRADE_FIXTURE_ERROR",
+            "failed",
+          );
         }
       });
       return;
     }
     case "turn/interrupt": {
-      if (params.threadId !== parentId) {
+      if ([runningId, completeId].includes(params.threadId)) {
         throw new Error("This fixture only interrupts parent turns");
       }
-      const turn = thread(parentId).turns.find((value) => value.id === params.turnId);
-      if (!turn) {
-        throw new Error("Unknown synthetic parent turn");
+      const turn = thread(params.threadId).turns.find((value) => value.id === params.turnId);
+      if (turn?.status !== "inProgress") {
+        throw new Error("No active synthetic parent turn to interrupt");
       }
       result({});
-      completeTurn(socket, phase, parentId, turn, undefined, "interrupted");
+      setImmediate(() =>
+        completeTurn(socket, phase, params.threadId, turn, undefined, "interrupted"),
+      );
       return;
     }
     case "thread/loaded/list": {
@@ -495,7 +532,7 @@ function handle(socket, phase, message) {
           completeTurn(
             socket,
             closing.phase,
-            parentId,
+            closing.threadId,
             closing.turn,
             "NATIVE_UPGRADE_CLOSE_OBSERVED",
           ),

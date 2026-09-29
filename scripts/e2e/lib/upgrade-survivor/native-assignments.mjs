@@ -132,7 +132,7 @@ function runParent(phase, wait = true) {
       agentId: "native-proof",
       message:
         phase === "seed-assignments"
-          ? "Spawn two native child agents for this synthetic upgrade fixture."
+          ? "NATIVE_UPGRADE_SEED_ASSIGNMENTS: Spawn two native child agents for this synthetic upgrade fixture."
           : `Continue the synthetic native upgrade fixture: ${phase}.`,
       deliver: false,
     },
@@ -160,17 +160,256 @@ function snapshot() {
       )
       .all(SESSION_KEY)
       .map((row) => Object.assign({}, row));
+    const baselinePath = artifact("native-assignment-baseline.json");
+    const bindingKey = fs.existsSync(baselinePath) ? readJson(baselinePath).binding.key : undefined;
     const bindings = db
       .prepare(
         "SELECT entry_key, value_json FROM plugin_state_entries WHERE plugin_id = 'codex' AND namespace = 'app-server-thread-bindings'",
       )
       .all()
       .map((row) => ({ key: row.entry_key, value: JSON.parse(row.value_json) }))
-      .filter((row) => row.value.binding?.threadId === "native-upgrade-parent");
+      .filter((row) =>
+        bindingKey
+          ? row.key === bindingKey
+          : row.value.binding?.threadId === "native-upgrade-parent",
+      );
     assert.equal(bindings.length, 1, "native parent binding was missing or ambiguous");
     return { databasePath, tasks, binding: bindings[0] };
   } finally {
     db.close();
+  }
+}
+
+function captureInventory(stage) {
+  const observation = { stage, capturedAt: new Date().toISOString() };
+  const fingerprint = (value) => createHash("sha256").update(value).digest("hex");
+  try {
+    const baseline = readJson(artifact("native-assignment-baseline.json"));
+    const db = new DatabaseSync(
+      path.join(required("OPENCLAW_STATE_DIR"), "state", "openclaw.sqlite"),
+      {
+        readOnly: true,
+      },
+    );
+    try {
+      const row = db
+        .prepare(
+          "SELECT value_json FROM plugin_state_entries WHERE plugin_id = 'codex' AND namespace = 'app-server-thread-bindings' AND entry_key = ?",
+        )
+        .get(baseline.binding.key);
+      const stored = row ? JSON.parse(row.value_json) : undefined;
+      const binding = stored?.binding;
+      observation.binding = stored
+        ? {
+            state: stored.state,
+            sessionId: stored.sessionId,
+            threadId: binding?.threadId,
+            connectionFingerprint: binding?.appServerRuntimeFingerprint
+              ? fingerprint(
+                  JSON.stringify([
+                    binding.appServerRuntimeFingerprint,
+                    binding.connectionScope ?? null,
+                    binding.authProfileId ?? null,
+                  ]),
+                )
+              : null,
+            import: stored.nativeSubagentTaskImport
+              ? {
+                  version: stored.nativeSubagentTaskImport.version,
+                  taskIds: stored.nativeSubagentTaskImport.taskIds,
+                }
+              : undefined,
+            assignments: (stored.nativeSubagentAssignments?.assignments ?? []).map((entry) => ({
+              runId: entry.runId,
+              childThreadId: entry.childThreadId,
+              nativeParentThreadId: entry.nativeParentThreadId,
+              nativeTurnId: entry.nativeTurnId,
+              owner: {
+                parentThreadId: entry.owner?.parentThreadId,
+                sessionId: entry.owner?.sessionId,
+                lifecycleRevision: entry.owner?.lifecycleRevision,
+                connectionFingerprint: entry.owner?.connectionFingerprint,
+              },
+              recordedCompletion: entry.recordedCompletion
+                ? {
+                    status: entry.recordedCompletion.status,
+                    resultSha256: fingerprint(entry.recordedCompletion.result),
+                    hasResultMarker: entry.recordedCompletion.result.includes(RESULT_MARKER),
+                  }
+                : undefined,
+            })),
+          }
+        : null;
+    } finally {
+      db.close();
+    }
+    const sessions = new DatabaseSync(
+      path.join(
+        required("OPENCLAW_STATE_DIR"),
+        "agents",
+        "native-proof",
+        "agent",
+        "openclaw-agent.sqlite",
+      ),
+      { readOnly: true },
+    );
+    try {
+      const row = sessions
+        .prepare("SELECT current_session_id, entry_json FROM session_nodes WHERE session_key = ?")
+        .get(SESSION_KEY);
+      const entry = row ? JSON.parse(row.entry_json) : undefined;
+      observation.session = row
+        ? {
+            currentSessionId: row.current_session_id,
+            sessionId: entry.sessionId,
+            lifecycleRevision: entry.lifecycleRevision,
+            agentHarnessId: entry.agentHarnessId,
+          }
+        : null;
+    } finally {
+      sessions.close();
+    }
+  } catch (error) {
+    // Read failures remain explicit evidence without copying raw state or error text.
+    observation.unavailable = { name: error.name, code: error.code };
+  }
+  writeJson(`native-assignment-inventory-${stage}.json`, observation);
+}
+
+async function handoff() {
+  setPhase("handoff");
+  const seeded = nativeMessages().find(
+    (entry) =>
+      entry.phase === "seed-assignments" &&
+      entry.method === "item/completed" &&
+      entry.params?.threadId === "native-upgrade-parent" &&
+      entry.params?.item?.tool === "spawnAgent",
+  );
+  assert(seeded?.params.turnId, "native handoff has no witnessed seed-parent turn");
+  const socket = new WebSocket(readJson(artifact("native-assignment-ready.json")).url);
+  const deadline = AbortSignal.timeout(30_000);
+  let sequence = 0;
+  const pending = new Map();
+  let interruption;
+  let failure;
+  const fail = (error) => {
+    failure ??= error;
+    for (const request of pending.values()) {
+      request.reject(error);
+    }
+    pending.clear();
+    interruption?.reject(error);
+    interruption = undefined;
+  };
+  socket.addEventListener("message", ({ data }) => {
+    try {
+      const message = JSON.parse(data);
+      if (message.method) {
+        if (
+          interruption &&
+          message.method === "turn/completed" &&
+          message.params?.threadId === "native-upgrade-parent" &&
+          message.params.turn?.id === interruption.turnId
+        ) {
+          const observed = interruption;
+          interruption = undefined;
+          message.params.turn.status === "interrupted"
+            ? observed.resolve()
+            : observed.reject(new Error("Native handoff did not interrupt the seed-parent turn"));
+        }
+        return;
+      }
+      const request = pending.get(message.id);
+      if (request) {
+        pending.delete(message.id);
+        message.error
+          ? request.reject(new Error(message.error.message))
+          : request.resolve(message.result);
+      }
+    } catch (error) {
+      fail(error);
+    }
+  });
+  socket.addEventListener("error", () => fail(new Error("Native handoff transport failed")));
+  socket.addEventListener("close", () => fail(new Error("Native handoff transport closed")));
+  const abort = () => fail(new Error("Native handoff timed out"));
+  deadline.addEventListener("abort", abort, { once: true });
+  const request = (method, params) =>
+    new Promise((resolve, reject) => {
+      deadline.throwIfAborted();
+      if (failure) {
+        throw failure;
+      }
+      const id = ++sequence;
+      pending.set(id, { resolve, reject });
+      socket.send(JSON.stringify({ id, method, params }));
+    });
+  try {
+    await new Promise((resolve, reject) => {
+      socket.addEventListener("open", resolve, { once: true });
+      socket.addEventListener(
+        "error",
+        () => reject(new Error("Native handoff failed to connect")),
+        { once: true },
+      );
+      deadline.addEventListener(
+        "abort",
+        () => reject(new Error("Native handoff connect timed out")),
+        { once: true },
+      );
+    });
+    await request("initialize", { clientInfo: { name: "native-upgrade-handoff", version: "1" } });
+    socket.send(JSON.stringify({ method: "initialized", params: {} }));
+    await request("thread/resume", { threadId: "native-upgrade-parent" });
+    const parent = (
+      await request("thread/read", { threadId: "native-upgrade-parent", includeTurns: true })
+    ).thread;
+    assert.deepEqual(
+      parent.turns.filter((turn) => turn.status === "inProgress").map((turn) => turn.id),
+      [seeded.params.turnId],
+    );
+    const children = {};
+    for (const threadId of ["native-upgrade-running", "native-upgrade-complete"]) {
+      children[threadId] = await request("thread/read", { threadId, includeTurns: true });
+    }
+    // Codex acknowledges interruption before publishing turn/completed. Arm the
+    // exact terminal witness before the request and join both protocol events.
+    const interrupted = new Promise((resolve, reject) => {
+      deadline.throwIfAborted();
+      if (failure) {
+        throw failure;
+      }
+      interruption = { turnId: seeded.params.turnId, resolve, reject };
+    });
+    await Promise.all([
+      interrupted,
+      request("turn/interrupt", {
+        threadId: "native-upgrade-parent",
+        turnId: seeded.params.turnId,
+      }),
+    ]);
+    const settled = (
+      await request("thread/read", { threadId: "native-upgrade-parent", includeTurns: true })
+    ).thread;
+    assert.equal(settled.status.type, "idle");
+    assert(settled.turns.every((turn) => turn.status !== "inProgress"));
+    for (const threadId of Object.keys(children)) {
+      assert.deepEqual(
+        await request("thread/read", { threadId, includeTurns: true }),
+        children[threadId],
+        "parent interruption changed a native child",
+      );
+    }
+    assert.deepEqual(
+      snapshot().tasks,
+      readJson(artifact("native-assignment-baseline.json")).tasks,
+      "native handoff changed published source rows",
+    );
+    // The first candidate Gateway may recover retained work before the explicit live probe.
+    setPhase("recover");
+  } finally {
+    deadline.removeEventListener("abort", abort);
+    socket.close();
   }
 }
 
@@ -416,24 +655,34 @@ function assertCloseWitness(phase, childLoaded) {
       .some(
         (entry) =>
           entry.method === "turn/completed" &&
-          entry.params?.threadId === "native-upgrade-parent" &&
+          entry.params?.threadId === messages[started].params.threadId &&
           entry.params?.turn?.id === messages[started].params.turnId,
       ),
     "native close parent completed before confirmation",
   );
-  assert.deepEqual(response.result, {
-    data: childLoaded
-      ? ["native-upgrade-parent", "native-upgrade-running"]
-      : ["native-upgrade-parent"],
-    nextCursor: null,
-  });
+  assert.equal(response.result.nextCursor, null, "native closure snapshot was incomplete");
+  assert.equal(
+    response.result.data.filter((id) => id === messages[started].params.threadId).length,
+    1,
+    "closing parent was not loaded exactly once",
+  );
+  assert.equal(
+    response.result.data.filter((id) => id === "native-upgrade-running").length,
+    childLoaded ? 1 : 0,
+  );
+  assert(
+    !response.result.data.includes("native-upgrade-complete"),
+    "finished child entered closure inventory",
+  );
 }
 
 async function live(candidateVersion) {
+  captureInventory("before-recovery");
   const before = readJson(artifact("native-assignment-baseline.json"));
   const firstHop = readJson(artifact("native-assignment-first-hop.json"));
   assert.equal(firstHop.candidateVersion, candidateVersion);
   runParent("recover");
+  captureInventory("after-recovery");
   // The foreground run can settle before its detached completion continuation. Join the
   // observable delivery and native terminal event before switching the backend's phase.
   await waitForWitness(() => {
@@ -449,7 +698,7 @@ async function live(candidateVersion) {
       messages.some(
         (entry) =>
           entry.method === "turn/completed" &&
-          entry.params?.threadId === "native-upgrade-parent" &&
+          entry.params?.threadId === delivered[0].params.threadId &&
           entry.params?.turn?.id === reply.result.turn.id,
       ),
       "completion continuation did not settle",
@@ -545,8 +794,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     );
   } else if (operation === "post-update") {
     postUpdate(candidateVersion);
+  } else if (operation === "handoff") {
+    await handoff();
+  } else if (operation === "inventory") {
+    assert.equal(candidateVersion, "after-first-hop");
+    captureInventory(candidateVersion);
   } else if (operation === "live") {
-    await live(candidateVersion);
+    try {
+      await live(candidateVersion);
+    } finally {
+      captureInventory("live-final");
+    }
   } else {
     throw new Error(`Unknown native assignment operation: ${operation}`);
   }
