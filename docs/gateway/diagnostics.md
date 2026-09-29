@@ -490,7 +490,8 @@ limit for the main isolate plus the workers below, not for either half alone.
 - **Prepared model catalog** — one worker, resident for the process lifetime
   because it keeps a published catalog generation.
 - **Canonical database preflight** — up to two workers that validate agent
-  databases.
+  databases. This one is startup peak rather than steady state: the pool closes
+  when the startup validation run finishes.
 - **Transcript, archive, and reclamation** — one retained worker per database
   path in use, plus retention work.
 - **Shared-state reads and lease heartbeat** — one or more workers for
@@ -507,19 +508,24 @@ old-generation limit, which an explicit process-wide heap flag overrides; native
 and external allocations stay outside it.
 
 Idle collection returns unused heap to V8 while the worker stays alive, and each
-resident owner above holds its worker as long as it holds a published result. Only
-**critical** memory pressure retires idle workers through their cleanup owners;
-warning-level pressure events (`rss_threshold`, `heap_threshold`) are recorded
-without retiring anything. A host whose pressure stays at warning level therefore
-keeps every worker resident and may swap instead. Any retirement is followed by a
-rebuild on next use, so it trades resident memory for a slower first request.
+resident owner above holds its worker as long as it holds a published result.
+Owners keep reclaiming on their own schedules at warning level: task pools retire
+idle slots on the pool's idle timeout, and a retained reclamation worker exits
+after its 30-minute idle TTL. **Critical** memory pressure additionally retires
+idle workers through their cleanup owners; warning-level pressure events
+(`rss_threshold`, `heap_threshold`) are recorded without that pressure-driven
+retirement, so a worker whose owner has no idle-retirement path stays resident and
+a host that only ever reaches warning level may swap instead. Any retirement is
+followed by a rebuild on next use, so it trades resident memory for a slower first
+request.
 
 Measure the footprint on your own host instead of assuming a baseline:
 
 - `openclaw gateway call diagnostics.lanes --json` lists live pools: `workerPoolCount`
   and `workerPools`, each with its allowlisted `script` and `workerCount`.
-- `diagnostic.memory.sample` events carry `memory.workerHeaps` with up to the five
-  largest individual worker heaps as `{script, heapUsed, heapTotal}`.
+- `diagnostic.memory.sample` events carry `memory.workerHeaps` with every tracked
+  direct-worker heap as `{script, heapUsed, heapTotal}`; a memory-pressure log
+  prints only the five largest entries, sorted by heap plus external bytes.
 - [Prometheus](/gateway/prometheus) exports the same bytes per worker script
   (`openclaw_worker_heap_used_bytes`) plus worker start and retire counters.
 - `diagnostics.stability` and the sampling heap profile describe the main isolate.
