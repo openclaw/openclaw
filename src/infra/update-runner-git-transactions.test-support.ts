@@ -388,11 +388,11 @@ function registerGitRetainedTransactionTests(
       });
       expect(result.status).toBe("ok");
       assert(retained);
-      expect((await retained.rollback(() => {})).exitCode).toBe(0);
+      const kept = await retained.rollback(() => {});
+      expect(kept.exitCode).toBe(0);
       expect(await runFixtureGit(root, "rev-parse", "refs/heads/main")).toBe(targetSha);
       expect(await runFixtureGit(root, "rev-parse", "HEAD")).toBe(beforeSha);
       expect(await runFixtureGit(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe(branch);
-      const kept = result.steps.find((step) => step.name === "git-rollback-keep-branch");
       expect(kept?.advisory).toMatchObject({ kind: "recoverable-maintenance" });
       expect(kept?.advisory?.message).toContain(
         `Kept branch main created by this update at ${targetSha}`,
@@ -494,12 +494,12 @@ function registerGitRetainedTransactionTests(
     const operatorFile = path.join(root, "operator-note.txt");
     await fs.writeFile(operatorFile, "preserve this operator note\n");
 
-    expect((await retained.rollback(() => {})).exitCode).toBe(0);
+    const restored = await retained.rollback(() => {});
+    expect(restored.exitCode).toBe(0);
     expect(await runFixtureGit(root, "rev-parse", "HEAD")).toBe(beforeSha);
     await expect(runFixtureGit(root, "symbolic-ref", "-q", "HEAD")).rejects.toThrow();
     expect(await runFixtureGit(root, "rev-parse", "refs/heads/main")).toBe(targetSha);
     await expect(runFixtureGit(root, "reflog", "exists", "refs/heads/main")).rejects.toThrow();
-    const restored = result.steps.find((step) => step.name === "git-rollback-source");
     expect(restored?.advisory).toMatchObject({ kind: "recoverable-maintenance" });
     for (const detail of [root, "main", beforeSha, targetSha, "branch -f"]) {
       expect(restored?.advisory?.message).toContain(detail);
@@ -513,7 +513,7 @@ function registerGitRetainedTransactionTests(
   });
 
   it.each(["raw-writer-before", "raw-writer-after"] as const)(
-    "retains the runtime when the rollback rewrite transition cannot be verified: %s",
+    "retained rollback keeps the runtime when the rewrite transition cannot be verified: %s",
     async (failure) => {
       const { root, beforeSha, advanceRemote, update, runCommand, setRunCommand } = getFixture();
       const targetSha = await advanceRemote();
@@ -552,7 +552,11 @@ function registerGitRetainedTransactionTests(
       expect(result.status).toBe("ok");
       assert(retained);
       rollingBack = true;
-      await expect(retained.rollback(() => {})).rejects.toThrow("git-rollback-source");
+      const rollback = retained.rollback(() => {});
+      await expect(rollback).rejects.toThrow("git-rollback-source");
+      for (const sha of [targetSha, beforeSha, concurrentSha]) {
+        await expect(rollback).rejects.toThrow(sha);
+      }
       expect(injected).toBe(true);
       const finalSha = failure === "raw-writer-after" ? concurrentSha : beforeSha;
       expect(await runFixtureGit(root, "rev-parse", "HEAD")).toBe(finalSha);

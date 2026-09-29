@@ -199,7 +199,9 @@ export async function runGitRollbackSteps({
     assertCurrent();
     if (source) {
       if (isFailedUpdateStep(result)) {
-        throw new Error(`Git source rollback failed at ${name}; previous runtime retained.`);
+        throw new Error(
+          `Git source rollback failed at ${name}; previous runtime retained.${result.stderrTail ? ` ${result.stderrTail}` : ""}`,
+        );
       }
       // Advance only to the command's planned result, never a fresh snapshot
       // that could adopt operator edits made while the child was running.
