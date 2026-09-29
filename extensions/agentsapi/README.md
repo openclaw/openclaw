@@ -35,9 +35,12 @@ Exact `toolFilter.include` names become the native tool allowlist. Configured
 exclusions and session tool denials are subtracted from that list; exclusions
 without an explicit include list and wildcard filters are rejected. Legacy SSE and
 custom TLS settings are unsupported. Connection/request timeouts and parallel-call
-settings remain controlled by the native API. Changing the effective HTTP MCP
-configuration or credentials requires an OpenClaw session reset; existing native
-sessions are never silently replaced. Sessions without HTTP MCP configuration
+settings remain controlled by the native API.
+
+Updating MCP definitions in an existing native session is an MVP implementation
+gap. Changing the effective HTTP MCP configuration or credentials requires a fresh
+session through `/new` or `/reset`; the harness does not update or automatically
+replace the existing native session. Sessions without HTTP MCP configuration
 retain their existing bindings.
 
 Stdio MCP forwarding is a deferred implementation gap. Command-based servers are
