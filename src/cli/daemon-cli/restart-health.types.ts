@@ -11,6 +11,7 @@ export const GATEWAY_RESTART_WAIT_OUTCOMES = [
   "build-id-mismatch",
   "stale-pids",
   "stopped-free",
+  "port-held",
   "timeout",
   "still-starting",
   "generation-changed",
