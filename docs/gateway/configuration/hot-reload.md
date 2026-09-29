@@ -234,7 +234,8 @@ Role definitions, proxy trust, identity scopes, Tailscale authentication, and
 trusted-proxy policies apply live. Transport policy changes can require a new
 handshake without cancelling accepted runs. Proxy headers, OIDC mapping, device
 auto-approval, and proxy-address changes fence connections but preserve accepted
-work when the owner's grant is unchanged. Editing another login's identity scopes
+work when the owner's grant is unchanged. This includes a requested initial turn
+after `sessions.create` commits its new session. Editing another login's identity scopes
 or reordering the same scopes keeps the connection and its accepted runs active.
 Changing the owner's identity-scope grant, removing that identity from the proxy
 allowlist, or disabling its authentication method revokes retained and delegated
