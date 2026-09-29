@@ -22,6 +22,7 @@ import {
   waitForSessionsSpawnEvent,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
 import { getLatestSubagentRunByChildSessionKey } from "./subagents/registry/subagent-registry-read.js";
+import { observeRootWork } from "./subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import { resetSubagentRegistryForTests } from "./subagents/registry/subagent-registry.test-helpers.js";
 
 const fastModeEnv = vi.hoisted(() => {
@@ -113,6 +114,7 @@ describe("sessions_spawn lifecycle", () => {
   });
 
   it("retires the child's bundle MCP runtime after run-mode cleanup", async () => {
+    const settleRootWork = observeRootWork();
     const started = createDeferred();
     const gate = createDeferred<"delivered">();
     setSessionsSpawnAnnounceFlowOverride(async () => {
@@ -140,8 +142,12 @@ describe("sessions_spawn lifecycle", () => {
     } finally {
       gate.resolve("delivered");
       const key = ctx.getChild().sessionKey;
-      if (key) {
-        await waitForCleanup(key);
+      try {
+        if (key) {
+          await waitForCleanup(key);
+        }
+      } finally {
+        await settleRootWork();
       }
     }
     await waitForSessionsSpawnEvent(

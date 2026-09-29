@@ -7,9 +7,6 @@ import {
   applyResolvedCommandOutputMode,
   withConsoleLogsRoutedToStderrForJson,
 } from "../../json-output-mode.js";
-import { registerMessagePollCommand } from "./register.poll.js";
-import { registerMessageReactionsCommands } from "./register.reactions.js";
-import { registerMessageReadEditDeleteCommands } from "./register.read-edit-delete.js";
 import { registerMessageSendCommand } from "./register.send.js";
 
 const messageCommandMock = vi.fn(async (): Promise<unknown> => undefined);
@@ -87,6 +84,7 @@ vi.mock("../../deps.js", () => ({
 }));
 
 const { createMessageCliHelpers } = await import("./helpers.js");
+const { registerMessageCommands } = await import("../register.message.js");
 const { initializeGlobalHookRunner, resetGlobalHookRunner } =
   await import("../../../plugins/hook-runner-global.js");
 afterEach(resetGlobalHookRunner);
@@ -291,12 +289,11 @@ describe("runMessageAction", () => {
         dryRun,
       });
       const program = new Command();
-      const message = program.command("message");
-      const helpers = createMessageCliHelpers("telegram");
-      registerMessageSendCommand(message, helpers);
-      registerMessagePollCommand(message, helpers);
-      registerMessageReactionsCommands(message, helpers);
-      registerMessageReadEditDeleteCommands(message, helpers);
+      registerMessageCommands(program, {
+        programVersion: "test",
+        messageChannelOptions: "telegram",
+        agentChannelOptions: "last|telegram",
+      });
       const args = {
         react: ["--message-id", "456", "--emoji", "✅"],
         delete: ["--message-id", "456"],

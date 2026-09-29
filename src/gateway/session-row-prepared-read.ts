@@ -1,6 +1,6 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import type { CapturedSessionEntryReadSource } from "../config/sessions/session-accessor.types.js";
 import { withCanonicalSessionValidationDeferral } from "../config/sessions/session-canonical-validation-deferral.js";
+import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import * as records from "./session-row-projection-record.js";

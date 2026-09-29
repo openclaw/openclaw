@@ -42,7 +42,6 @@ final class QuickChatController: NSObject {
     @ObservationIgnored private let dictation: QuickChatDictation
     @ObservationIgnored private let allowsHotkeyRegistrationInTests: Bool
     @ObservationIgnored private var panel: QuickChatPanel?
-    @ObservationIgnored private var hostingView: NSHostingView<QuickChatView>?
     @ObservationIgnored private weak var textView: NSTextView?
     @ObservationIgnored private var globalMonitor: Any?
     @ObservationIgnored private var localMonitor: Any?
@@ -168,7 +167,6 @@ final class QuickChatController: NSObject {
         NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: nil)
         self.panel?.delegate = nil
         self.panel = nil
-        self.hostingView = nil
         self.textView = nil
     }
 
@@ -283,7 +281,6 @@ final class QuickChatController: NSObject {
         let host = NSHostingView(rootView: view)
         panel.contentView = host
         self.panel = panel
-        self.hostingView = host
         // Sheets retain SwiftUI's delegate; observe their focus loss without replacing it.
         NotificationCenter.default.addObserver(
             self,

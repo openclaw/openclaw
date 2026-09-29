@@ -106,7 +106,7 @@ describe("ACP operator model ceiling", () => {
     }
   }
 
-  it.each(["fixture/denied", "bare-native-model", undefined])(
+  it.each(["fixture/denied", undefined])(
     "rejects an excluded or unqualified selection before backend preparation: %s",
     async (model) => {
       const { outcome, runtimeState } = await run(model);

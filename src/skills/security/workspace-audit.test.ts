@@ -202,12 +202,12 @@ describe("security audit workspace skill path escape findings", () => {
       const unreadableDir = path.join(workspaceDir, "skills", relative);
       await fs.mkdir(unreadableDir, { recursive: true });
       await fs.writeFile(path.join(unreadableDir, "SKILL.md"), "# skill\n");
-      const readDirectory = fs.readdir.bind(fs);
-      const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+      const openDirectory = fs.opendir.bind(fs);
+      const opendirSpy = vi.spyOn(fs, "opendir").mockImplementation(async (...args) => {
         if (path.resolve(String(args[0])) === unreadableDir) {
           throw Object.assign(new Error("directory unavailable"), { code: "EACCES" });
         }
-        return readDirectory(...args);
+        return openDirectory(...args);
       });
 
       try {
@@ -216,7 +216,7 @@ describe("security audit workspace skill path escape findings", () => {
         });
         expect(requireFinding(findings, "skills.workspace.scan_truncated").severity).toBe("warn");
       } finally {
-        readdirSpy.mockRestore();
+        opendirSpy.mockRestore();
       }
     },
   );

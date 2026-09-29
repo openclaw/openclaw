@@ -248,7 +248,7 @@ struct DashboardReconnectTests {
             let reopened = try #require(manager._testController())
             #expect(reopened === first)
             #expect(reopened.webView.url == loginURL)
-            #expect(reopened.hasTLSParams(nil))
+            #expect(reopened.tlsParams == nil)
             #expect(reopened.auth.usesBrowserIdentity)
         }
     }
@@ -283,7 +283,7 @@ struct DashboardReconnectTests {
         #expect(identified.auth == .browserIdentity(gatewayUrl: "wss://team.example/dashboard/"))
         #expect(identified.auth.token == nil)
         #expect(identified.auth.password == nil)
-        #expect(identified.hasTLSParams(nil))
+        #expect(identified.tlsParams == nil)
 
         let nextTunnel = try #require(URL(string: "ws://127.0.0.1:29876"))
         await manager.handleEndpointState(.ready(

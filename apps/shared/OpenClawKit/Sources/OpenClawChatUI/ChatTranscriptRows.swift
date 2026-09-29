@@ -213,14 +213,11 @@ extension ChatTranscriptRow {
                 OpenClawChatMessageContent(
                     type: "tool_result",
                     text: toolText,
-                    thinking: nil,
-                    thinkingSignature: nil,
                     mimeType: nil,
                     fileName: nil,
                     content: nil,
                     id: toolCallId,
                     name: message.toolName,
-                    arguments: nil,
                     details: message.details,
                     isError: message.isError))
 

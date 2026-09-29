@@ -37,9 +37,7 @@ export function registerMessageDiscordAdminCommands(message: Command, helpers: M
 
   const channel = message.command("channel").description("Channel actions");
   helpers
-    .withMessageBase(
-      helpers.withRequiredMessageTarget(channel.command("info").description("Fetch channel info")),
-    )
+    .withMessageBase(channel.command("info").description("Fetch channel info"), "required")
     .action((opts) => helpers.runMessageAction("channel-info", opts));
   register(channel, "list", "List channels", "channel-list", ["guild"]);
 

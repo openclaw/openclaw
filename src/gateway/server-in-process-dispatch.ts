@@ -27,6 +27,7 @@ type InProcessGatewayDispatchOptions = {
   onExecution?: (execution: Promise<void>) => void;
   onSignalAbort?: () => Promise<void> | void;
   requestIdPrefix?: string;
+  prepareDispatchCurrent?: () => Promise<void>;
   sessionMutationCommitGuard?: () => void;
   assertCreatedInputSourceCurrent?: () => void;
   timeoutMs?: number;
@@ -217,6 +218,7 @@ export async function dispatchGatewayRequestInProcessRaw(
               },
               context: options.context,
               methodRegistry: options.methodRegistry,
+              prepareDispatchCurrent: options.prepareDispatchCurrent,
               sessionMutationCommitGuard: options.sessionMutationCommitGuard,
               ...(options.hasCurrentClientAuthority
                 ? { hasCurrentClientAuthority: options.hasCurrentClientAuthority }

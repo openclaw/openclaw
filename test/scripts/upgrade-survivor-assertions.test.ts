@@ -2517,6 +2517,53 @@ process.stdout.write(sessionDir + "\\n");
     ).not.toThrow();
   });
 
+  it.each([
+    { corruption: "none", error: undefined },
+    { corruption: "missing-table", error: /no such table: session_entry_snapshots/ },
+    { corruption: "missing-snapshot", error: /metadata prompt was not preserved/ },
+    { corruption: "wrong-prompt", error: /metadata prompt was not preserved/ },
+  ])("reads schema 24 session snapshots ($corruption)", ({ corruption, error }) => {
+    const verify = () =>
+      runSessionStateAssertion((stateDir) => {
+        writeMigratedSessionState(stateDir);
+        const db = new DatabaseSync(
+          join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+        );
+        try {
+          db.exec(`
+            PRAGMA user_version = 24;
+            CREATE TABLE session_entry_snapshots (
+              session_key TEXT NOT NULL,
+              field TEXT NOT NULL,
+              value_json TEXT NOT NULL,
+              PRIMARY KEY (session_key, field)
+            );
+            INSERT INTO session_entry_snapshots
+              SELECT session_key, 'skillsSnapshot', json_extract(entry_json, '$.skillsSnapshot')
+              FROM session_nodes WHERE json_type(entry_json, '$.skillsSnapshot') IS NOT NULL;
+            UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.skillsSnapshot');
+          `);
+          if (corruption === "missing-table") {
+            db.exec("DROP TABLE session_entry_snapshots;");
+          } else if (corruption === "missing-snapshot") {
+            db.exec("DELETE FROM session_entry_snapshots;");
+          } else if (corruption === "wrong-prompt") {
+            db.prepare("UPDATE session_entry_snapshots SET value_json = ?").run(
+              JSON.stringify({ prompt: "wrong prompt" }),
+            );
+          }
+        } finally {
+          db.close();
+        }
+        writeMigratedSessionFiles(stateDir);
+      });
+    if (error) {
+      expect(verify).toThrow(error);
+    } else {
+      expect(verify).not.toThrow();
+    }
+  });
+
   it("does not mask missing session_nodes rows with a valid file store", () => {
     expect(() =>
       runSessionStateAssertion((stateDir) => {

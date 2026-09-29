@@ -20,6 +20,167 @@ function expectNoDispatch(f: Candidate) {
 }
 
 describePosix("prior-CI whole REST observation fallback", () => {
+  it.each(["stability", "final authority"])(
+    "settles a recalculated projection after forward main during %s",
+    (stage) => {
+      const f = unknownGraphqlCandidate();
+      const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+      f.save({
+        ...f.state(),
+        restObservations: [
+          ...Array.from({ length: stage === "stability" ? 1 : 4 }, () => ({})),
+          { main, pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } },
+          { pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" } },
+        ],
+      });
+
+      const result = f.adminPriorCi(f.path);
+
+      expect(result.status, result.output).toBe(0);
+      expect(f.state()).toMatchObject({
+        mutations: 1,
+        posts: 1,
+        restMergePayload: { sha: f.head, merge_method: "squash" },
+        settlementSleeps: [1, 1],
+      });
+      expect(f.record()).toMatchObject({ phase: "complete", head: f.head, main: f.base });
+      expect(f.git(["rev-parse", `${f.record().landed}^1`])).toBe(main);
+      const calls = f.state().calls.slice(
+        0,
+        f
+          .state()
+          .calls.findIndex(
+            (call) => call.includes("repos/fixture/repo/pulls/123/merge") && call.includes("PUT"),
+          ),
+      );
+      const finalMainRead = calls.findLastIndex((call) =>
+        call.includes("repos/fixture/repo/git/ref/heads/main"),
+      );
+      expect(
+        calls.findLastIndex((call) => call.includes("orgs/fixture/memberships/fixture-operator")),
+      ).toBeGreaterThan(finalMainRead);
+    },
+  );
+
+  it.each(["same main", "persistent", "conflict", "known status", "policy", "head", "rewind"])(
+    "refuses %s during projection recalculation without dispatch",
+    (fault) => {
+      const f = unknownGraphqlCandidate();
+      const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+      const restored = { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" };
+      f.save({
+        ...f.state(),
+        restObservations: [
+          {},
+          {
+            main: fault === "same main" ? f.base : main,
+            pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" },
+          },
+          ...(fault === "persistent" || fault === "same main"
+            ? []
+            : [
+                {
+                  ...(fault === "rewind" ? { main: f.base } : {}),
+                  pr: {
+                    ...restored,
+                    ...(fault === "conflict"
+                      ? { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }
+                      : {}),
+                    ...(fault === "known status" ? { mergeStateStatus: "CLEAN" } : {}),
+                    ...(fault === "head" ? { headRefOid: f.base } : {}),
+                  },
+                  ...(fault === "policy" ? { priorCi: { reviewCount: 2 } } : {}),
+                },
+              ]),
+        ],
+      });
+
+      const result = f.adminPriorCi(f.path);
+
+      expect(result.status, result.output).not.toBe(0);
+      expect(result.output).toContain(
+        fault === "persistent"
+          ? "mergeability recalculation remained UNKNOWN after 3 observations"
+          : fault === "rewind"
+            ? "both observed and verified main"
+            : "PR or main changed during observation",
+      );
+      expect(f.state().settlementSleeps).toEqual(
+        fault === "same main" ? [1] : fault === "persistent" ? [1, 1, 2] : [1, 1],
+      );
+      expectNoDispatch(f);
+    },
+  );
+
+  it.each(["rewind", "divergence", "same-main UNKNOWN"])(
+    "checks %s against the latest accepted main rather than the intent anchor",
+    (fault) => {
+      const f = unknownGraphqlCandidate();
+      const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+      const next =
+        fault === "rewind"
+          ? f.base
+          : fault === "divergence"
+            ? f.commit(f.tree("before\n", "divergent\n"), [f.base])
+            : main;
+      f.save({
+        ...f.state(),
+        restObservations: [
+          {},
+          { main },
+          {
+            main: next,
+            ...(fault === "same-main UNKNOWN"
+              ? { pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } }
+              : {}),
+          },
+        ],
+      });
+      const result = f.adminPriorCi(f.path);
+      expect(result.status, result.output).not.toBe(0);
+      expect(result.output).toContain(
+        fault === "same-main UNKNOWN"
+          ? "PR or main changed during observation"
+          : "both observed and verified main",
+      );
+      expect(f.state().settlementSleeps).toEqual([1]);
+      expectNoDispatch(f);
+    },
+  );
+
+  it.each(["remote-only main", "revoked admin"])(
+    "refuses %s while recalculating in the final authority window",
+    (fault) => {
+      const f = unknownGraphqlCandidate();
+      const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+      const state = f.state();
+      state.priorCi.revokeAdminOnMainFetch = true;
+      state.restObservations = [
+        {},
+        {},
+        {},
+        {},
+        { main, pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } },
+        {
+          pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" },
+          ...(fault === "remote-only main"
+            ? { advanceMain: true }
+            : { priorCi: { membership: "member" } }),
+        },
+      ];
+      f.save(state);
+      const result = f.adminPriorCi(f.path);
+      expect(result.status, result.output).not.toBe(0);
+      expect(result.output).toContain(
+        fault === "remote-only main"
+          ? "final prior-CI main cannot be verified with local-only Git"
+          : "writer must be an active organization admin",
+      );
+      expect(f.state().priorCi.adminRevokedDuringMainFetch).toBe(false);
+      expectNoDispatch(f);
+    },
+  );
+
   it("lands qualified blocked CI through a complete REST observation after GraphQL remains UNKNOWN", () => {
     const f = unknownGraphqlCandidate();
     const result = f.adminPriorCi(f.path);

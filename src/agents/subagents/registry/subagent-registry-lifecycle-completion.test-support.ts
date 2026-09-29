@@ -378,7 +378,10 @@ export function registerNativeCompletionAuthorityTest({
   completeRun: (
     controller: SubagentLifecycleController,
     entry: SubagentRunRecord,
-    options?: Pick<SubagentCompletionRequest, "triggerCleanup" | "terminalReply" | "endedAt">,
+    options?: Pick<
+      SubagentCompletionRequest,
+      "triggerCleanup" | "terminalReply" | "endedAt" | "recoveryCurrent"
+    >,
   ) => Promise<void>;
   helperMocks: { persistSubagentSessionTiming: Mock<() => Promise<void>> };
 }) {
@@ -429,14 +432,15 @@ export function registerNativeCompletionAuthorityTest({
     expect(entry.killReconciliation).toBe(marker);
     expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
   });
-  it.each(["replacement", "cancellation"] as const)(
-    "does not commit a captured result after native %s takes ownership",
+  it.each(["replacement", "cancellation", "recovery authority"] as const)(
+    "does not commit a captured result after %s retires its owner",
     async (transition) => {
       const entry = createRunEntry({ expectsCompletionMessage: false });
       const runs = new Map([[entry.runId, entry]]);
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const persistOrThrow = vi.fn();
+      let recoveryHostCurrent = true;
       const controller = createLifecycleController({
         entry,
         runs,
@@ -450,27 +454,46 @@ export function registerNativeCompletionAuthorityTest({
       const pending = completeRun(controller, entry, {
         terminalReply: undefined,
         triggerCleanup: false,
+        recoveryCurrent: {
+          prepare: async () => true,
+          isHostCurrent: () => recoveryHostCurrent,
+        },
       });
+      const settled = Promise.allSettled([pending]);
       try {
         await entered.promise;
         const successor =
           transition === "replacement" ? createRunEntry({ runId: entry.runId }) : entry;
-        successor.execution = {
-          status: "terminal",
-          endedAt: 5_000,
-          outcome: { status: "error", error: "cancelled" },
-        };
+        if (transition === "recovery authority") {
+          recoveryHostCurrent = false;
+        } else {
+          successor.execution = {
+            status: "terminal",
+            endedAt: 5_000,
+            outcome: { status: "error", error: "cancelled" },
+          };
+        }
         runs.set(entry.runId, successor);
         const execution = successor.execution;
         release.resolve();
-        await pending;
+        const [result] = await settled;
+        if (transition === "recovery authority") {
+          expect(result).toMatchObject({
+            status: "rejected",
+            reason: expect.objectContaining({
+              message: "Subagent terminal publication lost its original owner",
+            }),
+          });
+        } else {
+          expect(result?.status).toBe("fulfilled");
+        }
         expect(runs.get(entry.runId)).toBe(successor);
         expect(successor.execution).toBe(execution);
         expect(persistOrThrow).not.toHaveBeenCalled();
         expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
       } finally {
         release.resolve();
-        await pending;
+        await settled;
       }
     },
   );

@@ -25,12 +25,6 @@ const RESUME_HANDOFF_UNRESOLVED =
 
 const validateHandoffSessionResolveResult = lazyCompile(SessionsResolveResultSchema);
 
-function requireInteractiveResumeTerminal() {
-  if (!isTerminalInteractive()) {
-    throw new Error(RESUME_INTERACTIVE_TERMINAL_GUIDANCE);
-  }
-}
-
 async function formatResumeConnectionError(error: unknown): Promise<Error> {
   const [{ formatTuiErrorMessage }, { resolveGatewayDisconnectState }] = await Promise.all([
     import("../tui/tui-formatters.js"),
@@ -62,18 +56,9 @@ async function connectResumeGateway(opts: ResumeCliOptions, handoffTarget: boole
   });
   try {
     await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const finish = (complete: () => void) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        complete();
-      };
-      client.onConnected = () => finish(resolve);
-      client.onConnectError = (error) => finish(() => reject(error));
-      client.onDisconnected = (reason) =>
-        finish(() => reject(new Error(reason || "Gateway connection closed")));
+      client.onConnected = resolve;
+      client.onConnectError = reject;
+      client.onDisconnected = (reason) => reject(new Error(reason || "Gateway connection closed"));
       client.start();
     });
     return client;
@@ -194,7 +179,9 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
     throw new Error("--handoff cannot be combined with a positional query or --url.");
   }
   const handoff = encodedHandoff === undefined ? undefined : decodeResumeHandoff(encodedHandoff);
-  requireInteractiveResumeTerminal();
+  if (!isTerminalInteractive()) {
+    throw new Error(RESUME_INTERACTIVE_TERMINAL_GUIDANCE);
+  }
   const resolvedQuery = query?.trim();
   const explicitGlobalSession = resolveExplicitGlobalSessionKey(resolvedQuery);
   let connection: Awaited<ReturnType<typeof connectResumeGateway>>["connection"];
