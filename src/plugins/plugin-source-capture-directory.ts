@@ -3,7 +3,6 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { resolveStateDir } from "../config/state-dir.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -17,7 +16,6 @@ import { removeTemporaryArtifacts } from "../infra/temp-artifact-cleanup.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   pluginSourceCaptureMaintenance,
-  pluginSourceCaptureStateDir,
   runInPluginSourceCaptureContext,
 } from "./plugin-source-capture-context.js";
 import { observePluginNativeLoads } from "./plugin-source-capture-native-loads.js";
@@ -27,6 +25,7 @@ import {
   resolvePluginSourceCaptureFallbackPrefix,
   resolvePluginSourceCapturesDirectory,
 } from "./plugin-source-capture-path.js";
+import { resolvePluginSourceCaptureStateDir } from "./plugin-source-capture-state-dir.js";
 
 const CAPTURE_GRACE_MS = 60 * 60 * 1_000;
 
@@ -584,7 +583,7 @@ function scheduleCaptureCleanup(key: string, instance: Instance): void {
 
 /** Artifact custody survives until every producer and metadata owner releases it. */
 export function retainPluginSourceCaptureInstance(stateDir?: string) {
-  const key = path.resolve(stateDir ?? pluginSourceCaptureStateDir.getStore() ?? resolveStateDir());
+  const key = resolvePluginSourceCaptureStateDir(stateDir);
   const maintenance = pluginSourceCaptureMaintenance.getStore();
   const scheduler = maintenance?.scheduler;
   scheduler?.signal.throwIfAborted();

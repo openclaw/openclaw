@@ -325,6 +325,7 @@ export async function writeRootBoundJsonFile(params: {
       throw error;
     }
     let rollbackStatus: ConfigWriteRollbackStatus = "unknown";
+    let cause = error;
     try {
       const rolledBack = await rollbackJsonFileWriteIfUnchanged({
         target: targetAtCommit,
@@ -334,22 +335,17 @@ export async function writeRootBoundJsonFile(params: {
       });
       rollbackStatus = rolledBack ? "restored" : "not-restored";
     } catch (rollbackError) {
-      throw new ConfigWritePostCommitError({
-        configPath: targetAtCommit.absolutePath,
-        rollbackStatus,
-        publication: publication.phase === "removed" ? "partial" : "complete",
-        cause: new AggregateError(
-          [error, rollbackError],
-          `${formatErrorMessage(error)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
-          { cause: rollbackError },
-        ),
-      });
+      cause = new AggregateError(
+        [error, rollbackError],
+        `${formatErrorMessage(error)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
+        { cause: rollbackError },
+      );
     }
     throw new ConfigWritePostCommitError({
       configPath: targetAtCommit.absolutePath,
       rollbackStatus,
       publication: publication.phase === "removed" ? "partial" : "complete",
-      cause: error,
+      cause,
     });
   }
   return publicationProof;

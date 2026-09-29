@@ -710,10 +710,9 @@
   line-break: anywhere;
 }
 
-/* Pair each reader tone with its own opaque, theme-derived tint. A translucent
-   accent fill mixed unrelated state colors into user/sender bubbles. Mixing the
-   ink toward strong text protects both light and dark palettes; the surface
-   remains independent of the bubble beneath it. The whole chip stays atomic. */
+/* Keep status in the ink, not competing fills inside tinted user/sender bubbles.
+   The opaque neutral surface stays independent of its host, while mixing the
+   ink toward strong text protects light and dark palettes. Chips stay atomic. */
 .chat-text a.markdown-github-item {
   --github-item-tone: var(--muted);
 
@@ -722,7 +721,7 @@
   position: static;
   padding: 0.08em 0.45em 0.08em 0.4em;
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--github-item-tone) 12%, var(--bg));
+  background: var(--github-item-bg);
   /* Unknown, unavailable and draft states remain neutral, not disabled. */
   color: color-mix(in srgb, var(--github-item-tone) 65%, var(--text-strong));
   font-weight: 600;
@@ -754,7 +753,7 @@
 
 .chat-text a.markdown-github-item:hover,
 .chat-text a.markdown-github-item:focus-visible {
-  background: color-mix(in srgb, var(--github-item-tone) 18%, var(--bg));
+  background: var(--github-item-hover-bg);
   text-decoration: underline;
 }
 

@@ -35,6 +35,72 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow", () => {
+  it.each(["available", "unavailable before create", "unavailable after create"] as const)(
+    "preserves the runtime through Auto placement when recovery storage is %s",
+    async (storage) => {
+      const { context, flow, place } = createDraftFixture({
+        methods: ["sessions.create", "sessions.dispatch"],
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+      });
+      place.applyPendingPlacement({ agentId: "main", profileId: "", autoDevice: true });
+      place.modelControl.selected = "openai/gpt-5.6-sol";
+      place.modelControl.agentRuntime = "codex";
+      vi.spyOn(flow, "canSubmit").mockReturnValue(true);
+      context.placementStartup.start = vi.fn();
+      const failStorage = () => {
+        vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+          throw new DOMException("storage disabled", "SecurityError");
+        });
+      };
+      vi.mocked(context.sessions.createResult).mockImplementation(async (params) => {
+        if (storage === "unavailable after create") {
+          failStorage();
+        }
+        return {
+          key: expectDefined(params?.key, "Auto placement create key"),
+          initialRun: { status: "idle" },
+        };
+      });
+      vi.mocked(context.navigateAndWait).mockImplementation(async () => {
+        queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
+      });
+      flow.setMessage("Keep my model and runtime");
+      if (storage === "unavailable before create") {
+        failStorage();
+      }
+
+      await flow.submit();
+
+      if (storage !== "unavailable before create") {
+        expect(context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            agentId: "main",
+            message: "",
+            worktree: true,
+            model: "openai/gpt-5.6-sol",
+            agentRuntime: "codex",
+          }),
+          { reconciliation: "background" },
+        );
+        if (storage === "available") {
+          expect(context.placementStartup.start).toHaveBeenCalledOnce();
+        } else {
+          expect(context.placementStartup.start).not.toHaveBeenCalled();
+          expect(flow.error).toBe(
+            "The session was created, but startup needs attention: placement recovery storage is unavailable",
+          );
+          expect(flow.message).toBe("Keep my model and runtime");
+        }
+      } else {
+        expect(context.sessions.createResult).not.toHaveBeenCalled();
+        expect(context.placementStartup.start).not.toHaveBeenCalled();
+        expect(flow.error).toBe("Couldn't prepare session recovery. Your draft has been kept.");
+        expect(flow.message).toBe("Keep my model and runtime");
+      }
+      flow.disconnect();
+    },
+  );
+
   it("preserves a restored file draft and reports disabled uploads without creating a session", async () => {
     const { context, flow } = createDraftFixture();
     context.config.current.uploadsEnabled = false;

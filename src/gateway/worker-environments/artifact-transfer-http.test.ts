@@ -9,7 +9,11 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "../auth-rate-limit.js";
 import { createArtifactTransferHttpCallback } from "./artifact-transfer-http.js";
-import { ArtifactTransferBusyError } from "./artifact-transfer-service.js";
+import {
+  ArtifactTransferBusyError,
+  createArtifactTransferService,
+  type ArtifactTransferService,
+} from "./artifact-transfer-service.js";
 import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
 import { handleWorkerBootstrapArtifactTransferHttpRequest } from "./worker-bootstrap-artifact-transfer-http.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
@@ -63,6 +67,7 @@ describe("artifact transfer response settlement", () => {
       artifactKey?: string;
       range?: string;
       afterWrite?: () => void;
+      transfer?: Omit<ArtifactTransferService, "prepare">;
     } = {},
   ) {
     const chunks: Buffer[] = [];
@@ -94,7 +99,7 @@ describe("artifact transfer response settlement", () => {
         req,
         res,
         clientIp: "127.0.0.1",
-        callback: createArtifactTransferHttpCallback(service),
+        callback: createArtifactTransferHttpCallback(options.transfer ?? service),
         rateLimiter,
       });
       const wire = Buffer.concat(chunks).toString("utf8");
@@ -103,6 +108,36 @@ describe("artifact transfer response settlement", () => {
       socket.destroy();
     }
   }
+
+  it("reports progress only for authorized bytes and isolates observer failures", async ({
+    onTestFinished,
+  }) => {
+    const transfer = createArtifactTransferService({ now: () => now });
+    onTestFinished(() => transfer.closeAll());
+    const onProgress = vi.fn(() => {
+      throw new Error("synthetic progress observer failure");
+    });
+    const prepare = () =>
+      transfer.prepare({
+        artifact,
+        artifactKey: artifact.tarballSha256,
+        ttlMs: 60_000,
+        maxServes: 1,
+        isAuthorized: () => authorized,
+        onProgress,
+      });
+    ({ token } = prepare());
+    transfer.revoke(token);
+    expect((await serve({ transfer })).res.statusCode).toBe(404);
+    expect(onProgress).not.toHaveBeenCalled();
+
+    ({ token } = prepare());
+    const completed = await serve({ transfer });
+    expect(completed.res.statusCode).toBe(200);
+    expect(completed.res.writableFinished).toBe(true);
+    expect(completed.body).toBe(contents);
+    expect(onProgress).toHaveBeenCalled();
+  });
 
   it.each([0, 4, contents.length - 1])(
     "serves exactly the bytes from offset %i",

@@ -405,7 +405,9 @@ side panel and copy the original text, preserving markup, line breaks, and
 indentation. The excerpt and chip also support keyboard activation. Select
 **Show in text field** on the second row inside the composer card to return its
 text to the draft without opening the side panel.
-The composer side panel also offers the same action and removal. Messages
+Use the **X** at the card's top-right corner to discard the pasted text without
+changing your draft or other attachments. The composer side panel also offers
+the same action and removal. Messages
 containing only comment or pasted-text chips
 use a transparent shell.
 Newly uploaded text files remain file cards, even when their names resemble

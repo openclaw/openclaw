@@ -662,27 +662,18 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
       }
       continue;
     }
-    if (keepSource) {
-      try {
-        await claim.retain();
-        changes.push(...groupChanges);
-      } catch (error) {
-        rollbackCommitted();
-        warnings.push(
-          `${shortenHomePath(source.path)} was not migrated: ${errorMessage(error)}. Rerun doctor to retry safely.`,
-        );
-      }
-      continue;
-    }
     try {
-      // release() re-verifies the claimed bytes; when they changed it restores
-      // the newer file itself and reports HeartbeatClaimChangedError.
-      await claim.release({
-        archivePath: archivePathForSource(importAgents[0]![0], source.sha256, env),
-      });
+      if (keepSource) {
+        await claim.retain();
+      } else {
+        // release() restores changed bytes and reports HeartbeatClaimChangedError.
+        await claim.release({
+          archivePath: archivePathForSource(importAgents[0]![0], source.sha256, env),
+        });
+      }
       changes.push(...groupChanges);
     } catch (error) {
-      if (error instanceof Error && error.name === HEARTBEAT_CLAIM_CHANGED_ERROR) {
+      if (keepSource || (error instanceof Error && error.name === HEARTBEAT_CLAIM_CHANGED_ERROR)) {
         // The changed file is authoritative; committed scratch must not shadow it.
         rollbackCommitted();
         warnings.push(
