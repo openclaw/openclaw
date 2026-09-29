@@ -90,7 +90,6 @@ extensions/browser/src/node-host/invoke-browser.ts	5
 extensions/browser/test-fetch.ts	2
 extensions/buzz/src/directory-state.ts	1
 extensions/buzz/src/gateway.ts	1
-extensions/buzz/src/inbound.ts	1
 extensions/buzz/src/message-event.ts	2
 extensions/buzz/src/qa/adapter.runtime.ts	2
 extensions/buzz/src/room-membership.ts	2
@@ -705,7 +704,6 @@ extensions/nostr/src/setup-surface.ts	2
 extensions/nostr/src/types.ts	3
 extensions/nvidia/provider-catalog.ts	1
 extensions/oc-path/src/oc-path/find.ts	12
-extensions/oc-path/src/oc-path/jsonc/parse.ts	1
 extensions/oc-path/src/oc-path/universal.ts	4
 extensions/oc-path/src/oc-path/yaml/edit.ts	2
 extensions/oc-path/src/oc-path/yaml/resolve.ts	6
@@ -1105,7 +1103,7 @@ extensions/workboard/browser/lib/workboard/metadata-contract-normalization.ts	1
 extensions/workboard/browser/lib/workboard/normalization.ts	5
 extensions/workboard/browser/pages/workboard/view-card-actions.ts	2
 extensions/workboard/browser/pages/workboard/view-card-modal.ts	1
-extensions/workboard/doctor-contract-api.ts	4
+extensions/workboard/doctor-contract-api.ts	1
 extensions/workboard/src/cli.ts	2
 extensions/workboard/src/command.ts	1
 extensions/workboard/src/store-automation.ts	1

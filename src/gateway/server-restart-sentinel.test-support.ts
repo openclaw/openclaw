@@ -118,6 +118,19 @@ export function expectMockCallFields(
   return expectRecordFields(mockCallArg(mock, callIndex), expected);
 }
 
+export function expectContinuationDispatchFields(
+  mock: { mock: { calls: Array<Array<unknown>> } },
+  expected: Record<string, unknown>,
+  expectedCtx?: Record<string, unknown>,
+  callIndex = 0,
+): Record<string, unknown> {
+  const params = expectMockCallFields(mock, expected, callIndex);
+  if (expectedCtx) {
+    expectRecordFields(params.ctxPayload, expectedCtx);
+  }
+  return params;
+}
+
 export function expectRestartSentinelTranscriptBroadcast(
   broadcastToConnIds: GatewayBroadcastToConnIdsFn,
   params: { sessionKey: string; report: string; subscribers: ReadonlySet<string> },

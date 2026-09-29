@@ -8,6 +8,11 @@ read_when:
 
 ## Local equivalents
 
+The complete channels test lane prepares its native worker artifacts before
+starting the test process. Cold compilation therefore does not consume the
+test-output watchdog's deadline. Focused channel selections retain lazy
+preparation; the watchdog and compiler cleanup rules remain unchanged.
+
 The lint wrapper owns Go resource limits for current CI. It applies them on
 hosts with fewer than eight available CPUs or less than 24 GiB of memory,
 without applying lint defaults to declaration preparation. Explicit Go settings
