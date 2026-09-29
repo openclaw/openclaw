@@ -176,6 +176,7 @@ import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import {
   beginMcpLoopbackToolCallCapture,
   clearMcpLoopbackToolCallCapture,
+  createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
   markMcpLoopbackToolCallFinished,
   markMcpLoopbackToolCallStarted,
@@ -619,6 +620,21 @@ describe("MCP terminal process result delivery", () => {
 });
 
 describe("buildMcpToolSchema", () => {
+  it("marks only the turn-one core tools as always loaded for deferring harnesses", () => {
+    const entries = buildMockMcpToolSchema(
+      ["message", "sessions_yield", "sessions_spawn", "automations"].map((name) =>
+        makeMockTool({ name, description: name }),
+      ),
+    );
+
+    expect(Object.fromEntries(entries.map((entry) => [entry.name, entry._meta]))).toEqual({
+      message: { "anthropic/alwaysLoad": true },
+      sessions_yield: { "anthropic/alwaysLoad": true },
+      sessions_spawn: undefined,
+      automations: undefined,
+    });
+  });
+
   it("preserves own prototype-named union properties without requiring inherited names", () => {
     const properties = Object.fromEntries(
       ["__proto__", "toString"].map((key) => [key, { type: "string" }]),
@@ -1977,7 +1993,13 @@ describe("mcp loopback server", () => {
     const listed = await readOkMcpPayload(
       await sendLoopbackToolsList({ token: runtime.ownerToken }),
     );
-    expect(listed.result?.tools).toEqual([{ name: "message", inputSchema: objectSchema({}) }]);
+    expect(listed.result?.tools).toEqual([
+      {
+        name: "message",
+        inputSchema: objectSchema({}),
+        _meta: { "anthropic/alwaysLoad": true },
+      },
+    ]);
     expectMcpResultText(await callMainSessionTool({ token: runtime.ownerToken }), "ok");
     expectMcpResultText(
       await callMainSessionTool({ token: runtime.ownerToken, name: "hidden" }),
@@ -2492,6 +2514,16 @@ describe("collector result tool across the loopback MCP boundary", () => {
 });
 
 describe("createMcpLoopbackServerConfig", () => {
+  it("keeps server-wide alwaysLoad by default and drops it when loopback tools are deferred", () => {
+    type LoopbackConfig = { mcpServers?: Record<string, { alwaysLoad?: boolean; url?: string }> };
+    const eager = createMcpLoopbackServerConfig(23119) as LoopbackConfig;
+    const deferred = createMcpLoopbackServerConfig(23119, { deferTools: true }) as LoopbackConfig;
+
+    expect(eager.mcpServers?.openclaw?.alwaysLoad).toBe(true);
+    expect(deferred.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
+    expect(deferred.mcpServers?.openclaw).not.toHaveProperty("alwaysLoad");
+  });
+
   it("requires an active matching CLI capture on GET and DELETE", async () => {
     const { port, runtime } = await startLoopbackServerForTest();
     const captureKey = "capture-transport";

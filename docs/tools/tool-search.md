@@ -58,6 +58,17 @@ controls. OpenClaw passes product capabilities to Codex as dynamic tools, and
 Codex owns the stable native code mode, native tool search, deferred dynamic
 tools, and nested tool calls.
 
+Claude CLI backends reach OpenClaw tools through the bundle MCP loopback server,
+so these controls do not apply there either. By default that server is marked
+`alwaysLoad`, which sends every OpenClaw tool schema on every turn. When you set
+`tools.toolSearch` explicitly (`true`, or an object that resolves enabled), the
+loopback entry drops `alwaysLoad` and Claude Code defers OpenClaw tools behind
+its native ToolSearch. `message` and `sessions_yield` stay loaded on turn one
+through the per-tool `_meta["anthropic/alwaysLoad"]` hint. Leaving
+`tools.toolSearch` unset keeps the eager behavior. Changing the setting
+invalidates reusable Claude CLI sessions once, because the MCP config is part of
+their resume fingerprint.
+
 ## How a turn runs
 
 At planning time the OpenClaw embedded runner builds the effective catalog for the

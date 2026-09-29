@@ -120,6 +120,7 @@ import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
+import { isToolSearchExplicitlyEnabled } from "../tool-search-config.js";
 import { assertNativeCronCreatorCapabilities } from "../tools/cron-tool-creator-cap.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import {
@@ -1327,7 +1328,9 @@ async function prepareCliRunContextWithinReadFence(
       : undefined;
     cleanupPreparedResources = cleanupMcpClientGrant;
     const rawLoopbackServerConfig = mcpLoopbackRuntime
-      ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
+      ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port, {
+          deferTools: isToolSearchExplicitlyEnabled(runConfig),
+        })
       : undefined;
     const loopbackServerConfig =
       rawLoopbackServerConfig && backendResolved.bundleMcpMode === "claude-config-file"

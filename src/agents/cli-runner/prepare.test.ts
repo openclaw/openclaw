@@ -1778,6 +1778,67 @@ describe("prepareCliRunContext", () => {
     }
   });
 
+  it.each([
+    {
+      name: "keeps eager loopback tools when tools.toolSearch is unset",
+      config: {},
+      deferTools: false,
+    },
+    {
+      name: "defers loopback tools when tools.toolSearch is explicitly enabled",
+      config: { tools: { toolSearch: true } },
+      deferTools: true,
+    },
+    {
+      name: "keeps eager loopback tools when tools.toolSearch is explicitly disabled",
+      config: { tools: { toolSearch: false } },
+      deferTools: false,
+    },
+  ] satisfies Array<{ name: string; config: OpenClawConfig; deferTools: boolean }>)(
+    "$name",
+    async ({ config, deferTools }) => {
+      const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+      setRawCliBackendForPrepareTest({
+        id: "google-gemini-cli",
+        pluginId: "google",
+        bundleMcp: true,
+        bundleMcpMode: "gemini-system-settings",
+        config: {
+          command: "gemini",
+          args: ["--prompt", "{prompt}"],
+          output: "json",
+          input: "arg",
+          sessionMode: "existing",
+        },
+      });
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime: vi.fn(() => ({
+          port: 31783,
+          ownerToken: "loopback-owner-token",
+          nonOwnerToken: "loopback-non-owner-token",
+        })),
+        ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
+        createMcpLoopbackServerConfig,
+        mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
+        resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
+      });
+
+      let cleanup: (() => Promise<void>) | undefined;
+      try {
+        const context = await fixture.prepare({
+          sessionKey: "agent:main:main",
+          provider: "google-gemini-cli",
+          model: "gemini-3.1-pro-preview",
+          config,
+        });
+        cleanup = context.preparedBackend.cleanup;
+        expect(createMcpLoopbackServerConfig).toHaveBeenCalledWith(31783, { deferTools });
+      } finally {
+        await cleanup?.();
+      }
+    },
+  );
+
   it("preserves backend staging for queued execution without running it during prepare", async () => {
     const beforeExecution = vi.fn(async () => {});
     const prepareExecution = vi.fn(async () => ({ beforeExecution }));
