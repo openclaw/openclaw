@@ -13,7 +13,6 @@ import type { CronScheduleMaintenanceOptions } from "../store/runtime-worker.typ
 import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../stream-schedule.js";
 import type { CronJob, CronSchedule } from "../types.js";
 import { autoDisableCronJob } from "./auto-disable.js";
-import { normalizePayloadToSystemText } from "./normalize.js";
 import {
   computeOneShotNextRunAtMs,
   clearInvalidForcePreservedNextRun,
@@ -752,13 +751,4 @@ export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean })
     hasScheduledNextRunAtMs(job.state.nextRunAtMs) &&
     nowMs >= job.state.nextRunAtMs
   );
-}
-
-/** Returns main-session queue text for system-event jobs, or undefined when empty/unsupported. */
-export function resolveJobPayloadTextForMain(job: CronJob): string | undefined {
-  if (job.payload.kind !== "systemEvent") {
-    return undefined;
-  }
-  const text = normalizePayloadToSystemText(job.payload);
-  return text.trim() ? text : undefined;
 }

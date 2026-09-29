@@ -1,14 +1,12 @@
 #!/usr/bin/env node
 
 // Enforces Kysely and SQLite guardrails in infrastructure code.
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import type { Expression, ImportDeclaration, Node, SourceFile } from "typescript/unstable/ast";
-import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
-  collectTypeScriptFilesFromRoots,
+  collectFileViolations,
   getPropertyNameText,
   runAsScript,
   toLine,
@@ -350,11 +348,7 @@ function isLikelySqliteReceiver(expression: Expression) {
 
 function isPersistedRowExpression(expression: Expression) {
   const unwrapped = unwrapExpression(expression);
-  if (ts.isPropertyAccessExpression(unwrapped)) {
-    const owner = unwrapExpression(unwrapped.expression);
-    return ts.isIdentifier(owner) && /^(?:row|record|entry)$/u.test(owner.text);
-  }
-  if (ts.isElementAccessExpression(unwrapped)) {
+  if (ts.isPropertyAccessExpression(unwrapped) || ts.isElementAccessExpression(unwrapped)) {
     const owner = unwrapExpression(unwrapped.expression);
     return ts.isIdentifier(owner) && /^(?:row|record|entry)$/u.test(owner.text);
   }
@@ -368,9 +362,6 @@ function isPersistedStringCastType(typeText: string) {
   ].some((pattern) => pattern.test(typeText));
 }
 
-/**
- * Collects Kysely/raw SQLite violations from one source file.
- */
 function collectKyselyGuardrailViolations(sourceFile: SourceFile, relativePath: string) {
   const imports = collectImports(sourceFile);
   const violations: GuardViolation[] = [];
@@ -491,38 +482,31 @@ function collectKyselyGuardrailViolations(sourceFile: SourceFile, relativePath: 
   return violations;
 }
 
-/**
- * Collects Kysely guardrail violations across configured source roots.
- */
 async function collectKyselyGuardrails() {
-  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
-  const files = await collectTypeScriptFilesFromRoots(sourceRoots, { includeTests: true });
   const violations: Array<GuardViolation & { path: string }> = [];
-  for (const filePath of files) {
-    const relativePath = path.relative(repoRoot, filePath).split(path.sep).join("/");
-    const content = await fs.readFile(filePath, "utf8");
-    const sourceFile = parser.parseSourceFile(filePath, content);
-    for (const violation of collectKyselyGuardrailViolations(sourceFile, relativePath)) {
-      violations.push({ path: relativePath, ...violation });
-    }
-  }
-  const nodeSqliteFiles = await collectTypeScriptFilesFromRoots(nodeSqliteBoundaryRoots, {
-    includeTests: false,
-  });
-  for (const filePath of nodeSqliteFiles) {
-    const relativePath = path.relative(repoRoot, filePath).split(path.sep).join("/");
-    const content = await fs.readFile(filePath, "utf8");
-    const sourceFile = parser.parseSourceFile(filePath, content);
-    for (const violation of collectNodeSqliteBoundaryViolations(sourceFile, relativePath)) {
-      violations.push({ path: relativePath, ...violation });
+  for (const scan of [
+    { sourceRoots, includeTests: true, collect: collectKyselyGuardrailViolations },
+    {
+      sourceRoots: nodeSqliteBoundaryRoots,
+      includeTests: false,
+      collect: collectNodeSqliteBoundaryViolations,
+    },
+  ]) {
+    const found = await collectFileViolations({
+      repoRoot,
+      sourceRoots: scan.sourceRoots,
+      includeTests: scan.includeTests,
+      findViolations: (_content, filePath, sourceFile) =>
+        scan.collect(sourceFile, path.relative(repoRoot, filePath).split(path.sep).join("/")),
+    });
+    for (const violation of found) {
+      violation.path = violation.path.split(path.sep).join("/");
+      violations.push(violation);
     }
   }
   return violations;
 }
 
-/**
- * Runs the Kysely guardrail check.
- */
 async function main() {
   const violations = await collectKyselyGuardrails();
   if (violations.length === 0) {

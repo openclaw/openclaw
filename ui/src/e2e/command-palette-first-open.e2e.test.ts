@@ -272,7 +272,10 @@ suite.define(() => {
     { height: 844, width: 390 },
   ])("shows the palette shell while its module loads at $width px", async (viewport) => {
     await suite.withPage({ viewport }, async ({ page }) => {
-      await installMockGateway(page);
+      await installMockGateway(page, {
+        // The held chat route module prevents foreground readiness and roster loading.
+        awaitInitialRoster: false,
+      });
       const paletteModule = await holdModuleResponse(
         page,
         /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,

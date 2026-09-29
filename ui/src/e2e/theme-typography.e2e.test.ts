@@ -57,7 +57,7 @@ async function openThemedChat(
   mode: "dark" | "light",
   scenario: Pick<
     ControlUiMockGatewayScenario,
-    "basePath" | "featureMethods" | "historyMessages" | "methodResponses"
+    "awaitInitialRoster" | "basePath" | "featureMethods" | "historyMessages" | "methodResponses"
   > = {},
 ) {
   const context = await suite.newBrowserContext({
@@ -587,7 +587,10 @@ suite.define(() => {
       // Bundle aborts isolate the boot document; resource timing verifies the
       // browser actually blocks rendering, not merely that a link exists later.
       for (const mode of ["dark", "light"] as const) {
-        const { page } = await openThemedChat(theme, mode);
+        const { page } = await openThemedChat(theme, mode, {
+          // The app bundle is blocked to inspect the boot document before upgrade.
+          awaitInitialRoster: false,
+        });
         await page.route("**/assets/**.js", (route) => route.abort());
         await page.goto(`${suite.server.baseUrl}chat`);
         const report = await page.evaluate(() => ({

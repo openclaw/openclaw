@@ -307,15 +307,7 @@
 }
 
 .approval-page__action--allow-once:hover:not(:disabled) {
-  border-color: var(--accent-hover);
-  background: var(--accent-hover);
-}
-
-:root[data-theme="dark"] .approval-page__action--allow-once:hover:not(:disabled) {
-  background: var(--primary-hover);
-}
-
-:root[data-theme="openknot"] .approval-page__action--allow-once:hover:not(:disabled) {
+  border-color: var(--primary-hover);
   background: var(--primary-hover);
 }
 

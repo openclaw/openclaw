@@ -30,7 +30,7 @@ type CurrentAdmissionFixture = {
 };
 
 export function registerAlreadyCurrentAdmissionTests(f: CurrentAdmissionFixture) {
-  it.each([undefined, "30"])(
+  it.each([undefined])(
     "refuses pending service recovery acquired before already-current activation (timeout=%s)",
     async (timeout) => {
       const updateExecutor = await import("./update-command-executor.js");

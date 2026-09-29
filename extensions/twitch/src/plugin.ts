@@ -28,7 +28,6 @@ import {
   getAccountConfig,
   resolveDefaultTwitchAccountId,
   resolveTwitchAccountContext,
-  resolveTwitchSnapshotAccountId,
   twitchConfigAdapter,
   type ResolvedTwitchAccount,
 } from "./config.js";
@@ -175,11 +174,9 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
         probeAccount: async ({ account, timeoutMs }) => await probeTwitch(account, timeoutMs),
         collectStatusIssues: collectTwitchStatusIssues,
         resolveAccountSnapshot: ({ account, cfg }) => {
-          const resolvedAccountId =
-            account.accountId || resolveTwitchSnapshotAccountId(cfg, account);
-          const { configured } = resolveTwitchAccountContext(cfg, resolvedAccountId);
+          const { configured } = resolveTwitchAccountContext(cfg, account.accountId);
           return {
-            accountId: resolvedAccountId,
+            accountId: account.accountId,
             enabled: account.enabled !== false,
             configured,
           };

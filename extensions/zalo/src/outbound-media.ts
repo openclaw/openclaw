@@ -1,4 +1,3 @@
-// Zalo plugin module implements outbound media behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   asDateTimestampMs,

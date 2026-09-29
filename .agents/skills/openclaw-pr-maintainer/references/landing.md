@@ -223,6 +223,15 @@ Retain these additional fields:
   successful `pr-fail-fast` job's `jobId` and cancellation-step number `step`.
   This records inspected cancellation provenance, never passing coverage.
 
+An explicitly attributed Node job that exhausted its execution deadline may appear
+as `cancelled` in GitHub's job API. Keep it in `failures`, with the actual observed
+cases and incomplete coverage recorded. The verifier requires the matching live
+GitHub Actions check-run, complete deadline/cancellation annotations, consistent
+head, suite and timestamps, an elapsed deadline, one cancelled Node test step,
+no additional failed steps, and unchanged workflow source. It retains the cancelled
+status and deadline evidence; it does not classify this root as fail-fast collateral.
+Manual cancellation and missing or contradictory deadline evidence remain refused.
+
 For the existing Node matrix's native fail-fast (including fork PRs whose monitor
 is skipped), use `cancellation.kind: "matrix-fail-fast"` and
 `workflowJob: "checks-node-core-test-nondist-shard"` instead of monitor `jobId`/`step`.

@@ -26,6 +26,7 @@ import { handleInvoke } from "./invoke.js";
 import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
 import { NodeWorkerCapacityExhaustedError } from "./node-worker-capacity.js";
 import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
+import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-commands.js";
 import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
 import { testWorkerLaunchInput } from "./node-worker-supervisor.test-support.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
@@ -154,6 +155,22 @@ async function invokePrivate(params: {
 }
 
 describe("node-host worker supervisor commands", () => {
+  it("passes a bounded status wait and its connection cancellation to the supervisor", async () => {
+    const supervisor = supervisorWith(fullReceipt());
+    const controller = new AbortController();
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+      paramsJSON: JSON.stringify({ launchId: "launch-1", waitMs: 20_000 }),
+      supervisor,
+      signal: controller.signal,
+    });
+    expect(supervisor.status).toHaveBeenCalledExactlyOnceWith("launch-1", {
+      waitMs: 20_000,
+      signal: controller.signal,
+    });
+    expect(result).toMatchObject({ ok: true });
+  });
+
   it("settles environment teardown only after the exact owner has stopped", async () => {
     const receipt = fullReceipt();
     const supervisor = supervisorWith(receipt);
@@ -893,3 +910,10 @@ describe("node-host worker supervisor commands", () => {
     expect(message.length).toBeLessThanOrEqual(1_024);
   });
 });
+
+it.each(["worker.desktop.computer.v1", " worker.status.v1", "system.run"])(
+  "leaves %s outside supervisor dispatch",
+  async (command) => {
+    expect(await invokeNodeWorkerSupervisorCommand({ command })).toEqual({ handled: false });
+  },
+);

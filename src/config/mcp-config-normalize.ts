@@ -75,8 +75,8 @@ export function normalizeConfiguredMcpServers(value: unknown): ConfigMcpServers 
     return {};
   }
   return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, server]) => isRecord(server))
-      .map(([name, server]) => [name, { ...(server as Record<string, unknown>) }]),
+    Object.entries(value).flatMap(([name, server]) =>
+      isRecord(server) ? [[name, { ...server }]] : [],
+    ),
   );
 }

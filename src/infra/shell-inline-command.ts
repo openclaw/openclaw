@@ -147,10 +147,7 @@ function combinedSeparateValueOptionCount(token: string): number {
 }
 
 function isPosixShortOption(token: string, option: string): boolean {
-  if (token.length < 2 || token[0] !== "-" || token[1] === "-") {
-    return false;
-  }
-  return !token.includes("-", 1) && token.includes(option, 1);
+  return token.startsWith("-") && !token.includes("-", 1) && token.includes(option, 1);
 }
 
 /** Return how many argv tokens a POSIX shell option consumes while scanning. */
@@ -207,7 +204,7 @@ export function resolveInlineCommandMatch(
     }
     const combined = options.allowCombinedC ? parseCombinedCommandFlag(token) : null;
     if (combined) {
-      if (combined.attachedCommand != null) {
+      if (combined.attachedCommand !== null) {
         return { command: combined.attachedCommand.trim() || null, valueTokenIndex: i };
       }
       const valueTokenIndex = i + 1 + combined.separateValueCount;
@@ -355,8 +352,7 @@ function hasPosixStartupModeBeforeInlineCommand(
   return false;
 }
 
-/** Detect fish init-command options that run before the inline command. */
-export function hasFishInitCommandOption(argv: string[]): boolean {
+function hasFishOption(argv: string[], matches: (token: string) => boolean): boolean {
   for (let i = 1; i < argv.length; i += 1) {
     const token = argv[i]?.trim();
     if (!token) {
@@ -365,12 +361,7 @@ export function hasFishInitCommandOption(argv: string[]): boolean {
     if (token === "--") {
       return false;
     }
-    if (
-      token === "-C" ||
-      token === "--init-command" ||
-      (token.startsWith("-C") && token !== "-C") ||
-      token.startsWith("--init-command=")
-    ) {
+    if (matches(token)) {
       return true;
     }
     if (!token.startsWith("-") && !token.startsWith("+")) {
@@ -380,22 +371,16 @@ export function hasFishInitCommandOption(argv: string[]): boolean {
   return false;
 }
 
+/** Detect fish init-command options that run before the inline command. */
+export function hasFishInitCommandOption(argv: string[]): boolean {
+  return hasFishOption(
+    argv,
+    (token) =>
+      token.startsWith("-C") || token === "--init-command" || token.startsWith("--init-command="),
+  );
+}
+
 /** Detect fish attached `-cCOMMAND` forms that should not be rebound. */
 export function hasFishAttachedCommandOption(argv: string[]): boolean {
-  for (let i = 1; i < argv.length; i += 1) {
-    const token = argv[i]?.trim();
-    if (!token) {
-      continue;
-    }
-    if (token === "--") {
-      return false;
-    }
-    if (token.startsWith("-c") && token !== "-c") {
-      return true;
-    }
-    if (!token.startsWith("-") && !token.startsWith("+")) {
-      return false;
-    }
-  }
-  return false;
+  return hasFishOption(argv, (token) => token.startsWith("-c") && token !== "-c");
 }

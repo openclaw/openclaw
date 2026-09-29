@@ -206,16 +206,11 @@ function waitWithTimeout(promise: Promise<void>, timeoutMs: number): Promise<boo
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(false), timeoutMs);
     timer.unref?.();
-    void promise.then(
-      () => {
-        clearTimeout(timer);
-        resolve(true);
-      },
-      () => {
-        clearTimeout(timer);
-        resolve(true);
-      },
-    );
+    const settled = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    void promise.then(settled, settled);
   });
 }
 
@@ -528,7 +523,6 @@ function isPermissionDeniedError(err: unknown): boolean {
   return (
     combined.includes("permission denied") ||
     combined.includes("access denied") ||
-    combined.includes("operation not permitted") ||
     combined.includes("not permitted") ||
     combined.includes("requires root") ||
     combined.includes("must be run as root") ||
@@ -548,19 +542,15 @@ export async function hasTailscaleFunnelRouteForPort(
     timeoutMs: 5_000,
   });
   const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
-  return tailscaleFunnelStatusCoversPort(parsed, port);
-}
-
-const TAILSCALE_LOOPBACK_PROXY_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
-
-function tailscaleFunnelStatusCoversPort(status: Record<string, unknown>, port: number): boolean {
-  for (const proxy of funnelStatusBackendsForPort(status)) {
+  for (const proxy of funnelStatusBackendsForPort(parsed)) {
     if (tailscaleProxyMatchesLoopbackPort(proxy, port)) {
       return true;
     }
   }
   return false;
 }
+
+const TAILSCALE_LOOPBACK_PROXY_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 
 function tailscaleProxyMatchesLoopbackPort(proxy: string, port: number): boolean {
   // Tailscale stores the Proxy field as a full URL string (e.g.

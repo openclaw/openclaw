@@ -30,7 +30,7 @@ import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { resolveGatewayAuthPolicyGeneration } from "./auth-policy.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createChannelManager } from "./server-channels.js";
 import { createContext as createGatewayTestContext } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -121,7 +121,7 @@ it("commits model-only role changes without retiring permitted models or origina
         avatarRevision: "1",
         updatedAt: 1,
       },
-      authPolicyGeneration: resolveGatewayAuthPolicyGeneration(initialConfig),
+      authPolicy: captureGatewayAuthPolicy(initialConfig, null),
       connectionSignal: connection.signal,
     };
     const entered = createDeferred();

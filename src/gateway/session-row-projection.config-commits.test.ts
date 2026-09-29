@@ -180,7 +180,50 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
         { agentId: "main", sessionKey: "agent:main:config-0" },
         { owner: { type: "agent", id: "main" }, assignedBy: { type: "system", id: "test" } },
       );
-      await listProjectedSessions({ projection, opts: { archived: "all", limit: 247 } });
+      const resident = await listProjectedSessions({
+        projection,
+        opts: { archived: "all", limit: 247 },
+      });
+      const residentRows = resident.sessions.map(({ snapshotAt: _snapshotAt, ...row }) => row);
+      for (const [operation, model] of [
+        ["add", "unit-test/talk-a"],
+        ["change", "unit-test/talk-b"],
+        ["remove", undefined],
+      ] as const) {
+        const event = `talk.realtime.model:${operation}`;
+        const before = projection.materializedCount;
+        const started = performance.now();
+        applied = createDeferred<GatewayReloadPlan>();
+        await state.writeConfig({
+          ...cfg,
+          talk: { realtime: model === undefined ? {} : { model } },
+        });
+        watcher.emit("change", state.configPath);
+        const plan = await applied.promise;
+        expect(plan.restartGateway).toBe(false);
+        const dirtyRows = dirtyAtCommit;
+        const result = await listProjectedSessions({
+          projection,
+          opts: { archived: "all", limit: 247 },
+        });
+        const materializations = projection.materializedCount - before;
+        console.log(
+          JSON.stringify({
+            event,
+            count,
+            dirtyRows,
+            materializations,
+            elapsedMs: performance.now() - started,
+          }),
+        );
+        expect(result.totalCount).toBe(count);
+        expect(result.sessions.map(({ snapshotAt: _snapshotAt, ...row }) => row)).toEqual(
+          residentRows,
+        );
+        expect.soft(dirtyRows, event).toBe(0);
+        expect.soft(materializations, event).toBe(0);
+        expect(projection.state.cfg).toBe(cfg);
+      }
       const beforeRename = projection.materializedCount;
       const previousConfig = cfg;
       cfg = {

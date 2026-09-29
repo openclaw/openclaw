@@ -6,6 +6,7 @@ import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import * as terminalStart from "../../lib/sessions/catalog-terminal.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
+import * as toast from "../../lib/toast.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import {
   getChatAttachmentDataUrl,
@@ -34,6 +35,72 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow", () => {
+  it.each(["available", "unavailable before create", "unavailable after create"] as const)(
+    "preserves the runtime through Auto placement when recovery storage is %s",
+    async (storage) => {
+      const { context, flow, place } = createDraftFixture({
+        methods: ["sessions.create", "sessions.dispatch"],
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+      });
+      place.applyPendingPlacement({ agentId: "main", profileId: "", autoDevice: true });
+      place.modelControl.selected = "openai/gpt-5.6-sol";
+      place.modelControl.agentRuntime = "codex";
+      vi.spyOn(flow, "canSubmit").mockReturnValue(true);
+      context.placementStartup.start = vi.fn();
+      const failStorage = () => {
+        vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+          throw new DOMException("storage disabled", "SecurityError");
+        });
+      };
+      vi.mocked(context.sessions.createResult).mockImplementation(async (params) => {
+        if (storage === "unavailable after create") {
+          failStorage();
+        }
+        return {
+          key: expectDefined(params?.key, "Auto placement create key"),
+          initialRun: { status: "idle" },
+        };
+      });
+      vi.mocked(context.navigateAndWait).mockImplementation(async () => {
+        queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
+      });
+      flow.setMessage("Keep my model and runtime");
+      if (storage === "unavailable before create") {
+        failStorage();
+      }
+
+      await flow.submit();
+
+      if (storage !== "unavailable before create") {
+        expect(context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            agentId: "main",
+            message: "",
+            worktree: true,
+            model: "openai/gpt-5.6-sol",
+            agentRuntime: "codex",
+          }),
+          { reconciliation: "background" },
+        );
+        if (storage === "available") {
+          expect(context.placementStartup.start).toHaveBeenCalledOnce();
+        } else {
+          expect(context.placementStartup.start).not.toHaveBeenCalled();
+          expect(flow.error).toBe(
+            "The session was created, but startup needs attention: placement recovery storage is unavailable",
+          );
+          expect(flow.message).toBe("Keep my model and runtime");
+        }
+      } else {
+        expect(context.sessions.createResult).not.toHaveBeenCalled();
+        expect(context.placementStartup.start).not.toHaveBeenCalled();
+        expect(flow.error).toBe("Couldn't prepare session recovery. Your draft has been kept.");
+        expect(flow.message).toBe("Keep my model and runtime");
+      }
+      flow.disconnect();
+    },
+  );
+
   it("preserves a restored file draft and reports disabled uploads without creating a session", async () => {
     const { context, flow } = createDraftFixture();
     context.config.current.uploadsEnabled = false;
@@ -46,6 +113,39 @@ describe("DraftSubmissionFlow", () => {
     expect(flow.attachmentDraft.attachments).toEqual([attachment]);
     expect(flow.error).toContain("uploads are disabled");
     flow.disconnect();
+  });
+
+  it("retains an oversized attachment draft before creating a session", async () => {
+    const takePreparedTitle = vi.fn(() => "Review files");
+    const { context, flow } = createDraftFixture({ takePreparedTitle });
+    const hello = expectDefined(context.gateway.snapshot.hello, "connected hello");
+    hello.policy = {
+      maxPayload: 256 * 1024 + 2,
+      attachments: { maxBytes: 10, maxImageBytes: 10 },
+    };
+    const attachments = ["first.txt", "second.txt"].map((fileName) => ({
+      id: fileName,
+      fileName,
+      mimeType: "text/plain",
+      dataUrl: "data:text/plain;base64,aQ==",
+    }));
+    const mentions = [{ profileId: "profile-alex", start: 0, end: 5 }];
+    flow.setMessage("@Alex review these", mentions);
+    flow.attachmentDraft.replace(attachments);
+    const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
+
+    await flow.submit();
+
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    expect(context.navigateAndWait).not.toHaveBeenCalled();
+    expect(flow.message).toBe("@Alex review these");
+    expect(flow.mentions).toEqual(mentions);
+    expect(flow.attachmentDraft.attachments).toEqual(attachments);
+    expect(flow.submitting).toBe(false);
+    expect(takePreparedTitle).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledExactlyOnceWith({
+      message: "Too large to send: second.txt",
+    });
   });
 
   it.each(["navigation", "reconnect"])("retires only the captured draft after %s", async (mode) => {

@@ -5,7 +5,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isVitestRuntimeEnv } from "../../infra/env.js";
 
-const DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP = 32;
+const DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP = 128;
 const UNKNOWN_CLIENT_IP_BUDGET_KEY = "__openclaw_unknown_client_ip__";
 
 function getMaxPreauthConnectionsPerIpFromEnv(env: NodeJS.ProcessEnv = process.env): number {

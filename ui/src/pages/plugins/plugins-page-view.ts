@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { PluginsSkillsReadParams } from "../../../../packages/gateway-protocol/src/schema/plugin-skills.ts";
 import {
   pathForPluginCatalogEntry,
@@ -51,6 +51,7 @@ import {
 } from "./skill-preview.ts";
 
 type PluginsPageViewActions = {
+  startMcpLogin: (serverName: string) => void;
   openTool: (name: string) => void;
   openSkill: (request: PluginsSkillsReadParams) => void;
   selectHubTab: (tab: PluginsHubTab) => void;
@@ -75,6 +76,9 @@ type PluginsPageViewActions = {
 };
 
 export type PluginsPageViewModel = {
+  mcpLogin: TemplateResult;
+  mcpLoginBusy: boolean;
+  canMcpLogin: boolean;
   renderCredential?: PluginSettingsEditor["renderCredential"];
   help?: PluginHelpController;
   context: ApplicationContext;
@@ -179,6 +183,10 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
       pluginId,
       installProgress: consentController.getActiveInstall(pluginRowKey(pluginId)),
       inspection: detail?.inspection ?? null,
+      mcpLoginBusy: model.mcpLoginBusy,
+      canMcpLogin: model.canMcpLogin,
+      onMcpLogin: actions.startMcpLogin,
+      onEditMcp: () => model.context.navigate("mcp"),
       catalog: detail?.catalog,
       inspectionError: detail?.error ?? null,
       catalogLoading: detail?.catalogLoading,
@@ -333,7 +341,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
               })
       }
     `)}
-    ${renderPluginSkillPreview(model.skillPreview)}
+    ${renderPluginSkillPreview(model.skillPreview)} ${model.mcpLogin}
     ${
       consentController.consent
         ? renderPluginConsentDialog({
