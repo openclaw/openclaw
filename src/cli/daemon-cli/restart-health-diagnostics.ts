@@ -44,6 +44,12 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
       `Readiness budget exhausted after ${Math.round((snapshot.elapsedMs ?? 0) / 1000)}s. Last observed startup phase: ${snapshot.startupPhase}.`,
     );
   }
+  if (snapshot.waitOutcome === "port-held") {
+    lines.push(
+      snapshot.probeError ??
+        `Gateway port ${snapshot.portUsage.port} is held by another process while the Gateway service is stopped.`,
+    );
+  }
   if (snapshot.waitOutcome === "generation-changed") {
     lines.push("Gateway process generation changed before readiness could be confirmed.");
   }
