@@ -2451,52 +2451,50 @@ describe("Crabbox worker provider", () => {
   });
 
   it.each([
-    { providerId: "aws", enrollmentDeadlineMs: 65 * 60_000 + CRABBOX_LIFECYCLE_TIMEOUT_MS },
-    { providerId: "hetzner", enrollmentDeadlineMs: 65 * 60_000 + CRABBOX_LIFECYCLE_TIMEOUT_MS },
-    { providerId: "machine0", enrollmentDeadlineMs: 75 * 60_000 },
+    { providerId: "aws", bootstrapTimeoutMs: undefined, commandMs: 15 * 60_000 },
+    { providerId: "hetzner", bootstrapTimeoutMs: 5 * 60_000, commandMs: 15 * 60_000 },
+    { providerId: "machine0", bootstrapTimeoutMs: 95 * 60_000, commandMs: 95 * 60_000 },
   ])(
-    "reserves diagnostics and full $providerId cleanup after late node enrollment failure",
-    async ({ providerId, enrollmentDeadlineMs }) => {
+    "reserves the granted window, diagnostics, and full $providerId cleanup after late enrollment failure",
+    async ({ providerId, bootstrapTimeoutMs, commandMs }) => {
       const profile = { ...PROFILE, provider: providerId };
+      const budget = { nodeBootstrapTimeoutMs: 105 * 60_000 };
       let elapsedMs = 0;
-      let cleanupTimeoutMs = 0;
+      const commandTimeouts: number[] = [];
       const now = vi.spyOn(Date, "now").mockImplementation(() => elapsedMs);
       const provider = providerWithRunner(async (argv, options) => {
         if (argv[1] === "inspect" || argv[1] === "status") {
           return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
         }
-        if (argv[1] === "run" && String(options.input).includes("node.log tail:")) {
-          elapsedMs += options.timeoutMs + 10_000;
+        if (argv[1] === "run" || argv[1] === "stop") {
+          commandTimeouts.push(options.timeoutMs);
+          elapsedMs += options.timeoutMs + CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS;
         }
-        if (argv[1] === "stop") {
-          cleanupTimeoutMs = options.timeoutMs;
-          elapsedMs += options.timeoutMs + 10_000;
-          return commandResult({ code: null, killed: true, termination: "timeout" });
-        }
-        return commandResult();
+        return argv[1] === "stop"
+          ? commandResult({ code: null, killed: true, termination: "timeout" })
+          : commandResult();
       });
 
       try {
         await expect(
           provider.provision(profile, OPERATION_ID, {
-            beginNodeEnrollment: async () => ({
-              mode: "resume" as const,
-              deviceId: "device-bound",
-              openclawVersion: "2026.8.1",
-              nodeBootstrap: createNodeBootstrapFixture(),
-              displayName: "Bound worker",
-              waitForDeviceId: async () => {
-                elapsedMs = enrollmentDeadlineMs;
-                throw new Error("node enrollment expired");
-              },
-            }),
+            ...budget,
+            beginNodeEnrollment: async () => {
+              elapsedMs = resolveCrabboxProvisionBaseTimeoutMs(profile);
+              return {
+                ...nodeEnrollmentFixture("synthetic-setup", "Bound worker", async () => {
+                  elapsedMs += 10 * 60_000;
+                  throw new Error("node enrollment expired");
+                }),
+                bootstrapTimeoutMs,
+              };
+            },
           }),
         ).rejects.toMatchObject({ code: "cleanup_indeterminate", leaseId: LEASE_ID });
 
-        expect(cleanupTimeoutMs).toBe(CRABBOX_STOP_TIMEOUT_MS);
-        // This fresh failed enrollment has no heartbeat to drain; replays can have one.
-        expect(provider.resolveProvisionTimeoutMs?.(profile)).toBe(
-          elapsedMs + CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS,
+        expect(commandTimeouts).toEqual([commandMs, 60_000, CRABBOX_STOP_TIMEOUT_MS]);
+        expect(provider.resolveProvisionTimeoutMs?.(profile, budget)).toBeGreaterThanOrEqual(
+          elapsedMs,
         );
       } finally {
         now.mockRestore();

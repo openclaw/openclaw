@@ -150,7 +150,7 @@ export function registerQueuedRegistrationClaimCases(params: {
       );
       const attemptCount = f.writes.length;
       const writeObservers = [...f.persistenceObservers];
-      const first = f.manager.claimSubagentRunKill({ runId: entry.runId, expected: entry });
+      const first = await f.claimSubagentRunKill({ runId: entry.runId, expected: entry });
       if (!first) {
         throw new Error("missing initial claim");
       }
@@ -159,8 +159,8 @@ export function registerQueuedRegistrationClaimCases(params: {
         throw new Error("missing claim observer");
       }
       let second: SubagentRunRecord["killIntent"];
-      const reacquired = observedWait.then(() => {
-        second = f.manager.claimSubagentRunKill({ runId: entry.runId, expected: entry });
+      const reacquired = observedWait.then(async () => {
+        second = await f.claimSubagentRunKill({ runId: entry.runId, expected: entry });
         expect(second).toBeDefined();
       });
       try {
@@ -172,7 +172,7 @@ export function registerQueuedRegistrationClaimCases(params: {
           expect(f.persistenceObservers.size).toBe(2);
         });
         expect(
-          f.manager.releaseSubagentRunKillClaim({
+          await f.releaseSubagentRunKillClaim({
             runId: entry.runId,
             expected: entry,
             claim: first,
@@ -188,12 +188,12 @@ export function registerQueuedRegistrationClaimCases(params: {
       } finally {
         const claim = entry.killIntent;
         if (claim) {
-          f.manager.releaseSubagentRunKillClaim({ runId: entry.runId, expected: entry, claim });
+          await f.releaseSubagentRunKillClaim({ runId: entry.runId, expected: entry, claim });
         }
         await reacquired;
         const remaining = entry.killIntent;
         if (remaining) {
-          f.manager.releaseSubagentRunKillClaim({
+          await f.releaseSubagentRunKillClaim({
             runId: entry.runId,
             expected: entry,
             claim: remaining,
@@ -232,12 +232,12 @@ export function registerQueuedRegistrationClaimCases(params: {
         f.writes[2]!.gate.resolve();
         await vi.waitFor(() => expect(f.writes).toHaveLength(4));
       }
-      const claim = f.manager.claimSubagentRunKill({ runId: entry.runId, expected: entry });
+      const claim = await f.claimSubagentRunKill({ runId: entry.runId, expected: entry });
       if (!claim) {
         throw new Error("missing no-replay claim");
       }
       expect(
-        f.manager.releaseSubagentRunKillClaim({ runId: entry.runId, expected: entry, claim }),
+        await f.releaseSubagentRunKillClaim({ runId: entry.runId, expected: entry, claim }),
       ).toBe(true);
       const failure = new SubagentRegistryWriteError(
         outcome,
@@ -294,14 +294,14 @@ export function registerQueuedRegistrationClaimCases(params: {
       f.writes[2]!.gate.resolve();
       await vi.waitFor(() => expect(f.writes).toHaveLength(4));
     }
-    const claim = f.manager.claimSubagentRunKill({ runId: entry.runId, expected: entry });
+    const claim = await f.claimSubagentRunKill({ runId: entry.runId, expected: entry });
     try {
       if (!claim) {
         throw new Error("missing staged-settlement claim");
       }
       if (timing === "released before ACK") {
         expect(
-          f.manager.releaseSubagentRunKillClaim({ runId: entry.runId, expected: entry, claim }),
+          await f.releaseSubagentRunKillClaim({ runId: entry.runId, expected: entry, claim }),
         ).toBe(true);
       } else if (timing === "confirmed Stop") {
         entry.killIntent = undefined;
@@ -333,7 +333,7 @@ export function registerQueuedRegistrationClaimCases(params: {
       if (timing !== "released before ACK") {
         expect(f.writes).toHaveLength(attemptIndex + 1);
         expect(
-          f.manager.releaseSubagentRunKillClaim({ runId: entry.runId, expected: entry, claim }),
+          await f.releaseSubagentRunKillClaim({ runId: entry.runId, expected: entry, claim }),
         ).toBe(true);
       }
       await vi.waitFor(() => expect(f.writes).toHaveLength(attemptIndex + 2));
@@ -351,7 +351,7 @@ export function registerQueuedRegistrationClaimCases(params: {
       expect(successor.execution.status).toBe("queued");
     } finally {
       if (claim && entry.killIntent === claim) {
-        f.manager.releaseSubagentRunKillClaim({ runId: entry.runId, expected: entry, claim });
+        await f.releaseSubagentRunKillClaim({ runId: entry.runId, expected: entry, claim });
       }
       f.acknowledgeAllWrites();
       await joined;
@@ -372,9 +372,9 @@ export function registerQueuedRegistrationClaimCases(params: {
       const hasSuccessor = timing === "successor during claim" || retainedFailure;
       let retainedSettlement: Promise<void> | undefined;
       let claim: SubagentRunRecord["killIntent"];
-      const claimRun = () => {
+      const claimRun = async () => {
         const entry = f.runs.get(f.registration.runId)!;
-        claim = f.manager.claimSubagentRunKill({ runId: entry.runId, expected: entry });
+        claim = await f.claimSubagentRunKill({ runId: entry.runId, expected: entry });
         expect(claim).toBeDefined();
       };
       const cleanup = vi.fn(async () => {});
@@ -396,7 +396,7 @@ export function registerQueuedRegistrationClaimCases(params: {
       try {
         await vi.waitFor(() => expect(f.writes).toHaveLength(1));
         if (initialIntent) {
-          claimRun();
+          await claimRun();
           if (timing === "initial intent refusal") {
             expect(f.writes[0]!.assertCurrent).toThrow("lost its original run owner");
             f.writes[0]!.gate.reject(
@@ -415,7 +415,7 @@ export function registerQueuedRegistrationClaimCases(params: {
             f.writes[1]!.gate.resolve();
             registered = await pipeline;
           }
-          claimRun();
+          await claimRun();
           if (hasSuccessor) {
             const original = f.runs.get(f.registration.runId)!;
             f.runs.set("successor", {
@@ -453,7 +453,7 @@ export function registerQueuedRegistrationClaimCases(params: {
           throw new Error("missing provisional claim");
         }
         expect(
-          f.manager.releaseSubagentRunKillClaim({ runId: entry.runId, expected: entry, claim }),
+          await f.releaseSubagentRunKillClaim({ runId: entry.runId, expected: entry, claim }),
         ).toBe(true);
         if (timing === "initial intent refusal") {
           await vi.waitFor(() => expect(f.writes).toHaveLength(2));
@@ -489,7 +489,7 @@ export function registerQueuedRegistrationClaimCases(params: {
       } finally {
         const entry = f.runs.get(f.registration.runId);
         if (entry && claim && entry.killIntent === claim) {
-          f.manager.releaseSubagentRunKillClaim({ runId: entry.runId, expected: entry, claim });
+          await f.releaseSubagentRunKillClaim({ runId: entry.runId, expected: entry, claim });
         }
         f.acknowledgeAllWrites();
         markGatewayRestartDraining();
@@ -544,7 +544,7 @@ export function registerQueuedRegistrationClaimCases(params: {
         completed = true;
       });
     await entered.promise;
-    const claim = f.manager.claimSubagentRunKill({ runId: entry.runId, expected: entry });
+    const claim = await f.claimSubagentRunKill({ runId: entry.runId, expected: entry });
     try {
       expect(claim).toBeDefined();
       expect(f.scope.canCleanupSession()).toBe(false);
@@ -556,7 +556,7 @@ export function registerQueuedRegistrationClaimCases(params: {
       expect(completed).toBe(false);
     } finally {
       if (claim) {
-        f.manager.releaseSubagentRunKillClaim({ runId: entry.runId, expected: entry, claim });
+        await f.releaseSubagentRunKillClaim({ runId: entry.runId, expected: entry, claim });
       }
       gate.resolve();
       f.acknowledgeAllWrites();

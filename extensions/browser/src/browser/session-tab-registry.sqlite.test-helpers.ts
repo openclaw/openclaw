@@ -1,11 +1,12 @@
 // Shared shapes for the durable session tab registry tests. The registry module
 // is imported fresh per test, so its types are re-declared here rather than
 // exported from production code.
+import type { SessionEntryCurrentPreparation } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { BrowserSessionTabAuthority } from "../browser-runtime-state.js";
 import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import type { BrowserTabOwnership } from "./client.types.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import type { BrowserSessionTabRoute } from "./session-tab-route.js";
-import type { BrowserSessionTabAuthority } from "./session-tab-store.js";
 
 type TabIdentity = {
   sessionKey?: string;
@@ -42,7 +43,7 @@ export type CloseTab = (tab: {
   profile?: string;
 }) => Promise<void>;
 
-type CleanupParams = {
+type CleanupParams = SessionEntryCurrentPreparation & {
   isCurrent?: () => boolean;
   closeTab?: CloseTab;
   closeDurableTab?: (

@@ -33,7 +33,7 @@ import {
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
 
-export function createSpawnOperatorSource() {
+export function createSpawnOperatorSource(profileId = "spawn-operator") {
   const revocation = new AbortController();
   let requestOpen = true;
   let holds = 0;
@@ -44,8 +44,9 @@ export function createSpawnOperatorSource() {
     }
   };
   const authority = createAdmittedRunOperatorAuthority({
-    profileId: "spawn-operator",
+    profileId,
     scopes: ["operator.read", "operator.write"],
+    gatewayAccessGrant: null,
     source: {},
     signal: revocation.signal,
     assertCurrent,
@@ -207,7 +208,7 @@ export async function createBoundWorker(
 
 export function createBoundSpawnInvocation(
   bound: Awaited<ReturnType<typeof createSpawnBoundaryParent>>,
-  request?: { collect?: true; groupId?: string; context?: "isolated" | "fork" },
+  request?: { collect?: true; groupId?: string; context?: "isolated" | "fork"; user?: string },
   requesterModel?: { provider: string; model: string },
 ) {
   const { parentSessionKey, parentRunId } = bound;

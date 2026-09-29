@@ -674,7 +674,7 @@ process.stdout.write(JSON.stringify([{ filename }]));
         expect(args.slice(args.indexOf("timeout"), args.indexOf("timeout") + 3)).toEqual([
           "timeout",
           "--kill-after=30s",
-          "1800s",
+          "3200s",
         ]);
         expect(args[args.indexOf("--entrypoint") + 1]).toBe(
           "/opt/openclaw-e2e/scripts/e2e/lib/prepublish-plugin-registry.sh",

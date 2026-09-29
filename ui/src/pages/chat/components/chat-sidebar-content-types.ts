@@ -73,7 +73,7 @@ export type AttachmentSidebarRuntime = {
   resolveArtifactDownload?: ArtifactDownloadResolver;
 };
 
-type AttachmentSidebarContent = {
+type AttachmentSidebarContent = Omit<AttachmentSidebarSource, "src"> & {
   kind: "attachment";
   attachmentKind?: "audio" | "video" | "document" | "image";
   title: string;
@@ -81,12 +81,6 @@ type AttachmentSidebarContent = {
   src?: string;
   mimeType?: string | null;
   sourceIdentity?: string;
-  playback?: ChatMediaPlaybackMode;
-  authToken?: string | null;
-  sizeBytes?: number;
-  durationMs?: number;
-  width?: number;
-  height?: number;
   voiceNote?: boolean;
   plainText?: boolean;
   renderActions?: () => TemplateResult;

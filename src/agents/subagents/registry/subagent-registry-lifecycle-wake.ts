@@ -565,7 +565,8 @@ export function completeCleanupBookkeeping(
   cleanupParams: CleanupBookkeepingParams,
 ): void {
   const params = context.options;
-  const suppressSessionEffects = context.shouldSuppressSessionEffects(cleanupParams.entry);
+  // Bookkeeping can retire the row; detached child effects refresh currency below.
+  const suppressSessionEffects = !context.sessionEffectsHostCurrent(cleanupParams.entry);
   const scheduleCleanupTails = (options: {
     allowRetiredRow: boolean;
     isDeleteCleanup: boolean;
@@ -580,14 +581,17 @@ export function completeCleanupBookkeeping(
       return (
         rowOwnershipMatches &&
         !context.newerGenerationOwnsSession(cleanupParams.entry) &&
-        !context.shouldSuppressSessionEffects(cleanupParams.entry)
+        context.sessionEffectsHostCurrent(cleanupParams.entry)
       );
     };
     const runCleanupTail = (label: string, run: () => Promise<unknown>) => {
       // Admission can outlive the caller's async scope. Own the tail's lifetime
       // and recheck row ownership after waiting; surviving tails still block snapshots.
       void runWithGatewayDetachedWorkAdmission(async () => {
-        if (postBookkeepingEffectsAllowed()) {
+        if (
+          !(await context.shouldSuppressSessionEffects(cleanupParams.entry)) &&
+          postBookkeepingEffectsAllowed()
+        ) {
           await run();
         }
       }, "subagents:lifecycle-cleanup").catch((error: unknown) => {
@@ -634,7 +638,12 @@ export function completeCleanupBookkeeping(
             agentDir: cleanupParams.entry.agentDir,
             workspaceDir: cleanupParams.entry.workspaceDir,
           },
-          { isCurrent: postBookkeepingEffectsAllowed },
+          {
+            isCurrent: postBookkeepingEffectsAllowed,
+            prepareCurrent: async () =>
+              !(await context.shouldSuppressSessionEffects(cleanupParams.entry)) &&
+              postBookkeepingEffectsAllowed(),
+          },
         ),
       );
     }

@@ -2,7 +2,7 @@
 
 import { appendFile } from "node:fs/promises";
 import {
-  SupersededReviewError,
+  ObsoleteReviewError,
   finishGuard,
   openGuard,
   securityReviewContracts,
@@ -157,7 +157,7 @@ export async function reviewSecuritySensitiveChanges(prepared) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   reviewSecuritySensitiveChanges().catch(
     /** @param {unknown} error */ (error) => {
-      if (error instanceof SupersededReviewError) {
+      if (error instanceof ObsoleteReviewError) {
         console.log(error.message);
         return;
       }

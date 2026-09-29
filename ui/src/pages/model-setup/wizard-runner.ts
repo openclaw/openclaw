@@ -21,6 +21,7 @@ import {
   MODEL_SETUP_AUTH_START_TIMEOUT_MS,
   MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS,
   type ModelSetupWizardResult,
+  type ModelSetupWizardRecovery,
   type ModelSetupWizardState,
   wizardStateFromResult,
 } from "./state.ts";
@@ -119,6 +120,24 @@ export class ModelSetupWizardRunner {
     this.setState({ phase: "starting", authChoice: session.authChoice });
   }
 
+  restore(recovery: ModelSetupWizardRecovery, onTerminalResult: WizardTerminalObserver): void {
+    const client = this.options.getClient();
+    if (!client || this.session) {
+      return;
+    }
+    this.session = {
+      ...recovery,
+      client,
+      notes: [],
+      admitted: true,
+      retirementGeneration: this.retirementGeneration,
+      abortController: new AbortController(),
+      startMethod: "openclaw.setup.auth.start",
+      onTerminalResult,
+    };
+    this.setState({ phase: "starting", authChoice: recovery.authChoice });
+  }
+
   async resume(): Promise<ModelSetupWizardCompletion | null> {
     const previous = this.session;
     const client = this.options.getClient();
@@ -198,9 +217,10 @@ export class ModelSetupWizardRunner {
     if (!client || this.currentState.phase !== "idle") {
       return null;
     }
+    const sessionId = generateUUID();
     const session: WizardSession = {
       client,
-      sessionId: generateUUID(),
+      sessionId,
       retirementGeneration: this.retirementGeneration,
       authChoice,
       authKind: this.pendingSignIn?.kind,
@@ -214,7 +234,11 @@ export class ModelSetupWizardRunner {
         "kind" in params
           ? params
           : startMethod === "openclaw.setup.auth.start" && "authChoice" in params
-            ? { ...params, kind: "provider-auth" }
+            ? {
+                ...params,
+                kind: "provider-auth",
+                wizard: { sessionId, authChoice, authKind: this.pendingSignIn?.kind },
+              }
             : undefined,
       ),
     };
@@ -289,17 +313,8 @@ export class ModelSetupWizardRunner {
   }
 
   async cancel(options: { settleActiveRequest?: boolean } = {}): Promise<void> {
-    this.pendingSignIn?.window?.close();
-    this.pendingSignIn = undefined;
     const session = this.session;
-    session?.reservedWindow?.close();
-    clearTimeout(session?.externalInputTimer);
-    if (!options.settleActiveRequest) {
-      session?.abortController.abort();
-    }
-    this.session = null;
-    this.authLabel = undefined;
-    this.setState({ phase: "idle" });
+    this.clearSession(!options.settleActiveRequest);
     if (session) {
       await this.cancelSession(session);
     }
@@ -371,11 +386,17 @@ export class ModelSetupWizardRunner {
     if (options.retireOwner) {
       this.retirementGeneration += 1;
     }
+    this.clearSession();
+  }
+
+  private clearSession(abortRequest = true): void {
     this.pendingSignIn?.window?.close();
     this.pendingSignIn = undefined;
     this.session?.reservedWindow?.close();
     clearTimeout(this.session?.externalInputTimer);
-    this.session?.abortController.abort();
+    if (abortRequest) {
+      this.session?.abortController.abort();
+    }
     this.session = null;
     this.authLabel = undefined;
     this.setState({ phase: "idle" });

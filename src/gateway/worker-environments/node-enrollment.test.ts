@@ -300,6 +300,33 @@ describe("worker node enrollment", () => {
     },
   );
 
+  it("sizes grants and download authority for the actual artifacts", async () => {
+    const record = await createProvisioning();
+    let transferNow = 0;
+    let tarballBytes = 1;
+    transfer = createWorkerBootstrapArtifactTransferService({ now: () => transferNow });
+    const manager = createManager({
+      prepareArtifact: async () => ({ ...artifact(), tarballBytes }),
+    });
+    for (const { bytes, enrollmentMs, runtimeMs } of [
+      { bytes: 1, enrollmentMs: 45 * 60_000, runtimeMs: 45 * 60_000 },
+      { bytes: 200_000_000, enrollmentMs: 61 * 60_000 + 40_000, runtimeMs: 88 * 60_000 + 20_000 },
+      { bytes: 250_000_000, enrollmentMs: 68 * 60_000 + 20_000, runtimeMs: 95 * 60_000 },
+    ]) {
+      tarballBytes = bytes;
+      const runtime = await manager.prepareRuntime(record, { ...bundle(), tarballBytes });
+      expect(runtime.bootstrapTimeoutMs).toBe(runtimeMs);
+      transferNow += runtimeMs - 1;
+      for (const download of [runtime.nodeBootstrap, runtime.workerBundle]) {
+        expect(
+          transfer.authorize({ token: download.token, artifactKey: download.sha256 }),
+        ).toBeDefined();
+      }
+      const enrollment = await manager.begin(record);
+      expect(enrollment.bootstrapTimeoutMs).toBe(enrollmentMs);
+    }
+  });
+
   it("grants artifact access before enrollment without creating a setup identity or credential", async () => {
     const record = await createProvisioning();
     const manager = createManager();

@@ -54,6 +54,10 @@ import {
   AGENT_V14_CORE_SCHEMA_SQL,
   AGENT_V14_SESSION_SHARING_SCHEMA_SQL,
 } from "./openclaw-agent-session-sharing-schema.js";
+import {
+  SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION,
+  withoutSessionEntrySnapshotsSchema,
+} from "./openclaw-agent-session-snapshots-schema.js";
 import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
@@ -66,10 +70,14 @@ export {
 
 /** Compare historical migration targets against only the representation they support. */
 export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
+  const sessionSchemaSql =
+    targetVersion < SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION
+      ? withoutSessionEntrySnapshotsSchema(OPENCLAW_AGENT_SCHEMA_SQL)
+      : OPENCLAW_AGENT_SCHEMA_SQL;
   const targetSchemaSql =
     targetVersion < AGENT_STORAGE_SCHEMA_VERSION
-      ? withLegacyAgentStorageSchema(OPENCLAW_AGENT_SCHEMA_SQL, targetVersion)
-      : OPENCLAW_AGENT_SCHEMA_SQL;
+      ? withLegacyAgentStorageSchema(sessionSchemaSql, targetVersion)
+      : sessionSchemaSql;
   return targetVersion < 18
     ? withLegacySessionParticipantsSchema(targetSchemaSql)
     : targetVersion < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION

@@ -16,6 +16,7 @@ import {
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { killSubagentRunAdmin } from "../../agents/subagents/registry/subagent-control.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../agents/subagents/registry/subagent-control.types.js";
+import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/subagent-registry-state.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
@@ -31,6 +32,7 @@ import {
   loadTranscriptEvents,
   patchSessionEntryCore,
   readSessionTranscriptWatermark,
+  replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
@@ -400,19 +402,25 @@ it.each(["cascade native new", "RPC reset", "RPC delete"])(
     const sessionKey = "agent:main:direct:incarnation";
     const sessionId = "incarnation-parent";
     const childKey = "agent:child:subagent:incarnation";
-    const storePath = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey,
-      defaultSessionId: sessionId,
-      lifecycleRevision: "before-reset",
-    });
-    const childStore = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "child",
-      sessionKey: childKey,
-      defaultSessionId: "incarnation-child",
-    });
+    const storePath = path.join(fixture.stateDir, "agents/main/sessions/sessions.json");
+    const childStore = path.join(fixture.stateDir, "agents/child/sessions/sessions.json");
+    // Automatic seed maintenance would wait on the fixture's held child writer
+    // while retaining the archive queue needed by parent deletion.
+    replaceSessionEntrySync(
+      { storePath, sessionKey },
+      {
+        sessionId,
+        updatedAt: Date.now(),
+        lifecycleRevision: "before-reset",
+      },
+    );
+    replaceSessionEntrySync(
+      { storePath: childStore, sessionKey: childKey },
+      {
+        sessionId: "incarnation-child",
+        updatedAt: Date.now(),
+      },
+    );
     const scope = { storePath, sessionKey, sessionId, agentId: "main" };
     const parentDatabase = openOpenClawAgentDatabase({ agentId: "main" });
     const transcriptRows = () =>
@@ -439,6 +447,16 @@ it.each(["cascade native new", "RPC reset", "RPC delete"])(
     });
     const entered = createDeferred();
     const release = createDeferred();
+    const child = getSubagentRunByChildSessionKey(childKey)!;
+    const childTerminated = createDeferred();
+    const stopObservingChild = onSubagentRegistryPersisted(() => {
+      if (
+        getSubagentRunByChildSessionKey(childKey) === child &&
+        child.endedReason === "subagent-killed"
+      ) {
+        childTerminated.resolve();
+      }
+    });
     const native = boundary.endsWith("native new");
     let writer: Promise<unknown> | undefined;
     const childHandle = createEmbeddedRunHandle({
@@ -491,7 +509,7 @@ it.each(["cascade native new", "RPC reset", "RPC delete"])(
     });
     try {
       await Promise.race([
-        entered.promise,
+        Promise.all([entered.promise, childTerminated.promise]),
         abort.then(() => {
           throw new Error("abort completed before child gate");
         }),
@@ -570,6 +588,7 @@ it.each(["cascade native new", "RPC reset", "RPC delete"])(
         expect(transcriptRows()).toEqual({ nodes: 0, windows: 0 });
       }
     } finally {
+      stopObservingChild();
       parentAdmission.release();
       operation.complete();
       release.resolve();

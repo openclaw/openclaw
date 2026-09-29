@@ -106,6 +106,12 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     setVerifyState: (next) => (this.verifyState = next),
     setActivationState: (next) => (this.activationState = next),
     setRefreshWarning: (warning) => (this.setupRefreshWarning = warning),
+    resumeWizard: (recovery, observer) => {
+      this.wizard.restore(recovery, observer);
+      void this.runWizardMutation(() => this.wizard.resume());
+    },
+    closeWizard: () => this.closeWizard(),
+    notify: () => this.requestUpdate(),
   });
   private readonly nativeModels = new NativeModelSetup(this, {
     getContext: () => this.context,
@@ -165,17 +171,12 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         this.cancellationNotice = null;
       }
     },
-    onStart: (method, intent) => {
-      if (method === "openclaw.setup.prepare.start") {
-        return undefined;
-      }
-      const activation = this.firstRun.beginActivation(intent ?? { kind: "provider-auth" });
-      return (result) => {
-        this.firstRun.recordActivation(activation, result);
-        this.requestUpdate();
-        return () => this.firstRun.ownsActivation(activation);
-      };
-    },
+    onStart: (method, intent) =>
+      method === "openclaw.setup.prepare.start"
+        ? undefined
+        : this.firstRun.observeActivation(
+            this.firstRun.beginActivation(intent ?? { kind: "provider-auth" }),
+          ),
     onBackgroundCompletion: (completion) =>
       this.runWizardMutation(() => Promise.resolve(completion), true),
     requestFailedMessage: () => t("modelSetup.errors.requestFailed"),

@@ -103,7 +103,8 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         stream: "lifecycle",
         data: { phase: "end", endedAt: Date.now() },
       });
-      await vi.waitFor(() => expect(ended.execution.status).toBe("terminal"));
+      await fixture.settle();
+      expect(ended.execution.status).toBe("terminal");
       clearAgentRunContext("ended");
       await fixture.settle();
       expect(ended.endedReason).toBe("subagent-complete");

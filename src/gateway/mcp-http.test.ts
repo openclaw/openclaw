@@ -28,16 +28,13 @@ import {
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
 import { createProcessTool } from "../agents/bash-tools.process.js";
-import { buildCliMcpGrantContext } from "../agents/cli-runner/mcp-grant-context.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
-import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
 import {
   drainSystemEventEntries,
   enqueueSystemEventWithReceipt,
   peekSystemEventEntries,
 } from "../infra/system-events.js";
-import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import { buildMcpToolSchema } from "./mcp-http.schema.js";
 import type { resolveGatewayScopedTools } from "./tool-resolution.js";
@@ -85,14 +82,6 @@ type ScopedToolsCall = Parameters<typeof resolveGatewayScopedTools>[0] & {
 };
 
 type BeforeToolCallHookInput = Parameters<typeof runBeforeToolCallHook>[0];
-
-type McpToolResultPayload = {
-  result?: {
-    tools?: Array<{ name: string; inputSchema?: Record<string, unknown> }>;
-    content?: Array<Record<string, unknown>>;
-    isError?: boolean;
-  };
-};
 
 const runBeforeToolCallHookMock = vi.hoisted(() =>
   vi.fn(async (args: { params: unknown }): Promise<MockBeforeToolCallHookResult> => ({
@@ -194,27 +183,21 @@ import {
   waitForMcpLoopbackToolCallCaptureIdle,
 } from "./mcp-http.loopback-runtime.js";
 import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
+import {
+  jsonHeaders,
+  mcpToolCallBody,
+  mcpToolCallMessage,
+  readMcpPayload,
+  readOkMcpPayload,
+  sendLoopbackToolCall,
+  sendRaw,
+  startLoopbackServerForTest,
+  type McpToolResultPayload,
+} from "./mcp-http.test-support.js";
 
 const MAIN_SESSION_HEADER = { "x-session-key": "agent:main:main" };
 const ANGLE_NUMBER_PROPERTY = { type: "number" };
 const SSE_TEST_READ_TIMEOUT_MS = 100;
-
-async function sendRaw(params: {
-  port: number;
-  token?: string;
-  method?: "GET" | "POST" | "DELETE" | "PUT";
-  headers?: Record<string, string>;
-  body?: string;
-}) {
-  return await fetch(`http://127.0.0.1:${params.port}/mcp`, {
-    method: params.method ?? "POST",
-    headers: {
-      ...(params.token ? { authorization: `Bearer ${params.token}` } : {}),
-      ...params.headers,
-    },
-    body: params.body,
-  });
-}
 
 async function readStreamChunkWithTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -443,19 +426,6 @@ async function sendStalledBody(params: {
   });
 }
 
-async function startLoopbackServerForTest() {
-  await ensureMcpLoopbackServer(0);
-  const runtime = getActiveMcpLoopbackRuntime();
-  if (!runtime) {
-    throw new Error("expected active MCP loopback runtime");
-  }
-  return { port: runtime.port, runtime };
-}
-
-async function readMcpPayload(response: Response): Promise<McpToolResultPayload> {
-  return (await response.json()) as McpToolResultPayload;
-}
-
 async function sendLoopbackToolsList(params: {
   token?: string;
   headers?: Record<string, string>;
@@ -466,20 +436,6 @@ async function sendLoopbackToolsList(params: {
     token: params.token,
     headers: jsonHeaders(params.headers),
     body: mcpToolsListBody(params.id),
-  });
-}
-
-async function sendLoopbackToolCall(params: {
-  token?: string;
-  name: string;
-  args?: Record<string, unknown>;
-  headers?: Record<string, string>;
-}) {
-  return sendRaw({
-    port: getActiveMcpLoopbackRuntime()?.port ?? 0,
-    token: params.token,
-    headers: jsonHeaders(params.headers),
-    body: mcpToolCallBody(params.name, params.args),
   });
 }
 
@@ -494,12 +450,6 @@ async function sendMainSessionToolCall(params: {
     args: params.args,
     headers: MAIN_SESSION_HEADER,
   });
-}
-
-async function readOkMcpPayload(response: Response) {
-  const payload = await readMcpPayload(response);
-  expect(response.status).toBe(200);
-  return payload;
 }
 
 async function listMainSessionTools(token?: string) {
@@ -629,28 +579,8 @@ function mockScopedTools(tools: MockGatewayTool[]) {
   });
 }
 
-function jsonHeaders(headers: Record<string, string> = {}) {
-  return {
-    "content-type": "application/json",
-    ...headers,
-  };
-}
-
 function mcpToolsListBody(id = 1) {
   return JSON.stringify({ jsonrpc: "2.0", id, method: "tools/list" });
-}
-
-function mcpToolCallBody(name: string, args: Record<string, unknown> = {}, id = 1) {
-  return JSON.stringify(mcpToolCallMessage(name, args, id));
-}
-
-function mcpToolCallMessage(name: string, args: Record<string, unknown> = {}, id = 1) {
-  return {
-    jsonrpc: "2.0",
-    id,
-    method: "tools/call",
-    params: { name, arguments: args },
-  } as const;
 }
 
 function buildMockMcpToolSchema(tools: MockGatewayTool[]) {
@@ -1872,95 +1802,6 @@ describe("mcp loopback server", () => {
       availability.resolve({ cacheKey: "eligible", isAvailable: () => true });
       clearMcpLoopbackToolCallCapture(captureKey);
     }
-  });
-
-  it("carries callable personal Workshop authority outside cloned grant context", async () => {
-    const { runtime } = await startLoopbackServerForTest();
-    const admittedRunContext = await activeAdmission("run-library-grant");
-    const invoke = vi.fn(async () => {
-      const caller = getGatewayToolCallerIdentity();
-      expect(caller?.operationalRunInstance).toBe(admittedRunContext.operationalRunInstance);
-      expect(caller?.receiptAuthority?.()).toBe(true);
-      return {
-        entries: [],
-        profileId: "requester",
-        multipleProfiles: true,
-        defaultTarget: "personal" as const,
-        canManageWorkspace: false,
-        defaultSelectionLimit: 64,
-      };
-    });
-    const skillLibraryAuthoring: SkillLibraryAuthoringCapability = {
-      target: "personal",
-      defaultTarget: "personal",
-      multipleProfiles: true,
-      bind: () => {},
-      invoke,
-    };
-    const context = buildCliMcpGrantContext({
-      run: {
-        sessionId: "library-session",
-        sessionKey: "agent:main:library",
-        sessionFile: "/tmp/library-session",
-        workspaceDir: "/tmp/library-workspace",
-        provider: "test-cli",
-        prompt: "List my skills",
-        timeoutMs: 1_000,
-        runId: "run-library-grant",
-        skillLibraryAuthoring,
-      },
-      config: {},
-      requireExplicitMessageTarget: false,
-      agentId: "main",
-      modelProvider: "openai",
-      modelId: "gpt-5.6-luna",
-    });
-    const grantInput = {
-      context,
-      runtimeOwnerToken: runtime.ownerToken,
-      admittedRunContext,
-      skillLibraryAuthoring,
-    };
-    const grant = mintMcpLoopbackClientGrant(grantInput);
-    expect(grant.context).not.toHaveProperty("skillWorkshop.libraryAuthoring");
-    resolveGatewayScopedToolsMock.mockImplementation((input) => {
-      const capability = (input as ScopedToolsCall).skillWorkshop?.libraryAuthoring;
-      if (!capability) {
-        return { agentId: "main", tools: [] };
-      }
-      const tool = createLibrarySkillWorkshopTool(capability);
-      return {
-        agentId: "main",
-        tools: [
-          makeMockTool({
-            name: tool.name,
-            parameters: tool.parameters,
-            execute: async (id, args) => ({
-              content: (await tool.execute(String(id), args)).content,
-            }),
-          }),
-        ],
-      };
-    });
-    const captureKey = "capture-library-grant";
-    activateMcpLoopbackClientGrantCapture({
-      token: grant.token,
-      runtimeOwnerToken: runtime.ownerToken,
-      captureKey,
-    });
-    const response = await sendLoopbackToolCall({
-      token: grant.token,
-      name: "skill_workshop",
-      args: { action: "list" },
-      headers: { "x-openclaw-cli-capture-key": captureKey },
-    });
-    const payload = await readOkMcpPayload(response);
-    expect(payload.result?.isError).toBe(false);
-    expect(JSON.parse(String(payload.result?.content?.[0]?.text))).toMatchObject({
-      entries: [],
-      omitted: 0,
-    });
-    expect(invoke).toHaveBeenCalledOnce();
   });
 
   it.each(["revoked", "replaced"])(

@@ -8,6 +8,7 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "../../../src/agents/auth-
 import type { EmbeddedAgentQueueMessageOutcome } from "../../../src/agents/embedded-agent-runner/runs.js";
 import { withFastReplyConfig } from "../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../src/state/openclaw-agent-db-lifecycle.js";
 import { captureEnv } from "../../../src/test-utils/env.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
@@ -233,6 +234,7 @@ afterAll(async () => {
   if (!suiteTempHomeRoot) {
     return;
   }
+  await closeOpenClawAgentDatabasesAsync(suiteTempHomeRoot);
   try {
     rmSync(suiteTempHomeRoot, { recursive: true, force: true });
   } catch {

@@ -98,8 +98,8 @@ export default defineConfig({
     expect(identity.path).toContain(path.join(root, "retained-agent-state"));
     const report: JsonTestResults = JSON.parse(await fs.readFile(reportPath, "utf8"));
     expect(report).toMatchObject({
-      numTotalTests: 13,
-      numPassedTests: 12,
+      numTotalTests: 15,
+      numPassedTests: 14,
       numFailedTests: 0,
       numPendingTests: 1,
       numTodoTests: 0,

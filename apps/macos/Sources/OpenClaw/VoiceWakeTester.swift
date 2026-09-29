@@ -288,7 +288,10 @@ final class VoiceWakeTester {
     }
 
     private static func debugCandidateGaps(triggers: [String], segments: [WakeWordSegment]) -> String {
-        let tokens = self.normalizeSegments(segments)
+        let tokens = segments.compactMap { segment -> (normalized: String, segment: WakeWordSegment)? in
+            let normalized = VoiceWakeTextUtils.normalizeToken(segment.text)
+            return normalized.isEmpty ? nil : (normalized, segment)
+        }
         guard !tokens.isEmpty else { return "" }
         let triggerTokens = triggers.map(VoiceWakeTextUtils.normalizedTokens)
         var gaps: [String] = []
@@ -299,31 +302,14 @@ final class VoiceWakeTester {
             for i in 0...(tokens.count - count - 1) {
                 let matched = (0..<count).allSatisfy { tokens[i + $0].normalized == trigger[$0] }
                 if !matched { continue }
-                let triggerEnd = tokens[i + count - 1].end
-                let nextToken = tokens[i + count]
+                let triggerEnd = tokens[i + count - 1].segment.end
+                let nextToken = tokens[i + count].segment
                 let gap = nextToken.start - triggerEnd
                 let formatted = String(format: "%.2f", gap)
                 gaps.append("\(trigger.joined(separator: " ")):\(formatted)s")
             }
         }
         return gaps.joined(separator: ", ")
-    }
-
-    private struct DebugToken {
-        let normalized: String
-        let start: TimeInterval
-        let end: TimeInterval
-    }
-
-    private static func normalizeSegments(_ segments: [WakeWordSegment]) -> [DebugToken] {
-        segments.compactMap { segment in
-            let normalized = VoiceWakeTextUtils.normalizeToken(segment.text)
-            guard !normalized.isEmpty else { return nil }
-            return DebugToken(
-                normalized: normalized,
-                start: segment.start,
-                end: segment.end)
-        }
     }
 
     private func scheduleSilenceCheck(

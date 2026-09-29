@@ -5,7 +5,12 @@
 import type { Server } from "node:http";
 import type { ChromeMcpPageProbe } from "./chrome-mcp-contracts.js";
 import type { RunningChrome } from "./chrome.js";
-import type { BrowserOpenResult, BrowserTab, BrowserTransport } from "./client.types.js";
+import type {
+  BrowserOpenResult,
+  BrowserTab,
+  BrowserTransport,
+  ProfileStatus as BrowserClientProfileStatus,
+} from "./client.types.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import type { BrowserErrorResponse } from "./errors.js";
 import type { ExtensionRelayResource } from "./extension-relay/relay-access.js";
@@ -113,19 +118,8 @@ export type ProfileContext = {
 } & BrowserProfileActions;
 
 /** Status payload returned by Browser profile listing. */
-export type ProfileStatus = {
-  name: string;
+export type ProfileStatus = BrowserClientProfileStatus & {
   transport: BrowserTransport;
-  cdpPort: number | null;
-  cdpUrl: string | null;
-  color: string;
-  driver: ResolvedBrowserProfile["driver"];
-  running: boolean;
-  tabCount: number;
-  isDefault: boolean;
-  isRemote: boolean;
-  missingFromConfig?: boolean;
-  reconcileReason?: string | null;
 };
 
 /** Inputs for creating a Browser route context. */

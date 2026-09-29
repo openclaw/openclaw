@@ -13,7 +13,6 @@ import {
 } from "openclaw/plugin-sdk/webhook-ingress";
 import {
   createWebhookInFlightLimiter,
-  installRequestBodyLimitGuard,
   readWebhookBodyOrReject,
   sendHttpRequestRejection,
 } from "openclaw/plugin-sdk/webhook-request-guards";
@@ -490,19 +489,10 @@ async function handleFeishuWebhook(
     return;
   }
 
-  const guard = installRequestBodyLimitGuard(req, res, {
-    maxBytes: FEISHU_WEBHOOK_MAX_BODY_BYTES,
-    timeoutMs: FEISHU_WEBHOOK_BODY_TIMEOUT_MS,
-    responseFormat: "text",
-  });
-  if (guard.isTripped()) {
-    preAuthInFlightLimiter.release(preAuthInFlightKey);
-    return;
-  }
-
   try {
     let rawBody: string;
     try {
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
       const body = await readWebhookBodyOrReject({
         req,
         res,
@@ -511,9 +501,6 @@ async function handleFeishuWebhook(
         profile: "pre-auth",
       });
       if (!body.ok || res.writableEnded) {
-        return;
-      }
-      if (guard.isTripped()) {
         return;
       }
       rawBody = body.value;
@@ -562,7 +549,6 @@ async function handleFeishuWebhook(
     } finally {
       // This slot owns only untrusted body and signature work; authenticated
       // parsing and dispatch must not reject new reads when downstream stalls.
-      guard.dispose();
       preAuthInFlightLimiter.release(preAuthInFlightKey);
     }
 

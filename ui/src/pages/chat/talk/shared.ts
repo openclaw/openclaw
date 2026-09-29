@@ -200,21 +200,18 @@ type AgentWaitResult = {
 const EMPTY_FINAL_FALLBACK_GRACE_MS = 500;
 
 function extractTextFromMessage(message: unknown): string {
-  if (!message || typeof message !== "object") {
+  const record = asOptionalObjectRecord(message);
+  if (!record) {
     return "";
   }
-  const record = message as Record<string, unknown>;
   if (typeof record.text === "string") {
     return record.text;
   }
   const content = Array.isArray(record.content) ? record.content : [];
   const parts = content
     .map((block) => {
-      if (!block || typeof block !== "object") {
-        return "";
-      }
-      const entry = block as Record<string, unknown>;
-      return entry.type === "text" && typeof entry.text === "string" ? entry.text : "";
+      const entry = asOptionalObjectRecord(block);
+      return entry?.type === "text" && typeof entry.text === "string" ? entry.text : "";
     })
     .filter(Boolean);
   return parts.join("\n\n").trim();
@@ -362,8 +359,7 @@ function emitRealtimeTalkAgentProgress(
   if (!emitTalkEvent || payload.stream !== "tool") {
     return;
   }
-  const data = payload.data && typeof payload.data === "object" ? payload.data : {};
-  const record = data as Record<string, unknown>;
+  const record = asOptionalObjectRecord(payload.data) ?? {};
   const phase = typeof record.phase === "string" ? record.phase : undefined;
   const name = typeof record.name === "string" ? record.name : undefined;
   const toolCallId = typeof record.toolCallId === "string" ? record.toolCallId : undefined;
@@ -495,10 +491,10 @@ function maybeSpeakRealtimeTalkControlResult(
   speakControlResult: ((message: string) => void) | undefined,
   suppressSpeechForModes: readonly RealtimeVoiceAgentControlMode[] | undefined,
 ): void {
-  if (!speakControlResult || !result || typeof result !== "object") {
+  const record = asOptionalObjectRecord(result);
+  if (!speakControlResult || !record) {
     return;
   }
-  const record = result as Record<string, unknown>;
   const mode =
     typeof record.mode === "string" ? (record.mode as RealtimeVoiceAgentControlMode) : undefined;
   if (mode && suppressSpeechForModes?.includes(mode)) {
