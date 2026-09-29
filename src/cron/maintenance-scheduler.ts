@@ -39,7 +39,7 @@ export function createCronMaintenanceScheduler(
   }
 
   return {
-    start(scheduler: GatewayScheduler) {
+    start: (scheduler: GatewayScheduler) => {
       if (scope && !scope.signal.aborted) {
         return;
       }
@@ -52,7 +52,7 @@ export function createCronMaintenanceScheduler(
         run: () => startScheduledSweep(signal),
       });
     },
-    async stop(): Promise<void> {
+    stop: async (): Promise<void> => {
       await Promise.all([scope?.stop(), scheduledSweep]);
     },
   };

@@ -118,7 +118,7 @@ export class GatewayScheduler {
       beginClose,
       stop: async () => {
         beginClose();
-        await Promise.all([...owner.jobs].map((job) => job.running));
+        await Promise.all([...owner.jobs].flatMap((job) => job.running ?? []));
       },
     };
   }
