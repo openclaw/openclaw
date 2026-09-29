@@ -80,11 +80,13 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
   tempDirs.cleanup();
 });
 
 test("commits foreground replacement while cold reclamation holds native integrity", async () => {
   const fixture = createFixture(["victim", "foreground"]);
+  vi.stubEnv("OPENCLAW_STATE_DIR", fixture.options.env.OPENCLAW_STATE_DIR);
   await closeOpenClawAgentDatabaseByPathAsync(fixture.database.path);
   invalidateOpenClawAgentDatabaseValidation(fixture.database.path);
   clearOpenClawAgentIntegrityVerification(fixture.database.path, fixture.options.env);
@@ -117,7 +119,6 @@ test("commits foreground replacement while cold reclamation holds native integri
     ).toBe("native integrity");
     expect(Atomics.load(new Int32Array(counts), 0)).toBe(1);
     await applySessionEntryReplacements({
-      env: fixture.options.env,
       storePath: fixture.database.path,
       sessionKeys: [fixture.scopes[1]!.sessionKey],
       skipMaintenance: true,

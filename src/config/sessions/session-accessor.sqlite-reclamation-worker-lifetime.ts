@@ -239,6 +239,7 @@ export class SqliteReclamationWorker {
   async prepare(
     params: Omit<MutationRunParams<SqliteReclamationPreparation>, "claim"> & {
       expectedSource: SqliteReclamationExistingSource;
+      plan: SqliteSessionReclamationPlan;
       assertCurrent: () => void;
     },
   ): Promise<
@@ -259,7 +260,8 @@ export class SqliteReclamationWorker {
       ...params,
       assertCurrent,
       databaseOptions: this.options,
-      kind: "prepare",
+      kind: params.plan.kind,
+      sessionId: reclamationSessionId(params.plan),
       readOpeningValidation: () => {
         assertCurrent();
         const openingValidation = getOpenClawAgentDatabaseValidationForTransfer(this.options);
@@ -327,12 +329,7 @@ export class SqliteReclamationWorker {
       databaseOptions: params.plan.databaseOptions,
       assertCurrent: () => this.assertCurrent(params.plan.databaseOptions, params.claim),
       kind: params.plan.kind,
-      sessionId:
-        params.plan.kind === "entry"
-          ? params.plan.preparedTargetSnapshot[0]?.entry.sessionId
-          : params.plan.kind === "historical-generation" || params.plan.kind === "history-eviction"
-            ? params.plan.sessionId
-            : undefined,
+      sessionId: reclamationSessionId(params.plan),
       request: (operationId, coordination) => ({
         type: "reclaim",
         operationId,
@@ -707,4 +704,12 @@ export class SqliteReclamationWorker {
       this.closing = undefined;
     }));
   }
+}
+
+function reclamationSessionId(plan: SqliteSessionReclamationPlan): string | undefined {
+  return plan.kind === "entry"
+    ? plan.preparedTargetSnapshot[0]?.entry.sessionId
+    : plan.kind === "historical-generation" || plan.kind === "history-eviction"
+      ? plan.sessionId
+      : undefined;
 }

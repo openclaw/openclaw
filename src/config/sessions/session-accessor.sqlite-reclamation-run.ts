@@ -251,6 +251,8 @@ export async function runSqliteSessionReclamation(params: {
             const receiveValidation =
               captureOpenClawAgentDatabaseValidationTransfer(validationSource);
             const prepared = await worker.prepare({
+              plan: params.plan,
+              diagnostics: params.diagnostics,
               expectedSource,
               assertCurrent: assertOpeningCurrent,
               commitGate,
