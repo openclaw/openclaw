@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { callGateway } from "../../../gateway/call.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
@@ -19,10 +19,12 @@ const fixture = vi.hoisted(() => ({
 }));
 vi.mock("../../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
-  patchSessionEntryCore: vi.fn(async () => null),
   findTranscriptEvent: () => {
     throw new Error("Unexpected transcript lookup in queued registration recovery");
   },
+}));
+vi.mock("../../../config/sessions/session-accessor.sqlite-replacement-projection.js", () => ({
+  applySessionEntryExactReplacements: vi.fn(async () => undefined),
 }));
 vi.mock("../../../gateway/call.js", () => ({ callGateway: vi.fn() }));
 vi.mock("./subagent-registry-state.js", { spy: true });
@@ -34,7 +36,7 @@ vi.mock("./subagent-session-reconciliation.js", () => ({
 }));
 
 beforeEach(() => {
-  vi.mocked(patchSessionEntryCore).mockClear();
+  vi.mocked(applySessionEntryExactReplacements).mockClear();
   subagentRuns.clear();
 });
 afterEach(() => {
@@ -175,7 +177,7 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
         ).resolves.toBeUndefined();
         expect(stopped.execution).toBe(stoppedExecution);
         expect(expectDefined(ownership, "registration scope").canCleanupSession()).toBe(false);
-        expect(patchSessionEntryCore).toHaveBeenCalled();
+        expect(applySessionEntryExactReplacements).toHaveBeenCalled();
         return;
       }
       if (newerSibling) {

@@ -111,7 +111,7 @@ export async function persistSubagentSessionTiming(
   },
 ) {
   const childSessionKey = entry.childSessionKey?.trim();
-  if (!childSessionKey) {
+  if (!childSessionKey || options?.isCurrentGeneration?.() === false) {
     return;
   }
 
@@ -208,7 +208,7 @@ export async function persistSubagentSessionTiming(
     activeSessionKey: childSessionKey,
     assertCommitAllowed: assertCurrent,
     update: ([row]) => {
-      if (!row) {
+      if (!row || options?.isCurrentGeneration?.() === false) {
         return { result: undefined };
       }
       selected = row.entry;

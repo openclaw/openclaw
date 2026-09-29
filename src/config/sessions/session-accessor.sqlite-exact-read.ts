@@ -43,11 +43,7 @@ import {
   toDatabaseOptions,
   type SessionSqliteTargetResolutionCache,
 } from "./session-accessor.sqlite-scope.js";
-import type {
-  CapturedSessionEntryReadSource,
-  SessionEntryReadScope,
-  SessionEntryReadSource,
-} from "./session-accessor.types.js";
+import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
   readWithCanonicalSessionAdmission,
@@ -55,6 +51,10 @@ import {
   type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "./session-canonical-row.js";
+import type {
+  CapturedSessionEntryReadSource,
+  SessionEntryReadSource,
+} from "./session-entry-read-source.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type ResolvedSqliteSessionEntry = {

@@ -58,6 +58,7 @@ import {
   registerForcedCollectorCompletionSettlementTests,
   registerRestartDrainCompletionSettlementTest,
   registerRestoredRunDeadlineSettlementTests,
+  registerSupersededTimingOwnershipTest,
 } from "./subagent-registry.native-settlement.test-support.js";
 import { registerSubagentRegistrationPersistenceTests } from "./subagent-registry.persistence.test-support.js";
 import {
@@ -122,6 +123,12 @@ vi.mock("../../../config/sessions.js", () => ({
 vi.mock("../../../config/sessions/session-accessor.js", () => mocks.sessionAccessors);
 vi.mock("../../../config/sessions/session-entry-read-runtime.js", () => ({
   withSessionEntryReadOnlyInWorker: mocks.withSessionEntryReadOnlyInWorker,
+}));
+vi.mock("../../../config/sessions/session-entry-current-runtime.js", () => ({
+  captureSessionEntryCurrentRead: mocks.captureSessionEntryCurrentRead,
+}));
+vi.mock("../../../config/sessions/session-accessor.sqlite-replacement-projection.js", () => ({
+  applySessionEntryExactReplacements: mocks.applySessionEntryExactReplacements,
 }));
 
 vi.mock("../../../sessions/session-lifecycle-events.js", () => ({
@@ -287,6 +294,8 @@ describe("subagent registry seam flow", () => {
     mocks.loadSessionEntry.mockReset();
     mocks.listSessionEntriesCore.mockReset();
     mocks.patchSessionEntryCore.mockReset();
+    mocks.readSessionCurrent.mockReset();
+    mocks.applySessionEntryExactReplacements.mockReset();
     mocks.runSubagentAnnounceFlow.mockReset().mockResolvedValue("delivered");
     wakeRequester.mockReset().mockImplementation(async (params) => {
       await params.completeBatch([params.settledEntry]);
@@ -769,11 +778,11 @@ describe("subagent registry seam flow", () => {
 
   it("keeps killed session timing root-admitted after task finalization", async () => {
     let finishTiming: (() => void) | undefined;
-    mocks.patchSessionEntryCore.mockImplementationOnce(async () => {
+    mocks.applySessionEntryExactReplacements.mockImplementationOnce(async () => {
       await new Promise<void>((resolve) => {
         finishTiming = resolve;
       });
-      return null;
+      return undefined;
     });
     mockPendingAgentWait();
     const runId = "run-kill-tail-admission";
@@ -3750,6 +3759,7 @@ describe("subagent registry seam flow", () => {
           },
           timeoutMs: 10_000,
           assertDispatchCurrent: expect.any(Function),
+          prepareDispatchCurrent: expect.any(Function),
         });
       });
       expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
@@ -4154,59 +4164,11 @@ describe("subagent registry seam flow", () => {
     }
   });
 
-  it("does not restore a superseded lifecycle after a successor is released", async () => {
-    const childSessionKey = "agent:main:subagent:released-timing-owner";
-    mockPendingAgentWait();
-    mocks.entries = {
-      [childSessionKey]: { sessionId: "sess-released-timing-owner", updatedAt: 1 },
-    };
-    const originalEntry = structuredClone(mocks.entries[childSessionKey]);
-    const patchSessionEntry = expectDefined(
-      mocks.patchSessionEntryCore.getMockImplementation(),
-      "default session entry patch",
-    );
-    let releaseTimingWrite: (() => void) | undefined;
-    let timingWriteStarted: (() => void) | undefined;
-    const timingWriteStartedPromise = new Promise<void>((resolve) => {
-      timingWriteStarted = resolve;
-    });
-    const timingWriteFinished = new Promise<void>((resolveFinished) => {
-      mocks.patchSessionEntryCore.mockImplementationOnce(async (scope, update, options) => {
-        timingWriteStarted?.();
-        await new Promise<void>((resolve) => {
-          releaseTimingWrite = resolve;
-        });
-        const result = await patchSessionEntry(scope, update, options);
-        resolveFinished();
-        return result;
-      });
-    });
-
-    await mod.registerSubagentRun({
-      runId: "run-released-timing-old",
-      childSessionKey,
-      task: "old timing owner",
-    });
-    expect(
-      mod.markSubagentRunTerminated({
-        runId: "run-released-timing-old",
-        reason: "manual kill",
-      }),
-    ).toBe(1);
-    await timingWriteStartedPromise;
-
-    await mod.registerSubagentRun({
-      runId: "run-released-timing-new",
-      childSessionKey,
-      task: "new timing owner",
-    });
-    mod.releaseSubagentRun("run-released-timing-new");
-    releaseTimingWrite?.();
-    await timingWriteFinished;
-
-    const oldRun = findRequesterRun("run-released-timing-old");
-    expect(oldRun?.killReconciliation?.supersededAt).toBeTypeOf("number");
-    expect(mocks.entries[childSessionKey]).toEqual(originalEntry);
+  registerSupersededTimingOwnershipTest({
+    getRegistry: () => mod,
+    mocks,
+    mockPendingAgentWait,
+    findRequesterRun,
   });
 
   it("reconciles an old completion without touching the newer session generation", async () => {
