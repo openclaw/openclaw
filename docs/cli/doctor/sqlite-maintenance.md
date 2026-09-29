@@ -201,6 +201,13 @@ finding, run `openclaw doctor --session-sqlite dry-run --session-sqlite-all-agen
 This summary does not retire recovery references or make missing archives eligible
 for cleanup. Preserve the remaining originals and migration manifests for recovery.
 
+`openclaw update status` also omits a recorded `transcript_missing` warning for a
+canonical `agent:<id>:...` session key once that row is gone from the agent's
+session store, for example after `openclaw sessions cleanup --fix-missing`. The
+manifest keeps the finding. The warning stays visible while the row exists, when
+the store cannot be read, and for legacy keys that canonical-key repair may have
+renamed.
+
 ### Changed archived registry
 
 `historical_transcript_deferred` can report that an archived session registry no
