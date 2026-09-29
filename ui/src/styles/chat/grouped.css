@@ -542,11 +542,7 @@
   line-height: inherit;
 }
 
-.chat-notice__body {
-  width: min(560px, 100%);
-  margin: 0 auto;
-}
-
+.chat-notice__body,
 .chat-notice__collapse {
   width: min(560px, 100%);
   margin: 0 auto;
