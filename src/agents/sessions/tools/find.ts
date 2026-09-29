@@ -110,7 +110,7 @@ function buildFindResult(params: {
   limitNotice: string;
 }) {
   const resultLimitReached = params.paths.length > params.effectiveLimit;
-  const rawOutput = params.paths
+  const outputPaths = params.paths
     .slice(0, params.effectiveLimit)
     .map((foundPath) => {
       // Backends may return search-relative paths; only absolute paths need relativizing.
@@ -122,8 +122,11 @@ function buildFindResult(params: {
       return normalized.endsWith("/") && !relativePath.endsWith("/")
         ? `${relativePath}/`
         : relativePath;
-    })
-    .join("\n");
+    });
+  // JSON keeps a newline-containing path distinct from the boundary between two paths.
+  const rawOutput = outputPaths.some((foundPath) => /[\r\n]/.test(foundPath))
+    ? JSON.stringify(outputPaths)
+    : outputPaths.join("\n");
   const { content, ...truncation } = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
   const details: FindToolDetails = { content };
   const notices: string[] = [];

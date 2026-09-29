@@ -249,6 +249,7 @@ it.each([
 it("preserves fd paths containing newlines", async () => {
   const searchRoot = path.resolve(path.sep, "find-fixture");
   const newlinePath = path.join(searchRoot, "line\nbreak.ts");
+  const plainPath = path.join(searchRoot, "plain.ts");
   const child = createChild();
   vi.mocked(spawnCommand).mockReturnValue(child as never);
   vi.mocked(ensureTool).mockResolvedValue("fd");
@@ -256,18 +257,18 @@ it("preserves fd paths containing newlines", async () => {
   const tool = createFindToolDefinition(searchRoot);
   const resultPromise = tool.execute(
     "call-newline-path",
-    { pattern: "*.ts", limit: 1 },
+    { pattern: "*.ts", limit: 2 },
     undefined,
     undefined,
     {} as never,
   );
   await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
-  child.stdout.end(`${newlinePath}\0`);
+  child.stdout.end(`${newlinePath}\0${plainPath}\0`);
   child.stderr.end();
   child.emit("close", 0, null);
 
   const result = await resultPromise;
-  expect(textContent(result)).toBe("line\nbreak.ts");
+  expect(textContent(result)).toBe(JSON.stringify(["line\nbreak.ts", "plain.ts"]));
   expect(result.details?.resultLimitReached).toBeUndefined();
   expect(vi.mocked(spawnCommand).mock.calls[0]?.[0]).toEqual(expect.arrayContaining(["--print0"]));
 });
