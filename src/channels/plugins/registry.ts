@@ -1,7 +1,6 @@
 /** Active channel plugin registry with bundled fallback. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { normalizeAnyChannelId } from "../registry.js";
 import { getBundledChannelPlugin } from "./bundled.js";
 import {
   getLoadedChannelPluginById,
@@ -10,6 +9,8 @@ import {
 } from "./registry-loaded.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
+
+export { normalizeAnyChannelId as normalizeChannelId } from "../registry.js";
 
 export const listChannelPlugins = (): ChannelPlugin[] => listLoadedChannelPlugins();
 
@@ -73,11 +74,4 @@ export function resolveChannelPluginRegistration(
  */
 export function getChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
   return resolveChannelPluginRegistration(id)?.plugin;
-}
-
-/**
- * Normalizes user-facing channel aliases to canonical channel ids.
- */
-export function normalizeChannelId(raw?: string | null): ChannelId | null {
-  return normalizeAnyChannelId(raw);
 }

@@ -90,9 +90,6 @@ describe("parseObservationSegments", () => {
 });
 
 describe("parseCardsJson", () => {
-  const windowStartMs = dayMs("10:00:00");
-  const windowEndMs = dayMs("11:00:00");
-
   const card = (overrides: Record<string, unknown> = {}) => ({
     startTime: "10:00:00",
     endTime: "10:30:00",
@@ -104,7 +101,7 @@ describe("parseCardsJson", () => {
     appSites: { primary: "github.com" },
     ...overrides,
   });
-  const parse = (raw: string) => parseCardsJson({ raw, day: DAY, windowStartMs, windowEndMs });
+  const parse = (raw: string) => parseCardsJson({ raw, day: DAY });
 
   it("accepts a valid card array and normalizes fields", () => {
     expect(

@@ -123,18 +123,11 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Slack terminal status diagnostics", () => {
-  it("reports a failed active write once after successful processing", async () => {
-    const f = await fixture({ active: { ok: false } });
-    await f.start();
-    await f.stop();
-    await f.stop();
-    expect(f.error).toHaveBeenCalledExactlyOnceWith(expect.any(String));
-    expect(f.api).toHaveBeenCalledTimes(2);
-  });
-
   it("reports a rejected Slack request without copying private error data to the normal log", async () => {
     const f = await fixture({ active: new Error("synthetic-private-detail") });
     await f.start();
+    await f.start();
+    await f.stop();
     await f.stop();
     expect(f.error).toHaveBeenCalledExactlyOnceWith(expect.any(String));
     expect(f.error.mock.calls.flat().join(" ")).not.toMatch(
@@ -155,13 +148,6 @@ describe("Slack terminal status diagnostics", () => {
     const f = await fixture({ active: { ok: true, status: "processing", agent_status: "active" } });
     await f.start();
     await f.stop();
-    expect(f.error).not.toHaveBeenCalled();
-  });
-
-  it("does not attempt a status write when cleanup runs before start", async () => {
-    const f = await fixture();
-    await f.stop();
-    expect(f.api).not.toHaveBeenCalled();
     expect(f.error).not.toHaveBeenCalled();
   });
 

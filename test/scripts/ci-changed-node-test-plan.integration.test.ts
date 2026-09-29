@@ -46,10 +46,27 @@ it("keeps the hybrid hourly plan within the main-tier cap", () => {
   expect(hourly.length).toBeLessThanOrEqual(79);
 });
 
-it.each(["test/scripts/bench-gateway-installed.test.ts", "scripts/bench-gateway-startup.ts"])(
-  "opts in a PR-exempt process proof beside hub inputs: %s",
-  (changedPath) => {
-    const target = "test/scripts/bench-gateway-installed.test.ts";
+it.each(
+  [
+    {
+      target: "test/scripts/bench-gateway-installed.test.ts",
+      sources: ["scripts/bench-gateway-startup.ts"],
+      preciseSubjects: true,
+    },
+    {
+      target: "src/commands/doctor-lint.native-capture.test.ts",
+      sources: [
+        "src/commands/doctor-lint.native-capture.test-support.ts",
+        "src/cli/run-main-plugin-cache.ts",
+      ],
+      preciseSubjects: false,
+    },
+  ].flatMap(({ target, sources, preciseSubjects }) =>
+    [target, ...sources].map((changedPath) => ({ target, changedPath, preciseSubjects })),
+  ),
+)(
+  "opts in $target for $changedPath beside hub inputs",
+  ({ target, changedPath, preciseSubjects }) => {
     expect(listPrExemptRuntimeTestFiles()).toContain(target);
     const options = {
       runnerBackend: "github",
@@ -57,13 +74,28 @@ it.each(["test/scripts/bench-gateway-installed.test.ts", "scripts/bench-gateway-
       includePrExemptRuntimeTests: false,
       includeReleaseOnlyToolingShards: false,
     };
+    const fallbackFiles = (changedPaths: string[]) =>
+      createNodeTestShardBundles({
+        ...options,
+        compactMode: "pull-request",
+        changedPaths,
+      }).flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? []));
     const precise = createChangedNodeTestShards([changedPath], options);
-    expect(precise, changedPath).not.toBeNull();
-    expect(selectedFiles(precise), changedPath).toContain(target);
+    if (preciseSubjects || changedPath === target) {
+      expect(precise, changedPath).not.toBeNull();
+    }
+    expect(precise ? selectedFiles(precise) : fallbackFiles([changedPath]), changedPath).toContain(
+      target,
+    );
     const withHub = createChangedNodeTestShards(["tsconfig.json", changedPath], options);
-    expect(withHub, changedPath).not.toBeNull();
-    expect(selectedFiles(withHub), changedPath).toContain(target);
-    expect(selectedFiles(withHub)).not.toContain(
+    if (preciseSubjects) {
+      expect(withHub, changedPath).not.toBeNull();
+    }
+    const withHubFiles = withHub
+      ? selectedFiles(withHub)
+      : fallbackFiles(["tsconfig.json", changedPath]);
+    expect(withHubFiles, changedPath).toContain(target);
+    expect(withHubFiles).not.toContain(
       "extensions/acpx/src/runtime-advertised-model.process.test.ts",
     );
   },

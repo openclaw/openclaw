@@ -24,6 +24,12 @@ const SESSION_ICON_GLYPH_DESCRIPTION = SESSION_ICON_GLYPH_IDS.join(", ");
 
 const SessionsToolSchema = Type.Object(
   {
+    user: Type.Optional(
+      Type.String({
+        description:
+          "The person's requester_profile.id, required when several people have steered this turn.",
+      }),
+    ),
     action: stringEnum(ACTIONS, { description: "Action" }),
     profileId: Type.Optional({
       ...SessionMoveProfileTargetSchema.properties.profileId,
@@ -143,6 +149,7 @@ const SessionsToolSchema = Type.Object(
 
 export const SessionControlToolSchema = Type.Object(
   {
+    user: SessionsToolSchema.properties.user,
     action: stringEnum(["patch", "stop"]),
     sessionKey: SessionsToolSchema.properties.sessionKey,
     expectedSessionId: SessionsToolSchema.properties.expectedSessionId,

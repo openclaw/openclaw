@@ -35,8 +35,8 @@ import type {
 } from "./session-accessor.sqlite-archive-types.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
+import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
 import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
-import * as reclamation from "./session-accessor.sqlite-reclamation.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
@@ -436,11 +436,25 @@ describe("SQLite transcript archive sessions", () => {
     const blockerEntered = createDeferred();
     const releaseBlocker = createDeferred();
     const materializationQueued = createDeferred();
-    const blocker = runExclusiveSqliteTranscriptArchiveWorker(async () => {
-      blockerEntered.resolve();
-      await releaseBlocker.promise;
-    });
-    await blockerEntered.promise;
+    let blocker: Promise<void> | undefined;
+    const prepare = reclamation.runSessionDeletionPlanning;
+    const planning = vi
+      .spyOn(reclamation, "runSessionDeletionPlanning")
+      .mockImplementationOnce(async (...args) => {
+        const result = await prepare(...args);
+        if (result.operation !== "entry" || result.value.kind !== "ready") {
+          throw new Error("Expected entry planning before blocking archive materialization");
+        }
+        expect(result.value.value.targetSnapshot).toMatchObject([
+          { sessionKey, entry: { sessionId } },
+        ]);
+        blocker = runExclusiveSqliteTranscriptArchiveWorker(async () => {
+          blockerEntered.resolve();
+          await releaseBlocker.promise;
+        });
+        await blockerEntered.promise;
+        return result;
+      });
     archiveScopeHooks.afterMaterializeQueued = () => materializationQueued.resolve();
     const archiveWorkers = observeArchiveSessionWorkers();
     const deletion = deleteSessionEntryLifecycle({
@@ -465,6 +479,7 @@ describe("SQLite transcript archive sessions", () => {
     } finally {
       releaseBlocker.resolve();
       await Promise.allSettled([blocker, deletion, retirement]);
+      planning.mockRestore();
       archiveWorkers.stop();
     }
     expect(loadSessionEntry(scope)).toMatchObject({ sessionId });

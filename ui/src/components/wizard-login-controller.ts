@@ -51,6 +51,7 @@ export class WizardLoginController {
         host.requestUpdate();
       },
       cancelledMessage: () => t("modelSetup.wizard.cancelled"),
+      gatewayNotRespondingMessage: () => t("modelSetup.wizard.gatewayNotResponding"),
     });
   }
 

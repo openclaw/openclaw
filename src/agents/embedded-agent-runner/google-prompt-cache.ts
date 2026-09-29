@@ -1,6 +1,3 @@
-/**
- * Prepares Google prompt-cache payloads for embedded-agent stream calls.
- */
 import {
   sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
@@ -50,11 +47,6 @@ type GooglePromptCacheSessionManager = {
   appendCustomEntry(customType: string, data?: unknown): void | Promise<void>;
   getEntries(): CustomEntryLike[];
 };
-type GooglePromptCacheModel = Model & {
-  baseUrl?: string;
-  headers?: Record<string, string>;
-  provider: string;
-};
 type GooglePromptCacheContext = Parameters<StreamFn>[1];
 type GooglePromptCacheOptions = Parameters<StreamFn>[2];
 
@@ -84,7 +76,7 @@ type GooglePromptCacheEntry = {
 type PrepareGooglePromptCacheStreamFnParams = {
   apiKey?: string;
   extraParams?: Record<string, unknown>;
-  model: GooglePromptCacheModel;
+  model: Model;
   modelId: string;
   provider: string;
   sessionManager: GooglePromptCacheSessionManager;
@@ -197,32 +189,13 @@ function readGooglePromptCacheName(value: unknown): string | null {
   }
 }
 
-function convertManagedGoogleTools(tools: NonNullable<GooglePromptCacheContext["tools"]>) {
-  if (tools.length === 0) {
-    return undefined;
-  }
-  return [
-    {
-      functionDeclarations: sortPromptCacheToolsByName(tools).map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        parametersJsonSchema: tool.parameters,
-      })),
-    },
-  ];
-}
-
 function mapManagedGoogleToolChoice(
   choice: unknown,
 ): { mode: "AUTO" | "NONE" | "ANY"; allowedFunctionNames?: string[] } | undefined {
   if (!choice) {
     return undefined;
   }
-  if (
-    typeof choice === "object" &&
-    choice !== null &&
-    (choice as { type?: unknown }).type === "function"
-  ) {
+  if (typeof choice === "object" && (choice as { type?: unknown }).type === "function") {
     const functionName = (choice as { function?: { name?: unknown } }).function?.name;
     return typeof functionName === "string"
       ? { mode: "ANY", allowedFunctionNames: [functionName] }
@@ -243,7 +216,17 @@ function buildManagedGooglePromptCacheConfig(
   context: GooglePromptCacheContext,
   options: GooglePromptCacheOptions,
 ) {
-  const tools = context.tools?.length ? convertManagedGoogleTools(context.tools) : undefined;
+  const tools = context.tools?.length
+    ? [
+        {
+          functionDeclarations: sortPromptCacheToolsByName(context.tools).map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            parametersJsonSchema: tool.parameters,
+          })),
+        },
+      ]
+    : undefined;
   const toolChoice = tools
     ? mapManagedGoogleToolChoice((options as { toolChoice?: unknown } | undefined)?.toolChoice)
     : undefined;
@@ -295,7 +278,7 @@ function buildGooglePromptCacheHeaders(params: {
   apiKey: string;
   baseUrl: string;
   headers?: Record<string, string>;
-  model: GooglePromptCacheModel;
+  model: Model;
 }): Record<string, string> | undefined {
   const authHeaders = resolveGooglePromptCacheAuthHeaders({
     apiKey: params.apiKey,
@@ -322,7 +305,7 @@ async function requestGooglePromptCache(
     cacheRetention: CacheRetention;
     fetchImpl: typeof fetch;
     headers?: Record<string, string>;
-    model: GooglePromptCacheModel;
+    model: Model;
     now: number;
     signal?: AbortSignal;
   } & (
@@ -391,7 +374,7 @@ async function ensureGooglePromptCache(
   params: {
     apiKey: string;
     cacheRetention: CacheRetention;
-    model: GooglePromptCacheModel;
+    model: Model;
     provider: string;
     cacheConfigDigest?: string;
     sessionManager: GooglePromptCacheSessionManager;

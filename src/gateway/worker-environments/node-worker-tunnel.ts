@@ -9,15 +9,12 @@ import {
   formatNodeRunnerInventoryIssue,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+  NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
   resolveNodeWorkerLaunchToolNames,
 } from "../../infra/node-runner-inventory.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { SpawnResult } from "../../process/exec.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
-import type {
-  NodeWorkerLaunchInput,
-  NodeWorkerSupervisorReceipt,
-} from "../../worker/node-supervisor-protocol.js";
+import type { NodeWorkerLaunchInput } from "../../worker/node-supervisor-protocol.js";
 import {
   parseNodeWorkerWorkspaceExecResult,
   type NodeWorkerWorkspaceExecInput,
@@ -34,6 +31,7 @@ import type {
 } from "../node-registry-private.js";
 import {
   measureNodeWorkerLaunchBytes,
+  nodeWorkerSpawnResultFromReceipt,
   RETRYABLE_NODE_WORKER_TRANSPORT_CODES,
   type createNodeWorkerLaunchAdapter,
 } from "./node-launch-adapter.js";
@@ -57,6 +55,7 @@ import {
   type WorkerWorkspaceCommand,
 } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
+import { workerWorkspaceCommandSucceeded } from "./workspace-sync-helpers.js";
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
 const COMMAND_RESULT_GRACE_MS = 5_000;
@@ -102,27 +101,9 @@ type NodeTunnelEntry = NodeEnvironmentOwner & {
   initialization?: Promise<void>;
   launchTasks: Set<Promise<unknown>>;
   workspaceTasks: Set<Promise<unknown>>;
+  nativeWorkspaceLeases: Set<string>;
   readiness: Deferred<WorkerTurnTunnelHandle>;
 };
-
-function spawnResultFromReceipt(receipt: NodeWorkerSupervisorReceipt): SpawnResult {
-  if (
-    receipt.state === "completed" ||
-    receipt.state === "failed" ||
-    receipt.state === "interrupted" ||
-    receipt.state === "cancelled"
-  ) {
-    return {
-      stdout: receipt.state === "completed" ? receipt.resultJson : "",
-      stderr: receipt.state === "completed" ? "" : receipt.errorText,
-      code: receipt.state === "completed" ? 0 : 1,
-      signal: null,
-      killed: receipt.state === "cancelled" || receipt.state === "interrupted",
-      termination: "exit",
-    };
-  }
-  throw new Error("node worker launch returned without a terminal receipt");
-}
 
 function payloadJson(value: string | null | undefined): unknown {
   if (!value) {
@@ -214,6 +195,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     }
     const signal = AbortSignal.any(signals);
     const preparationKey = readPreparation(entry)?.key;
+    let nativeContractError: Error | undefined;
     const input: NodeWorkerWorkspaceExecInput = {
       gatewayNamespace,
       environmentId: entry.environmentId,
@@ -227,6 +209,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       ...(command.transfer === undefined ? {} : { transfer: command.transfer }),
       ...(command.seed === undefined ? {} : { seed: command.seed }),
       ...(command.process === undefined ? {} : { process: command.process }),
+      ...(command.quiescence === undefined ? {} : { quiescence: command.quiescence }),
     };
     while (true) {
       assertCurrent();
@@ -238,21 +221,52 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       try {
         const { node, transport } = await findNode(entry, signal);
         assertCurrent();
+        const nativeOwnership =
+          node.workerHost.workspaceQuiescence === NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION;
+        const assertNativeContract = () => {
+          if ((input.quiescence || entry.nativeWorkspaceLeases.size > 0) && !nativeOwnership) {
+            nativeContractError ??= new Error(
+              "node workspace quiescence support changed; reconnect a compatible node host",
+            );
+            throw nativeContractError;
+          }
+        };
+        assertNativeContract();
+        const params: NodeWorkerWorkspaceExecInput = {
+          ...input,
+          ...(nativeOwnership &&
+          !command.legacyQuiescence &&
+          !input.quiescence &&
+          !input.process &&
+          !input.transfer &&
+          !input.seed
+            ? { nativeProcessOwner: true }
+            : {}),
+        };
         result = await transport.invoke({
           node,
           command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
-          params: input,
+          params,
           timeoutMs: remainingMs,
           signal,
-          onDispatchReady,
+          onDispatchReady: () => {
+            if (input.quiescence?.action === "acquire") {
+              // An unacknowledged acquisition can still own a helper. Keep its contract
+              // until this exact nonce is released, not merely until this request ends.
+              entry.nativeWorkspaceLeases.add(input.quiescence.nonce);
+            }
+            onDispatchReady();
+          },
           isDispatchAuthorized: () => {
             assertCurrent();
+            assertNativeContract();
             return true;
           },
         });
       } catch (error) {
         assertCurrent();
         if (
+          (nativeContractError !== undefined && error === nativeContractError) ||
           command.transportRetry !== "idempotent" ||
           signal.aborted ||
           !isEnvironmentOwner(entry)
@@ -288,6 +302,9 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       );
       if (!parsed) {
         throw new Error("node workspace command violated its private result contract");
+      }
+      if (input.quiescence?.action === "release" && workerWorkspaceCommandSucceeded(parsed)) {
+        entry.nativeWorkspaceLeases.delete(input.quiescence.nonce);
       }
       return parsed;
     }
@@ -343,6 +360,13 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         ownerSignal: entry.abortController.signal,
         isOwnerCurrent: () => isLiveEntry(entry),
         restoredWorkspace,
+        supportsNativeQuiescence: async () => {
+          const { node } = await findNode(entry, entry.abortController.signal);
+          if (!isLiveEntry(entry)) {
+            throw new Error("node worker workspace authority closed");
+          }
+          return node.workerHost.workspaceQuiescence === NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION;
+        },
         workspaceTransfer: options.workspaceTransfer,
         runWorkspaceCommand: (command) => runWorkspaceCommand(entry, command),
       });
@@ -386,7 +410,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         });
         entry.launchTasks.add(operation);
         try {
-          return spawnResultFromReceipt(await operation);
+          return nodeWorkerSpawnResultFromReceipt(await operation);
         } finally {
           entry.launchTasks.delete(operation);
         }
@@ -628,6 +652,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         abortController: new AbortController(),
         launchTasks: new Set(),
         workspaceTasks: new Set(),
+        nativeWorkspaceLeases: new Set(),
         readiness,
       };
       entry.drainLocalWork = async () => {

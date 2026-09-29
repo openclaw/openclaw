@@ -150,9 +150,7 @@ function normalizeResponsesReplayItemId(
   return `${prefix}_${shortHash(id)}`;
 }
 
-export function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
-  return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
-}
+export { encodeTextSignatureV1 } from "../utils/text-signature.js";
 
 function orderResponsesAsyncToolResults(source: Context["messages"]): Context["messages"] {
   const turnKey = (message: AssistantMessage) => {

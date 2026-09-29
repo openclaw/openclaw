@@ -1,9 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-/**
- * Subagent completion announcement coordinator.
- *
- * Captures child output, applies wait outcomes, routes announcements, and performs cleanup decisions.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isSilentReplyText,
@@ -116,13 +111,6 @@ function buildAnnounceReplyInstruction(params: {
     return `A completed ${params.announceType} is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}${modelRouteInstruction} Otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type). Reply ONLY: ${SILENT_REPLY_TOKEN} only when this exact result is already visible to the user in this same turn.`;
   }
   return `A completed ${params.announceType} is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}${modelRouteInstruction} Otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
-}
-
-function buildAnnounceSteerMessage(events: AgentInternalEvent[]): string {
-  return (
-    formatAgentInternalEventsForPrompt(events) ||
-    "A background task finished. Process the completion update now."
-  );
 }
 
 export function hasUsableSessionEntry(entry: unknown): entry is Record<string, unknown> {
@@ -330,14 +318,13 @@ async function runSubagentAnnounceFlowBound(
         const directChildren = listSubagentRunsForRequester(params.childSessionKey, {
           requesterRunId: params.childRunId,
         });
-        if (Array.isArray(directChildren) && directChildren.length > 0) {
-          const completionRows = dedupeLatestChildCompletionRows(
+        if (directChildren.length > 0) {
+          childCompletionRows = dedupeLatestChildCompletionRows(
             filterCurrentDirectChildCompletionRows(directChildren, {
               requesterSessionKey: params.childSessionKey,
               getLatestSubagentRunByChildSessionKey,
             }),
           );
-          childCompletionRows = completionRows;
         }
       }
     } catch {
@@ -530,7 +517,6 @@ async function runSubagentAnnounceFlowBound(
       outcome = params.outcome ?? { status: "unknown" };
     }
 
-    // Build status label
     const statusLabel =
       outcome.status === "ok"
         ? "completed; ready for parent review"
@@ -660,7 +646,9 @@ async function runSubagentAnnounceFlowBound(
         replyInstruction,
       },
     ];
-    const triggerMessage = buildAnnounceSteerMessage(internalEvents);
+    const triggerMessage =
+      formatAgentInternalEventsForPrompt(internalEvents) ||
+      "A background task finished. Process the completion update now.";
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
     let deliveryResultReported = false;
     const reportDeliveryResult = async (delivery: SubagentAnnounceDeliveryResult) => {
@@ -705,8 +693,6 @@ async function runSubagentAnnounceFlowBound(
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
   } finally {
-    // The spawn label is persisted at run start (agent request `label` →
-    // buildAgentSessionPatch), so no post-run label patch is needed here.
     if (
       shouldDeleteChildSession &&
       (await prepareChildSessionEffects()) &&

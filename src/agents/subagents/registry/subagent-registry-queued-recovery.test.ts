@@ -125,7 +125,7 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
     const cleaned = vi.fn();
     const resume = vi.fn();
     const startQueued = vi.fn(() => true);
-    vi.mocked(restoreSubagentRunsFromDisk).mockImplementation(({ runs }) => {
+    vi.mocked(restoreSubagentRunsFromDisk).mockImplementation(async ({ runs }) => {
       for (const [id, entry] of stored) {
         runs.set(id, structuredClone(entry));
       }
@@ -135,9 +135,14 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
       runs: subagentRuns,
       getGatewayContextResolver: () => undefined,
       bindGatewayOwners: () => true,
-      persist,
       persistOrThrow: persist,
-      settleRequesterTurn: () => false,
+      persistAsyncOrThrow: async (_context, publication, ...runIds) => {
+        publication.assertCurrent();
+        persist(...runIds);
+        await Promise.resolve();
+        publication.onCommitted?.();
+      },
+      settleRequesterTurn: async () => false,
       ensureListener: () => {},
       startSweeper: () => {},
       scheduleSweep: () => {},
@@ -213,8 +218,8 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
         subagentRuns.set(successor.runId, successor);
       }
       subagentRuns.clear();
-      restorer.restoreOnce();
-      restorer.activate();
+      await restorer.restoreOnce();
+      await restorer.activate();
       await vi.waitFor(() => expect(stored.get(runId)?.execution.status).toBe("terminal"));
       expect(stored.get(runId)).toMatchObject({
         execution: { status: "terminal", lifecycleGeneration: getAgentEventLifecycleGeneration() },

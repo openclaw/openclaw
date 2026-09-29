@@ -1,4 +1,5 @@
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { captureCronMutationCommit } from "../mutation-completion.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { cronStoreKey } from "../store/key.js";
@@ -31,6 +32,12 @@ import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import { authorCronRunCompletion, executeJobCoreWithTimeout } from "./timer-job-runner.js";
 import { isRunnableJob } from "./timer-runnable.js";
 
+type ReservedCronRun = {
+  job: CronJob;
+  runReceipt: CronRunReceiptHandle;
+  runReceiptContext: OpenClawStateWorkerContext;
+};
+
 export {
   cancelCronRunAdmissionWaiters,
   runWithCronAdmission,
@@ -56,6 +63,7 @@ export function reserveQueuedCronRun(
   reservationAt: number,
   opts: {
     runReceipt: CronRunReceiptHandle;
+    runReceiptContext: OpenClawStateWorkerContext;
     preserveWhenDisabled?: boolean;
     onExit?: boolean;
     lifecycleGeneration?: number;
@@ -67,6 +75,7 @@ export function reserveQueuedCronRun(
     lifecycleGeneration: opts.lifecycleGeneration ?? state.lifecycleGeneration,
     markerAtMs: reservationAt,
     runReceipt: opts.runReceipt,
+    runReceiptContext: opts.runReceiptContext,
     preserveWhenDisabled: opts?.preserveWhenDisabled === true,
     ...(opts.onExit ? { onExit: true } : {}),
   });
@@ -101,6 +110,7 @@ export function isQueuedCronRunReservationCurrent(
 /** Clears exact reservations through the worker, retrying only a known non-commit. */
 export async function cleanupQueuedCronRunReservations(params: {
   state: CronServiceState;
+  context?: OpenClawStateWorkerContext;
   reservations: readonly QueuedCronRunReservation[];
   restoreLastError?: boolean;
   recompute?: "maintenance" | "startup-overflow";
@@ -108,12 +118,27 @@ export async function cleanupQueuedCronRunReservations(params: {
   requireCurrentReceipt?: boolean;
 }): Promise<void> {
   const { state, reservations } = params;
+  const context =
+    params.context ??
+    reservations
+      .map(({ jobId, reservationIdentity }) => {
+        const owner = state.queuedRunReservationsByJobId.get(jobId);
+        return owner?.identity === reservationIdentity ? owner.runReceiptContext : undefined;
+      })
+      .find((candidate) => candidate !== undefined);
+  if (!context) {
+    if (params.terminal) {
+      throw new Error("Cron reservation terminalization lost its original receipt context");
+    }
+    return;
+  }
   let retrySafe = false;
   const attempt = () =>
     locked(state, async () => {
       retrySafe = false;
       await releaseReservedCronRuns({
         ...params,
+        context,
         recompute: params.recompute !== undefined,
         onSettled: (outcome) => {
           retrySafe = outcome === "not-committed";
@@ -143,11 +168,13 @@ export async function supersedeActivatedCronRun(params: {
   jobId: string;
   reservationIdentity: object;
   runReceipt: CronRunReceiptHandle;
+  runReceiptContext: OpenClawStateWorkerContext;
   reason: string;
 }): Promise<void> {
   try {
     await cleanupQueuedCronRunReservations({
       state: params.state,
+      context: params.runReceiptContext,
       reservations: [params],
       recompute: "maintenance",
       terminal: {
@@ -179,10 +206,14 @@ export async function persistQueuedCronRunReservations(params: {
     scheduleOwnershipAtMs?: number;
     onExit?: {
       commitGuard: () => void;
-      onReserved: (job: CronJob, runReceipt: CronRunReceiptHandle) => void;
+      onReserved: (
+        job: CronJob,
+        runReceipt: CronRunReceiptHandle,
+        runReceiptContext: OpenClawStateWorkerContext,
+      ) => void;
     };
   };
-}): Promise<Array<{ job: CronJob; runReceipt: CronRunReceiptHandle }>> {
+}): Promise<ReservedCronRun[]> {
   const generation = params.state.lifecycleGeneration;
   if (params.state.stopped) {
     return [];
@@ -222,9 +253,7 @@ export async function persistQueuedCronRunReservations(params: {
       throw retiredError;
     }
   };
-  const cleanupUnhandedReservations = async (
-    committed: Array<{ job: CronJob; runReceipt: CronRunReceiptHandle }>,
-  ) => {
+  const cleanupUnhandedReservations = async (committed: ReservedCronRun[]) => {
     const reservations = committed.map(({ job, runReceipt }) => {
       const existing = params.state.queuedRunReservationsByJobId.get(job.id);
       return {
@@ -234,6 +263,7 @@ export async function persistQueuedCronRunReservations(params: {
             ? existing.identity
             : reserveQueuedCronRun(params.state, job.id, params.reservedAtMs, {
                 runReceipt,
+                runReceiptContext: context,
                 lifecycleGeneration: generation,
               }),
       };
@@ -256,7 +286,7 @@ export async function persistQueuedCronRunReservations(params: {
   const markCommitted = params.manualRun ? captureCronMutationCommit("cron.run") : undefined;
   while (pendingJobs.size > 0) {
     let reservationCommitted = false;
-    let committedReservations: Array<{ job: CronJob; runReceipt: CronRunReceiptHandle }> = [];
+    let committedReservations: ReservedCronRun[] = [];
     try {
       const conflict = await reserveCronRuns({
         state: params.state,
@@ -271,7 +301,10 @@ export async function persistQueuedCronRunReservations(params: {
         assertCurrent,
         onCommitted(outcome) {
           reservationCommitted = true;
-          committedReservations = outcome.reservations;
+          committedReservations = outcome.reservations.map((reservation) => ({
+            ...reservation,
+            runReceiptContext: context,
+          }));
           if (committedReservations.length > 0) {
             markCommitted?.();
           }
@@ -280,7 +313,11 @@ export async function persistQueuedCronRunReservations(params: {
           }
           const first = committedReservations[0];
           if (params.manualRun?.onExit && first) {
-            params.manualRun.onExit.onReserved(first.job, first.runReceipt);
+            params.manualRun.onExit.onReserved(
+              first.job,
+              first.runReceipt,
+              first.runReceiptContext,
+            );
           }
         },
       });
@@ -316,7 +353,11 @@ export async function persistQueuedCronRunReservations(params: {
       );
       const reloadedReservations = (params.state.store?.jobs ?? [])
         .filter((job) => receiptByJobId.has(job.id))
-        .map((job) => ({ job, runReceipt: receiptByJobId.get(job.id)! }));
+        .map((job) => ({
+          job,
+          runReceipt: receiptByJobId.get(job.id)!,
+          runReceiptContext: context,
+        }));
       const reloadedJobIds = new Set(reloadedReservations.map(({ job }) => job.id));
       for (const reservation of committedReservations) {
         if (reloadedJobIds.has(reservation.job.id)) {
@@ -370,6 +411,7 @@ export async function activateQueuedCronRun(params: {
       job: CronJob;
       startedAt: number;
       runReceipt: CronRunReceiptHandle;
+      runReceiptContext: OpenClawStateWorkerContext;
     }
   | { kind: "fenced" }
   | { kind: "unavailable"; reason: "stopped" }
@@ -394,13 +436,20 @@ export async function activateQueuedCronRun(params: {
   }
   const { job: activatedJob, receipt: activatedReceipt } = activation;
   if (!state.stopped && reservation.lifecycleGeneration === state.lifecycleGeneration) {
-    return { kind: "activated", job: activatedJob, startedAt, runReceipt: activatedReceipt };
+    return {
+      kind: "activated",
+      job: activatedJob,
+      startedAt,
+      runReceipt: activatedReceipt,
+      runReceiptContext: reservation.runReceiptContext,
+    };
   }
 
   params.onUnavailable?.();
   try {
     await releaseReservedCronRuns({
       state,
+      context: reservation.runReceiptContext,
       reservations: [{ jobId: job.id, reservationIdentity }],
       onSettled() {},
       terminal: {
@@ -472,14 +521,17 @@ export async function executeQueuedCronRun(params: {
           // terminalize like cleanupQueuedCronRunReservations does. locked()
           // is non-reentrant, hence the direct finish instead of that helper.
           try {
-            await finishCronRunReceiptAsync({
-              handle: ownership.runReceipt,
-              status: "skipped",
-              finishedAtMs: state.deps.nowMs(),
-              error: "cron reservation fenced by concurrent mutation",
-            });
+            await finishCronRunReceiptAsync(
+              {
+                handle: ownership.runReceipt,
+                status: "skipped",
+                finishedAtMs: state.deps.nowMs(),
+                error: "cron reservation fenced by concurrent mutation",
+              },
+              ownership.runReceiptContext,
+            );
           } catch {
-            // finishCronRunReceipt retained ownership and scheduled a retry.
+            // finishCronRunReceiptAsync retained ownership and scheduled a retry.
           }
         }
         releaseQueuedCronRun(state, params.jobId, params.reservationIdentity);
@@ -521,6 +573,7 @@ export async function executeQueuedCronRun(params: {
         taskRun,
         startedAt: activation.startedAt,
         runReceipt: activation.runReceipt,
+        runReceiptContext: activation.runReceiptContext,
         // Publish the occurrence before releasing the mutation lock, including during setup.
         activeJobMarker: markServiceCronJobActive(state, activation.job, activation.runReceipt),
       };
@@ -544,6 +597,7 @@ export async function executeQueuedCronRun(params: {
       reservationIdentity: params.reservationIdentity,
       startedAt: started.startedAt,
       runReceipt: started.runReceipt,
+      runReceiptContext: started.runReceiptContext,
     };
     let outcome: TimedCronRunOutcome;
     try {

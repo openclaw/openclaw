@@ -1,10 +1,6 @@
 import { randomUUID } from "node:crypto";
-
-type AssistantTextPhaseBlock = {
-  type: "text";
-  text: string;
-  textSignature?: string;
-};
+import type { TextContent as AssistantTextPhaseBlock } from "../types.js";
+import { encodeTextSignatureV1 } from "./text-signature.js";
 
 export type PendingCommentaryTags = Map<AssistantTextPhaseBlock, string>;
 
@@ -16,10 +12,6 @@ function isAssistantTextPhaseBlock(block: unknown): block is AssistantTextPhaseB
   }
   const record = block as { type?: unknown; text?: unknown };
   return record.type === "text" && typeof record.text === "string";
-}
-
-function encodeAssistantTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
-  return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
 }
 
 function tagUnphasedText(
@@ -38,7 +30,7 @@ function tagUnphasedText(
     // segments across responses (every response's first commentary becomes
     // `<prefix>-0`) and collapses distinct stream-reconciliation rows. Entropy
     // keeps each generated identity unique per segment.
-    const signature = encodeAssistantTextSignatureV1(
+    const signature = encodeTextSignatureV1(
       `${idPrefix}-${phaseIndex}-${randomUUID().replaceAll("-", "").slice(0, 24)}`,
       phase,
     );

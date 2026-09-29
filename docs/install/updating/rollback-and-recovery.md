@@ -129,6 +129,9 @@ Migrated files are kept as
 and displaced files. See [Recovery limits](/cli/update/how-updates-run#recovery-limits)
 for disk requirements and the lifecycle checks.
 
+Database restoration preserves current update history, including failure details
+recorded after capture. The retained original snapshots remain unchanged.
+
 This requires the repaired updater to drive the update; already-running older
 drivers cannot gain database rollback from the candidate. A candidate that
 may have served keeps the existing refusal to avoid discarding newer writes.

@@ -17,7 +17,11 @@ import {
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { AttemptParamsLike, ModelRefInputObject } from "./src/attempt-types.js";
+import type {
+  AttemptParamsLike,
+  CopilotAttemptParams,
+  ModelRefInputObject,
+} from "./src/attempt-types.js";
 import type { CopilotSessionConfig } from "./src/attempt.js";
 import { createCopilotByokAuth, resolveCopilotAuth, tokenFingerprint } from "./src/auth-bridge.js";
 import { createCopilotByokProxy } from "./src/byok-proxy.js";
@@ -44,13 +48,7 @@ import type {
 type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletionV2"]>;
 type AgentHarnessIsolatedCompletionParams = Parameters<AgentHarnessIsolatedCompletion>[0];
 type AgentHarnessIsolatedCompletionResult = Awaited<ReturnType<AgentHarnessIsolatedCompletion>>;
-type CopilotSettledTurnFinalizationAttemptParams = Parameters<
-  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
->[0]["attempt"];
-type CopilotHarnessAttemptParams = (
-  | AgentHarnessAttemptParamsV2
-  | CopilotSettledTurnFinalizationAttemptParams
-) & {
+type CopilotHarnessAttemptParams = CopilotAttemptParams & {
   initialReplayState?: AgentHarnessAttemptParamsV2["initialReplayState"] & {
     journalValidated?: boolean;
     sdkSessionId?: string;
@@ -62,31 +60,23 @@ const COPILOT_PROVIDER_IDS: ReadonlySet<string> = new Set(["github-copilot"]);
 interface CreateCopilotAgentHarnessOptions {
   id?: string;
   label?: string;
-  pluginConfig?: unknown;
   pool?: CopilotClientPool;
   poolOptions?: CopilotClientPoolOptions;
   sessionStore?: CopilotSessionBindingStore;
 }
 
-interface TrackedSession {
-  journalVersion?: 1;
-  sdkSessionId: string;
+interface TrackedSession extends Omit<CopilotSessionBinding, "schemaVersion" | "updatedAt"> {
   client: CopilotClient;
   clientOptions: ClientCreateOptions;
   poolKey: PoolKey;
   sessionConfig: CopilotSessionConfig;
-  // A provider/model/cwd/auth change starts a fresh SDK session instead of resuming.
-  compatKey: string;
-  compactKey: string;
-  authMode: "gitHubToken" | "useLoggedInUser" | "byok";
-  authProfileId?: string;
-  authProfileVersion?: string;
 }
 
 export type CopilotSessionBinding = {
   schemaVersion: 2;
   journalVersion?: 1;
   sdkSessionId: string;
+  // A provider/model/cwd/auth change starts a fresh SDK session instead of resuming.
   compatKey: string;
   compactKey: string;
   authMode: "gitHubToken" | "useLoggedInUser" | "byok";
@@ -643,17 +633,7 @@ export function createCopilotAgentHarness(
         ...(operation === "settled-tool-finalization" ? { operation } : {}),
         onSessionEstablished:
           operation === "attempt" && openclawSessionId
-            ? ({
-                compactionSessionConfig,
-                sdkSessionId,
-                pooledClient,
-                sessionConfig,
-              }: {
-                compactionSessionConfig?: CopilotSessionConfig;
-                sdkSessionId: string;
-                pooledClient: PooledClient;
-                sessionConfig: CopilotSessionConfig;
-              }) =>
+            ? ({ compactionSessionConfig, sdkSessionId, pooledClient, sessionConfig }) =>
                 bindingQueue.enqueue(openclawSessionId, async () => {
                   const tracked: TrackedSession = {
                     sdkSessionId,
@@ -678,15 +658,7 @@ export function createCopilotAgentHarness(
                 })
             : undefined,
         onDeferredCompaction: openclawSessionId
-          ? ({
-              abort,
-              cleanup,
-              sdkSessionId,
-            }: {
-              abort: () => void;
-              cleanup: Promise<DeferredCompactionCleanupOutcome>;
-              sdkSessionId: string;
-            }) =>
+          ? ({ abort, cleanup, sdkSessionId }) =>
               bindingQueue.enqueue(openclawSessionId, async () => {
                 const trackedBinding = trackedSessions.get(openclawSessionId);
                 const storedBinding = await lookupStoredBinding(

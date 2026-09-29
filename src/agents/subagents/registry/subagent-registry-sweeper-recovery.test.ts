@@ -177,7 +177,7 @@ describe("subagent registry recovery scheduling", () => {
           } finally {
             completion.resolve();
             await pending;
-            sweeper.reset();
+            await sweeper.reset();
           }
         });
       });
@@ -298,7 +298,7 @@ describe("subagent registry recovery scheduling", () => {
                 lifecycleRevision: "reset-revision",
               });
             } finally {
-              sweeper.reset();
+              await sweeper.reset();
             }
           });
         });

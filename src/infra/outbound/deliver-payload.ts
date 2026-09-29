@@ -1,7 +1,6 @@
 // Normalizes payloads and applies post-send presentation/media effects.
 import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { resolveReceiptSourceId } from "../../channels/message/receipt.js";
 import type { ChannelOutboundTargetRef } from "../../channels/plugins/types.adapters.js";
 import { hasReplyPayloadContent, type ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -154,14 +153,7 @@ function stripInternalRuntimeScaffoldingFromValue(value: unknown): unknown {
     changed ||= stripped !== entry[1];
     entry[1] = stripped;
   }
-  if (!changed) {
-    return value;
-  }
-  const next: Record<string, unknown> = {};
-  for (const [key, entry] of entries) {
-    next[key] = entry;
-  }
-  return next;
+  return changed ? Object.fromEntries(entries) : value;
 }
 
 /** Every media reference a payload set carries, in payload order. */
@@ -213,10 +205,6 @@ export function stripInternalRuntimeScaffoldingFromPayload(payload: ReplyPayload
 
 export { summarizeOutboundPayloadForTransport as buildPayloadSummary } from "./payloads.js";
 
-export function hasDeliveryResultIdentity(result: OutboundDeliveryResult): boolean {
-  return resolveReceiptSourceId(result) !== undefined;
-}
-
 function normalizeDeliveryPin(payload: ReplyPayload): ReplyPayloadDeliveryPin | undefined {
   const pin = payload.delivery?.pin;
   if (pin === true) {
@@ -228,14 +216,11 @@ function normalizeDeliveryPin(payload: ReplyPayload): ReplyPayloadDeliveryPin | 
   if (!pin.enabled) {
     return undefined;
   }
-  const normalized: ReplyPayloadDeliveryPin = { enabled: true };
-  if (pin.notify === true) {
-    normalized.notify = true;
-  }
-  if (pin.required === true) {
-    normalized.required = true;
-  }
-  return normalized;
+  return {
+    enabled: true,
+    ...(pin.notify === true ? { notify: true } : {}),
+    ...(pin.required === true ? { required: true } : {}),
+  };
 }
 
 export async function maybePinDeliveredMessage(params: {

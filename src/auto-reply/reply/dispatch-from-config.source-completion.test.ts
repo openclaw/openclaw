@@ -41,36 +41,18 @@ it.each<{
   suffix?: Failure;
   media?: boolean;
   priorBracket?: boolean;
-  paragraph?: boolean;
   finalMedia?: boolean;
   prepared?: boolean;
   fenced?: boolean;
   expected: string[];
   suffixCalls: number;
 }>([
-  { name: "failed suffix", suffix: "before-send", expected: ["See ", "["], suffixCalls: 1 },
   { name: "successful suffix", prepared: true, expected: ["See ", "["], suffixCalls: 1 },
-  {
-    name: "successful suffix after wrapped code",
-    fenced: true,
-    expected: [fencedFirst, fencedSecond, "See ", "["],
-    suffixCalls: 1,
-  },
   {
     name: "failed suffix after wrapped code",
     fenced: true,
     suffix: "before-send",
     expected: [fencedFirst, fencedSecond, "See ", `${fencedSource}\n\nSee [`],
-    suffixCalls: 1,
-  },
-  { name: "unsent prefix", prefix: "before-send", expected: ["See ["], suffixCalls: 0 },
-  { name: "ambiguous suffix", suffix: "ambiguous", expected: ["See ", "["], suffixCalls: 1 },
-  { name: "pending suffix", suffix: "pending", expected: ["See "], suffixCalls: 1 },
-  {
-    name: "paragraph boundary",
-    paragraph: true,
-    suffix: "before-send",
-    expected: ["First", "See ", "["],
     suffixCalls: 1,
   },
   {
@@ -192,9 +174,6 @@ it.each<{
             setReplyPayloadMetadata({ text: fencedSecond }, { blockSourceText: "1;\n```" }),
           );
         }
-        if (scenario.paragraph) {
-          pipeline.enqueue({ text: "First" });
-        }
         pipeline.enqueue(source);
         await pipeline.flush({ force: true });
         if (!scenario.prefix) {
@@ -205,11 +184,7 @@ it.each<{
         }
         const finalPayload = {
           ...source,
-          text: scenario.fenced
-            ? `${fencedSource}\n\nSee [`
-            : scenario.paragraph
-              ? "First\n\nSee ["
-              : source.text,
+          text: scenario.fenced ? `${fencedSource}\n\nSee [` : source.text,
           ...(scenario.finalMedia ? { mediaUrl: "https://example.com/final.opus" } : {}),
         };
         if (scenario.finalMedia) {

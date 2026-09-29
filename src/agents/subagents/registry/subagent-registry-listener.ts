@@ -148,6 +148,7 @@ export function createSubagentRegistryListener(config: {
           return;
         }
         const classification = classifySubagentTerminalOutcome(terminalOutcome);
+        const pendingTerminal = { runId: evt.runId, endedAt, startedAt, terminalReply };
         if (
           classification === "cancellation" &&
           evt.data?.aborted === true &&
@@ -155,29 +156,16 @@ export function createSubagentRegistryListener(config: {
           evt.data.status === undefined &&
           evt.data.timeoutPhase === undefined
         ) {
-          pendingLifecycle.scheduleCancellation({
-            runId: evt.runId,
-            endedAt,
-            startedAt,
-            terminalReply,
-          });
+          pendingLifecycle.scheduleCancellation(pendingTerminal);
           return;
         }
         if (classification === "timeout") {
-          pendingLifecycle.scheduleTimeout({
-            runId: evt.runId,
-            endedAt,
-            startedAt,
-            terminalReply,
-          });
+          pendingLifecycle.scheduleTimeout(pendingTerminal);
           return;
         }
         if (phase === "error" && classification === "failure") {
           pendingLifecycle.scheduleError({
-            runId: evt.runId,
-            endedAt,
-            startedAt,
-            terminalReply,
+            ...pendingTerminal,
             error: terminalOutcome.error,
           });
           return;

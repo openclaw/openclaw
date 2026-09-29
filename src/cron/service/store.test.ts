@@ -12,7 +12,7 @@ import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import {
   CronRunReceiptConflictError,
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
 import { claimCronRunReceiptInDatabaseForTest } from "../store/run-receipt-store.test-support.js";
@@ -798,7 +798,7 @@ describe("cron service store seam coverage", () => {
       expect((await loadCronStore(storePath)).jobs[0]?.agentId).toBe("alpha");
       expect(state.pendingQuarantineConfigJobs).toHaveLength(1);
     } finally {
-      finishCronRunReceipt({
+      await finishCronRunReceiptAsync({
         handle: receipt,
         status: "superseded",
         finishedAtMs: STORE_TEST_NOW + 1,

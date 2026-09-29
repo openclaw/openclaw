@@ -423,15 +423,7 @@ final class LiveActivityManager {
         self.currentState = nil
         self.currentStaleDate = nil
         self.logger.info("ending live activity reason=\(reason, privacy: .public)")
-        let finalState = OpenClawActivityAttributes.ContentState(
-            status: .disconnected,
-            verbatimDetail: nil,
-            startedAt: startedAt)
-        Task {
-            await activity.end(
-                ActivityContent(state: finalState, staleDate: nil),
-                dismissalPolicy: .immediate)
-        }
+        self.end(activity: activity, startedAt: startedAt)
     }
 
     private func hydrateCurrentAndPruneDuplicates() {
@@ -537,8 +529,8 @@ final class LiveActivityManager {
         return existing?.state.startedAt ?? now
     }
 
-    private func end(activity: Activity<OpenClawActivityAttributes>) {
-        let startedAt = activity.content.state.startedAt
+    private func end(activity: Activity<OpenClawActivityAttributes>, startedAt: Date? = nil) {
+        let startedAt = startedAt ?? activity.content.state.startedAt
         Task {
             await activity.end(
                 ActivityContent(

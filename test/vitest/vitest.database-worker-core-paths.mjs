@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/state/session-repository-workspaces.test.ts",
   "src/infra/update-run-reconciliation.worker.test.ts",
   "src/infra/update-run-interruption.worker.test.ts",
   "src/channels/turn/durable-delivery.reload.test.ts",
@@ -152,6 +153,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/commands-config.owner.test.ts",
   "src/auto-reply/reply/commands-plugins.owner.test.ts",
   "src/auto-reply/reply/commands-plugin.owner.test.ts",
+  "src/auto-reply/reply/commands-plugin.test.ts",
   "src/auto-reply/reply/commands-session-restart.test.ts",
   "src/cli/node-cli/identity.test.ts",
   "src/node-host/local-id.test.ts",
@@ -344,6 +346,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt-stream-prepare.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-stream-settle.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-yield-handoff.test.ts",
+  "src/agents/embedded-agent-runner/run-entry.test.ts",
+  "src/agents/openclaw-tools.requester-yield.test.ts",
   "src/agents/openclaw-tools.sessions-steering.test.ts",
   "src/agents/openclaw-tools.sessions-send-child-coordination.test.ts",
   "src/agents/openclaw-tools.sessions.test.ts",
@@ -507,6 +511,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-execution.creation-witness.test.ts",
   "src/state/openclaw-agent-execution.close-wedge.test.ts",
   "src/state/openclaw-agent-execution-cleanup.test.ts",
+  "src/sessions/session-diff-baseline.test.ts",
   "src/sessions/session-state-events.test.ts",
   "src/state/openclaw-state-ownership.test.ts",
   "src/sessions/session-created.test.ts",
@@ -517,6 +522,7 @@ export const databaseWorkerCoreTestFiles = [
   "test/canonical-descendant.integration.test.ts",
   "test/runtime-agent.codex-initialization.integration.test.ts",
   "packages/memory-host-sdk/src/host/session-memory-sync.test.ts",
+  "packages/memory-host-sdk/src/host/session-files-archive-identity.test.ts",
   "src/agents/harness/native-hook-relay-store.test.ts",
   "src/agents/harness/native-hook-relay.approval-binding.test.ts",
   "src/agents/harness/native-hook-relay.approval-wait.test.ts",
@@ -542,6 +548,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/agent-harness-completion-delivery.test.ts",
   "src/agents/agent-harness-native-custody.test.ts",
   "src/agents/openclaw-tools.subagents.scope.test.ts",
+  "src/agents/tools/media-generate-background-retention.test.ts",
   "src/agents/tools/media-generate-tool.donor-resources.test.ts",
   "src/agents/tools/media-generate-tool.resources.test.ts",
   "src/agents/embedded-agent-runner/context-engine-maintenance.test.ts",
@@ -671,6 +678,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/commands/doctor-device-pairing.test.ts",
   "src/cli/proxy-cli.runtime.test.ts",
   "src/commands/doctor-maintenance.worker.test.ts",
+  "src/commands/doctor-maintenance.session-workers.test.ts",
+  "src/commands/doctor-session-canonical-keys.completions.test.ts",
   "src/commands/doctor-lint.crabbox.test.ts",
   "src/fleet/doctor.runtime.test.ts",
   "src/fleet/registry.test.ts",
@@ -692,6 +701,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/meeting-bot/participation.capacity-race.test.ts",
   "src/meeting-bot/participation.test.ts",
   "src/memory/memory-artifact-provenance.test.ts",
+  "src/plugin-sdk/memory-core-host-engine-sessions.test.ts",
   "src/plugin-sdk/memory-host-core.test.ts",
   "src/plugin-sdk/memory-host-event-export.test.ts",
   "src/plugin-sdk/memory-host-events.test.ts",
@@ -706,6 +716,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/skills/lifecycle/upload-store.test.ts",
   "src/skills/lifecycle/upload-store-lifecycle.test.ts",
   "src/skills/runtime/embedded-run-entries.library-read.test.ts",
+  "src/skills/runtime/refresh.recovery.test.ts",
   "src/state/openclaw-memory-write-admission.test.ts",
   "src/state/openclaw-state-db.test.ts",
   "src/state/openclaw-state-db-read-admission.test.ts",
@@ -786,6 +797,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/session-transcript-readers.test.ts",
   "src/gateway/worker-environments/worker-turn-transcript-footprint.test.ts",
   "src/plugin-sdk/session-transcript-mirror-runtime.test.ts",
+  "src/plugin-sdk/session-store-runtime.test.ts",
+  "src/plugin-sdk/session-store-runtime.conversation.test.ts",
   "src/plugin-sdk/session-transcript-runtime-visible-delta.test.ts",
 ];
 
@@ -793,6 +806,8 @@ const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);
 
 // Preserve watch admission for consumers previously inferred into fast lanes.
 export const databaseWorkerCoreFormerFastKinds = new Map([
+  ["src/commands/doctor-maintenance.session-workers.test.ts", "unitFast"],
+  ["src/commands/doctor-session-canonical-keys.completions.test.ts", "unitFast"],
   ["src/plugins/installed-plugin-index-store.availability.test.ts", "unitFast"],
   ["test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts", "unitFast"],
   ["src/infra/outbound/bound-delivery-router.test.ts", "unitFast"],

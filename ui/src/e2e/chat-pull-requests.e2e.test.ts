@@ -453,7 +453,7 @@ describeControlUiE2e("session pull request chips", () => {
       .poll(() => page.locator("[data-publication-account]").textContent())
       .toContain("Publish as @system-bot");
     await expect
-      .poll(() => page.getByRole("combobox", { name: "Publication account" }).count())
+      .poll(() => page.getByRole("button", { name: "Publication account", exact: true }).count())
       .toBe(0);
     expect(request.params).not.toHaveProperty("title");
     expect(JSON.stringify(request.params)).not.toContain("token");
@@ -834,11 +834,11 @@ describeControlUiE2e("session pull request chips", () => {
     await expect
       .poll(() => page.getByRole("button", { name: "Publish PR" }).isEnabled())
       .toBe(true);
-    await page.getByRole("button", { name: "Publication account" }).click();
-    await expect
-      .poll(() => page.locator("wa-popover").textContent())
-      .toContain("My GitHub requires an idle, reconciled local workspace");
-    await page.keyboard.press("Escape");
+    expect(
+      await page.getByRole("button", { name: "Publication account", exact: true }).count(),
+    ).toBe(0);
+    expect(await page.locator(".chat-pr wa-dropdown, .chat-pr wa-popover").count()).toBe(0);
+    expect(await page.locator(".chat-prs").textContent()).not.toContain("reclaim the workspace");
     await page.getByRole("button", { name: "Publish PR" }).click();
     const request = await gateway.waitForRequest("sessions.github.publish");
     expect(request.params).toMatchObject({

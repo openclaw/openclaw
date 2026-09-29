@@ -11,6 +11,7 @@ import {
 import { resolveSessionWorkspace } from "../../../lib/sessions/workspace.ts";
 import {
   activePlacementSession,
+  createPaneHeaderWorkspaceFixture,
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "../chat-pane.test-support.ts";
@@ -22,7 +23,6 @@ import {
 } from "./chat-pane-header.test-support.ts";
 import { canRevealSessionWorkspace, resolveChatPaneParentSession } from "./chat-pane-header.ts";
 import { renderChatPanePlacement } from "./chat-pane-placement.ts";
-import { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
 
 const containers: HTMLElement[] = [];
 
@@ -73,7 +73,7 @@ function mountIntegratedPresenceHeader(params: {
   const renderHeader = () =>
     render(
       pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
+        createPaneHeaderWorkspaceFixture(state),
         session,
         false,
         undefined,

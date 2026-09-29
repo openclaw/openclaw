@@ -30,11 +30,7 @@ import { collectAuditModelRefs } from "./audit-model-refs.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { GATEWAY_CONTROL_PLANE_TOOLS } from "./dangerous-tools.js";
 
-type HooksHardeningAuditOptions = {
-  gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
-};
-
-type GatewayHttpNoAuthAuditOptions = {
+type GatewayAuthAuditOptions = {
   gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
 };
 
@@ -43,14 +39,6 @@ type GatewayAuthSharedSecretReuse = {
   label: GatewayAuthSharedSecretLabel;
   source: "config" | "override";
 };
-type ActiveGatewaySharedSecret = {
-  label: GatewayAuthSharedSecretLabel;
-  value?: string;
-};
-
-// --------------------------------------------------------------------------
-// Helpers
-// --------------------------------------------------------------------------
 
 function isProbablySyncedPath(p: string): boolean {
   const s = p.toLowerCase();
@@ -86,23 +74,21 @@ function formatHooksTokenReuseDetail(reusedGatewayAuthLabel: GatewayAuthSharedSe
   return "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.";
 }
 
-function listActiveGatewaySharedSecrets(auth: ResolvedGatewayAuth): ActiveGatewaySharedSecret[] {
-  if (auth.mode === "token") {
-    return [{ label: "gateway auth token", value: auth.token }];
-  }
-  if (auth.mode === "password" || auth.mode === "trusted-proxy") {
-    return [{ label: "gateway auth password", value: auth.password }];
-  }
-  return [];
-}
-
 function findGatewayAuthLabelMatchingHooksToken(params: {
   hooksToken: string;
   auth: ResolvedGatewayAuth;
 }): GatewayAuthSharedSecretLabel | undefined {
-  return listActiveGatewaySharedSecrets(params.auth).find(
-    (candidate) => normalizeOptionalString(candidate.value) === params.hooksToken,
-  )?.label;
+  const { auth, hooksToken } = params;
+  if (auth.mode === "token" && normalizeOptionalString(auth.token) === hooksToken) {
+    return "gateway auth token";
+  }
+  if (
+    (auth.mode === "password" || auth.mode === "trusted-proxy") &&
+    normalizeOptionalString(auth.password) === hooksToken
+  ) {
+    return "gateway auth password";
+  }
+  return undefined;
 }
 
 function findHooksTokenGatewayAuthReuse(params: {
@@ -223,25 +209,16 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
     { platform: "windows", deviceFamily: "Windows" },
     { platform: "unknown" },
   ];
-  for (const node of platformNodes) {
-    const allow = resolveNodePairingCommandAllowlist(baseCfg, node);
-    for (const cmd of allow) {
+  for (const commands of [
+    ...platformNodes.map((node) => resolveNodePairingCommandAllowlist(baseCfg, node)),
+    resolveNodePairingCommandAllowlist(baseCfg, { caps: ["talk"] }),
+    DEFAULT_DANGEROUS_NODE_COMMANDS,
+  ]) {
+    for (const cmd of commands) {
       const normalized = normalizeNodeCommand(cmd);
       if (normalized) {
         out.add(normalized);
       }
-    }
-  }
-  for (const cmd of resolveNodePairingCommandAllowlist(baseCfg, { caps: ["talk"] })) {
-    const normalized = normalizeNodeCommand(cmd);
-    if (normalized) {
-      out.add(normalized);
-    }
-  }
-  for (const cmd of DEFAULT_DANGEROUS_NODE_COMMANDS) {
-    const normalized = normalizeNodeCommand(cmd);
-    if (normalized) {
-      out.add(normalized);
     }
   }
   return out;
@@ -498,10 +475,6 @@ function collectControlPlaneToolExposureContexts(cfg: OpenClawConfig): string[] 
   return exposedContexts;
 }
 
-// --------------------------------------------------------------------------
-// Exported collectors
-// --------------------------------------------------------------------------
-
 export function collectSyncedFolderFindings(params: {
   stateDir: string;
   configPath: string;
@@ -551,7 +524,7 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
 export function collectHooksHardeningFindings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
-  options: HooksHardeningAuditOptions = {},
+  options: GatewayAuthAuditOptions = {},
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   if (cfg.hooks?.enabled !== true) {
@@ -697,7 +670,7 @@ export function collectGatewayHttpSessionKeyOverrideFindings(
 export function collectGatewayHttpNoAuthFindings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
-  options: GatewayHttpNoAuthAuditOptions = {},
+  options: GatewayAuthAuditOptions = {},
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
@@ -891,9 +864,6 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
       });
     }
   }
-
-  // CDP source range is now auto-derived at runtime from the Docker network gateway
-  // for all bridge-like networks, so an unset cdpSourceRange is no longer a security gap.
 
   return findings;
 }

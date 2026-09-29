@@ -408,7 +408,25 @@ export function completePackageLifecycle(params = {}, reportError = console.erro
 
 if (isDirectPostinstallInvocation()) {
   runBundledPluginPostinstall();
-  if (!completePackageLifecycle()) {
+  let admitted = true;
+  if (
+    process.platform === "win32" &&
+    process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" &&
+    !isSourceCheckoutRoot({ packageRoot: DEFAULT_PACKAGE_ROOT })
+  ) {
+    try {
+      const { preflightUpdatePackageLifecycle } = await import(
+        pathToFileURL(join(DEFAULT_PACKAGE_ROOT, "dist/commands/doctor-update-schema-guard.js"))
+          .href
+      );
+      await preflightUpdatePackageLifecycle();
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+      admitted = false;
+    }
+  }
+  if (admitted && !completePackageLifecycle()) {
     process.exitCode = 1;
   }
 }

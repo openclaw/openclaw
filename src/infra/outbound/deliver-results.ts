@@ -1,5 +1,5 @@
 // Reconciles adapter progress results with hook-bearing final delivery results.
-import { hasDeliveryResultIdentity } from "./deliver-payload.js";
+import { resolveReceiptSourceId } from "../../channels/message/receipt.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 
 export function createDeliveryResultRecorder(params: {
@@ -10,7 +10,7 @@ export function createDeliveryResultRecorder(params: {
   const reportedResults = new Map<number, string>();
   let suppressionReason: "adapter_returned_no_send" | "adapter_returned_no_identity" | undefined;
   const observeDeliveryResult = (delivery: OutboundDeliveryResult): boolean => {
-    if (hasDeliveryResultIdentity(delivery)) {
+    if (resolveReceiptSourceId(delivery) !== undefined) {
       return true;
     }
     // One ambiguous completion prevents the payload from claiming that every

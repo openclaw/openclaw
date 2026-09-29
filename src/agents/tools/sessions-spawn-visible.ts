@@ -30,7 +30,8 @@ import { listAgentIds, resolveAgentConfig, resolveSessionAgentId } from "../agen
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { resolveAgentIdentity } from "../identity.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
-import { resolveSpawnedWorkspaceInheritance, type SpawnedToolContext } from "../spawned-context.js";
+import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
+import type { SpawnedToolContext } from "../spawned-context.js";
 import {
   countActiveRunsForSession,
   registerSubagentRun,
@@ -63,31 +64,41 @@ import { startVisibleCloudSession } from "./sessions-spawn-cloud.js";
 import { resolveVisibleSessionOwner } from "./sessions-spawn-visible-owner.js";
 import { SessionsSpawnPlacementSchema } from "./sessions-spawn-visible.schema.js";
 
-export type VisibleSessionsSpawnDeps = {
+type VisibleSessionsSpawnDeps = {
   callGateway?: InProcessGatewayCaller;
   registerRun?: typeof registerSubagentRun;
   countActiveRuns?: typeof countActiveRunsForSession;
 };
 
-type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps &
-  SpawnedToolContext & {
-    onSpawnEffectsStart?: () => void;
-    assertActive?: () => void;
-    signal?: AbortSignal;
-    agentSessionKey?: string;
-    requesterTurnRunId?: string;
-    completionOwnerKey?: string;
-    agentChannel?: string;
-    agentAccountId?: string;
-    agentTo?: string;
-    agentThreadId?: string | number;
-    currentMessagingTarget?: string;
-    currentChannelId?: string;
-    currentThreadTs?: string;
-    sandboxed?: boolean;
-    config?: OpenClawConfig;
-    requesterAgentIdOverride?: string;
-  };
+export type SessionsSpawnToolOptions = {
+  agentSessionKey?: string;
+  requesterTurnRunId?: string;
+  /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
+  completionOwnerKey?: string;
+  agentChannel?: string;
+  agentAccountId?: string;
+  agentTo?: string;
+  agentThreadId?: string | number;
+  currentMessagingTarget?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  currentMessageId?: string | number;
+  sandboxed?: boolean;
+  config?: OpenClawConfig;
+  /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
+  requesterAgentIdOverride?: string;
+  requesterRunId?: string;
+  swarmCollector?: boolean;
+  /** Backend-derived parent incarnation; never sourced from model arguments. */
+  expectedParentSessionId?: string;
+  signal?: AbortSignal;
+} & VisibleSessionsSpawnDeps &
+  SpawnedToolContext;
+
+type VisibleSessionsSpawnOptions = SessionsSpawnToolOptions & {
+  onSpawnEffectsStart?: () => void;
+  assertActive?: () => void;
+};
 
 function summarizeSessionsSpawnError(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
@@ -535,8 +546,7 @@ export async function maybeSpawnVisibleSession(params: {
             ).response;
           },
           terminateRun: (runId) => terminateCloudRun(childSessionKey, runId),
-          assertActive:
-            params.options?.assertActive ?? (() => params.options?.signal?.throwIfAborted()),
+          assertActive,
           signal: params.options?.signal,
         })),
       };

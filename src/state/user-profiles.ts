@@ -467,15 +467,12 @@ export function mergeProfiles(
           .distinct()
           .where("profile_id", "in", cohort),
       ).rows;
-      const movedAliasKinds: UsersMergeResult["movedAliasKinds"] = [];
-      if (email) {
-        movedAliasKinds.push("email");
-      }
-      for (const kind of ["provider", "channel"] as const) {
-        if (identities.some((identity) => identity.kind === kind)) {
-          movedAliasKinds.push(kind);
-        }
-      }
+      const movedAliasKinds: UsersMergeResult["movedAliasKinds"] = [
+        ...(email ? ["email" as const] : []),
+        ...(["provider", "channel"] as const).filter((kind) =>
+          identities.some((identity) => identity.kind === kind),
+        ),
+      ];
       mergeUserProfiles(db, source.id, target.id, Date.now(), options.mutation);
       publishUserProfilesChange(db, target.id);
       return { profile: selectUserProfileListItemById(db, target.id), movedAliasKinds };
