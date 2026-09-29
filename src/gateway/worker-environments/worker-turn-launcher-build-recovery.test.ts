@@ -534,33 +534,40 @@ describe("worker turn launcher build recovery", () => {
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
   });
 
-  it("accepts Stop through the reply owner between refresh and retry preparation", async () => {
-    const operation = createReplyOperation({
-      sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
-      resetTriggered: false,
-    });
-    operation.setPhase("running");
-    const duringRetryPreparation = vi.fn(() => {
-      expect(isEmbeddedAgentRunHandleActive(SESSION_ID)).toBe(false);
-      expect(abortEmbeddedAgentRun(SESSION_ID)).toBe(true);
-    });
-    const harness = await createBuildRecoveryHarness({
-      rejection: "pending refresh",
-      refreshInPlace: true,
-      replyOperation: operation,
-      duringRetryPreparation,
-    });
-    try {
-      await expect(harness.execute(operation.abortSignal)).rejects.toThrow();
-      expect(duringRetryPreparation).toHaveBeenCalledOnce();
-      expect(operation.abortSignal.aborted).toBe(true);
-      expect(harness.launchTurn).not.toHaveBeenCalled();
-      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
-    } finally {
-      operation.complete();
-    }
-  });
+  it.each(["backend", "reply"] as const)(
+    "accepts Stop through the %s owner between refresh and retry preparation",
+    async (cancellation) => {
+      const operation = createReplyOperation({
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+      const duringRetryPreparation = vi.fn(() => {
+        // The retry now owns cancellation before resolving its workspace.
+        expect(isEmbeddedAgentRunHandleActive(SESSION_ID)).toBe(true);
+        expect(
+          cancellation === "reply" ? operation.abortByUser() : abortEmbeddedAgentRun(SESSION_ID),
+        ).toBe(true);
+      });
+      const harness = await createBuildRecoveryHarness({
+        rejection: "pending refresh",
+        refreshInPlace: true,
+        replyOperation: operation,
+        duringRetryPreparation,
+      });
+      try {
+        await expect(harness.execute(operation.abortSignal)).rejects.toThrow();
+        expect(duringRetryPreparation).toHaveBeenCalledOnce();
+        // Backend cancellation closes its effective turn signal, not the upstream reply signal.
+        expect(operation.abortSignal.aborted).toBe(cancellation === "reply");
+        expect(harness.launchTurn).not.toHaveBeenCalled();
+        expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+      } finally {
+        operation.complete();
+      }
+    },
+  );
 
   it.each([
     { rejection: "pending refresh", outcome: "reconnected" },

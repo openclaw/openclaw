@@ -30,11 +30,8 @@ import { createWorkerComputerTool } from "../../worker/computer-runtime.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import { createWorkerPlacementTools } from "../../worker/worker-placement-tools.js";
-import {
-  STALE_WORKER_BUILD_REASON,
-  StaleWorkerBuildError,
-  supportsCurrentWorkerLaunch,
-} from "./admission.js";
+import { requireCurrentWorkerTurnEnvironment, StaleWorkerBuildError } from "./admission.js";
+import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import {
   bindWorkerTurnToolSurface,
@@ -75,36 +72,27 @@ export async function executeWorkerTurn(
 ) {
   const { placement, turn } = params;
   const modelRef = assertSupportedTurn(turn);
-  const environment = params.environments.get(placement.environmentId);
-  const bootstrapReceipt = environment?.bootstrapReceipt;
-  // Provider reconciliation records current-build teardown before placement repair. Consume
-  // that fact before launch so canonical reconciliation can persist the same cause.
-  if (environment?.error === STALE_WORKER_BUILD_REASON) {
-    throw new StaleWorkerBuildError();
-  }
-  if (
-    !environment ||
-    environment.state !== "attached" ||
-    environment.ownerEpoch !== placement.activeOwnerEpoch ||
-    !bootstrapReceipt ||
-    bootstrapReceipt.bundleHash !== placement.workerBundleHash ||
-    environment.attachedSessionIds.length !== 1 ||
-    environment.attachedSessionIds[0] !== placement.sessionId
-  ) {
-    throw new Error("Active worker placement does not match its attached environment");
-  }
-  if (!supportsCurrentWorkerLaunch(bootstrapReceipt)) {
-    throw new Error(
-      "Active worker bundle lacks the current launch capability; reprovision the worker before launch",
-    );
-  }
-  await recoverWorkspaceBeforeTurn(params);
-  const github = await prepareWorkerGitHubBinding({
-    sessionId: placement.sessionId,
-    sessionKey: placement.sessionKey,
-    agentId: placement.agentId,
-    assertCurrent: () => params.placements.validateTurnClaim(params.turnClaim),
+  const { environment, bootstrapReceipt } = requireCurrentWorkerTurnEnvironment({
+    environments: params.environments,
+    placement,
   });
+  await recoverWorkspaceBeforeTurn({ ...params, signal: turn.abortSignal });
+  params.assertRunCurrent?.();
+  turn.abortSignal?.throwIfAborted();
+  // Shared account refresh and repository lookup own their own lifetime. A
+  // cancelled turn may stop waiting, but cannot consume a late binding.
+  const github = await raceNodeWorkerOperation(
+    prepareWorkerGitHubBinding({
+      sessionId: placement.sessionId,
+      sessionKey: placement.sessionKey,
+      agentId: placement.agentId,
+      assertCurrent: () =>
+        !turn.abortSignal?.aborted && params.placements.validateTurnClaim(params.turnClaim),
+    }),
+    turn.abortSignal,
+  );
+  params.assertRunCurrent?.();
+  turn.abortSignal?.throwIfAborted();
 
   const startedAt = Date.now();
   await turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration });
@@ -590,7 +578,11 @@ export async function executeWorkerTurn(
         return;
       }
       dispatchReady = true;
-      params.onHandoff();
+      params.onHandoff(
+        environment.nodeDeviceId && environment.sshEndpoint === null
+          ? { requiresTerminalReceipt: true }
+          : undefined,
+      );
       turn.onExecutionPhase?.({ phase: "process_spawned", backend: "cloud-worker" });
       handoffPending = (async () => {
         try {
