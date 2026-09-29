@@ -9,7 +9,7 @@ import { discardSessionPendingInput } from "../../config/sessions/session-pendin
 import { isIncognitoSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
-import { createChatAbortOps } from "../chat-abort-ops.js";
+import { captureWorkerInferenceForSession, createChatAbortOps } from "../chat-abort-ops.js";
 import {
   abortChatRunById,
   isChatAbortControllerEntryAbortable,
@@ -38,7 +38,6 @@ import {
 } from "./chat-abort-authorization.js";
 import {
   abortChatRunsForSessionKeyWithPartials,
-  captureWorkerInferenceForSession,
   abortControlledSubagents,
   descendantAbortError,
 } from "./chat-abort-runtime.js";

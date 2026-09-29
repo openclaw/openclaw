@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { Type, type Static } from "typebox";
@@ -91,13 +92,8 @@ function readInteger(
   key: string,
   options: { minimum?: number; maximum?: number } = {},
 ): number {
-  const value = record[key];
-  if (
-    typeof value !== "number" ||
-    !Number.isSafeInteger(value) ||
-    (options.minimum !== undefined && value < options.minimum) ||
-    (options.maximum !== undefined && value > options.maximum)
-  ) {
+  const value = asSafeIntegerInRange(record[key], { min: options.minimum, max: options.maximum });
+  if (value === undefined) {
     const range =
       options.minimum !== undefined && options.maximum !== undefined
         ? ` between ${options.minimum} and ${options.maximum}`

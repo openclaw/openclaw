@@ -1,15 +1,12 @@
 import { resolveConfiguredGitHubToolIdentity } from "../agents/github-tool-identity.js";
 import { installSessionPlacementAdmissionProvider } from "../agents/session-placement-admission.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
-import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "../config/sessions/store-maintenance-preserve.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
-import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { createGitHubPublicationRuntime } from "./github-publication-runtime.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
@@ -33,6 +30,7 @@ import {
   createWorkerPlacementNodeWorkspaceBindingResolver,
   createWorkerWorkspaceRecoveryPreparer,
   loadWorkerPlacementSessionRuntimeModule,
+  prepareWorkerPlacementRepositoryManifestRefs,
   resolveWorkerPlacementSessionTarget,
   runWorkerPlacementSessionBarrier,
   WorkerDispatchTargetChangedError,
@@ -132,23 +130,7 @@ export function createGatewayWorkerPlacementRuntime(
     gatewayNamespace: params.gatewayNamespace,
     placements: params.placements,
     environments: params.environments,
-    additionalManifestRefs: (placement) => {
-      const entry = loadSessionEntryReadOnly({
-        ...placement,
-        storePath: resolveSessionStorePathForScope(placement),
-      });
-      if (entry?.sessionId !== placement.sessionId || !entry.repositoryWorkspaceId) {
-        return [];
-      }
-      const repository = getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId);
-      // Cumulative exports need the original checkout manifest after the current
-      // placement manifest advances; retaining only the latter loses earlier edits.
-      return repository?.agentId === placement.agentId &&
-        repository.sessionKey === placement.sessionKey &&
-        repository.baseManifestHash
-        ? [repository.baseManifestHash]
-        : [];
-    },
+    additionalManifestRefs: prepareWorkerPlacementRepositoryManifestRefs,
     warn: params.warn,
   });
   const runnerAvailability = createWorkerPlacementRunnerAvailabilityReader({
@@ -180,7 +162,7 @@ export function createGatewayWorkerPlacementRuntime(
     agentId: string;
   }): Promise<WorkerSessionWorkspace> => {
     const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
-    const { workspace } = resolveWorkerPlacementSessionTarget({
+    const { workspace, assertCurrent } = await resolveWorkerPlacementSessionTarget({
       sessionRuntime,
       config: getRuntimeConfig(),
       sessionId,
@@ -188,18 +170,20 @@ export function createGatewayWorkerPlacementRuntime(
       agentId,
       errorMessage: `Session ${sessionKey} dispatch requires a session-owned workspace`,
     });
+    assertCurrent(getRuntimeConfig());
     return workspace;
   };
   const resolveDevicePlacementRequirement: WorkerDevicePlacementRequirementResolver = async (
     identity,
   ) => {
     const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
-    const { config, target, entry } = resolveWorkerPlacementSessionTarget({
+    const { config, target, entry, assertCurrent } = await resolveWorkerPlacementSessionTarget({
       sessionRuntime,
       config: getRuntimeConfig(),
       ...identity,
       errorMessage: `Session ${identity.sessionKey} changed before node-backed placement recovery`,
     });
+    assertCurrent(getRuntimeConfig());
     const runtime = sessionRuntime.resolveWorkerPlacementSessionRuntime({
       cfg: config,
       entry,

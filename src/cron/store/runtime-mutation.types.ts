@@ -64,6 +64,24 @@ export type CronRuntimeMutationContracts = {
     preparation: Record<string, never>;
     outcome: Record<string, never>;
   };
+  "cron.finalizeRuns": {
+    input: CronRuntimeMutationInputs["cron.finalizeRuns"];
+    facts: {
+      jobs: CronJob[];
+      receipts: Array<{
+        receiptId: string;
+        deletionBlocked: boolean;
+        triggerStateRetired: boolean;
+      }>;
+    };
+    preparation: {
+      defaultAgentId?: string;
+      jobs: CronJob[];
+      deletedJobIds: string[];
+      deferredReceiptIds: string[];
+    };
+    outcome: { changed: boolean };
+  };
   "cron.removeStaleFamily": {
     input: CronRuntimeMutationInputs["cron.removeStaleFamily"];
     facts: Record<string, never>;

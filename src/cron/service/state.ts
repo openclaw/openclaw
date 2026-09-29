@@ -8,6 +8,7 @@ import type { GatewayScheduler, GatewayScheduledJob } from "../../infra/gateway-
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { SessionEventWakeWaitOptions } from "../../infra/session-event-wake.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronAgentAvailability } from "../agent-availability.js";
 import { toPublicCronJob } from "../public-job.js";
@@ -292,6 +293,8 @@ type QueuedCronRunReservation = {
   lifecycleGeneration: number;
   markerAtMs: number;
   runReceipt: CronRunReceiptHandle;
+  /** Host-only source custody from durable reservation through terminal settlement. */
+  runReceiptContext: OpenClawStateWorkerContext;
   preserveWhenDisabled: boolean;
   onExit?: boolean;
   activationPreviousLastError?: { value: string | undefined };

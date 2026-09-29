@@ -7,6 +7,7 @@ import {
 } from "../../agents/harness/session-deletion.js";
 import type { AgentHarnessSessionDeletionMutation } from "../../agents/harness/types.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
+import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   commitSessionInitializationRollback,
@@ -24,7 +25,12 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import {
+  captureOpenClawAgentDatabaseExecution,
+  supportsOpenClawAgentDatabaseExecution,
+} from "../../state/openclaw-agent-execution.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   createSessionRepositoryWorkspaceStore,
   findSessionRepositoryWorkspaces,
@@ -38,6 +44,10 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
 import type { SessionEntryCreateWithTranscriptOptions } from "./session-accessor.types.js";
+import type {
+  CapturedSessionEntryCurrentRead,
+  SessionEntryCurrentFacts,
+} from "./session-entry-current.types.js";
 import type { SessionEntry } from "./types.js";
 
 type DeletionEntry = { sessionKey: string; entry: SessionEntry };
@@ -204,95 +214,221 @@ async function withSqliteSessionMutations<T>(
     : captureAgentHarnessSessionDeletions();
   const repositories = options.contextReset
     ? undefined
-    : createSessionRepositoryWorkspaceStore({ path: resolveOpenClawStateSqlitePath(scope.env) });
-  const repositoryWorkspaces = repositories
-    ? await findSessionRepositoryWorkspaces(targets, { path: repositories.path, env: scope.env })
-    : [];
-  const invoke = async (
-    prepared: ReadonlyMap<string, readonly PreparedAgentHarnessSessionDeletion[]>,
-  ) => {
-    const assertCurrent = () => {
-      targets.forEach(assertTargetIdle);
-      for (const mutations of prepared.values()) {
-        mutations.forEach((mutation) => mutation.assertCurrent());
-      }
-    };
-    assertCurrent();
-    const receiptDeletions = new Map<
-      string,
-      Awaited<ReturnType<typeof preparePersonalGitHubSessionReceiptDeletion>>
-    >();
-    for (const workspace of repositoryWorkspaces) {
-      const target = targets.find((candidate) => candidate.sessionKey === workspace.sessionKey);
-      if (!target) {
-        throw new Error("Repository workspace deletion omitted its session target");
-      }
-      receiptDeletions.set(
-        workspace.workspaceId,
-        await preparePersonalGitHubSessionReceiptDeletion({
-          agentId: workspace.agentId,
-          env: scope.env,
-          generations: [
-            {
-              sessionKey: workspace.sessionKey,
-              sessionId: target.sessionId,
-              lifecycleRevision: target.lifecycleRevision ?? null,
-            },
-          ],
-          assertCurrent,
-        }),
-      );
-    }
-    return await deletions.run(
-      new Map(
-        targets.map((target) => [
-          target.sessionKey,
-          {
-            target,
-            mutations: prepared.get(target.sessionKey) ?? [],
-            assertIdle: () => assertTargetIdle(target),
-            contextReset: options.contextReset,
-          },
-        ]),
-      ),
-      async () => {
-        try {
-          return await run(assertCurrent);
-        } finally {
-          // Conversation deletion owns repository cleanup, including retained publication
-          // sources after a Gateway move. History rotation and failed deletion keep the row.
-          for (const workspace of repositoryWorkspaces) {
-            const currentEntry = () =>
-              readSessionEntryRow(
-                openOpenClawAgentDatabase(toDatabaseOptions(scope)),
-                workspace.sessionKey,
-              );
-            if (currentEntry()) {
-              continue;
-            }
-            const assertSessionAbsent = () => {
-              if (currentEntry()) {
-                throw new Error("Repository workspace session changed before deletion");
-              }
-            };
-            await receiptDeletions.get(workspace.workspaceId)!(assertSessionAbsent);
-            await repositories?.delete({
-              workspaceId: workspace.workspaceId,
-              assertCurrent: assertSessionAbsent,
-            });
-          }
+    : createSessionRepositoryWorkspaceStore({
+        path: resolveOpenClawStateSqlitePath(scope.env),
+        env: scope.env,
+      });
+  const repositorySource = repositories
+    ? captureOpenClawStateWorkerContext({ path: repositories.path, env: scope.env })
+    : undefined;
+  const databaseOptions = toDatabaseOptions(scope);
+  const execution =
+    repositories && supportsOpenClawAgentDatabaseExecution(databaseOptions)
+      ? captureOpenClawAgentDatabaseExecution(databaseOptions)
+      : undefined;
+  try {
+    const repositoryWorkspaces = repositories
+      ? await findSessionRepositoryWorkspaces(targets, { path: repositories.path, env: scope.env })
+      : [];
+    const invoke = async (
+      prepared: ReadonlyMap<string, readonly PreparedAgentHarnessSessionDeletion[]>,
+    ) => {
+      const currentReads = new Map<
+        string,
+        {
+          current: Extract<CapturedSessionEntryCurrentRead, { kind: "file" }>;
+          readPresent: (assertSourceCurrent: () => void) => Promise<boolean>;
         }
-      },
-    );
-  };
-  return await runExclusiveSessionLifecycleMutation({
-    scope: ownerStorePath,
-    identities: [
-      ...targets.flatMap((target) => [target.sessionKey, target.sessionId]),
-      ...(options.additionalIdentities ?? []),
-    ],
-    run: async () => (prepare ? await prepare(targets, invoke) : await invoke(new Map())),
-  });
+      >();
+      const assertCurrent = () => {
+        if (repositoryWorkspaces.length > 0) {
+          repositorySource?.admission.assertCurrent();
+          execution?.assertCurrent();
+        }
+        for (const read of currentReads.values()) {
+          read.current.assertSourceCurrent();
+        }
+        targets.forEach(assertTargetIdle);
+        for (const mutations of prepared.values()) {
+          mutations.forEach((mutation) => mutation.assertCurrent());
+        }
+      };
+      assertCurrent();
+      if (execution && repositoryWorkspaces.length > 0) {
+        const [{ captureSessionEntryCurrentRead }, { withSessionEntryReadOnlyInWorker }] =
+          await Promise.all([
+            import("./session-entry-current-runtime.js"),
+            import("./session-entry-read-runtime.js"),
+          ]);
+        assertCurrent();
+        for (const workspace of repositoryWorkspaces) {
+          const readScope = {
+            agentId: workspace.agentId,
+            defaultAgentId: databaseOptions.agentId,
+            storePath: scope.ownerStorePath ?? scope.path ?? ownerStorePath,
+            sessionKey: workspace.sessionKey,
+            env: scope.env,
+          };
+          const current = await withSessionEntryReadOnlyInWorker(
+            readScope,
+            assertCurrent,
+            async (read, owner) => {
+              if (!read.ok) {
+                throw read.error;
+              }
+              const captured = captureSessionEntryCurrentRead(readScope, owner);
+              execution.assertCurrent();
+              if (
+                captured.kind !== "file" ||
+                captured.source.agentId !== execution.agentId ||
+                !owner.scope
+              ) {
+                throw new Error("Repository cleanup lost its original file-backed session owner");
+              }
+              assertExistingDatabaseIdentity(
+                execution.path,
+                `file:${captured.source.databaseIdentity}`,
+                captured.source.databaseBirthtime,
+              );
+              return { current: captured, scope: { ...owner.scope, projection: "full" as const } };
+            },
+          );
+          currentReads.set(workspace.workspaceId, {
+            current: current.current,
+            readPresent: async (assertSourceCurrent) =>
+              await withSessionEntryReadOnlyInWorker(
+                current.scope,
+                assertSourceCurrent,
+                async (read, owner) => {
+                  if (!read.ok) {
+                    throw read.error;
+                  }
+                  const refreshed = captureSessionEntryCurrentRead(current.scope, owner);
+                  const original = current.current.source;
+                  if (
+                    refreshed.kind !== "file" ||
+                    refreshed.source.agentId !== original.agentId ||
+                    refreshed.source.path !== original.path ||
+                    refreshed.source.databaseIdentity !== original.databaseIdentity ||
+                    refreshed.source.databaseBirthtime !== original.databaseBirthtime ||
+                    refreshed.source.sessionKey !== original.sessionKey
+                  ) {
+                    throw new Error("Repository cleanup session source changed before deletion");
+                  }
+                  assertSourceCurrent();
+                  return read.value !== undefined;
+                },
+              ),
+          });
+        }
+      }
+      const receiptDeletions = new Map<
+        string,
+        Awaited<ReturnType<typeof preparePersonalGitHubSessionReceiptDeletion>>
+      >();
+      for (const workspace of repositoryWorkspaces) {
+        const target = targets.find((candidate) => candidate.sessionKey === workspace.sessionKey);
+        if (!target) {
+          throw new Error("Repository workspace deletion omitted its session target");
+        }
+        receiptDeletions.set(
+          workspace.workspaceId,
+          await preparePersonalGitHubSessionReceiptDeletion({
+            agentId: workspace.agentId,
+            env: scope.env,
+            generations: [
+              {
+                sessionKey: workspace.sessionKey,
+                sessionId: target.sessionId,
+                lifecycleRevision: target.lifecycleRevision ?? null,
+              },
+            ],
+            assertCurrent,
+          }),
+        );
+      }
+      return await deletions.run(
+        new Map(
+          targets.map((target) => [
+            target.sessionKey,
+            {
+              target,
+              mutations: prepared.get(target.sessionKey) ?? [],
+              assertIdle: () => assertTargetIdle(target),
+              contextReset: options.contextReset,
+            },
+          ]),
+        ),
+        async () => {
+          try {
+            return await run(assertCurrent);
+          } finally {
+            // Conversation deletion owns repository cleanup, including retained publication
+            // sources after a Gateway move. History rotation and failed deletion keep the row.
+            for (const workspace of repositoryWorkspaces) {
+              const currentRead = currentReads.get(workspace.workspaceId);
+              const assertSourceCurrent = () => {
+                if (execution && !currentRead) {
+                  throw new Error("Repository cleanup omitted its prepared session source");
+                }
+                repositorySource?.admission.assertCurrent();
+                execution?.assertCurrent();
+                currentRead?.current.assertSourceCurrent();
+              };
+              const currentEntry = () =>
+                readSessionEntryRow(
+                  openOpenClawAgentDatabase(toDatabaseOptions(scope)),
+                  workspace.sessionKey,
+                );
+              assertSourceCurrent();
+              const present = currentRead
+                ? await currentRead.readPresent(assertSourceCurrent)
+                : currentEntry() !== undefined;
+              if (present) {
+                continue;
+              }
+              const sessionEntryCurrent = currentRead
+                ? {
+                    source: currentRead.current.source,
+                    assertCurrent: (entry: SessionEntryCurrentFacts | undefined) => {
+                      assertSourceCurrent();
+                      if (entry !== undefined) {
+                        throw new Error("Repository workspace session changed before deletion");
+                      }
+                    },
+                  }
+                : undefined;
+              const assertSessionAbsent = () => {
+                assertSourceCurrent();
+                if (!currentRead && currentEntry()) {
+                  throw new Error("Repository workspace session changed before deletion");
+                }
+              };
+              await receiptDeletions.get(workspace.workspaceId)!(
+                assertSessionAbsent,
+                sessionEntryCurrent,
+              );
+              await repositories?.delete({
+                workspaceId: workspace.workspaceId,
+                sessionEntryCurrent,
+                assertCurrent: assertSessionAbsent,
+              });
+            }
+          }
+        },
+      );
+    };
+    return await runExclusiveSessionLifecycleMutation({
+      scope: ownerStorePath,
+      identities: [
+        ...targets.flatMap((target) => [target.sessionKey, target.sessionId]),
+        ...(options.additionalIdentities ?? []),
+      ],
+      run: async () => (prepare ? await prepare(targets, invoke) : await invoke(new Map())),
+    });
+  } finally {
+    await execution?.release();
+  }
 }
 
 /** Called only at the synchronous SQL edge, after the operation revalidates its row snapshot. */
