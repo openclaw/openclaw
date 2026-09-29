@@ -55,6 +55,9 @@ function buildRestrictedFinalizationAttempt(
     onAttemptAbort: attempt.onAttemptAbort,
     preparedModelRuntime: attempt.preparedModelRuntime,
     sessionFile: attempt.sessionFile,
+    // Host-owned transcript custody: detached runs keep the receipt-bearing manager.
+    sessionManager: attempt.sessionManager,
+    sessionPersistence: attempt.sessionPersistence,
     prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
     contextTokenBudget: attempt.contextTokenBudget,
     contextWindowInfo: attempt.contextWindowInfo,
