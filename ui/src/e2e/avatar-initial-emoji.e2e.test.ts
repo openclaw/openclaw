@@ -3,7 +3,10 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -174,7 +177,9 @@ suite.define(() => {
         const hydratedEmojiAgent = { id: "emoji", identity: { name: "Rocket" }, name: "Rocket" };
         const gateway = await installMockGateway(page, {
           defaultAgentId: "main",
+          featureMethods: [...defaultControlUiFeatureMethods, "agents.update"],
           methodResponses: {
+            "agents.update": { ok: true },
             "agent.identity.get": {
               cases: [
                 {
@@ -214,13 +219,27 @@ suite.define(() => {
         await expect
           .poll(() => new URL(page.url()).pathname)
           .toBe("/settings/agents/emoji/overview");
+        const picker = page.locator("openclaw-agent-emoji-picker");
         await expect
-          .poll(() => page.locator(".agent-identity-editor__emoji input").inputValue())
+          .poll(() => picker.locator(".agent-emoji-picker__current").textContent())
           .toBe(emojiGrapheme);
-        await screenshot(
-          page,
-          `03-agents-overview-${process.env.OPENCLAW_UI_PROOF_LABEL ?? "emoji"}.png`,
-        );
+        await picker.getByRole("button", { name: "Choose emoji" }).click();
+        await expect.poll(() => picker.getByRole("button", { name: "lobster" }).count()).toBe(1);
+        await screenshot(page, "03-agents-emoji-picker-open.png");
+        expect(await picker.getByRole("textbox", { name: "Paste another emoji" }).count()).toBe(0);
+        expect(await picker.getByRole("button", { name: "Use", exact: true }).count()).toBe(0);
+        await picker.getByRole("searchbox", { name: "Search emoji…" }).fill("dolphin");
+        await picker.getByRole("button", { name: "dolphin", exact: true }).click();
+        await expect
+          .poll(() => picker.locator(".agent-emoji-picker__current").textContent())
+          .toBe("🐬");
+        await screenshot(page, "04-agents-emoji-selected.png");
+        await page
+          .locator(".agent-identity-editor__actions")
+          .getByRole("button", { name: "Save" })
+          .click();
+        const update = await gateway.waitForRequest("agents.update");
+        expect(update.params).toMatchObject({ agentId: "emoji", emoji: "🐬" });
         await expect
           .poll(() =>
             page

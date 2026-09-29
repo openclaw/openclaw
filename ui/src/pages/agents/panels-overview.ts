@@ -8,6 +8,7 @@ import type {
   ModelCatalogResult,
 } from "../../api/types.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
+import "../../components/agent-emoji-picker.ts";
 import {
   renderDecisionModelPicker,
   type DecisionModelEntry,
@@ -188,18 +189,14 @@ export function renderAgentOverview(params: {
                     params.onIdentityFieldChange("name", (e.target as HTMLInputElement).value)}
                 />
               </label>
-              <label class="field agent-identity-editor__emoji">
+              <div class="field agent-identity-editor__emoji">
                 <span>${t("agents.identity.emoji")}</span>
-                <input
-                  type="text"
-                  maxlength="8"
+                <openclaw-agent-emoji-picker
                   .value=${identityEmoji}
-                  placeholder="🦞"
-                  ?disabled=${identityBusy}
-                  @input=${(e: Event) =>
-                    params.onIdentityFieldChange("emoji", (e.target as HTMLInputElement).value)}
-                />
-              </label>
+                  .disabled=${identityBusy}
+                  .onSelect=${(emoji: string) => params.onIdentityFieldChange("emoji", emoji)}
+                ></openclaw-agent-emoji-picker>
+              </div>
             </div>
           </div>
           ${

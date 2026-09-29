@@ -192,7 +192,7 @@ function createCronLayoutMethodResponses() {
 }
 
 suite.define(() => {
-  it("keeps agent identity inputs inside their fields at desktop and mobile widths", async () => {
+  it("keeps agent identity controls inside their fields at desktop and mobile widths", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installMockGateway(page, {
         featureMethods: [...defaultControlUiFeatureMethods, "agents.update"],
@@ -203,15 +203,17 @@ suite.define(() => {
 
       for (const viewport of responsiveViewports) {
         await page.setViewportSize(viewport);
-        for (const name of ["Display name", "Emoji"]) {
-          const input = editor.getByRole("textbox", { name, exact: true });
-          await input.focus();
+        for (const [name, control] of [
+          ["Display name", editor.getByRole("textbox", { name: "Display name" })],
+          ["Emoji", editor.getByRole("button", { name: "Choose emoji" })],
+        ] as const) {
+          await control.focus();
           await expect
             .poll(
               () =>
-                input.evaluate((element) => {
+                control.evaluate((element) => {
                   const inputBox = element.getBoundingClientRect();
-                  const fieldBox = element.closest("label")!.getBoundingClientRect();
+                  const fieldBox = element.closest(".field")!.getBoundingClientRect();
                   const cardBox = element.closest(".settings-row")!.getBoundingClientRect();
                   return (
                     inputBox.width > 0 &&

@@ -1,0 +1,102 @@
+openclaw-agent-emoji-picker {
+  display: block;
+}
+
+.agent-emoji-picker__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 38px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.agent-emoji-picker__trigger:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.agent-emoji-picker__trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.agent-emoji-picker__current {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.agent-emoji-picker__chevron {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
+wa-popover.agent-emoji-picker__popover {
+  --max-width: min(306px, calc(100vw - 24px));
+}
+
+wa-popover.agent-emoji-picker__popover::part(body) {
+  width: min(306px, calc(100vw - 24px));
+  padding: 12px;
+  border: 1px solid var(--overlay-border);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--overlay-shadow);
+}
+
+.agent-emoji-picker__panel {
+  display: grid;
+  gap: 10px;
+}
+
+.agent-emoji-picker__search {
+  min-width: 0;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.agent-emoji-picker__grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 4px;
+  max-height: min(260px, 40vh);
+  overflow-y: auto;
+}
+
+.agent-emoji-picker__choice {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 42px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 24px;
+}
+
+.agent-emoji-picker__choice:hover,
+.agent-emoji-picker__choice:focus-visible,
+.agent-emoji-picker__choice[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.agent-emoji-picker__empty {
+  grid-column: 1 / -1;
+  padding: 12px;
+  color: var(--muted);
+  text-align: center;
+}
