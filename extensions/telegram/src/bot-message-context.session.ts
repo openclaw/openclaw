@@ -748,19 +748,13 @@ export async function buildTelegramInboundContextPayload(params: {
       mentions: mentionFacts,
     },
     command:
-      commandSource === "native"
+      commandSource === "native" || commandSource === "text"
         ? {
-            kind: "native",
+            kind: commandSource === "native" ? "native" : "text-slash",
             authorized: commandAuthorized,
             body: commandBody,
           }
-        : commandSource === "text"
-          ? {
-              kind: "text-slash",
-              authorized: commandAuthorized,
-              body: commandBody,
-            }
-          : undefined,
+        : undefined,
     media: currentMediaFacts,
     supplemental: {
       quote:

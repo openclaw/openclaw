@@ -147,7 +147,6 @@ async function resolveFeishuAudioTranscript(params: {
 export function parseFeishuMessageEvent(
   event: FeishuMessageEvent,
   botOpenId?: string,
-  _botName?: string,
   preparedContent?: string,
 ): FeishuMessageContext {
   const mentionedBot = checkBotMentioned(event, botOpenId);
@@ -259,7 +258,6 @@ export async function handleFeishuMessage(params: {
   event: FeishuMessageEvent;
   preparedContent?: string;
   botOpenId?: string;
-  botName?: string;
   runtime?: RuntimeEnv;
   channelRuntime?: ReturnType<typeof getFeishuRuntime>["channel"];
   chatHistories?: Map<string, HistoryEntry[]>;
@@ -273,7 +271,6 @@ export async function handleFeishuMessage(params: {
     event,
     preparedContent,
     botOpenId,
-    botName,
     runtime,
     channelRuntime,
     chatHistories,
@@ -307,7 +304,7 @@ export async function handleFeishuMessage(params: {
     return;
   }
 
-  let ctx = parseFeishuMessageEvent(event, botOpenId, botName, preparedContent);
+  let ctx = parseFeishuMessageEvent(event, botOpenId, preparedContent);
   const isGroup = isFeishuGroupChatType(ctx.chatType);
   const isDirect = !isGroup;
   const directPreDispatchTarget = isDirect
@@ -384,12 +381,7 @@ export async function handleFeishuMessage(params: {
         );
         return;
       }
-      const deliveredCtx = parseFeishuMessageEvent(
-        verifiedEvent,
-        localBotOpenId,
-        botName,
-        preparedContent,
-      );
+      const deliveredCtx = parseFeishuMessageEvent(verifiedEvent, localBotOpenId, preparedContent);
       ctx = {
         ...deliveredCtx,
         mentionedBot: true,
