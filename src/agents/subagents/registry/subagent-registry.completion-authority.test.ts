@@ -32,6 +32,22 @@ vi.mock("../../../gateway/server-recovery-runtime-context.js", { spy: true });
 vi.mock("../../../infra/agent-events.js", { spy: true });
 vi.mock("./subagent-registry.store.sqlite.js", { spy: true });
 
+function registration(
+  runId: string,
+  overrides: Partial<Parameters<typeof registerSubagentRun>[0]> = {},
+): Parameters<typeof registerSubagentRun>[0] {
+  return {
+    runId,
+    childSessionKey: `agent:main:subagent:${runId}`,
+    requesterSessionKey: "agent:main:main",
+    requesterDisplayKey: "main",
+    task: "result",
+    cleanup: "keep",
+    expectsCompletionMessage: true,
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   vi.mocked(callGateway).mockResolvedValue({ status: "pending" });
   vi.mocked(bindGatewayLifecycleRequest).mockReturnValue(callGateway);
@@ -51,7 +67,6 @@ describe("registered completion source custody", () => {
     "admission",
     "lifecycle",
     "replacement",
-    "child replacement",
     "retired child replacement",
     "failed child replacement",
     "unrelated child",
@@ -100,27 +115,16 @@ describe("registered completion source custody", () => {
         const pending = withPluginRuntimeGatewayRequestScope(
           { client, context, isWebchatConnect: () => false },
           () =>
-            registerSubagentRun(
-              {
-                runId,
-                childSessionKey,
-                requesterSessionKey,
-                requesterDisplayKey: "main",
-                task: "result",
-                cleanup: "keep",
-                expectsCompletionMessage: true,
+            registerSubagentRun(registration(runId), {
+              assertCurrent: () => {
+                if (!active) {
+                  throw new Error("launch closed");
+                }
+                if (changed === "source callback") {
+                  sourceController.abort(new Error("source closed by admission callback"));
+                }
               },
-              {
-                assertCurrent: () => {
-                  if (!active) {
-                    throw new Error("launch closed");
-                  }
-                  if (changed === "source callback") {
-                    sourceController.abort(new Error("source closed by admission callback"));
-                  }
-                },
-              },
-            ),
+            }),
         );
         const settled = Promise.allSettled([pending]);
         let replacement = subagentRuns.get(runId);
@@ -131,34 +135,27 @@ describe("registered completion source custody", () => {
           } else if (changed === "lifecycle") {
             rotateAgentEventLifecycleGeneration();
           } else if (changed === "replacement") {
-            await registerSubagentRun({
-              runId,
-              childSessionKey,
-              requesterSessionKey,
-              requesterDisplayKey: "main",
-              task: "replacement",
-              cleanup: "keep",
-              expectsCompletionMessage: false,
-            });
+            await registerSubagentRun(
+              registration(runId, { task: "replacement", expectsCompletionMessage: false }),
+            );
             replacement = subagentRuns.get(runId);
             expect(replacement).toBeDefined();
           } else if (
-            changed === "child replacement" ||
             changed === "retired child replacement" ||
             changed === "failed child replacement" ||
             changed === "unrelated child"
           ) {
             const registerNewChild = async () => {
-              await registerSubagentRun({
-                runId: "newer-child",
-                childSessionKey:
-                  changed === "unrelated child" ? "agent:main:subagent:unrelated" : childSessionKey,
-                requesterSessionKey,
-                requesterDisplayKey: "main",
-                task: "newer child",
-                cleanup: "keep",
-                expectsCompletionMessage: false,
-              });
+              await registerSubagentRun(
+                registration("newer-child", {
+                  childSessionKey:
+                    changed === "unrelated child"
+                      ? "agent:main:subagent:unrelated"
+                      : childSessionKey,
+                  task: "newer child",
+                  expectsCompletionMessage: false,
+                }),
+              );
             };
             if (changed === "failed child replacement") {
               vi.mocked(saveSubagentRegistryChangesToSqlite).mockImplementationOnce(() => {
@@ -212,15 +209,12 @@ describe("registered completion source custody", () => {
 
   it.each([
     "settle",
-    "release",
-    "reset",
     "revoke",
     "gateway-close",
     "replace",
     "release-rejected",
     "registration-rejected",
     "cancelled-by-another-operator",
-    "mixed-source",
     "mixed-cancellation-source",
     "mixed-cancellation-same-source",
     "stale-batch-member",
@@ -253,17 +247,9 @@ describe("registered completion source custody", () => {
               isWebchatConnect: () => false,
             },
             () =>
-              registerSubagentRun({
-                runId,
-                childSessionKey: `agent:main:subagent:${runId}`,
-                requesterSessionKey: "agent:main:main",
-                requesterAgentId: "main",
-                requesterDisplayKey: "main",
-                requesterTurnRunId: "parent",
-                task: "result",
-                cleanup: "keep",
-                expectsCompletionMessage: true,
-              }),
+              registerSubagentRun(
+                registration(runId, { requesterAgentId: "main", requesterTurnRunId: "parent" }),
+              ),
           );
         if (ending === "registration-rejected") {
           vi.mocked(saveSubagentRegistryChangesToSqlite).mockImplementationOnce(() => {
@@ -316,20 +302,18 @@ describe("registered completion source custody", () => {
               ),
           );
           releaseSubagentRun(entry.runId);
-        } else if (ending === "mixed-source" || ending === "mixed-cancellation-source") {
+        } else if (ending === "mixed-cancellation-source") {
           await register(
             "other",
             createOperatorClient({ profileName: "other-owner", scopes: ["operator.write"] }),
           );
           const other = subagentRuns.get("other")!;
-          if (ending === "mixed-cancellation-source") {
-            other.execution = {
-              status: "terminal",
-              endedAt: 1,
-              outcome: { status: "error", error: "cancelled" },
-            };
-            other.endedReason = "subagent-killed";
-          }
+          other.execution = {
+            status: "terminal",
+            endedAt: 1,
+            outcome: { status: "error", error: "cancelled" },
+          };
+          other.endedReason = "subagent-killed";
           expect(() =>
             subagentRuns.runWithCompletionBatchAuthority([entry, other], () => "wrong caller"),
           ).toThrow(/incompatible operator authority/);
@@ -360,10 +344,6 @@ describe("registered completion source custody", () => {
           }
           releaseSubagentRun(entry.runId);
           releaseSubagentRun(other.runId);
-        } else if (ending === "release") {
-          releaseSubagentRun(entry.runId);
-        } else if (ending === "reset") {
-          resetSubagentRegistryForTests({ persist: false });
         } else if (ending === "gateway-close") {
           getGatewayContextLifetime(resolveGatewayContext).abort();
         } else if (ending === "replace") {

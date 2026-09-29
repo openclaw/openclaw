@@ -7,8 +7,8 @@ import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
-import { positiveFiniteNumber } from "./service-genai-attributes.js";
 import {
   assignOtelToolContentAttributes,
   assignOtelToolIdentityAttributes,
@@ -203,7 +203,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       "openclaw.reason": normalizeDiagnosticValue(evt.reason, "none"),
     };
     payloadLargeCounter.add(1, attrs);
-    const bytes = positiveFiniteNumber(evt.bytes);
+    const bytes = asPositiveFiniteNumber(evt.bytes);
     if (bytes !== undefined) {
       payloadLargeBytesHistogram.record(bytes, attrs);
     }

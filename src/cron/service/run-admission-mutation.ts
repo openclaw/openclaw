@@ -1,7 +1,7 @@
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
-import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { resolveCronJobEffectiveAgentId, tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { noteCronJobsStoreCommit } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
@@ -10,6 +10,7 @@ import {
   CronRunReceiptRevisionError,
   exactCronRunReceiptMatches,
   isCronRunReceiptOwnerStale,
+  prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
   retainCronRunReceiptSettlement,
 } from "../store/run-receipt-store.js";
@@ -17,7 +18,6 @@ import type { CronRunReceipt, CronRunReceiptHandle } from "../store/run-receipt.
 import type { CronRuntimeMutationContracts } from "../store/runtime-mutation.types.js";
 import type { CronReceiptTerminal } from "../store/runtime-worker.types.js";
 import type { CronJob } from "../types.js";
-import { prepareServiceCronRunReceiptClaim } from "./run-receipts.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
 import { applyCronRuntimeRowsToState } from "./runtime-store.js";
 import type { CronServiceState } from "./state.js";
@@ -87,9 +87,10 @@ export async function reserveCronRuns(params: {
           }),
         );
         const claims = [...params.candidates.values()].map((job) =>
-          prepareServiceCronRunReceiptClaim({
-            state,
+          prepareCronRunReceiptClaim({
+            storePath: state.deps.storePath,
             job: params.onExit ? { ...job, enabled: false } : job,
+            agentId: resolveCronJobEffectiveAgentId(job, currentDefaultAgentId(state)),
             startedAtMs: params.reservedAtMs,
             requestRunId: params.requestRunId,
             observed: observed.get(job.id),

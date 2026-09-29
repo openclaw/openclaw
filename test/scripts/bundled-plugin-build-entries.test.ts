@@ -464,7 +464,7 @@ describe("bundled plugin build entries", () => {
   it("excludes externalized meeting plugins from bundled artifacts", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
-    for (const pluginId of ["teams-meetings", "zoom-meetings"]) {
+    for (const pluginId of ["slack-huddles", "teams-meetings", "zoom-meetings"]) {
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/index.js`);
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/openclaw.plugin.json`);
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/package.json`);

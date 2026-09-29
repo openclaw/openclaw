@@ -500,18 +500,14 @@ export function registerPathCli(program: Command): void {
       .command("resolve")
       .description("Print the match at an oc:// path")
       .argument("<oc-path>", "oc:// path to resolve"),
-  ).action(async (pathStr: string, opts: PathCommandOptions) => {
-    await pathResolveCommand(pathStr, opts);
-  });
+  ).action(pathResolveCommand);
 
   withCommonOpts(
     path
       .command("find")
       .description("Enumerate matches for a wildcard / predicate oc:// pattern")
       .argument("<pattern>", "oc:// pattern"),
-  ).action(async (patternStr: string, opts: PathCommandOptions) => {
-    await pathFindCommand(patternStr, opts);
-  });
+  ).action(pathFindCommand);
 
   withCommonOpts(
     path
@@ -522,9 +518,7 @@ export function registerPathCli(program: Command): void {
       .option("--value-json", "Parse <value> as JSON for JSON/JSONC/JSONL leaf replacement")
       .option("--dry-run", "Print bytes without writing")
       .option("--diff", "With --dry-run, print a unified diff instead of full bytes"),
-  ).action(async (pathStr: string, value: string, opts: PathCommandOptions) => {
-    await pathSetCommand(pathStr, value, opts);
-  });
+  ).action(pathSetCommand);
 
   path
     .command("validate")
@@ -532,18 +526,14 @@ export function registerPathCli(program: Command): void {
     .argument("<oc-path>", "oc:// path to validate")
     .option("--json", "Force JSON output")
     .option("--human", "Force human output")
-    .action((pathStr: string, opts: PathCommandOptions) => {
-      pathValidateCommand(pathStr, opts);
-    });
+    .action(pathValidateCommand);
 
   withCommonOpts(
     path
       .command("emit")
       .description("Round-trip a file through parse + emit")
       .argument("<file>", "Path to a workspace file"),
-  ).action(async (fileArg: string, opts: PathCommandOptions) => {
-    await pathEmitCommand(fileArg, opts);
-  });
+  ).action(pathEmitCommand);
 
   // Bare `openclaw path` prints help and exits 0 (matches the core
   // applyParentDefaultHelpAction contract — see openclaw#73077).

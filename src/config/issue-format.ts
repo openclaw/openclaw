@@ -74,16 +74,6 @@ function resolveIssueLocationPrefix(
   return `${sanitizeTerminalText(sourceFile)}:${issue.line} — `;
 }
 
-function resolveIssuePathForLine(
-  path: string | null | undefined,
-  opts?: ConfigIssueFormatOptions,
-): string {
-  if (opts?.normalizeRoot) {
-    return normalizeConfigIssuePath(path);
-  }
-  return typeof path === "string" ? path : "";
-}
-
 /**
  * Format one config issue for terminal output.
  * Path and message are sanitized because issues can include user-edited config text.
@@ -98,7 +88,13 @@ export function formatConfigIssueLine(
   const issuePath = issue.pathSegments?.length
     ? formatConcreteConfigPath(issue.pathSegments)
     : issue.path;
-  const path = sanitizeTerminalText(resolveIssuePathForLine(issuePath, opts));
+  const path = sanitizeTerminalText(
+    opts?.normalizeRoot
+      ? normalizeConfigIssuePath(issuePath)
+      : typeof issuePath === "string"
+        ? issuePath
+        : "",
+  );
   const message = sanitizeTerminalText(issue.message);
   return `${prefix}${locationPrefix}${path}: ${message}`;
 }

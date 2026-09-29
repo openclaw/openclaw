@@ -158,7 +158,7 @@ export function saveCronStoreChangesInDatabase(
   return { version: 1, jobs: [...currentById.values()] } satisfies CronStoreFile;
 }
 
-export function replaceCronStoreRowsInDatabase(
+function replaceCronStoreRowsInDatabase(
   db: DatabaseSync,
   storeKey: string,
   store: CronStoreFile,

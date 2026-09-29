@@ -433,7 +433,7 @@ export async function rollbackFailedUpdate(params: {
               step: "package rollback",
               status: restored.exitCode === 0 ? "completed" : "failed",
               endedAtMs: Date.now(),
-              ...(restored.reason ? { detail: restored.stderrTail ?? restored.reason } : {}),
+              detail: restored.advisory?.message ?? restored.stderrTail ?? restored.reason,
             },
             { env: opts.run.env },
           );

@@ -30,7 +30,6 @@ import type {
 import { runSqliteSessionDeletionTransaction } from "./session-accessor.sqlite-deletion.js";
 import {
   sqliteLifecycleTargetSnapshotsEqual,
-  sqliteSessionEntriesEqual,
   type SqliteLifecycleTargetSnapshot,
 } from "./session-accessor.sqlite-entry-equality.js";
 import {
@@ -45,6 +44,7 @@ import {
   assertPlannedLifecycleArtifactEntriesUnchanged,
   deleteMaterializedSessionStatePlans,
   deletePlannedLifecycleArtifactEntries,
+  shouldRemoveSessionEntry,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   ReclamationDatabaseOptions,
@@ -70,7 +70,6 @@ import {
   isRecentHistoricalSessionId,
 } from "./session-accessor.sqlite-references.js";
 import {
-  cloneSessionEntry,
   getSessionKysely,
   runExclusiveSqliteSessionWrite,
   withSqliteSessionDatabase,
@@ -151,21 +150,13 @@ export function shouldDeleteSqliteSessionEntryLifecycle(
   ) {
     return false;
   }
-  if (!entry || (params.expectedEntry && !sqliteSessionEntriesEqual(entry, params.expectedEntry))) {
-    return false;
-  }
   if (
-    params.expectedSessionId !== undefined &&
-    (params.expectedSessionId === null
-      ? entry.sessionId !== undefined
-      : entry.sessionId !== params.expectedSessionId)
-  ) {
-    return false;
-  }
-  if (
-    (params.expectedLifecycleRevision !== undefined &&
-      entry.lifecycleRevision !== params.expectedLifecycleRevision) ||
-    (params.expectedUpdatedAt !== undefined && entry.updatedAt !== params.expectedUpdatedAt)
+    !shouldRemoveSessionEntry(entry, {
+      expectedEntry: params.expectedEntry || undefined,
+      expectedSessionId: params.expectedSessionId,
+      expectedLifecycleRevision: params.expectedLifecycleRevision,
+      expectedUpdatedAt: params.expectedUpdatedAt,
+    })
   ) {
     return false;
   }
@@ -338,7 +329,7 @@ function reclaimSqliteRowsInTransaction(
         return {
           archivedTranscripts,
           deleted: true,
-          deletedEntry: cloneSessionEntry(entry),
+          deletedEntry: structuredClone(entry),
           ...(entry.sessionId ? { deletedSessionId: entry.sessionId } : {}),
         };
       },

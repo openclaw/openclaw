@@ -85,7 +85,7 @@ or blank, it keeps the base TTS voice.
     providers: {
       google: {
         apiKey: "${GEMINI_API_KEY}",
-        model: "gemini-3.1-flash-tts-preview",
+        model: "gemini-3.8-flash-tts",
         speakerVoice: "Kore",
         // Optional natural-language style prompts:
         // audioProfile: "Speak in a calm, podcast-host tone.",

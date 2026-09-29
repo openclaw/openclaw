@@ -15,7 +15,7 @@ import {
   createWritableRenameTargetResolver,
   resolveReadOnlyWorkspaceSkillMounts,
 } from "openclaw/plugin-sdk/sandbox";
-import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
+import { extractErrorCode, FsSafeError } from "openclaw/plugin-sdk/security-runtime";
 import type { OpenShellFsBridgeContext, OpenShellMirrorBackend } from "./backend.types.js";
 import {
   isOpenShellRemotePathInside,
@@ -533,11 +533,7 @@ async function nearestExistingDirectoryStats(params: {
 
 function isNotFoundError(err: unknown): boolean {
   return (
-    (err instanceof FsSafeError && err.code === "not-found") ||
-    (typeof err === "object" &&
-      err !== null &&
-      "code" in err &&
-      (err as { code?: unknown }).code === "ENOENT")
+    (err instanceof FsSafeError && err.code === "not-found") || extractErrorCode(err) === "ENOENT"
   );
 }
 

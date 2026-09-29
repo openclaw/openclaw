@@ -20,6 +20,8 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 const repositoryScriptEntries = [
   // apps/linux/README.md invokes this live Windows native-browser proof driver by path.
   "apps/linux/scripts/test-inline-browser.mjs!",
+  // Linux App CI executes the injected native-auth bridge tests through Node.
+  "apps/linux/scripts/test-native-control-auth.mjs!",
   "scripts/render-proof-video.mts!",
   "scripts/ci-shard-timings-refresh.mts!",
   // tsdown builds this private macOS app worker protocol entry by path.
@@ -457,6 +459,8 @@ const rootEntries = [
   "apps/linux/ui/quickchat.js!",
   // The native window-chrome owner injects this script through Rust include_str!.
   "apps/linux/ui/window-chrome.js!",
+  // The native Gateway auth owner injects this script through Rust include_str!.
+  "apps/linux/ui/native-control-auth.js!",
   "apps/linux/ui/gateway-switch.js!",
   "apps/linux/ui/gateway-notice.js!",
   "apps/linux/ui/gateways.js!",

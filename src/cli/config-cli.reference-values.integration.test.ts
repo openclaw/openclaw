@@ -15,90 +15,89 @@ import {
 } from "./config-cli.integration.test-harness.js";
 
 const {
-  registeredRuntimeLogs,
-  registeredRuntimeErrors,
-  runRegisteredConfigCommand,
-  withConfigFileHarness,
+  registeredRuntimeLogs: logs,
+  registeredRuntimeErrors: errors,
+  runRegisteredConfigCommand: invoke,
+  withConfigFileHarness: withFile,
 } = useConfigCliIntegrationHarness();
+
+const read = (file: string) => fs.readFileSync(file, "utf8");
+const readJson = (file: string) => JSON.parse(read(file));
+const run = (...args: string[]) => invoke(["config", ...args]);
+const set = (...args: string[]) => invoke(["config", "set", ...args]);
+const reject = (result: Promise<unknown>) =>
+  expect(result).rejects.toMatchObject({ name: "ExitError", code: 1 });
+const withConfig = (raw: string, visit: Parameters<typeof withFile>[2]) =>
+  withFile("config-cli-", raw, visit);
 
 describe("config CLI explicit reference values", () => {
   it("does not retain config env ownership from a rejected read", async () => {
-    await withConfigFileHarness(
-      "config-env-rejected-owner-",
-      "{}",
-      async ({ configPath, tempDir }) => {
-        const originalDir = path.join(fs.realpathSync(tempDir), "external-agent");
-        const replacementDir = path.join(fs.realpathSync(tempDir), "config-agent");
-        const vars = { CONFIG_REJECTED_AGENT_DIR: originalDir };
-        await withEnvAsync({ CONFIG_REJECTED_AGENT_DIR: undefined }, async () => {
-          fs.writeFileSync(configPath, JSON.stringify({ env: { vars }, agents: "invalid" }));
-          expect((await readConfigFileSnapshot()).valid).toBe(false);
-          expect(process.env.CONFIG_REJECTED_AGENT_DIR).toBeUndefined();
-          const raw = JSON.stringify({
-            env: { vars },
-            agents: { entries: { main: { agentDir: "${CONFIG_REJECTED_AGENT_DIR}" } } },
-          });
-          fs.writeFileSync(configPath, raw);
-          setTestEnvValue("CONFIG_REJECTED_AGENT_DIR", originalDir);
-          const args = [
-            "config",
-            "set",
-            "--batch-json",
-            JSON.stringify([
-              { path: "env.vars.CONFIG_REJECTED_AGENT_DIR", value: replacementDir },
-              { path: "agents.entries.main.agentDir", value: "${CONFIG_REJECTED_AGENT_DIR}" },
-            ]),
-          ];
-          await runRegisteredConfigCommand([...args, "--dry-run"]);
-          expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
-          await runRegisteredConfigCommand(args);
-          const saved = JSON.parse(fs.readFileSync(configPath, "utf8"));
-          expect(saved.env.vars.CONFIG_REJECTED_AGENT_DIR).toBe(replacementDir);
-          expect(saved.agents.entries.main.agentDir).toBe("${CONFIG_REJECTED_AGENT_DIR}");
-          expect(process.env.CONFIG_REJECTED_AGENT_DIR).toBe(originalDir);
-          expect(
-            (await readConfigFileSnapshot()).sourceConfig.agents?.entries?.main?.agentDir,
-          ).toBe(originalDir);
-          expect(fs.readFileSync(configPath + ".bak", "utf8")).toBe(raw);
-          expect(registeredRuntimeErrors).toEqual([]);
+    await withConfig("{}", async ({ configPath, tempDir }) => {
+      const originalDir = path.join(fs.realpathSync(tempDir), "external-agent");
+      const replacementDir = path.join(fs.realpathSync(tempDir), "config-agent");
+      const vars = { CONFIG_REJECTED_AGENT_DIR: originalDir };
+      await withEnvAsync({ CONFIG_REJECTED_AGENT_DIR: undefined }, async () => {
+        fs.writeFileSync(configPath, JSON.stringify({ env: { vars }, agents: "invalid" }));
+        expect((await readConfigFileSnapshot()).valid).toBe(false);
+        expect(process.env.CONFIG_REJECTED_AGENT_DIR).toBeUndefined();
+        const raw = JSON.stringify({
+          env: { vars },
+          agents: { entries: { main: { agentDir: "${CONFIG_REJECTED_AGENT_DIR}" } } },
         });
-      },
-    );
+        fs.writeFileSync(configPath, raw);
+        setTestEnvValue("CONFIG_REJECTED_AGENT_DIR", originalDir);
+        const args = [
+          "config",
+          "set",
+          "--batch-json",
+          JSON.stringify([
+            { path: "env.vars.CONFIG_REJECTED_AGENT_DIR", value: replacementDir },
+            { path: "agents.entries.main.agentDir", value: "${CONFIG_REJECTED_AGENT_DIR}" },
+          ]),
+        ];
+        await invoke([...args, "--dry-run"]);
+        expect(read(configPath)).toBe(raw);
+        await invoke(args);
+        const saved = readJson(configPath);
+        expect(saved.env.vars.CONFIG_REJECTED_AGENT_DIR).toBe(replacementDir);
+        expect(saved.agents.entries.main.agentDir).toBe("${CONFIG_REJECTED_AGENT_DIR}");
+        expect(process.env.CONFIG_REJECTED_AGENT_DIR).toBe(originalDir);
+        expect((await readConfigFileSnapshot()).sourceConfig.agents?.entries?.main?.agentDir).toBe(
+          originalDir,
+        );
+        expect(read(configPath + ".bak")).toBe(raw);
+        expect(errors).toEqual([]);
+      });
+    });
   });
 
   it.each([false, true])(
     "refuses physical owner changes through config-owned environment edits (preview=%s)",
     async (preview) => {
-      await withConfigFileHarness(
-        "config-env-physical-owner-",
-        "{}",
-        async ({ configPath, tempDir }) => {
-          const originalDir = path.join(fs.realpathSync(tempDir), "original-agent");
-          const replacementDir = path.join(fs.realpathSync(tempDir), "replacement-agent");
-          const raw = JSON.stringify({
-            env: { vars: { CONFIG_EDITED_AGENT_DIR: originalDir } },
-            agents: { entries: { main: { agentDir: "${CONFIG_EDITED_AGENT_DIR}" } } },
-          });
-          fs.writeFileSync(configPath, raw);
-          await withEnvAsync({ CONFIG_EDITED_AGENT_DIR: undefined }, async () => {
-            await expect(
-              runRegisteredConfigCommand([
-                "config",
-                "set",
-                "--batch-json",
-                JSON.stringify([
-                  { path: "env.vars.CONFIG_EDITED_AGENT_DIR", value: replacementDir },
-                  { path: "agents.entries.main.agentDir", value: "${CONFIG_EDITED_AGENT_DIR}" },
-                ]),
-                ...(preview ? ["--dry-run"] : []),
+      await withConfig("{}", async ({ configPath, tempDir }) => {
+        const originalDir = path.join(fs.realpathSync(tempDir), "original-agent");
+        const replacementDir = path.join(fs.realpathSync(tempDir), "replacement-agent");
+        const raw = JSON.stringify({
+          env: { vars: { CONFIG_EDITED_AGENT_DIR: originalDir } },
+          agents: { entries: { main: { agentDir: "${CONFIG_EDITED_AGENT_DIR}" } } },
+        });
+        fs.writeFileSync(configPath, raw);
+        await withEnvAsync({ CONFIG_EDITED_AGENT_DIR: undefined }, async () => {
+          await reject(
+            set(
+              "--batch-json",
+              JSON.stringify([
+                { path: "env.vars.CONFIG_EDITED_AGENT_DIR", value: replacementDir },
+                { path: "agents.entries.main.agentDir", value: "${CONFIG_EDITED_AGENT_DIR}" },
               ]),
-            ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-            expect(registeredRuntimeErrors.join("\n")).toContain("inherited auth");
-            expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
-            expect(fs.existsSync(configPath + ".bak")).toBe(false);
-          });
-        },
-      );
+              ...(preview ? ["--dry-run"] : []),
+            ),
+          );
+          expect(errors.join("\n")).toContain("inherited auth");
+          expect(read(configPath)).toBe(raw);
+          expect(fs.existsSync(configPath + ".bak")).toBe(false);
+        });
+      });
     },
   );
 
@@ -106,7 +105,7 @@ describe("config CLI explicit reference values", () => {
     const raw = JSON.stringify({
       agents: { entries: { main: {} }, defaults: { model: "${CONFIG_UNTOUCHED_MODEL}" } },
     });
-    await withConfigFileHarness("config-dry-run-unchanged-model-", raw, async ({ configPath }) => {
+    await withConfig(raw, async ({ configPath }) => {
       await withEnvAsync(
         { CONFIG_UNTOUCHED_MODEL: "fixture-unavailable-provider/missing-model" },
         async () => {
@@ -118,28 +117,23 @@ describe("config CLI explicit reference values", () => {
             "--merge",
             "--strict-json",
           ];
-          const previewError = await runRegisteredConfigCommand([
-            ...args,
-            "--dry-run",
-            "--json",
-          ]).catch((error: unknown) => error);
-          expect(
-            previewError,
-            [...registeredRuntimeLogs, ...registeredRuntimeErrors].join("\n"),
-          ).toBeUndefined();
-          expect(JSON.parse(registeredRuntimeLogs.join("\n"))).toMatchObject({
+          const previewError = await invoke([...args, "--dry-run", "--json"]).catch(
+            (error: unknown) => error,
+          );
+          expect(previewError, [...logs, ...errors].join("\n")).toBeUndefined();
+          expect(JSON.parse(logs.join("\n"))).toMatchObject({
             ok: true,
             refsChecked: 0,
           });
-          expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+          expect(read(configPath)).toBe(raw);
           expect(fs.existsSync(configPath + ".bak")).toBe(false);
-          await runRegisteredConfigCommand(args);
-          expect(JSON.parse(fs.readFileSync(configPath, "utf8")).agents.defaults).toMatchObject({
+          await invoke(args);
+          expect(readJson(configPath).agents.defaults).toMatchObject({
             model: "${CONFIG_UNTOUCHED_MODEL}",
             maxConcurrent: 3,
           });
-          expect(fs.readFileSync(configPath + ".bak", "utf8")).toBe(raw);
-          expect(registeredRuntimeErrors).toEqual([]);
+          expect(read(configPath + ".bak")).toBe(raw);
+          expect(errors).toEqual([]);
         },
       );
     });
@@ -150,7 +144,7 @@ describe("config CLI explicit reference values", () => {
       env: { vars: { CONFIG_CAPTURED_MODEL: "claude-cli/claude-sonnet-4-6" } },
       agents: { entries: { main: {} } },
     });
-    await withConfigFileHarness("config-dry-run-managed-model-", raw, async ({ configPath }) => {
+    await withConfig(raw, async ({ configPath }) => {
       const env = captureEnv(["CONFIG_CAPTURED_MODEL"]);
       const releaseOwner = registerManagedRuntimeConfigWriteOwner(configPath);
       try {
@@ -160,28 +154,26 @@ describe("config CLI explicit reference values", () => {
           "claude-cli/claude-sonnet-4-6",
         );
         expect(process.env.CONFIG_CAPTURED_MODEL).toBeUndefined();
-        await expect(
-          runRegisteredConfigCommand([
-            "config",
-            "set",
+        await reject(
+          set(
             "agents.defaults.model",
             JSON.stringify("${CONFIG_CAPTURED_MODEL}"),
             "--dry-run",
             "--json",
-          ]),
-        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+          ),
+        );
         // This harness excludes the backend from its catalog. The model must reach
         // that resolver and be refused, not remain unchecked due to missing read-time env.
-        expect(JSON.parse(registeredRuntimeLogs.join("\n"))).toMatchObject({
+        expect(JSON.parse(logs.join("\n"))).toMatchObject({
           ok: false,
           refsChecked: 1,
           checks: { resolvabilityComplete: true },
           errors: [expect.objectContaining({ kind: "model" })],
         });
-        expect(registeredRuntimeLogs.join("\n")).not.toContain("claude-cli/claude-sonnet-4-6");
-        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+        expect(logs.join("\n")).not.toContain("claude-cli/claude-sonnet-4-6");
+        expect(read(configPath)).toBe(raw);
         expect(fs.existsSync(configPath + ".bak")).toBe(false);
-        expect(registeredRuntimeErrors).toEqual([]);
+        expect(errors).toEqual([]);
       } finally {
         releaseOwner();
         env.restore();
@@ -193,33 +185,31 @@ describe("config CLI explicit reference values", () => {
     "redacts environment-expanded model errors without writing (json=%s)",
     async (json) => {
       const raw = JSON.stringify({ agents: { entries: { main: {} } } });
-      await withConfigFileHarness("config-dry-run-model-env-", raw, async ({ configPath }) => {
+      await withConfig(raw, async ({ configPath }) => {
         await withEnvAsync({ CONFIG_PRIVATE_MODEL: undefined }, async () => {
           const privateValue = "fixture-private-provider/fixture-private-model";
           const authored = "${CONFIG_PRIVATE_MODEL}";
           setTestEnvValue("CONFIG_PRIVATE_MODEL", privateValue);
-          await expect(
-            runRegisteredConfigCommand([
-              "config",
-              "set",
+          await reject(
+            set(
               "agents.defaults.model",
               json ? JSON.stringify(authored) : authored,
               "--dry-run",
               ...(json ? ["--json"] : []),
-            ]),
-          ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-          const output = [...registeredRuntimeLogs, ...registeredRuntimeErrors].join("\n");
+            ),
+          );
+          const output = [...logs, ...errors].join("\n");
           expect(output).not.toContain(privateValue);
           expect(output).not.toContain("fixture-private-provider");
           expect(output).not.toContain("fixture-private-model");
           expect(output).toContain("Cannot set model reference");
           if (json) {
-            expect(JSON.parse(registeredRuntimeLogs.join("\n"))).toMatchObject({
+            expect(JSON.parse(logs.join("\n"))).toMatchObject({
               ok: false,
               errors: [expect.objectContaining({ kind: "model" })],
             });
           }
-          expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+          expect(read(configPath)).toBe(raw);
           expect(fs.existsSync(configPath + ".bak")).toBe(false);
         });
       });
@@ -232,125 +222,80 @@ describe("config CLI explicit reference values", () => {
       agents: { entries: { main: {} } },
       browser: { $include: "./browser.json" },
     });
-    await withConfigFileHarness(
-      "config-reference-activation-",
-      raw,
-      async ({ configPath, tempDir }) => {
-        const ownedPath = path.join(tempDir, "browser.json");
-        fs.writeFileSync(ownedPath, JSON.stringify(browser));
-        const before = fs.readFileSync(ownedPath, "utf8");
-        await withEnvAsync({ CONFIG_ACTIVATION_VALUE: "/opt/activated-browser" }, async () => {
-          await runRegisteredConfigCommand([
-            "config",
-            "set",
-            "browser.executablePath",
-            "${CONFIG_ACTIVATION_VALUE}",
-          ]);
-          const saved = JSON.parse(fs.readFileSync(ownedPath, "utf8"));
-          expect(saved).toMatchObject({
-            executablePath: "${CONFIG_ACTIVATION_VALUE}",
-          });
-          expect(fs.readFileSync(ownedPath + ".bak", "utf8")).toBe(before);
-          expect((await readConfigFileSnapshot()).sourceConfig.browser?.executablePath).toBe(
-            "/opt/activated-browser",
-          );
-          expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
-          expect(registeredRuntimeErrors).toEqual([]);
+    await withConfig(raw, async ({ configPath, tempDir }) => {
+      const ownedPath = path.join(tempDir, "browser.json");
+      fs.writeFileSync(ownedPath, JSON.stringify(browser));
+      const before = read(ownedPath);
+      await withEnvAsync({ CONFIG_ACTIVATION_VALUE: "/opt/activated-browser" }, async () => {
+        await set("browser.executablePath", "${CONFIG_ACTIVATION_VALUE}");
+        const saved = readJson(ownedPath);
+        expect(saved).toMatchObject({
+          executablePath: "${CONFIG_ACTIVATION_VALUE}",
         });
-      },
-    );
+        expect(read(ownedPath + ".bak")).toBe(before);
+        expect((await readConfigFileSnapshot()).sourceConfig.browser?.executablePath).toBe(
+          "/opt/activated-browser",
+        );
+        expect(read(configPath)).toBe(raw);
+        expect(errors).toEqual([]);
+      });
+    });
   });
 
-  it.each([
-    { include: false, parent: false },
-    { include: true, parent: true },
-  ])(
-    "retains authored identity for equal-value assignments (include=$include, parent=$parent)",
-    async ({ include, parent }) => {
-      const browser = { enabled: true, executablePath: "${CONFIG_REFERENCE_VALUE}" };
-      const raw = JSON.stringify({
-        agents: { entries: { main: {} } },
-        browser: include ? { $include: "./browser.json" } : browser,
-      });
-      await withConfigFileHarness(
-        "config-literal-intent-",
-        raw,
-        async ({ configPath, tempDir }) => {
-          const ownedPath = include ? path.join(tempDir, "browser.json") : configPath;
-          if (include) {
-            fs.writeFileSync(ownedPath, JSON.stringify(browser));
-          }
-          const before = fs.readFileSync(ownedPath, "utf8");
-          await withEnvAsync({ CONFIG_REFERENCE_VALUE: "/opt/browser-original" }, async () => {
-            await runRegisteredConfigCommand(
-              parent
-                ? [
-                    "config",
-                    "set",
-                    "browser",
-                    JSON.stringify({ enabled: true, executablePath: "/opt/browser-original" }),
-                    "--strict-json",
-                  ]
-                : ["config", "set", "browser.executablePath", "/opt/browser-original"],
-            );
-            const saved = JSON.parse(fs.readFileSync(ownedPath, "utf8"));
-            expect(include ? saved : saved.browser).toMatchObject({
-              executablePath: "${CONFIG_REFERENCE_VALUE}",
-            });
-            expect(fs.readFileSync(ownedPath, "utf8")).toBe(before);
-            expect(fs.existsSync(ownedPath + ".bak")).toBe(false);
-            setTestEnvValue("CONFIG_REFERENCE_VALUE", "/opt/browser-rotated");
-            expect((await readConfigFileSnapshot()).sourceConfig.browser?.executablePath).toBe(
-              "/opt/browser-rotated",
-            );
-            if (include) {
-              expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
-            }
-            expect(registeredRuntimeErrors).toEqual([]);
-          });
-        },
-      );
-    },
-  );
-
-  it.each([
-    { json: false, value: "${CONFIG_DRY_RUN_VALUE}" },
-    { json: true, value: "$${CONFIG_DRY_RUN_VALUE}" },
-  ])(
-    "prints only a no-write dry-run summary (json=$json, value=$value)",
-    async ({ json, value }) => {
-      const raw = JSON.stringify({ agents: { entries: { main: {} } }, browser: { enabled: true } });
-      await withConfigFileHarness("config-dry-run-reference-", raw, async ({ configPath }) => {
-        await withEnvAsync({ CONFIG_DRY_RUN_VALUE: undefined }, async () => {
-          const privateValue = "/opt/fixture-dry-run-private-value";
-          setTestEnvValue("CONFIG_DRY_RUN_VALUE", privateValue);
-          await runRegisteredConfigCommand([
-            "config",
-            "set",
-            "browser.executablePath",
-            json ? JSON.stringify(value) : value,
-            "--dry-run",
-            ...(json ? ["--json"] : []),
-          ]);
-          const output = [...registeredRuntimeLogs, ...registeredRuntimeErrors].join("\n");
-          expect(output).not.toContain(privateValue);
-          expect(output).not.toContain("CONFIG_DRY_RUN_VALUE");
-          if (json) {
-            expect(JSON.parse(registeredRuntimeLogs.join("\n"))).toMatchObject({
-              ok: true,
-              operations: 1,
-            });
-            expect(JSON.parse(registeredRuntimeLogs.join("\n"))).not.toHaveProperty("config");
-          } else {
-            expect(output).toContain("Dry run successful: 1 update(s)");
-          }
-          expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
-          expect(fs.existsSync(configPath + ".bak")).toBe(false);
-          expect(registeredRuntimeErrors).toEqual([]);
+  it("retains included reference identity for an equal-value parent assignment", async () => {
+    const browser = { enabled: true, executablePath: "${CONFIG_REFERENCE_VALUE}" };
+    const raw = JSON.stringify({
+      agents: { entries: { main: {} } },
+      browser: { $include: "./browser.json" },
+    });
+    await withConfig(raw, async ({ configPath, tempDir }) => {
+      const ownedPath = path.join(tempDir, "browser.json");
+      fs.writeFileSync(ownedPath, JSON.stringify(browser));
+      const before = read(ownedPath);
+      await withEnvAsync({ CONFIG_REFERENCE_VALUE: "/opt/browser-original" }, async () => {
+        await set(
+          "browser",
+          JSON.stringify({ enabled: true, executablePath: "/opt/browser-original" }),
+          "--strict-json",
+        );
+        const saved = readJson(ownedPath);
+        expect(saved).toMatchObject({
+          executablePath: "${CONFIG_REFERENCE_VALUE}",
         });
+        expect(read(ownedPath)).toBe(before);
+        expect(fs.existsSync(ownedPath + ".bak")).toBe(false);
+        setTestEnvValue("CONFIG_REFERENCE_VALUE", "/opt/browser-rotated");
+        expect((await readConfigFileSnapshot()).sourceConfig.browser?.executablePath).toBe(
+          "/opt/browser-rotated",
+        );
+        expect(read(configPath)).toBe(raw);
+        expect(errors).toEqual([]);
       });
-    },
-  );
+    });
+  });
+
+  it("prints only a no-write dry-run JSON summary for reference values", async () => {
+    const raw = JSON.stringify({ agents: { entries: { main: {} } }, browser: { enabled: true } });
+    await withConfig(raw, async ({ configPath }) => {
+      const privateValue = "/opt/fixture-dry-run-private-value";
+      await withEnvAsync({ CONFIG_DRY_RUN_VALUE: privateValue }, async () => {
+        await set(
+          "browser.executablePath",
+          JSON.stringify("$${CONFIG_DRY_RUN_VALUE}"),
+          "--dry-run",
+          "--json",
+        );
+        const output = [...logs, ...errors].join("\n");
+        expect(output).not.toContain(privateValue);
+        expect(output).not.toContain("CONFIG_DRY_RUN_VALUE");
+        expect(JSON.parse(logs.join("\n"))).toMatchObject({ ok: true, operations: 1 });
+        expect(JSON.parse(logs.join("\n"))).not.toHaveProperty("config");
+        expect(read(configPath)).toBe(raw);
+        expect(fs.existsSync(configPath + ".bak")).toBe(false);
+        expect(errors).toEqual([]);
+      });
+    });
+  });
 });
 
 describe("config CLI ordered writer policy", () => {
@@ -373,76 +318,68 @@ describe("config CLI ordered writer policy", () => {
         agents: { entries: { main: {} } },
         models: { providers: { example: include ? { $include: "./provider.json" } : provider } },
       });
-      await withConfigFileHarness(
-        "config-ordered-policy-",
-        raw,
-        async ({ configPath, tempDir }) => {
-          const ownedPath = include ? path.join(tempDir, "provider.json") : configPath;
-          if (include) {
-            fs.writeFileSync(ownedPath, JSON.stringify(provider));
-          }
-          const before = fs.readFileSync(ownedPath, "utf8");
-          await withEnvAsync(
-            { CONFIG_POLICY_TARGET: "activated-model", CONFIG_POLICY_OTHER: "unrelated-model" },
-            async () => {
-              const { runConfigOperations } = await import("./config-cli-runner.js");
-              const target = ["models", "providers", "example", "models", "1", "name"];
-              const removed = ["models", "providers", "example", "models", String(deleted)];
-              const { runtime, errors } = createTestRuntime();
-              await runConfigOperations({
-                runtime,
-                options: {},
-                successMode: "patch",
-                operations: [
-                  {
-                    inputMode: "json",
-                    requestedPath: target,
-                    setPath: target,
-                    value: "${CONFIG_POLICY_TARGET}",
-                  },
-                  {
-                    inputMode: "unset",
-                    requestedPath: removed,
-                    setPath: removed,
-                    value: undefined,
-                    mutation: "delete",
-                  },
-                ],
-              });
-              const saved = JSON.parse(fs.readFileSync(ownedPath, "utf8"));
-              const models = include ? saved.models : saved.models.providers.example.models;
-              expect(models).toEqual([
-                deleted === 0
-                  ? { id: "edited", name: "${CONFIG_POLICY_TARGET}" }
-                  : provider.models[0],
-                provider.models[2],
-              ]);
-              expect(fs.readFileSync(ownedPath + ".bak", "utf8")).toBe(before);
-              expect(errors).toEqual([]);
-              setTestEnvValue("CONFIG_POLICY_TARGET", "rotated-model");
-              const snapshot = await readConfigFileSnapshot();
-              expect(snapshot.sourceConfig.models?.providers?.example?.models[0]?.name).toBe(
-                deleted === 0 ? "rotated-model" : "drop",
-              );
-              const intermediate = fs.readFileSync(ownedPath, "utf8");
-              await runRegisteredConfigCommand([
-                "config",
-                "unset",
-                "models.providers.example.models[0]",
-              ]);
-              const final = JSON.parse(fs.readFileSync(ownedPath, "utf8"));
-              expect(include ? final.models : final.models.providers.example.models).toEqual([
-                provider.models[2],
-              ]);
-              expect(fs.readFileSync(ownedPath + ".bak", "utf8")).toBe(intermediate);
-              if (include) {
-                expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
-              }
-              expect(registeredRuntimeErrors).toEqual([]);
-            },
-          );
-        },
-      );
+      await withConfig(raw, async ({ configPath, tempDir }) => {
+        const ownedPath = include ? path.join(tempDir, "provider.json") : configPath;
+        if (include) {
+          fs.writeFileSync(ownedPath, JSON.stringify(provider));
+        }
+        const before = read(ownedPath);
+        await withEnvAsync(
+          { CONFIG_POLICY_TARGET: "activated-model", CONFIG_POLICY_OTHER: "unrelated-model" },
+          async () => {
+            const { runConfigOperations } = await import("./config-cli-runner.js");
+            const target = ["models", "providers", "example", "models", "1", "name"];
+            const removed = ["models", "providers", "example", "models", String(deleted)];
+            const { runtime, errors: writeErrors } = createTestRuntime();
+            await runConfigOperations({
+              runtime,
+              options: {},
+              successMode: "patch",
+              operations: [
+                {
+                  inputMode: "json",
+                  requestedPath: target,
+                  setPath: target,
+                  value: "${CONFIG_POLICY_TARGET}",
+                },
+                {
+                  inputMode: "unset",
+                  requestedPath: removed,
+                  setPath: removed,
+                  value: undefined,
+                  mutation: "delete",
+                },
+              ],
+            });
+            const saved = readJson(ownedPath);
+            const models = include ? saved.models : saved.models.providers.example.models;
+            expect(models).toEqual([
+              deleted === 0
+                ? { id: "edited", name: "${CONFIG_POLICY_TARGET}" }
+                : provider.models[0],
+              provider.models[2],
+            ]);
+            expect(read(ownedPath + ".bak")).toBe(before);
+            expect(writeErrors).toEqual([]);
+            setTestEnvValue("CONFIG_POLICY_TARGET", "rotated-model");
+            const snapshot = await readConfigFileSnapshot();
+            expect(snapshot.sourceConfig.models?.providers?.example?.models[0]?.name).toBe(
+              deleted === 0 ? "rotated-model" : "drop",
+            );
+            const intermediate = read(ownedPath);
+            await run("unset", "models.providers.example.models[0]");
+            const final = readJson(ownedPath);
+            expect(include ? final.models : final.models.providers.example.models).toEqual([
+              provider.models[2],
+            ]);
+            expect(read(ownedPath + ".bak")).toBe(intermediate);
+            if (include) {
+              expect(read(configPath)).toBe(raw);
+            }
+            expect(errors).toEqual([]);
+          },
+        );
+      });
     },
   );
 });

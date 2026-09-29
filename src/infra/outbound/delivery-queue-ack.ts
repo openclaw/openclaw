@@ -35,7 +35,7 @@ export async function retireUnsentDelivery(
     try {
       await releaseSpoolArtifacts(retired.spoolPaths, stateDir);
     } finally {
-      cancelDeliveryQueueMediaRetention(retired.retention, stateDir, context);
+      await cancelDeliveryQueueMediaRetention(retired.retention, stateDir, context);
     }
   };
 }

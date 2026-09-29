@@ -41,6 +41,50 @@ function toRunMap(runs: SubagentRunRecord[]): Map<string, SubagentRunRecord> {
 }
 
 describe("subagent registry query regressions", () => {
+  it("patches one sibling without reading others and preserves group order after removal", () => {
+    let unrelatedReads = 0;
+    const first = {
+      ...makeRun({
+        runId: "first",
+        collect: true,
+        groupId: "group",
+        swarmRequesterSessionKey: "parent",
+      }),
+      get runId() {
+        unrelatedReads++;
+        return "first";
+      },
+    };
+    const middle = makeRun({ ...first, runId: "middle", childSessionKey: "middle" });
+    const last = makeRun({ ...first, runId: "last", childSessionKey: "last" });
+    let index = buildSubagentRunReadIndexFromRuns({ runs: toRunMap([first, middle, last]) });
+    unrelatedReads = 0;
+    const updated = { ...last, cleanupCompletedAt: 100 };
+    index = index.patch(toRunMap([updated]), new Map());
+    expect(unrelatedReads).toBe(0);
+    expect(index.getDisplaySubagentRun("last")).toBe(updated);
+
+    index = index.patch(new Map([[middle.runId, undefined]]), new Map());
+    const replacement = { ...last, cleanupCompletedAt: 200 };
+    index = index.patch(toRunMap([replacement]), new Map());
+    expect(index.runsByControllerSessionKey.get(first.requesterSessionKey)).toEqual([
+      first,
+      replacement,
+    ]);
+    expect(index.swarmRunsByRequesterSessionKey.get("parent")).toEqual([first, replacement]);
+    index = index.patch(toRunMap([middle]), new Map());
+    expect(index.runsByControllerSessionKey.get(first.requesterSessionKey)).toEqual([
+      first,
+      replacement,
+      middle,
+    ]);
+    expect(index.swarmRunsByRequesterSessionKey.get("parent")).toEqual([
+      first,
+      replacement,
+      middle,
+    ]);
+  });
+
   it("preserves complete snapshot inputs and exact memory winners after the source changes", () => {
     const ungrouped = makeRun({ runId: "ungrouped", requesterSessionKey: "", endedAt: 50 });
     const older = makeRun({ runId: "older", createdAt: 10, endedAt: 15 });

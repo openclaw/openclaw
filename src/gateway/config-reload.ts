@@ -229,7 +229,7 @@ export function startGatewayConfigReloader(opts: {
     run: (ownership: GatewayConfigReloadTransactionOwnership) => Promise<T>,
   ): Promise<T> =>
     runOutsidePluginLifecycleLease(() =>
-      withPluginLifecycleLease({ signal: lifecycle.signal }, async (lease) => {
+      withPluginLifecycleLease({ signal: lifecycle.signal, processBound: true }, async (lease) => {
         // Accepted restart work outlives the requesting mutation. Reacquire exclusion
         // while retaining the same source observation and stopped/superseded checks.
         const current = {
@@ -1170,8 +1170,9 @@ export function startGatewayConfigReloader(opts: {
     let enteredReload = false;
     // Management enters with the lease held, then takes the config queue. A watcher
     // must use the same order, including when its timer inherited a writer's context.
+    // Reload's protected writes stay in this process; package installers own separate leases.
     const reload = runOutsidePluginLifecycleLease(() =>
-      withPluginLifecycleLease({ signal: lifecycle.signal }, async (lease) => {
+      withPluginLifecycleLease({ signal: lifecycle.signal, processBound: true }, async (lease) => {
         enteredReload = true;
         leaseRetryDelayMs = 0;
         await runReload(() => lease.assertOwned());

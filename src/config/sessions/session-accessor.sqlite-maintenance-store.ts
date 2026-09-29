@@ -33,7 +33,7 @@ import {
   readSessionMaintenanceKeyProjection,
 } from "./session-accessor.sqlite-maintenance-candidates.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
-import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
@@ -289,7 +289,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
       archivedSessionKeys.push(key);
       if (entry.worktree) {
         archivedWorktrees.push({
-          entry: cloneSessionEntry(entry),
+          entry: structuredClone(entry),
           sessionKey: key,
           storePath: params.storePath,
         });

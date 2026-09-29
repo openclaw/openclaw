@@ -29,9 +29,13 @@ type SlackPlanTaskStatus = TaskUpdateChunk["status"];
 type SlackPlanTask = Pick<TaskUpdateChunk, "id" | "title" | "status" | "details" | "output">;
 type SlackProgressDiffStat = NonNullable<ChannelProgressDraftCompositorSnapshot["diffStat"]>;
 
-function buildSessionSources(url: string): NonNullable<TaskUpdateChunk["sources"]> {
+export type SlackProgressSessionLink = { url: string; text: string };
+
+function buildSessionSources(
+  links: readonly SlackProgressSessionLink[],
+): NonNullable<TaskUpdateChunk["sources"]> {
   // The live Slack API requires url_source; @slack/types 3.0.0 still declares the old `url` tag.
-  return [{ type: "url_source", url, text: "Open in OpenClaw" }] as unknown as NonNullable<
+  return links.map((link) => ({ type: "url_source", ...link })) as unknown as NonNullable<
     TaskUpdateChunk["sources"]
   >;
 }
@@ -275,7 +279,7 @@ export function buildSlackProgressStreamChunks(params: {
   /** Terminal status applied to rows still in progress when the turn finishes. */
   finalInProgressStatus?: "complete" | "error";
   diffStat?: SlackProgressDiffStat;
-  sessionUrl?: string;
+  sessionLinks?: readonly SlackProgressSessionLink[];
 }): AnyChunk[] | undefined {
   const approvals = params.lines.filter((line) => line.kind === "approval");
   const tasks = buildNativeTasks({
@@ -310,7 +314,7 @@ export function buildSlackProgressStreamChunks(params: {
       SLACK_PROGRESS_PLAN_FALLBACK_TITLE,
   );
   const diffOutput = formatTaskDiffOutput(params.diffStat);
-  if (tasks.length === 0 && (params.summaryRow || params.sessionUrl || diffOutput)) {
+  if (tasks.length === 0 && (params.summaryRow || params.sessionLinks?.length || diffOutput)) {
     // Native rows cannot be removed, so the quiet card owns one replaceable
     // summary row for the whole turn; detailed cards add it only as a receipt.
     tasks.push({
@@ -351,8 +355,8 @@ export function buildSlackProgressStreamChunks(params: {
     if (index === finalTaskIndex && diffOutput) {
       chunk.output = [task.output, diffOutput].filter(Boolean).join(" · ");
     }
-    if (index === finalTaskIndex && params.sessionUrl) {
-      chunk.sources = buildSessionSources(params.sessionUrl);
+    if (index === finalTaskIndex && params.sessionLinks?.length) {
+      chunk.sources = buildSessionSources(params.sessionLinks);
     }
     return chunk;
   });
@@ -395,7 +399,7 @@ export function buildSlackProgressCardBlocks(params: {
   toolCalls?: number;
   elapsedSeconds?: number;
   diffStat?: SlackProgressDiffStat;
-  sessionUrl?: string;
+  sessionLinks?: readonly SlackProgressSessionLink[];
 }): (Block | KnownBlock)[] {
   const maxLineChars = resolveMaxLineChars(
     params.maxLineChars,
@@ -451,17 +455,16 @@ export function buildSlackProgressCardBlocks(params: {
   if (footer) {
     blocks.push({ type: "context", elements: [field(footer)] });
   }
-  if (params.state !== "working" && params.sessionUrl) {
+  if (params.state !== "working" && params.sessionLinks?.length) {
     blocks.push({
       type: "actions",
-      elements: [
-        {
-          type: "button",
-          action_id: SLACK_SESSION_LINK_ACTION_ID,
-          text: { type: "plain_text", text: "Open in OpenClaw" },
-          url: params.sessionUrl,
-        },
-      ],
+      elements: params.sessionLinks.map((link, index) => ({
+        type: "button" as const,
+        action_id:
+          index === 0 ? SLACK_SESSION_LINK_ACTION_ID : `${SLACK_SESSION_LINK_ACTION_ID}:${index}`,
+        text: { type: "plain_text" as const, text: link.text },
+        url: link.url,
+      })),
     });
   }
   return blocks.slice(0, SLACK_MAX_BLOCKS);
