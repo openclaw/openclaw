@@ -38,7 +38,7 @@ function recoveryRuntime(
 function dispatchRecovery(
   params: Pick<
     Parameters<typeof dispatchRestartRecoveryWithinCapacity>[0],
-    "capacity" | "gatewayRuntime" | "onSettled"
+    "capacity" | "gatewayRuntime" | "onSettled" | "holdTimeoutMs" | "retainPollMs"
   >,
 ) {
   return dispatchRestartRecoveryWithinCapacity({
@@ -123,3 +123,65 @@ it.each([
     release?.();
   },
 );
+
+it("returns undefined when the bounded wait budget is exhausted", async () => {
+  const capacity = createMainSessionRecoveryCapacity({
+    limit: 1,
+    acquireTimeoutMs: 100,
+  });
+  const release = await capacity.acquire(() => true);
+  expect(release).toBeTypeOf("function");
+  const result = await capacity.acquire(() => true);
+  expect(result).toBeUndefined();
+  release?.();
+});
+
+it("forces capacity release after the hold budget is exhausted when the run is no longer live", async () => {
+  vi.spyOn(agentRuns, "hasLiveAgentRunContext").mockReturnValue(false);
+  const runtime = recoveryRuntime(async <T>() => ({ status: "timeout" } as T));
+  const capacity = createMainSessionRecoveryCapacity({ limit: 1 });
+  const onSettled = vi.fn();
+
+  await dispatchRecovery({
+    capacity,
+    gatewayRuntime: runtime,
+    onSettled,
+    holdTimeoutMs: 100,
+  });
+  await vi.waitFor(() => expect(onSettled).toHaveBeenCalledOnce());
+  const release = await capacity.acquire(() => true);
+  expect(release).toBeTypeOf("function");
+  release?.();
+});
+
+it("retains capacity slot when hold budget is exhausted but the run is still live, then releases when the run is no longer live", async () => {
+  let live = true;
+  vi.spyOn(agentRuns, "hasLiveAgentRunContext").mockImplementation(() => live);
+  const runtime = recoveryRuntime(async <T>() => ({ status: "timeout" } as T));
+  const capacity = createMainSessionRecoveryCapacity({
+    limit: 1,
+    acquireTimeoutMs: 100,
+  });
+  const onSettled = vi.fn();
+
+  await dispatchRecovery({
+    capacity,
+    gatewayRuntime: runtime,
+    onSettled,
+    holdTimeoutMs: 100,
+    retainPollMs: 10,
+  });
+  await expect(
+    Promise.race([
+      vi.waitFor(() => expect(onSettled).toHaveBeenCalledOnce()).then(() => "settled"),
+      new Promise<string>((resolve) => {
+        setTimeout(() => resolve("pending"), 200);
+      }),
+    ]),
+  ).resolves.toBe("pending");
+  live = false;
+  await vi.waitFor(() => expect(onSettled).toHaveBeenCalledOnce());
+  const release = await capacity.acquire(() => true);
+  expect(release).toBeTypeOf("function");
+  release?.();
+});

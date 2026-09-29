@@ -36,18 +36,29 @@ async function runRecoveryRetries(params: {
   retryDelayMs?: number;
   shouldContinue: () => boolean;
   signal?: AbortSignal;
-  attempt: (finalAttempt: boolean) => Promise<boolean>;
+  attempt: (finalAttempt: boolean) => Promise<boolean | "skip">;
   onError: (error: unknown, finalAttempt: boolean) => void | Promise<void>;
 }): Promise<void> {
   let delayMs = params.initialDelayMs;
-  for (let attempt = 1; attempt <= params.maxRetries && params.shouldContinue(); attempt += 1) {
+  let attempt = 1;
+  while (attempt <= params.maxRetries && params.shouldContinue()) {
     const finalAttempt = attempt === params.maxRetries;
+    let skipped = false;
     try {
       if (delayMs > 0) {
         await sleepWithAbort(delayMs, params.signal, { ref: false });
       }
-      if (!params.shouldContinue() || (await params.attempt(finalAttempt))) {
+      if (!params.shouldContinue()) {
         return;
+      }
+      const outcome = await params.attempt(finalAttempt);
+      if (outcome === true) {
+        return;
+      }
+      if (outcome === "skip") {
+        skipped = true;
+      } else {
+        attempt += 1;
       }
     } catch (error) {
       if (!params.shouldContinue()) {
@@ -57,11 +68,16 @@ async function runRecoveryRetries(params: {
       if (finalAttempt) {
         return;
       }
+      attempt += 1;
     }
-    delayMs =
-      delayMs > 0
-        ? delayMs * RETRY_BACKOFF_MULTIPLIER
-        : (params.retryDelayMs ?? DEFAULT_RECOVERY_DELAY_MS);
+    if (skipped) {
+      delayMs = params.retryDelayMs ?? DEFAULT_RECOVERY_DELAY_MS;
+    } else {
+      delayMs =
+        delayMs > 0
+          ? delayMs * RETRY_BACKOFF_MULTIPLIER
+          : (params.retryDelayMs ?? DEFAULT_RECOVERY_DELAY_MS);
+    }
   }
 }
 
@@ -343,8 +359,11 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
       attempt: async (finalAttempt) => {
         exhaustedTargets = new Map();
         const result = await runRecoveryAttempt(exhaustedTargets);
-        if (result.failed === 0) {
+        if (result.failed === 0 && result.skipped === 0) {
           return true;
+        }
+        if (result.failed === 0 && result.skipped > 0) {
+          return "skip";
         }
         if (finalAttempt && exhaustedTargets.size > 0) {
           await reconcileExhaustedTargets(exhaustedTargets.values());

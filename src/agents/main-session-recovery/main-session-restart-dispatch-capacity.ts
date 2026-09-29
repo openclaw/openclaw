@@ -7,6 +7,9 @@ import {
   dispatchRestartRecoveryUntilStarted,
   type RestartRecoveryDispatchStartOutcome,
 } from "./main-session-restart-dispatch-start.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+
+const log = createSubsystemLogger("main-session-restart-recovery");
 
 export async function dispatchRestartRecoveryWithinCapacity(params: {
   agentParams: AgentRunRequest;
@@ -15,6 +18,8 @@ export async function dispatchRestartRecoveryWithinCapacity(params: {
   onSettled?: () => void;
   beginDispatch: () => boolean;
   shouldContinue: () => boolean;
+  holdTimeoutMs?: number;
+  retainPollMs?: number;
 }): Promise<RestartRecoveryDispatchStartOutcome | undefined> {
   const terminalRunId = params.agentParams.idempotencyKey;
   if (!terminalRunId) {
@@ -50,6 +55,8 @@ export async function dispatchRestartRecoveryWithinCapacity(params: {
         onSettled,
         runId: terminalRunId,
         shouldContinue: params.shouldContinue,
+        holdTimeoutMs: params.holdTimeoutMs,
+        retainPollMs: params.retainPollMs,
       });
     }
     return outcome;
@@ -64,28 +71,55 @@ async function releaseCapacityAtTerminal(params: {
   onSettled: () => void;
   runId: string;
   shouldContinue: () => boolean;
+  holdTimeoutMs?: number;
+  retainPollMs?: number;
 }): Promise<void> {
+  const deadline = Date.now() + (params.holdTimeoutMs ?? 300_000);
+  let settled = false;
   try {
-    while (params.shouldContinue()) {
+    while (params.shouldContinue() && Date.now() < deadline) {
       try {
         const result = await params.gatewayRuntime.waitForAgent<{
           endedAt?: unknown;
           status?: unknown;
         }>({ runId: params.runId, timeoutMs: 30_000 }, 35_000);
         if (result.status !== "timeout" || typeof result.endedAt === "number") {
+          settled = true;
           return;
         }
         if (!hasLiveAgentRunContext(params.runId)) {
+          settled = true;
           return;
         }
       } catch {
         if (!hasLiveAgentRunContext(params.runId)) {
+          settled = true;
           return;
         }
         await sleepWithAbort(1_000, undefined, { ref: false });
       }
     }
+    if (params.shouldContinue() && Date.now() >= deadline) {
+      if (!hasLiveAgentRunContext(params.runId)) {
+        log.warn(
+          `recovery capacity held beyond budget for run ${params.runId}, releasing`,
+        );
+        settled = true;
+        return;
+      }
+      log.warn(
+        `recovery capacity hold budget exhausted for live run ${params.runId}; retaining slot until run is no longer live`,
+      );
+      while (params.shouldContinue() && hasLiveAgentRunContext(params.runId)) {
+        await sleepWithAbort(params.retainPollMs ?? 5_000, undefined, { ref: false });
+      }
+      if (params.shouldContinue()) {
+        settled = true;
+      }
+    }
   } finally {
-    params.onSettled();
+    if (settled) {
+      params.onSettled();
+    }
   }
 }
