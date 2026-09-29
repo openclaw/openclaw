@@ -20,16 +20,28 @@ offload. The configured Testbox workflow hydrates credentials, so untrusted
 contributor or fork code must use secretless fork CI or sanitized direct AWS
 Crabbox instead.
 
-Do not pre-warm for anticipated work. Acquire the backend lazily when the
-first environment-sensitive command is ready, reuse the returned `tbx_...` id
-for later remote commands, sync the current checkout on every run, and stop it
-before handoff.
+When the operator selects remote validation for the task, run the first
+format, lint, type, and behavior checks there too. Local source inspection,
+editing, Git, and remote transport do not execute validation.
+
+Prepare the selected backend once the task and its first required command are
+known; preparation may overlap source work. Reuse the returned `tbx_...` id
+for later commands and corrections, sync the current checkout on every run,
+and stop the owned lease when proof and corrections finish. One lease has one
+active command: let its command and cleanup settle before another sync or
+reuse. Do not allocate speculative capacity for unrelated future work.
 
 At allocation, the wrapper records the caller task, physical checkout, HEAD,
 base, dependency inputs, and Testbox preparation fingerprint under
-`.crabbox/testbox-leases/`. Reuse requires those inputs to match, including
-immediately before delegation. Source-only edits can reuse the box while HEAD
-and preparation inputs remain unchanged; every run syncs the checkout.
+`.crabbox/testbox-leases/`. Reuse requires the same task, checkout, base,
+dependencies, preparation, and workflow inputs, including immediately before
+delegation. Source-only edits and commits can reuse that prepared box. The
+allocation receipt remains unchanged, while each command records its current
+source revision and syncs the checkout. A HEAD change during that command's
+preparation still stops delegation; rerun from the current candidate.
+This source-refresh contract belongs to the OpenClaw wrapper's trusted task
+path; it does not permit raw native callers or untrusted proof to reuse a
+lease across revisions.
 Older or missing receipts require stopping the owned lease and allocating a
 fresh one through the wrapper. `OPENCLAW_TESTBOX_ALLOW_STALE` cannot bypass
 these checks. All providers require Crabbox 0.67.0 or newer.
@@ -80,8 +92,8 @@ names must be UTF-8; symlink targets remain raw bytes. Symlinked repository Crab
 configuration or ignore files, and privacy-excluded runtime configuration, are
 rejected before upload rather than changing their trust or privacy treatment.
 
-The [local test commands](/reference/test/local) are the normal trusted development path. Keep proof
-proportional to the touched contract.
+Use the maintained [test commands](/reference/test/local) inside the prepared
+remote checkout. Keep proof proportional to the touched contract.
 
 For untrusted proof, lazily warm with `--provider aws`. Every run must set
 `CRABBOX_ENV_ALLOW=CI`, pass `--provider aws --no-hydrate`, and use
