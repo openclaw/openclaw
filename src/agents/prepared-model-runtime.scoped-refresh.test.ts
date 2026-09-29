@@ -940,10 +940,10 @@ describe("prepared model runtime scoped refresh", () => {
     // A failed scoped discovery never observed the credential source, so its auth
     // omission is not a logout: the prior entry survives until an observed refresh.
     const retainedAuth = (await publishedAuth("unavailable"))!;
-    expect(retainedAuth.credentials["provider-a"]).toBeDefined();
+    expect(retainedAuth.credentials?.["provider-a"]).toBeDefined();
     // A ready scoped refresh re-read the source and found nothing: the omission is
     // an observed removal, so the prior entry must go.
     const observedAuth = (await publishedAuth("ready"))!;
-    expect(observedAuth.credentials["provider-a"]).toBeUndefined();
+    expect(observedAuth.credentials?.["provider-a"]).toBeUndefined();
   });
 });
