@@ -142,27 +142,39 @@ describe("Cloudflare Access OIDC profile resolution", () => {
     },
   );
 
-  it("rejects a malformed custom claim without changing an existing profile", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const profile = ensureProfileForEmail("ada@example.test");
-      setUserProfileRole(profile.id, "maintainer");
-      setUserPreferences(profile.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false });
-      const before = getUserProfileListItem(profile.id);
-      const transport = vi
-        .spyOn(globalThis, "fetch")
-        .mockResolvedValueOnce(identityResponse(oidcIdentity("01", "custom")));
-      const request = accessRequest("ada@example.test", githubCfg);
-      try {
-        await expect(resolveAuthenticatedHttpUserProfile(request)).rejects.toThrow(
-          "Cloudflare Access OIDC GitHub account id is invalid",
-        );
-        expect(transport).toHaveBeenCalledOnce();
-        expect(getUserProfileListItem(profile.id)).toEqual(before);
-      } finally {
-        request.req.destroy();
-      }
-    });
-  });
+  it.each(["email-only", "verified"])(
+    "ignores a malformed custom claim without changing an existing %s profile",
+    async (kind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const profile =
+          kind === "verified"
+            ? syncGitHubIdentity({
+                identity: { accountId: 101, login: "ada" },
+                authenticationAlias: { kind: "email", email: "ada@example.test" },
+              })
+            : ensureProfileForEmail("ada@example.test");
+        setUserProfileRole(profile.id, "maintainer");
+        setUserPreferences(profile.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false });
+        const before = getUserProfileListItem(profile.id);
+        const transport = vi
+          .spyOn(globalThis, "fetch")
+          .mockResolvedValueOnce(identityResponse(oidcIdentity("01", "custom")));
+        const request = accessRequest("ada@example.test", githubCfg);
+        try {
+          const admitted = await resolveAuthenticatedHttpUserProfile(request);
+          expect(admitted.authenticatedUserProfile?.profileId).toBe(profile.id);
+          expect(admitted.operatorRolePolicy?.scopes).toEqual(["operator.admin"]);
+          expect(transport).toHaveBeenCalledOnce();
+          expect(getUserProfileListItem(profile.id)).toEqual(before);
+          expect(getUserPreferences(profile.id, [GIT_COAUTHOR_PREFERENCE_KEY])).toEqual({
+            [GIT_COAUTHOR_PREFERENCE_KEY]: false,
+          });
+        } finally {
+          request.req.destroy();
+        }
+      });
+    },
+  );
 
   it.each([
     { field: "oidc_fields", verified: false },
@@ -268,7 +280,7 @@ describe("Cloudflare Access OIDC profile resolution", () => {
   });
 
   it.each([101, "0", "-1", "01", "1.5", "1e2", " 101", "9007199254740992", null])(
-    "rejects malformed trusted account claim %j before GitHub lookup",
+    "ignores malformed trusted account claim %j without falling back to custom or GitHub lookup",
     async (claim) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const transport = vi
@@ -278,9 +290,16 @@ describe("Cloudflare Access OIDC profile resolution", () => {
           );
         const request = accessRequest("ada@example.test", githubCfg);
         try {
-          await expect(resolveAuthenticatedHttpUserProfile(request)).rejects.toThrow(
-            "GitHub account id is invalid",
-          );
+          const admitted = await resolveAuthenticatedHttpUserProfile(request);
+          const profileId = admitted.authenticatedUserProfile!.profileId;
+          expect(admitted.operatorRolePolicy?.scopes).toEqual([]);
+          expect(getUserProfileListItem(profileId)).toMatchObject({
+            emails: ["ada@example.test"],
+            githubIdentity: null,
+          });
+          expect(
+            (await resolveUserProfileGitHubAttribution([profileId])).get(profileId),
+          ).toBeNull();
           expect(transport).toHaveBeenCalledOnce();
         } finally {
           request.req.destroy();

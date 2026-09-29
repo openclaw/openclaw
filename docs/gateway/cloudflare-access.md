@@ -118,8 +118,9 @@ invalid. The identity-provider **Test** preview uses `oidc_fields`; inspect the
 authenticated identity endpoint after a fresh sign-in to verify the response
 OpenClaw consumes.
 
-A missing claim or an unselected issuer/provider keeps ordinary email-only
-resolution. If the optional GitHub account lookup fails, OpenClaw resolves the
+A missing or malformed optional claim, or an unselected issuer/provider, keeps
+ordinary email-only resolution. Malformed claims are never sent to GitHub or
+used to create an association or public credit. If the optional GitHub account lookup fails, OpenClaw resolves the
 authenticated email through the normal profile and access-policy checks. An
 existing authorized profile or valid email invitation can still sign in. A
 GitHub-only access requirement is not satisfied by an email fallback.
@@ -128,8 +129,8 @@ Lookup failure does not create a GitHub identity or public credit. An existing
 verified matching association and saved co-author preference remain intact;
 a later successful lookup can complete or refresh the link. This behavior
 applies to both `oidc_fields` and `custom`. Invalid Access authentication,
-mismatched principals, malformed selected account claims, conflicting profile
-bindings, and expired or revoked access still fail their normal checks.
+mismatched principals, conflicting profile bindings for valid account claims,
+and expired or revoked access still fail their normal checks.
 
 Existing email profiles retain
 their identity, role, and saved co-author preference. A conflicting GitHub account

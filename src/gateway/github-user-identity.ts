@@ -133,7 +133,7 @@ async function resolveCloudflareAccessIdentity(
       !/^[1-9][0-9]*$/u.test(claim) ||
       !Number.isSafeInteger(Number(claim))
     ) {
-      throw new Error("Cloudflare Access OIDC GitHub account id is invalid");
+      return { provider: "oidc" };
     }
     return { provider: "oidc", accountId: Number(claim) };
   }

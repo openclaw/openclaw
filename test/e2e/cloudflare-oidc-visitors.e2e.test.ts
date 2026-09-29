@@ -38,7 +38,7 @@ afterEach(() => {
 });
 
 describe("Cloudflare OIDC and Visitor Access admission", () => {
-  it("admits a new invited email during an outage while enforcing current access requirements", async () => {
+  it("admits an invited email without optional GitHub enrichment while enforcing current access requirements", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
       const grant = visitorGrant("ada@example.test");
@@ -72,11 +72,14 @@ describe("Cloudflare OIDC and Visitor Access admission", () => {
           roles: { default: "guest", definitions: { guest: guestRole } },
         },
       };
-      vi.spyOn(globalThis, "fetch").mockImplementation(async (url) =>
-        url === `${accessOrigin}/cdn-cgi/access/get-identity`
-          ? identityResponse(oidcIdentity("101", "custom"))
-          : identityResponse({}, 503),
-      );
+      let claim = "01";
+      const transport = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async (url) =>
+          url === `${accessOrigin}/cdn-cgi/access/get-identity`
+            ? identityResponse(oidcIdentity(claim, "custom"))
+            : identityResponse({}, 503),
+        );
       const request = accessRequest(grant.email, invitedCfg);
       try {
         const admitted = await resolveAuthenticatedHttpUserProfile(request);
@@ -88,8 +91,13 @@ describe("Cloudflare OIDC and Visitor Access admission", () => {
         expect(admitted.operatorRolePolicy?.scopes).toEqual(guestRole.scopes);
         expect(admitted.operatorAccessAuthority).toBeTruthy();
         expect((await resolveUserProfileGitHubAttribution([profileId])).get(profileId)).toBeNull();
+        expect(transport).toHaveBeenCalledOnce();
 
         requiresGitHub = true;
+        await expect(resolveAuthenticatedHttpUserProfile(request)).rejects.toBeInstanceOf(
+          GatewayOperatorAccessDeniedError,
+        );
+        claim = "101";
         await expect(resolveAuthenticatedHttpUserProfile(request)).rejects.toBeInstanceOf(
           GatewayOperatorAccessDeniedError,
         );
