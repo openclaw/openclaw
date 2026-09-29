@@ -147,12 +147,7 @@ function parseDistractions(day: string, value: unknown): LogbookDistraction[] {
   return distractions;
 }
 
-export function parseCardsJson(params: {
-  raw: string;
-  day: string;
-  windowStartMs: number;
-  windowEndMs: number;
-}): CardParseResult {
+export function parseCardsJson(params: { raw: string; day: string }): CardParseResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(extractJsonPayload(params.raw));

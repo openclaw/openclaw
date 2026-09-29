@@ -47,10 +47,6 @@ export class TwitchClientManager {
     account: TwitchAccountConfig,
     normalizedToken: string,
   ): Promise<StaticAuthProvider | RefreshingAuthProvider> {
-    if (!account.clientId) {
-      throw new Error("Missing Twitch client ID");
-    }
-
     if (account.clientSecret) {
       const authProvider = new RefreshingAuthProvider({
         clientId: account.clientId,
@@ -228,9 +224,7 @@ export class TwitchClientManager {
           return;
         }
         settled = true;
-        if (timeout) {
-          clearTimeout(timeout);
-        }
+        clearTimeout(timeout);
         for (const listener of listeners) {
           listener.unbind();
         }
@@ -277,7 +271,7 @@ export class TwitchClientManager {
           );
         }),
       );
-      const timeout: NodeJS.Timeout | undefined = setTimeout(
+      const timeout = setTimeout(
         () => finish(new Error(`Timed out connecting to Twitch as ${account.username}`)),
         connectTimeoutMs,
       );
