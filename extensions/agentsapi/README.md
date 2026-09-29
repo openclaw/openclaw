@@ -185,3 +185,32 @@ upstream accounting arrives. See the
 Native turn billing can sum multiple model calls. It does not establish the
 current context-window usage. Cost estimates use the configured model prices;
 they are not provider billing receipts.
+
+## Installed plugin settings
+
+Agents API has its own installed Codex plugin selection schema at
+`plugins.entries.agentsapi.config.plugins`:
+
+```json
+{
+  "enabled": true,
+  "allow_all_plugins": false,
+  "plugins": {
+    "slack": {
+      "enabled": true,
+      "marketplaceName": "openai-curated",
+      "pluginName": "slack"
+    }
+  }
+}
+```
+
+The supported fields are `enabled`, `allow_all_plugins`, and per-plugin
+`enabled`, `marketplaceName`, and `pluginName`. Codex policy fields such as
+`allow_destructive_actions` are not part of this schema. Editing this selection
+block does not restart the Gateway.
+
+This schema does not yet enable native apps or connectors in this build. Codex
+settings remain independent. Configuration is not migrated automatically; copy
+supported selection fields from `plugins.entries.codex.config.codexPlugins`
+manually when adopting the Agents API settings.

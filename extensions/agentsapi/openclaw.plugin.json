@@ -11,6 +11,27 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "plugins": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Agents API-specific installed Codex plugin selection.",
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "allow_all_plugins": { "type": "boolean" },
+          "plugins": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "marketplaceName": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+                "pluginName": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
+      },
       "environment": {
         "type": "string",
         "enum": ["openai_hosted", "self_hosted"],
