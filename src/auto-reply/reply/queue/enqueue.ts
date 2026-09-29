@@ -13,6 +13,7 @@ import {
 } from "../../../utils/queue-helpers.js";
 import {
   createOverflowSummaryRetrySource,
+  resolveFollowupAuthorizationKey,
   resolveFollowupDeliveryContextKey,
 } from "./delivery-context.js";
 import {
@@ -273,6 +274,28 @@ export function getFollowupQueueDepth(key: string): number {
     return 0;
   }
   return countPendingQueueItems(queue.items, queue.inFlight);
+}
+
+/**
+ * Next pending user request from the same route and principal as `source`, so it can
+ * answer for it; internal retries and ambient events do not count.
+ */
+export function findQueuedFollowupRequestFrom(
+  key: string,
+  source: FollowupRun,
+): FollowupRun | undefined {
+  const queue = getExistingFollowupQueue(key);
+  const route = followupMessageRouteIdentityKey(source);
+  const authorization = resolveFollowupAuthorizationKey(source);
+  return queue?.items.find(
+    (item) =>
+      !queue.inFlight.has(item) &&
+      !isFollowupRunAborted(item) &&
+      item.run.terminalReplyExpectation === "required" &&
+      item.strandedReplyRetry !== true &&
+      followupMessageRouteIdentityKey(item) === route &&
+      resolveFollowupAuthorizationKey(item) === authorization,
+  );
 }
 
 function settleParkedSteerAcceptance(key: string, run: FollowupRun, accepted: boolean): boolean {

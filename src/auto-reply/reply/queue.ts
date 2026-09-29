@@ -2,7 +2,12 @@
 
 export { clearSessionQueues } from "./queue/cleanup.js";
 export { scheduleFollowupDrain } from "./queue/drain.js";
-export { enqueueFollowupRun, getFollowupQueueDepth, parkSteerCandidate } from "./queue/enqueue.js";
+export {
+  enqueueFollowupRun,
+  findQueuedFollowupRequestFrom,
+  getFollowupQueueDepth,
+  parkSteerCandidate,
+} from "./queue/enqueue.js";
 export { resolveQueueSettings } from "./queue/settings-runtime.js";
 export { clearRemovedQueuedAuthProfiles, refreshQueuedFollowupSession } from "./queue/state.js";
 export type { FollowupRun, QueueSettings } from "./queue/types.js";

@@ -432,6 +432,23 @@ describe("qa suite planning helpers", () => {
     });
   });
 
+  it("merges scenario QA gateway env and rejects conflicting values", () => {
+    const stuck = makeQaSuiteTestScenario("stuck", {
+      gatewayRuntime: { env: { QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS: "30000" } },
+    });
+    expect(collectQaSuiteGatewayRuntimeOptions([makeQaSuiteTestScenario("plain"), stuck])).toEqual({
+      env: { QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS: "30000" },
+    });
+    expect(() =>
+      collectQaSuiteGatewayRuntimeOptions([
+        stuck,
+        makeQaSuiteTestScenario("slower", {
+          gatewayRuntime: { env: { QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS: "60000" } },
+        }),
+      ]),
+    ).toThrow(/QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS/);
+  });
+
   it.each([
     {
       reason: "explicit scenario isolation",

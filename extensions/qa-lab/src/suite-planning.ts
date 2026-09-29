@@ -257,16 +257,25 @@ function collectQaSuiteGatewayRuntimeOptions(scenarios: QaSeedScenario[]) {
   let allowUnhealthyStartup = false;
   let forwardHostHome = false;
   let preserveDebugArtifacts = false;
+  const env: Record<string, string> = {};
   for (const scenario of scenarios) {
     allowUnhealthyStartup ||= scenario.gatewayRuntime?.allowUnhealthyStartup === true;
     forwardHostHome ||= scenario.gatewayRuntime?.forwardHostHome === true;
     preserveDebugArtifacts ||= scenario.gatewayRuntime?.preserveDebugArtifacts === true;
+    for (const [key, value] of Object.entries(scenario.gatewayRuntime?.env ?? {})) {
+      if (env[key] !== undefined && env[key] !== value) {
+        throw new Error(`conflicting QA gateway runtime env for ${key} in scenario ${scenario.id}`);
+      }
+      env[key] = value;
+    }
   }
-  return allowUnhealthyStartup || forwardHostHome || preserveDebugArtifacts
+  const hasEnv = Object.keys(env).length > 0;
+  return allowUnhealthyStartup || forwardHostHome || preserveDebugArtifacts || hasEnv
     ? {
         ...(allowUnhealthyStartup ? { allowUnhealthyStartup: true } : {}),
         ...(forwardHostHome ? { forwardHostHome: true } : {}),
         ...(preserveDebugArtifacts ? { preserveDebugArtifacts: true } : {}),
+        ...(hasEnv ? { env } : {}),
       }
     : undefined;
 }
