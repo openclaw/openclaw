@@ -683,6 +683,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/qa-channel/src/channel.threading.test.ts",
   "extensions/qa-lab/index.test.ts",
   "extensions/qa-lab/src/cli.runtime.test.ts",
+  "extensions/qa-lab/src/cli.test.ts",
   "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
