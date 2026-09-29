@@ -114,11 +114,6 @@ export class ClickClackDiscussionService {
         this.#logger().warn(`discussion activation failed: ${String(error)}`);
       });
     }
-    if (this.#timersEnabled && !options.gatewayEvents) {
-      void this.#withOperation(() => this.#ensureTimer()).catch((error: unknown) => {
-        this.#logger().warn(`discussion timer initialization failed: ${String(error)}`);
-      });
-    }
   }
 
   async bindGatewayEvents(
