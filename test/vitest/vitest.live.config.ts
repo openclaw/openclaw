@@ -2,6 +2,7 @@
 import { defineConfig } from "vitest/config";
 import { BUNDLED_PLUGIN_LIVE_TEST_GLOB } from "./vitest.bundled-plugin-paths.ts";
 import baseConfig from "./vitest.config.ts";
+import { vitestLiveTestGlob } from "./vitest.pattern-file.ts";
 import { resolveRepoRootPath } from "./vitest.shared.config.ts";
 
 const base = baseConfig as unknown as Record<string, unknown>;
@@ -12,7 +13,7 @@ const { projects: _projects, ...baseTest } = baseTestWithProjects as {
   projects?: string[];
   setupFiles?: string[];
 };
-const exclude = (baseTest.exclude ?? []).filter((p) => p !== "**/*.live.test.ts");
+const exclude = (baseTest.exclude ?? []).filter((pattern) => pattern !== vitestLiveTestGlob);
 
 export default defineConfig({
   ...base,

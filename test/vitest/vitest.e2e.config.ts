@@ -3,6 +3,7 @@ import { defineConfig } from "vitest/config";
 import { BUNDLED_PLUGIN_E2E_TEST_GLOB } from "./vitest.bundled-plugin-paths.ts";
 import baseConfig from "./vitest.config.ts";
 import { RepoE2eSequencer } from "./vitest.e2e.sequencer.ts";
+import { vitestE2eTestGlob } from "./vitest.pattern-file.ts";
 import { resolveRepoRootPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 import { tuiPtyTestFiles } from "./vitest.test-shards.mjs";
 import { uiE2eRealGatewayTestFiles } from "./vitest.ui-paths.mjs";
@@ -24,7 +25,7 @@ const { projects: _projects, ...baseTest } = baseTestWithProjects as {
   setupFiles?: string[];
 };
 const exclude = [
-  ...(baseTest.exclude ?? []).filter((p) => p !== "**/*.e2e.test.ts"),
+  ...(baseTest.exclude ?? []).filter((pattern) => pattern !== vitestE2eTestGlob),
   ...tuiPtyTestFiles,
   // Browser suites, including plugin-local files, need the Control UI project's setup.
   ...uiE2eRealGatewayTestFiles,
