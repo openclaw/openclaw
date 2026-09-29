@@ -615,9 +615,8 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   // default is deferred until after Tailscale mode is known (see below)
   // so that Tailscale's loopback constraint is respected.
   const VALID_BIND_MODES = new Set<string>(["loopback", "lan", "auto", "custom", "tailnet"]);
-  const bindExplicitRawStr = normalizeOptionalString(
-    toOptionString(opts.bind) ?? cfg.gateway?.bind,
-  );
+  const bindOverride = normalizeOptionalString(toOptionString(opts.bind));
+  const bindExplicitRawStr = normalizeOptionalString(bindOverride ?? cfg.gateway?.bind);
   if (bindExplicitRawStr !== undefined && !VALID_BIND_MODES.has(bindExplicitRawStr)) {
     defaultRuntime.error('Invalid --bind. Use "loopback", "lan", "tailnet", "auto", or "custom".');
     defaultRuntime.exit(1);
@@ -977,7 +976,8 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;
         return await startGatewayServer(port, {
-          bind,
+          // Reload saved bind settings on restart; only an explicit CLI flag stays pinned.
+          bind: startupConfigSnapshotReadForThisStart || bindOverride ? bind : undefined,
           ...(opts.updateCanary ? { updateCanary: true } : {}),
           ...(activeBootId ? { bootId: activeBootId } : {}),
           auth: authOverride,

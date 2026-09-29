@@ -1528,8 +1528,7 @@ describe("gateway run option collisions", () => {
       await runGatewayCli(["gateway", "run", "--bind", "auto", "--allow-unconfigured"]);
     });
 
-    const options = gatewayStartOptions();
-    expect(options.bind).toBe("auto");
+    expect(gatewayStartOptions().bind).toBe("auto");
   });
 
   it("blocks container auto startup without explicit gateway auth", async () => {
@@ -1588,6 +1587,7 @@ describe("gateway run option collisions", () => {
     const secondOptions = gatewayStartOptions(1);
     expect(secondOptions.startupConfigSnapshotRead).toBeUndefined();
     expect(secondOptions.startupStartedAt).toBe(2000);
+    expect(secondOptions.bind).toBeUndefined();
   });
 
   it("lets gateway bootstrap refresh inherited service-managed dotenv keys", async () => {

@@ -31,6 +31,39 @@ openclaw devices list
 openclaw devices approve <requestId>
 ```
 
+## Connect your phone without editing settings
+
+If the Gateway is only reachable on this computer, run `openclaw qr` in an
+interactive terminal. It offers **Same Wi-Fi or local network**, checks that an
+address is available, and explains who will be able to connect.
+Confirm to save the network settings and restart the Gateway. Once the phone
+address is ready, the command continues with the QR code. Existing authentication
+and unrelated settings, including the authored port, are preserved. A temporary
+`OPENCLAW_GATEWAY_PORT` override is never saved to the configuration.
+
+Local-network access listens on all interfaces: use a trusted network and keep
+your firewall enabled. Plaintext LAN pairing still grants limited access.
+This recovery does not enable Tailscale Serve or replace existing Tailscale
+routes. Pairing through already configured Tailscale access or an explicit secure
+`--url` remains supported. Cancel or select **Not now** before confirmation to
+leave settings and the running Gateway unchanged.
+
+Before changing settings and again after restart, recovery verifies that the
+running Gateway owns the advertised port; a different service returning HTTP
+200 is not sufficient. Default interactive LAN pairing repeats this check
+before each setup code, including retries after a failed activation.
+If a shell-only `OPENCLAW_GATEWAY_PORT` override points elsewhere, check or remove
+that override before trying again.
+
+If saving succeeds but restart, listener ownership, or readiness fails, the command explains how to
+finish and does not issue a setup code. The saved settings remain in place; run
+`openclaw gateway status` or `openclaw gateway restart`, then `openclaw qr` again.
+
+Piped/noninteractive runs, `--json`, `--setup-code-only`, `--remote`, and explicit
+URL or credential overrides never start this setup flow or change network
+settings. Use an interactive `openclaw qr` first, or supply an already reachable
+address with `--url`.
+
 ## Options
 
 - `--remote`: prefer `gateway.remote.url` and remote credentials; fall back to Tailscale Serve/Funnel when the remote URL is unset. Ignores `device-pair` plugin `publicUrl`; explicit `--url` or `--public-url` still takes precedence.

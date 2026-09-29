@@ -65,6 +65,38 @@ function validateGatewayPortInput(value: unknown): string | undefined {
   return undefined;
 }
 
+/** Shared network/origin defaults; callers own consent, persistence, and activation. */
+export async function configureGatewayNetworkForSetup(
+  config: OpenClawConfig,
+  settings: Pick<GatewayWizardSettings, "bind" | "customBindHost" | "tailscaleMode"> & {
+    port?: number;
+  },
+  tailscaleBin?: string | null,
+): Promise<OpenClawConfig> {
+  const { port, bind, customBindHost, tailscaleMode } = settings;
+  let nextConfig: OpenClawConfig = {
+    ...config,
+    gateway: {
+      ...config.gateway,
+      ...(port !== undefined ? { port } : {}),
+      bind,
+      ...(bind === "custom" && customBindHost ? { customBindHost } : {}),
+      tailscale: {
+        ...config.gateway?.tailscale,
+        mode: tailscaleMode,
+      },
+    },
+  };
+  nextConfig = ensureControlUiAllowedOriginsForNonLoopbackBind(nextConfig, {
+    requireControlUiEnabled: true,
+  }).config;
+  return await maybeAddTailnetOriginToControlUiAllowedOrigins({
+    config: nextConfig,
+    tailscaleMode,
+    tailscaleBin,
+  });
+}
+
 export async function configureGatewayForSetup(
   opts: ConfigureGatewayOptions,
 ): Promise<ConfigureGatewayResult> {
@@ -280,30 +312,16 @@ export async function configureGatewayForSetup(
     auth.password = password;
   }
 
-  nextConfig = {
-    ...nextConfig,
-    gateway: {
-      ...nextConfig.gateway,
+  nextConfig = await configureGatewayNetworkForSetup(
+    { ...nextConfig, gateway: { ...nextConfig.gateway, auth } },
+    {
       port,
       bind,
-      auth,
-      ...(bind === "custom" && customBindHost ? { customBindHost } : {}),
-      tailscale: {
-        ...nextConfig.gateway?.tailscale,
-        mode: tailscaleMode,
-      },
+      customBindHost,
+      tailscaleMode,
     },
-  };
-
-  nextConfig = ensureControlUiAllowedOriginsForNonLoopbackBind(nextConfig, {
-    requireControlUiEnabled: true,
-  }).config;
-  nextConfig = await maybeAddTailnetOriginToControlUiAllowedOrigins({
-    config: nextConfig,
-    tailscaleMode,
     tailscaleBin,
-  });
-
+  );
   return {
     nextConfig,
     settings: {

@@ -76,6 +76,8 @@ type ResolvePairingSetupOptions = {
   bootstrapProfile?: DeviceBootstrapProfileInput;
   issuedBootstrap?: { token: string; expiresAtMs: number; setupId: string };
   pairingBaseDir?: string;
+  /** Caller admission for the resolved destination before exposing a bootstrap credential. */
+  beforeIssue?: (target: { url: string; source?: string }) => Promise<void>;
   runCommandWithTimeout?: PairingSetupCommandRunner;
   networkInterfaces?: () => ReturnType<typeof os.networkInterfaces>;
   localTlsFingerprint?: string;
@@ -101,12 +103,14 @@ type PairingSetupResolution =
   | {
       ok: false;
       error: string;
+      reason?: "loopback";
     };
 
 type ResolveUrlResult = {
   url?: string;
   source?: string;
   error?: string;
+  reason?: "loopback";
 };
 
 function describeSecureMobilePairingFix(source?: string): string {
@@ -397,7 +401,7 @@ export async function resolvePairingGatewayUrl(
     return bindResult;
   }
 
-  return publicOriginResult ?? { error: PAIRING_GATEWAY_LOOPBACK_ERROR };
+  return publicOriginResult ?? { reason: "loopback", error: PAIRING_GATEWAY_LOOPBACK_ERROR };
 }
 
 export function encodePairingSetupCode(payload: PairingSetupPayload): string {
@@ -511,7 +515,11 @@ export async function resolvePairingSetupFromConfig(
   });
 
   if (!urlResult.url) {
-    return { ok: false, error: urlResult.error ?? "Gateway URL unavailable." };
+    return {
+      ok: false,
+      error: urlResult.error ?? "Gateway URL unavailable.",
+      ...(urlResult.reason ? { reason: urlResult.reason } : {}),
+    };
   }
   const mobilePairingUrlError = validateMobilePairingUrl(urlResult.url, urlResult.source);
   if (mobilePairingUrlError) {
@@ -546,6 +554,7 @@ export async function resolvePairingSetupFromConfig(
   if (directGatewayTlsFingerprintRaw !== undefined && !directGatewayTlsFingerprint) {
     return { ok: false, error: "Gateway TLS fingerprint is invalid." };
   }
+  await options.beforeIssue?.({ url: urlResult.url, source: urlResult.source });
   const issued =
     options.issuedBootstrap ??
     (await issueDevicePairSetupBootstrapToken({
