@@ -364,6 +364,13 @@ export function createSecretEgressBodyBudget(): (length: number) => (() => void)
   };
 }
 
+function allocateBufferedRequestBody(length: number): Buffer {
+  if (!Number.isSafeInteger(length) || length < 0 || length > MAX_BUFFERED_REQUEST_BODY_BYTES) {
+    throw new RangeError("Invalid buffered request body length");
+  }
+  return Buffer.allocUnsafeSlow(length);
+}
+
 /** Collect original bytes, then authorize/substitute synchronously at the send boundary. */
 export function forwardSecretEgressRequest(
   forward: Omit<ForwardRequest, "target" | "headers" | "substituted"> & {
@@ -487,7 +494,7 @@ export function forwardSecretEgressRequest(
   try {
     // One exact backing store: chunk count, BufferList nodes and shared slabs
     // cannot amplify retained memory. Every byte is initialized before scanning.
-    body = Buffer.allocUnsafeSlow(length);
+    body = allocateBufferedRequestBody(length);
     let received = 0;
     collector = forward.ownResource(
       new Writable({
