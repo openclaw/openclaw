@@ -222,14 +222,7 @@ async function handleMessageToolCall(
   bridge: ReturnType<typeof createCodexDynamicToolBridge>,
   arguments_: JsonValue,
 ) {
-  return await bridge.handleToolCall({
-    threadId: "thread-1",
-    turnId: "turn-1",
-    callId: "call-1",
-    namespace: null,
-    tool: "message",
-    arguments: arguments_,
-  });
+  return await bridge.handleToolCall(createDynamicToolCall("message", arguments_));
 }
 
 const STRICT_INSTRUCTION_SCHEMA = {
@@ -458,14 +451,9 @@ describe("createCodexDynamicToolBridge", () => {
       signal: new AbortController().signal,
     });
 
-    const response = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-external-mcp",
-      namespace: null,
-      tool: tool.name,
-      arguments: { instruction: 47 },
-    });
+    const response = await bridge.handleToolCall(
+      createDynamicToolCall(tool.name, { instruction: 47 }, "call-external-mcp"),
+    );
 
     expectInputText(response, "mcp handled");
   });
@@ -489,14 +477,9 @@ describe("createCodexDynamicToolBridge", () => {
       signal: new AbortController().signal,
     });
 
-    const response = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-provider-scoped-codex",
-      namespace: null,
-      tool: source.name,
-      arguments: { instruction: 47 },
-    });
+    const response = await bridge.handleToolCall(
+      createDynamicToolCall(source.name, { instruction: 47 }, "call-provider-scoped-codex"),
+    );
 
     expect(response.success).toBe(false);
     expect(execute).not.toHaveBeenCalled();
@@ -584,14 +567,11 @@ describe("createCodexDynamicToolBridge", () => {
       signal: new AbortController().signal,
     });
     const response = await handleDynamicToolCallWithTimeout({
-      call: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-memory-forget",
-        namespace: null,
-        tool: "memory_forget",
-        arguments: { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" },
-      },
+      call: createDynamicToolCall(
+        "memory_forget",
+        { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" },
+        "call-memory-forget",
+      ),
       toolBridge: bridge,
       signal: new AbortController().signal,
       timeoutMs: 1_000,
@@ -639,14 +619,7 @@ describe("createCodexDynamicToolBridge", () => {
       signal: new AbortController().signal,
     });
     const response = await handleDynamicToolCallWithTimeout({
-      call: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: `call-unowned-${testCase.name}`,
-        namespace: null,
-        tool: testCase.name,
-        arguments: testCase.args,
-      },
+      call: createDynamicToolCall(testCase.name, testCase.args, `call-unowned-${testCase.name}`),
       toolBridge: bridge,
       signal: new AbortController().signal,
       timeoutMs: 1_000,
@@ -687,14 +660,7 @@ describe("createCodexDynamicToolBridge", () => {
       signal: new AbortController().signal,
     });
     const response = await handleDynamicToolCallWithTimeout({
-      call: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: `call-successful-${testCase.name}`,
-        namespace: null,
-        tool: testCase.name,
-        arguments: testCase.args,
-      },
+      call: createDynamicToolCall(testCase.name, testCase.args, `call-successful-${testCase.name}`),
       toolBridge: bridge,
       signal: new AbortController().signal,
       timeoutMs: 1_000,
@@ -969,14 +935,9 @@ describe("createCodexDynamicToolBridge", () => {
       }),
     );
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-options",
-      namespace: null,
-      tool: "sample__show_options",
-      arguments: { limit: 4 },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("sample__show_options", { limit: 4 }, "call-options"),
+    );
 
     expect(result.transcriptDetails).toEqual({
       mcpAppPreview,
@@ -996,14 +957,9 @@ describe("createCodexDynamicToolBridge", () => {
       textToolResult("Forbidden: spawn limit reached.", { status: "forbidden" }),
     );
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-forbidden",
-      namespace: null,
-      tool: "sessions_spawn",
-      arguments: { task: "deploy" },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("sessions_spawn", { task: "deploy" }, "call-forbidden"),
+    );
 
     expect(result.success).toBe(false);
     expect(bridge.telemetry.acceptedSessionSpawns).toEqual([]);
@@ -1807,14 +1763,9 @@ describe("createCodexDynamicToolBridge", () => {
     async ({ toolName, mediaUrl, audioAsVoice }) => {
       const bridge = createBridgeWithToolResult(toolName, mediaResult(mediaUrl, audioAsVoice));
 
-      const result = await bridge.handleToolCall({
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-1",
-        namespace: null,
-        tool: toolName,
-        arguments: { prompt: "hello" },
-      });
+      const result = await bridge.handleToolCall(
+        createDynamicToolCall(toolName, { prompt: "hello" }),
+      );
 
       expectInputText(result, "Generated media reply.");
       expect(bridge.telemetry.toolMediaUrls).toEqual([mediaUrl]);
@@ -1877,19 +1828,15 @@ describe("createCodexDynamicToolBridge", () => {
       vi.useFakeTimers();
       try {
         const response = handleDynamicToolCallWithTimeout({
-          call: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            callId: "held-result",
-            namespace: null,
+          call: createDynamicToolCall(
             tool,
-            arguments:
-              tool === "message"
-                ? { action: "send", target: "C123", text: "hello" }
-                : tool === "cron"
-                  ? { action: "add" }
-                  : { text: "hello" },
-          },
+            tool === "message"
+              ? { action: "send", target: "C123", text: "hello" }
+              : tool === "cron"
+                ? { action: "add" }
+                : { text: "hello" },
+            "held-result",
+          ),
           toolBridge: bridge,
           signal: outer.signal,
           timeoutMs: 1,
@@ -1951,14 +1898,7 @@ describe("createCodexDynamicToolBridge", () => {
       signal: new AbortController().signal,
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "tts",
-      arguments: { text: "hello" },
-    });
+    const result = await bridge.handleToolCall(createDynamicToolCall("tts", { text: "hello" }));
 
     expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: true,
@@ -1989,14 +1929,7 @@ describe("createCodexDynamicToolBridge", () => {
       signal: new AbortController().signal,
     });
 
-    await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "tts",
-      arguments: { text: "hello" },
-    });
+    await bridge.handleToolCall(createDynamicToolCall("tts", { text: "hello" }));
 
     expect(bridge.telemetry.toolMediaUrls).toEqual([]);
     expect(bridge.telemetry.toolAutoDeliveryMediaUrls).toEqual([]);
@@ -2697,14 +2630,9 @@ describe("createCodexDynamicToolBridge", () => {
       action: "send",
       message: "visible reply",
     });
-    const secondResult = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-2",
-      namespace: null,
-      tool: "message",
-      arguments: { action: "inspect" },
-    });
+    const secondResult = await bridge.handleToolCall(
+      createDynamicToolCall("message", { action: "inspect" }, "call-2"),
+    );
 
     expect(firstResult.terminate).toBe(true);
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
@@ -3030,14 +2958,9 @@ describe("createCodexDynamicToolBridge", () => {
       computerContextEpoch,
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "shot-1",
-      namespace: null,
-      tool: "computer",
-      arguments: { action: "screenshot" },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("computer", { action: "screenshot" }, "shot-1"),
+    );
 
     expectInputText(result, "screenshot removed");
     expect(computerContextEpoch).toEqual({ value: 1 });
@@ -3085,14 +3008,9 @@ describe("createCodexDynamicToolBridge", () => {
       computerContextEpoch,
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "shot-1",
-      namespace: null,
-      tool: "computer",
-      arguments: { action: "screenshot" },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("computer", { action: "screenshot" }, "shot-1"),
+    );
 
     expect(result.contentItems).toEqual([
       {
@@ -3142,14 +3060,9 @@ describe("createCodexDynamicToolBridge", () => {
       computerContextEpoch,
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "shot-1",
-      namespace: null,
-      tool: "computer",
-      arguments: { action: "screenshot" },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("computer", { action: "screenshot" }, "shot-1"),
+    );
 
     expect(result.success).toBe(false);
     expect(result.contentItems).toEqual([
@@ -3160,7 +3073,7 @@ describe("createCodexDynamicToolBridge", () => {
     expect(computerContextEpoch).toEqual({ value: 1 });
   });
 
-  it("keeps the current computer frame when middleware preserves its exact screenshot", async () => {
+  it("keeps the current computer frame for an exact screenshot without middleware", async () => {
     const computerContextEpoch = {
       value: 0,
       frameToolCallId: "shot-1",
@@ -3182,14 +3095,9 @@ describe("createCodexDynamicToolBridge", () => {
       computerContextEpoch,
     });
 
-    await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "shot-1",
-      namespace: null,
-      tool: "computer",
-      arguments: { action: "screenshot" },
-    });
+    await bridge.handleToolCall(
+      createDynamicToolCall("computer", { action: "screenshot" }, "shot-1"),
+    );
 
     expect(computerContextEpoch).toEqual({
       value: 0,
@@ -3240,14 +3148,7 @@ describe("createCodexDynamicToolBridge", () => {
       details: { messageId: "msg_123" },
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "message",
-      arguments: { text: "hello" },
-    });
+    const result = await bridge.handleToolCall(createDynamicToolCall("message", { text: "hello" }));
 
     expectInputText(result, "message sent: msg_123");
     expect(handler).toHaveBeenCalledTimes(1);
@@ -3459,14 +3360,9 @@ describe("createCodexDynamicToolBridge", () => {
       signal: new AbortController().signal,
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "web_fetch",
-      arguments: { url: "https://example.com" },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("web_fetch", { url: "https://example.com" }),
+    );
 
     expect(result.success).toBe(false);
     expect(result.sideEffectEvidence).toBeUndefined();
@@ -3479,14 +3375,9 @@ describe("createCodexDynamicToolBridge", () => {
       terminate: true,
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "image_generate",
-      arguments: { prompt: "lighthouse" },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("image_generate", { prompt: "lighthouse" }),
+    );
 
     const protocolResponse = toCodexDynamicToolProtocolResponse(result);
     expectInputText(protocolResponse, "Background task started.");
@@ -3511,14 +3402,9 @@ describe("createCodexDynamicToolBridge", () => {
   it("omits side-effect evidence for explicitly replay-safe terminal tools", async () => {
     const bridge = createBridgeWithToolResult("web_fetch", textToolResult("done"));
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "web_fetch",
-      arguments: { url: "https://example.com/private" },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("web_fetch", { url: "https://example.com/private" }),
+    );
 
     expectInputText(result, "done");
     expect(result.sideEffectEvidence).toBeUndefined();
@@ -3527,14 +3413,9 @@ describe("createCodexDynamicToolBridge", () => {
   it("shares replay-safe classification with OpenClaw for read-only dynamic tools", async () => {
     const bridge = createBridgeWithToolResult("web_search", textToolResult("done"));
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-web-search",
-      namespace: null,
-      tool: "web_search",
-      arguments: { query: "current weather" },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("web_search", { query: "current weather" }, "call-web-search"),
+    );
 
     expect(result.sideEffectEvidence).toBeUndefined();
   });
@@ -3549,14 +3430,9 @@ describe("createCodexDynamicToolBridge", () => {
       }),
     );
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-async-search",
-      namespace: null,
-      tool: "web_search",
-      arguments: { query: "scheduler" },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("web_search", { query: "scheduler" }, "call-async-search"),
+    );
 
     expect(result.asyncStarted).toBe(true);
     expect(result.sideEffectEvidence).toBe(true);
@@ -3573,14 +3449,7 @@ describe("createCodexDynamicToolBridge", () => {
       signal: new AbortController().signal,
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "cron",
-      arguments: { action: "status" },
-    });
+    const result = await bridge.handleToolCall(createDynamicToolCall("cron", { action: "status" }));
 
     expect(execute).toHaveBeenCalledWith(
       "call-1",
@@ -3614,14 +3483,13 @@ describe("createCodexDynamicToolBridge", () => {
       signal: new AbortController().signal,
     });
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-cron-rewritten-blocked",
-      namespace: null,
-      tool: "cron",
-      arguments: { action: "add", job: { name: "reminder" } },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall(
+        "cron",
+        { action: "add", job: { name: "reminder" } },
+        "call-cron-rewritten-blocked",
+      ),
+    );
 
     expect(execute).toHaveBeenCalledTimes(1);
     expect(result.diagnosticTerminalType).toBe("blocked");
@@ -3647,14 +3515,13 @@ describe("createCodexDynamicToolBridge", () => {
     setActivePluginRegistry(registry);
     const bridge = createBridgeWithToolResult("cron", textToolResult("added", { id: "job-1" }));
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-cron-mutable-args",
-      namespace: null,
-      tool: "cron",
-      arguments: { action: "add", job: { name: "reminder" } },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall(
+        "cron",
+        { action: "add", job: { name: "reminder" } },
+        "call-cron-mutable-args",
+      ),
+    );
 
     expect(result.sideEffectEvidence).toBe(true);
     expect(bridge.telemetry.successfulCronAdds).toBe(1);
@@ -3671,14 +3538,9 @@ describe("createCodexDynamicToolBridge", () => {
     );
     const bridge = createBridgeWithToolResult("cron", textToolResult("added", { id: "job-1" }));
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "cron",
-      arguments: { action: "add", job: { name: "reminder" } },
-    });
+    const result = await bridge.handleToolCall(
+      createDynamicToolCall("cron", { action: "add", job: { name: "reminder" } }),
+    );
 
     expect(result.sideEffectEvidence).toBe(true);
     expect(bridge.telemetry.successfulCronAdds).toBe(1);
@@ -4046,14 +3908,11 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     const result = bridge.handleToolCall(
-      {
-        threadId: "thread-1",
-        turnId: "turn-1",
+      createDynamicToolCall(
+        "message",
+        { action: "send", target: "channel:original", text: "hello" },
         callId,
-        namespace: null,
-        tool: "message",
-        arguments: { action: "send", target: "channel:original", text: "hello" },
-      },
+      ),
       { retainExecutionSnapshot: true },
     );
     await vi.waitFor(() => expect(middleware).toHaveBeenCalledOnce());
@@ -4108,14 +3967,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     const result = bridge.handleToolCall(
-      {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId,
-        namespace: null,
-        tool: "message",
-        arguments: { action: "send", text: "blocked" },
-      },
+      createDynamicToolCall("message", { action: "send", text: "blocked" }, callId),
       { retainExecutionSnapshot: true },
     );
     await vi.waitFor(() => expect(middleware).toHaveBeenCalledOnce());
@@ -4159,14 +4011,11 @@ describe("createCodexDynamicToolBridge", () => {
     });
     const controller = new AbortController();
     const result = bridge.handleToolCall(
-      {
-        threadId: "thread-1",
-        turnId: "turn-1",
+      createDynamicToolCall(
+        "message",
+        { action: "send", target: "channel:original", text: "hello" },
         callId,
-        namespace: null,
-        tool: "message",
-        arguments: { action: "send", target: "channel:original", text: "hello" },
-      },
+      ),
       { signal: controller.signal, retainExecutionSnapshot: true },
     );
     await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
