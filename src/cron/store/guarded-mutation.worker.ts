@@ -8,7 +8,13 @@ import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contra
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { findCronRunRecoveryInDatabase } from "../service/run-history-recovery.js";
-import { deleteCronJobRowInDatabase, loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
+import {
+  deleteCronJobRowInDatabase,
+  fingerprintCronJobRows,
+  fingerprintCronRuntimeRows,
+  loadedCronStoreFromRows,
+  loadCronRows,
+} from "./row-codec.js";
 import {
   adjudicateActiveCronRunReceiptInDatabase,
   CronRunReceiptConflictError,
@@ -33,9 +39,14 @@ import type { CronAdmittedStoreTransactionHooks } from "./transaction-hooks.type
 type MutationInput = CronRuntimeWorkerOperations["cron.mutateJobs"]["input"];
 
 function loadCronMutationStore(db: DatabaseSync, storeKey: string) {
-  const store = loadedCronStoreFromRows(loadCronRows(db, storeKey)).store;
+  const rows = loadCronRows(db, storeKey);
+  const store = loadedCronStoreFromRows(rows).store;
   loadCronRuntimeAuthorities({ db, storeKey, jobs: store.jobs });
-  return store;
+  return {
+    store,
+    jobsFingerprint: fingerprintCronJobRows(rows),
+    runtimeFingerprint: fingerprintCronRuntimeRows(rows),
+  };
 }
 
 function retireCronMutationTriggerState(db: DatabaseSync, storeKey: string, jobId: string): void {
@@ -113,7 +124,14 @@ export function mutateCronJobsInWorker(
           });
           if (input.preconditionJob || input.expectedJob || input.replacement) {
             const current = loadCronMutationStore(db, input.storeKey);
-            const currentById = new Map(current.jobs.map((job) => [job.id, job]));
+            if (
+              input.replacement &&
+              (current.jobsFingerprint !== input.replacement.jobsFingerprint ||
+                current.runtimeFingerprint !== input.replacement.runtimeFingerprint)
+            ) {
+              throw new CronJobsStoreChangedError(input.storeKey);
+            }
+            const currentById = new Map(current.store.jobs.map((job) => [job.id, job]));
             const expected = input.expectedJob;
             const expectedCurrent = expected ? currentById.get(expected.id) : undefined;
             if (
@@ -135,6 +153,20 @@ export function mutateCronJobsInWorker(
               throw new CronJobsStoreChangedError(input.storeKey);
             }
             if (input.replacement) {
+              // Definition fingerprints exclude the independently revocable authority sidecar.
+              for (const [jobId, previous] of input.changes.previousById) {
+                const currentJob = currentById.get(jobId);
+                if (
+                  !isDeepStrictEqual(
+                    structuredClone(currentJob?.runtimeAuthority),
+                    previous.runtimeAuthority,
+                  ) ||
+                  (currentJob?.runtimeAuthorityRecoveryRequired === true) !==
+                    (previous.runtimeAuthorityRecoveryRequired === true)
+                ) {
+                  throw new CronJobsStoreChangedError(input.storeKey);
+                }
+              }
               assertCronStoreChangesCurrent(input.changes, currentById, input.storeKey);
             }
           }
@@ -169,8 +201,8 @@ export function mutateCronJobsInWorker(
               hooks,
             );
           }
-          const store = loadCronMutationStore(db, input.storeKey);
-          return retainCronRuntimeMutationOutcome("cron.mutateJobs", db, input.nonce, { store });
+          const outcome = loadCronMutationStore(db, input.storeKey);
+          return retainCronRuntimeMutationOutcome("cron.mutateJobs", db, input.nonce, outcome);
         } catch (error) {
           if (
             error instanceof CronJobsStoreChangedError ||

@@ -38,7 +38,12 @@ export type CronRuntimeMutationInputs = {
   "cron.mutateJobs": {
     storeKey: string;
     changes: PreparedCronStoreChanges;
-    replacement?: { store: CronStoreFile; options?: CronStoreSaveOptions };
+    replacement?: {
+      store: CronStoreFile;
+      jobsFingerprint: string;
+      runtimeFingerprint: string;
+      options?: CronStoreSaveOptions;
+    };
     expectedJob?: { id: string; configRevision: string };
     preconditionJob?: CronJob;
     receiptMutation?: {

@@ -36,7 +36,10 @@ import { runCronRuntimeMutation } from "./runtime-mutation.js";
 import { publishDurableNextRunChanges } from "./runtime-publication.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 
-const loadedCronStoreRevisions = new WeakMap<CronServiceState, number>();
+const loadedCronStoreRevisions = new WeakMap<
+  CronServiceState,
+  { revision: number; jobsFingerprint?: string; runtimeFingerprint?: string }
+>();
 
 type CronPersistence = {
   save: typeof saveCronJobsStoreWithRevision;
@@ -120,7 +123,7 @@ export async function ensureLoaded(
   // Keep scheduler-local pacing/catch-up mutations while the publication fact
   // still matches; evicted partitions conservatively use the global sequence.
   if (state.store && !opts?.forceReload) {
-    const loadedRevision = loadedCronStoreRevisions.get(state);
+    const loadedRevision = loadedCronStoreRevisions.get(state)?.revision;
     if (
       loadedRevision === undefined ||
       loadedRevision === getCronJobsStoreRevision(state.deps.storePath)
@@ -215,7 +218,11 @@ export async function ensureLoaded(
   state.durableNextRunAtMsByJobId = durableNextRunAtMsByJobId;
   state.storeLoadedAtMs = loadNowMs;
   // A writer or load repair during the await leaves this snapshot conservatively stale.
-  loadedCronStoreRevisions.set(state, loadedRevision);
+  loadedCronStoreRevisions.set(state, {
+    revision: loadedRevision,
+    jobsFingerprint: loaded.jobsFingerprint,
+    runtimeFingerprint: loaded.runtimeFingerprint,
+  });
 
   if (quarantinedConfigJobs.length > 0 && !opts?.deferQuarantinePersist) {
     // Config decoding and runtime validation reject rows in separate passes;
@@ -292,14 +299,21 @@ async function persistUsing(
       ? { entries: state.pendingQuarantineConfigJobs, nowMs: state.deps.nowMs() }
       : undefined;
   const stateOnly = !quarantine && opts?.stateOnly === true;
+  const previousFingerprint = loadedCronStoreRevisions.get(state)?.jobsFingerprint;
   let revision: number;
+  let jobsFingerprint: string | undefined;
+  let runtimeFingerprint: string | undefined;
   try {
     const committed = await save(state.deps.storePath, store, {
       quarantine,
       stateOnly,
       transactionHooks: opts?.transactionHooks,
     });
-    revision = committed.revision;
+    // Runtime-only writes do not refresh the service's definition snapshot.
+    revision =
+      stateOnly && committed.jobsFingerprint !== previousFingerprint ? -1 : committed.revision;
+    jobsFingerprint = stateOnly ? previousFingerprint : committed.jobsFingerprint;
+    runtimeFingerprint = committed.runtimeFingerprint;
   } catch (error) {
     if (
       !quarantine ||
@@ -319,7 +333,7 @@ async function persistUsing(
     }
     return false;
   }
-  loadedCronStoreRevisions.set(state, revision);
+  loadedCronStoreRevisions.set(state, { revision, jobsFingerprint, runtimeFingerprint });
   if (quarantine) {
     state.pendingQuarantineConfigJobs = [];
     state.lastQuarantineFailureWarnKey = null;
@@ -428,6 +442,16 @@ export async function persistCronJobMutation(params: {
   const { state, source } = params;
   assertCronStoreCanPersist(params.next);
   const changes = prepareCronStoreChanges(params.previous, params.next);
+  const jobsFingerprint = loadedCronStoreRevisions.get(state)?.jobsFingerprint;
+  const runtimeFingerprint = loadedCronStoreRevisions.get(state)?.runtimeFingerprint;
+  if (
+    state.deps.cronEnabled &&
+    changes.changedIds.size > 0 &&
+    (!jobsFingerprint || !runtimeFingerprint)
+  ) {
+    loadedCronStoreRevisions.set(state, { revision: -1 });
+    throw new CronJobsStoreChangedError(source.storeKey);
+  }
   const observedRevision = getCronJobsStoreRevision(source.storeKey);
   const markCommitted = captureCronMutationCommit(params.method);
   const quarantine =
@@ -453,8 +477,11 @@ export async function persistCronJobMutation(params: {
       expectedJob: params.expectedJob,
       receiptMutation: params.receiptMutation,
       replacement:
-        state.deps.cronEnabled && changes.changedIds.size > 0
-          ? { store: params.next, options: { quarantine } }
+        state.deps.cronEnabled &&
+        changes.changedIds.size > 0 &&
+        jobsFingerprint &&
+        runtimeFingerprint
+          ? { store: params.next, jobsFingerprint, runtimeFingerprint, options: { quarantine } }
           : undefined,
     }),
     assertCurrent,
@@ -472,7 +499,7 @@ export async function persistCronJobMutation(params: {
       assertAvailable();
       return { value: { nowMs: state.deps.nowMs() }, assertCurrent: assertAvailable };
     },
-    publish({ store }) {
+    publish({ store, jobsFingerprint: committedJobs, runtimeFingerprint: committedRuntime }) {
       published = true;
       markCommitted?.();
       const unchanged = getCronJobsStoreRevision(source.storeKey) === observedRevision;
@@ -483,10 +510,11 @@ export async function persistCronJobMutation(params: {
         state.pendingQuarantineConfigJobs = [];
         state.lastQuarantineFailureWarnKey = null;
       }
-      loadedCronStoreRevisions.set(
-        state,
-        unchanged ? getCronJobsStoreRevision(source.storeKey) : -1,
-      );
+      loadedCronStoreRevisions.set(state, {
+        revision: unchanged ? getCronJobsStoreRevision(source.storeKey) : -1,
+        jobsFingerprint: committedJobs,
+        runtimeFingerprint: committedRuntime,
+      });
       try {
         params.afterCommit?.();
       } finally {
@@ -506,12 +534,12 @@ export async function persistCronJobMutation(params: {
     onSettled(outcome) {
       if (!published && outcome === "unknown") {
         noteCronJobsStoreCommit(source.storeKey);
-        loadedCronStoreRevisions.set(state, -1);
+        loadedCronStoreRevisions.set(state, { revision: -1 });
       }
     },
     onRolledBackMutation(refusal) {
       if (refusal.kind === "store-changed") {
-        loadedCronStoreRevisions.set(state, -1);
+        loadedCronStoreRevisions.set(state, { revision: -1 });
       }
       throw refusal.kind === "receipt-conflict"
         ? new CronRunReceiptConflictError(refusal.receipt)
@@ -552,7 +580,11 @@ async function persistOrRestoreUsing(
       );
       state.store = committed.value;
       state.storeLoadedAtMs = state.deps.nowMs();
-      loadedCronStoreRevisions.set(state, committed.revision);
+      loadedCronStoreRevisions.set(state, {
+        revision: committed.revision,
+        jobsFingerprint: committed.jobsFingerprint,
+        runtimeFingerprint: committed.runtimeFingerprint,
+      });
       publishDurableNextRunChanges({
         state,
         storeJobs: state.store.jobs,

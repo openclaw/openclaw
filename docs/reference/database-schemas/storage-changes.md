@@ -571,8 +571,11 @@ declaration convergence, and removal use the existing retained-outcome worker
 admission. Callback functions stay with the caller; only prepared changes and
 receipt facts enter the worker. Enabled schedulers retain full replacement and
 atomic quarantine, while passive writers retain changed-row merges. The native
-transaction rechecks affected definitions, applies receipt retirement and owner
-fences with the job change, and retains its result before commit. Private drafts
+transaction fences full replacements against the originally loaded definition and
+runtime rows, and independently rechecks authority sidecars. Runtime-only saves
+cannot certify newer definitions against an older service snapshot. It applies
+receipt retirement and owner fences with the job change, and retains its result
+before commit. Private drafts
 become visible only after confirmed native commit and settlement; a missing reply
 does not replay the mutation. One-use creator grants retain their original
 issuer and scope for repeated live checks without redeeming the token again.
