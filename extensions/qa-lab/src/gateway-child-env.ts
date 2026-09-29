@@ -119,6 +119,7 @@ export function buildQaRuntimeEnv(params: {
   // Test-runner skip flags are parent controls; each QA child declares its own runtime needs.
   delete normalizedEnv.OPENCLAW_SKIP_CHANNELS;
   delete normalizedEnv.OPENCLAW_SKIP_PROVIDERS;
+  delete normalizedEnv.OPENCLAW_SKIP_CRON;
   Object.assign(normalizedEnv, params.runtimeEnvPatch);
   // Child scratch and default compiler caches share the Gateway's joined cleanup lifetime.
   normalizedEnv.TMPDIR = params.tempRoot;

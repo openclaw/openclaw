@@ -17,6 +17,18 @@ function createParams(baseEnv: NodeJS.ProcessEnv) {
 }
 
 describe("QA child service identity", () => {
+  it("keeps cron suppression under the child's runtime controls", () => {
+    const params = createParams({ OPENCLAW_SKIP_CRON: "1" });
+
+    expect(buildQaRuntimeEnv(params).OPENCLAW_SKIP_CRON).toBeUndefined();
+    expect(
+      buildQaRuntimeEnv({
+        ...params,
+        runtimeEnvPatch: { OPENCLAW_SKIP_CRON: "1" },
+      }).OPENCLAW_SKIP_CRON,
+    ).toBe("1");
+  });
+
   it.each(["parent", "runtime patch"])(
     "keeps %s supervision out of QA-owned children",
     (source) => {

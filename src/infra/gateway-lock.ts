@@ -47,7 +47,7 @@ import {
 export const GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS = 5 * 60_000;
 const log = createSubsystemLogger("gateway");
 
-type GatewayLockHandle = {
+export type GatewayLockHandle = {
   lockPath: string;
   stateLockPath: string;
   stateDir: string;

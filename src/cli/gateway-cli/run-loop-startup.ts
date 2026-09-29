@@ -1,11 +1,21 @@
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { markGatewayRestartTrace } from "../../gateway/restart-trace.js";
-import type { GatewayStartupOperation } from "../../gateway/server-public.js";
+import type { GatewayServerOptions, GatewayStartupOperation } from "../../gateway/server-public.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { GatewayRestartEmitter } from "../../infra/restart.js";
 import { SqliteIntegrityWorkerInterruptedError } from "../../infra/sqlite-integrity-worker-error.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+
+export type GatewayRunLoopStartOptions = Pick<
+  GatewayServerOptions,
+  | "processStartedAt"
+  | "startupStartedAt"
+  | "hostLifecycle"
+  | "startupOperation"
+  | "gatewayStateOwner"
+> & { requestHotReloadRecovery?: GatewayRestartEmitter };
 
 export function createGatewayStartupOperations(): {
   run: GatewayStartupOperation;
