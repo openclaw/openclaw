@@ -135,9 +135,7 @@ export function normalizeOpenAIRealtimeVoice(value: unknown): OpenAIRealtimeVoic
     return undefined;
   }
   const normalized = value.trim().toLowerCase();
-  return OPENAI_REALTIME_VOICES.includes(normalized as OpenAIRealtimeVoice)
-    ? (normalized as OpenAIRealtimeVoice)
-    : undefined;
+  return OPENAI_REALTIME_VOICES.find((voice) => voice === normalized);
 }
 
 export type RealtimeEvent = {
@@ -168,7 +166,6 @@ export type RealtimeEvent = {
   error?: unknown;
 };
 
-export type RealtimeTurnDetectionConfig = ReturnType<typeof buildOpenAIRealtimeTurnDetectionConfig>;
 type RealtimeGaSessionPolicy = ReturnType<typeof buildOpenAIRealtimeGaSessionPolicy>;
 
 export function normalizeProviderConfig(
@@ -465,11 +462,7 @@ export async function resolveOpenAIRealtimePlatformAuth(
 }
 
 export async function requireOpenAIRealtimePlatformAuth(
-  params: {
-    configuredApiKey: string | undefined;
-    cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-    agentId?: string;
-  },
+  params: Parameters<typeof resolveOpenAIRealtimePlatformAuth>[0],
   runtime: OpenAIRealtimeHost,
 ): Promise<Extract<OpenAIRealtimeApiKeyResolution, { status: "available" }>> {
   const resolved = await resolveOpenAIRealtimePlatformAuth(params, runtime);
@@ -480,10 +473,7 @@ export async function requireOpenAIRealtimePlatformAuth(
 }
 
 export async function resolveOpenAIQuicksilverBridgeAuth(
-  params: {
-    configuredApiKey: string | undefined;
-    cfg: RealtimeVoiceBridgeCreateRequest["cfg"] | undefined;
-    agentId?: string;
+  params: Parameters<typeof resolveOpenAIRealtimePlatformAuth>[0] & {
     model: string;
   },
   runtime: OpenAIRealtimeHost,
@@ -521,11 +511,7 @@ export async function resolveOpenAIQuicksilverBridgeAuth(
 }
 
 export function hasOpenAIRealtimePlatformAuthInput(
-  params: {
-    configuredApiKey: string | undefined;
-    cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-    agentId?: string;
-  },
+  params: Parameters<typeof resolveOpenAIRealtimePlatformAuth>[0],
   {
     isProviderAuthProfileConfigured,
     resolveAgentDir,

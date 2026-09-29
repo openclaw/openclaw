@@ -13,7 +13,7 @@ export const syncPluginsForUpdateChannel = vi.fn();
 export const updateNpmInstalledPlugins = vi.fn();
 export const loadInstalledPluginIndexInstallRecords = vi.fn();
 export const pathExists = vi.fn();
-export const spawn = vi.fn();
+const spawn = vi.fn();
 export const observeUpdateGatewayReadiness =
   vi.fn<typeof import("./update-cli/update-command-readiness.js").observeUpdateGatewayReadiness>();
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
@@ -194,7 +194,8 @@ const { createTempHomeEnv } = await import("../test-utils/temp-home.js");
 const existingHostUri = nodeSqlite.resolveExistingSqliteFileUri;
 const immutableHostUri = nodeSqlite.resolveImmutableSqliteFileUri;
 export const { updateGitCheckout } = await import("../infra/update-runner-git.js");
-export const { runExec, runCommandWithTimeout } = await import("../process/exec.js");
+const { runExec, runCommandWithTimeout } = await import("../process/exec.js");
+export { runExec };
 export const { defaultRuntime, ExitError } = await import("../runtime.js");
 export const { readConfigFileSnapshot, replaceConfigFile, mutateConfigFileWithRetry } =
   await import("../config/config.js");

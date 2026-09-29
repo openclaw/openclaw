@@ -282,6 +282,11 @@ export function getPreparedModelRuntimeSnapshot(
   return getBlockingReplacement() ? undefined : readPublishedModelRuntimeSnapshot(owners, rawInput);
 }
 
+/** Reads the owner-held publication barrier without starting catalog acquisition. */
+export function getPendingPreparedModelRuntimeReplacement(): Promise<void> | undefined {
+  return getBlockingReplacement()?.promise;
+}
+
 /** Publishes one owner from an explicit startup/activation lifecycle boundary. */
 export async function publishPreparedModelRuntimeSnapshot(
   rawInput: PreparedModelRuntimeInput,

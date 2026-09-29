@@ -421,7 +421,9 @@ async function runEvidenceReports(
           riskLockfiles.map(async (file) => [
             file,
             createHash("sha256")
-              .update(await readFile(path.join(rootDir, file)))
+              .update(
+                await readFile(path.join(file === "pnpm-lock.yaml" ? rootDir : toolingRoot, file)),
+              )
               .digest("hex"),
           ]),
         ),

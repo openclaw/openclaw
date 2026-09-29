@@ -28,14 +28,14 @@ import {
   type WhatsAppQaScenarioMetadata,
   type WhatsAppQaScenarioRun,
 } from "./whatsapp-live.contracts.js";
+import { isTransientWhatsAppQaDriverError } from "./whatsapp-live.driver.js";
 import {
   callWhatsAppGatewayMessageAction,
   callWhatsAppGatewayPoll,
   callWhatsAppGatewaySend,
-  isTransientWhatsAppQaDriverError,
-  runWhatsAppStructuredInboundChecks,
-  waitForScenarioObservedMessage,
-} from "./whatsapp-live.operations.js";
+} from "./whatsapp-live.gateway.js";
+import { runWhatsAppStructuredInboundChecks } from "./whatsapp-live.media.js";
+import { waitForScenarioObservedMessage } from "./whatsapp-live.observations.js";
 import { unpackWhatsAppAuthArchive } from "./whatsapp-live.setup.js";
 
 const runExecSpy = vi.hoisted(() =>

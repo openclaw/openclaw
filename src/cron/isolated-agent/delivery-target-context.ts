@@ -61,7 +61,7 @@ export function readCronDeliveryTargetContexts(
     targets.map(({ agentId, storePath, threadSessionKey, mainSessionKey }) => ({
       agentId,
       storePath,
-      projection: "list",
+      projection: "delivery",
       // The metadata owner groups physical reads while each job retains its own outcome.
       sessionKeys: [threadSessionKey, mainSessionKey].flatMap((key) =>
         key

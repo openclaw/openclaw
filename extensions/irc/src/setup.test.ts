@@ -22,7 +22,6 @@ import { startIrcGatewayAccount } from "./gateway.js";
 import { setIrcRuntime } from "./runtime.js";
 import {
   ircSetupAdapter,
-  parsePort,
   setIrcAllowFrom,
   setIrcDmPolicy,
   setIrcGroupAccess,
@@ -109,14 +108,6 @@ function installIrcRuntime() {
 describe("irc setup", () => {
   afterEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("parses valid ports and falls back for invalid values", () => {
-    expect(parsePort("6697", 6667)).toBe(6697);
-    expect(parsePort(" 7000 ", 6667)).toBe(7000);
-    expect(parsePort("", 6667)).toBe(6667);
-    expect(parsePort("70000", 6667)).toBe(6667);
-    expect(parsePort("abc", 6667)).toBe(6667);
   });
 
   it("updates top-level dm policy and allowlist", () => {

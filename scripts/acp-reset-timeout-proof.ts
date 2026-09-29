@@ -128,14 +128,18 @@ async function waitForEvent(params: {
   controlDir: string;
   afterIndex?: number;
   description: string;
-  predicate: (event: AdapterEvent) => boolean;
+  match: Partial<AdapterEvent>;
   timeoutMs?: number;
 }): Promise<{ event: AdapterEvent; index: number; events: AdapterEvent[] }> {
   const startedAt = Date.now();
   const afterIndex = params.afterIndex ?? -1;
   while (Date.now() - startedAt < (params.timeoutMs ?? EVENT_WAIT_TIMEOUT_MS)) {
     const events = await readEvents(params.controlDir);
-    const relativeIndex = events.slice(afterIndex + 1).findIndex(params.predicate);
+    const relativeIndex = events
+      .slice(afterIndex + 1)
+      .findIndex((event) =>
+        Object.entries(params.match).every(([key, value]) => event[key] === value),
+      );
     if (relativeIndex >= 0) {
       const index = afterIndex + 1 + relativeIndex;
       return { event: events[index]!, index, events };
@@ -495,8 +499,7 @@ async function sendAndObserveTurn(params: {
     controlDir: params.controlDir,
     afterIndex: params.afterIndex,
     description: `completed turn ${params.text}`,
-    predicate: (event) =>
-      event.event === "turn_end" && event.text === params.text && event.stopReason === "end_turn",
+    match: { event: "turn_end", text: params.text, stopReason: "end_turn" },
   });
 }
 
@@ -526,7 +529,7 @@ async function spawnAndBindAcpSession(params: {
   await waitForEvent({
     controlDir: params.controlDir,
     description: "spawned ACP adapter session creation",
-    predicate: (event) => event.event === "session_create",
+    match: { event: "session_create" },
   });
   await logDriverEvent(params.scenarioDir, "acp_spawn_bound", {
     sourceSessionKey: CONTROL_SESSION_KEY,
@@ -706,12 +709,15 @@ async function runScenario(params: {
       agentRows: readAgentSessionRows(state.stateDir, acpSessionKey),
     });
 
-    const baseline = await sendAndObserveTurn({
+    const turn = {
       client,
       controlDir,
       scenarioDir,
       stateDir: state.stateDir,
       acpSessionKey,
+    };
+    const baseline = await sendAndObserveTurn({
+      ...turn,
       text: `baseline-${params.scenario}`,
     });
     const oldIdentity = identityFromTurn(baseline.event);
@@ -726,13 +732,12 @@ async function runScenario(params: {
       identity: oldIdentity,
     });
 
-    if (params.scenario === "cancel-timeout") {
-      await writeMarker(controlDir, "hang-cancel");
-    } else if (params.scenario === "runtime-option-timeout") {
-      await writeMarker(controlDir, "hang-close");
+    await writeMarker(
+      controlDir,
+      params.scenario === "cancel-timeout" ? "hang-cancel" : "hang-close",
+    );
+    if (params.scenario === "runtime-option-timeout") {
       await writeMarker(controlDir, "hang-set-mode");
-    } else {
-      await writeMarker(controlDir, "hang-close");
     }
     if (params.scenario === "late-turn") {
       await writeMarker(controlDir, "cancel-no-abort");
@@ -741,14 +746,21 @@ async function runScenario(params: {
     let heldTurnRunId: string | undefined;
     let runtimeOptionRunId: string | undefined;
     let eventCursor = baseline.index;
+    const waitForOldSessionEvent = (
+      description: string,
+      match: Partial<AdapterEvent>,
+      afterIndex = eventCursor,
+    ) =>
+      waitForEvent({
+        controlDir,
+        afterIndex,
+        description,
+        match: { ...match, sessionId: oldIdentity.sessionId },
+      });
     if (params.scenario === "runtime-option-timeout") {
       runtimeOptionRunId = await sendChat(client, "/acp set-mode plan");
-      const setModeStarted = await waitForEvent({
-        controlDir,
-        afterIndex: eventCursor,
-        description: "old runtime-option operation start",
-        predicate: (event) =>
-          event.event === "set_mode_start" && event.sessionId === oldIdentity.sessionId,
+      const setModeStarted = await waitForOldSessionEvent("old runtime-option operation start", {
+        event: "set_mode_start",
       });
       eventCursor = setModeStarted.index;
       await logDriverEvent(scenarioDir, "held_runtime_option_started", {
@@ -757,14 +769,9 @@ async function runScenario(params: {
       });
     } else if (params.scenario !== "close-timeout") {
       heldTurnRunId = await sendChat(client, "hold-turn");
-      const heldTurn = await waitForEvent({
-        controlDir,
-        afterIndex: eventCursor,
-        description: "held old turn start",
-        predicate: (event) =>
-          event.event === "turn_start" &&
-          event.text === "hold-turn" &&
-          event.sessionId === oldIdentity.sessionId,
+      const heldTurn = await waitForOldSessionEvent("held old turn start", {
+        event: "turn_start",
+        text: "hold-turn",
       });
       eventCursor = heldTurn.index;
       await logDriverEvent(scenarioDir, "held_turn_started", {
@@ -799,11 +806,7 @@ async function runScenario(params: {
     });
 
     const fresh = await sendAndObserveTurn({
-      client,
-      controlDir,
-      scenarioDir,
-      stateDir: state.stateDir,
-      acpSessionKey,
+      ...turn,
       text: `fresh-${params.scenario}`,
       afterIndex: eventCursor,
       directToAcpSession: true,
@@ -833,53 +836,33 @@ async function runScenario(params: {
     let lateRuntimeOptionCompletedAt: string | undefined;
     if (params.scenario === "close-timeout") {
       await writeMarker(controlDir, "release-close");
-      lateCompletion = await waitForEvent({
-        controlDir,
-        afterIndex: eventCursor,
-        description: "late close completion",
-        predicate: (event) =>
-          event.event === "close_end" && event.sessionId === oldIdentity.sessionId,
+      lateCompletion = await waitForOldSessionEvent("late close completion", {
+        event: "close_end",
       });
     } else if (params.scenario === "cancel-timeout") {
       await writeMarker(controlDir, "release-cancel");
-      lateCompletion = await waitForEvent({
-        controlDir,
-        afterIndex: eventCursor,
-        description: "late cancel completion",
-        predicate: (event) =>
-          event.event === "cancel_end" && event.sessionId === oldIdentity.sessionId,
+      lateCompletion = await waitForOldSessionEvent("late cancel completion", {
+        event: "cancel_end",
       });
-      await waitForEvent({
-        controlDir,
-        afterIndex: eventCursor,
-        description: "cancelled old turn completion",
-        predicate: (event) =>
-          event.event === "turn_end" &&
-          event.sessionId === oldIdentity.sessionId &&
-          event.stopReason === "cancelled",
+      await waitForOldSessionEvent("cancelled old turn completion", {
+        event: "turn_end",
+        stopReason: "cancelled",
       });
     } else if (params.scenario === "runtime-option-timeout") {
       await writeMarker(controlDir, "release-set-mode");
       await writeMarker(controlDir, "release-close");
-      const lateRuntimeOption = await waitForEvent({
-        controlDir,
-        afterIndex: eventCursor,
-        description: "late runtime-option completion",
-        predicate: (event) =>
-          event.event === "set_mode_end" && event.sessionId === oldIdentity.sessionId,
+      const lateRuntimeOption = await waitForOldSessionEvent("late runtime-option completion", {
+        event: "set_mode_end",
       });
       assert(
         lateRuntimeOption.index > fresh.index,
         "runtime-option completion was not observed after the fresh turn",
       );
       lateRuntimeOptionCompletedAt = lateRuntimeOption.event.at;
-      lateCompletion = await waitForEvent({
-        controlDir,
-        afterIndex: eventCursor,
-        description: "late close completion after runtime-option operation",
-        predicate: (event) =>
-          event.event === "close_end" && event.sessionId === oldIdentity.sessionId,
-      });
+      lateCompletion = await waitForOldSessionEvent(
+        "late close completion after runtime-option operation",
+        { event: "close_end" },
+      );
       if (runtimeOptionRunId) {
         await client
           .request(
@@ -896,24 +879,17 @@ async function runScenario(params: {
       });
     } else {
       await writeMarker(controlDir, "release-turn");
-      lateCompletion = await waitForEvent({
-        controlDir,
-        afterIndex: eventCursor,
-        description: "late old turn completion",
-        predicate: (event) =>
-          event.event === "turn_end" &&
-          event.sessionId === oldIdentity.sessionId &&
-          event.text === "hold-turn" &&
-          event.stopReason === "end_turn",
+      lateCompletion = await waitForOldSessionEvent("late old turn completion", {
+        event: "turn_end",
+        text: "hold-turn",
+        stopReason: "end_turn",
       });
       await writeMarker(controlDir, "release-close");
-      await waitForEvent({
-        controlDir,
-        afterIndex: lateCompletion.index,
-        description: "old close completion after late turn",
-        predicate: (event) =>
-          event.event === "close_end" && event.sessionId === oldIdentity.sessionId,
-      });
+      await waitForOldSessionEvent(
+        "old close completion after late turn",
+        { event: "close_end" },
+        lateCompletion.index,
+      );
     }
     eventCursor = lateCompletion.index;
 
@@ -946,11 +922,7 @@ async function runScenario(params: {
     }
 
     const followup = await sendAndObserveTurn({
-      client,
-      controlDir,
-      scenarioDir,
-      stateDir: state.stateDir,
-      acpSessionKey,
+      ...turn,
       text: `followup-${params.scenario}`,
       afterIndex: eventCursor,
       directToAcpSession: true,

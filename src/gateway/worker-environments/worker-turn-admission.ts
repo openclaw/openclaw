@@ -9,6 +9,7 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { createAbortError } from "../../infra/abort-signal.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
@@ -18,6 +19,7 @@ import type {
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
+import type { WorkerRuntimeRefreshInFlight } from "./provider-runtime-refresh.js";
 import {
   projectWorkspaceResultConflict,
   type WorkerWorkspaceResultConflict,
@@ -26,6 +28,28 @@ import {
 } from "./workspace-conflicts.js";
 
 type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
+
+/** Wait without a placement claim: a claim would fail the refresh's authority check. */
+export async function waitForWorkerRuntimeRefresh(params: {
+  refresh: WorkerRuntimeRefreshInFlight;
+  signal?: AbortSignal;
+  timeoutMs: number;
+  onProgress: () => void;
+}): Promise<void> {
+  const unsubscribe = params.refresh.onProgress(params.onProgress);
+  try {
+    await waitForTurnOperation({
+      start: () => params.refresh.settled,
+      signal: AbortSignal.any([
+        getGatewayRestartDrainSignal(),
+        ...(params.signal ? [params.signal] : []),
+      ]),
+      timeoutMs: params.timeoutMs,
+    });
+  } finally {
+    unsubscribe();
+  }
+}
 
 /** Wait for live reconciliation, or report a retained result that needs recovery. */
 export async function waitForPendingWorkerResult(params: {

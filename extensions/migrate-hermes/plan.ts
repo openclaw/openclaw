@@ -12,6 +12,7 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { filterStringRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildAuthItems } from "./auth.js";
 import { buildConfigItems } from "./config.js";
 import { exists, parseEnv, parseHermesConfig, readText } from "./helpers.js";
@@ -76,11 +77,7 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
   }
   const env = parseEnv(await readText(source.envPath));
   const modelRef = resolveHermesModelRef(config, env);
-  const runtimeEnv = Object.fromEntries(
-    Object.entries(process.env).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
-  );
+  const runtimeEnv = filterStringRecord(process.env) ?? {};
   const items: MigrationItem[] = [];
 
   let modelItemIndex: number | undefined;

@@ -293,17 +293,11 @@ class MotionHandler internal constructor(
     query: (MotionRangeRequest) -> String,
   ): GatewaySession.InvokeResult {
     if (!dataSource.hasPermission(appContext)) {
-      return GatewaySession.InvokeResult.error(
-        code = "MOTION_PERMISSION_REQUIRED",
-        message = "MOTION_PERMISSION_REQUIRED: grant Motion permission",
-      )
+      return nodeInvokeError("MOTION_PERMISSION_REQUIRED", "grant Motion permission")
     }
     val request =
       parseRangeRequest(paramsJson)
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: expected JSON object",
-        )
+        ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object")
     return try {
       GatewaySession.InvokeResult.ok(query(request))
     } catch (err: IllegalArgumentException) {
@@ -311,10 +305,7 @@ class MotionHandler internal constructor(
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {
-      GatewaySession.InvokeResult.error(
-        code = "MOTION_UNAVAILABLE",
-        message = "MOTION_UNAVAILABLE: ${err.message ?: fallbackMessage}",
-      )
+      nodeInvokeError("MOTION_UNAVAILABLE", err.message ?: fallbackMessage)
     }
   }
 
