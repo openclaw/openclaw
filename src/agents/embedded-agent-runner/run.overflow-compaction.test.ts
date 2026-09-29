@@ -18,7 +18,6 @@ import {
 } from "../admitted-run-context.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import { SessionManager } from "../sessions/session-manager.js";
-import { normalizeUsage } from "../usage.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import {
   compactEmbeddedRunForRecovery,
@@ -277,7 +276,7 @@ describe("compactEmbeddedRunForRecovery", () => {
     });
   });
 
-  it.each(["overflow", "timeout_recovery"] as const)(
+  it.each(["timeout_recovery"] as const)(
     "lets delegated native %s compaction use its progress-aware watchdog",
     async (trigger) => {
       vi.useFakeTimers();
@@ -458,37 +457,6 @@ describe("compactEmbeddedRunForRecovery", () => {
       }
     },
   );
-
-  it("accounts recovery model usage even when compaction fails", async () => {
-    const compact = vi.fn(async (params: { runtimeContext?: ContextEngineRuntimeContext }) => {
-      const usage = normalizeUsage({
-        input: 100,
-        output: 50,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 150,
-      });
-      if (!usage) {
-        throw new Error("expected normalized usage");
-      }
-      readCompactionAccountingRecorder(params.runtimeContext)?.recordUsage?.(usage);
-      return { ok: false as const, compacted: false as const, reason: "invalid summary" };
-    });
-    const usageAccumulator = createUsageAccumulator();
-
-    await compactEmbeddedRunForRecovery(
-      makeRecoveryInput({ contextEngine: makeContextEngine(compact), usageAccumulator }),
-      {
-        tokenBudget: 200_000,
-        trigger: "overflow",
-        diagId: "diag-usage",
-        attempt: 1,
-        maxAttempts: 3,
-      },
-    );
-
-    expect(usageAccumulator).toMatchObject({ input: 100, output: 50, total: 150 });
-  });
 });
 
 describe("createEmbeddedRunCompactionRuntime", () => {

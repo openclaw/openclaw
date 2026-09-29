@@ -1,12 +1,3 @@
-/**
- * Nostr Profile HTTP Handler
- *
- * Handles HTTP requests for profile management:
- * - PUT /api/channels/nostr/:accountId/profile - Update and publish profile
- * - POST /api/channels/nostr/:accountId/profile/import - Import from relays
- * - GET /api/channels/nostr/:accountId/profile - Get current profile state
- */
-
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
@@ -32,13 +23,10 @@ import {
 } from "./nostr-profile-url-safety.js";
 
 interface NostrProfileHttpContext {
-  /** Get current profile from config */
   getConfigProfile: (accountId: string) => NostrProfile | undefined;
   /** Update profile in config (after successful publish) */
   updateConfigProfile: (accountId: string, profile: NostrProfile) => Promise<void>;
-  /** Get account's public key and relays */
   getAccountInfo: (accountId: string) => { pubkey: string; relays: string[] } | null;
-  /** Logger */
   log?: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -46,8 +34,8 @@ interface NostrProfileHttpContext {
   };
 }
 
-const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
-const RATE_LIMIT_MAX_REQUESTS = 5; // 5 requests per minute
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_REQUESTS = 5;
 const RATE_LIMIT_MAX_TRACKED_KEYS = 2_048;
 const profileRateLimiter = createFixedWindowRateLimiter({
   windowMs: RATE_LIMIT_WINDOW_MS,
@@ -81,16 +69,15 @@ function normalizeProfileUpdateUrlInputs(value: unknown): unknown {
   if (!isRecord(value)) {
     return value;
   }
-  const record = value;
   let normalized: Record<string, unknown> | undefined;
   for (const field of PROFILE_URL_FIELDS) {
-    const input = record[field];
+    const input = value[field];
     if (typeof input !== "string") {
       continue;
     }
     const next = normalizeNostrProfileUrlForRuntime(input);
     if (next !== input) {
-      normalized ??= { ...record };
+      normalized ??= { ...value };
       normalized[field] = next;
     }
   }
@@ -101,12 +88,11 @@ function restoreProfileUpdateUrlInputs(profile: NostrProfile, value: unknown): N
   if (!isRecord(value)) {
     return profile;
   }
-  const record = value;
   return {
     ...profile,
-    ...(typeof record.picture === "string" ? { picture: record.picture } : {}),
-    ...(typeof record.banner === "string" ? { banner: record.banner } : {}),
-    ...(typeof record.website === "string" ? { website: record.website } : {}),
+    ...(typeof value.picture === "string" ? { picture: value.picture } : {}),
+    ...(typeof value.banner === "string" ? { banner: value.banner } : {}),
+    ...(typeof value.website === "string" ? { website: value.website } : {}),
   };
 }
 
@@ -150,17 +136,14 @@ function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
 
   const ipLower = normalizeLowercaseStringOrEmpty(remoteAddress).replace(/^\[|\]$/g, "");
 
-  // IPv6 loopback
   if (ipLower === "::1") {
     return true;
   }
 
-  // IPv4 loopback (127.0.0.0/8)
   if (ipLower === "127.0.0.1" || ipLower.startsWith("127.")) {
     return true;
   }
 
-  // IPv4-mapped IPv6
   const v4Mapped = ipLower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
   if (v4Mapped) {
     return isLoopbackRemoteAddress(v4Mapped[1]);
@@ -404,7 +387,6 @@ async function handleUpdateProfile(
     ...profile,
   };
 
-  // Publish with mutex to prevent concurrent publishes
   try {
     const result = await publishLocks.enqueue(accountId, async () => {
       await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
@@ -474,7 +456,7 @@ async function handleImportProfile(
   const result = await importProfileFromRelays({
     pubkey,
     relays,
-    timeoutMs: 10_000, // 10 seconds for import
+    timeoutMs: 10_000,
   });
 
   if (!result.ok) {

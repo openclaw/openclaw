@@ -19,6 +19,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
     prewarm: boolean;
     signal?: AbortSignal;
     assertCurrent?: () => void;
+    onProgress?: () => void;
   }) => {
     params.signal?.throwIfAborted();
     const transport = options.getTransport();
@@ -54,6 +55,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
       ...(bundlePrewarm ? { bundlePrewarm } : {}),
       isAuthorized,
       signal: params.signal,
+      onProgress: params.onProgress,
     });
     try {
       const result = await transport.invoke({

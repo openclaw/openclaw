@@ -1,5 +1,3 @@
-/** Cron service dependency, event, state, and public result types. */
-
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionFacts } from "../../audit/execution-identity-admission.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
@@ -49,7 +47,6 @@ import type {
   ResolvedFailureAlert,
 } from "./notification-intents.js";
 
-/** Event payload emitted for cron lifecycle changes and completed runs. */
 export type CronEvent = {
   jobId: string;
   action: "added" | "updated" | "removed" | "started" | "finished" | "scheduled";
@@ -80,14 +77,12 @@ type CronEventContext = {
   failureNotificationDetail?: CronFailureNotificationDetail;
 };
 
-/** Builds event context only when a closed notification fact exists. */
 export function cronFailureNotificationEventContext(
   failureNotificationDetail?: CronFailureNotificationDetail,
 ): CronEventContext | undefined {
   return failureNotificationDetail ? { failureNotificationDetail } : undefined;
 }
 
-/** Logger contract consumed by cron service internals. */
 export type Logger = {
   debug: (obj: unknown, msg?: string) => void;
   info: (obj: unknown, msg?: string) => void;
@@ -117,7 +112,6 @@ export type CronRunDeliveryResult = {
   delivery?: CronDeliveryTrace;
 };
 
-/** Dependency injection surface for the cron service runtime. */
 export type CronServiceDeps = {
   nowMs?: () => number;
   scheduler: GatewayScheduler;
@@ -145,7 +139,6 @@ export type CronServiceDeps = {
   resolveSessionStoreAgentIds?: () => string[];
   /** Revalidate resident policy using the supplied transaction or worker deletion facts. */
   isAgentAvailable?: CronAgentAvailability;
-  /** Resolve session store path for a given agent id. */
   resolveSessionStorePath?: (agentId?: string) => string;
   /** Path to the session store (sessions.json) for reaper use. */
   sessionStorePath?: string;
@@ -275,7 +268,6 @@ export type CronExecutionIdentityAdmission = {
   onExecutionStarted?: () => void | Promise<void>;
 };
 
-/** Cron deps after optional defaults have been made concrete. */
 type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
   nowMs: () => number;
 };
@@ -305,7 +297,6 @@ type QueuedCronRunReservation = {
   activationPreviousLastError?: { value: string | undefined };
 };
 
-/** Mutable cron service state shared across store, job, timer, and ops helpers. */
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
@@ -351,7 +342,6 @@ export type CronServiceState = {
   storeLoadedAtMs: number | null;
 };
 
-/** Creates mutable cron service state with a concrete clock dependency. */
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
   // The public CronService constructor shipped before roster-aware callers.
   // Preserve its implicit owner unless a static or dynamic configured default exists.
@@ -405,13 +395,11 @@ export function isImmediateCronRunMode(mode: CronRunMode | undefined): boolean {
 /** Main-session wake strategy used after enqueuing cron text. */
 export type CronWakeMode = "now" | "next-heartbeat";
 
-/** Lightweight service status returned to gateway/control surfaces. */
 export type CronStatusSummary = {
   enabled: boolean;
   triggersEnabled: boolean;
   /** @deprecated Alias for `sqlitePath`. */
   storePath: string;
-  /** Storage backend identifier. */
   storage: "sqlite";
   /** Resolved path to the shared state SQLite database. */
   sqlitePath: string;
@@ -419,7 +407,6 @@ export type CronStatusSummary = {
   nextWakeAtMs: number | null;
 };
 
-/** Result shape for immediate or queued cron run requests. */
 export type CronRunResult =
   | { ok: true; ran: true }
   | { ok: true; enqueued: true; runId: string }
@@ -436,19 +423,15 @@ export type CronRemoveResult =
   | { ok: true; removed: boolean; sessionCleanup?: "pending" }
   | { ok: false; removed: false };
 
-/** Created cron job returned by service mutation calls. */
 type CronDeclarativeAddResult = CronStoredJob & {
   created: boolean;
   updated?: boolean;
   job: CronStoredJob;
 };
 export type CronAddResult = CronStoredJob | CronDeclarativeAddResult;
-/** Updated cron job returned by service mutation calls. */
 export type CronUpdateResult = CronJob;
 
-/** Chronological job list returned by service read calls. */
 export type CronListResult = CronJob[];
-/** Normalized create input accepted by the cron service. */
 export type CronAddInput = CronJobCreate;
 /** Caller-specific declaration-key visibility and explicit enablement metadata. */
 export type CronAddOptions = {
@@ -471,19 +454,14 @@ export type CronAddOptions = {
   /** One-use fresh capture; callback presence means fresh even when it returns undefined. */
   captureRuntimeAuthority?: () => CronRuntimeAuthority | undefined;
 };
-/** Normalized patch input accepted by cron service updates. */
 export type CronUpdateInput = CronJobPatch;
 /** Authenticated caller provenance used only when a tool policy is explicitly adopted. */
-export type CronUpdateOptions = {
+export type CronUpdateOptions = Pick<
+  CronAddOptions,
+  "toolsAllowProvenance" | "toolsAllowExecTarget" | "commitGuard" | "captureRuntimeAuthority"
+> & {
   /** Null forbids policy adoption; undefined retains in-process operator defaults. */
   scheduledToolPolicy?: CronScheduledToolPolicy | null;
-  toolsAllowProvenance?: CronToolsAllowProvenance;
-  /** Restrict-only exec pin from the signed creator-turn identity. */
-  toolsAllowExecTarget?: CronToolsAllowExecTarget;
-  /** Synchronous Gateway-owned liveness guard consumed immediately before mutation. */
-  commitGuard?: () => void;
-  /** One-use fresh capture; callback presence means fresh even when it returns undefined. */
-  captureRuntimeAuthority?: () => CronRuntimeAuthority | undefined;
 };
 
 export type CronCommitGuardOptions = {

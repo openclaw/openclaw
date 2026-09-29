@@ -1598,7 +1598,7 @@ describe("scripts/crabbox-wrapper", () => {
         env: {
           GITHUB_PATH: githubPath,
           OPENCLAW_STATE_DIR: path.join(directory, "state"),
-          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.56.0",
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 999.0.0",
           OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: invocationLog,
         },
       }),
@@ -1609,7 +1609,7 @@ describe("scripts/crabbox-wrapper", () => {
       makeFakeCrabbox(defaultProviderHelp),
       process.platform === "win32" ? "crabbox.cmd" : "crabbox",
     );
-    expect(JSON.parse(result.stdout)).toEqual({ binary, version: "0.56.0" });
+    expect(JSON.parse(result.stdout)).toEqual({ binary, version: "999.0.0" });
     expect(readFileSync(githubPath, "utf8")).toBe(`${path.dirname(binary)}\n`);
     expect(readInvocations(invocationLog)).toEqual([["--version"]]);
     expect(existsSync(path.join(directory, "state"))).toBe(false);
@@ -1628,20 +1628,24 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("selected=aws");
   });
 
-  it.skipIf(process.platform === "win32")(
-    "upgrades only Testbox and refreshes native metadata",
-    () => {
-      const root = invocationLogTempDirs.make("openclaw-testbox-version-");
+  it.skipIf(process.platform === "win32").each(["aws", "blacksmith-testbox"])(
+    "upgrades an old binary before metadata and lease commands for %s",
+    (provider) => {
+      const root = invocationLogTempDirs.make("openclaw-crabbox-version-");
       const stateDir = path.join(root, "state");
       const platform = process.platform;
       const arch = process.arch === "x64" ? "amd64" : process.arch;
       const managed = path.join(stateDir, "tools/crabbox/0.67.0", `${platform}-${arch}`, "crabbox");
       mkdirSync(path.dirname(managed), { recursive: true });
-      // Use the logging Node fake so both metadata probes are observable.
+      // Keep candidate and managed commands distinguishable at the executable boundary.
       const fake = path.join(makeFakeCrabbox(defaultProviderHelp), "crabbox-node");
       const candidate = path.join(root, "bin", "crabbox");
+      const candidateLog = makeInvocationLog();
       mkdirSync(path.dirname(candidate));
-      writeShellCommand(candidate, `exec node ${shellQuote(fake)} "$@"`);
+      writeShellCommand(
+        candidate,
+        `OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG=${shellQuote(candidateLog)} exec node ${shellQuote(fake)} "$@"`,
+      );
       writeShellCommand(
         managed,
         `unset OPENCLAW_FAKE_CRABBOX_VERSION\nexec node ${shellQuote(fake)} "$@"`,
@@ -1655,19 +1659,15 @@ describe("scripts/crabbox-wrapper", () => {
           OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: log,
         },
       };
-      const offline = runDefaultWrapper(["run", "--provider", "aws", "--", "true"], options);
-      expect(offline.status, offline.stderr).toBe(0);
-      expect(offline.stderr).toContain("version=0.56.0 provider=aws");
-      writeFileSync(log, "");
-      const testbox = runDefaultWrapper(
-        ["run", "--provider", "blacksmith-testbox", "--", "true"],
-        options,
-      );
-      expect(testbox.status, testbox.stderr).toBe(0);
-      expect(testbox.stderr).toContain("version=0.67.0 provider=blacksmith-testbox");
+      const result = runDefaultWrapper(["run", "--provider", provider, "--", "true"], options);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toContain(`version=0.67.0 provider=${provider}`);
+      expect(readInvocations(candidateLog)).toEqual([["--version"]]);
       const calls = readInvocations(log);
-      expect(calls.filter((args) => args[0] === "run" && args[1] === "--help")).toHaveLength(2);
-      expect(calls.filter((args) => args[0] === "config" && args[1] === "show")).toHaveLength(2);
+      expect(calls[0]).toEqual(["--version"]);
+      expect(calls.filter((args) => args[0] === "run" && args[1] === "--help")).toHaveLength(1);
+      expect(calls.filter((args) => args[0] === "config" && args[1] === "show")).toHaveLength(1);
+      expect(calls.filter((args) => args[0] === "run" && args[1] !== "--help")).toHaveLength(1);
     },
   );
 
@@ -1851,7 +1851,7 @@ describe("scripts/crabbox-wrapper", () => {
       {
         env: {
           OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: invocationLog,
-          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.56.0",
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 999.0.0",
           OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS: "azure",
           OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS: "1",
         },
@@ -1862,7 +1862,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("selected=aws chain=azure,aws");
     const invocations = readInvocations(invocationLog);
     expect(invocations.filter(([command]) => command === "--version")).toEqual([["--version"]]);
-    expect(result.stderr).toContain("version=0.56.0");
+    expect(result.stderr).toContain("version=999.0.0");
     expect(invocations.filter(([command]) => command === "doctor").map((args) => args[2])).toEqual([
       "azure",
       "aws",

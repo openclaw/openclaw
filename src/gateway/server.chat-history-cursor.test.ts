@@ -32,6 +32,11 @@ import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { installGatewayTestHooks, testState, writeSessionStore } from "./test-helpers.js";
 
+// Icon I/O has its own suite; its detached import must not outlive this cursor fixture.
+vi.mock("./workspace-icon-http.js", () => ({
+  prepareSessionWorkspaceIcon: vi.fn(async () => undefined),
+}));
+
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = createTempDirTracker();
 

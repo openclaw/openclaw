@@ -4,7 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createAwaitedDecodedOutput, onDecodedOutput } from "../process/decoded-output.js";
 import type { ProcessExtinctionResult } from "../process/supervisor/types.js";
-import type { WorkerProcessResult } from "../worker/worker-process-protocol.js";
+import type {
+  WorkerProcessMessage,
+  WorkerProcessResult,
+} from "../worker/worker-process-protocol.js";
 import {
   observeNodeWorkerChild,
   type NodeWorkerTerminalOutcome,
@@ -38,7 +41,7 @@ function observationHarness(
     cleanupContainer?: () => Promise<void>;
     expectedKind?: "confirmed" | "deferred";
     consumeError?: Error;
-    onResult?: (frame: WorkerProcessResult) => Promise<void>;
+    onResult?: (frame: WorkerProcessMessage) => Promise<void>;
   } = {},
 ) {
   const stdout = new PassThrough();
@@ -81,7 +84,7 @@ function observationHarness(
     kill,
     dispose,
   } satisfies NodeWorkerChildAdapter;
-  const frames: WorkerProcessResult[] = [];
+  const frames: WorkerProcessMessage[] = [];
   const completion = observeNodeWorkerChild(
     {
       adapter,
@@ -137,6 +140,24 @@ function observationHarness(
 }
 
 describe("node worker output framing", () => {
+  it("delivers idle readiness without replacing the completed turn result", async () => {
+    const harness = observationHarness();
+    const retained = { ...resultFrame("first"), retainWorker: true, retention: "background" };
+    const idle = { type: "idle-ready", turnId: "first" };
+    try {
+      await harness.releaseJournal();
+      harness.stdout.write(`${JSON.stringify(retained)}\n${JSON.stringify(idle)}\n`);
+      expect(await harness.close()).toEqual({
+        state: "completed",
+        resultJson: JSON.stringify(retained.result),
+      });
+      expect(harness.frames).toEqual([retained, idle]);
+      expect(harness.kill).not.toHaveBeenCalled();
+    } finally {
+      await harness.close();
+    }
+  });
+
   it("requests stop after consumer failure and joins separately completed child output", async () => {
     const failure = new Error("synthetic stdout consumer failed");
     const harness = observationHarness({ consumeError: failure });

@@ -35,15 +35,6 @@
           "spawnNodeTerminalPty"
         ]
       }
-    },
-    {
-      "id": "node-host-auto-update-install",
-      "origin": "known-blocker",
-      "feature": "Node host updater",
-      "owner": "Unowned: needs an owner (src/node-host/auto-update-install.ts)",
-      "callSite": "src/node-host/auto-update-install.ts prepareNodeRuntimeUpdate -> npm view, npm pack, and npm global install into the private runtime prefix",
-      "step": null,
-      "notExercisedReason": "The candidate is newer than every published release, so the node host never prepares an update."
     }
   ]
 }

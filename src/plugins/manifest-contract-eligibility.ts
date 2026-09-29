@@ -3,7 +3,7 @@ import { sortUniqueStrings } from "@openclaw/normalization-core/string-normaliza
 import {
   hasMeaningfulChannelConfigShallow,
   resolveChannelConfigRecord,
-} from "../config/channel-configured-shared.js";
+} from "../config/channel-config-activation.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readBundledDiscoveryModeMemoized } from "./bundled-discovery-state.js";
 import { isBundledProviderCompatContract } from "./bundled-provider-compat.js";
@@ -146,13 +146,11 @@ export function listAvailableManifestContractValues(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): string[] {
-  const values = new Set<string>();
-  for (const plugin of listAvailableManifestContractPlugins(params)) {
-    for (const value of plugin.contracts?.[params.contract] ?? []) {
-      values.add(value);
-    }
-  }
-  return sortUniqueStrings(values);
+  return sortUniqueStrings(
+    listAvailableManifestContractPlugins(params).flatMap(
+      (plugin) => plugin.contracts?.[params.contract] ?? [],
+    ),
+  );
 }
 
 export function loadManifestContractSnapshot(params: {

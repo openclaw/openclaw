@@ -16,6 +16,7 @@ import {
   requireRecord,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForSessionRosterHydration } from "./session-management.test-support.ts";
 import { closeSidebarMenu, openSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -162,12 +163,6 @@ suite.define(() => {
     });
     const key = "agent:main:session-a";
     const runId = "run-sidebar-metadata";
-    const rosterPeer = {
-      key: "agent:main:roster-peer",
-      kind: "direct",
-      label: "Roster peer",
-      updatedAt: 1,
-    };
     const running = chatSessionListResponse([
       {
         key,
@@ -186,7 +181,6 @@ suite.define(() => {
           revision: 1,
         },
       },
-      rosterPeer,
     ]);
     const completed = chatSessionListResponse([
       {
@@ -207,10 +201,8 @@ suite.define(() => {
           revision: 2,
         },
       },
-      rosterPeer,
     ]);
     const gateway = await installMockGateway(page, {
-      deferredMethods: ["chat.startup"],
       methodResponses: { "sessions.list": running },
       sessionKey: key,
     });
@@ -219,11 +211,6 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await row.getByText("Implementing the repair").waitFor();
-      // A descriptor can render the selected row before startup releases the roster.
-      // Wait for a roster-only row before measuring event-triggered list reads.
-      await gateway.waitForRequest("chat.startup");
-      await gateway.resolveDeferred("chat.startup");
-      await page.locator(`.sidebar-recent-session[data-session-key="${rosterPeer.key}"]`).waitFor();
       if (captureUiProofEnabled) {
         await writeFile(
           path.join(
@@ -233,6 +220,7 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [row]),
         );
       }
+      await waitForSessionRosterHydration(page);
       await gateway.setSessionsListResponse(completed);
       const listCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await gateway.emitGatewayEvent("session.message", {

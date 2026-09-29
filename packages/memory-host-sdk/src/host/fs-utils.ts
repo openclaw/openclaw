@@ -2,7 +2,7 @@
 export { root } from "@openclaw/fs-safe/root";
 export { isPathInside } from "@openclaw/fs-safe/path";
 export { readRegularFile, statRegularFile } from "@openclaw/fs-safe/advanced";
-export { walkDirectory, type WalkDirectoryEntry } from "@openclaw/fs-safe/walk";
+export { walkDirectory } from "@openclaw/fs-safe/walk";
 
 /**
  * True for missing-file errors emitted by Node or fs-safe.

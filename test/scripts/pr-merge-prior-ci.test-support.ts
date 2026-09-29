@@ -24,6 +24,8 @@ export function createPriorCiFixtureState(head: string) {
           run_id: number;
           head_sha: string;
           check_run_url?: string;
+          started_at?: string;
+          completed_at?: string;
           steps?: Array<{
             number: number;
             name: string;
@@ -59,6 +61,36 @@ export function createPriorCiFixtureState(head: string) {
       approval: false,
       role: "admin",
       statusReads: 0,
+    },
+    deadline: {
+      check: {
+        id: 601,
+        name: "owner-tests",
+        head_sha: head,
+        status: "completed",
+        conclusion: "cancelled",
+        started_at: "2026-09-20T00:00:00Z",
+        completed_at: "2026-09-20T01:00:20Z",
+        app: { id: 15368, slug: "github-actions" },
+        check_suite: { id: 10 },
+        output: { annotations_count: 2 },
+      },
+      annotations: [
+        {
+          annotation_level: "failure",
+          title: "",
+          message: "The job has exceeded the maximum execution time of 1h0m0s",
+          path: ".github",
+          start_line: 1,
+        },
+        {
+          annotation_level: "failure",
+          title: "",
+          message: "The operation was canceled.",
+          path: ".github",
+          start_line: 18,
+        },
+      ],
     },
   };
 }
@@ -138,8 +170,8 @@ export function ciWorkflowTree(f: MergeFixture, treeish: string, workflow: strin
 export function createPriorCiCandidateFactory(
   fixture: ReturnType<typeof createMergeOutcomeFixtureHarness>["fixture"],
 ) {
-  function candidate() {
-    const f = fixture(undefined, [["first change\n"], ["resolved conflict\n"]]);
+  function candidate(existing?: ReturnType<typeof fixture>) {
+    const f = existing ?? fixture(undefined, [["first change\n"], ["resolved conflict\n"]]);
     const state = f.state();
     const path = join(f.root, "admin.json");
     state.priorCi.enabled = true;
@@ -187,8 +219,8 @@ export function createPriorCiCandidateFactory(
     return { ...f, path, evidence };
   }
 
-  function preExistingCandidate(workflow?: string) {
-    const f = candidate();
+  function preExistingCandidate(workflow?: string, existing?: ReturnType<typeof fixture>) {
+    const f = candidate(existing);
     let main = f.base;
     if (workflow) {
       main = f.commit(ciWorkflowTree(f, f.base, workflow), [f.base]);

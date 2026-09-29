@@ -75,6 +75,66 @@ describe("Git runtime promotion", () => {
     await promotion.cleanup();
   }
 
+  it.each([false, true])(
+    "does not repeat completed restoration after authority is lost (previous runtime: %s)",
+    async (previous) => {
+      const candidateRoot = await createCandidate();
+      const destination = path.join(root, "dist");
+      if (!previous) {
+        await fs.rm(destination, { recursive: true, force: true });
+      }
+      const promotion = await prepareGitRuntimePromotion(
+        root,
+        candidateRoot,
+        runCommandWithTimeout,
+        5000,
+        path.dirname(candidateRoot),
+      );
+      await promotion.activate();
+      let revoked = false;
+      const rename = fs.rename.bind(fs);
+      const remove = fs.rm.bind(fs);
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+        await rename(source, target);
+        if (previous && path.basename(String(source)) === "previous" && target === destination) {
+          revoked = true;
+        }
+      });
+      const removeSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+        await remove(target, options);
+        if (!previous && target === destination) {
+          revoked = true;
+        }
+      });
+      try {
+        await expect(
+          promotion.restore(() => {
+            if (revoked) {
+              throw new Error("restoration authority lost");
+            }
+          }),
+        ).rejects.toThrow("restoration authority lost");
+      } finally {
+        renameSpy.mockRestore();
+        removeSpy.mockRestore();
+      }
+      // A completed destination is no longer rollback-owned, even if admission then fails.
+      if (!previous) {
+        await fs.mkdir(destination);
+        await fs.writeFile(path.join(destination, "subsequent-owner"), "preserve");
+      }
+      await promotion.restore();
+      if (previous) {
+        await expectRuntime(root, "original");
+      } else {
+        expect(await fs.readFile(path.join(destination, "subsequent-owner"), "utf8")).toBe(
+          "preserve",
+        );
+      }
+      await promotion.cleanup();
+    },
+  );
+
   it.each(["dependency", "cache-link", "parent-link"] as const)(
     "preserves tool cache paths owned by a %s",
     async (layout) => {
