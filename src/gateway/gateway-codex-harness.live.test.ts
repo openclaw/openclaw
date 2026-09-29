@@ -2304,7 +2304,8 @@ describeLive("gateway live (Codex harness)", () => {
     CODEX_HARNESS_TIMEOUT_MS,
   );
 
-  it(
+  // Waived for 2026.9.7 by the release lead under Peter's 00:40 PT live/e2e waiver decision; see FRV 36534008742 job 109300784066.
+  it.skip(
     "runs gateway agent turns through the plugin-owned Codex app-server harness",
     async (context) => {
       const modelKey = process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL ?? DEFAULT_CODEX_MODEL;

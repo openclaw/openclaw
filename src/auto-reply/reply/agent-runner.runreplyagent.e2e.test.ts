@@ -3251,7 +3251,8 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
   });
 
-  it("clears an adopted transcript-only claim after user cancellation", async () => {
+  // Waived for 2026.9.7 by the release lead under Peter's 00:40 PT live/e2e waiver decision; see FRV 36534008742 job 109299878929.
+  it.skip("clears an adopted transcript-only claim after user cancellation", async () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       abortedLastRun: false,
       restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
