@@ -601,6 +601,44 @@ describe("handleEmbeddedAssistantFailure", () => {
     expect(fixture.traceAttempts).toEqual([]);
   });
 
+  it("does not rotate a missing-model error onto another profile", async () => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    const assistant = buildEmbeddedRunnerAssistant({
+      provider: "anthropic",
+      model: "mock-1",
+      stopReason: "error",
+      errorMessage: "404 model not found",
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+    });
+    fixture.input.attempt = attempt;
+    fixture.input.attemptAssistant = assistant;
+    fixture.input.currentAttemptAssistant = assistant;
+    fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
+    fixture.input.emptyErrorRetries = 0;
+    fixture.input.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => false);
+
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toMatchObject({
+      reason: "model_not_found",
+    });
+
+    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.input.failover.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.input.failover.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.traceAttempts).toEqual([
+      {
+        provider: "anthropic",
+        model: "mock-1",
+        result: "fallback_model",
+        reason: "model_not_found",
+        stage: "assistant",
+        status: 404,
+      },
+    ]);
+  });
+
   it("closes every failover retry after an idle timeout commits a write", async () => {
     const fixture = makeIdleTimeoutFailureInput();
 
