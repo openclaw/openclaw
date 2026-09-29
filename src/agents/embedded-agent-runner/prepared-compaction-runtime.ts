@@ -1,7 +1,3 @@
-/**
- * Builds the skills, tools, capability profile, and system prompt used by one
- * prepared direct compaction attempt.
- */
 import fs from "node:fs/promises";
 import os from "node:os";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
@@ -50,7 +46,6 @@ import {
   buildAgentRuntimePlan,
   resolvePreparedProviderRuntimeHandle,
 } from "../runtime-plan/build.js";
-import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import {
   resolveSessionPermissionExecMode,
   SESSION_PERMISSION_BY_EXEC_MODE,
@@ -205,7 +200,6 @@ export async function buildPreparedCompactionRuntime(
       provider: contextConfigProvider,
       modelId,
       model: runtimeModel,
-      agentId: sessionAgentId,
       requestedTokenBudget: params.contextTokenBudget,
       fallbackTokenBudget: params.tokenBudget,
     });
@@ -510,9 +504,7 @@ export async function buildPreparedCompactionRuntime(
       cwd: effectiveCwd,
       moduleUrl: import.meta.url,
     });
-    const promptContributionContext: Parameters<
-      AgentRuntimePlan["prompt"]["resolveSystemPromptContribution"]
-    >[0] = {
+    const buildPromptContributionContext = () => ({
       config: params.config,
       agentDir,
       workspaceDir: effectiveWorkspace,
@@ -522,9 +514,10 @@ export async function buildPreparedCompactionRuntime(
       runtimeChannel,
       runtimeCapabilities,
       agentId: sessionAgentId,
-    };
-    const promptContribution =
-      runtimePlan.prompt.resolveSystemPromptContribution(promptContributionContext);
+    });
+    const promptContribution = runtimePlan.prompt.resolveSystemPromptContribution(
+      buildPromptContributionContext(),
+    );
     const preparedMemoryPrompt = await prepareAgentMemoryPrompt({
       enabled: promptMode === "full",
       toolNames: promptTools.map((tool) => tool.name),
@@ -585,15 +578,7 @@ export async function buildPreparedCompactionRuntime(
         config: params.config,
         workspaceDir: effectiveWorkspace,
         context: {
-          config: params.config,
-          agentDir,
-          workspaceDir: effectiveWorkspace,
-          provider,
-          modelId,
-          promptMode,
-          runtimeChannel,
-          runtimeCapabilities,
-          agentId: sessionAgentId,
+          ...buildPromptContributionContext(),
           systemPrompt: builtSystemPrompt,
         },
       });

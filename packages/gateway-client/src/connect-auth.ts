@@ -4,6 +4,7 @@ import {
   readConnectErrorDetailCode,
   readConnectErrorRecoveryAdvice,
 } from "@openclaw/gateway-protocol/connect-error-details";
+import { normalizeOptionalString as normalized } from "@openclaw/normalization-core/string-coerce";
 
 export type GatewayConnectAuthSelection = {
   authToken?: string;
@@ -18,10 +19,6 @@ export type GatewayConnectAuthSelection = {
   storedScopes?: string[];
   usingStoredDeviceToken?: boolean;
 };
-
-function normalized(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim() || undefined : undefined;
-}
 
 export function selectGatewayConnectAuth(params: {
   token?: string;

@@ -91,15 +91,7 @@ function responseInputItemShape(input: unknown): string {
 }
 
 function summarizeResponsesCompactionItems(input: unknown): string[] {
-  if (!Array.isArray(input)) {
-    return [
-      "compactionItems=0",
-      "compactionIdHashes=none",
-      "compactionPayloadHashes=none",
-      "compactionInputIndexes=none",
-    ];
-  }
-  const compactions = input.flatMap((item, inputIndex) => {
+  const compactions = (Array.isArray(input) ? input : []).flatMap((item, inputIndex) => {
     if (!isRecord(item) || item.type !== "compaction") {
       return [];
     }
@@ -225,17 +217,12 @@ function buildResponsesFailedEventSummary(
   code?: string,
   observation?: ResponsesFailedNoDetailsObservation,
 ): ResponsesFailedEventSummary {
-  const summary: ResponsesFailedEventSummary = { message };
-  if (responseId) {
-    summary.responseId = responseId;
-  }
-  if (code) {
-    summary.code = code;
-  }
-  if (observation) {
-    summary.observation = observation;
-  }
-  return summary;
+  return {
+    message,
+    ...(responseId ? { responseId } : {}),
+    ...(code ? { code } : {}),
+    ...(observation ? { observation } : {}),
+  };
 }
 
 function isResponseFailedIdentifierKey(key: string): boolean {

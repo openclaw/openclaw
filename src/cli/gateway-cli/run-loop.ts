@@ -9,7 +9,6 @@ import {
   markGatewayRestartTrace,
   startGatewayRestartTrace,
 } from "../../gateway/restart-trace.js";
-import type { GatewayHostLifecycle, GatewayStartupOperation } from "../../gateway/server-public.js";
 import { GatewayStartupCleanupError } from "../../gateway/server-shutdown.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayInstallationReplacement } from "../../gateway/stale-install.js";
@@ -21,7 +20,6 @@ import {
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { consumeGatewaySuspendHandoff } from "../../infra/gateway-suspend-coordinator.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
-import type { GatewayRestartEmitter } from "../../infra/restart.js";
 import { cleanupSnapshotOperations } from "../../infra/sqlite-readonly-location-cleanup.js";
 import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -52,6 +50,7 @@ import { formatBootCompletionContext, formatShutdownReason } from "./run-loop-sh
 import {
   createGatewayStartupOperations,
   prepareGatewayRestartIteration,
+  type GatewayRunLoopStartOptions,
 } from "./run-loop-startup.js";
 import {
   armShutdownHardExitWatchdog,
@@ -69,13 +68,9 @@ const gatewayLifecycleRuntimeLoader = createLazyImportLoader(
 );
 
 export async function runGatewayLoop(params: {
-  start: (params?: {
-    processStartedAt?: number;
-    startupStartedAt?: number;
-    requestHotReloadRecovery?: GatewayRestartEmitter;
-    hostLifecycle?: GatewayHostLifecycle;
-    startupOperation?: GatewayStartupOperation;
-  }) => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
+  start: (
+    params?: GatewayRunLoopStartOptions,
+  ) => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
   runtime: RuntimeEnv;
   /** Grants this run loop authority over the process it exclusively owns. */
   ownsProcessLifecycle?: boolean;
@@ -140,7 +135,6 @@ export async function runGatewayLoop(params: {
     );
     restartDrainWarning = undefined;
   };
-  let restartDrainingMarked = false;
   const observeSignal = loopLogs.createGatewaySignalObserver(gatewayLog);
   let startupFailedWithoutServerHandle = false;
   let failureWork: { controller: AbortController; settled: Promise<void> } | undefined;
@@ -629,14 +623,10 @@ export async function runGatewayLoop(params: {
     }
   };
   const markRestartDraining = (reason: GatewayDrainReason) => {
-    if (restartDrainingMarked) {
-      return;
-    }
     // The lifecycle module is primed before listeners are installed. Keep this
     // transition synchronous so an accepted signal cannot yield between token
     // handling and closing process-wide root admission.
     eagerLifecycleRuntime.markGatewayDraining(reason);
-    restartDrainingMarked = true;
   };
 
   const handleHostedStopAfterServerClose = async (
@@ -1028,6 +1018,7 @@ export async function runGatewayLoop(params: {
         pendingStartupRequest = null;
         clearPendingStartupForceExitTimer();
         startupFailedWithoutServerHandle = false;
+        markRestartDraining(formatShutdownReason(acceptedRequest));
         runAcceptedRequest(acceptedRequest);
         return;
       }
@@ -1217,9 +1208,6 @@ export async function runGatewayLoop(params: {
       }
       try {
         eagerLifecycleRuntime.rollbackGatewayRestartSignalAdmission();
-        // A later signal must repeat the synchronous close transition even if
-        // this handler failed after marking the one-way drain.
-        restartDrainingMarked = false;
       } catch {
         // Keep admission recovery independent from restart-token recovery.
       }
@@ -1272,9 +1260,6 @@ export async function runGatewayLoop(params: {
           await prepareGatewayRestartIteration(
             await gatewayLifecycleRuntimeLoader.load(),
             gatewayLog,
-            () => {
-              restartDrainingMarked = false;
-            },
           );
         }
         if (installationReplacement) {
@@ -1296,6 +1281,7 @@ export async function runGatewayLoop(params: {
           requestHotReloadRecovery: eagerLifecycleRuntime.requestGatewayRestartWithSignalAdmission,
           hostLifecycle: iterationHost.capability,
           startupOperation: iterationStartupOperations.run,
+          gatewayStateOwner: lock ?? undefined,
         });
         iterationStartupOperations.close();
         server = startedServer;

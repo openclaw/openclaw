@@ -236,7 +236,6 @@ packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/markdown-core/src/ir.ts
 packages/memory-host-sdk/src/host/session-files.ts
 packages/tool-call-repair/src/stream-normalizer.ts
-src/acp/control-plane/manager.turn-results.test.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
 src/agents/agent-bundle-mcp-runtime.ts
 src/agents/agent-command.live-model-switch.test.ts
@@ -275,7 +274,6 @@ src/agents/embedded-agent-runner-extraparams.test.ts
 src/agents/embedded-agent-runner.cache.live.test.ts
 src/agents/embedded-agent-runner.e2e.test.ts
 src/agents/embedded-agent-runner.run-embedded-agent.auth-profile-rotation.e2e.test.ts
-src/agents/embedded-agent-runner.sanitize-session-history.test.ts
 src/agents/embedded-agent-runner/compact.hooks.harness.ts
 src/agents/embedded-agent-runner/compact.hooks.test.ts
 src/agents/embedded-agent-runner/context-engine-maintenance.test.ts

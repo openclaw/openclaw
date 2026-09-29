@@ -4,6 +4,7 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { resetComposerFixture } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
@@ -19,6 +20,60 @@ const defaults = { modelProvider: null, model: null, contextTokens: null };
 
 afterEach(async () => {
   await resetComposerFixture();
+});
+
+it.each([
+  { reason: "Your operator role requires a sandboxed session.", scope: "operator.write" },
+  { reason: null, scope: "operator.read" },
+])("disables composition before a denied send ($reason, $scope)", ({ reason, scope }) => {
+  const { pane, state, context } = createRefreshChatPane(
+    createGatewayBrowserClientFixture({ recoveryScopeReady: true }),
+  );
+  context.gateway.snapshot.hello = sessionMutationGatewayHello([scope]);
+  const row: GatewaySessionRow = {
+    key: state.sessionKey,
+    kind: "direct",
+    sharingRole: "owner",
+    sendDisabledReason: reason,
+  };
+  state.sessionsResult = { ts: 1, path: "", count: 1, defaults, sessions: [row] };
+  state.chatMessage = "Keep this draft";
+  state.handleSendChat = vi.fn();
+  const container = document.createElement("div");
+  const draw = () => {
+    pane.render();
+    assert(pane.chatProps);
+    render(renderChatComposer(pane.chatProps), container);
+  };
+  try {
+    draw();
+    const input = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(input?.disabled).toBe(true);
+    expect(input?.value).toBe("Keep this draft");
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.disabled,
+    ).toBe(true);
+    const displayedReason = reason ?? pane.chatProps?.disabledReason;
+    expect(displayedReason).toBeTruthy();
+    expect(container.querySelector(".agent-chat__composer-status-text")?.textContent).toBe(
+      displayedReason,
+    );
+    expect(input?.getAttribute("aria-describedby")).toContain("disabled-reason");
+    input?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    void pane.chatProps?.onSend();
+    expect(state.handleSendChat).not.toHaveBeenCalled();
+
+    row.sendDisabledReason = null;
+    context.gateway.snapshot.hello = sessionMutationGatewayHello(["operator.write"]);
+    draw();
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("Keep this draft");
+    expect(container.querySelector(".agent-chat__composer-status-text")).toBeNull();
+    void pane.chatProps?.onSend();
+    expect(state.handleSendChat).toHaveBeenCalledOnce();
+  } finally {
+    render(nothing, container);
+  }
 });
 
 it.each([

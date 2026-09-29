@@ -235,11 +235,22 @@ function settleProcess(proc: ChildProcess): Promise<void> {
   });
 }
 
-async function stopPeriodicRenewal(): Promise<void> {
+async function stopWatcherResources(onProcessStop?: () => void): Promise<void> {
+  shuttingDown = true;
+  if (respawnTimeout) {
+    clearTimeout(respawnTimeout);
+    respawnTimeout = null;
+  }
   const renewal = renewalScope;
   await renewal?.stop();
   if (renewalScope === renewal) {
     renewalScope = undefined;
+  }
+  if (watcherProcess) {
+    onProcessStop?.();
+    const proc = watcherProcess;
+    watcherProcess = null;
+    await settleProcess(proc);
   }
 }
 
@@ -308,17 +319,7 @@ export async function startGmailWatcherService(
   // This must run before Tailscale/watch-start to prevent the old
   // process from exiting and queuing a respawn during async work.
   if (watcherProcess || renewalScope || respawnTimeout) {
-    shuttingDown = true;
-    if (respawnTimeout) {
-      clearTimeout(respawnTimeout);
-      respawnTimeout = null;
-    }
-    await stopPeriodicRenewal();
-    if (watcherProcess) {
-      const oldProcess = watcherProcess;
-      watcherProcess = null;
-      await settleProcess(oldProcess);
-    }
+    await stopWatcherResources();
     shuttingDown = false;
   }
 
@@ -383,20 +384,7 @@ export async function startGmailWatcherService(
  * Stop the Gmail watcher service.
  */
 export async function stopGmailWatcher(): Promise<void> {
-  shuttingDown = true;
-
-  if (respawnTimeout) {
-    clearTimeout(respawnTimeout);
-    respawnTimeout = null;
-  }
-  await stopPeriodicRenewal();
-
-  if (watcherProcess) {
-    log.info("stopping gmail watcher");
-    const proc = watcherProcess;
-    watcherProcess = null;
-    await settleProcess(proc);
-  }
+  await stopWatcherResources(() => log.info("stopping gmail watcher"));
 
   currentConfig = null;
   log.info("gmail watcher stopped");

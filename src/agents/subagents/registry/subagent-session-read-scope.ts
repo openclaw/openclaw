@@ -1,3 +1,4 @@
+import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 
 type RunIdentity = Pick<SubagentRunReadRecord, "childSessionKey" | "requesterSessionKey">;
@@ -77,7 +78,7 @@ export class SubagentSessionReadLookup {
     }
     const child = entry.childSessionKey.trim();
     const requester = entry.requesterSessionKey;
-    const controller = entry.controllerSessionKey?.trim() || requester;
+    const controller = resolveControllerSessionKey(entry);
     if (
       previous &&
       previous.child === child &&

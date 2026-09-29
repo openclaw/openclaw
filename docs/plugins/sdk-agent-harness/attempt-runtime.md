@@ -33,6 +33,12 @@ backends retain and revalidate each item's assertion, including before retries;
 omit revoked items without cancelling independently accepted work or poisoning
 later authorized controls.
 
+When supplied, call `options.onQueueSettled()` once after that input commits,
+is canceled, or is terminally rejected. `onQueueAccepted(true)` only reports
+admission. A backend that returns early for `waitForTranscriptCommit: false`
+retains the settlement callback until its exact input finishes; core uses it
+to release the selected sender's retained source authority.
+
 Optional V2 `claimPendingUserInputAnswer(text, options, assertCurrent, authorityKind)`
 and `cancelPendingUserInput(resolvedBy, assertCurrent, authorityKind)` methods
 require the same assertion and authority kind. Carry it through question registration and persistence to the final

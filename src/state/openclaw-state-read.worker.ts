@@ -60,7 +60,7 @@ import {
 import {
   inspectUpdateRunReconciliation,
   readUpdateRunReconciliationCandidates,
-} from "../infra/update-run-reconciliation.worker.js";
+} from "../infra/update-run-reconciliation.read.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
 import {
   pluginBlobLookupInDatabase,

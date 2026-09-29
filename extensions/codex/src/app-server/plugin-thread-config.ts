@@ -1,7 +1,6 @@
-import crypto from "node:crypto";
 import { codexAppIdentityKey } from "./app-identity.js";
 import { defaultCodexAppInventoryCache, CodexAppInventoryCache } from "./app-inventory-cache.js";
-import { stringifyCodexPolicy } from "./config-policy-json.js";
+import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import {
   resolveCodexPluginsPolicy,
   type CodexPluginDestructiveApprovalMode,
@@ -116,7 +115,7 @@ export function buildCodexPluginThreadConfigInputFingerprint(params: {
   appCacheKey?: string;
 }): string {
   const policy = resolveCodexPluginsPolicy(params.pluginConfig);
-  return fingerprintJson({
+  return fingerprintCodexPolicy({
     version: CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION,
     policy: policyFingerprint(policy),
     appCacheKey: params.appCacheKey ?? null,
@@ -402,7 +401,7 @@ export async function buildCodexPluginThreadConfig(
     ...(provisionalAppIds.size > 0
       ? { provisionalAppIds: Array.from(provisionalAppIds).toSorted() }
       : {}),
-    fingerprint: fingerprintJson({
+    fingerprint: fingerprintCodexPolicy({
       version: CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION,
       inputFingerprint,
       configPatch,
@@ -459,7 +458,7 @@ function emptyPluginThreadConfig(params: {
   const policyContext = buildPluginAppPolicyContext({}, {});
   return {
     enabled: params.enabled,
-    fingerprint: fingerprintJson({
+    fingerprint: fingerprintCodexPolicy({
       version: CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION,
       inputFingerprint: params.inputFingerprint,
       configPatch: params.configPatch ?? null,
@@ -616,7 +615,7 @@ export function buildPluginAppPolicyContext(
   pluginAppIds: Record<string, string[]>,
 ): PluginAppPolicyContext {
   return {
-    fingerprint: fingerprintJson({ version: 2, apps, pluginAppIds }),
+    fingerprint: fingerprintCodexPolicy({ version: 2, apps, pluginAppIds }),
     apps,
     pluginAppIds,
   };
@@ -681,8 +680,4 @@ function mergeJsonObjects(left: JsonObject, right: JsonObject): JsonObject {
     }
   }
   return merged;
-}
-
-function fingerprintJson(value: JsonValue): string {
-  return crypto.createHash("sha256").update(stringifyCodexPolicy(value)).digest("hex");
 }

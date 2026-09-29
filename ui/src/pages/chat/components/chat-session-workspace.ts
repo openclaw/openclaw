@@ -554,6 +554,8 @@ export function resolveSessionDiffSidebarContent(
     isGatewayMethodAdvertised(state, "sessions.files.get") === true && Boolean(state.client);
   const content: SidebarContent = {
     kind: "session-diff",
+    // Checkout retirement replaces this identity; ordinary refreshes retain it.
+    owner: workspace,
     load: async (scope) => {
       if (!client) {
         throw new Error(t("chat.sessionDiff.disconnected"));

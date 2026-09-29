@@ -119,6 +119,16 @@ describe("sessions.files RPC handlers", () => {
     );
   });
 
+  it("returns no workspace listing while the session checkout is pending", async () => {
+    mockSession({ sessionId: "sess-pending", pendingWorktree: { titleSource: "New checkout" } });
+    mockVisibleMessages([]);
+
+    expect(expectOkPayload(await listFiles())).toEqual({
+      sessionKey: "agent:main:main",
+      files: [],
+    });
+  });
+
   it("uses the persisted fixed-store owner for a bare session workspace", async () => {
     const cfg = {
       session: { store: path.join(workspaceRoot, "shared.sqlite"), scope: "global" },

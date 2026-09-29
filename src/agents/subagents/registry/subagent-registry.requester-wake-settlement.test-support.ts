@@ -165,6 +165,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
     const completions: Array<{ delivered: boolean; error?: string }> = [];
     const runWake = () =>
       maybeWakeRequesterAfterAllChildrenSettled({
+        isSourceCurrent: () => true,
         requesterSessionKey,
         settledEntry: batch,
         transitionBatch: (_runIds, state) => {

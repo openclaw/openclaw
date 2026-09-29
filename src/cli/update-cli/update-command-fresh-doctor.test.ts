@@ -51,6 +51,11 @@ vi.mock("../../daemon/gateway-entrypoint.js", () => ({
   resolveGatewayInstallEntrypoint: mocks.resolveEntrypoint,
 }));
 
+vi.mock("../../infra/deferred-plugin-migrations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/deferred-plugin-migrations.js")>()),
+  readDeferredPluginMigrationsAsync: async () => [],
+}));
+
 vi.mock("../../process/exec.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../process/exec.js")>();
   return {

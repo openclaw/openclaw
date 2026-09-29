@@ -123,11 +123,9 @@ export function parseWorkerProcessRequest(value: unknown): WorkerProcessInput {
 }
 
 export function parseWorkerRuntimeResult(value: unknown): WorkerRuntimeResult | null {
-  const parsed = RuntimeResultSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
+  return RuntimeResultSchema.safeParse(value).data ?? null;
 }
 
 export function parseWorkerProcessMessage(value: unknown): WorkerProcessMessage | null {
-  const parsed = ProcessMessageSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
+  return ProcessMessageSchema.safeParse(value).data ?? null;
 }

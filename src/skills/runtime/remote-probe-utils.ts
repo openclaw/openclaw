@@ -61,10 +61,6 @@ export function isRemoteSkillEligibilityNode(
   );
 }
 
-export function supportsSystemWhich(commands?: string[]): boolean {
-  return Array.isArray(commands) && commands.includes("system.which");
-}
-
 export function collectRequiredBins(entries: SkillEntry[], targetPlatform: string): string[] {
   const bins = new Set<string>();
   for (const entry of entries) {

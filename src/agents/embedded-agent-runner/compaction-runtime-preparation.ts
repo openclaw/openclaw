@@ -1,4 +1,3 @@
-/** Shared model, harness, and auth preparation for embedded compaction. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";

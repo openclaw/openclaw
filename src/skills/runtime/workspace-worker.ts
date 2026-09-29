@@ -195,9 +195,7 @@ export async function serveWorkspaceSkills(options: {
   const chunks: Buffer[] = [];
   const inputChunks: AsyncIterable<unknown> = input;
   for await (const raw of inputChunks) {
-    if (typeof raw === "string") {
-      chunks.push(Buffer.from(raw));
-    } else if (raw instanceof Uint8Array) {
+    if (typeof raw === "string" || raw instanceof Uint8Array) {
       chunks.push(Buffer.from(raw));
     } else {
       throw new Error("Skill worker input must be bytes");
