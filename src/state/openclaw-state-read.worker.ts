@@ -45,6 +45,7 @@ import {
 } from "../gateway/worker-environments/store-row-codec.js";
 import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
+import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
@@ -607,6 +608,9 @@ serveOwnedWorkerTasks(
         );
         return { ok: true, sourceAdmitted: true, ...result };
       });
+      if (process.versions.bun && bunSqliteNativeCleanupPending) {
+        nativeCleanupFailure ??= { error: undefined };
+      }
       return nativeCleanupFailure ? { ...reply, nativeCleanupFailure } : reply;
     } catch (value) {
       const error = toStringifiedError(value);
