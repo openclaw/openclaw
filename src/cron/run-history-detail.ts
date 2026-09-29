@@ -285,6 +285,18 @@ export function resolveCronRunRecordTimestamp(
   return record.endedAt ?? record.lastEventAt ?? record.createdAt;
 }
 
+/** Shared newest-first order for history pages, retention, and recovery. */
+export function compareCronRunRecordsNewestFirst(
+  left: CronRunRecord,
+  right: CronRunRecord,
+): number {
+  return (
+    resolveCronRunRecordTimestamp(right) - resolveCronRunRecordTimestamp(left) ||
+    right.createdAt - left.createdAt ||
+    right.id.localeCompare(left.id)
+  );
+}
+
 /** Reads internal trigger recovery data without adding it to run-history responses. */
 export function cronRunRecordToTriggerEval(
   record: Pick<CronRunRecord, "detail">,
