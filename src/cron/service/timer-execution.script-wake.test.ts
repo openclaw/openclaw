@@ -72,7 +72,6 @@ describe("cron script immediate wake", () => {
             reason: options.reason,
           }),
           canRelayToUser: true,
-          startedAt: now,
           scheduledTasks: [],
           useHeartbeatResponseTool: false,
         });

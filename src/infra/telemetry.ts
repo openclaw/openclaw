@@ -392,16 +392,12 @@ export async function checkTelemetryUpdate(
         await readProviderJsonResponse(response, "Telemetry update response"),
       );
       const note = parsed.note?.trim().slice(0, TELEMETRY_NOTE_MAX_LENGTH);
-      const update = {
-        version: parsed.version,
-        ...(note ? { note } : {}),
-      };
       const persisted = await persistTelemetrySuccess(
         pendingKey,
         {
           lastPingAt: nowMs,
-          latestVersion: update.version,
-          ...(update.note ? { note: update.note } : {}),
+          latestVersion: parsed.version,
+          ...(note ? { note } : {}),
         },
         context,
       );
