@@ -523,7 +523,7 @@ describe("qa suite runtime agent session helpers", () => {
     const sessionKey = "agent:qa:reply-anchor";
     const sessionId = "session-reply-anchor";
     const marker = "PARENT_DONE:9f1";
-    await seedQaSession({ tempRoot, sessionKey, sessionId });
+    const transcript = await createQaTranscript({ tempRoot, sessionKey, sessionId });
     for (const message of [
       { role: "user", content: `reply with exactly ${marker}` },
       { role: "assistant", content: marker },
@@ -543,7 +543,7 @@ describe("qa suite runtime agent session helpers", () => {
         timestamp: 500,
       },
     ]) {
-      await appendQaTranscriptMessage({ tempRoot, sessionKey, sessionId, message });
+      await transcript.append(message);
     }
     const transcriptEnv = { gateway: { tempRoot } } as never;
 
