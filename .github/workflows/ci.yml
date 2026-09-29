@@ -1067,24 +1067,33 @@ jobs:
           hosted_runner_profile_contract=false
           grep -Fq "hosted-runner-profile-contract-v1" .github/workflows/ci.yml &&
             hosted_runner_profile_contract=true
-          # Every PR first attempt runs on the same Blacksmith labels regardless of
-          # author, so it shares one planner profile. Fork retries route hosted
-          # because forks cannot read the backend override.
+          fork_pull_request=false
+          [[ "$GITHUB_EVENT_NAME" == "pull_request" && "$HEAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]] &&
+            fork_pull_request=true
+          # Forks cannot mount the trusted sticky disks and caches that size the
+          # all-in-one lint/type jobs, so their check jobs keep the hosted stripes.
           if [[
             "$hosted_runner_profile_contract" == "true" &&
             (
               "$GITHUB_EVENT_NAME" == "workflow_dispatch" ||
               "$GITHUB_REPOSITORY" != "openclaw/openclaw" ||
-              (
-                "$GITHUB_EVENT_NAME" == "pull_request" &&
-                "$HEAD_REPOSITORY" != "$GITHUB_REPOSITORY" &&
-                "${GITHUB_RUN_ATTEMPT:-1}" != "1"
-              )
+              "$fork_pull_request" == "true"
             )
           ]]; then
             runner_profile=github
           fi
           node_runner_backend="$runner_profile"
+          # Fork first attempts run Node shards on the same Blacksmith labels as
+          # every other PR, so they plan with the same backend regardless of author.
+          # Fork retries route hosted because forks cannot read the backend override.
+          if [[
+            "$hosted_runner_profile_contract" == "true" &&
+            "$fork_pull_request" == "true" &&
+            "$GITHUB_REPOSITORY" == "openclaw/openclaw" &&
+            "${GITHUB_RUN_ATTEMPT:-1}" == "1"
+          ]]; then
+            node_runner_backend="$qualified_runner_profile"
+          fi
           qualification_runner_backend=
           if [[ "$ci_qualification" == "true" && "${GITHUB_RUN_ATTEMPT:-1}" == "1" ]]; then
             runner_profile="$qualified_runner_profile"

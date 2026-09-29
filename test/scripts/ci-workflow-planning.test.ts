@@ -4665,8 +4665,9 @@ describe("ci workflow guards", () => {
         },
       },
       {
-        expected: "hybrid",
-        name: "untrusted fork first attempt keeps the configured hybrid profile",
+        expected: "github",
+        expectedNode: "hybrid",
+        name: "untrusted fork first attempt plans Node shards with the configured hybrid backend",
         options: {
           authorAssociation: "NONE",
           configuredProfile: "hybrid",
@@ -4676,8 +4677,9 @@ describe("ci workflow guards", () => {
         },
       },
       {
-        expected: "blacksmith",
-        name: "untrusted fork first attempt plans for its Blacksmith runners",
+        expected: "github",
+        expectedNode: "blacksmith",
+        name: "untrusted fork first attempt plans Node shards for its Blacksmith runners",
         options: {
           authorAssociation: "FIRST_TIME_CONTRIBUTOR",
           eventName: "pull_request" as const,
@@ -4686,8 +4688,9 @@ describe("ci workflow guards", () => {
         },
       },
       {
-        expected: "blacksmith",
-        name: "trusted fork first attempt plans for its Blacksmith runners",
+        expected: "github",
+        expectedNode: "blacksmith",
+        name: "trusted fork first attempt plans Node shards for its Blacksmith runners",
         options: {
           authorAssociation: "CONTRIBUTOR",
           eventName: "pull_request" as const,
@@ -4696,8 +4699,9 @@ describe("ci workflow guards", () => {
         },
       },
       {
-        expected: "hybrid",
-        name: "trusted fork first attempt keeps the configured hybrid profile",
+        expected: "github",
+        expectedNode: "hybrid",
+        name: "trusted fork first attempt plans Node shards with the configured hybrid backend",
         options: {
           authorAssociation: "CONTRIBUTOR",
           configuredProfile: "hybrid",
@@ -4759,7 +4763,12 @@ describe("ci workflow guards", () => {
         { name: "trusted canonical PR", expected: "hybrid", expectedNode: "runson" },
         { name: "PR retry", expected: "hybrid", expectedNode: "hybrid", runAttempt: 2 },
         // Trusted forks plan for their hybrid Blacksmith labels; RunsOn stays same-repository.
-        { name: "returning-contributor fork", expected: "hybrid", headRepository: "fork/openclaw" },
+        {
+          name: "returning-contributor fork",
+          expected: "github",
+          expectedNode: "hybrid",
+          headRepository: "fork/openclaw",
+        },
         {
           name: "returning-contributor fork retry",
           expected: "github",

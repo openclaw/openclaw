@@ -188,8 +188,8 @@ test and had a 118-second hosted median wait; it is not a complete fifteen-minut
 qualification.
 
 The change adds three actual Blacksmith registrations on ordinary hybrid main
-and same-repository PRs. Fork PR first attempts use the same planner profile as
-same-repository PRs, so they add the same three. A fresh
+and same-repository PRs. Fork PRs keep the logical GitHub check profile, which
+emits five core-lint rows, so their increase can be six including the gate. A fresh
 current-source audit totals 71 potentially self-hosted non-Node rows across the
 supported automatic main/PR profiles. This conservative union includes five
 core-lint rows, five core-type rows, five Windows rows, and thirteen UI E2E rows;

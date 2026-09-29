@@ -168,7 +168,7 @@ ClawSweeper, ClawHub, Clownfish, OpenClaw RTT, and Clawbench.
 
 Native compact plans admit 90 rows and GitHub-hosted plans 96; final Node caps remain 70 push and 130 PR rows.
 The current automatic main/PR source has a conservative union of 71 potentially
-self-hosted non-Node rows, including five core-lint stripes retained as a conservative allowance,
+self-hosted non-Node rows, including five core-lint stripes for fork PRs,
 five type stripes, five Windows rows, and thirteen UI E2E rows. Retain an 84-row
 allowance with thirteen rows reserved: `4 × 154 + 21 × 214 = 5,110` for the
 four-main/21-PR arrival envelope, leaving 890 below the 6,000 reference target.
@@ -233,8 +233,8 @@ These are intentionally guarded by the `ci-workflow-guards`,
   jobs or registrations and keeps the deadline and complete stripe inventory. The gate has no checkout or dependency setup; retries, ordinary
   manual dispatches, noncanonical contexts, and the GitHub override stay hosted.
   Core lint additionally retains hosted routing for frozen targets. Normal hybrid
-  main/same-repository PRs add three assignments; fork PR first attempts add the
-  same three because they share that planner profile. These fit the fresh
+  main/same-repository PRs add three assignments; fork PRs can add six because
+  their logical GitHub check profile emits five lint rows. These fit the fresh
   71-row union and reserved 84-row non-Node allowance described above.
   Automatic hybrid first-attempt `preflight` requests the existing
   16-class after hosted assignment stalled across three nearby runs while
