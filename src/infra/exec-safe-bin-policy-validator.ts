@@ -176,6 +176,13 @@ function collectPositionalTokens(args: string[], profile: SafeBinProfile): strin
       break;
     }
 
+    // The obsolete count form (`head -1`, `tail -20`): a standalone digits-only token, never a
+    // cluster with other letters (`tail -5f` follows), and never a file operand.
+    if (profile.allowNumericCount === true && /^-\d+$/.test(rawToken)) {
+      i += 1;
+      continue;
+    }
+
     if (token.kind === "positional") {
       if (!consumePositionalToken(token.raw, positional)) {
         return null;
