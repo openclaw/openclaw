@@ -48,6 +48,7 @@ import {
 import { callInProcessGatewayTool } from "../../tools/in-process-gateway.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
 import { settleSubagentRegistryPersistenceWork } from "../registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
@@ -96,6 +97,7 @@ const COLD_MODEL_ENTRY_TIMEOUT_MS = 60_000;
 let state: OpenClawTestState;
 let stateDir = "";
 let runtimeConfig: OpenClawConfig;
+let settleRootWork: ReturnType<typeof observeRootWork>;
 
 async function writeTestConfig() {
   const config = {
@@ -137,6 +139,7 @@ async function writeTestConfig() {
 }
 
 beforeEach(async () => {
+  settleRootWork = observeRootWork();
   state = await createOpenClawTestState({ label: "spawn-production-boundary" });
   await resetPreparedModelRuntimeHarness(state);
   runEmbeddedAgent.mockReset();
@@ -181,7 +184,8 @@ beforeEach(async () => {
 });
 
 afterEach(async ({ task }) => {
-  await settleSubagentRegistryPersistenceWork();
+  // Completion owns detached worker writes beyond the Gateway execution drain.
+  await settleSubagentRegistryPersistenceWork(settleRootWork);
   // Retire workspace observers before fixture cleanup removes their roots.
   const { closeSkillsWatchers } = await import("../../../skills/runtime/refresh.js");
   await closeSkillsWatchers(true);
