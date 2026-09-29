@@ -407,13 +407,11 @@ function createPreparedSlackMessage(params?: {
       ...params?.ctxPayload,
     },
     turn: {
-      storePath: "/tmp/slack-sessions.json",
       record: {},
     },
     replyToMode: params?.replyToMode ?? "all",
     isDirectMessage: params?.isDirectMessage ?? false,
     isRoomish: false,
-    preview: "",
     ackReactionValue: "eyes",
     ackReactionMessageTs: params?.ackReactionMessageTs,
     ackReactionPromise: params?.ackReactionPromise ?? null,

@@ -1,8 +1,3 @@
-/**
- * Publishes agent activity (streamed commentary + tool progress) into
- * ClickClack as durable `agent_commentary` / `agent_tool` message rows,
- * coalesced so one logical step becomes one row instead of a row per frame.
- */
 import {
   formatChannelProgressDraftLineForEntry,
   isCompleteAgentPreamble,
@@ -13,7 +8,6 @@ import type { ClickClackMessageProvenance } from "./types.js";
 
 const CLICKCLACK_COMMENTARY_FLUSH_MS = 700;
 
-/** Destination for durable activity rows (channel or DM conversation). */
 type ClickClackActivityTarget = {
   channelId?: string;
   conversationId?: string;
@@ -103,7 +97,6 @@ type ToolRow = {
   sentBody?: string;
 };
 
-/** Publisher wired into one agent turn via `replyOptions.onItemEvent`. */
 export type ClickClackActivityPublisher = {
   onItemEvent: (payload: ClickClackItemEventPayload) => false;
   /**

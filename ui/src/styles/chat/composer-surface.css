@@ -661,10 +661,6 @@
     min-width: 36px;
     padding: 0;
   }
-
-  .agent-chat__control-label {
-    display: none;
-  }
 }
 
 .chat-send-btn svg {

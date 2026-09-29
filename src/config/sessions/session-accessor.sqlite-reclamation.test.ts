@@ -49,6 +49,7 @@ import {
   appendTranscriptEventSync,
   replaceTranscriptEventsSync,
 } from "./session-accessor.sqlite-transcript-write.js";
+import type { SqliteWorkerWriteAdmission } from "./session-accessor.sqlite-worker-request.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 
 const hooks = vi.hoisted(() => ({
@@ -91,6 +92,26 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
         options,
         claim,
         async (worker) => {
+          const observeAdmission =
+            <T>(withWriteAdmission: SqliteWorkerWriteAdmission<T>) =>
+            async (...args: Parameters<typeof withWriteAdmission>) => {
+              const [runAdmitted, ...admission] = args;
+              await hooks.beforeWriteAdmission?.();
+              return withWriteAdmission(
+                async (refusal) => {
+                  await hooks.afterWriteAdmission?.();
+                  return await runAdmitted(refusal);
+                },
+                ...admission,
+              );
+            };
+          const originalPrepare = worker.prepare.bind(worker);
+          const prepareSpy = vi.spyOn(worker, "prepare").mockImplementation((params) =>
+            originalPrepare({
+              ...params,
+              withWriteAdmission: observeAdmission(params.withWriteAdmission),
+            }),
+          );
           const originalRun = worker.run.bind(worker);
           const spy = vi.spyOn(worker, "run").mockImplementation((params) => {
             const withWriteAdmission = params.withWriteAdmission;
@@ -98,17 +119,7 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
               ...params,
               ...(withWriteAdmission
                 ? {
-                    withWriteAdmission: async (...args: Parameters<typeof withWriteAdmission>) => {
-                      const [runAdmitted, ...admission] = args;
-                      await hooks.beforeWriteAdmission?.();
-                      return withWriteAdmission(
-                        async (refusal) => {
-                          await hooks.afterWriteAdmission?.();
-                          return await runAdmitted(refusal);
-                        },
-                        ...admission,
-                      );
-                    },
+                    withWriteAdmission: observeAdmission(withWriteAdmission),
                   }
                 : {}),
               onCommitRequest: () => {
@@ -121,6 +132,7 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
             return await run(worker);
           } finally {
             spy.mockRestore();
+            prepareSpy.mockRestore();
           }
         },
         assertRequestCurrent,
@@ -674,8 +686,8 @@ test("file warnings retain rejected native admission releases without attributin
   const failure = new Error("synthetic admission refusal");
   hooks.beforeWriteAdmission = async () => {
     if (admissions === 0) {
-      // Executor preparation can lend warm proof. Revoke it at reclamation admission
-      // so this scenario observes the real native validation phase and its release.
+      // Revoke incoming warm proof at the actual cold prepare admission so native
+      // validation releases and reacquires its own writer before acceptance.
       clearOpenClawAgentIntegrityVerification(databaseOptions.path, databaseOptions.env);
     }
     if (admissions === 1) {
@@ -870,8 +882,8 @@ test.each([
     hooks.failWorkerLog = failLog;
     hooks.beforeWriteAdmission = async () => {
       if (++admissions === 1) {
-        // Invalidate after executor preparation, preserving the real proof owner while
-        // requiring this cold-validation scenario to release its preliminary admission.
+        // Invalidate at native preparation's first admission, preserving the proof
+        // owner while requiring validation to release its preliminary writer.
         clearOpenClawAgentIntegrityVerification(databaseOptions.path, databaseOptions.env);
         return;
       }
