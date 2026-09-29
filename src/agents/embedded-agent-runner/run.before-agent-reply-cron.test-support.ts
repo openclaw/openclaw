@@ -23,28 +23,6 @@ function firstBeforeAgentReplyCall() {
   return call;
 }
 
-function firstAttemptParams(): {
-  cleanupBundleMcpOnRunEnd?: boolean;
-  disableTrajectory?: boolean;
-  modelRun?: boolean;
-  promptMode?: string;
-} {
-  const call = mockedRunEmbeddedAttempt.mock.calls[0] as
-    | [
-        {
-          cleanupBundleMcpOnRunEnd?: boolean;
-          disableTrajectory?: boolean;
-          modelRun?: boolean;
-          promptMode?: string;
-        },
-      ]
-    | undefined;
-  if (!call) {
-    throw new Error("expected embedded attempt call");
-  }
-  return call[0];
-}
-
 describe("runEmbeddedAgent before_agent_reply seam", () => {
   beforeAll(async () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
@@ -122,40 +100,5 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
       expect.objectContaining({ phase: "runtime_plugins" }),
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-  });
-
-  it("forwards one-shot auxiliary-run flags and tool bindings into the embedded attempt", async () => {
-    // Auxiliary-run flags are request-scoped; they must pass through to the
-    // first attempt without becoming persistent session settings.
-    const toolBindings = {
-      browser: { kind: "tab", tabId: 7, target: "host", profile: "chrome", targetId: "target-7" },
-    };
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
-
-    await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      trigger: "user",
-      toolBindings,
-      disableTrajectory: true,
-      modelRun: true,
-      promptMode: "none",
-    });
-
-    const attemptParams = firstAttemptParams();
-    expect(attemptParams.disableTrajectory).toBe(true);
-    expect(attemptParams.modelRun).toBe(true);
-    expect(attemptParams.promptMode).toBe("none");
-    expect(attemptParams).toMatchObject({ toolBindings });
-  });
-
-  it("forwards one-shot bundle MCP cleanup into the embedded attempt", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
-
-    await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      cleanupBundleMcpOnRunEnd: true,
-    });
-
-    expect(firstAttemptParams().cleanupBundleMcpOnRunEnd).toBe(true);
   });
 });

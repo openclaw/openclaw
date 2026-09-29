@@ -260,16 +260,9 @@ describe("plugin runtime refresh admission", () => {
     const next = await runEmbeddedAgent({ ...runParams, prompt: "new task" });
     expect(next.meta.agentMeta?.terminalReceipt?.successfulToolNames).toEqual([]);
   });
-  it.each([
-    { kind: "generated", refresh: false },
-    { kind: "generated", refresh: true },
-    { kind: "host-owned", refresh: false },
-    { kind: "host-owned", refresh: true },
-    { kind: "tts", refresh: true },
-    { kind: "foreign-tts", refresh: true },
-  ])(
-    "preserves pending $kind media and its provenance (refresh: $refresh)",
-    async ({ kind, refresh }) => {
+  it.each(["generated", "host-owned", "tts", "foreign-tts"])(
+    "preserves pending %s media and its provenance across refresh",
+    async (kind) => {
       useOpenAIPlatformAuthFixture();
       const { getReplyPayloadMetadata } = await import("../../auto-reply/reply-payload.js");
       const { markCoreTtsAttemptResult } = await import("../tools/tts-tool-result-provenance.js");
@@ -293,12 +286,10 @@ describe("plugin runtime refresh admission", () => {
         },
       });
       mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
-        if (refresh) {
-          params.registerPluginRuntimeRefreshConsumer?.(() => true);
-          expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
-        }
+        params.registerPluginRuntimeRefreshConsumer?.(() => true);
+        expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
         const attempt = makeAttemptResult({
-          assistantTexts: refresh ? [] : [finalText],
+          assistantTexts: [],
           toolMetas: [{ toolName: "produce_media", isError: false }],
           toolMediaUrls: mediaUrls,
           hostOwnedToolMediaUrls: kind === "host-owned" ? [selected, alternate] : undefined,
@@ -315,11 +306,9 @@ describe("plugin runtime refresh admission", () => {
             )
           : attempt;
       });
-      if (refresh) {
-        mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-          makeAttemptResult({ assistantTexts: [finalText] }),
-        );
-      }
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({ assistantTexts: [finalText] }),
+      );
       mockedBuildEmbeddedRunPayloads.mockImplementation(({ assistantTexts }) =>
         assistantTexts.map((text) => ({ text })),
       );
@@ -332,7 +321,7 @@ describe("plugin runtime refresh admission", () => {
         preparedRunAdmission: admission,
         ...(kind === "generated" ? {} : { sourceReplyDeliveryMode: "message_tool_only" as const }),
       }).finally(() => admission.close());
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(refresh ? 2 : 1);
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
       expect(result.didSendViaMessagingTool).not.toBe(true);
       expect(result.messagingToolSentMediaUrls ?? []).toEqual([]);
       expect(result.meta.agentMeta?.terminalReceipt?.sourceReplyDelivered).not.toBe(true);
@@ -511,15 +500,14 @@ describe("plugin runtime refresh admission", () => {
 
 describe("plugin runtime refresh streaming delivery", () => {
   it.each([
-    { name: "same source", otherRoute: false, toolOnly: false, mirror: false, ownedMedia: false },
-    { name: "another target", otherRoute: true, toolOnly: false, mirror: false, ownedMedia: false },
-    { name: "source mirrors", otherRoute: false, toolOnly: false, mirror: true, ownedMedia: false },
+    { name: "same source", otherRoute: false, toolOnly: false, mirror: false },
+    { name: "another target", otherRoute: true, toolOnly: false, mirror: false },
+    { name: "source mirrors", otherRoute: false, toolOnly: false, mirror: true },
     {
       name: "tool-only source with owned media",
       otherRoute: false,
       toolOnly: true,
       mirror: false,
-      ownedMedia: true,
     },
   ])("retains committed delivery before successor callbacks for $name", async (scenario) => {
     const {
@@ -590,7 +578,7 @@ describe("plugin runtime refresh streaming delivery", () => {
       await params.onPartialReply?.({ text: unrelated });
       await params.onBlockReply?.(scenario.mirror ? mirror : duplicate);
       await params.onBlockReply?.(remaining);
-      if (scenario.ownedMedia) {
+      if (scenario.toolOnly) {
         await params.onBlockReply?.(ownedMedia);
       }
       await params.onReasoningStream?.({
@@ -605,9 +593,7 @@ describe("plugin runtime refresh streaming delivery", () => {
             ? [prefix, divergent, text, unrelated]
             : [divergent, unrelated],
         blocks: scenario.toolOnly
-          ? scenario.ownedMedia
-            ? [ownedMedia]
-            : []
+          ? [ownedMedia]
           : scenario.otherRoute
             ? [duplicate, remaining]
             : [...(scenario.mirror ? [mirror] : []), { text: unrelated }],

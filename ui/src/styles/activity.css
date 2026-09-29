@@ -255,7 +255,7 @@ a.activity-current-work__row:hover {
 }
 
 .activity-feed__presence-dot[data-presence-activity="idle"] {
-  background: var(--warn);
+  background: var(--presence-idle);
 }
 
 .activity-feed__presence-dot[data-presence-activity="unknown"] {

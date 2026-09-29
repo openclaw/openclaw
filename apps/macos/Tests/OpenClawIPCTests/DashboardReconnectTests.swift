@@ -325,13 +325,20 @@ struct DashboardReconnectTests {
             routeRevision: 2)
         let manager = DashboardManager._testMake(
             authTokenProvider: { _ in await authGate.authToken() },
+            legacyCredentialsProvider: { _, _ in
+                guard await authGate.authToken() != nil else { throw CancellationError() }
+                return .init(credentials: [:], isCurrent: { true }, waitForInvalidation: nil)
+            },
             endpointStateProvider: { endpointState })
         manager._testSetController(controller)
-        defer { manager._testController()?.closeDashboard() }
+        defer { manager.close() }
 
         await manager.handleEndpointState(endpointState)
         let failureController = try #require(manager._testController())
-        #expect(failureController !== controller)
+        #expect(failureController.isShowingFailurePage)
+        #expect(!failureController.canDeliverNativeCommands)
+        #expect(failureController.auth.token == nil)
+        #expect(failureController.documentHost.nativeGatewayAuthProvider == nil)
         #expect(failureController.currentURL == URL(string: "about:blank"))
 
         await manager.handleEndpointState(endpointState)
@@ -347,6 +354,6 @@ struct DashboardReconnectTests {
         #expect(recoveredController !== failureController)
         #expect(!failureController.isWindowOpen)
         #expect(recoveredController.currentURL.absoluteString ==
-            replacementServer.url("/#token=route-b-device-token").absoluteString)
+            replacementServer.url("/").absoluteString)
     }
 }

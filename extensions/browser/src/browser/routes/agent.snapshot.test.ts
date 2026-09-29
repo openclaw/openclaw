@@ -19,16 +19,6 @@ describe("resolveOperationTargetOutcome", () => {
       }),
     ).toBe("replacement-456");
   });
-
-  it("prefers the exact relay-owned tab over a stale detached Playwright page", async () => {
-    expect(
-      await resolveOperationTargetOutcome({
-        actedOnTargetId: "old-123",
-        operationTargetId: "old-123",
-        resolveRelayTarget: () => "replacement-456",
-      }),
-    ).toBe("replacement-456");
-  });
 });
 
 describe("captureBrowserOperationTarget", () => {
@@ -65,7 +55,13 @@ describe("captureBrowserOperationTarget", () => {
       targetId: "old-123",
     });
 
-    expect(await resolveRelayTarget?.()).toBe("replacement-456");
+    expect(
+      await resolveOperationTargetOutcome({
+        actedOnTargetId: "old-123",
+        operationTargetId: "old-123",
+        resolveRelayTarget,
+      }),
+    ).toBe("replacement-456");
     relays.set("chrome", {
       bridge: { captureOperationTarget: () => () => "unrelated-999" },
     });

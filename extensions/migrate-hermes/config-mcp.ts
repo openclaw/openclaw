@@ -4,6 +4,7 @@ import { asPositiveFiniteNumber as readPositiveNumber } from "openclaw/plugin-sd
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import {
   asBoolean,
+  asOptionalRecord,
   isRecord,
   normalizeOptionalString,
   parseBooleanValue,
@@ -40,11 +41,7 @@ function hasUnsupportedToolPattern(pattern: string): boolean {
 }
 
 function mapHermesToolFilter(value: Record<string, unknown>): Record<string, unknown> | undefined {
-  const direct = isRecord(value.toolFilter)
-    ? value.toolFilter
-    : isRecord(value.tool_filter)
-      ? value.tool_filter
-      : undefined;
+  const direct = asOptionalRecord(value.toolFilter) ?? asOptionalRecord(value.tool_filter);
   if (direct) {
     const include = readToolFilterList(direct.include);
     const exclude = readToolFilterList(direct.exclude);
@@ -54,7 +51,7 @@ function mapHermesToolFilter(value: Record<string, unknown>): Record<string, unk
     return exclude !== undefined && exclude.length > 0 ? { exclude } : undefined;
   }
 
-  const tools = isRecord(value.tools) ? value.tools : undefined;
+  const tools = asOptionalRecord(value.tools);
   if (!tools) {
     return undefined;
   }
@@ -120,7 +117,7 @@ export function importsMcpSensitiveValues(
 }
 
 function mapHermesMcpOauth(value: Record<string, unknown>): Record<string, unknown> | undefined {
-  const oauth = isRecord(value.oauth) ? value.oauth : undefined;
+  const oauth = asOptionalRecord(value.oauth);
   if (!oauth) {
     return undefined;
   }
@@ -192,7 +189,7 @@ export function mapMcpServer(
   next.oauth = mapHermesMcpOauth(value);
   Object.assign(next, mapHermesClientCertificate(value));
   next.toolFilter = mapHermesToolFilter(value);
-  const tools = isRecord(value.tools) ? value.tools : undefined;
+  const tools = asOptionalRecord(value.tools);
   if (
     tools &&
     readToolFilterList(tools.include) === undefined &&
@@ -319,7 +316,7 @@ export function mcpManualItems(params: {
       "Configure an equivalent OpenClaw MCP authentication mode manually.",
     );
   }
-  const oauth = isRecord(raw.oauth) ? raw.oauth : undefined;
+  const oauth = asOptionalRecord(raw.oauth);
   if (auth === "oauth" || oauth) {
     add(
       "oauth-login",
@@ -341,7 +338,7 @@ export function mcpManualItems(params: {
     );
   }
 
-  const tools = isRecord(raw.tools) ? raw.tools : undefined;
+  const tools = asOptionalRecord(raw.tools);
   const include = tools ? readToolFilterList(tools.include) : undefined;
   const activePatterns = include ?? (tools ? readToolFilterList(tools.exclude) : undefined);
   if (activePatterns?.some(hasUnsupportedToolPattern)) {

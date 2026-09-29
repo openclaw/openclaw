@@ -1,6 +1,7 @@
 // Qa Lab tests cover tool coverage report plugin behavior.
 import { describe, expect, it } from "vitest";
-import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
+import type { RuntimeParityResult } from "./runtime-parity.js";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import {
   buildQaToolCoverageReport,

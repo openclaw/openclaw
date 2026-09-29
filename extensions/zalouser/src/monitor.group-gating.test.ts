@@ -2,22 +2,21 @@
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  sendDeliveredZalouserMock,
-  sendMessageZalouserMock,
-  sendSeenZalouserMock,
-  sendTypingZalouserMock,
-} from "./monitor.send.test-mocks.js";
+import { sendMessageZalouserMock } from "./monitor.send.test-mocks.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
   listZaloFriendsMock,
   listZaloGroupsMock,
   startZaloListenerMock,
+  sendZaloDeliveredEventMock as sendDeliveredZalouserMock,
+  sendZaloSeenEventMock as sendSeenZalouserMock,
+  sendZaloTypingEventMock as sendTypingZalouserMock,
 } from "./zalo-js.test-mocks.js";
 import { resolveZalouserAccountSync } from "./accounts.js";
 import {

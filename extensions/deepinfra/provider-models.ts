@@ -185,22 +185,8 @@ function manifestChatEntryToSurfaceModel(entry: ManifestChatModelEntry): DeepInf
   };
 }
 
-// Per-surface static fallback used only when no API key is configured or
-// live discovery fails. Kept deliberately minimal: the dynamic
-// `/v1/openai/models?sort_by=openclaw&filter=with_meta` projection is the
-// real source of truth (140 tagged rows today), so every retired model
-// removed from the DeepInfra catalog disappears here automatically the
-// next time discovery runs. Newer entries — additional image-gen models,
-// video-gen models, additional TTS voices — arrive through discovery
-// without a code change.
-//
-// Every entry below is verified against the live catalog at the time of
-// addition; entries are not pinned to historical shipped models if the
-// upstream provider has retired them (e.g. `run-diffusion/Juggernaut-
-// Lightning-Flux` was removed from DeepInfra and is therefore not listed
-// even though earlier main releases shipped it as a fallback).
+// Pre-auth/offline defaults; successful live discovery replaces this catalog.
 const STATIC_NON_CHAT_FALLBACK: DeepInfraSurfaceModel[] = [
-  // image-gen — representative subset of currently-served models.
   {
     id: "black-forest-labs/FLUX-1-schnell",
     name: "black-forest-labs/FLUX-1-schnell",
@@ -237,18 +223,13 @@ const STATIC_NON_CHAT_FALLBACK: DeepInfraSurfaceModel[] = [
     defaultHeight: 1024,
     defaultIterations: 4,
   },
-  // video-gen — DeepInfra has no live video-gen catalog rows today;
-  // intentionally empty here. Live discovery picks up text-to-video
-  // models as soon as the backend tags them, no static row required.
   ...DEEPINFRA_TTS_FALLBACK_CATALOG,
-  // stt
   {
     id: "openai/whisper-large-v3-turbo",
     name: "openai/whisper-large-v3-turbo",
     tags: ["stt"],
     pricing: { input_seconds: 0.00004 },
   },
-  // embed
   {
     id: "BAAI/bge-m3",
     name: "BAAI/bge-m3",
@@ -259,19 +240,14 @@ const STATIC_NON_CHAT_FALLBACK: DeepInfraSurfaceModel[] = [
   },
 ];
 
-function manifestFallbackCatalog(): DeepInfraDiscoveredCatalog {
+// Registration stays synchronous; live discovery feeds the capability catalog hooks.
+export function getDeepInfraSurfaceFallbackCatalog(): DeepInfraDiscoveredCatalog {
   const rawChat = (manifest.modelCatalog.providers.deepinfra.models ??
     []) as ManifestChatModelEntry[];
   const chatModels = rawChat.map(manifestChatEntryToSurfaceModel);
   const catalog = bucketBySurface([...chatModels, ...STATIC_NON_CHAT_FALLBACK]);
   catalog.live = false;
   return catalog;
-}
-
-// Sync per-surface fallback for the (sync) register callback. Media providers
-// register with these defaults; live discovery feeds the chat, image, and video catalog hooks.
-export function getDeepInfraSurfaceFallbackCatalog(): DeepInfraDiscoveredCatalog {
-  return manifestFallbackCatalog();
 }
 
 function chatSurfaceModelToModelDefinition(
@@ -314,7 +290,7 @@ export async function discoverDeepInfraSurfaces(
       log.warn(`Model metadata discovery unavailable: ${String(error)}`);
     }
   }
-  return manifestFallbackCatalog();
+  return getDeepInfraSurfaceFallbackCatalog();
 }
 
 async function loadDeepInfraSurfaces(): Promise<DeepInfraDiscoveredCatalog> {

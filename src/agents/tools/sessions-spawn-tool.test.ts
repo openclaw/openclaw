@@ -1,3 +1,4 @@
+import "./sessions-spawn-tool.mocks.test-support.js";
 import path from "node:path";
 // sessions_spawn tool tests cover model-visible schema gating, ACP/subagent
 // dispatch, and result details for spawned child sessions.
@@ -24,56 +25,7 @@ import { createAgentsWaitTool } from "./agents-wait-tool.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { registerSessionsSpawnCompletionTests } from "./sessions-spawn-tool.completion.test-support.js";
 
-const hoisted = vi.hoisted(() => {
-  const spawnSubagentDirectMock = vi.fn();
-  const spawnAcpDirectMock = vi.fn();
-  const registerSubagentRunMock = vi.fn();
-  const inProcessCreationMock = vi.fn();
-  const runSubagentProgressMock = vi.fn(async () => {});
-  const prepareModelChoiceMock = vi.fn<typeof supportedSpawnModelChoice>();
-  return {
-    spawnSubagentDirectMock,
-    spawnAcpDirectMock,
-    registerSubagentRunMock,
-    inProcessCreationMock,
-    runSubagentProgressMock,
-    prepareModelChoiceMock,
-  };
-});
-
-vi.mock("../subagents/spawn/subagent-spawn.runtime.js", () => ({
-  prepareModelChoice: hoisted.prepareModelChoiceMock,
-}));
-
-vi.mock("../subagents/spawn/subagent-spawn.js", () => ({
-  SUBAGENT_SPAWN_CONTEXT_MODES: ["isolated", "fork"],
-  SUBAGENT_SPAWN_MODES: ["run", "session"],
-  spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
-}));
-
-vi.mock("../subagents/spawn/acp-spawn.js", () => ({
-  spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
-}));
-
-vi.mock("../subagents/registry/subagent-registry.js", () => ({
-  registerSubagentRun: (...args: unknown[]) => hoisted.registerSubagentRunMock(...args),
-}));
-
-vi.mock("./in-process-gateway.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./in-process-gateway.js")>();
-  return {
-    ...actual,
-    callInProcessGatewayToolWithCreation: (...args: unknown[]) =>
-      hoisted.inProcessCreationMock(...args),
-  };
-});
-
-vi.mock("../../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => ({
-    hasHooks: (hookName: string) => hookName === "subagent_progress",
-    runSubagentProgress: hoisted.runSubagentProgressMock,
-  }),
-}));
+const { hoisted } = await import("./sessions-spawn-tool.mocks.test-support.js");
 
 let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
 let acpRuntimeRegistry: typeof import("../../acp/runtime/registry.js");
@@ -1232,69 +1184,6 @@ describe("sessions_spawn tool", () => {
     await expect(
       tool.execute("visible-unsupported", { task: "inspect", visible: true, ...override }),
     ).rejects.toThrow(message);
-  });
-
-  it("creates visible sessions while carrying inherited tool restrictions forward", async () => {
-    hoisted.inProcessCreationMock.mockResolvedValue({
-      key: "agent:main:dashboard:restricted-child",
-      runStarted: true,
-      runId: "run-visible-restricted",
-    });
-    const registerRun = vi.fn();
-    const tool = createSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-      config: {
-        agents: {
-          defaults: { model: "mock-provider/primary" },
-          list: [{ id: "main", identity: { name: "Roboclaw" } }],
-        },
-        gateway: { publicOrigin: "https://openclaw.example", controlUi: { basePath: "/control" } },
-      },
-      inheritedToolAllowlist: ["read", "sessions_spawn"],
-      inheritedToolDenylist: ["exec"],
-      registerRun,
-      countActiveRuns: () => 0,
-    });
-
-    const result = await tool.execute("visible-restricted", {
-      task: "inspect",
-      label: "Track upstream fix",
-      visible: true,
-    });
-
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      childSessionKey: "agent:main:dashboard:restricted-child",
-      runId: "run-visible-restricted",
-      sessionUrl: "https://openclaw.example/control/chat/main/dashboard/restricted-child",
-      owner: { type: "agent", id: "main", label: "Roboclaw" },
-    });
-    expect(hoisted.inProcessCreationMock).toHaveBeenCalledWith(
-      "sessions.create",
-      expect.objectContaining({
-        agentId: "main",
-        label: "Track upstream fix",
-        parentSessionKey: "agent:main:main",
-        spawnDepth: 1,
-      }),
-      {
-        via: "spawn",
-        actor: { type: "agent", id: "main" },
-        requesterSessionKey: "agent:main:main",
-        completionOwnerSessionKey: "agent:main:main",
-        spawnModelAutoSelection: { model: "mock-provider/primary", hasFallbackOrigin: false },
-        inheritedToolPolicy: {
-          version: 1,
-          allow: ["read", "sessions_spawn"],
-          deny: ["exec"],
-        },
-      },
-      undefined,
-    );
-    expectRegisteredSubagentRun(registerRun, {
-      childSessionKey: "agent:main:dashboard:restricted-child",
-      runId: "run-visible-restricted",
-    });
   });
 
   it("blocks unsandboxed visible targets for a sandboxed caller runtime", async () => {

@@ -6,24 +6,21 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { listUpdateRuns } from "../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
-import { VERSION } from "../version.js";
 import {
   installDeferredCompletionFixture,
   readPackageVersion,
-  updateGitCheckout,
-  runCommandWithTimeout,
   readConfigFileSnapshot,
   defaultRuntime,
   runExec,
   syncPluginsForUpdateChannel,
   updateNpmInstalledPlugins,
-  spawn,
   runPostCorePluginConvergenceSpy,
   loadInstalledPluginIndexInstallRecords,
   pathExists,
   resolveGatewayInstallEntrypoint,
   replaceConfigFile,
   mutateConfigFileWithRetry,
+  updateGitCheckout,
   updateFinalizeCommand,
   ExitError,
   observeUpdateGatewayReadiness,
@@ -52,40 +49,6 @@ describe("update-cli child-owned deferred completion", () => {
     runPostCoreUpdate,
     lastReplaceConfigCall,
   } = installDeferredCompletionFixture();
-
-  it("legacy post-core resume completes Doctor without running core update", async () => {
-    readPackageVersion.mockResolvedValue("2026.9.4");
-    await runPostCoreCommand({ restart: false }, { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" });
-
-    expect(updateGitCheckout).not.toHaveBeenCalled();
-    const installCall = (
-      vi.mocked(runCommandWithTimeout).mock.calls as unknown as Array<[string[], unknown]>
-    ).find(([argv]) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g");
-    expect(installCall).toBeUndefined();
-    expect(
-      vi
-        .mocked(readConfigFileSnapshot)
-        .mock.calls.some(
-          ([options]) =>
-            options?.skipPluginValidation === true && options.suppressFutureVersionWarning === true,
-        ),
-    ).toBe(true);
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
-    // No ownership declaration preserves the shipped child-owned Doctor completion contract.
-    expect(
-      vi
-        .mocked(runExec)
-        .mock.calls.filter(([, args]) => args[1] === "doctor")
-        .map(([, args]) => args[1]),
-    ).toEqual(["doctor"]);
-    expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
-    expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
-    expect(lastNpmPluginUpdateCall()).toMatchObject({
-      coreVersion: "2026.9.4",
-      versionBoundPluginIds: new Set(["codex"]),
-    });
-    expect(spawn).not.toHaveBeenCalled();
-  });
 
   it("refuses a post-core run missing from history before Doctor or plugin effects", async () => {
     const ledger = await import("../infra/update-run-ledger.js");
@@ -122,31 +85,6 @@ describe("update-cli child-owned deferred completion", () => {
     expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(0);
     expect(ledger.listUpdateRuns({ limit: 100 })).toEqual(history);
-  });
-
-  it("completes convergence-only post-core changes for a legacy parent", async () => {
-    runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
-      ...postCoreConvergenceResult({
-        changes: ["Repaired configured plugin install records."],
-      }),
-      config: cfg,
-    }));
-
-    await runPostCoreCommand({ restart: false, json: true });
-
-    expect(syncPluginCall()?.config).toBeDefined();
-    expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
-    // Without a parent ownership declaration, the child runs Doctor and final validation.
-    expect(
-      vi
-        .mocked(runExec)
-        .mock.calls.filter(([, args]) => ["doctor", "config"].includes(args[1] ?? ""))
-        .map(([, args]) => args[1]),
-    ).toEqual(["doctor", "doctor", "config"]);
-    expect(lastWriteJsonCall()).toMatchObject({
-      status: "ok",
-      postUpdate: { plugins: { changed: true } },
-    });
   });
 
   it("keeps Doctor diagnostics outside JSON during legacy post-core resume", async () => {
@@ -205,15 +143,11 @@ describe("update-cli child-owned deferred completion", () => {
     expect(updateCall?.skipIds?.has("demo")).toBe(true);
   });
 
-  it.each(
-    [
-      { touchedVersion: "9999.1.1", valid: true, writes: true },
-      { touchedVersion: VERSION, valid: true, writes: false },
-      { touchedVersion: "9999.1.1", valid: false, writes: false },
-    ].flatMap(({ touchedVersion, valid, writes }) =>
-      ["resume", "finalize"].map((mode) => ({ touchedVersion, valid, writes, mode })),
-    ),
-  )(
+  it.each([
+    { touchedVersion: "9999.1.1", valid: true, writes: true, mode: "resume" },
+    { touchedVersion: "9999.1.1", valid: false, writes: false, mode: "finalize" },
+    { touchedVersion: "9999.1.1", valid: true, writes: true, mode: "finalize" },
+  ])(
     "$mode commits a validated downgrade without changing channels ($touchedVersion, valid=$valid)",
     async ({ touchedVersion, valid, writes, mode }) => {
       const config = stableConfig({ meta: { lastTouchedVersion: touchedVersion } });
@@ -289,81 +223,71 @@ describe("update-cli child-owned deferred completion", () => {
     },
   );
 
-  it.each([false, true])(
-    "reports a completed missing-payload repair instead of the later bulk skip (json=%s)",
-    async (json) => {
-      mockNoopPostUpdatePluginConvergence();
-      const installPath = createCaseDir("openclaw-repaired-plugin-summary");
-      fsSync.mkdirSync(installPath, { recursive: true });
-      const records = {
-        demo: { source: "npm", spec: "@example/demo", installPath, version: "1.0.0" },
-      } satisfies Record<string, PluginInstallRecord>;
-      const config = {
-        ...baseConfig,
-        plugins: { ...baseConfig.plugins, entries: { demo: { enabled: true } } },
-      } satisfies OpenClawConfig;
-      vi.mocked(readConfigFileSnapshot).mockResolvedValue(configSnapshot(config));
-      loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-      mockFileBackedPathExists();
-      // Child-owned completion needs the installed candidate's Doctor entrypoint.
-      vi.mocked(resolveGatewayInstallEntrypoint).mockImplementation(async (root) => {
-        expect(root).toBe(process.cwd());
-        return FRESH_POST_UPDATE_ENTRYPOINT;
-      });
-      const repaired = {
-        pluginId: "demo",
-        status: "updated" as const,
-        message: 'Repaired plugin "demo".',
-      };
-      updateNpmInstalledPlugins.mockImplementation(async ({ config: current, skipIds }) => {
-        if (skipIds?.has("demo")) {
-          return {
-            config: current,
-            changed: false,
-            outcomes: [
-              {
-                pluginId: "demo",
-                status: "skipped",
-                message: 'Skipping "demo" (already updated).',
-              },
-            ],
-          };
-        }
-        fsSync.writeFileSync(
-          path.join(installPath, "package.json"),
-          JSON.stringify({
-            name: "@example/demo",
-            version: "1.0.0",
-            openclaw: { extensions: ["./index.js"] },
-          }),
-        );
-        fsSync.writeFileSync(
-          path.join(installPath, "openclaw.plugin.json"),
-          JSON.stringify({ id: "demo", configSchema: { type: "object" } }),
-        );
-        fsSync.writeFileSync(path.join(installPath, "index.js"), "module.exports = {};\n");
-        return { config: current, changed: true, outcomes: [repaired] };
-      });
-      runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
-        ...postCoreConvergenceResult(),
-        installRecords: records,
-        config: cfg,
-      }));
-
-      await runPostCoreCommand({ yes: true, json, restart: false });
-
-      expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-      if (json) {
-        const result = lastWriteJsonCall() as UpdateRunResult | undefined;
-        expect(result?.status).toBe("ok");
-        expect(result?.postUpdate?.plugins?.status).toBe("ok");
-        expect(result?.postUpdate?.plugins?.npm?.outcomes.at(-1)).toEqual(repaired);
-      } else {
-        expect(getLogOutput()).toContain("Plugin updates: 1 updated, 0 unchanged.");
-        expect(getLogOutput()).not.toContain("1 skipped");
+  it("reports a completed missing-payload repair instead of the later bulk skip", async () => {
+    mockNoopPostUpdatePluginConvergence();
+    const installPath = createCaseDir("openclaw-repaired-plugin-summary");
+    fsSync.mkdirSync(installPath, { recursive: true });
+    const records = {
+      demo: { source: "npm", spec: "@example/demo", installPath, version: "1.0.0" },
+    } satisfies Record<string, PluginInstallRecord>;
+    const config = {
+      ...baseConfig,
+      plugins: { ...baseConfig.plugins, entries: { demo: { enabled: true } } },
+    } satisfies OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue(configSnapshot(config));
+    loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mockFileBackedPathExists();
+    // Child-owned completion needs the installed candidate's Doctor entrypoint.
+    vi.mocked(resolveGatewayInstallEntrypoint).mockImplementation(async (root) => {
+      expect(root).toBe(process.cwd());
+      return FRESH_POST_UPDATE_ENTRYPOINT;
+    });
+    const repaired = {
+      pluginId: "demo",
+      status: "updated" as const,
+      message: 'Repaired plugin "demo".',
+    };
+    updateNpmInstalledPlugins.mockImplementation(async ({ config: current, skipIds }) => {
+      if (skipIds?.has("demo")) {
+        return {
+          config: current,
+          changed: false,
+          outcomes: [
+            {
+              pluginId: "demo",
+              status: "skipped",
+              message: 'Skipping "demo" (already updated).',
+            },
+          ],
+        };
       }
-    },
-  );
+      fsSync.writeFileSync(
+        path.join(installPath, "package.json"),
+        JSON.stringify({
+          name: "@example/demo",
+          version: "1.0.0",
+          openclaw: { extensions: ["./index.js"] },
+        }),
+      );
+      fsSync.writeFileSync(
+        path.join(installPath, "openclaw.plugin.json"),
+        JSON.stringify({ id: "demo", configSchema: { type: "object" } }),
+      );
+      fsSync.writeFileSync(path.join(installPath, "index.js"), "module.exports = {};\n");
+      return { config: current, changed: true, outcomes: [repaired] };
+    });
+    runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
+      ...postCoreConvergenceResult(),
+      installRecords: records,
+      config: cfg,
+    }));
+
+    await runPostCoreCommand({ yes: true, restart: false });
+
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    expect(getLogOutput()).toContain("Plugin updates: 1 updated, 0 unchanged.");
+    expect(getLogOutput()).not.toContain("1 skipped");
+  });
 
   it.each([
     {

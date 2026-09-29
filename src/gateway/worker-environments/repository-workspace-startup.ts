@@ -153,15 +153,12 @@ export async function syncSessionRepositoryWorkspace(params: {
     await reconciliation.verifyStable();
     await reconciliation.verifyLocalStable();
     params.assertCurrent();
-    if (!reconciliation.publishStagedResult) {
-      throw new Error("Repository preparation did not stage a durable checkpoint");
-    }
     await reconciliation.publishStagedResult();
     params.assertCurrent();
     return { ...synced, manifestRef: reconciliation.manifestRef };
   } finally {
     try {
-      await reconciliation?.discardPreparedStagedResult?.();
+      await reconciliation?.discardPreparedStagedResult();
     } finally {
       await quiescence.resume();
     }
