@@ -429,6 +429,72 @@ describe("dispatch Stop before provider allocation", () => {
     },
   );
 
+  it("fences a new turn during dispatch preflight and reopens admission after cancellation", async () => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    workspace.preflight.mockImplementation(async ({ signal }: { signal?: AbortSignal }) => {
+      entered.resolve();
+      await release.promise;
+      signal?.throwIfAborted();
+    });
+    const provider = support.createProvider();
+    const environments = support.createService(provider);
+    const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+    const revokeSessionAuthority = vi.fn();
+    const runtime = createGatewayWorkerPlacementRuntime({
+      getCommittedRuntimeConfig: getRuntimeConfig,
+      placements,
+      environments,
+      gatewayNamespace: "gateway-test",
+      warn: vi.fn(),
+      cancelSessionWork: vi.fn(async () => {}),
+      revokeSessionAuthority,
+    });
+    const controller = new AbortController();
+    const canceled = new Error("dispatch canceled during preflight");
+    const dispatch = runtime.dispatchService.dispatch(
+      REQUEST,
+      undefined,
+      undefined,
+      controller.signal,
+    );
+    const dispatchResult = expect(dispatch).rejects.toThrow(canceled);
+    await entered.promise;
+    const assertAllowed = vi.fn();
+    const onInterrupt = vi.fn();
+    const pending = beginSessionWorkAdmission({
+      scope: `${support.testState.root}/sessions.sqlite`,
+      identities: [REQUEST.sessionId],
+      assertAllowed,
+      onInterrupt,
+    });
+    try {
+      // An unrelated admission crosses the same store writer while this turn
+      // remains fenced, without a timer or polling the pending promise.
+      const unrelated = await beginSessionWorkAdmission({
+        scope: `${support.testState.root}/sessions.sqlite`,
+        identities: ["unrelated-session"],
+        assertAllowed: () => {},
+      });
+      unrelated.release();
+      expect(assertAllowed).not.toHaveBeenCalled();
+      expect(placements.get(REQUEST.sessionId)).toBeUndefined();
+      controller.abort(canceled);
+    } finally {
+      release.resolve();
+    }
+    await dispatchResult;
+    const admission = await pending;
+    try {
+      expect(assertAllowed).toHaveBeenCalled();
+      expect(onInterrupt).not.toHaveBeenCalled();
+      expect(revokeSessionAuthority).not.toHaveBeenCalled();
+      expect(placements.get(REQUEST.sessionId)).toBeUndefined();
+    } finally {
+      admission.release();
+    }
+  });
+
   it("does not cancel an ordinary local session without an in-flight dispatch", async () => {
     const environments = support.createService(support.createProvider());
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });

@@ -12,6 +12,7 @@ import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-sch
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import {
   interruptSessionWorkAdmissions,
+  isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../sessions/session-lifecycle-admission.js";
@@ -306,6 +307,13 @@ export function createGatewayWorkerPlacementRuntime(
             if (resolveWorkerPlacementExecutionMode(currentRuntime) !== executionMode) {
               throw new WorkerDispatchTargetChangedError(
                 `Session ${sessionKey} runtime changed to ${currentRuntime} before cloud worker dispatch. Retry.`,
+              );
+            }
+            // The lifecycle fence blocks new turns; exclude dispatch's own admission
+            // (and an initiating redispatch turn) before any placement or queue changes.
+            if (isCompetingSessionWorkAdmissionActive(target.storePath, lifecycleIdentities)) {
+              throw new Error(
+                `Session ${sessionKey} is busy with active work; wait for the turn to finish and retry dispatch.`,
               );
             }
             if (workspace.kind === "local") {
