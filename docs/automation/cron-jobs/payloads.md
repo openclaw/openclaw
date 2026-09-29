@@ -229,6 +229,25 @@ Changing a running job's script payload or saved state protects that edit from
 the old script's returned state, including when completion is recovered after a
 Gateway restart. The completed run still retains its history.
 
+## Authoring recurring jobs
+
+A recurring job re-runs the same instructions on every fire, so anything the model
+works out from scratch costs the same time and tokens each run. Keep the model for
+judgment and move the repeatable parts into code:
+
+- Put listing and diffing, dedupe, checkpoints or watermarks, and failure counting in
+  a workspace script that the payload runs in a single `exec` call.
+- Have the message name the exact tool ids and argument shapes the run should use,
+  instead of asking the model to discover them.
+- Cap `toolsAllow` to the tools the run actually needs.
+- When a script can decide there is nothing to do, use a condition trigger, a
+  [command payload](#command-payloads), or a [script payload](#script-payloads) so
+  quiet fires skip the model. Triggers and script payloads are unavailable when
+  `cron.triggers.enabled` is `false`.
+- Record transient failures, such as one source timing out once, and stay silent.
+  Do not post raw errors to the user from inside the run; repeated failures reach
+  the user through [failure notifications](/automation/cron-jobs/delivery#failure-notifications).
+
 ## Execution styles
 
 ### Codex apps in scheduled automations
