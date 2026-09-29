@@ -278,9 +278,7 @@ serveOwnedWorkerTasks(
       }
       if (request.kind === "session-entry-current") {
         const { readSessionEntryCurrentFacts } = await import("./session-entry-read.worker.js");
-        return await withHistoryDatabase(request.database, request.kind, () =>
-          readSessionEntryCurrentFacts(request),
-        );
+        return readSessionEntryCurrentFacts(request);
       }
       if (request.kind === "session-row-backfill") {
         const { readSessionRowTranscriptFields } =
