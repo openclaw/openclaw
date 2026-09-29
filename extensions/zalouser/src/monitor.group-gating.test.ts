@@ -353,7 +353,12 @@ async function processMessageThroughMonitor(params: {
       ingressQueue,
     });
     try {
-      await Promise.race([processed, run]);
+      await Promise.race([
+        processed,
+        run.then(() => {
+          throw new Error("Zalouser monitor exited before fixture messages were processed");
+        }),
+      ]);
     } finally {
       abortController.abort();
       await run;
