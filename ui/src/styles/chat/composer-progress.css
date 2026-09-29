@@ -560,14 +560,8 @@
   gap: 16px;
 }
 
-.session-progress-card--composer[open] .session-progress-card__summary-collapsed {
-  display: none;
-}
-
-.session-progress-card--composer[open] .session-progress-card__summary-indicator {
-  display: none;
-}
-
+.session-progress-card--composer[open] .session-progress-card__summary-collapsed,
+.session-progress-card--composer[open] .session-progress-card__summary-indicator,
 .session-progress-card--composer[open] .session-progress-card__summary-count--collapsed {
   display: none;
 }

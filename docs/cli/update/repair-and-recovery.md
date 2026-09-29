@@ -99,6 +99,42 @@ its parent Gateway process. Diagnosis preserves that refusal: it does not stop t
 Gateway, retry the update, or bypass safety checks. See
 [Update troubleshooting](/install/update-troubleshooting).
 
+### Original state captures
+
+Before a fresh direct CLI update writes runtime state, the installed updater attempts to
+retain the original config, its includes, local databases, and declared plugin
+migration resources. The capture stays beside the selected state directory in
+`<state-directory>.update-captures/<run-id>`. Doctor continuations keep the same
+capture; they do not replace it with already migrated state. State-directory
+relocation leaves its original location and recorded paths intact.
+Inherited control-plane and managed-helper runs retain their existing capture
+behavior. Standalone `doctor --fix` preserves a separate pre-repair copy; that
+copy does not replace an earlier update's originals.
+
+These captures are evidence for manual recovery. Active writers can change state
+during capture; an observed change leaves the capture incomplete and produces a
+warning. The set is not an atomic snapshot across active stores. Missing,
+unreadable, or incomplete captures do not establish a safe
+rollback point. The updater process keeps optional debug-proxy persistence
+disabled because its update history can use an older database schema. Doctor
+can resume capture after preserving the originals and admitting the repaired
+schema. A successful update that skips Doctor can therefore leave local HTTP
+tracing disabled for that invocation.
+Direct updates, including `--dry-run`, report this limitation when debug capture
+is enabled.
+
+Use `openclaw update status --json` to inspect retained evidence. Runtime rollback
+does not prove that an earlier original capture was restored. Status reports that
+capture as restored only when the restoration evidence identifies its manifest.
+Standalone Doctor copies appear as `manual`; their presence does not record a
+successful or failed repair. An unfinished capture appears as `incomplete`
+alongside valid captures, with its directory and no sealed manifest reference.
+Keep current data and inspect the originals before attempting restoration.
+Older installed updaters may not preserve or forward an original capture; a
+newer Doctor reports that limitation instead of treating current bytes as the
+pre-update state. Take a [verified backup](/install/updating#before-updating-create-a-verified-backup)
+before an upgrade when you need a complete recovery copy.
+
 ### Retained updater runtime
 
 An update can retain its running code in an `openclaw-update-runtime-*` directory

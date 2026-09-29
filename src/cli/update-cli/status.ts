@@ -47,13 +47,22 @@ async function readUpdateRecoverySetStatus() {
       await import("../../infra/update-recovery-backup-status.js");
     const sets = await inspectUpdateRecoveryBackups();
     return {
-      recoverySets: sets.map(({ ref, runId, status, message, nextAction }) => ({
-        runId,
-        manifestPath: ref.manifestPath,
-        status,
-        message,
-        nextAction,
-      })),
+      recoverySets: sets.map((set) =>
+        set.status === "incomplete"
+          ? {
+              directory: set.directory,
+              status: set.status,
+              message: set.message,
+              nextAction: set.nextAction,
+            }
+          : {
+              runId: set.runId,
+              manifestPath: set.ref.manifestPath,
+              status: set.status,
+              message: set.message,
+              nextAction: set.nextAction,
+            },
+      ),
     };
   } catch (error) {
     return { recoverySetsError: formatErrorMessage(error) };
@@ -402,8 +411,14 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     defaultRuntime.log("");
   } else {
     for (const set of recoveryStatus.recoverySets) {
-      defaultRuntime.log(safeMessage(`Update recovery set ${set.runId}: ${set.status}`));
-      defaultRuntime.log(safeMessage(set.manifestPath));
+      if (set.status === "incomplete") {
+        defaultRuntime.log("Update capture: incomplete");
+        defaultRuntime.log(safeMessage(set.directory));
+      } else {
+        const label = set.status === "manual" ? "Doctor capture" : "Update recovery set";
+        defaultRuntime.log(safeMessage(`${label} ${set.runId}: ${set.status}`));
+        defaultRuntime.log(safeMessage(set.manifestPath));
+      }
       defaultRuntime.log(safeMessage(set.message));
       defaultRuntime.log(safeMessage(`Next action: ${set.nextAction}`));
       defaultRuntime.log("");

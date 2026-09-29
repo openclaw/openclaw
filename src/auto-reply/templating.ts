@@ -532,13 +532,12 @@ function formatTemplateValue(value: unknown): string {
   if (Array.isArray(value)) {
     return value
       .flatMap((entry) => {
-        if (entry == null) {
-          return [];
-        }
-        if (typeof entry === "string") {
-          return [entry];
-        }
-        if (typeof entry === "number" || typeof entry === "boolean" || typeof entry === "bigint") {
+        if (
+          typeof entry === "string" ||
+          typeof entry === "number" ||
+          typeof entry === "boolean" ||
+          typeof entry === "bigint"
+        ) {
           return [String(entry)];
         }
         return [];

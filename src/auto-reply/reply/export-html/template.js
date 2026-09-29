@@ -188,17 +188,8 @@
 
       const children = getChildren(node);
       const multipleChildren = children.length > 1;
-      let childIndent;
-      if (multipleChildren) {
-        // Parent branches: children get +1
-        childIndent = indent + 1;
-      } else if (justBranched && indent > 0) {
-        // First generation after a branch: +1 for visual grouping
-        childIndent = indent + 1;
-      } else {
-        // Single-child chain: stay flat
-        childIndent = indent;
-      }
+      // Indent branches and their first generation; single-child chains stay flat.
+      const childIndent = multipleChildren || (justBranched && indent > 0) ? indent + 1 : indent;
 
       // Build gutters for children
       const connectorDisplayed = showConnector && !isVirtualRootChild;
@@ -647,7 +638,10 @@
               `<span class="tree-role-tool">${escapeHtml(formatToolCall(toolCall.name, toolCall.arguments))}</span>`
             );
           }
-          return labelHtml + `<span class="tree-role-tool">[${escapeHtml(msg.toolName || "tool")}]</span>`;
+          return (
+            labelHtml +
+            `<span class="tree-role-tool">[${escapeHtml(msg.toolName || "tool")}]</span>`
+          );
         }
         if (msg.role === "bashExecution") {
           const cmd = truncate(normalize(msg.command || ""));
@@ -677,7 +671,10 @@
       case "model_change":
         return labelHtml + `<span class="tree-muted">[model: ${escapeHtml(entry.modelId)}]</span>`;
       case "thinking_level_change":
-        return labelHtml + `<span class="tree-muted">[thinking: ${escapeHtml(entry.thinkingLevel)}]</span>`;
+        return (
+          labelHtml +
+          `<span class="tree-muted">[thinking: ${escapeHtml(entry.thinkingLevel)}]</span>`
+        );
       default:
         return labelHtml + `<span class="tree-muted">[${escapeHtml(entry.type)}]</span>`;
     }
@@ -865,9 +862,7 @@
 
   function highlightCode(code, lang) {
     try {
-      return lang
-        ? hljs.highlight(code, { language: lang }).value
-        : hljs.highlightAuto(code).value;
+      return lang ? hljs.highlight(code, { language: lang }).value : hljs.highlightAuto(code).value;
     } catch {
       return escapeHtml(code);
     }
@@ -877,7 +872,7 @@
     if (lang) {
       return highlightCode(lines.join("\n"), lang);
     }
-    return lines.map((line) => `<div>${escapeHtml(replaceTabs(line))}</div>`).join("");
+    return lines.map((line) => `<div>${escapeHtml(line)}</div>`).join("");
   }
 
   function formatExpandableOutput(text, maxLines, lang) {
@@ -1069,7 +1064,6 @@
   function buildShareUrl(entryId) {
     // Check for injected base URL (used when loaded in iframe via srcdoc)
     const baseUrlMeta = document.querySelector('meta[name="openclaw-share-base-url"]');
-    const baseUrl = baseUrlMeta ? baseUrlMeta.content : window.location.href.split("?")[0];
 
     const url = new URL(window.location.href);
     // Find the gist ID (first query param without value, e.g., ?abc123)
@@ -1081,7 +1075,7 @@
 
     // If we have an injected base URL (iframe context), use it directly
     if (baseUrlMeta) {
-      return `${baseUrl}&${params.toString()}`;
+      return `${baseUrlMeta.content}&${params.toString()}`;
     }
 
     // Otherwise build from current location (direct file access)
@@ -1283,7 +1277,9 @@
               cost.cacheWrite += msg.usage.cost.cacheWrite || 0;
             }
           }
-          toolCalls += (Array.isArray(msg.content) ? msg.content : []).filter((c) => c.type === "toolCall").length;
+          toolCalls += (Array.isArray(msg.content) ? msg.content : []).filter(
+            (c) => c.type === "toolCall",
+          ).length;
         }
         if (msg.role === "toolResult") {
           toolResults++;
@@ -1335,7 +1331,7 @@
       ["customMessages", "custom"],
       ["compactions", "compactions"],
       ["branchSummaries", "branch summaries"],
-    ].flatMap(([key, label]) => globalStats[key] ? [`${globalStats[key]} ${label}`] : []);
+    ].flatMap(([key, label]) => (globalStats[key] ? [`${globalStats[key]} ${label}`] : []));
 
     let html = "";
     if (warning) {

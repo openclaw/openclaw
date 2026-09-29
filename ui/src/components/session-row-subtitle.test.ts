@@ -19,7 +19,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session: workSession(),
         hasDisplay: true,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: undefined,
@@ -32,7 +31,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session: { ...workSession(), status: "running" },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: "Still running",
@@ -45,7 +43,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session: { ...workSession(), hasActiveRun: true, status: "queued" },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: undefined,
@@ -65,7 +62,6 @@ describe("resolveSidebarSessionSubtitle", () => {
             status: "running",
           },
           hasDisplay: false,
-          displaySubtitle: undefined,
           sidebarLiveActivity: true,
           showPreview: false,
           narrationLine: "Using bash",
@@ -91,7 +87,6 @@ describe("resolveSidebarSessionSubtitle", () => {
           status: "running",
         },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: false,
         narrationLine: undefined,
@@ -111,7 +106,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session: { ...workSession(), hasActiveRun: true, status: "queued" },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: false,
         narrationLine: undefined,
@@ -139,7 +133,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session: { ...session, ...overrides },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: "Using test runner",
@@ -160,7 +153,6 @@ describe("resolveSidebarSessionSubtitle", () => {
           observerDigest: undefined,
         },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: "Using test runner",
@@ -180,7 +172,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session,
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: "Using test runner",
@@ -220,7 +211,6 @@ describe("resolveSidebarSessionSubtitle", () => {
           lastReadAt: 1_999,
         },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: undefined,
@@ -244,7 +234,6 @@ describe("resolveSidebarSessionSubtitle", () => {
           lastReadAt: 2_000,
         },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: undefined,
@@ -269,7 +258,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session: { ...session, ...overrides },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: undefined,
@@ -303,7 +291,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session,
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: "Running the focused tests",
@@ -323,7 +310,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session,
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: false,
         narrationLine,

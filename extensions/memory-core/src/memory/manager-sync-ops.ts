@@ -312,7 +312,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         const targetedSessionSync = await runMemoryTargetedSessionSync({
           hasSessionSource: this.sources.has("sessions"),
           targetArchiveFiles,
-          reason: params?.reason,
           progress: progress ?? undefined,
           sessionsFullRetryDirty: this.sessionsFullRetryDirty,
           sessionsReconcileDirty: this.sessionsReconcileDirty,
@@ -323,7 +322,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
               corpusEntries: targetSessionSync?.corpusEntries,
             });
           },
-          shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
           activateFallbackProvider: async (reason) => {
             this.endSyncProviderGeneration();
             return await this.activateFallbackProvider(reason);
@@ -364,7 +362,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       } catch (err) {
         this.dirty ||= this.sources.has("memory");
         const reason = formatErrorMessage(err);
-        const shouldFallback = this.shouldFallbackOnError(err);
+        const shouldFallback = isMemoryEmbeddingOperationError(err);
         if (shouldFallback) {
           // A failed generation cannot wait on its own sync lease while activating fallback.
           this.endSyncProviderGeneration();
@@ -382,7 +380,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           }
           return;
         }
-        if (!this.provider && this.fts.enabled && this.shouldFallbackOnError(err)) {
+        if (!this.provider && this.fts.enabled && isMemoryEmbeddingOperationError(err)) {
           this.syncOutcomes.recordActiveFailure(err);
           log.warn(`memory embeddings unavailable; leaving memory index dirty: ${reason}`);
           return;
@@ -396,10 +394,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         await this.pruneEmbeddingCacheIfNeeded();
       }
     }
-  }
-
-  protected shouldFallbackOnError(err: unknown): boolean {
-    return isMemoryEmbeddingOperationError(err);
   }
 
   protected resolveBatchConfig(): MemoryEmbeddingBatchConfig {
@@ -619,7 +613,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       // cache only after successful publication so failed rebuilds retain their work.
       await this.pruneEmbeddingCacheIfNeeded();
     } catch (err) {
-      this.restoreReindexRetryState(originalRetryState);
+      this.adoptReindexRetryState(originalRetryState);
       this.markFailedFullReindexRetry({
         memory: shouldRetryMemoryOnFailure,
         sessions: shouldRetrySessionsOnFailure,

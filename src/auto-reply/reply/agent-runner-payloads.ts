@@ -194,23 +194,19 @@ export async function buildReplyPayloads(params: {
         text = formatBunFetchSocketError(text);
       }
 
-      if (!text || !text.includes("HEARTBEAT_OK")) {
-        sanitizedPayloads.push(
-          copyPayloadWithSanitizedText(payload, text, params.conversationContext),
-        );
-        continue;
-      }
-      const stripped = stripHeartbeatToken(text, { mode: "message" });
-      if (stripped.didStrip && !didLogHeartbeatStrip) {
-        didLogHeartbeatStrip = true;
-        logVerbose("Stripped stray HEARTBEAT_OK token from reply");
-      }
-      const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
-      if (stripped.shouldSkip && !hasMedia) {
-        continue;
+      if (text?.includes("HEARTBEAT_OK")) {
+        const stripped = stripHeartbeatToken(text, { mode: "message" });
+        if (stripped.didStrip && !didLogHeartbeatStrip) {
+          didLogHeartbeatStrip = true;
+          logVerbose("Stripped stray HEARTBEAT_OK token from reply");
+        }
+        if (stripped.shouldSkip && !resolveSendableOutboundReplyParts(payload).hasMedia) {
+          continue;
+        }
+        text = stripped.text;
       }
       sanitizedPayloads.push(
-        copyPayloadWithSanitizedText(payload, stripped.text, params.conversationContext),
+        copyPayloadWithSanitizedText(payload, text, params.conversationContext),
       );
     }
   }
@@ -419,9 +415,8 @@ export async function buildReplyPayloads(params: {
       params.blockReplyPipeline?.hasSentPayload(textOnlyPayload) ||
       params.blockReplyPipeline?.isFinalPayloadRetryBlocked?.(
         copyReplyPayloadMetadata(payload, { text: payload.text }),
-      )
-        ? true
-        : isDirectTextRetryBlocked(textOnlyPayload);
+      ) ||
+      isDirectTextRetryBlocked(textOnlyPayload);
     if (!textShouldBeOmitted) {
       return payload;
     }
@@ -431,21 +426,19 @@ export async function buildReplyPayloads(params: {
       audioAsVoice: payload.audioAsVoice || undefined,
     });
   };
-  const contentSuppressedPayloads = shouldDropFinalPayloads
-    ? dedupedPayloads.flatMap((payload) => preserveUnsentMediaAfterBlockSend(payload) ?? [])
-    : params.blockStreamingEnabled
-      ? dedupedPayloads.flatMap((payload) =>
-          params.blockReplyPipeline?.hasSentPayload(payload) || isDirectBlockRetryBlocked(payload)
-            ? []
-            : (preserveUnsentMediaAfterBlockSend(payload) ?? []),
-        )
-      : retryBlockedDirectPayloads.length > 0
-        ? dedupedPayloads.flatMap((payload) =>
-            isDirectBlockRetryBlocked(payload)
-              ? []
-              : (preserveUnsentMediaAfterBlockSend(payload) ?? []),
-          )
-        : dedupedPayloads;
+  const contentSuppressedPayloads =
+    shouldDropFinalPayloads || params.blockStreamingEnabled || retryBlockedDirectPayloads.length > 0
+      ? dedupedPayloads.flatMap((payload) => {
+          if (
+            !shouldDropFinalPayloads &&
+            ((params.blockStreamingEnabled && params.blockReplyPipeline?.hasSentPayload(payload)) ||
+              isDirectBlockRetryBlocked(payload))
+          ) {
+            return [];
+          }
+          return preserveUnsentMediaAfterBlockSend(payload) ?? [];
+        })
+      : dedupedPayloads;
   const blockMediaUrlsToOmit = await normalizeSentMediaUrlsForDedupe({
     sentMediaUrls: [
       ...(params.blockStreamingEnabled

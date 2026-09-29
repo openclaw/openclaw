@@ -845,7 +845,7 @@ openclaw-settings-save-indicator:empty {
 }
 
 .settings-save-indicator__spinner svg {
-  animation: spin 0.7s linear infinite;
+  animation: btn-spinner-spin 0.7s linear infinite;
 }
 
 .settings-save-indicator__apply {
@@ -2746,21 +2746,6 @@ openclaw-settings-save-indicator:empty {
   box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
-.sidebar-customize-menu:not(wa-dropdown) {
-  position: fixed;
-  z-index: 120;
-  min-width: 224px;
-  max-width: 264px;
-  max-height: 420px;
-  overflow-y: auto;
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
-  animation: menu-in 140ms var(--ease-out);
-}
-
 wa-dropdown.sidebar-customize-menu {
   position: fixed;
   z-index: 120;
@@ -2869,19 +2854,6 @@ wa-dropdown-item.sidebar-customize-menu__item {
 
 .sidebar-customize-menu__item--active .nav-item__icon {
   color: var(--accent);
-}
-
-.session-menu:not(wa-dropdown) {
-  position: fixed;
-  z-index: 121;
-  min-width: 224px;
-  max-width: 264px;
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
-  animation: menu-in 140ms var(--ease-out);
 }
 
 wa-dropdown.session-menu {

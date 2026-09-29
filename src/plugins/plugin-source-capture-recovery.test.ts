@@ -14,7 +14,10 @@ import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
+import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
+import * as captureDirectory from "./plugin-source-capture-directory.js";
 import {
   createPluginNativeCaptureRoot,
   createPluginSourceCaptureRoot,
@@ -45,6 +48,55 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.useRealTimers();
+});
+
+it("preserves the preparation cause when synchronous token cleanup also fails", async () => {
+  const stateDir = temp.make("capture-error-cause-");
+  const instance = retainPluginSourceCaptureInstance(stateDir);
+  await sweepPluginSourceCapturesForTest(stateDir);
+  const primary = new Error("Fixture first capture refused");
+  const cleanup = new Error("Fixture token retirement refused once");
+  let ownedRoot: string | undefined;
+  let refuseCleanup = true;
+  const acquire = stagingToken.acquireSqliteStagingToken;
+  vi.spyOn(stagingToken, "acquireSqliteStagingToken").mockImplementation((...args) => {
+    const token = acquire(...args);
+    ownedRoot = args[0];
+    return Object.assign((retiring?: boolean) => {
+      if (retiring && refuseCleanup) {
+        refuseCleanup = false;
+        throw cleanup;
+      }
+      token(retiring);
+    }, token);
+  });
+  const mkdtemp = fs.mkdtempSync.bind(fs);
+  vi.spyOn(fs, "mkdtempSync").mockImplementation((...args) => {
+    if (ownedRoot && args[0].startsWith(path.join(ownedRoot, "captures") + path.sep)) {
+      throw primary;
+    }
+    return mkdtemp(...args);
+  });
+  try {
+    let failure: unknown;
+    try {
+      instance.createDirectory();
+    } catch (error) {
+      failure = error;
+    }
+    if (!(failure instanceof AggregateError)) {
+      throw new Error("Expected the paired preparation and cleanup refusal", { cause: failure });
+    }
+    expect(failure.cause).toBe(primary);
+    expect(failure.errors.length).toBe(2);
+    expect(failure.errors[0]).toBe(primary);
+    expect(failure.errors[1]).toBe(cleanup);
+    expect(refuseCleanup).toBe(false);
+  } finally {
+    vi.restoreAllMocks();
+    await instance.releaseAsync();
+  }
+  expect(ownedRoot !== undefined && fs.existsSync(ownedRoot)).toBe(false);
 });
 
 it("recovers a removed captures directory without releasing a live instance", async () => {
@@ -514,3 +566,69 @@ it.each(["managed", "fallback"] as const)(
     }
   },
 );
+
+it("preserves artifact setup failure and borrowed custody when partial removal fails", async () => {
+  const stateDir = temp.make("capture-artifact-cleanup-");
+  const source = temp.make("capture-artifact-source-");
+  const owner = retainPluginSourceCaptureInstance(stateDir);
+  const first = owner.createDirectory();
+  const root = path.dirname(path.dirname(first));
+  await sweepPluginSourceCapturesForTest(stateDir);
+  const primary = new Error("Fixture artifact permissions refused");
+  const cleanup = new Error("Fixture partial capture removal refused");
+  let borrowed: ReturnType<typeof retainPluginSourceCaptureInstance> | undefined;
+  let created: string | undefined;
+  const retain = captureDirectory.retainPluginSourceCaptureInstance;
+  vi.spyOn(captureDirectory, "retainPluginSourceCaptureInstance").mockImplementation((...args) => {
+    borrowed = retain(...args);
+    return borrowed;
+  });
+  const chmod = fs.chmodSync.bind(fs);
+  vi.spyOn(fs, "chmodSync").mockImplementation((target, mode) => {
+    if (typeof target === "string" && path.dirname(target) === path.dirname(first)) {
+      created = target;
+      throw primary;
+    }
+    return chmod(target, mode);
+  });
+  const remove = fs.rmSync.bind(fs);
+  vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+    if (target === created) {
+      throw cleanup;
+    }
+    return remove(target, options);
+  });
+  try {
+    let failure: unknown;
+    try {
+      withPluginSourceCaptureStorage({ stateDir, placement: "state" }, () =>
+        capturePluginGenerationArtifact(source),
+      );
+    } catch (error) {
+      failure = error;
+    }
+    if (!(failure instanceof AggregateError)) {
+      throw new Error("Expected the artifact setup and removal failures", { cause: failure });
+    }
+    expect(failure.cause).toBe(primary);
+    expect(failure.errors.length).toBe(2);
+    expect(failure.errors[0]).toBe(primary);
+    expect(failure.errors[1]).toBe(cleanup);
+    if (!borrowed) {
+      throw new Error("Expected the artifact to borrow its capture instance");
+    }
+    const releasedBorrower = borrowed;
+    expect(() => releasedBorrower.createDirectory()).toThrow(
+      "Plugin source instance has been released",
+    );
+    expect(created !== undefined && fs.existsSync(created)).toBe(true);
+  } finally {
+    vi.restoreAllMocks();
+    try {
+      await borrowed?.releaseAsync();
+    } finally {
+      await owner.releaseAsync();
+    }
+  }
+  expect(fs.existsSync(root)).toBe(false);
+});

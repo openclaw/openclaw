@@ -31,8 +31,8 @@ function readWorkflow({ evidence, git, requireEvidence }) {
   };
 }
 
-/** Actions reports exhausted job deadlines as cancellation, unlike failed test steps. */
-export function qualifyPriorCiDeadlineJobs(context) {
+/** A cancelled job can retain a failed test step or an exhausted execution deadline. */
+export function qualifyPriorCiCancelledRoots(context) {
   const { evidence, run, jobs, gate, requireEvidence } = context;
   const readJson = (endpoint, paginate = false) =>
     execPrGhJson([
@@ -44,7 +44,7 @@ export function qualifyPriorCiDeadlineJobs(context) {
       "Cache-Control: max-age=0",
       ...(paginate ? ["--paginate", "--slurp"] : []),
     ]);
-  const deadlines = new Map();
+  const roots = new Map();
   for (const job of jobs) {
     if (
       job === gate ||
@@ -64,6 +64,26 @@ export function qualifyPriorCiDeadlineJobs(context) {
     );
     const endpoint = `repos/${evidence.repository}/check-runs/${checkRunId}`;
     const check = readJson(endpoint);
+    requireEvidence(
+      check.id === checkRunId &&
+        check.name === job.name &&
+        check.head_sha === evidence.head &&
+        check.check_suite?.id === run.check_suite_id &&
+        check.app?.id === 15368 &&
+        check.app.slug === "github-actions" &&
+        check.status === "completed" &&
+        check.conclusion === "cancelled" &&
+        check.started_at === job.started_at &&
+        check.completed_at === job.completed_at,
+      "cancelled deadline/test root requires a matching live GitHub Actions check-run",
+    );
+    const attribution = evidence.failures.find((value) => value.jobId === job.id);
+    if (attribution.failedStep !== undefined) {
+      roots.set(job.id, {
+        failedStep: qualifyNodeTestFailure(context, attribution, job, checkRunId),
+      });
+      continue;
+    }
     const pages = readJson(`${endpoint}/annotations?per_page=100`, true);
     requireEvidence(
       Array.isArray(pages) && pages.every(Array.isArray),
@@ -87,17 +107,7 @@ export function qualifyPriorCiDeadlineJobs(context) {
         entry.message === "The operation was canceled.",
     );
     requireEvidence(
-      check.id === checkRunId &&
-        check.name === job.name &&
-        check.head_sha === evidence.head &&
-        check.check_suite?.id === run.check_suite_id &&
-        check.app?.id === 15368 &&
-        check.app.slug === "github-actions" &&
-        check.status === "completed" &&
-        check.conclusion === "cancelled" &&
-        check.started_at === job.started_at &&
-        check.completed_at === job.completed_at &&
-        check.output?.annotations_count === annotations.length &&
+      check.output?.annotations_count === annotations.length &&
         annotations.length === 2 &&
         timeout.length === 1 &&
         cancelled.length === 1,
@@ -123,15 +133,69 @@ export function qualifyPriorCiDeadlineJobs(context) {
       "deadline root has contradictory duration or additional failed steps",
     );
     const { workflowBlob } = readWorkflow(context);
-    deadlines.set(job.id, {
-      checkRunId,
-      conclusion: job.conclusion,
-      seconds,
-      workflowBlob,
-      annotations,
+    roots.set(job.id, {
+      deadline: { checkRunId, conclusion: job.conclusion, seconds, workflowBlob, annotations },
     });
   }
-  return deadlines;
+  return roots;
+}
+
+function qualifyNodeTestFailure(context, entry, job, checkRunId) {
+  const { requireEvidence } = context;
+  const workflowJob = "checks-node-core-test-nondist-shard";
+  const binding = entry.failedStep;
+  const steps = job.steps;
+  requireEvidence(
+    binding?.workflowJob === workflowJob &&
+      positiveInteger(binding.number) &&
+      Array.isArray(steps) &&
+      steps.length > 0 &&
+      steps.every(
+        (step) =>
+          positiveInteger(step.number) &&
+          step.status === "completed" &&
+          ["success", "skipped", "failure"].includes(step.conclusion),
+      ) &&
+      new Set(steps.map((step) => step.number)).size === steps.length &&
+      steps.filter((step) => step.conclusion === "failure").length === 1 &&
+      steps.filter((step) => step.name === "Run Node test shard").length === 1 &&
+      steps.at(-1)?.name === "Complete job" &&
+      steps.at(-1).conclusion === "success",
+    "cancelled test root requires complete steps with only one failed Node test",
+  );
+  const step = steps.find((value) => value.number === binding.number);
+  const times = [job.started_at, step?.started_at, step?.completed_at, job.completed_at].map(
+    Date.parse,
+  );
+  requireEvidence(
+    step?.name === "Run Node test shard" &&
+      step.conclusion === "failure" &&
+      times.every(Number.isFinite) &&
+      times.every((time, index) => index === 0 || time >= times[index - 1]),
+    "cancelled test root has mismatched step identity or timestamps",
+  );
+  const { workflow, workflowBlob } = readWorkflow(context);
+  const owner = workflow?.jobs?.[workflowJob];
+  const sourceSteps = owner?.steps?.filter((value) => value.name === step.name);
+  const source = sourceSteps?.[0];
+  requireEvidence(
+    owner?.name === "${{ matrix.check_name || 'checks-node-core-test-nondist-shard' }}" &&
+      Array.isArray(owner.needs) &&
+      owner.needs.includes("preflight") &&
+      owner.strategy?.matrix ===
+        "${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}" &&
+      [undefined, false].includes(owner["continue-on-error"]) &&
+      sourceSteps?.length === 1 &&
+      source.shell === "bash" &&
+      source.uses === undefined &&
+      [undefined, false].includes(source["continue-on-error"]) &&
+      typeof source.run === "string" &&
+      // Recognize the inspected Node shard entrypoint, not arbitrary workflow commands.
+      digest(source.run) === "43a70550e9537ea675a8052ebd4821200d24ffa6a48ccd3b44c047f667490691",
+    "cancelled test root requires the unchanged canonical Node shard workflow owner",
+  );
+  // Matrix membership and causal baseline qualification remain inspected evidence.
+  return { ...binding, checkRunId, conclusion: job.conclusion, workflowBlob, step };
 }
 
 function verifyMatrixCancellation(context, cancellation, members) {

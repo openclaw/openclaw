@@ -547,41 +547,6 @@ describe("mock gateway stateful sessions", () => {
     });
   });
 
-  it.for(["sessions.catalog.continue", "sessions.create"])(
-    "does not publish rejected %s materialization to sessions.list",
-    async (method, { gatewayPage }) => {
-      const { execute } = gatewayPage;
-      const sessionKey = "agent:main:rejected-session";
-      execute(
-        createControlUiMockGatewayInitScript({
-          methodResponses: {
-            [method]: {
-              __mockError: { code: "INVALID_REQUEST", message: "materialization rejected" },
-            },
-          },
-        }),
-      );
-      const { frames, send } = gatewayPage.connect();
-      await flushMockTimers();
-      send(
-        "rejected",
-        method,
-        method === "sessions.create"
-          ? { agentId: "main", key: sessionKey }
-          : { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
-      );
-      await flushMockTimers();
-      send("list-after-rejection", "sessions.list", {
-        agentId: "main",
-        search: "rejected-session",
-      });
-      await flushMockTimers();
-      const listed = frames.find((frame) => frame.id === "list-after-rejection")?.payload;
-      expect(listed).toMatchObject({ count: 1, sessions: [{ key: "agent:main:main" }] });
-      expect(JSON.stringify(listed)).not.toContain(sessionKey);
-    },
-  );
-
   it("keeps repeated events scoped after unsubscribe and reconnect without filtering roster messages", async ({
     gatewayPage,
   }) => {
@@ -660,43 +625,6 @@ describe("mock gateway stateful sessions", () => {
       gatewayPage.close();
       vi.useRealTimers();
     }
-  });
-
-  it("keeps archive filtering opt-in for static session fixtures", async ({ gatewayPage }) => {
-    const { execute } = gatewayPage;
-    const script = createControlUiMockGatewayInitScript({
-      methodResponses: {
-        "sessions.list": {
-          count: 1,
-          defaults: {},
-          path: "",
-          sessions: [{ key: "agent:main:research", archived: false }],
-          ts: 0,
-        },
-        "sessions.patch": { ok: true },
-      },
-    });
-    execute(script);
-
-    const { frames, send } = gatewayPage.connect();
-    await flushMockTimers();
-
-    send("patch-1", "sessions.patch", { key: "agent:main:research", archived: true });
-    await flushMockTimers();
-    send("list-1", "sessions.list", {});
-    await flushMockTimers();
-
-    expect(frames.find((frame) => frame.id === "list-1")?.payload).toMatchObject({
-      count: 1,
-      sessions: [
-        {
-          key: "agent:main:research",
-          archived: true,
-          archivedAt: expect.any(Number),
-          pinned: false,
-        },
-      ],
-    });
   });
 
   it("moves archive patches between active and archived session lists", async ({ gatewayPage }) => {

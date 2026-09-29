@@ -158,20 +158,6 @@ export async function verifyPreviousManagedGatewayForUpdate(
   }
 }
 
-function recordUpdateGatewayHealth(
-  run: UpdateCommandOptions["run"],
-  health: GatewayRestartSnapshot,
-  port: number,
-  readyz = false,
-): void {
-  if (!run) {
-    return;
-  }
-  recordUpdateRunVerification(run.runId, updateGatewayHealthFacts(health, port, readyz), {
-    env: run.env,
-  });
-}
-
 function updateGatewayHealthFacts(
   health: GatewayRestartSnapshot,
   port: number,
@@ -226,8 +212,12 @@ export async function verifyUpdatedGateway(
   assertCurrent();
   if (params.purpose === "recovery") {
     params.result.verification = updateGatewayHealthFacts(health, params.gatewayPort, readyz);
-  } else {
-    recordUpdateGatewayHealth(proofOptions.run, health, params.gatewayPort, readyz);
+  } else if (proofOptions.run) {
+    recordUpdateRunVerification(
+      proofOptions.run.runId,
+      updateGatewayHealthFacts(health, params.gatewayPort, readyz),
+      { env: proofOptions.run.env },
+    );
   }
   const recordVerificationStep = (
     failureFacts?: UpdateFailureFact[],

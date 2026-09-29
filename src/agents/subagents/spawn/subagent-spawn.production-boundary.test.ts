@@ -69,6 +69,7 @@ import {
   createBoundWorker,
   createSpawnBoundaryParent,
   createSpawnOperatorSource,
+  registerYieldedRequesterBatchCase,
 } from "./subagent-spawn.production-boundary.test-support.js";
 import { registerOperatorSpawnRollbackCases } from "./subagent-spawn.rollback.test-support.js";
 
@@ -308,15 +309,16 @@ async function waitForEmbeddedRun(
   bound: Awaited<ReturnType<typeof createBoundParent>>,
   childRunId: string,
   started?: Promise<void>,
+  calls = 1,
 ) {
   try {
     if (started) {
       await withTimeout(started, COLD_MODEL_ENTRY_TIMEOUT_MS, {
         message: "embedded execution entry timed out",
       });
-      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(calls);
     } else {
-      await vi.waitFor(() => expect(runEmbeddedAgent).toHaveBeenCalledOnce(), {
+      await vi.waitFor(() => expect(runEmbeddedAgent).toHaveBeenCalledTimes(calls), {
         timeout: 15_000,
       });
     }
@@ -390,6 +392,14 @@ describe("recursive spawn production boundary", () => {
     runEmbeddedAgent,
     parentSessionKey,
     parentRunId,
+  });
+  registerYieldedRequesterBatchCase({
+    createBoundParent,
+    createBoundGateway,
+    closeBoundGateway,
+    waitForEmbeddedRun,
+    runEmbeddedAgent,
+    throwBoundFailures,
   });
   registerOperatorSpawnRollbackCases({
     createBoundParent,

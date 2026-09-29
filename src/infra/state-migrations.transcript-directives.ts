@@ -66,6 +66,7 @@ type TranscriptRowPlan = {
 type DatabaseMigrationResult = {
   archivedTranscripts: number;
   transcriptSessions: number;
+  warnings: string[];
 };
 
 function createMigrationDatabaseHandle(
@@ -342,7 +343,7 @@ async function migrateAgentDatabase(
     assertOpenClawAgentDatabaseForMaintenance(database, params);
     const cursor = readMigrationCursor(database, params.pathname);
     if (cursor.phase === "complete") {
-      return { archivedTranscripts: 0, transcriptSessions: 0 };
+      return { archivedTranscripts: 0, transcriptSessions: 0, warnings: [] };
     }
     const owner = createMigrationDatabaseHandle(database, params.agentId, params.pathname);
     const transcriptSessions =
@@ -356,7 +357,7 @@ async function migrateAgentDatabase(
           })
         : 0;
     const archiveCursor = readMigrationCursor(database, params.pathname);
-    const archivedTranscripts =
+    const archives =
       archiveCursor.phase === "archives"
         ? await migrateTranscriptDirectiveArchives({
             agentId: params.agentId,
@@ -370,8 +371,12 @@ async function migrateAgentDatabase(
                 "phase" in next ? next : { ...next, phase: "archives" },
               ),
           })
-        : 0;
-    return { archivedTranscripts, transcriptSessions };
+        : { rewrittenArchives: 0, warnings: [] };
+    return {
+      archivedTranscripts: archives.rewrittenArchives,
+      transcriptSessions,
+      warnings: archives.warnings,
+    };
   } finally {
     clearNodeSqliteKyselyCacheForDatabase(database);
     database.close();
@@ -475,6 +480,8 @@ export async function migrateHistoricalTranscriptDirectives(
               { agentId: target.agentId, pathname: target.path },
               maintenance,
             );
+            warnings.push(...result.warnings);
+            recoverableWarningCount += result.warnings.length;
             if (result.transcriptSessions > 0 || result.archivedTranscripts > 0) {
               changes.push(
                 `Migrated historical transcript directives in ${target.path}: ${result.transcriptSessions} active session(s), ${result.archivedTranscripts} archived transcript(s).`,

@@ -60,7 +60,6 @@ import {
   markRepositoryGitHubPublicationReported,
   readRepositoryGitHubPublication,
   readPendingRepositoryGitHubPublication,
-  readSharedRepositoryGitHubPublication,
   requireRepositoryGitHubPublication,
   repositoryGitHubPublicationDigest,
   terminalRepositoryGitHubPublication,
@@ -580,7 +579,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       isExecuting: (requestId) => active.has(requestId),
       execute: (row, assertCustody) => execute(row, { assertCustody }),
     }),
-    ...createSharedGitHubPublicationReadMethods(readSharedRepositoryGitHubPublication),
+    ...createSharedGitHubPublicationReadMethods("repository"),
     preparePersonalStatus,
     personalStatus(
       action: PersonalGitHubAction,

@@ -75,7 +75,6 @@ class DevicesPage extends OpenClawLightDomElement {
   @state() private desktopEnvironments: EnvironmentSummary[] = [];
   private systemInfoUnavailable = false;
   @state() private pageState = createInitialDevicesState();
-  @state() private canPairDevice = false;
   @state() private canManagePairing = false;
   @state() private canAdmin = false;
   @state() private execApprovalsTarget: "gateway" | "node" = "gateway";
@@ -248,7 +247,6 @@ class DevicesPage extends OpenClawLightDomElement {
     void this.presenceTask.run([null, null]);
     this.resetInventoryDetails();
     this.presence = [];
-    this.canPairDevice = false;
     this.canManagePairing = false;
     this.canAdmin = false;
     super.disconnectedCallback();
@@ -263,7 +261,10 @@ class DevicesPage extends OpenClawLightDomElement {
     this.pageState.client = snapshot.client;
     this.pageState.connected = snapshot.phase === "connected";
     this.pageState.requestGeneration = this.gateway.epoch;
-    this.syncGatewayState(snapshot);
+    const connected = snapshot.phase === "connected";
+    const auth = snapshot.hello?.auth ?? null;
+    this.canAdmin = connected && hasOperatorAdminAccess(auth);
+    this.canManagePairing = connected && (!auth || hasOperatorPairingAccess(auth));
     if (!this.canLoadSystemInfo) {
       void this.systemInfoTask.run([null, null]);
       this.gatewaySystemInfo = null;
@@ -283,14 +284,6 @@ class DevicesPage extends OpenClawLightDomElement {
       void this.loadPresence();
     }
     this.syncPolling();
-  }
-
-  private syncGatewayState(snapshot: ApplicationGatewaySnapshot) {
-    const connected = snapshot.phase === "connected";
-    const auth = snapshot.hello?.auth ?? null;
-    this.canAdmin = connected && hasOperatorAdminAccess(auth);
-    this.canManagePairing = connected && (!auth || hasOperatorPairingAccess(auth));
-    this.canPairDevice = this.canAdmin;
   }
 
   private applyRouteData() {
@@ -514,7 +507,7 @@ class DevicesPage extends OpenClawLightDomElement {
           devicesLoading: devices.devicesLoading,
           devicesError: devices.devicesError,
           devicesList: devices.devicesList,
-          canPairDevice: this.canPairDevice,
+          canPairDevice: this.canAdmin,
           canManagePairing: this.canManagePairing,
           canAdmin: this.canAdmin,
           configForm: currentConfigObject(config),

@@ -1,36 +1,10 @@
 // Policy doctor checks and findings for MCP, model provider, and network policy.
-import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
+import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import type { PolicyEvidence } from "../../policy-state.js";
-import { createPolicyScopedChecks } from "../check-factory.js";
 import { CHECK_IDS } from "../check-ids.js";
 import { policyEvidenceFinding } from "../policy-evidence-finding.js";
-import type { PolicyDoctorCheckDeps } from "../types.js";
 import { readPolicyBoolean, readStringList } from "../utils.js";
-
-export function createPolicyModelNetworkChecks(
-  deps: PolicyDoctorCheckDeps,
-): readonly HealthCheck[] {
-  return createPolicyScopedChecks(deps, [
-    [CHECK_IDS.policyDeniedMcpServer, "Configured MCP servers do not match policy deny rules."],
-    [
-      CHECK_IDS.policyUnapprovedMcpServer,
-      "Configured MCP servers do not match policy allow rules.",
-    ],
-    [
-      CHECK_IDS.policyDeniedModelProvider,
-      "Configured model providers do not match policy deny rules.",
-    ],
-    [
-      CHECK_IDS.policyUnapprovedModelProvider,
-      "Configured model providers do not match policy allow rules.",
-    ],
-    [
-      CHECK_IDS.policyPrivateNetworkAccess,
-      "Network SSRF policy settings match private-network requirements.",
-    ],
-  ]);
-}
 
 export function mcpServerFindings(
   policy: unknown,

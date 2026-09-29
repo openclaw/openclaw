@@ -78,6 +78,7 @@ const coreWorker = "src/infra/sqlite-worker-operation-attachment.test.ts";
 const infraConfig = "test/vitest/vitest.infra.config.ts";
 const packageContract = "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts";
 const contractsConfig = "test/vitest/vitest.contracts-plugin.config.ts";
+const channelsConfig = "test/vitest/vitest.channels.config.ts";
 
 it.for([
   { name: "worker", args: [coreWorker], prepare: true },
@@ -91,6 +92,14 @@ it.for([
   { name: "nonmatching include", args: [coreWorker], include: ["test/**"], prepare: false },
   { name: "root config", config: "vitest.config.ts", args: [coreWorker], prepare: true },
   { name: "custom config", config: "custom.config.ts", args: [coreWorker], prepare: false },
+  { name: "full channels", config: channelsConfig, args: [], prepare: true },
+  {
+    name: "focused channels",
+    config: channelsConfig,
+    args: ["src/channels/chat-type.test.ts"],
+    prepare: false,
+  },
+  { name: "empty channels", config: channelsConfig, args: [], include: [], prepare: false },
 ])(
   "selects eager worker preparation for $name",
   async ({ config = infraConfig, args, include, prepare }) => {
@@ -113,7 +122,7 @@ it.runIf(process.platform !== "win32").for(
           "metadata",
           "custom-root",
           "custom-project",
-          ...(route === "direct" ? ["include-worker", "include-excluded"] : []),
+          ...(route === "direct" ? ["include-worker", "include-excluded", "channels"] : []),
         ]
     ).map((mode) => ({
       route,
@@ -210,7 +219,13 @@ syncFixtureBuiltinExports();
       }
       const args =
         route === "direct" || route === "contracts-direct"
-          ? ["scripts/run-vitest.mjs", "run", "--config", selectedConfig, selectedFile, ...controls]
+          ? [
+              "scripts/run-vitest.mjs",
+              "run",
+              "--config",
+              ...(mode === "channels" ? [channelsConfig] : [selectedConfig, selectedFile]),
+              ...controls,
+            ]
           : [
               "--import",
               "./scripts/tsx.mjs",
@@ -235,7 +250,7 @@ syncFixtureBuiltinExports();
       expect(result.code, result.stdout + result.stderr).toBe(
         mode === "cancel" ? 143 : mode === "failure" ? 1 : 0,
       );
-      const ready = mode === "ready" || mode === "include-worker";
+      const ready = mode === "ready" || mode === "include-worker" || mode === "channels";
       const prepared = ready || mode === "failure" || mode === "cancel";
       expect(fs.existsSync(compilerReceipt)).toBe(prepared);
       if (mode === "failure" || mode === "cancel") {

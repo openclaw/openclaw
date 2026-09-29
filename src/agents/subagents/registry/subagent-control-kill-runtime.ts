@@ -511,7 +511,7 @@ export async function killSubagentRun(params: {
         if (!killOwnerCurrent()) {
           return { killed: false, sessionId, superseded: true };
         }
-        let marked: number;
+        let marked = 0;
         try {
           marked = await markSubagentRunTerminated({
             runId: params.entry.runId,
@@ -535,15 +535,20 @@ export async function killSubagentRun(params: {
                 throw new Error("Subagent kill publication lost its original claim");
               }
             },
+            onPublished: (count) => {
+              marked = count;
+            },
           });
         } catch (error) {
           if (hasSqliteWorkerOutcomeUnknown(error)) {
             throw error;
           }
+          const action =
+            marked > 0 ? "finish subagent kill cleanup" : "persist subagent kill tombstone";
           return {
-            killed: false,
+            killed: marked > 0,
             sessionId,
-            error: `Failed to persist subagent kill tombstone: ${formatErrorMessage(error)}`,
+            error: `Failed to ${action}: ${formatErrorMessage(error)}`,
           };
         }
         if (marked === 0) {

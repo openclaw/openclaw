@@ -67,11 +67,13 @@ import type {
 } from "../infra/sqlite-wal-write-admission.js";
 import type { SqliteWorkerPreparedBackend } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
+import type { LegacyMcpOAuthWorkerOperations } from "../infra/state-migrations.mcp-oauth.worker-contract.js";
 import type { TelemetryWorkerOperations } from "../infra/telemetry-worker-contract.js";
 import type {
   InterruptedUpdateSettlement,
   InterruptedUpdateSettlementResult,
 } from "../infra/update-run-interruption-contract.js";
+import type { UpdateRunStepWriteOperations } from "../infra/update-run-mutation.types.js";
 import type { UpdateRunReconciliationOperations } from "../infra/update-run-reconciliation.types.js";
 import type { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
 import type { NodeWorkerJournalWorkerOperations } from "../node-host/node-worker-journal.worker-contract.js";
@@ -116,6 +118,7 @@ export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; ident
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
 export type OpenClawStateWorkerOperations = UpdateRunReconciliationOperations &
+  UpdateRunStepWriteOperations &
   RepositoryWorkspaceWorkerOperations &
   CaptureWorkerOperations &
   TuiLastSessionWorkerOperations &
@@ -127,6 +130,7 @@ export type OpenClawStateWorkerOperations = UpdateRunReconciliationOperations &
   SkillWorkshopExecutionOperations &
   CurrentConversationBindingWorkerOperations &
   McpOAuthWriteOperations &
+  LegacyMcpOAuthWorkerOperations &
   WebPushWorkerOperations &
   ApnsRegistrationWorkerOperations &
   DevicePairingWorkerOperations &

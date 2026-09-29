@@ -1,6 +1,5 @@
 // Control UI view renders channels screen content.
 import { html } from "lit";
-import type { ConfigUiHints } from "../../api/types.ts";
 import {
   analyzeConfigSchema,
   renderConfigTierGroups,
@@ -13,38 +12,16 @@ import { t } from "../../i18n/index.ts";
 import { formatChannelExtraValue, resolveChannelConfigValue } from "../../lib/channels/index.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
-type ChannelConfigFormProps = {
-  channelId: string;
-  configValue: Record<string, unknown> | null;
-  schema: unknown;
-  uiHints: ConfigUiHints;
-  disabled: boolean;
-  showAdvanced: boolean;
-  onShowAdvanced: (enabled: boolean) => void;
-  onPatch: (path: Array<string | number>, value: unknown) => void;
-};
-
 function resolveSchemaNode(schema: JsonSchema | null, path: string[]): JsonSchema | null {
   let current = schema;
   for (const key of path) {
-    if (!current) {
+    if (!current || schemaType(current) !== "object") {
       return null;
     }
-    const type = schemaType(current);
-    if (type === "object") {
-      const properties = current.properties ?? {};
-      if (properties[key]) {
-        current = properties[key];
-        continue;
-      }
-      const additional = current.additionalProperties;
-      if (additional && typeof additional === "object") {
-        current = additional;
-        continue;
-      }
-      return null;
-    }
-    return null;
+    const additional = current.additionalProperties;
+    current =
+      current.properties?.[key] ||
+      (additional && typeof additional === "object" ? additional : null);
   }
   return current;
 }
@@ -67,41 +44,41 @@ function renderExtraChannelFields(value: Record<string, unknown>) {
   `;
 }
 
-function renderChannelConfigForm(props: ChannelConfigFormProps) {
-  const analysis = analyzeConfigSchema(props.schema);
+function renderChannelConfigForm(channelId: string, props: ChannelsProps, disabled: boolean) {
+  const config = props.config;
+  const analysis = analyzeConfigSchema(config.configSchema);
   const normalized = analysis.schema;
   if (!normalized) {
     return html`<div class="settings-row__desc">${t("channels.config.schemaUnavailable")}</div>`;
   }
-  const node = resolveSchemaNode(normalized, ["channels", props.channelId]);
+  const node = resolveSchemaNode(normalized, ["channels", channelId]);
   if (!node) {
     return html`
       <div class="settings-row__desc">${t("channels.config.channelSchemaUnavailable")}</div>
     `;
   }
-  const configValue = props.configValue ?? {};
-  const value = resolveChannelConfigValue(configValue, props.channelId) ?? {};
-  const path = ["channels", props.channelId];
+  const value = resolveChannelConfigValue(config.configForm ?? {}, channelId) ?? {};
+  const path = ["channels", channelId];
   const unsupported = new Set(analysis.unsupportedPaths);
   return html`
     <div class="config-form">
       ${renderConfigTierGroups({
         schema: node,
         path,
-        hints: props.uiHints,
-        revealAdvanced: props.showAdvanced,
-        onShowAdvanced: () => props.onShowAdvanced(true),
-        onHideAdvanced: () => props.onShowAdvanced(false),
+        hints: config.configUiHints,
+        revealAdvanced: props.showAdvancedSettings,
+        onShowAdvanced: () => props.onShowAdvancedSettings(true),
+        onHideAdvanced: () => props.onShowAdvancedSettings(false),
         renderTier: (tier) =>
           renderNode({
             schema: tier,
             value,
             path,
-            hints: props.uiHints,
+            hints: config.configUiHints,
             unsupported,
-            disabled: props.disabled,
+            disabled,
             showLabel: false,
-            onPatch: props.onPatch,
+            onPatch: props.onConfigPatch,
           }),
       })}
     </div>
@@ -117,16 +94,7 @@ export function renderChannelConfigSection(params: { channelId: string; props: C
   }
   return html`
     <div class="settings-row settings-row--stacked">
-      ${renderChannelConfigForm({
-        channelId,
-        configValue: props.config.configForm,
-        schema: props.config.configSchema,
-        uiHints: props.config.configUiHints,
-        disabled,
-        showAdvanced: props.showAdvancedSettings,
-        onShowAdvanced: props.onShowAdvancedSettings,
-        onPatch: props.onConfigPatch,
-      })}
+      ${renderChannelConfigForm(channelId, props, disabled)}
       ${
         props.config.lastError
           ? html`<div class="callout danger" role="alert">${props.config.lastError}</div>`

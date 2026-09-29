@@ -47,6 +47,7 @@ import {
   closeOpenClawStateDatabaseAsync,
 } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -425,6 +426,28 @@ it.each([
         registration.finish();
         finished = true;
       };
+      const captureSource = stateReadWorker.captureOpenClawStateReadSource;
+      const registryReads = vi
+        .spyOn(stateReadWorker, "captureOpenClawStateReadSource")
+        .mockImplementation(() => {
+          const source = captureSource();
+          return {
+            ...source,
+            createTransport(command) {
+              const transport = source.createTransport(command);
+              if (command.type !== "agentDatabaseRegistry.read") {
+                return transport;
+              }
+              return {
+                ...transport,
+                startRead(...args) {
+                  observed.dispatch?.({ input: { command } });
+                  return transport.startRead(...args);
+                },
+              };
+            },
+          };
+        });
       try {
         expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
           "registration-a-message",
@@ -432,6 +455,7 @@ it.each([
         expect(started && finished).toBe(true);
       } finally {
         observed.dispatch = undefined;
+        registryReads.mockRestore();
         registration.finish();
       }
     });

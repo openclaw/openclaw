@@ -32,7 +32,10 @@ const invalidArrayItemSchema = z.unknown().transform(() => null);
 function tolerantArray<T>(schema: z.ZodType<T>) {
   return z
     .array(z.union([schema, invalidArrayItemSchema]))
-    .transform((items) => items.filter((item): item is T => item !== null))
+    .transform((items) => {
+      const normalized = items.filter((item): item is T => item !== null);
+      return normalized.length ? normalized : undefined;
+    })
     .optional()
     .catch(undefined);
 }
@@ -263,27 +266,7 @@ const workboardMetadataSchema = z
     failureCount: optionalNumberSchema,
   })
   .transform((value): WorkboardMetadata | undefined => {
-    const metadata: WorkboardMetadata = {
-      ...(value.attempts?.length ? { attempts: value.attempts } : {}),
-      ...(value.comments?.length ? { comments: value.comments } : {}),
-      ...(value.links?.length ? { links: value.links } : {}),
-      ...(value.proof?.length ? { proof: value.proof } : {}),
-      ...(value.artifacts?.length ? { artifacts: value.artifacts } : {}),
-      ...(value.attachments?.length ? { attachments: value.attachments } : {}),
-      ...(value.workerLogs?.length ? { workerLogs: value.workerLogs } : {}),
-      ...(value.workerProtocol ? { workerProtocol: value.workerProtocol } : {}),
-      ...(value.automation ? { automation: value.automation } : {}),
-      ...(value.claim ? { claim: value.claim } : {}),
-      ...(value.diagnostics?.length ? { diagnostics: value.diagnostics } : {}),
-      ...(value.notifications?.length ? { notifications: value.notifications } : {}),
-      ...(value.templateId ? { templateId: value.templateId } : {}),
-      ...(value.archivedAt !== undefined ? { archivedAt: value.archivedAt } : {}),
-      ...(value.stale ? { stale: value.stale } : {}),
-      ...(value.lifecycleStatusSourceUpdatedAt !== undefined
-        ? { lifecycleStatusSourceUpdatedAt: value.lifecycleStatusSourceUpdatedAt }
-        : {}),
-      ...(value.failureCount !== undefined ? { failureCount: value.failureCount } : {}),
-    };
+    const metadata = omitUndefinedFields(value);
     return Object.keys(metadata).length ? metadata : undefined;
   });
 
