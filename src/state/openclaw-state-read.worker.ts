@@ -54,9 +54,15 @@ import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
   readInterruptedUpdateCandidate,
+  readUpdateRunStatusInDatabase,
+  readUpdateRunHistoryStatusInDatabase,
   readUpdateRunRecord,
   readUpdateRuns,
 } from "../infra/update-run-read.kernel.js";
+import {
+  inspectUpdateRunReconciliation,
+  readUpdateRunReconciliationCandidates,
+} from "../infra/update-run-reconciliation.worker.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
 import {
   pluginBlobLookupInDatabase,
@@ -387,6 +393,37 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 runs: readUpdateRuns(db, command.input),
+              };
+            }
+            if (command.type === "updateRuns.reconciliationCandidates") {
+              return {
+                type: command.type,
+                candidates: readUpdateRunReconciliationCandidates(db, command.input),
+              };
+            }
+            if (command.type === "updateRuns.reconciliationCandidate") {
+              const run = tableExists(db, "update_runs")
+                ? readUpdateRunRecord(db, command.runId)
+                : undefined;
+              return {
+                type: command.type,
+                candidate: run ? inspectUpdateRunReconciliation(db, run, {}) : undefined,
+              };
+            }
+            if (command.type === "updateRuns.status") {
+              return {
+                type: command.type,
+                status: runSqliteDeferredTransactionSync(db, () =>
+                  readUpdateRunStatusInDatabase(db),
+                ),
+              };
+            }
+            if (command.type === "updateRuns.historyStatus") {
+              return {
+                type: command.type,
+                status: runSqliteDeferredTransactionSync(db, () =>
+                  readUpdateRunHistoryStatusInDatabase(db),
+                ),
               };
             }
             if (command.type === "updateRuns.interruptedCandidate") {

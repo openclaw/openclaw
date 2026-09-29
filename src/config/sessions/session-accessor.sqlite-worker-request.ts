@@ -17,6 +17,7 @@ import {
 } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { SqliteSessionReclamationAdmissionDiagnostics } from "./session-accessor.sqlite-contract.js";
+import type { SessionMaintenanceLiveProtection } from "./session-accessor.sqlite-lifecycle-types.js";
 import { revokeSqliteReclamationCommit } from "./session-accessor.sqlite-reclamation-commit.js";
 import {
   observeSqliteMutationWorkerEnd,
@@ -82,7 +83,10 @@ export function withSqliteMutationWorkerLifetime<T>(
 }
 
 export type SqliteWorkerWriteAdmission<Result> = (
-  run: (refusal?: { error: unknown }) => Promise<Result | undefined>,
+  run: (
+    refusal?: { error: unknown },
+    maintenanceProtection?: SessionMaintenanceLiveProtection,
+  ) => Promise<Result | undefined>,
   diagnostics: SqliteSessionReclamationAdmissionDiagnostics,
 ) => Promise<void>;
 
@@ -282,7 +286,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
         };
         admission = requested;
         const task = params
-          .withWriteAdmission(async (refusal) => {
+          .withWriteAdmission(async (refusal, maintenanceProtection) => {
             if (completed) {
               return undefined;
             }
@@ -296,6 +300,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                 operationId,
                 admissionId: requested.id,
                 allowed,
+                maintenanceProtection,
                 validation: allowed ? readValidation() : undefined,
               },
               [],

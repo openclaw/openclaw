@@ -16,6 +16,7 @@ import {
 import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registry-memory.js";
 import {
   persistSubagentRegistryChangesAsync,
+  reconcileRetiredSubagentRegistryWrites,
   supersedePendingSubagentRegistryWrites,
   type SubagentRegistryWriteOptions,
 } from "./subagent-registry-persistence.js";
@@ -392,6 +393,9 @@ export function restoreSubagentRunsFromDisk(params: {
   mergeOnly?: boolean;
 }) {
   const restored = loadSubagentRegistryFromSqlite();
+  if (!params.mergeOnly) {
+    reconcileRetiredSubagentRegistryWrites(params.runs, restored);
+  }
   supersedePendingSubagentRegistryWrites();
   const keys = rememberPersistedSubagentRunsSnapshot(restored);
   let added = 0;

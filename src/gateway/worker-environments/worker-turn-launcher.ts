@@ -564,6 +564,12 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 );
                 timeout.unref?.();
                 try {
+                  markDiagnosticRunProgress({
+                    sessionId: placement.sessionId,
+                    sessionKey: identity.sessionKey,
+                    runId: claim.runId,
+                    reason: "worker:runtime_refresh",
+                  });
                   emitAgentRunStatusEvent({
                     runId: claim.runId,
                     phase: "provisioning_environment",

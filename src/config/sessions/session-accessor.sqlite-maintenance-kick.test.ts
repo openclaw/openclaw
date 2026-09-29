@@ -124,7 +124,7 @@ it("commits an automatic plan while unrelated writes arrive every 100 ms", async
 });
 
 it.each([1, 3])(
-  "replans protection conflicts without write quiet, bounded at three attempts (%s)",
+  "replans policy conflicts without write quiet, bounded at three attempts (%s)",
   async (conflicts) => {
     const { request, scope, storePath, updatedAt } = createStore();
     const victimKey = "agent:main:replan-victim";
@@ -138,41 +138,37 @@ it.each([1, 3])(
     const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
     const run = dispatch.getMockImplementation()!;
     let rejections = 0;
-    let protectedKey = "agent:main:unrelated-protection-0";
-    const unregister = registerSessionMaintenancePreserveKeysProvider(() => [protectedKey]);
+
     dispatch.mockImplementation((params) => {
       if (
         params.plan.kind === "maintenance-plan" &&
         params.plan.input.preservation !== null &&
         rejections < conflicts
       ) {
-        protectedKey = `agent:main:unrelated-protection-${++rejections}`;
+        rejections += 1;
+        request.maintenanceConfig.maxEntries += 1;
       }
       return run(params);
     });
-    try {
-      kickSessionEntryMaintenanceAfterWrite(request);
-      await yieldToEventLoop();
-      expect(rejections).toBe(conflicts);
-      expect(plans).toHaveBeenCalledTimes(conflicts === 1 ? 2 : 3);
-      if (conflicts === 3) {
-        expect(warn).toHaveBeenCalledWith(
-          "SQLite automatic session maintenance paused after repeated input changes",
-          expect.objectContaining({ rejections: 3, error: expect.any(Error) }),
-        );
-        expect(loadSessionEntry({ sessionKey: victimKey, storePath })?.archivedAt).toBeUndefined();
-        await vi.advanceTimersByTimeAsync(30 * 60 * 1_000);
-        expect(plans).toHaveBeenCalledTimes(3);
-        kickSessionEntryMaintenanceAfterWrite(request);
-        await vi.advanceTimersByTimeAsync(1_000);
-        await yieldToEventLoop();
-      }
-      expect(loadSessionEntry({ sessionKey: victimKey, storePath })?.archiveReason).toBe(
-        "age-retention",
+    kickSessionEntryMaintenanceAfterWrite(request);
+    await yieldToEventLoop();
+    expect(rejections).toBe(conflicts);
+    expect(plans).toHaveBeenCalledTimes(conflicts === 1 ? 2 : 3);
+    if (conflicts === 3) {
+      expect(warn).toHaveBeenCalledWith(
+        "SQLite automatic session maintenance paused after repeated input changes",
+        expect.objectContaining({ rejections: 3, error: expect.any(Error) }),
       );
-    } finally {
-      unregister();
+      expect(loadSessionEntry({ sessionKey: victimKey, storePath })?.archivedAt).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1_000);
+      expect(plans).toHaveBeenCalledTimes(3);
+      kickSessionEntryMaintenanceAfterWrite(request);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await yieldToEventLoop();
     }
+    expect(loadSessionEntry({ sessionKey: victimKey, storePath })?.archiveReason).toBe(
+      "age-retention",
+    );
   },
 );
 

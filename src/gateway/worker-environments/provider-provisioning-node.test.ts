@@ -59,6 +59,7 @@ describe("node worker provider provisioning", () => {
         invoke,
       };
       const ensureNodeWorkerBundle = createGatewayNodeWorkerBundleInstaller({
+        log: { info: vi.fn(), warn: vi.fn() },
         gatewayNamespace: "gateway-test",
         getTransport: () => transport,
         transfer,

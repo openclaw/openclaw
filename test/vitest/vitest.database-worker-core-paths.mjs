@@ -1,5 +1,7 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/infra/update-run-reconciliation.worker.test.ts",
+  "src/infra/update-run-interruption.worker.test.ts",
   "src/channels/turn/durable-delivery.reload.test.ts",
   "test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts",
   "src/channels/message/durable-receive.test.ts",
@@ -198,6 +200,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/agent-runner-memory.private-transcript.test.ts",
   "src/auto-reply/reply/agent-runner-required-maintenance.pending-input.test.ts",
   "src/auto-reply/reply/abort.acp-boundary.test.ts",
+  "src/auto-reply/reply/abort.test.ts",
   "src/auto-reply/reply/dispatch-from-config.pending-restart.test.ts",
   "src/auto-reply/reply/session.acp-reset-routing.test.ts",
   "src/auto-reply/reply/dispatch-acp.test.ts",
@@ -302,6 +305,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli/update-command-service-publication.test.ts",
   "src/cli/update-cli/update-config-provenance.integration.test.ts",
   "src/cli/update-cli/update-load-path-finalization.integration.test.ts",
+  "src/cli/update-cli/update-repair-command.test.ts",
   "src/cli/update-cli/update-repair-history.test.ts",
   "src/commands/auth-choice.test.ts",
   "src/commands/models/auth.test.ts",
@@ -633,6 +637,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/outbound/delivery-queue-platform-lease.worker.test.ts",
   "src/infra/sqlite-worker-existing-schema.test.ts",
   "src/state/openclaw-state-read.existing-schema.test.ts",
+  "src/state/openclaw-state-db-readonly.warm-source.test.ts",
   "src/infra/session-cost-usage-metadata.test.ts",
   "src/plugins/installed-plugin-index-records.managed-npm.test.ts",
   "src/plugins/installed-plugin-index-records.test.ts",

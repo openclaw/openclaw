@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
@@ -114,6 +115,38 @@ describe("SQLite session entry patch commit revalidation", () => {
     } finally {
       await release;
       other.close();
+    }
+  });
+
+  it("restores the connection's commit wait after admitting a rollback-journal patch", async () => {
+    expect(database.db.prepare("PRAGMA journal_mode = DELETE").get()?.journal_mode).toBe("delete");
+    database.db.exec("PRAGMA busy_timeout = 37");
+    const reader = new DatabaseSync(database.path);
+    try {
+      reader.exec("BEGIN");
+      reader.prepare("SELECT session_key FROM session_nodes").get();
+      const patched = await patchSessionEntryCore(scope, () => ({ label: "after reader" }), {
+        skipMaintenance: true,
+        assertCommitAllowed: () => {
+          expect(database.db.isTransaction).toBe(true);
+          expect(reader.isTransaction).toBe(true);
+          expect(readSqliteBusyTimeout(database.db)).toBe(37);
+          reader.exec("ROLLBACK");
+        },
+      });
+      expect(patched?.label).toBe("after reader");
+      expect(
+        reader
+          .prepare(
+            "SELECT json_extract(entry_json, '$.label') AS label FROM session_nodes WHERE session_key = ?",
+          )
+          .get(sessionKey),
+      ).toEqual({ label: "after reader" });
+    } finally {
+      if (reader.isTransaction) {
+        reader.exec("ROLLBACK");
+      }
+      reader.close();
     }
   });
 

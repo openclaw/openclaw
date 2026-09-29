@@ -358,7 +358,7 @@ export function retainPreparedSessionGenerationFacts(params: {
   const retained = retainPreparedSessionSharingFacts({
     ...params,
     membership: new Set(),
-    generation: { current: params.entry ?? null },
+    generation: { current: params.entry ?? null, initiallyAbsent: params.entry ? undefined : true },
   });
   return { readCurrent: retained.readGeneration, release: retained.release };
 }

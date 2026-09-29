@@ -26,7 +26,7 @@ vi.mock("../../infra/deferred-plugin-migrations.js", () => ({
 vi.mock("../../config/config.js", () => ({
   readSourceConfigBestEffort: async () => ({ gateway: { mode: "remote" } }),
 }));
-vi.mock("../../infra/update-run-status.js", () => ({ readUpdateRunStatus: () => ({}) }));
+vi.mock("../../infra/update-run-status.js", () => ({ readUpdateRunStatus: async () => ({}) }));
 vi.mock("../../runtime.js", () => ({ defaultRuntime: mocks }));
 vi.mock("../../gateway/call.js", () => ({ callGateway: async () => ({}) }));
 vi.mock("../../infra/channels-status-issues.js", () => ({ collectChannelStatusIssues: () => [] }));

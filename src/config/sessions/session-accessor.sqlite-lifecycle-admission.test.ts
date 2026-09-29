@@ -234,13 +234,14 @@ function observeColdAdmission(
               return execute({
                 ...params,
                 withWriteAdmission: (performWrite, diagnostics) =>
-                  params.withWriteAdmission(async (refusal) => {
+                  params.withWriteAdmission(async (...admissionArgs) => {
+                    const [refusal] = admissionArgs;
                     if (!refusal && !probe.held) {
                       probe.held = true;
                       entered.resolve();
                       await hostRelease.promise;
                     }
-                    return performWrite(refusal);
+                    return performWrite(...admissionArgs);
                   }, diagnostics),
               });
             });

@@ -424,9 +424,12 @@ describe("lazy protocol validators", () => {
     });
     expectAccepted(validateSessionsCompanionAskParams, [
       companion({ question: "What changed in the project?" }),
+      companion({ question: "Why?", selectionContext: "x".repeat(16_000) }),
     ]);
     expectRejected(validateSessionsCompanionAskParams, [
       companion({ question: "x".repeat(401) }),
+      companion({ question: "Why?", selectionContext: "" }),
+      companion({ question: "Why?", selectionContext: "x".repeat(16_001) }),
       { sessionKey: "", question: "why" },
       companion({ question: "why", extra: true }),
     ]);

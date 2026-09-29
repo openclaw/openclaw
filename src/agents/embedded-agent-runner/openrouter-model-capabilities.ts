@@ -274,3 +274,15 @@ export function getOpenRouterModelCapabilities(
 
   return result;
 }
+
+/**
+ * Read capabilities already loaded in process memory.
+ *
+ * Synchronous policy reads follow catalog refreshes without reading SQLite or
+ * starting a fetch; runtime model resolution loads the catalog first.
+ */
+export function getLoadedOpenRouterModelCapabilities(
+  modelId: string,
+): OpenRouterModelCapabilities | undefined {
+  return cache?.get(modelId);
+}

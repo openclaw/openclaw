@@ -122,7 +122,7 @@ describe("cloud bootstrap plugin generations", () => {
             resolveGatewayContext: () => undefined,
             desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
             startup,
-            log: { child: () => ({ warn: () => {} }) },
+            log: { child: () => ({ info: () => {}, warn: () => {} }) },
           });
           try {
             const managerResult = enrollmentFactory.mock.results.at(-1);
@@ -295,7 +295,7 @@ describe("cloud bootstrap plugin generations", () => {
         resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         startup,
-        log: { child: () => ({ warn: () => {} }) },
+        log: { child: () => ({ info: () => {}, warn: () => {} }) },
       });
       const enrollmentResult = enrollmentFactory.mock.results.at(-1);
       const service = runtime.workerEnvironmentService;

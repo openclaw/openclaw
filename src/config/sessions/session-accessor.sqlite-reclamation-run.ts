@@ -24,6 +24,7 @@ import { publishSessionEntryWorkerInvalidations } from "./session-accessor.sqlit
 import type {
   SessionDeletionPlanningOperation,
   SessionDeletionPlanningResult,
+  SessionMaintenanceLiveProtection,
   SqliteSessionReclamationPlan,
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
@@ -104,6 +105,7 @@ export async function runSessionDeletionPlanning(
 export async function runSqliteSessionReclamation(params: {
   diagnostics?: SqliteSessionReclamationDiagnostics;
   assertCommitAllowed?: () => void;
+  refreshMaintenanceProtection?: () => SessionMaintenanceLiveProtection;
   forceInProcess: boolean;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
   onWorkerResult?: (
@@ -125,6 +127,9 @@ export async function runSqliteSessionReclamation(params: {
     return await runExclusiveSqliteSessionWrite(
       params.plan.databaseOptions,
       async () => {
+        if (params.plan.kind === "maintenance-plan") {
+          Object.assign(params.plan.input, params.refreshMaintenanceProtection?.());
+        }
         params.assertCommitAllowed?.();
         return await withSqliteSessionDatabase(
           params.plan.databaseOptions,
@@ -274,6 +279,7 @@ function prepareReclamationWorkerTransferList(plan: SqliteSessionReclamationPlan
 async function runPreparedSqliteSessionReclamation(
   params: {
     diagnostics?: SqliteSessionReclamationDiagnostics;
+    refreshMaintenanceProtection?: () => SessionMaintenanceLiveProtection;
     onWorkerResult?: (
       result: SqliteSessionReclamationResult,
       databaseIdentity: string | symbol,
@@ -323,12 +329,14 @@ async function runPreparedSqliteSessionReclamation(
             plan.databaseOptions,
             async () => {
               let refusal: { error: unknown } | undefined;
+              let maintenanceProtection: SessionMaintenanceLiveProtection | undefined;
               try {
+                maintenanceProtection = params.refreshMaintenanceProtection?.();
                 assertCommitAllowed();
               } catch (error) {
                 refusal = { error };
               }
-              const completed = await run(refusal);
+              const completed = await run(refusal, maintenanceProtection);
               if (completed) {
                 // Publish captured identities after transaction settlement, before releasing the writer.
                 const publishRemoval =

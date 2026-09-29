@@ -202,14 +202,16 @@ files. Unchanged source stays in place with warm Git index stat data. Git's stag
 tracking and the final raw transport tree use separate indexes, preserving the
 same ignored-file and untracked-file selection rules. The wrapper reports copied
 and reused file counts and preparation time.
+Commits on the same retained source ref keep the mirror reusable; each command
+still records its full current witness and rechecks the source revision before sealing.
 
 The mirror remains exclusively locked for the entire command, including artifact
 preservation and lease-claim restoration. An overlapping run from the same worktree
 prints a message and builds an independent fresh capsule. Only completed cleanup
 records an idle mirror for reuse; a missing witness, unsupported staging location,
 or unresolved owner uses fresh staging. Changed source during freezing fails the
-run. Cache metadata, payload, witness, or Git-version mismatches rebuild cold before
-upload. Source enumeration and metadata checks still scale with the repository;
+run. Cache metadata, payload, witness repository or ref, or Git-version mismatches
+rebuild cold before upload. Source enumeration and metadata checks still scale with the repository;
 source-byte copying and hashing scale with changed files on warm runs.
 Private mirrors disable Git hooks and fsmonitor; source enumeration also disables
 fsmonitor in mirror mode. Other active Git callbacks retain the preparation hold
