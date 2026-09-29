@@ -1544,7 +1544,10 @@ describe("google transport stream", () => {
       request.resume();
       request.on("end", () => {
         response.writeHead(200, { "content-type": "text/event-stream" });
-        response.end(`data: ${"x".repeat(16 * 1024 * 1024)}`);
+        response.end(
+          'data: {"candidates":[{"finishReason":"STOP"}]}\n\n' +
+            `data: ${"x".repeat(16 * 1024 * 1024)}`,
+        );
       });
     });
     await new Promise<void>((resolve) => {

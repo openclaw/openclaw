@@ -967,6 +967,9 @@ async function* parseGoogleSseChunks(
         const rawEvent = buffer.slice(0, boundary.index);
         buffer = buffer.slice(boundary.index + boundary[0].length);
         boundary = GOOGLE_SSE_EVENT_BOUNDARY_RE.exec(buffer);
+        if (boundary === null && Buffer.byteLength(buffer, "utf8") > GOOGLE_SSE_FRAME_MAX_BYTES) {
+          throw new Error(`Google SSE frame exceeds ${GOOGLE_SSE_FRAME_MAX_BYTES} bytes`);
+        }
         const data = rawEvent
           .split(/\r\n|\n|\r/u)
           .filter((line) => line.startsWith("data:"))
