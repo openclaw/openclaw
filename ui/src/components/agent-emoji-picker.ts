@@ -5,6 +5,7 @@ import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
 import emojiDefinitions from "markdown-it-emoji/lib/data/full.mjs";
 import { t } from "../i18n/index.ts";
+import { generateUUID } from "../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { strokeIcon } from "./icons-tools.ts";
 import { syncPopoverLabel } from "./web-awesome-popover.ts";
@@ -46,7 +47,7 @@ export class AgentEmojiPicker extends OpenClawLightDomElement {
   @property({ type: Boolean }) disabled = false;
   @property({ attribute: false }) onSelect: (emoji: string) => void = () => undefined;
   @state() private query = "";
-  private readonly triggerId = `agent-emoji-trigger-${crypto.randomUUID()}`;
+  private readonly triggerId = `agent-emoji-trigger-${generateUUID()}`;
 
   private select(emoji: string) {
     if (this.disabled || !emoji.trim()) {

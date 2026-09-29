@@ -173,6 +173,12 @@ suite.define(() => {
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
+        await page.addInitScript(() => {
+          Object.defineProperty(Crypto.prototype, "randomUUID", {
+            configurable: true,
+            value: undefined,
+          });
+        });
         const config = { agents: { list: [{ id: "main" }, { id: "emoji" }] } };
         const hydratedEmojiAgent = { id: "emoji", identity: { name: "Rocket" }, name: "Rocket" };
         const gateway = await installMockGateway(page, {
@@ -209,6 +215,8 @@ suite.define(() => {
 
         const response = await page.goto(`${suite.server.baseUrl}settings/agents/main/tools`);
         expect(response?.status()).toBe(200);
+        expect(await page.evaluate(() => typeof crypto.randomUUID)).toBe("undefined");
+        expect(await page.evaluate(() => typeof crypto.getRandomValues)).toBe("function");
         await gateway.waitForRequest("agents.list");
         await gateway.waitForRequest("config.get");
         const agentSelect = page.locator(".settings-sidebar__agent openclaw-agent-select");
