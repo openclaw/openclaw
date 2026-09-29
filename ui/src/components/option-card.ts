@@ -52,6 +52,14 @@ class OptionCard extends LitElement {
       return;
     }
     this.focusPreselection = false;
+    const activeElement = this.ownerDocument.activeElement;
+    if (
+      activeElement &&
+      activeElement !== this.ownerDocument.body &&
+      !this.contains(activeElement)
+    ) {
+      return;
+    }
     const selected = [...this.querySelectorAll<HTMLButtonElement>(".option-card__choice")].find(
       (button) => button.dataset.optionValue === this.selectedValue,
     );

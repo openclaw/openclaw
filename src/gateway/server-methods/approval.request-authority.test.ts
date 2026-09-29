@@ -2,6 +2,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveExecApprovalRequestAllowedDecisions,
@@ -17,6 +21,7 @@ import {
   createOpenClawTestState,
   withOpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import { invalidateGatewayDeviceRevocation } from "../device-revocation.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
@@ -36,7 +41,10 @@ beforeAll(async () => {
   sharedState = await createOpenClawTestState({ label: "approval-request-custody" });
 });
 beforeEach(() => sharedState?.applyEnv());
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
 afterAll(async () => sharedState?.cleanup());
 
 const unrelatedAgentConfig: OpenClawConfig = {
@@ -67,6 +75,8 @@ it.each([
   "config-unrelated-agent",
   "config-target-routing-aba",
   "config-target-store-aba",
+  "config-other-identity",
+  "config-own-identity-aba",
   "config-role-revoked",
   "config-role-aba",
   "config-routing-aba",
@@ -82,6 +92,7 @@ it.each([
     "config-equivalent",
     "config-unrelated",
     "config-unrelated-agent",
+    "config-other-identity",
     "native-config-equivalent",
     "native-config-unrelated",
     "native-config-unrelated-agent",
@@ -148,10 +159,16 @@ it.each([
       ...(native ? { sessionMutationCommitGuard: nativeGuard } : {}),
     });
     const initialConfig: OpenClawConfig = {};
+    setRuntimeConfigSnapshot(initialConfig);
+    client.authPolicy = captureGatewayAuthPolicy(initialConfig, {
+      role: "operator",
+      verifiedIdentity: "reviewer@example.test",
+    });
     let currentConfig = initialConfig;
     invocation.context.getRuntimeConfig = () => currentConfig;
     const publishConfig = (config: OpenClawConfig) => {
       currentConfig = config;
+      setRuntimeConfigSnapshot(config);
       publishOperatorRoleConfigChange(invocation.context);
     };
     expect(before).toMatchObject({
@@ -229,6 +246,21 @@ it.each([
                   publishConfig({
                     ...initialConfig,
                     session: { store: path.join(state.stateDir, "moved", "{agentId}.sqlite") },
+                  });
+                  publishConfig(initialConfig);
+                  break;
+                case "config-other-identity":
+                case "config-own-identity-aba":
+                  publishConfig({
+                    gateway: {
+                      auth: {
+                        identityScopes: {
+                          [revocation === "config-other-identity"
+                            ? "other@example.test"
+                            : "reviewer@example.test"]: ["operator.approvals"],
+                        },
+                      },
+                    },
                   });
                   publishConfig(initialConfig);
                   break;
@@ -360,18 +392,26 @@ it("keeps a legacy decision wait when an unrelated agent is added", async () => 
     waiting.resolve();
     return decision;
   });
+  const client = createClient({ deviceId: "wait-reviewer" });
   const invocation = createApprovalInvocation({
     handlers: createExecApprovalHandlers(exec),
     method: "exec.approval.waitDecision",
     body: { id: record.id },
-    client: createClient({ deviceId: "wait-reviewer" }),
+    client,
   });
-  let currentConfig: OpenClawConfig = {};
+  const initialConfig: OpenClawConfig = {};
+  setRuntimeConfigSnapshot(initialConfig);
+  client.authPolicy = captureGatewayAuthPolicy(initialConfig, {
+    role: "operator",
+    verifiedIdentity: "reviewer@example.test",
+  });
+  let currentConfig = initialConfig;
   invocation.context.getRuntimeConfig = () => currentConfig;
   try {
     const pending = invocation.invoke();
     await waiting.promise;
     currentConfig = unrelatedAgentConfig;
+    setRuntimeConfigSnapshot(currentConfig);
     publishOperatorRoleConfigChange(invocation.context);
     await expect(exec.resolve(record.id, "allow-once")).resolves.toBe(true);
     await expect(pending).resolves.toMatchObject({

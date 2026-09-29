@@ -22,6 +22,7 @@ import {
   resolveRepoToolBinPath,
 } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mts";
+import { resolveUntouchedOxlintExclusions } from "./lib/oxlint-changed-scope.mts";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
@@ -113,14 +114,16 @@ function oxlintOption(args: string[], name: string, short: string) {
   };
 }
 
-function advisoryLimitRules(rules: DummyRuleMap | undefined) {
+function advisoryLimitRules(rules: DummyRuleMap | undefined, onlyMaxLines = false) {
   const overrides: DummyRuleMap = {};
+  const originalRules: DummyRuleMap = {};
   let enabled = false;
   for (const [name, rule] of Object.entries(rules ?? {})) {
     const id = name.startsWith("eslint/") ? name.slice("eslint/".length) : name;
-    if (!LIMIT_RULES.has(id)) {
+    if (!LIMIT_RULES.has(id) || (onlyMaxLines && id !== "max-lines")) {
       continue;
     }
+    originalRules[name] = rule;
     overrides[name] = rule;
     const severity = Array.isArray(rule) ? rule[0] : rule;
     // Replay disabled scopes too: a later exclusion must still override an earlier limit.
@@ -138,7 +141,7 @@ function advisoryLimitRules(rules: DummyRuleMap | undefined) {
     overrides[name] = Array.isArray(rule) ? ["warn", ...rule.slice(1)] : "warn";
     enabled = true;
   }
-  return { rules: overrides, enabled };
+  return { rules: overrides, originalRules, enabled };
 }
 
 async function runWithAdvisoryLimits(
@@ -160,24 +163,54 @@ async function runWithAdvisoryLimits(
     typeof evidenceId === "string" &&
     /^[\w:-]{1,160}$/u.test(evidenceId) &&
     !args.some((arg) => /^(?:--output-file|--fix(?:-suggestions|-dangerously)?)(?:=|$)/u.test(arg));
+  const githubAdvisory = limitsAreAdvisory(env);
+  let untouchedExclusions = githubAdvisory
+    ? undefined
+    : resolveUntouchedOxlintExclusions(configPath, env);
   if (
-    (!limitsAreAdvisory(env) && !evidenceEnabled) ||
+    (!githubAdvisory && !untouchedExclusions && !evidenceEnabled) ||
     args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg.replace(/[=][\s\S]*$/u, ""))) ||
     !fs.existsSync(configPath)
   ) {
     return { status: await runManagedCommand(command) };
   }
   const config = JSON5.parse<OxlintConfig>(fs.readFileSync(configPath, "utf8"));
-  const rootRules = advisoryLimitRules(config.rules);
+  // A child alone cannot replay inherited cap exceptions or disabled scopes safely.
+  if (!githubAdvisory && config.extends?.length) {
+    untouchedExclusions = undefined;
+  }
+  const rootRules = advisoryLimitRules(config.rules, !githubAdvisory);
   let enabled = rootRules.enabled;
-  const overrides = (config.overrides ?? []).flatMap((scope) => {
-    const scopedRules = advisoryLimitRules(scope.rules);
+  const overrides: NonNullable<OxlintConfig["overrides"]> = [];
+  if (untouchedExclusions && rootRules.enabled) {
+    overrides.push({
+      files: ["**/*"],
+      excludeFiles: untouchedExclusions,
+      rules: rootRules.rules,
+    });
+  }
+  for (const scope of config.overrides ?? []) {
+    const scopedRules = advisoryLimitRules(scope.rules, !githubAdvisory);
     enabled ||= scopedRules.enabled;
-    return Object.keys(scopedRules.rules).length > 0
-      ? [{ files: scope.files, excludeFiles: scope.excludeFiles, rules: scopedRules.rules }]
-      : [];
-  });
-  enabled &&= limitsAreAdvisory(env);
+    if (Object.keys(scopedRules.rules).length === 0) {
+      continue;
+    }
+    if (untouchedExclusions) {
+      overrides.push({
+        files: scope.files,
+        excludeFiles: scope.excludeFiles,
+        rules: scopedRules.originalRules,
+      });
+    }
+    overrides.push({
+      files: scope.files,
+      excludeFiles: untouchedExclusions
+        ? [...(scope.excludeFiles ?? []), ...untouchedExclusions]
+        : scope.excludeFiles,
+      rules: scopedRules.rules,
+    });
+  }
+  enabled &&= githubAdvisory || Boolean(untouchedExclusions);
   if (!enabled && !evidenceEnabled) {
     return { status: await runManagedCommand(command) };
   }
@@ -193,7 +226,7 @@ async function runWithAdvisoryLimits(
       advisoryConfig,
       JSON.stringify({
         extends: [configPath],
-        rules: rootRules.rules,
+        rules: githubAdvisory ? rootRules.rules : undefined,
         overrides,
         plugins: config.plugins,
         categories: config.categories,
@@ -222,6 +255,9 @@ async function runWithAdvisoryLimits(
   };
   try {
     const configuredArgs = advisoryConfig ? configOption.replace(advisoryConfig) : args;
+    if (!githubAdvisory && !evidenceEnabled) {
+      return { status: await runManagedCommand({ ...command, args: configuredArgs }) };
+    }
     const format = oxlintOption(configuredArgs, "--format", "-f");
     let output = "";
     let stderr = "";

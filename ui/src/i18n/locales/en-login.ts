@@ -24,6 +24,13 @@ const enLogin = {
     toggleSecretVisibility: "Toggle Gateway secret visibility",
     failure: {
       rawError: "Raw error",
+      busy: {
+        title: "Gateway busy, retrying…",
+        summary:
+          "The Gateway is reachable, but the connection could not be opened. This page will retry automatically.",
+        countdown: "Retrying in {seconds}s…",
+        retrying: "Retrying now…",
+      },
       profileUnavailable: {
         title: "Profile verification unavailable",
         stepRetry: "Retry shortly.",

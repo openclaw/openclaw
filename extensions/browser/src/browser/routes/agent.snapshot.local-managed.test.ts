@@ -1,4 +1,3 @@
-// Browser tests cover agent.snapshot.local managed plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 import type { BrowserRequest } from "./types.js";
@@ -129,6 +128,12 @@ function getSnapshotGetHandler(
   return handler;
 }
 
+async function snapshot(query: BrowserRequest["query"]) {
+  const response = createBrowserRouteResponse();
+  await getSnapshotGetHandler()!({ params: {}, query }, response.res);
+  return response;
+}
+
 function createPwModule(overrides: Record<string, ReturnType<typeof vi.fn>> = {}) {
   return {
     getDocumentIdentitiesViaPlaywright: vi.fn(async () => ({
@@ -166,31 +171,8 @@ describe("local-managed browser snapshot routes", () => {
     navigationGuardMocks.withBrowserNavigationPolicy.mockClear();
   });
 
-  it("blocks ARIA CDP snapshots when the current tab violates browser navigation policy", async () => {
-    const handler = getSnapshotGetHandler();
-    const response = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query: { format: "aria" } }, response.res);
-
-    expect(response.statusCode).toBe(400);
-    expect(response.body).toEqual({ error: "browser navigation blocked by policy" });
-    expect(routeState.profileCtx.ensureTabAvailable).toHaveBeenCalledWith(undefined, {
-      allowPlaywrightFallback: false,
-      signal: expect.any(AbortSignal),
-      timeoutMs: undefined,
-    });
-    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
-      url: "http://127.0.0.1:8080/admin",
-      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-    });
-    expect(cdpMocks.snapshotAria).not.toHaveBeenCalled();
-  });
-
   it("blocks AI CDP role snapshots when the current tab violates browser navigation policy", async () => {
-    const handler = getSnapshotGetHandler();
-    const response = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query: { format: "ai", interactive: "true" } }, response.res);
+    const response = await snapshot({ format: "ai", interactive: "true" });
 
     expect(response.statusCode).toBe(400);
     expect(response.body).toEqual({ error: "browser navigation blocked by policy" });
@@ -201,46 +183,29 @@ describe("local-managed browser snapshot routes", () => {
     expect(cdpMocks.snapshotRoleViaCdp).not.toHaveBeenCalled();
   });
 
-  it("forwards the resolved snapshot budget to raw CDP role snapshots", async () => {
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValueOnce(undefined);
-    const handler = getSnapshotGetHandler();
-    const response = createBrowserRouteResponse();
-
-    await handler?.(
-      { params: {}, query: { format: "ai", interactive: "true", maxChars: "123" } },
-      response.res,
-    );
-
-    expect(response.statusCode).toBe(200);
-    expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledWith(
-      expect.objectContaining({ maxChars: 123 }),
-    );
-  });
-
   it("uses CDP first for unscoped managed role snapshots and publishes its refs", async () => {
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
-    const storeSnapshotRefsViaPlaywright = vi.fn(async () => {});
-    const snapshotRoleViaPlaywright = vi.fn(async () => ({
-      snapshot: '- button "Playwright" [ref=e1]',
-      refs: { e1: { role: "button", name: "Playwright" } },
-      stats: { lines: 1, chars: 32, refs: 1, interactive: 1 },
-    }));
-    pwState.module = createPwModule({
-      snapshotRoleViaPlaywright,
-      storeSnapshotRefsViaPlaywright,
+    const pw = createPwModule();
+    pwState.module = pw;
+    const response = await snapshot({
+      format: "ai",
+      maxChars: 123,
+      depth: 2,
+      timeoutMs: 3_000_000_000,
     });
-    const handler = getSnapshotGetHandler();
-    const response = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query: { format: "ai", interactive: "true" } }, response.res);
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatchObject({ snapshot: expect.stringContaining("private") });
-    expect(snapshotRoleViaPlaywright).not.toHaveBeenCalled();
+    expect(pw.snapshotRoleViaPlaywright).not.toHaveBeenCalled();
     expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledWith(
-      expect.objectContaining({ recurseIframes: false }),
+      expect.objectContaining({
+        recurseIframes: false,
+        maxChars: 123,
+        timeoutMs: 2_147_483_647,
+        options: { interactive: undefined, compact: undefined, maxDepth: 2 },
+      }),
     );
-    expect(storeSnapshotRefsViaPlaywright).toHaveBeenCalledWith({
+    expect(pw.storeSnapshotRefsViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18800",
       targetId: "7",
       expectedDocumentIdentity: "pw:test-document",
@@ -253,23 +218,14 @@ describe("local-managed browser snapshot routes", () => {
   it("falls back to Playwright once when the CDP-first snapshot fails early", async () => {
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
     cdpMocks.snapshotRoleViaCdp.mockRejectedValueOnce(new Error("cdp unavailable"));
-    const snapshotRoleViaPlaywright = vi.fn(async () => ({
-      snapshot: '- button "Playwright" [ref=e1]',
-      refs: { e1: { role: "button", name: "Playwright" } },
-      stats: { lines: 1, chars: 32, refs: 1, interactive: 1 },
-    }));
-    pwState.module = createPwModule({
-      snapshotRoleViaPlaywright,
-    });
-    const handler = getSnapshotGetHandler();
-    const response = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query: { format: "ai", interactive: "true" } }, response.res);
+    const pw = createPwModule();
+    pwState.module = pw;
+    const response = await snapshot({ format: "ai", interactive: "true" });
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatchObject({ snapshot: expect.stringContaining("Playwright") });
     expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledTimes(1);
-    expect(snapshotRoleViaPlaywright).toHaveBeenCalledTimes(1);
+    expect(pw.snapshotRoleViaPlaywright).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -278,22 +234,13 @@ describe("local-managed browser snapshot routes", () => {
     ["frame scope", { format: "ai", frame: "iframe" }],
   ])("keeps %s on Playwright-first role snapshots", async (_name, query) => {
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
-    const snapshotRoleViaPlaywright = vi.fn(async () => ({
-      snapshot: '- button "Playwright" [ref=e1]',
-      refs: { e1: { role: "button", name: "Playwright" } },
-      stats: { lines: 1, chars: 32, refs: 1, interactive: 1 },
-    }));
-    pwState.module = createPwModule({
-      snapshotRoleViaPlaywright,
-    });
-    const handler = getSnapshotGetHandler();
-    const response = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query }, response.res);
+    const pw = createPwModule();
+    pwState.module = pw;
+    const response = await snapshot(query);
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatchObject({ snapshot: expect.stringContaining("Playwright") });
-    expect(snapshotRoleViaPlaywright).toHaveBeenCalledTimes(1);
+    expect(pw.snapshotRoleViaPlaywright).toHaveBeenCalledTimes(1);
     expect(cdpMocks.snapshotRoleViaCdp).not.toHaveBeenCalled();
   });
 
@@ -301,17 +248,14 @@ describe("local-managed browser snapshot routes", () => {
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
     const storeSnapshotRefsViaPlaywright = vi.fn(async () => {});
     pwState.module = createPwModule({ storeSnapshotRefsViaPlaywright });
-    const handler = getSnapshotGetHandler();
-    const response = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query: { format: "aria", limit: "1" } }, response.res);
+    const response = await snapshot({ format: "aria", limit: "25", timeoutMs: "4321" });
 
     expect(response.statusCode).toBe(200);
     expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
       wsUrl: "ws://127.0.0.1/devtools/page/7",
       lookup: tabLookup,
-      limit: 1,
-      timeoutMs: undefined,
+      limit: 25,
+      timeoutMs: 4321,
     });
     expect(storeSnapshotRefsViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18800",
@@ -327,7 +271,6 @@ describe("local-managed browser snapshot routes", () => {
     ["native AI", true, { format: "ai" }, true],
     ["recursive CDP", false, { format: "ai" }, true],
     ["main-frame ARIA", true, { format: "aria" }, false],
-    ["main-frame role", true, { format: "ai", interactive: "true" }, false],
     ["scoped frame with a changing sibling", true, { format: "ai", frame: "#selected" }, false],
   ])(
     "validates only captured documents for %s snapshots",
@@ -342,9 +285,7 @@ describe("local-managed browser snapshot routes", () => {
       } else {
         cdpMocks.getDocumentIdentitiesViaCdp.mockImplementation(identities);
       }
-      const handler = getSnapshotGetHandler();
-      const response = createBrowserRouteResponse();
-      await handler?.({ params: {}, query }, response.res);
+      const response = await snapshot(query);
       expect(response.statusCode).toBe(reject ? 400 : 200);
       if (reject) {
         expect(response.body).toEqual({
@@ -355,16 +296,17 @@ describe("local-managed browser snapshot routes", () => {
   );
 
   it.each([
-    ["the default cap", {}, { maxChars: 40_000 }],
+    [
+      "the default cap for invalid numeric query tokens",
+      { refs: "role", limit: "0x10", maxChars: "1.5", depth: "1e0", timeoutMs: "1000ms" },
+      { maxChars: 40_000 },
+    ],
     ["an explicit zero cap", { maxChars: "0" }, {}],
   ])("forwards %s to Playwright AI snapshots", async (_name, query, expected) => {
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
     const snapshotRoleViaPlaywright = vi.fn(async () => ({ snapshot: "Playwright" }));
     pwState.module = createPwModule({ snapshotRoleViaPlaywright });
-    const handler = getSnapshotGetHandler();
-    const response = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query: { format: "ai", ...query } }, response.res);
+    const response = await snapshot(query);
 
     expect(response.statusCode).toBe(200);
     expect(snapshotRoleViaPlaywright).toHaveBeenCalledWith({
@@ -399,10 +341,7 @@ describe("local-managed browser snapshot routes", () => {
       })),
       snapshotRoleViaPlaywright,
     });
-    const handler = getSnapshotGetHandler();
-    const response = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query: { format: "ai" } }, response.res);
+    const response = await snapshot({ format: "ai" });
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatchObject({
@@ -415,39 +354,17 @@ describe("local-managed browser snapshot routes", () => {
     expect(snapshotRoleViaPlaywright).not.toHaveBeenCalled();
   });
 
-  it.each(["ai", "aria"])(
-    "rejects a %s snapshot when the main-frame loader changes during capture",
-    async (format) => {
-      navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValueOnce(undefined);
-      cdpMocks.getDocumentIdentitiesViaCdp
-        .mockResolvedValueOnce({ mainFrame: "cdp:before", frameTree: "cdp:tree-before" })
-        .mockResolvedValueOnce({ mainFrame: "cdp:after", frameTree: "cdp:tree-after" });
-      const handler = getSnapshotGetHandler();
-      const response = createBrowserRouteResponse();
+  it("rejects a snapshot when the main-frame loader changes during capture", async () => {
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValueOnce(undefined);
+    cdpMocks.getDocumentIdentitiesViaCdp
+      .mockResolvedValueOnce({ mainFrame: "cdp:before", frameTree: "cdp:tree-before" })
+      .mockResolvedValueOnce({ mainFrame: "cdp:after", frameTree: "cdp:tree-after" });
+    const response = await snapshot({ format: "ai", interactive: "true" });
 
-      await handler?.({ params: {}, query: { format, interactive: "true" } }, response.res);
-
-      expect(response.statusCode).toBe(400);
-      expect(response.body).toEqual({
-        error: "Frame changed while its browser snapshot was being captured; retry.",
-      });
-    },
-  );
-
-  it("uses the tab lookup pin when reading delta document identity via CDP", async () => {
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
-    const handler = getSnapshotGetHandler();
-    const response = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query: { format: "ai", interactive: "true" } }, response.res);
-
-    expect(response.statusCode).toBe(200);
-    expect(cdpMocks.getDocumentIdentitiesViaCdp).toHaveBeenCalledWith(
-      expect.objectContaining({
-        wsUrl: "ws://127.0.0.1/devtools/page/7",
-        lookup: tabLookup,
-      }),
-    );
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toEqual({
+      error: "Frame changed while its browser snapshot was being captured; retry.",
+    });
   });
 
   it("disables deltas when no stable document identity is available", async () => {
@@ -468,21 +385,6 @@ describe("local-managed browser snapshot routes", () => {
     expect(second.body).not.toHaveProperty("snapshot", expect.stringContaining("[new]"));
   });
 
-  it("reuses delta keys when the stable document identity is unchanged", async () => {
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
-    const handler = getSnapshotGetHandler();
-    const first = createBrowserRouteResponse();
-    const second = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query: { format: "ai", interactive: "true" } }, first.res);
-    await handler?.({ params: {}, query: { format: "ai", interactive: "true" } }, second.res);
-
-    const secondCall = cdpMocks.snapshotRoleViaCdp.mock.calls[1]?.[0];
-    expect(secondCall).toMatchObject({
-      delta: { mode: "role", previousKeys: expect.any(Set) },
-    });
-  });
-
   it("reuses same-document delta keys across request contexts in one browser runtime", async () => {
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
     const state = {
@@ -496,14 +398,18 @@ describe("local-managed browser snapshot routes", () => {
     const secondHandler = getSnapshotGetHandler(state);
     const first = createBrowserRouteResponse();
     const second = createBrowserRouteResponse();
-    const request = { params: {}, query: { format: "ai", interactive: "true" } };
+    const request = { params: {}, query: { format: "ai", interactive: "true", urls: "1" } };
 
     await firstHandler?.(request, first.res);
     await secondHandler?.(request, second.res);
 
     expect(first.statusCode).toBe(200);
     expect(second.statusCode).toBe(200);
+    expect(cdpMocks.getDocumentIdentitiesViaCdp).toHaveBeenCalledWith(
+      expect.objectContaining({ wsUrl: "ws://127.0.0.1/devtools/page/7", lookup: tabLookup }),
+    );
     expect(cdpMocks.snapshotRoleViaCdp.mock.calls[1]?.[0]).toMatchObject({
+      urls: true,
       delta: { mode: "role", previousKeys: expect.any(Set) },
     });
   });

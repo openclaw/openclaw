@@ -149,9 +149,8 @@ export function assertGatewayServiceManagementAllowedForUpdate(
   try {
     assertGatewayServiceMutationAllowed("manage the gateway service during update", env);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
     throw new GatewayServiceUpdateOwnershipError(
-      message,
+      err instanceof Error ? err.message : String(err),
       err,
       undefined,
       "service-mutation-refused",
@@ -188,9 +187,7 @@ function serviceInspectionWarningMessage(state: GatewayServiceState): string {
     return `${GATEWAY_SERVICE_INSPECTION_WARNING} Processes remain in the systemd service cgroup (${tasksCurrent} tasks). Have their owner stop them before state maintenance.`;
   }
   const detail = runtime?.inspectionFailure?.detail;
-  return detail
-    ? `${GATEWAY_SERVICE_INSPECTION_WARNING} ${detail}`
-    : GATEWAY_SERVICE_INSPECTION_WARNING;
+  return GATEWAY_SERVICE_INSPECTION_WARNING + (detail ? ` ${detail}` : "");
 }
 
 export function observedSystemdManagerUid(state: GatewayServiceState): number | undefined {

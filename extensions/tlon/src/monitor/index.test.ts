@@ -7,6 +7,7 @@ import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-o
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { TLON_PENDING_APPROVAL_LIMIT, type PendingApproval } from "../settings.js";
 import { useTlonMonitorFixture } from "./monitor.test-harness.js";
 
 const {
@@ -299,6 +300,83 @@ it("persists group invite approval before notification and acknowledgement", asy
       app: "chat",
       mark: "chat-dm-action",
     });
+  });
+});
+
+it("preserves an oversized queue and applies a bare owner approval to its newest request", async () => {
+  authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
+  const pendingApprovals = Array.from(
+    { length: TLON_PENDING_APPROVAL_LIMIT + 1 },
+    (_, index): PendingApproval => ({
+      id: `dm-${index}`,
+      type: "dm",
+      requestingShip: `~requester-${index}`,
+      timestamp: index,
+    }),
+  );
+  settingsManagerMock.load.mockResolvedValueOnce({ pendingApprovals });
+  ingressMock.receive.mockResolvedValue({ kind: "ignored" });
+
+  await withMonitor(async () => {
+    const chatSubscription = getSubscription("chat", "/v3");
+    sseClientMock.poke.mockClear();
+
+    await chatSubscription.event({
+      whom: "~nec",
+      id: "approve-newest",
+      response: {
+        add: { essay: { author: "~nec", content: [{ inline: ["approve"] }], sent: 1 } },
+      },
+    });
+
+    const settingWrites = sseClientMock.poke.mock.calls
+      .map(([payload]) => payload.json?.["put-entry"])
+      .filter(Boolean);
+    const allowlistWrite = settingWrites.find((entry) => entry["entry-key"] === "dmAllowlist");
+    expect(allowlistWrite?.value).toEqual([`~requester-${TLON_PENDING_APPROVAL_LIMIT}`]);
+    expect(allowlistWrite?.value).not.toContain(`~requester-${TLON_PENDING_APPROVAL_LIMIT - 1}`);
+
+    const pendingWrite = settingWrites.find((entry) => entry["entry-key"] === "pendingApprovals");
+    const remaining = JSON.parse(String(pendingWrite?.value)) as PendingApproval[];
+    expect(remaining).toHaveLength(TLON_PENDING_APPROVAL_LIMIT);
+    expect(remaining.at(-1)?.requestingShip).toBe(`~requester-${TLON_PENDING_APPROVAL_LIMIT - 1}`);
+  });
+});
+
+it("keeps saturated DM invites retryable while notifying the owner once", async () => {
+  authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
+  const pendingApprovals = Array.from(
+    { length: TLON_PENDING_APPROVAL_LIMIT },
+    (_, index): PendingApproval => ({
+      id: `dm-${index}`,
+      type: "dm",
+      requestingShip: `~requester-${index}`,
+      timestamp: index,
+    }),
+  );
+  settingsManagerMock.load.mockResolvedValueOnce({ pendingApprovals });
+  ingressMock.receive.mockResolvedValue({ kind: "ignored" });
+
+  await withMonitor(async () => {
+    const chatSubscription = getSubscription("chat", "/v3");
+    sseClientMock.poke.mockClear();
+    sseClientMock.scry.mockClear();
+    const inviteEvent = [{ ship: "~overflow" }];
+
+    await chatSubscription.event(inviteEvent);
+    await chatSubscription.event(inviteEvent);
+
+    const ownerNotices = sseClientMock.poke.mock.calls
+      .map(([payload]) => payload)
+      .filter((payload) => payload.app === "chat" && payload.mark === "chat-dm-action");
+    expect(ownerNotices).toHaveLength(1);
+    expect(JSON.stringify(ownerNotices[0]?.json)).toContain("Pending approval queue is full");
+    expect(
+      sseClientMock.poke.mock.calls.filter(
+        ([payload]) => payload.json?.["put-entry"]?.["entry-key"] === "pendingApprovals",
+      ),
+    ).toHaveLength(0);
+    expect(sseClientMock.scry).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -1,5 +1,8 @@
 import path from "node:path";
 import { isPathInside } from "../infra/path-guards.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
+import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
+import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import type {
   InstalledPluginIndex,
@@ -9,6 +12,7 @@ import { resolveRetainedManagedNpmInstallPackageInfo } from "./managed-npm-reten
 import { safeRealpathSync } from "./path-safety.js";
 import { getPluginCache } from "./plugin-cache.js";
 import type { PluginCache } from "./plugin-cache.types.js";
+import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 import type {
   PluginNativeArtifactFact,
   PluginNativeNamespaceFact,
@@ -18,9 +22,15 @@ import {
   createPluginNativeCaptureRoot,
   retainPluginNativeCapturePath,
 } from "./plugin-source-capture-directory.js";
+import { resolvePluginSourceCaptureStateDir } from "./plugin-source-capture-state-dir.js";
 
 type NativeSnapshot = ReturnType<typeof createPluginNativeCaptureRoot>;
 export type AdmissionState = {
+  readonly viewKey: string;
+  readonly captureStateDir: string;
+  readonly publicationStateDir: string;
+  readonly artifactPreservingReadOnly: boolean;
+  preparedIndexes: WeakSet<InstalledPluginIndex>;
   owners: Map<string, InstalledPluginIndexRecord>;
   managedRoots: Map<string, "retained-npm" | "installed">;
   receipts: Map<string, PluginSourceAdmissionReceipt>;
@@ -33,9 +43,13 @@ export type AdmissionState = {
   publishing: Set<string>;
   borrowers: Set<object>;
 };
-const admissions = new WeakMap<PluginCache, AdmissionState>();
+const admissions = new WeakMap<PluginCache, Map<string, AdmissionState>>();
 const admissionScopes = new WeakMap<PluginCache, Set<AdmissionState>>();
 export const snapshotOwners = new WeakMap<NativeSnapshot, Set<object>>();
+
+function resolveAdmissionViewKey(readOnly = isArtifactPreservingStateRead()): string {
+  return `${readOnly ? "readonly" : "writable"}:${resolvePluginMetadataEnvFingerprint()}`;
+}
 
 export function retainNativePath(state: AdmissionState, filename: string): void {
   if (!state.pins.has(filename)) {
@@ -44,8 +58,7 @@ export function retainNativePath(state: AdmissionState, filename: string): void 
 }
 
 export async function settlePluginNativeAdmissions(cache = getPluginCache()): Promise<void> {
-  const state = admissions.get(cache);
-  if (state) {
+  for (const state of admissions.get(cache)?.values() ?? []) {
     await settleAdmissionState(state);
   }
 }
@@ -111,15 +124,28 @@ function bindAdmissionState(cache: PluginCache, state: AdmissionState): Admissio
   }
   scope.add(state);
   state.borrowers.add(scope);
-  admissions.set(cache, state);
+  let views = admissions.get(cache);
+  if (!views) {
+    views = new Map();
+    admissions.set(cache, views);
+  }
+  views.set(state.viewKey, state);
   return state;
 }
 
 export function nativeAdmissionStateFor(cache = getPluginCache()): AdmissionState {
-  const state = admissions.get(cache);
+  const artifactPreservingReadOnly = isArtifactPreservingStateRead();
+  const viewKey = resolveAdmissionViewKey(artifactPreservingReadOnly);
+  const state = admissions.get(cache)?.get(viewKey);
   return (
     state ??
     bindAdmissionState(cache, {
+      viewKey,
+      // Deferred publication and disposal can run after the caller restores its environment.
+      captureStateDir: resolvePluginSourceCaptureStateDir(),
+      publicationStateDir: resolveActivePluginInstallRoots().stateDir,
+      artifactPreservingReadOnly,
+      preparedIndexes: new WeakSet(),
       owners: new Map(),
       managedRoots: new Map(),
       receipts: new Map(),
@@ -135,7 +161,7 @@ export function nativeAdmissionStateFor(cache = getPluginCache()): AdmissionStat
   );
 }
 
-/** Private inspection caches share admitted payload custody, never registration authority. */
+/** Inspections in the same state view share payload custody, never registration authority. */
 export function inheritPluginNativeAdmissions(
   sourceCache: PluginCache,
   targetCache: PluginCache,
@@ -150,7 +176,7 @@ export function overlayPluginNativeAdmissions(
   index: InstalledPluginIndex,
   cache: PluginCache,
 ): InstalledPluginIndex {
-  const state = admissions.get(cache);
+  const state = admissions.get(cache)?.get(resolveAdmissionViewKey());
   if (!state || state.receipts.size === 0) {
     return index;
   }
@@ -178,6 +204,9 @@ export function preparePluginNativeAdmissions(
   cache = getPluginCache(),
 ): void {
   const state = nativeAdmissionStateFor(cache);
+  if (state.preparedIndexes.has(index)) {
+    return;
+  }
   for (const record of index.plugins) {
     const root = path.resolve(record.rootDir);
     if (state.owners.has(root)) {
@@ -219,5 +248,8 @@ export function preparePluginNativeAdmissions(
         state.files.set(source, { ...fact });
       }
     }
+  }
+  if (isDeeplyFrozenPlainData(index)) {
+    state.preparedIndexes.add(index);
   }
 }

@@ -237,7 +237,7 @@ export async function runWorkerDescriptor(
           prepareWorkerGitHubEnvironment({
             binding: descriptor.assignment.github!,
             stateDir,
-            runId: descriptor.assignment.runId,
+            turnId: descriptor.assignment.turnId,
             cwd: workspaceDir,
             signal: abortController.signal,
           }),

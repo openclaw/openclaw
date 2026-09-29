@@ -1102,6 +1102,7 @@ src/plugins/plugin-native-reference.ts
 src/plugins/plugin-package-metadata-capture.ts
 src/plugins/plugin-peer-link.ts
 src/plugins/plugin-policy-id.ts
+src/plugins/plugin-provider-request-policy.ts
 src/plugins/plugin-registry-comparison.ts
 src/plugins/plugin-registry-contributions.ts
 src/plugins/plugin-registry-id-normalizer.ts
@@ -1122,6 +1123,7 @@ src/plugins/plugin-source-capture-context.ts
 src/plugins/plugin-source-capture-directory.ts
 src/plugins/plugin-source-capture-native-loads.ts
 src/plugins/plugin-source-capture-path.ts
+src/plugins/plugin-source-capture-state-dir.ts
 src/plugins/plugin-source-file.ts
 src/plugins/plugin-source-references.ts
 src/plugins/plugin-source-verification.ts

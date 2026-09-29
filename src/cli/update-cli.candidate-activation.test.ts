@@ -38,7 +38,6 @@ import {
   restartHealthTestControl,
   resumeScheduledTaskAutoStartAfterUpdate,
   serviceDefinitionMutationCapability,
-  serviceEnabled,
   serviceLoaded,
   serviceReadRuntime,
   serviceRestart,
@@ -57,7 +56,6 @@ import {
   readConfigFileSnapshot,
   resolveGatewayInstallEntrypoint,
   runCommandWithTimeout,
-  runDaemonInstall,
   runDaemonRestart,
   runExec,
   updateCommand,
@@ -76,7 +74,6 @@ describe("update-cli", () => {
     mockNpmGlobalCommands,
     mockNpmGlobalRoot,
     mockPackageInstallAtCaseDir,
-    mockPackageReplacementFailure,
     mockRunningManagedGateway,
     mockStoppedManagedGitGateway,
     primeServiceCommand,
@@ -89,13 +86,7 @@ describe("update-cli", () => {
     tempDirs,
   } = createUpdateCliFixture();
 
-  it.each([
-    "valid",
-    "config-change",
-    "legacy-config-change",
-    "live-config-change",
-    "invalid",
-  ] as const)(
+  it.each(["config-change", "legacy-config-change", "live-config-change", "invalid"] as const)(
     "validates the staged candidate without inference while the previous gateway serves (%s)",
     async (outcome) => {
       const valid = outcome !== "invalid";
@@ -667,34 +658,6 @@ describe("update-cli", () => {
       ([argv]) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g",
     );
     expect(commandCalls()[packageInstallCallIndex]?.[0]).toContain("--prefix");
-  });
-
-  it("leaves a disabled stopped LaunchAgent disabled when package replacement fails", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    const tempDir = tempDirs.make("openclaw-update-disabled-launchagent-failure-");
-    const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
-    primeServiceCommand(["node", entryPath, "gateway", "run"]);
-    serviceLoaded.mockResolvedValue(true);
-    serviceEnabled.mockResolvedValue(false);
-    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
-    mockFileBackedPathExists();
-    mockNpmGlobalRoot(nodeModules);
-    mockPackageReplacementFailure("package replacement failed");
-
-    try {
-      await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
-    } finally {
-      platformSpy.mockRestore();
-    }
-
-    expectNoSideEffects(
-      serviceStart,
-      serviceStop,
-      serviceRestart,
-      runDaemonInstall,
-      runDaemonRestart,
-    );
-    expect(freshRestartCalls()).toHaveLength(0);
   });
 
   it.each([

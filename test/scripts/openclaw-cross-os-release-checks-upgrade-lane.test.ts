@@ -92,6 +92,7 @@ import {
   runFreshLane,
   runUpgradeLane,
 } from "../../scripts/lib/cross-os-release-checks/lanes.ts";
+import { writeSummary } from "../../scripts/lib/cross-os-release-checks/reporting.ts";
 
 const { createTempDir, trackTempDir } = createScriptTestHarness();
 
@@ -581,6 +582,102 @@ describe("cross-OS manual gateway lane evidence", () => {
     );
     expect(JSON.stringify(result)).not.toContain("npm-updater-private-fixture");
     expect(JSON.stringify(result)).not.toContain("npm install");
+  });
+
+  it.each([
+    "success",
+    "unsettled-exit",
+    "other failure",
+    "timeout",
+    "swap-cleanup",
+    "switched install",
+  ] as const)("retries the shipped Windows liveness defect once: %s", async (retryOutcome) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    arrangeSuccessfulLane();
+    const params = {
+      ...upgradeParams(),
+      // Recovery must use the installed baseline, even when selected by a moving tag.
+      baselineSpec: "openclaw@latest",
+      build: { ...candidate, candidateVersion: "2026.9.7" },
+    };
+    const unsettledExit = {
+      exitCode: 13,
+      stdout: "",
+      stderr:
+        "Warning: Detected unsettled top-level await at file:///C:/prefix/node_modules/openclaw/openclaw.mjs:757",
+    };
+    mocks.readInstalledVersion
+      .mockReset()
+      .mockReturnValueOnce("2026.9.6")
+      .mockReturnValueOnce("2026.9.6")
+      .mockReturnValueOnce(retryOutcome === "switched install" ? "2026.9.7" : "2026.9.6")
+      .mockReturnValue("2026.9.7");
+    mocks.readInstalledMetadata.mockReturnValue({
+      version: "2026.9.7",
+      commit: candidate.sourceSha,
+    });
+    mocks.runOpenClaw.mockResolvedValueOnce(unsettledExit).mockImplementationOnce(async () => {
+      if (retryOutcome === "timeout") {
+        throw new Error(
+          "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-candidate.tgz --yes --json --no-restart --timeout 600",
+        );
+      }
+      if (retryOutcome === "success") {
+        return { exitCode: 0, stdout: '{"status":"ok","durationMs":1234}', stderr: "" };
+      }
+      if (retryOutcome === "swap-cleanup") {
+        return {
+          exitCode: 1,
+          stdout: "",
+          stderr: "global install swap EPERM unlink 'C:\\prefix\\.openclaw-1-2\\native.node'",
+        };
+      }
+      return retryOutcome === "other failure"
+        ? { exitCode: 13, stdout: "", stderr: "Different failure" }
+        : unsettledExit;
+    });
+
+    const result = await runUpgradeLane(params);
+
+    const updates = mocks.runOpenClaw.mock.calls
+      .map(([call]) => call)
+      .filter((call) => call.args[0] === "update" && call.args[1] === "--tag");
+    expect(updates).toHaveLength(2);
+    expect(updates[1]).toEqual(updates[0]);
+    const recovered = retryOutcome === "success" || retryOutcome === "unsettled-exit";
+    expect(result.status).toBe(recovered ? "pass" : "fail");
+    expect(mocks.installPackageSpec).toHaveBeenCalledTimes(
+      retryOutcome === "unsettled-exit" ? 2 : 1,
+    );
+    expect(mocks.runOpenClaw.mock.calls.some(([call]) => call.args[1] === "status")).toBe(
+      retryOutcome === "success",
+    );
+    expect(mocks.runAgentTurn).toHaveBeenCalledTimes(recovered ? 1 : 0);
+    if (recovered) {
+      const action = retryOutcome === "success" ? "retry-update" : "direct-candidate-install";
+      expect(result.updateFallback).toEqual({ reason: "unsettled-exit", action });
+      expect(result.updateTimings).toEqual(
+        retryOutcome === "success" ? [{ name: "total", durationMs: 1234 }] : [],
+      );
+      writeSummary(logsDir, {
+        provider: "openai",
+        suite: "packaged-upgrade",
+        mode: "upgrade",
+        baselineSpec: params.baselineSpec,
+        result,
+      });
+      expect(readFileSync(join(logsDir, "summary.md"), "utf8")).toContain(
+        `- Updater fallback: \`unsettled-exit/${action}\``,
+      );
+    } else {
+      expect(result).not.toHaveProperty("updateFallback");
+      expect(result.error).toContain(
+        retryOutcome === "timeout" ? "Command timed out" : "Packaged upgrade failed",
+      );
+    }
+    expect(readFileSync(join(logsDir, "upgrade-update.log"), "utf8")).toContain(
+      "Windows baseline 2026.9.6 updater exited 13 (known shipped liveness defect fixed in 2026.9.7)",
+    );
   });
 });
 
