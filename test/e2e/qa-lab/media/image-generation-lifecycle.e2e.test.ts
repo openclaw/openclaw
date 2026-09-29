@@ -12,6 +12,7 @@ import {
   TINY_PNG_BASE64,
   type MockOpenAiRequestSnapshot,
 } from "../../../../extensions/qa-lab/api.js";
+import { resolveRuntimePolicySessionKey } from "../../../../src/auto-reply/reply/runtime-policy-session-key.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
 
@@ -21,8 +22,16 @@ const IMAGE_MODEL_REF = "openai/gpt-image-1";
 const REQUEST_TEXT =
   "Image generation check IMAGE_TASK_LIFECYCLE: generate the QA lighthouse image.";
 const CONVERSATION = { id: "image-generation-lifecycle", kind: "direct" as const };
-// QA direct chats share the agent main session, which owns the media task.
-const REQUESTER_SESSION_KEY = "agent:qa:main";
+// QA direct chats share a transcript, but each peer owns its media tasks.
+const REQUESTER_SESSION_KEY = resolveRuntimePolicySessionKey({
+  sessionKey: "agent:qa:main",
+  ctx: {
+    Provider: "qa-channel",
+    AccountId: "default",
+    ChatType: "direct",
+    SenderId: CONVERSATION.id,
+  },
+});
 
 async function readRequestBody(request: IncomingMessage) {
   const chunks: Buffer[] = [];
