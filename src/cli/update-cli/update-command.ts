@@ -5,6 +5,7 @@ import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js"
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { withDeferredDebugProxyCapture } from "../../proxy-capture/runtime-deferral.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -150,12 +151,32 @@ async function runAdmittedUpdate(
   initialization?: InitializedUpdate,
   executorOptions?: UpdateCommandExecutorOptions,
 ): Promise<void> {
+  const refusal = initialization?.refusal;
+  const serviceRoot = initialization
+    ? initialization.refusal
+      ? initialization.refusal.report.serviceRoot
+      : initialization.target.managedServiceRoot
+    : prepared.servicePlan?.serviceRoot;
+  let initializedFence: UpdateRecoveryFence | undefined;
+  let assertInitializationCurrent: (() => void) | undefined;
+  if (initialization) {
+    const root = initialization.refusal
+      ? initialization.refusal.report.root
+      : initialization.target.root;
+    const fence = await initialization.executor.enter(root, { preflight: true, serviceRoot });
+    initializedFence = fence;
+    assertInitializationCurrent = () => {
+      fence.assertCurrent();
+      assertUpdatePackageActivationAdmission(root, { serviceRoot });
+    };
+  }
   const run = await admitUpdateCommandRun({
     opts: inputOpts,
     root: resolveUpdateCommandAdmissionRoot(prepared),
-    serviceRoot: initialization?.target.managedServiceRoot ?? prepared.servicePlan?.serviceRoot,
+    serviceRoot,
     invocationCwd,
     initialization,
+    assertCurrent: assertInitializationCurrent,
     pkgOwnership: prepared.pkgOwnership,
     expectedForeground:
       prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
@@ -170,16 +191,9 @@ async function runAdmittedUpdate(
   let disposePresentation: (() => void) | undefined;
   let executionStarted = false;
   try {
+    assertInitializationCurrent?.();
+    run.executorFence = initializedFence;
     await initialization?.registerRun(run);
-    if (initialization?.target.updateInstallKind === "package") {
-      run.executorFence = await initialization.executor.enter(initialization.target.root, {
-        preflight: true,
-        serviceRoot: initialization.target.managedServiceRoot,
-      });
-      assertUpdatePackageActivationAdmission(initialization.target.root, {
-        serviceRoot: initialization.target.managedServiceRoot,
-      });
-    }
     const presentation = createUpdateProgress(!opts.json, run);
     disposePresentation = presentation.dispose;
     const executeWith = async (executor: UpdateCommandExecutor) => {
@@ -187,10 +201,14 @@ async function runAdmittedUpdate(
         run,
         executor,
         resolveUpdateCommandAdmissionRoot(prepared),
-        initialization?.target.managedServiceRoot ?? prepared.servicePlan?.serviceRoot,
+        serviceRoot,
       );
       const execute = () => {
         executionStarted = true;
+        if (refusal) {
+          assertInitializationCurrent?.();
+          throw refusal;
+        }
         return withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
           updateCommandInternal(
             opts,

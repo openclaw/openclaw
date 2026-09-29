@@ -158,8 +158,9 @@ export async function resolveUpdateCommandTarget(
       const pkgOwnership = createFreeBsdPkgOwnershipInspection(updateStepTimeoutMs);
       await pkgOwnership.assertUnowned(discoveredRoot);
       let { devTarget } = prepared;
-      let root = discoveredRoot;
+      let root = prepared.servicePlan?.rootRedirect?.root ?? discoveredRoot;
       let updateInstallKind = installKind;
+      let managedServiceRoot = prepared.servicePlan?.serviceRoot;
       let packageManager: ResolvedGlobalInstallTarget["manager"] | undefined;
       const preflightSteps: UpdateStepResult[] = [];
       const recordPreflightStep = (result: UpdateStepResult) => {
@@ -191,6 +192,7 @@ export async function resolveUpdateCommandTarget(
       const refuseUpdate: RefuseUpdate = async (reason, message, failureFacts, recoverySteps) => {
         const report = {
           root,
+          serviceRoot: managedServiceRoot,
           installKind: updateInstallKind,
           // Config failures refuse before manager probes; retain the known install kind.
           mode:
@@ -227,6 +229,7 @@ export async function resolveUpdateCommandTarget(
         throw new UnreportedUpdateAdmissionOutcome(
           {
             root,
+            serviceRoot: servicePlan.serviceRoot,
             installKind,
             mode: "unknown",
             opts,
@@ -306,6 +309,10 @@ export async function resolveUpdateCommandTarget(
       const switchToPackage =
         requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
       updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
+      if (updateInstallKind !== "package") {
+        root = discoveredRoot;
+        managedServiceRoot = undefined;
+      }
       if (updateInstallKind !== "package" && configReadFailure) {
         throw configReadFailure;
       }
@@ -353,7 +360,6 @@ export async function resolveUpdateCommandTarget(
       let packageTargetSchemaVersions: OpenClawSchemaVersions | undefined;
       let packageRuntimeTarget: { version: string; nodeEngine: string | null } | undefined;
       let managedServiceRootRedirect: ManagedServiceRootRedirect | null = null;
-      let managedServiceRoot: string | undefined;
       // The service runtime can differ even when its package root matches the shell.
       let managedServiceNodeRunner: string | undefined;
       let packageUpdateNodeRunner: string | undefined;
@@ -372,9 +378,7 @@ export async function resolveUpdateCommandTarget(
         serviceUnitTarget = servicePlan.serviceUnitTarget;
         managedServiceRoot = servicePlan.serviceRoot;
         managedServiceNodeRunner = servicePlan.nodeRunner;
-        if (managedServiceRootRedirect) {
-          root = managedServiceRootRedirect.root;
-        }
+        root = managedServiceRootRedirect?.root ?? discoveredRoot;
         if (!opts.json) {
           printManagedServicePackageUpdatePlan(servicePlan);
         }
@@ -424,6 +428,7 @@ export async function resolveUpdateCommandTarget(
             }
             const report = {
               root,
+              serviceRoot: managedServiceRoot,
               installKind,
               reason: error.reason,
               message: error.message,

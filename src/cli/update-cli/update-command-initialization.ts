@@ -22,13 +22,19 @@ import { runPackageUpdateDoctor } from "./update-command-package.js";
 import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
 import type { resolveUpdateCommandTarget } from "./update-command-target.js";
 
-export type InitializedUpdate = {
+export type UpdateTargetSelection =
+  | {
+      target: NonNullable<Awaited<ReturnType<typeof resolveUpdateCommandTarget>>>;
+      refusal?: never;
+    }
+  | { target?: never; refusal: UnreportedUpdateAdmissionOutcome };
+
+export type InitializedUpdate = UpdateTargetSelection & {
   env: NodeJS.ProcessEnv;
   runId: string;
   originalRecoveryCapture?: UpdateRecoveryBaselineRef;
   executor: UpdateCommandExecutor;
   registerRun: (run: NonNullable<UpdateCommandOptions["run"]>) => Promise<void>;
-  target: NonNullable<Awaited<ReturnType<typeof resolveUpdateCommandTarget>>>;
   databasePath: string;
   configPath: string;
   stagedPackage?: StagedPackageInstallUpdate;
@@ -37,7 +43,7 @@ export type InitializedUpdate = {
 };
 
 export async function confirmFreshUpdateDowngrade(params: {
-  target: InitializedUpdate["target"];
+  target: NonNullable<InitializedUpdate["target"]>;
   opts: UpdateCommandOptions;
   controlPlaneUpdateSentinelMeta: ConstructorParameters<
     typeof UnreportedUpdateAdmissionOutcome

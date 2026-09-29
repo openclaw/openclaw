@@ -35,6 +35,7 @@ import {
   initializeUpdateStateFromTarget,
   withUpdateInitializationCleanup,
   type InitializedUpdate,
+  type UpdateTargetSelection,
 } from "./update-command-initialization.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
@@ -77,38 +78,61 @@ export async function initializeAndRunUpdate(
           withUpdateCommandExecutor(
             runId,
             async (executor) => {
-              const target = await withOwnedManagedUpdateEnv(targetEnv, () =>
-                resolveUpdateCommandTarget(
-                  opts,
-                  recoveryState,
-                  invocationCwd,
-                  prepared,
-                  executor,
-                  prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-                ),
+              const selection: UpdateTargetSelection | undefined = await withOwnedManagedUpdateEnv(
+                targetEnv,
+                () =>
+                  resolveUpdateCommandTarget(
+                    opts,
+                    recoveryState,
+                    invocationCwd,
+                    prepared,
+                    executor,
+                    prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+                  ),
+              ).then(
+                (target) => (target ? { target } : undefined),
+                (error: unknown) => {
+                  if (
+                    policy.needsInitialization ||
+                    hasCommandProcessCleanupError(error) ||
+                    !(error instanceof UnreportedUpdateAdmissionOutcome)
+                  ) {
+                    throw error;
+                  }
+                  return { refusal: error };
+                },
               );
-              if (!target) {
+              if (!selection) {
                 return;
               }
-              const packageAdmission = { serviceRoot: target.managedServiceRoot };
+              const selectedTarget = selection.target;
+              const root = selection.refusal
+                ? selection.refusal.report.root
+                : selection.target.root;
+              const packageAdmission = {
+                serviceRoot: selection.refusal
+                  ? selection.refusal.report.serviceRoot
+                  : selection.target.managedServiceRoot,
+              };
               const originalCaptureWarnings: string[] = [];
               const initialization: InitializedUpdate = {
+                ...selection,
                 env,
                 runId,
                 executor,
                 registerRun: async (run) => {
                   registerRun(run);
-                  for (const result of target.preflightSteps ?? []) {
+                  for (const result of selectedTarget?.preflightSteps ?? []) {
                     for (const step of updateRunStepsFromResultStep(result)) {
                       recordUpdateCommandTarget(run, { step });
                     }
                   }
-                  if (target.inspectionWarning) {
+                  if (selectedTarget?.inspectionWarning) {
                     recordUpdateCommandTarget(run, {
                       step: {
                         step: "warning:installation-inspection",
                         status: "completed",
-                        detail: target.inspectionWarning,
+                        detail: selectedTarget.inspectionWarning,
                       },
                     });
                   }
@@ -135,43 +159,32 @@ export async function initializeAndRunUpdate(
                     recoveryState.triageTarget,
                   );
                 },
-                target,
                 databasePath: resolvePathViaExistingAncestorSync(
                   resolveOpenClawStateSqlitePath(env),
                 ),
                 configPath: resolvePathViaExistingAncestorSync(resolveConfigPath(env)),
               };
-              if (opts.dryRun) {
-                return await previewUpdateCommand({
-                  target,
-                  prepared,
-                  opts,
-                  runId,
-                  invocationCwd,
-                  updateStepTimeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-                });
-              }
               let originalCaptureAttempted = false;
               const captureOriginal = async () => {
                 if (!policy.captureOriginal || originalCaptureAttempted) {
                   return;
                 }
-                if (target.downgradeRisk && !initialization.downgradeConfirmed) {
+                if (selectedTarget?.downgradeRisk && !initialization.downgradeConfirmed) {
                   await confirmFreshUpdateDowngrade({
-                    target,
+                    target: selectedTarget,
                     opts,
                     controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
                   });
                   initialization.downgradeConfirmed = true;
                 }
-                const fence = await executor.enter(target.root, {
+                const fence = await executor.enter(root, {
                   preflight: true,
-                  serviceRoot: target.managedServiceRoot,
+                  ...packageAdmission,
                 });
                 const authority = captureUpdateCommandExecutorAuthority(fence, runId);
                 const assertCurrent = () => {
                   fence.assertCurrent();
-                  assertUpdatePackageActivationAdmission(target.root, packageAdmission);
+                  assertUpdatePackageActivationAdmission(root, packageAdmission);
                 };
                 const warn = (message: string) => {
                   const detail = redactSupportString(
@@ -197,7 +210,7 @@ export async function initializeAndRunUpdate(
                     env,
                     drivers: [driver],
                     assertCurrent,
-                    nodeRunner: target.packageUpdateNodeRunner,
+                    nodeRunner: selectedTarget?.packageUpdateNodeRunner,
                     timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
                   });
                   assertCurrent();
@@ -226,6 +239,20 @@ export async function initializeAndRunUpdate(
                 await captureOriginal();
                 await runInitialized(initialization);
               };
+              if (initialization.refusal) {
+                return await runCapturedInitialization();
+              }
+              const target = initialization.target;
+              if (opts.dryRun) {
+                return await previewUpdateCommand({
+                  target,
+                  prepared,
+                  opts,
+                  runId,
+                  invocationCwd,
+                  updateStepTimeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+                });
+              }
               const artifact =
                 target.updateInstallKind === "package" &&
                 !canResolveRegistryVersionForPackageTarget(target.packageInstallSpec ?? target.tag);

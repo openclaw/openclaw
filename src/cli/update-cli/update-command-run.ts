@@ -1,10 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { formatUnsupportedNodeVersionMessage } from "../../../node-version.mjs";
-import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/config.js";
 import { resolveConfigPath } from "../../config/paths.js";
-import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveGatewayNativeServiceIdentityConflict } from "../../daemon/constants.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
@@ -38,7 +36,6 @@ import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
 } from "../../infra/update-post-core-context.js";
-import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
 import {
   createManagedUpdateRequesterAuthority,
   resolveManagedUpdateRequester,
@@ -87,6 +84,7 @@ import {
 } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
 import { resolveForegroundUpdateAdmission } from "./update-command-handoff.js";
+import type { InitializedUpdate } from "./update-command-initialization.js";
 import { revalidateUpdateDatabaseContext } from "./update-command-managed-context.js";
 import {
   admitMutableUpdateSignalRun,
@@ -240,18 +238,16 @@ export async function admitUpdateCommandRun(params: {
   invocationCwd?: string;
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
   expectedForeground?: true;
-  initialization?: {
-    env: NodeJS.ProcessEnv;
-    runId: string;
-    originalRecoveryCapture?: UpdateRecoveryBaselineRef;
-    databasePath: string;
-    configPath: string;
-    target: {
-      configSnapshot: ConfigFileSnapshot;
-      legacyConfigPlan?: LegacyConfigUpdatePlan;
-      updateInstallKind?: "git" | "package" | "unknown";
-    };
+  initialization?: Pick<
+    InitializedUpdate,
+    "env" | "runId" | "originalRecoveryCapture" | "databasePath" | "configPath"
+  > & {
+    target?: Pick<NonNullable<InitializedUpdate["target"]>, "configSnapshot"> &
+      Partial<
+        Pick<NonNullable<InitializedUpdate["target"]>, "legacyConfigPlan" | "updateInstallKind">
+      >;
   };
+  assertCurrent?: () => void;
 }): Promise<NonNullable<UpdateCommandOptions["run"]>> {
   assertUpdatePackageActivationAdmission(params.root, { serviceRoot: params.serviceRoot });
   const env = await resolveUpdateCommandAdmissionEnv(params);
@@ -279,19 +275,21 @@ export async function admitUpdateCommandRun(params: {
         "service-context-changed",
       );
     }
-    await revalidateUpdateDatabaseContext({
-      env,
-      readEnv: env,
-      config: initialized.target.configSnapshot.sourceConfig,
-      configSnapshot: initialized.target.configSnapshot,
-      ...(initialized.target.updateInstallKind === "package" &&
-      usesCandidateUpdateAdmission(params.opts, params.installKind ?? "unknown")
-        ? { configValidation: "candidate" as const }
-        : {}),
-      ...(initialized.target.legacyConfigPlan
-        ? { legacyConfigPlan: initialized.target.legacyConfigPlan }
-        : {}),
-    });
+    if (initialized.target) {
+      await revalidateUpdateDatabaseContext({
+        env,
+        readEnv: env,
+        config: initialized.target.configSnapshot.sourceConfig,
+        configSnapshot: initialized.target.configSnapshot,
+        ...(initialized.target.updateInstallKind === "package" &&
+        usesCandidateUpdateAdmission(params.opts, params.installKind ?? "unknown")
+          ? { configValidation: "candidate" as const }
+          : {}),
+        ...(initialized.target.legacyConfigPlan
+          ? { legacyConfigPlan: initialized.target.legacyConfigPlan }
+          : {}),
+      });
+    }
   }
   const meta = await readControlPlaneUpdateSentinelMeta(env);
   await resolveForegroundUpdateAdmission({
@@ -309,6 +307,7 @@ export async function admitUpdateCommandRun(params: {
     env,
     busyTimeoutMs: parseUpdateTimeoutMs(params.opts.timeout) ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
   };
+  params.assertCurrent?.();
   const created = createUpdateRun(
     {
       runId: env[UPDATE_RUN_ID_ENV]?.trim() || params.initialization?.runId,

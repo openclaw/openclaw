@@ -517,6 +517,7 @@ export type UpdateAdmissionReportParams = {
   recoverySteps?: readonly UpdateRecoveryStep[];
   failureFacts?: readonly UpdateFailureFact[];
   root: string;
+  serviceRoot?: string;
   installKind: "git" | "package" | "unknown";
   reason: string;
   message?: string;
