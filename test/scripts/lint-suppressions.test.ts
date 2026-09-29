@@ -218,6 +218,8 @@ describe("production lint suppressions", () => {
         "src/cli/test-runtime-capture.ts|typescript/no-unnecessary-type-parameters|1",
         // Cleanup is retained in AggregateError.errors; extraction remains the primary cause.
         "src/commands/backup-restore.ts|preserve-caught-error|1",
+        // Repository policy requires a TODO beside the temporary delegated-include rejection.
+        "src/config/mutate.ts|no-warning-comments|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",
