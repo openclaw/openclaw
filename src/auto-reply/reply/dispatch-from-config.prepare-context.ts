@@ -457,13 +457,10 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     recordReplyOperationAgentTurn([state.replyOperationRunState], operation);
     // Feedback only for pre-run drops: the user never saw output. Finalization or
     // terminal-settle stalls already produced/settled output, so a notice is noise.
-    // The notice is the last resort: an armed run owner first hands the outstanding
-    // request to the session's followup lane (a queued request or one recovery run).
-    const droppedBeforeOutput = isReplyOperationStalledBeforeOutput(operation);
-    const continueStalledTurn = state.replyOperationRunState.continueStalledTurn;
-    state.replyOperationRunState.continueStalledTurn = undefined;
+    // Last resort: an armed run owner first hands the request to the follow-up lane.
     const queuedFinal =
-      droppedBeforeOutput && continueStalledTurn?.() !== true
+      isReplyOperationStalledBeforeOutput(operation) &&
+      state.replyOperationRunState.continueStalledTurn?.() !== true
         ? dispatcher.sendFinalReply({ text: STALLED_TURN_NOTICE_TEXT, isError: true })
         : false;
     if (
