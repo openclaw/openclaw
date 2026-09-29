@@ -4,6 +4,7 @@ import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
+  createTestMcpLoopbackClientGrant,
 } from "../cli-runner.test-helpers.js";
 import { applyDiscoveredContextWindows } from "../context-cache-projection.js";
 import { getContextWindowCaches } from "../context-cache.js";
@@ -79,5 +80,104 @@ describe("CLI context-window ownership", () => {
     expect(prepareExecution.mock.calls.map(([context]) => context.contextTokenBudget)).toEqual([
       200_000, 200_000, 1_000_000,
     ]);
+  });
+
+  describe("finalized context budget", () => {
+    const FABLE_CATALOG = [
+      {
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        provider: "anthropic",
+        contextWindow: 1_000_000,
+        contextWindows: [
+          { id: "200k", label: "200K", contextWindow: 200_000 },
+          { id: "1m", label: "1M", contextWindow: 1_000_000 },
+        ],
+        contextWindowDefault: "1m",
+      },
+    ];
+
+    function setClaudeCliBackend(params: {
+      prepareExecution?: CliBackendPlugin["prepareExecution"];
+      bundleMcp?: boolean;
+    }) {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            ...buildDefaultTestCliBackend({ bundleMcp: params.bundleMcp }),
+            id: "claude-cli",
+            pluginId: "anthropic",
+            modelProvider: "anthropic",
+            ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
+          },
+        ],
+      });
+    }
+
+    it.each([
+      { name: "the session-selected 200k option", selection: "200k", expected: 200_000 },
+      {
+        name: "the declared default option when unselected",
+        selection: undefined,
+        expected: 1_000_000,
+      },
+    ])("caps the context budget with $name from catalog contextWindows", async (testCase) => {
+      const prepareExecution = vi.fn(async () => undefined);
+      setClaudeCliBackend({ prepareExecution });
+      setCliRunnerPrepareTestDeps({ loadManifestModelCatalog: vi.fn(() => FABLE_CATALOG) });
+
+      const context = await fixture.prepare({
+        provider: "claude-cli",
+        model: "claude-fable-5",
+        config: {},
+        // The run owner carries the selection as a prepared fact; a session entry
+        // alone must not drive it (reply-path regression: selection dropped when
+        // prepare read sessionEntry directly).
+        ...(testCase.selection ? { contextWindow: testCase.selection } : {}),
+        sessionEntry: {
+          sessionId: "cli-session",
+          updatedAt: 0,
+          ...(testCase.selection ? {} : { contextWindow: "200k" }),
+        },
+      });
+
+      expect(context.contextWindowInfo?.tokens).toBe(testCase.expected);
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({ contextTokenBudget: testCase.expected }),
+      );
+    });
+
+    it("carries the finalized session-capped budget into the loopback grant", async () => {
+      // The grant must size loopback tool projections by the same number the run
+      // compacts on: a 200k session selection on a 1M catalog model, not the raw
+      // catalog window the run owner passed in.
+      const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
+      setClaudeCliBackend({ bundleMcp: true });
+      setCliRunnerPrepareTestDeps({
+        loadManifestModelCatalog: vi.fn(() => FABLE_CATALOG),
+        getActiveMcpLoopbackRuntime: vi.fn(() => ({
+          port: 31783,
+          ownerToken: "loopback-owner-token",
+          nonOwnerToken: "loopback-non-owner-token",
+        })),
+        mintMcpLoopbackClientGrant,
+        bindMcpLoopbackClientGrantAdmission: vi.fn(() => true),
+        revokeMcpLoopbackClientGrant: vi.fn(() => true),
+        resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
+      });
+
+      const context = await fixture.prepare({
+        provider: "claude-cli",
+        model: "claude-fable-5",
+        modelContextWindow: 1_000_000,
+        contextWindow: "200k",
+        config: {},
+      });
+
+      expect(context.contextWindowInfo?.tokens).toBe(200_000);
+      const grantContext = mintMcpLoopbackClientGrant.mock.calls.at(-1)?.[0]?.context;
+      expect(grantContext?.modelContextWindowTokens).toBe(200_000);
+    });
   });
 });
