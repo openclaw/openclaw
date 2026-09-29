@@ -19,12 +19,9 @@ describe("docs Markdown rendering", () => {
       data: { title: "Example", description: "{" },
       content: "# Body\r\n",
     },
-  ])(
-    "parses $name through the public frontmatter parser",
-    ({ source, data, content }) => {
-      expect(parseFrontmatter(source)).toEqual({ data, content });
-    },
-  );
+  ])("parses $name through the public frontmatter parser", ({ source, data, content }) => {
+    expect(parseFrontmatter(source)).toEqual({ data, content });
+  });
 
   it.each([
     {
