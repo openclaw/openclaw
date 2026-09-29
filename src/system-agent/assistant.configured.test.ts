@@ -328,7 +328,7 @@ describe("OpenClaw configured-model planner", () => {
   it("plans through the configured default agent CLI route with native tools disabled", async () => {
     const config: OpenClawConfig = {
       agents: {
-        defaults: {},
+        defaults: { workspace: "/tmp/ops-workspace" },
         list: [
           {
             id: "ops",
@@ -377,7 +377,7 @@ describe("OpenClaw configured-model planner", () => {
         authProfileId: "claude-cli:ops",
         executionMode: "side-question",
         disableTools: true,
-        workspaceDir: "/tmp/openclaw-planner",
+        workspaceDir: "/tmp/ops-workspace",
         cwd: "/tmp/openclaw-planner",
         cleanupCliLiveSessionOnRunEnd: true,
       }),
@@ -390,6 +390,7 @@ describe("OpenClaw configured-model planner", () => {
   it("plans through the configured default agent embedded runtime without tools", async () => {
     const config: OpenClawConfig = {
       agents: {
+        defaults: { workspace: "/tmp/ops-workspace" },
         list: [
           {
             id: "ops",
@@ -451,6 +452,7 @@ describe("OpenClaw configured-model planner", () => {
         toolsAllow: [],
         thinkLevel: "off",
         timeoutMs: 120_000,
+        workspaceDir: "/tmp/ops-workspace",
         lane: CommandLane.SystemAgentInference,
       }),
     );
