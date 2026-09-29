@@ -24,6 +24,7 @@ import {
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import {
   buildAssistantText,
+  buildImageInspectionReply,
   readForkedContextCompletion,
   isCanonicalCompactionRetryWriteResult,
   QA_COMPACTION_RETRY_FINAL_MARKER,
@@ -167,7 +168,6 @@ import {
   buildWhatsAppGroupDispatchReply,
   buildWhatsAppBatchedReply,
   countImageInputs,
-  extractCurrentImageRequest,
   parseToolOutputJson,
 } from "./mock-openai-input.js";
 import { createMockOpenAiRequestLog } from "./mock-openai-request-log.js";
@@ -670,7 +670,6 @@ async function buildResponsesPayload(
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
     promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
-  const currentImageRequest = extractCurrentImageRequest(input, body);
   const blockStreamingPrompt = scenarioFamilyPrompt || prompt || allInputText;
   const blockStreamingMarkers = extractBlockStreamingMarkerDirectives(blockStreamingPrompt);
   const isGroupChat = allInputText.includes('"is_group_chat": true');
@@ -1059,21 +1058,9 @@ async function buildResponsesPayload(
   if (/fanout worker beta/i.test(prompt)) {
     return buildAssistantEvents("BETA-OK");
   }
-  if (
-    /roundtrip image inspection check/i.test(currentImageRequest.text) &&
-    currentImageRequest.imageInputCount > 0
-  ) {
-    return buildAssistantEvents(
-      "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.",
-    );
-  }
-  if (
-    /image understanding check/i.test(currentImageRequest.text) &&
-    currentImageRequest.imageInputCount > 0
-  ) {
-    return buildAssistantEvents(
-      "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.",
-    );
+  const imageReply = buildImageInspectionReply(input, body);
+  if (imageReply) {
+    return buildAssistantEvents(imageReply);
   }
   if (QA_REASONING_ONLY_RECOVERY_PROMPT_RE.test(allInputText)) {
     if (!scenarioToolOutput) {
@@ -1122,20 +1109,18 @@ async function buildResponsesPayload(
   if (QA_THINKING_VISIBILITY_OFF_PROMPT_RE.test(prompt)) {
     return buildAssistantEvents("THINKING-OFF-OK");
   }
-  if (QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE.test(allInputText)) {
+  if (
+    QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE.test(allInputText) ||
+    QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE.test(allInputText)
+  ) {
     if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
     }
-    if (!hasEmptyResponseRetryInstruction) {
-      return buildAssistantEvents("");
-    }
-    return buildAssistantEvents("EMPTY-RECOVERED-OK");
-  }
-  if (QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE.test(allInputText)) {
-    if (!hasCompletedToolOutput) {
-      return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
-    }
-    return buildAssistantEvents("");
+    return buildAssistantEvents(
+      QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE.test(allInputText) && hasEmptyResponseRetryInstruction
+        ? "EMPTY-RECOVERED-OK"
+        : "",
+    );
   }
   const channelStreamingEvents = buildChannelStreamingFixtureEvents({
     currentPrompt,
@@ -1145,21 +1130,13 @@ async function buildResponsesPayload(
   if (channelStreamingEvents) {
     return channelStreamingEvents;
   }
-  const whatsAppPendingHistoryReply = buildWhatsAppPendingHistoryReply(prompt, input);
-  if (whatsAppPendingHistoryReply) {
-    return buildAssistantEvents(whatsAppPendingHistoryReply);
-  }
-  const whatsAppBroadcastReply = buildWhatsAppBroadcastReply(allInputText);
-  if (whatsAppBroadcastReply) {
-    return buildAssistantEvents(whatsAppBroadcastReply);
-  }
-  const whatsAppGroupDispatchReply = buildWhatsAppGroupDispatchReply(allInputText);
-  if (whatsAppGroupDispatchReply) {
-    return buildAssistantEvents(whatsAppGroupDispatchReply);
-  }
-  const whatsAppBatchedReply = buildWhatsAppBatchedReply(prompt);
-  if (whatsAppBatchedReply) {
-    return buildAssistantEvents(whatsAppBatchedReply);
+  const whatsAppReply =
+    buildWhatsAppPendingHistoryReply(prompt, input) ||
+    buildWhatsAppBroadcastReply(allInputText) ||
+    buildWhatsAppGroupDispatchReply(allInputText) ||
+    buildWhatsAppBatchedReply(prompt);
+  if (whatsAppReply) {
+    return buildAssistantEvents(whatsAppReply);
   }
   const slackChartMatch = QA_SLACK_CHART_PRESENTATION_PROMPT_RE.exec(allInputText);
   if (slackChartMatch?.[1] && slackChartMatch[2]) {
@@ -1417,11 +1394,9 @@ async function buildResponsesPayload(
   if (slackMpimHistoryReply !== undefined) {
     return buildAssistantEvents(slackMpimHistoryReply);
   }
-  if (/\bmarker\b/i.test(prompt) && promptExactMarkerDirective) {
-    return buildAssistantEvents(promptExactMarkerDirective);
-  }
-  if (/\bmarker\b/i.test(prompt) && promptExactReplyDirective) {
-    return buildAssistantEvents(promptExactReplyDirective);
+  const promptMarkerReply = promptExactMarkerDirective ?? promptExactReplyDirective;
+  if (/\bmarker\b/i.test(prompt) && promptMarkerReply) {
+    return buildAssistantEvents(promptMarkerReply);
   }
   const isTelegramCurrentSessionStatusTurn =
     QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(prompt) ||
@@ -1437,14 +1412,10 @@ async function buildResponsesPayload(
         : `QA-TELEGRAM-CURRENT-SESSION-BAD ${sessionKey || "missing-session-key"}`,
     );
   }
-  if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
-    return buildAssistantEvents(promptExactReplyDirective);
-  }
-  if (/\bmarker\b/i.test(allInputText) && userExactMarkerDirective) {
-    return buildAssistantEvents(userExactMarkerDirective);
-  }
-  if (/\bmarker\b/i.test(allInputText) && userExactReplyDirective) {
-    return buildAssistantEvents(userExactReplyDirective);
+  const historyMarkerReply =
+    promptExactReplyDirective ?? userExactMarkerDirective ?? userExactReplyDirective;
+  if (/\bmarker\b/i.test(allInputText) && historyMarkerReply) {
+    return buildAssistantEvents(historyMarkerReply);
   }
   if (QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE.test(allInputText)) {
     return buildAssistantEvents(

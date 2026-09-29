@@ -803,7 +803,7 @@ extensions/qa-lab/src/live-transports/shared/live-gateway-config.runtime.ts	3
 extensions/qa-lab/src/live-transports/shared/live-gateway.runtime.ts	1
 extensions/qa-lab/src/live-transports/shared/live-transport-rtt.ts	1
 extensions/qa-lab/src/live-transports/slack/adapter.runtime.ts	3
-extensions/qa-lab/src/live-transports/slack/scenario-environment.ts	5
+extensions/qa-lab/src/live-transports/slack/scenario-environment.ts	4
 extensions/qa-lab/src/live-transports/slack/slack-live.approval-checkpoint.ts	2
 extensions/qa-lab/src/live-transports/slack/slack-live.capture.ts	1
 extensions/qa-lab/src/live-transports/slack/slack-live.codex-approval.ts	2
@@ -812,7 +812,7 @@ extensions/qa-lab/src/live-transports/slack/slack-live.observations.ts	7
 extensions/qa-lab/src/live-transports/slack/slack-live.scenario-implementations.ts	2
 extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts	2
 extensions/qa-lab/src/live-transports/whatsapp/scenario-environment.ts	3
-extensions/qa-lab/src/live-transports/whatsapp/scenario-runtime.ts	4
+extensions/qa-lab/src/live-transports/whatsapp/scenario-runtime.ts	3
 extensions/qa-lab/src/mantis/crabbox-runtime.ts	2
 extensions/qa-lab/src/mantis/discord-smoke.runtime.ts	3
 extensions/qa-lab/src/mantis/run.runtime.ts	1
@@ -856,7 +856,6 @@ extensions/qa-lab/src/web-runtime.ts	1
 extensions/qa-lab/web/src/app.ts	7
 extensions/qa-lab/web/src/capture-saved-view.ts	1
 extensions/qa-lab/web/src/http.ts	1
-extensions/qa-lab/web/src/ui-render-capture-controls.ts	1
 extensions/qa-lab/web/src/ui-render-utils.ts	1
 extensions/qwen/models.ts	1
 extensions/qwen/stream.ts	3
@@ -995,7 +994,6 @@ extensions/telegram/src/doctor-contract.ts	3
 extensions/telegram/src/doctor.ts	10
 extensions/telegram/src/fetch.ts	7
 extensions/telegram/src/forum-service-message.ts	1
-extensions/telegram/src/group-history-window.ts	1
 extensions/telegram/src/interactive-fallback.ts	1
 extensions/telegram/src/miniapp/command.ts	1
 extensions/telegram/src/miniapp/init-data.ts	1

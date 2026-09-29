@@ -444,18 +444,9 @@ export function createQaEvidenceInvocation(params: {
       const pending = pendingChildren.get(index);
       if (pending) {
         if (
-          JSON.stringify([
-            pending.additions,
-            pending.completions,
-            pending.rows,
-            pending.updates,
-          ]) !==
-          JSON.stringify([
-            proposed.additions,
-            proposed.completions,
-            proposed.rows,
-            proposed.updates,
-          ])
+          (["additions", "completions", "rows", "updates"] as const).some(
+            (key) => JSON.stringify(pending[key]) !== JSON.stringify(proposed[key]),
+          )
         ) {
           throw new Error("child evidence changed its pending observation");
         }

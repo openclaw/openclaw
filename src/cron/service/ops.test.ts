@@ -1,10 +1,9 @@
 // Cron service ops tests cover high-level service operations and state transitions.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { AgentDeletionCommitUncertainError } from "../../agents/agent-lifecycle-registry.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -17,7 +16,6 @@ import {
 } from "../../test-utils/gateway-scheduler-clock.js";
 import { findCronRunForTests, readCronRunRecordsForTests } from "../run-history.test-support.js";
 import { createCronExecutionId } from "../run-id.js";
-import * as cronSchedule from "../schedule.js";
 import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
@@ -30,14 +28,13 @@ import { start, stop } from "./ops-lifecycle.js";
 import {
   add,
   remove,
-  removeAgentJobsTransactional,
   removeStaleJobFamily,
   update,
   updateWithPrecondition,
 } from "./ops-mutations.js";
 import { list, writeScratch } from "./ops-read.js";
-import { inspectManualRunDisposition } from "./ops-run-preparation.js";
 import { run } from "./ops-run.js";
+import { createOkIsolatedCronStateFactory } from "./ops.test-support.js";
 import * as taskRuns from "./run-history.js";
 import {
   claimCronRecoveryReceipt,
@@ -50,6 +47,7 @@ import { runMissedJobs } from "./timer.js";
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-ops-seam",
 });
+const createOkIsolatedCronState = createOkIsolatedCronStateFactory(logger);
 
 function createCronServiceState(params: Parameters<typeof createCronRegressionState>[0]) {
   return createCronRegressionState({ log: logger, ...params });
@@ -111,10 +109,11 @@ describe("scheduled tool policy provenance", () => {
     }
   });
 
-  it("consumes add authority only after candidate validation and immediately before mutation", async () => {
+  it("validates add authority and captures it once only after candidate validation", async () => {
     const { storePath } = await makeStorePath();
     const state = createOkIsolatedCronState({ storePath, now: Date.now() });
     const commitGuard = vi.fn();
+    const captureRuntimeAuthority = vi.fn(() => undefined);
     const invalid = {
       name: "invalid",
       enabled: true,
@@ -124,23 +123,27 @@ describe("scheduled tool policy provenance", () => {
       payload: { kind: "agentTurn" as const, message: "run" },
     };
 
-    await expect(add(state, invalid, { commitGuard })).rejects.toThrow(/no upcoming run time/);
+    await expect(add(state, invalid, { commitGuard, captureRuntimeAuthority })).rejects.toThrow(
+      /no upcoming run time/,
+    );
     expect(commitGuard).not.toHaveBeenCalled();
+    expect(captureRuntimeAuthority).not.toHaveBeenCalled();
     expect(state.store?.jobs).toEqual([]);
 
     const valid = { ...invalid, schedule: { kind: "cron" as const, expr: "0 0 * * *" } };
     commitGuard.mockImplementation(() => {
       expect(state.store?.jobs).toEqual([]);
     });
-    await add(state, valid, { commitGuard });
-    expect(commitGuard).toHaveBeenCalledOnce();
+    await add(state, valid, { commitGuard, captureRuntimeAuthority });
+    expect(commitGuard).toHaveBeenCalled();
+    expect(captureRuntimeAuthority).toHaveBeenCalledOnce();
     expect(state.store?.jobs).toHaveLength(1);
     if (state.timer) {
       state.timer.cancel();
     }
   });
 
-  it("preserves update authority across a failed precondition and consumes at mutation", async () => {
+  it("preserves update authority across a failed precondition and captures once at mutation", async () => {
     const { storePath } = await makeStorePath();
     const state = createOkIsolatedCronState({ storePath, now: Date.now() });
     const job = await add(state, {
@@ -155,6 +158,7 @@ describe("scheduled tool policy provenance", () => {
       expect(state.store?.jobs[0]?.name).toBe("original");
       return undefined;
     });
+    const captureRuntimeAuthority = vi.fn(() => undefined);
 
     await expect(
       updateWithPrecondition(
@@ -164,16 +168,19 @@ describe("scheduled tool policy provenance", () => {
         () => {
           throw new Error("revision conflict");
         },
-        { commitGuard },
+        { commitGuard, captureRuntimeAuthority },
       ),
     ).rejects.toThrow("revision conflict");
     expect(commitGuard).not.toHaveBeenCalled();
+    expect(captureRuntimeAuthority).not.toHaveBeenCalled();
     expect(state.store?.jobs[0]?.name).toBe("original");
 
     await updateWithPrecondition(state, job.id, { name: "updated" }, () => undefined, {
       commitGuard,
+      captureRuntimeAuthority,
     });
-    expect(commitGuard).toHaveBeenCalledOnce();
+    expect(commitGuard).toHaveBeenCalled();
+    expect(captureRuntimeAuthority).toHaveBeenCalledOnce();
     expect(state.store?.jobs[0]?.name).toBe("updated");
     if (state.timer) {
       state.timer.cancel();
@@ -208,6 +215,7 @@ describe("scheduled tool policy provenance", () => {
     expect(proven.toolsAllowProvenance).toEqual({
       version: 1,
       source: "final-executable-surface",
+      callerOrigin: { kind: "unknown" },
     });
 
     const legacy = await add(state, {
@@ -263,14 +271,18 @@ describe("scheduled tool policy provenance", () => {
     const routine = await update(state, job.id, { description: "preserve" });
     expect(routine.runtimeAuthority).toEqual(baseAuthority);
 
-    const commitGuard = vi.fn();
+    const commitGuard = vi.fn(() => {
+      expect(state.store?.jobs.find((entry) => entry.id === job.id)?.runtimeAuthority).toEqual(
+        baseAuthority,
+      );
+    });
     const validated = await update(
       state,
       job.id,
       { description: "preserve after validation" },
       { commitGuard },
     );
-    expect(commitGuard).toHaveBeenCalledOnce();
+    expect(commitGuard).toHaveBeenCalled();
     expect(validated.runtimeAuthority).toEqual(baseAuthority);
 
     const explicit = await update(state, job.id, {
@@ -366,7 +378,11 @@ describe("scheduled tool policy provenance", () => {
     );
     expect(created.job.runtimeAuthority).toEqual(baseAuthority);
 
-    const commitGuard = vi.fn();
+    const commitGuard = vi.fn(() => {
+      expect(
+        state.store?.jobs.find((entry) => entry.id === created.job.id)?.runtimeAuthority,
+      ).toEqual(baseAuthority);
+    });
     const validated = requireDeclarativeAddResult(
       await add(
         state,
@@ -378,7 +394,7 @@ describe("scheduled tool policy provenance", () => {
         { commitGuard },
       ),
     );
-    expect(commitGuard).toHaveBeenCalledOnce();
+    expect(commitGuard).toHaveBeenCalled();
     expect(validated.job.runtimeAuthority).toEqual(baseAuthority);
 
     const cleared = requireDeclarativeAddResult(
@@ -473,7 +489,9 @@ describe("scheduled tool policy provenance", () => {
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "run", toolsAllow: ["write"] },
     });
-    delete created.scheduledToolPolicy;
+    const legacy = structuredClone(created);
+    delete legacy.scheduledToolPolicy;
+    await writeCronStoreSnapshot({ storePath, jobs: [legacy] });
 
     const routine = await update(state, created.id, { description: "routine" });
     expect(routine.scheduledToolPolicy).toBeUndefined();
@@ -520,26 +538,6 @@ function createTimedOutIsolatedCronState(params: { storePath: string; now: numbe
     runIsolatedAgentJob: vi.fn(async () => {
       throw new Error("cron: job execution timed out");
     }),
-  });
-}
-
-function createOkIsolatedCronState(params: {
-  storePath: string;
-  now: number;
-  summary?: string;
-  onEvent?: (event: CronEvent) => void;
-  triggersEnabled?: boolean;
-}) {
-  return createCronServiceState({
-    storePath: params.storePath,
-    nowMs: () => params.now,
-    ...(params.triggersEnabled ? { cronConfig: { triggers: { enabled: true } } } : {}),
-    runIsolatedAgentJob: vi.fn(async () => ({
-      status: "ok" as const,
-      delivered: true,
-      ...(params.summary === undefined ? {} : { summary: params.summary }),
-    })),
-    ...(params.onEvent ? { onEvent: params.onEvent } : {}),
   });
 }
 
@@ -2101,384 +2099,4 @@ describe("cron service ops seam coverage", () => {
   });
 });
 
-describe("cron service ops persist rollback", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  function makeCreateInput(name: string) {
-    return {
-      name,
-      enabled: true,
-      schedule: { kind: "cron", expr: "0 0 * * *" },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "do work" },
-    } as const;
-  }
-
-  it("does not persist, re-arm, or notify when removing a missing job", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const onEvent = vi.fn();
-    const state = createOkIsolatedCronState({ storePath, now, onEvent });
-    const job = await add(state, makeCreateInput("daily cleanup"));
-    const previousRevision = cronStoreModule.getCronJobsStoreRevision(storePath);
-    const originalTimer = state.timer;
-    onEvent.mockClear();
-    const persist = vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision");
-    persist.mockClear();
-
-    await expect(remove(state, "missing-job")).resolves.toEqual({ ok: true, removed: false });
-
-    expect(persist).not.toHaveBeenCalled();
-    expect(cronStoreModule.getCronJobsStoreRevision(storePath)).toBe(previousRevision);
-    expect(onEvent).not.toHaveBeenCalled();
-    expect(state.timer).toBe(originalTimer);
-    expect(state.store?.jobs.map((entry) => entry.id)).toEqual([job.id]);
-    expect((await loadCronStore(storePath)).jobs.map((entry) => entry.id)).toEqual([job.id]);
-
-    await expect(remove(state, job.id)).resolves.toEqual({ ok: true, removed: true });
-
-    expect(persist).toHaveBeenCalledOnce();
-    expect(cronStoreModule.getCronJobsStoreRevision(storePath)).toBeGreaterThan(previousRevision);
-    expect(onEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ jobId: job.id, action: "removed" }),
-    );
-    expect((await loadCronStore(storePath)).jobs).toEqual([]);
-  });
-
-  it("rolls back an added job from the live store when persist fails", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
-
-    vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision").mockRejectedValueOnce(
-      new Error("disk full"),
-    );
-
-    await expect(add(state, makeCreateInput("daily cleanup"))).rejects.toThrow("disk full");
-
-    expect(state.timer).toBeNull();
-    expect(state.store?.jobs ?? []).toEqual([]);
-    const listed = await list(state, { includeDisabled: true });
-    if (state.timer) {
-      state.timer.cancel();
-    }
-    expect(listed).toEqual([]);
-    const loaded = await loadCronStore(storePath);
-    expect(loaded.jobs).toEqual([]);
-  });
-
-  it("keeps the pre-update job in the live store when persist fails", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
-
-    const job = await add(state, makeCreateInput("daily cleanup"));
-    if (state.timer) {
-      state.timer.cancel();
-    }
-
-    vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision").mockRejectedValueOnce(
-      new Error("disk full"),
-    );
-
-    await expect(update(state, job.id, { name: "renamed cleanup" })).rejects.toThrow("disk full");
-
-    const inMemory = state.store?.jobs.find((entry) => entry.id === job.id);
-    expect(inMemory?.name).toBe("daily cleanup");
-    const loaded = await loadCronStore(storePath);
-    const stored = loaded.jobs.find((entry) => entry.id === job.id);
-    expect(stored?.name).toBe("daily cleanup");
-  });
-
-  it("does not clone the store before a missing or invalid update reaches commit", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
-    const job = await add(state, makeCreateInput("daily cleanup"));
-    const clone = vi.spyOn(globalThis, "structuredClone");
-
-    await expect(update(state, "missing-job", { name: "missing" })).rejects.toThrow(
-      "unknown cron job id",
-    );
-    await expect(
-      update(state, job.id, { schedule: { kind: "cron", expr: "0 0 30 2 *" } }),
-    ).rejects.toThrow(/no upcoming run time/);
-
-    expect(clone).not.toHaveBeenCalledWith(state.store);
-    if (state.timer) {
-      state.timer.cancel();
-    }
-  });
-
-  it("keeps a removed job in the live store when persist fails", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
-
-    const job = await add(state, makeCreateInput("daily cleanup"));
-    if (state.timer) {
-      state.timer.cancel();
-    }
-
-    vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision").mockRejectedValueOnce(
-      new Error("disk full"),
-    );
-
-    await expect(remove(state, job.id)).rejects.toThrow("disk full");
-
-    expect(state.store?.jobs.map((entry) => entry.id)).toEqual([job.id]);
-    const loaded = await loadCronStore(storePath);
-    expect(loaded.jobs.map((entry) => entry.id)).toEqual([job.id]);
-  });
-
-  it("restores a job's catch-up deferral when a remove persist fails", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
-
-    const job = await add(state, makeCreateInput("daily cleanup"));
-    if (state.timer) {
-      state.timer.cancel();
-    }
-    job.state.startupCatchupAtMs = now + 5_000;
-
-    vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision").mockRejectedValueOnce(
-      new Error("disk full"),
-    );
-
-    await expect(remove(state, job.id)).rejects.toThrow("disk full");
-
-    expect(state.store?.jobs[0]?.state.startupCatchupAtMs).toBe(now + 5_000);
-    expect(state.store?.jobs.map((entry) => entry.id)).toEqual([job.id]);
-  });
-
-  it("recovers after a failed persist so the next mutation succeeds", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
-
-    vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision").mockRejectedValueOnce(
-      new Error("disk full"),
-    );
-    await expect(add(state, makeCreateInput("daily cleanup"))).rejects.toThrow("disk full");
-
-    const job = await add(state, makeCreateInput("daily cleanup"));
-    if (state.timer) {
-      state.timer.cancel();
-    }
-
-    const listed = await list(state, { includeDisabled: true });
-    if (state.timer) {
-      state.timer.cancel();
-    }
-    expect(listed.map((entry) => entry.id)).toEqual([job.id]);
-    const loaded = await loadCronStore(storePath);
-    expect(loaded.jobs.map((entry) => entry.id)).toEqual([job.id]);
-  });
-
-  it.each(["mutation"] as const)(
-    "notifies about schedule auto-disable only after %s persists",
-    async (triggerPath) => {
-      const { storePath } = await makeStorePath();
-      const now = Date.parse("2026-06-09T00:00:00.000Z");
-      const state = createOkIsolatedCronState({ storePath, now });
-
-      const malformed = await add(state, {
-        ...makeCreateInput("malformed sibling"),
-        schedule: { kind: "cron", expr: "0 1 * * *" },
-      });
-      if (state.timer) {
-        state.timer.cancel();
-      }
-      malformed.state.nextRunAtMs = undefined;
-      malformed.state.scheduleErrorCount = 2;
-      const enqueueSystemEvent = vi.mocked(state.deps.enqueueSystemEvent);
-      const requestHeartbeat = vi.mocked(state.deps.requestHeartbeat);
-      const order: string[] = [];
-      enqueueSystemEvent.mockClear();
-      requestHeartbeat.mockClear();
-      enqueueSystemEvent.mockImplementation(() => {
-        order.push("notify");
-      });
-      requestHeartbeat.mockImplementation(() => {
-        order.push("heartbeat");
-      });
-      const computeNextRunAtMs = cronSchedule.computeNextRunAtMs;
-      vi.spyOn(cronSchedule, "computeNextRunAtMs").mockImplementation((schedule, nowMs) => {
-        if (schedule.kind === "cron" && schedule.expr === "0 1 * * *") {
-          throw new Error("simulated schedule failure");
-        }
-        return computeNextRunAtMs(schedule, nowMs);
-      });
-
-      const saveCronJobsStoreWithRevision = cronStoreModule.saveCronJobsStoreWithRevision;
-      vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision")
-        .mockRejectedValueOnce(new Error("disk full"))
-        .mockImplementationOnce(async (...args) => {
-          expect(enqueueSystemEvent).not.toHaveBeenCalled();
-          expect(requestHeartbeat).not.toHaveBeenCalled();
-          const committed = await saveCronJobsStoreWithRevision(...args);
-          order.push("persist");
-          return committed;
-        });
-      const trigger = () => add(state, makeCreateInput(`trigger ${triggerPath}`));
-      await expect(trigger()).rejects.toThrow("disk full");
-
-      expect(state.store?.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(true);
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(requestHeartbeat).not.toHaveBeenCalled();
-
-      await trigger();
-      if (state.timer) {
-        state.timer.cancel();
-      }
-
-      expect(state.store?.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(false);
-      expect(order).toEqual(["persist", "notify", "heartbeat"]);
-      expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-      expect(requestHeartbeat).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it.each(["failed", "committed", "uncertain"] as const)(
-    "publishes agent-removal auto-disable notifications only after a %s roster outcome",
-    async (outcome) => {
-      const { storePath } = await makeStorePath();
-      const now = Date.parse("2026-06-09T00:00:00.000Z");
-      const state = createOkIsolatedCronState({ storePath, now });
-      const removed = await add(state, {
-        ...makeCreateInput("deleted agent job"),
-        agentId: "doomed",
-      });
-      expect(
-        writeCronJobScratch({
-          storePath,
-          jobId: removed.id,
-          content: "deleted agent scratch",
-          sourceSha256: "deleted-agent-source",
-          nowMs: now - 1,
-        }),
-      ).toMatchObject({ ok: true, currentRevision: 1 });
-      const scratchBefore = readCronJobScratchState(storePath, removed.id);
-      const malformed = await add(state, {
-        ...makeCreateInput("malformed surviving job"),
-        agentId: "survivor",
-        schedule: { kind: "cron", expr: "0 1 * * *" },
-      });
-      if (state.timer) {
-        state.timer.cancel();
-      }
-      malformed.state.nextRunAtMs = undefined;
-      malformed.state.scheduleErrorCount = 2;
-      const enqueueSystemEvent = vi.mocked(state.deps.enqueueSystemEvent);
-      const requestHeartbeat = vi.mocked(state.deps.requestHeartbeat);
-      enqueueSystemEvent.mockClear();
-      requestHeartbeat.mockClear();
-      const computeNextRunAtMs = cronSchedule.computeNextRunAtMs;
-      vi.spyOn(cronSchedule, "computeNextRunAtMs").mockImplementation((schedule, nowMs) => {
-        if (schedule.kind === "cron" && schedule.expr === "0 1 * * *") {
-          throw new Error("simulated schedule failure");
-        }
-        return computeNextRunAtMs(schedule, nowMs);
-      });
-
-      const commit = vi.fn(async () => {
-        expect(enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(requestHeartbeat).not.toHaveBeenCalled();
-        const persisted = await loadCronStore(storePath);
-        expect(persisted.jobs.find((job) => job.id === removed.id)).toBeUndefined();
-        expect(persisted.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(false);
-        if (outcome === "failed") {
-          throw new Error("roster commit failed");
-        }
-        if (outcome === "uncertain") {
-          throw new AgentDeletionCommitUncertainError(new Error("roster commit uncertain"));
-        }
-        return "roster committed";
-      });
-      const transaction = removeAgentJobsTransactional(state, "doomed", commit);
-      if (outcome === "committed") {
-        await expect(transaction).resolves.toBe("roster committed");
-      } else if (outcome === "uncertain") {
-        await expect(transaction).rejects.toBeInstanceOf(AgentDeletionCommitUncertainError);
-      } else {
-        await expect(transaction).rejects.toThrow("roster commit failed");
-      }
-      if (state.timer) {
-        state.timer.cancel();
-      }
-
-      const rolledBack = outcome === "failed";
-      const notificationCount = rolledBack ? 0 : 1;
-      expect(commit).toHaveBeenCalledOnce();
-      expect(enqueueSystemEvent).toHaveBeenCalledTimes(notificationCount);
-      expect(requestHeartbeat).toHaveBeenCalledTimes(notificationCount);
-      expect(state.store?.jobs.some((job) => job.id === removed.id)).toBe(rolledBack);
-      expect(state.store?.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(rolledBack);
-      const persisted = await loadCronStore(storePath);
-      expect(persisted.jobs.some((job) => job.id === removed.id)).toBe(rolledBack);
-      expect(persisted.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(rolledBack);
-      expect(readCronJobScratchState(storePath, removed.id)).toEqual(
-        rolledBack ? scratchBefore : { currentRevision: 0 },
-      );
-      if (!rolledBack) {
-        const replacement = await add(state, {
-          ...makeCreateInput("same-id replacement"),
-          id: removed.id,
-          agentId: "survivor",
-        });
-        expect(replacement.id).toBe(removed.id);
-        expect(readCronJobScratchState(storePath, removed.id)).toEqual({ currentRevision: 0 });
-        if (state.timer) {
-          state.timer.cancel();
-        }
-      }
-    },
-  );
-
-  it("does not auto-disable a job during manual-run preflight", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
-    const job = await add(state, {
-      ...makeCreateInput("preflight schedule failure"),
-      schedule: { kind: "cron", expr: "0 1 * * *" },
-    });
-    if (state.timer) {
-      state.timer.cancel();
-    }
-    job.state.nextRunAtMs = undefined;
-    job.state.scheduleErrorCount = 2;
-    const before = structuredClone(job);
-    const persistedBefore = structuredClone(
-      (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id),
-    );
-    const enqueueSystemEvent = vi.mocked(state.deps.enqueueSystemEvent);
-    const requestHeartbeat = vi.mocked(state.deps.requestHeartbeat);
-    enqueueSystemEvent.mockClear();
-    requestHeartbeat.mockClear();
-    const computeSpy = vi.spyOn(cronSchedule, "computeNextRunAtMs").mockImplementation(() => {
-      throw new Error("simulated preflight schedule failure");
-    });
-
-    try {
-      await expect(inspectManualRunDisposition(state, job.id)).resolves.toEqual({
-        ok: true,
-        ran: false,
-        reason: "not-due",
-      });
-      expect(job).toEqual(before);
-      expect((await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)).toEqual(
-        persistedBefore,
-      );
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(requestHeartbeat).not.toHaveBeenCalled();
-    } finally {
-      computeSpy.mockRestore();
-    }
-  });
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

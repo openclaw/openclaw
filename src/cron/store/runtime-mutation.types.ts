@@ -1,5 +1,5 @@
 import type { DeferredCronNotifications } from "../service/state.js";
-import type { CronJob } from "../types.js";
+import type { CronJob, CronStoreFile } from "../types.js";
 import type { CronRunReceiptHandle, PreparedCronRunReceiptClaim } from "./run-receipt.types.js";
 import type { CronRunRecoveryOutcome, CronRunRecoveryPreparation } from "./run-recovery.types.js";
 import type { CronRuntimeMutationInputs } from "./runtime-worker.types.js";
@@ -11,6 +11,12 @@ type CronScheduleOwnershipFacts = {
 };
 
 export type CronRuntimeMutationContracts = {
+  "cron.mutateJobs": {
+    input: CronRuntimeMutationInputs["cron.mutateJobs"];
+    facts: { deletionBlocked: boolean };
+    preparation: { nowMs: number };
+    outcome: { store: CronStoreFile; jobsFingerprint: string; runtimeFingerprint: string };
+  };
   "cron.reserveRuns": {
     input: CronRuntimeMutationInputs["cron.reserveRuns"];
     facts: { receipts: CronRunReceiptHandle[] };

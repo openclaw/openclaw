@@ -29,7 +29,6 @@ const matrixRuntimeReplaceConfigFileMock = vi.fn();
 const resetMatrixRoomKeyBackupMock = vi.fn();
 const restoreMatrixRoomKeyBackupMock = vi.fn();
 const runMatrixSelfVerificationMock = vi.fn();
-const setMatrixSdkConsoleLoggingMock = vi.fn();
 const setMatrixSdkLogModeMock = vi.fn();
 const startMatrixVerificationMock = vi.fn();
 const updateMatrixOwnProfileMock = vi.fn();
@@ -98,9 +97,10 @@ vi.mock("./matrix/actions/devices.js", () => ({
 }));
 
 vi.mock("./matrix/client/logging.js", () => ({
-  setMatrixSdkConsoleLogging: (...args: unknown[]) => setMatrixSdkConsoleLoggingMock(...args),
   setMatrixSdkLogMode: (...args: unknown[]) => setMatrixSdkLogModeMock(...args),
 }));
+
+vi.mock("./matrix/sdk/logger.js", () => ({ setMatrixConsoleLogging: vi.fn() }));
 
 vi.mock("./matrix/actions/profile.js", () => ({
   updateMatrixOwnProfile: (...args: unknown[]) => updateMatrixOwnProfileMock(...args),

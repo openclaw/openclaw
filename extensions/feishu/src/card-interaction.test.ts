@@ -1,10 +1,6 @@
 // Feishu tests cover card interaction plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  buildFeishuCardActionTextFallback,
-  createFeishuCardInteractionEnvelope,
-  decodeFeishuCardAction,
-} from "./card-interaction.js";
+import { createFeishuCardInteractionEnvelope, decodeFeishuCardAction } from "./card-interaction.js";
 
 function cardEvent(value: unknown, chatId = "chat1") {
   return {
@@ -40,13 +36,15 @@ describe("feishu card interaction decoder", () => {
     });
   });
 
-  it("falls back for legacy text-like payloads", () => {
+  it.each([
+    [{ text: "/ping" }, "/ping"],
+    [{ command: "/new" }, "/new"],
+  ] as const)("falls back for legacy payload %j", (value, text) => {
     const result = decodeFeishuCardAction({
-      event: cardEvent({ text: "/ping" }),
+      event: cardEvent(value),
     });
 
-    expect(result).toEqual({ kind: "legacy", text: "/ping" });
-    expect(buildFeishuCardActionTextFallback(cardEvent({ command: "/new" }))).toBe("/new");
+    expect(result).toEqual({ kind: "legacy", text });
   });
 
   it("rejects malformed structured payloads", () => {

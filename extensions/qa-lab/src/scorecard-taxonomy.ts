@@ -466,7 +466,6 @@ type QaScorecardValidationIssueCode =
   | "coverage-id-not-found"
   | "inventory-ref-not-found"
   | "taxonomy-ref-not-found"
-  | "taxonomy-category-ref-not-found"
   | "profile-category-ref-not-found"
   | "profile-coverage-ref-not-found"
   | "profile-category-missing-inventory";
@@ -1186,16 +1185,7 @@ function buildQaScorecardTaxonomyReport(params: {
   const requiredCoverageIds = new Set<string>();
   const inventoriedRequiredCoverageIds = new Set<string>();
   for (const categoryId of relevantCategoryIds) {
-    const category = maturityRefs.categories.get(categoryId);
-    if (!category) {
-      issues.push({
-        code: "taxonomy-category-ref-not-found",
-        severity: "warning",
-        ref: categoryId,
-        message: `${categoryId} does not match a maturity taxonomy category`,
-      });
-      continue;
-    }
+    const category = maturityRefs.categories.get(categoryId)!;
 
     const profileIds = uniqueSorted(profileCategoryIdsByCategoryId.get(categoryId) ?? []);
     const requiredCoverageIdsForCategory =
@@ -1205,7 +1195,6 @@ function buildQaScorecardTaxonomyReport(params: {
     const categoryScenarioRefs = new Set<string>();
     const inventoriedCoverageIds = new Set<string>();
     const secondaryOnlyCoverageIds = new Set<string>();
-    const coverageIdsWithAnyInventory = new Set<string>();
 
     for (const coverageId of category.coverageIds) {
       for (const [role, refsByCoverageId] of [
@@ -1232,14 +1221,10 @@ function buildQaScorecardTaxonomyReport(params: {
         } else if (!inventoriedCoverageIds.has(coverageId)) {
           secondaryOnlyCoverageIds.add(coverageId);
         }
-        coverageIdsWithAnyInventory.add(coverageId);
         inventoryRefs.push(...refs);
       }
     }
 
-    const inventoriedCoverageIdCountForCategory = category.coverageIds.filter((coverageId) =>
-      inventoriedCoverageIds.has(coverageId),
-    ).length;
     if (required) {
       for (const coverageId of requiredCoverageIdsForCategory) {
         requiredCoverageIds.add(coverageId);
@@ -1254,7 +1239,7 @@ function buildQaScorecardTaxonomyReport(params: {
         coverageIdsWithPrimaryInventory: inventoriedCoverageIds,
         coverageIdsWithSecondaryInventory: secondaryOnlyCoverageIds,
       });
-      if (inventoriedCoverageIdCountForCategory === 0) {
+      if (inventoriedCoverageIds.size === 0) {
         issues.push({
           code: "profile-category-missing-inventory",
           severity: "warning",
@@ -1266,7 +1251,8 @@ function buildQaScorecardTaxonomyReport(params: {
 
     const missingCoverageIds = required
       ? [...requiredCoverageIdsForCategory].filter(
-          (coverageId) => !coverageIdsWithAnyInventory.has(coverageId),
+          (coverageId) =>
+            !inventoriedCoverageIds.has(coverageId) && !secondaryOnlyCoverageIds.has(coverageId),
         )
       : [];
     const inventoryStatus =

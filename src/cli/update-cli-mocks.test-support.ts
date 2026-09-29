@@ -391,21 +391,30 @@ vi.mock("../infra/update-managed-service-handoff-cleanup.js", async (importOrigi
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const { SQLITE_READONLY_CHILD_ARG } = await import("../infra/runtime-process-entrypoints.js");
+  const { resolveRuntimeProcessEntrypointUrl } = await import("../infra/runtime-process-url.js");
+  const { resolveRuntimeWorkerArgv } = await import("../infra/runtime-worker-url.js");
   return {
     ...actual,
-    // Async status snapshots need real SQLite IPC; updater and service children stay simulated.
+    // SQLite snapshots and their native broker need real IPC; updater/service children stay simulated.
     execFile: (...args: Parameters<typeof actual.execFile>) =>
       args[0] === process.execPath &&
       Array.isArray(args[1]) &&
       args[1].includes(SQLITE_READONLY_CHILD_ARG)
         ? actual.execFile(...args)
         : execFile(...args),
-    spawn: (...args: Parameters<typeof actual.spawn>) =>
-      args[0] === process.execPath &&
-      Array.isArray(args[1]) &&
-      args[1].includes(SQLITE_READONLY_CHILD_ARG)
+    spawn: (...args: Parameters<typeof actual.spawn>) => {
+      const brokerArgv = resolveRuntimeWorkerArgv(
+        resolveRuntimeProcessEntrypointUrl("spawnBroker"),
+      );
+      const childArgs = args[1];
+      return args[0] === process.execPath &&
+        Array.isArray(childArgs) &&
+        (childArgs.includes(SQLITE_READONLY_CHILD_ARG) ||
+          (childArgs.length === brokerArgv.length &&
+            childArgs.every((arg, index) => arg === brokerArgv[index])))
         ? actual.spawn(...args)
-        : spawn(...args),
+        : spawn(...args);
+    },
   };
 });
 

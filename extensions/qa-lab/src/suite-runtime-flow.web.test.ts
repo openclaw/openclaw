@@ -118,7 +118,7 @@ describe("QA web acquisition across the real scenario DSL", () => {
       runScenarioFlow.mockImplementation((params) => {
         captures.push(params);
         const runSteps = params.api.runScenario;
-        const open = params.api.webOpenPage as typeof web.qaWebOpenPage;
+        const open = params.api.webOpenPage as ReturnType<typeof web.createQaWebPageOpener>;
         return actualFlow.runScenarioFlow({
           ...params,
           api: {
