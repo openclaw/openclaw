@@ -6,7 +6,7 @@ import {
   isBrowserOperatorUiClient,
   isWebchatClient,
 } from "../../utils/message-channel.js";
-import { resolveGatewayAuthPolicyGeneration } from "../auth-policy.js";
+import { isGatewayAuthPolicyCurrent } from "../auth-policy.js";
 import { checkBrowserOrigin, normalizeChromeExtensionOrigin } from "../origin-check.js";
 import { invalidateGatewayPolicyClient } from "./ws-policy-close.js";
 import type { GatewayWsBrowserOrigin, GatewayWsClient } from "./ws-types.js";
@@ -48,22 +48,14 @@ export function checkGatewayWsBrowserOrigin(origin: GatewayWsBrowserOrigin, cfg:
 /** Revocation follows committed publication; unrelated authenticated connections remain live. */
 export function disconnectDisallowedGatewayPolicyClients(
   clients: Iterable<
-    Pick<
-      GatewayWsClient,
-      | "browserOrigin"
-      | "invalidated"
-      | "invalidatedReason"
-      | "authPolicyGeneration"
-      | "authenticatedUserId"
-    > & {
+    Pick<GatewayWsClient, "browserOrigin" | "invalidated" | "invalidatedReason" | "authPolicy"> & {
       socket: Pick<GatewayWsClient["socket"], "close">;
     }
   >,
   cfg: OpenClawConfig,
 ): void {
   for (const client of clients) {
-    const generation = resolveGatewayAuthPolicyGeneration(cfg, client.authenticatedUserId);
-    if (client.authPolicyGeneration !== undefined && client.authPolicyGeneration !== generation) {
+    if (!isGatewayAuthPolicyCurrent(client.authPolicy, cfg)) {
       invalidateGatewayPolicyClient(client, {
         reason: "gateway-policy-changed",
         code: 4001,

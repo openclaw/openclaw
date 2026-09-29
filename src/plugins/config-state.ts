@@ -229,18 +229,8 @@ export const resolveEnableState = (
     resolveEffectivePluginActivationState({ id, origin, config, enabledByDefault }),
   );
 
-type EffectiveActivationParams = {
-  id: string;
-  origin: PluginOrigin;
-  config: NormalizedPluginsConfig;
-  rootConfig?: OpenClawConfig;
-  enabledByDefault?: boolean;
-  activationSource?: PluginActivationConfigSource;
-  channelIds?: readonly string[];
-};
-
 export const resolveEffectiveEnableState = (
-  params: EffectiveActivationParams,
+  params: Omit<Parameters<typeof resolveEffectivePluginActivationState>[0], "autoEnabledReason">,
 ): { enabled: boolean; reason?: string } =>
   toEnableStateResult(resolveEffectivePluginActivationState(params));
 
