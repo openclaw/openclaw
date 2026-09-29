@@ -135,15 +135,9 @@ function resolveWebProviderLoadOptions(
 ) {
   return buildPluginRuntimeLoadOptions(
     {
-      env: context.env,
-      config: context.config,
-      activationSourceConfig: context.activationSourceConfig,
-      autoEnabledReasons: context.autoEnabledReasons,
-      workspaceDir: context.workspaceDir,
+      ...context,
       logger: createPluginRuntimeLoaderLogger(),
-      ...(context.preparedManifestRegistry
-        ? { manifestRegistry: context.preparedManifestRegistry }
-        : {}),
+      manifestRegistry: context.preparedManifestRegistry,
     },
     {
       cache: params.cache ?? true,

@@ -146,7 +146,7 @@ openclaw node restart
 
 Node shutdown waits for plugin availability watchers and active computer executions
 to finish cleanup, and reports failures from those cleanup operations. If a command
-reports `Node plugin cleanup failed`, reconnect the node to retry disconnect cleanup
+reports `Node disconnect cleanup failed`, reconnect the node to retry disconnect cleanup
 before sending another command.
 
 ### Automatic node updates

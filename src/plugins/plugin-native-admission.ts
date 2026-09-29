@@ -223,7 +223,7 @@ export function createPluginNativeAdmission(
     previous?: PluginNativeNamespaceFact,
     retainedRoot?: string,
   ) => {
-    const root = createPluginNativeCaptureRoot();
+    const root = createPluginNativeCaptureRoot(state.captureStateDir);
     state.roots.add(root);
     snapshotOwners.set(root, new Set([state]));
     const { fact, changed } = capturePluginNativeNamespace({
@@ -252,6 +252,10 @@ export function createPluginNativeAdmission(
           pluginSourceIdentityChangedOnlyByCtime(member.capturedIdentity, identity);
         if (!identity || (!sourceChanged && !captureChanged)) {
           continue;
+        }
+        // Persisted receipts can outlive their captures; missing namespaces require fresh admission.
+        if (!fs.statSync(pluginNativeNamespaceDirectory(namespace), { throwIfNoEntry: false })) {
+          break;
         }
         if (namespace !== previous || !captureChanged) {
           const capturedHash = hashPluginSourceFile(
@@ -299,7 +303,7 @@ export function createPluginNativeAdmission(
     });
     const unchanged = isDeepStrictEqual(state.receipts.get(key), next);
     state.receipts.set(key, next);
-    if (!owner) {
+    if (!owner || state.artifactPreservingReadOnly) {
       return;
     }
     if (unchanged) {
@@ -309,6 +313,7 @@ export function createPluginNativeAdmission(
     const roots = [...state.roots].filter((root) => used.has(root.directory));
     const publication = () =>
       publishPluginSourceAdmission({
+        stateDir: state.publicationStateDir,
         pluginId: owner.pluginId,
         rootDir: owner.rootDir,
         installRecordHash: owner.installRecordHash,
@@ -623,7 +628,7 @@ export function createPluginNativeAdmission(
         },
       };
     },
-    finish(_captureDirectory: string, receipt: NativeReceipt) {
+    finish(receipt: NativeReceipt) {
       if (!files.size) {
         return;
       }

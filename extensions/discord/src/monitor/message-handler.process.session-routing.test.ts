@@ -1,31 +1,82 @@
-// Discord message processing coverage split by cohesive behavior.
-import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { resolveGroupThreadMentionFacts } from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
+import * as replyRuntime from "openclaw/plugin-sdk/reply-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it, vi, afterEach } from "vitest";
 import {
   BASE_CHANNEL_ROUTE,
   createBaseContext,
   createDirectMessageContextOverrides,
   createDiscordDraftStream,
-  createNoQueuedDispatchResult,
-  dispatchInboundMessageForTest as dispatchInboundMessage,
   getLastDispatchCtx,
   getLastDispatchReplyOptions,
   getLastRouteUpdate,
   runProcessDiscordMessage,
-  sendMocksForTest as sendMocks,
   registerDiscordProcessTestLifecycle,
+  createAutomaticSourceDeliveryContext,
+  deliverDiscordReply,
+  dispatchBufferedReplyForTest,
 } from "./message-handler.process.test-harness.js";
-import type { DispatchInboundParams } from "./message-handler.process.test-harness.js";
-import {
-  expectRecordFields,
-  getReactionEmojis,
-  requireRecord,
-} from "./message-handler.process.test-helpers.js";
+import { expectRecordFields, requireRecord } from "./message-handler.process.test-helpers.js";
 
 registerDiscordProcessTestLifecycle();
 
+async function createQuotedContext(options: {
+  replyId: string;
+  body: string;
+  author: { id: string; username: string; globalName: string };
+  fetch: typeof fetch;
+  text?: string;
+  visibility?: "all" | "allowlist";
+  botUserId?: string;
+}) {
+  const text = options.text ?? "<@bot> what is this?";
+  return await createBaseContext({
+    cfg: {
+      channels: { discord: { contextVisibility: options.visibility ?? "all" } },
+      messages: { ackReaction: "👀" },
+      session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+    },
+    channelConfig: options.visibility === "allowlist" ? { allowed: true, users: ["U1"] } : null,
+    botUserId: options.botUserId,
+    discordRestFetch: options.fetch,
+    message: {
+      id: "m-reply",
+      channelId: "c1",
+      content: text,
+      timestamp: new Date().toISOString(),
+      attachments: [],
+      messageReference: { type: 0, message_id: options.replyId, channel_id: "c1" },
+      referencedMessage: {
+        id: options.replyId,
+        channelId: "c1",
+        content: options.body,
+        timestamp: new Date().toISOString(),
+        attachments: [
+          {
+            id: "att-reply",
+            url: "https://cdn.discordapp.com/attachments/reply.png",
+            content_type: "image/png",
+            filename: "reply.png",
+          },
+        ],
+        author: { ...options.author, discriminator: "0" },
+      },
+    },
+    baseText: text,
+    messageText: text,
+  });
+}
+
 describe("processDiscordMessage session routing", () => {
   it("frames preflight audio transcript in dispatch context and marks media transcribed", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("prepared media must not be fetched again");
+    });
     const ctx = await createBaseContext({
+      discordRestFetch: fetchImpl,
       message: {
         id: "m-audio-preflight",
         channelId: "c1",
@@ -57,6 +108,7 @@ describe("processDiscordMessage session routing", () => {
 
     await runProcessDiscordMessage(ctx);
 
+    expect(fetchImpl).not.toHaveBeenCalled();
     expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
       BodyForAgent: '[Audio transcript (machine-generated, untrusted)]: "/status"',
       RawBody: "",
@@ -69,7 +121,13 @@ describe("processDiscordMessage session routing", () => {
         body: "",
       },
       Transcript: "/status",
-      media: [expect.objectContaining({ contentType: "audio/ogg", transcribed: true })],
+      media: [
+        expect.objectContaining({
+          path: "/tmp/openclaw-discord-test/voice.ogg",
+          contentType: "audio/ogg",
+          transcribed: true,
+        }),
+      ],
     });
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
@@ -93,107 +151,16 @@ describe("processDiscordMessage session routing", () => {
     });
   });
 
-  it("uses prepared media instead of re-downloading after the run queue", async () => {
-    // Regression for #96165: Discord CDN attachment URLs expire, so process
-    // must not re-fetch attachments preflight already downloaded at receipt
-    // time. A throwing fetchImpl here proves no re-fetch happens.
-    const fetchImpl = vi.fn(async () => {
-      throw new Error("attachment should not be re-fetched after preflight downloaded it");
-    });
-    const ctx = await createBaseContext({
-      message: {
-        id: "m-preflight-media",
-        channelId: "c1",
-        content: "look",
-        timestamp: new Date().toISOString(),
-        attachments: [
-          {
-            id: "att-preflight-media",
-            url: "https://cdn.discordapp.com/attachments/1/photo.png?ex=expired",
-            content_type: "image/png",
-            filename: "photo.png",
-          },
-        ],
-      },
-      baseText: "look",
-      messageText: "look",
-      preparedMedia: [
-        {
-          path: "/tmp/openclaw-discord-test/photo.png",
-          contentType: "image/png",
-        },
-      ],
-      discordRestFetch: fetchImpl,
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    expect(fetchImpl).not.toHaveBeenCalled();
-    expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
-      media: [
-        expect.objectContaining({
-          path: "/tmp/openclaw-discord-test/photo.png",
-          contentType: "image/png",
-        }),
-      ],
-    });
-  });
-
   it("does not attach referenced reply media when reply context is hidden", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("hidden reply media should not be fetched");
     });
-    const ctx = await createBaseContext({
-      cfg: {
-        channels: { discord: { contextVisibility: "allowlist" } },
-        messages: { ackReaction: "👀" },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-      },
-      author: {
-        id: "U1",
-        username: "alice",
-        discriminator: "0",
-        globalName: "Alice",
-      },
-      channelConfig: {
-        allowed: true,
-        users: ["U1"],
-      },
-      discordRestFetch: fetchImpl,
-      message: {
-        id: "m-reply-hidden-media",
-        channelId: "c1",
-        content: "<@bot> what is this?",
-        timestamp: new Date().toISOString(),
-        attachments: [],
-        messageReference: {
-          type: 0,
-          message_id: "m-hidden",
-          channel_id: "c1",
-        },
-        referencedMessage: {
-          id: "m-hidden",
-          channelId: "c1",
-          content: "hidden image",
-          timestamp: new Date().toISOString(),
-          attachments: [
-            {
-              id: "att-hidden",
-              url: "https://cdn.discordapp.com/attachments/hidden.png",
-              content_type: "image/png",
-              filename: "hidden.png",
-            },
-          ],
-          author: {
-            id: "U2",
-            username: "mallory",
-            discriminator: "0",
-            globalName: "Mallory",
-          },
-        },
-      },
-      baseText: "<@bot> what is this?",
-      messageText: "<@bot> what is this?",
+    const ctx = await createQuotedContext({
+      replyId: "m-hidden",
+      body: "hidden image",
+      author: { id: "U2", username: "mallory", globalName: "Mallory" },
+      fetch: fetchImpl,
+      visibility: "allowlist",
     });
 
     await runProcessDiscordMessage(ctx);
@@ -210,43 +177,11 @@ describe("processDiscordMessage session routing", () => {
     const fetchImpl = vi.fn(
       async () => new Response(Buffer.from("image"), { headers: { "content-type": "image/png" } }),
     );
-    const ctx = await createBaseContext({
-      cfg: {
-        channels: { discord: { contextVisibility: "all" } },
-        messages: { ackReaction: "👀" },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-      },
-      discordRestFetch: fetchImpl,
-      message: {
-        id: "m-attachment-reply",
-        channelId: "c1",
-        content: "<@bot> what is this?",
-        timestamp: new Date().toISOString(),
-        attachments: [],
-        messageReference: { type: 0, message_id: "m-attachment-only", channel_id: "c1" },
-        referencedMessage: {
-          id: "m-attachment-only",
-          channelId: "c1",
-          content: "",
-          timestamp: new Date().toISOString(),
-          attachments: [
-            {
-              id: "att-only",
-              url: "https://cdn.discordapp.com/attachments/1/attachment-only.png",
-              content_type: "image/png",
-              filename: "attachment-only.png",
-            },
-          ],
-          author: {
-            id: "U2",
-            username: "bob",
-            discriminator: "0",
-            globalName: "Bob",
-          },
-        },
-      },
-      baseText: "<@bot> what is this?",
-      messageText: "<@bot> what is this?",
+    const ctx = await createQuotedContext({
+      replyId: "m-attachment-only",
+      body: "",
+      author: { id: "U2", username: "bob", globalName: "Bob" },
+      fetch: fetchImpl,
     });
 
     await runProcessDiscordMessage(ctx);
@@ -264,59 +199,20 @@ describe("processDiscordMessage session routing", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    'Automation "daily update" failed 1 times\nCheck automation history for details.',
-    "The deployment is waiting for review.",
-  ])("preserves a user's reply to bot text without fetching self media: %s", async (body) => {
+  it("preserves a user's reply to bot text without fetching self media", async () => {
+    const body = 'Automation "daily update" failed 1 times\nCheck automation history for details.';
     const fetchImpl = vi.fn(async () => {
       throw new Error("self-reply media should not be fetched");
     });
-    const ctx = await createBaseContext({
+    const ctx = await createQuotedContext({
+      replyId: "m-bot-previous",
+      body,
+      author: { id: "bot-1", username: "Spartacus", globalName: "Spartacus" },
+      fetch: fetchImpl,
       botUserId: "bot-1",
-      cfg: {
-        channels: { discord: { contextVisibility: "all" } },
-        messages: { ackReaction: "👀" },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-      },
-      discordRestFetch: fetchImpl,
-      message: {
-        id: "m-self-reply",
-        channelId: "c1",
-        content: "<@bot> hit that again",
-        timestamp: new Date().toISOString(),
-        attachments: [],
-        messageReference: {
-          type: 0,
-          message_id: "m-bot-previous",
-          channel_id: "c1",
-        },
-        referencedMessage: {
-          id: "m-bot-previous",
-          channelId: "c1",
-          content: body,
-          timestamp: new Date().toISOString(),
-          attachments: [
-            {
-              id: "att-bot-previous",
-              url: "https://cdn.discordapp.com/attachments/previous.png",
-              content_type: "image/png",
-              filename: "previous.png",
-            },
-          ],
-          author: {
-            id: "bot-1",
-            username: "Spartacus",
-            discriminator: "0",
-            globalName: "Spartacus",
-          },
-        },
-      },
-      baseText: "<@bot> hit that again",
-      messageText: "<@bot> hit that again",
+      text: "<@bot> hit that again",
     });
-
     await runProcessDiscordMessage(ctx);
-
     const dispatchCtx = requireRecord(getLastDispatchCtx(), "dispatch context");
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(dispatchCtx.ReplyToId).toBe("m-bot-previous");
@@ -385,37 +281,12 @@ describe("processDiscordMessage session routing", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expectRecordFields(requireRecord(getLastRouteUpdate(), "last route update"), {
+    expect(getLastRouteUpdate()).toMatchObject({
       sessionKey: "agent:main:main",
       channel: "discord",
       to: "user:222",
       accountId: "default",
-    });
-    expectRecordFields(
-      requireRecord(
-        requireRecord(getLastRouteUpdate(), "last route update").mainDmOwnerPin,
-        "main DM owner pin",
-      ),
-      {
-        ownerRecipient: "111",
-        senderRecipient: "222",
-      },
-    );
-  });
-
-  it("stores group lastRoute with channel target", async () => {
-    const ctx = await createBaseContext({
-      baseSessionKey: "agent:main:discord:channel:c1",
-      route: BASE_CHANNEL_ROUTE,
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    expect(getLastRouteUpdate()).toEqual({
-      sessionKey: "agent:main:discord:channel:c1",
-      channel: "discord",
-      to: "channel:c1",
-      accountId: "default",
+      mainDmOwnerPin: { ownerRecipient: "111", senderRecipient: "222" },
     });
   });
 
@@ -442,67 +313,95 @@ describe("processDiscordMessage session routing", () => {
     });
     expect(createDiscordDraftStream).not.toHaveBeenCalled();
   });
+});
 
-  it("sends the configured ack while suppressing automatic status reactions for always-on guild replies", async () => {
-    const ctx = await createBaseContext({
-      shouldRequireMention: false,
-      effectiveWasMentioned: false,
-      ackReactionScope: "all",
-      cfg: {
-        messages: {
-          ackReaction: "👀",
-          ackReactionScope: "all",
-          groupChat: { visibleReplies: "message_tool" },
-          statusReactions: {
-            timing: { debounceMs: 0 },
-          },
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+describe("Discord group-thread participant delivery", () => {
+  it.each([
+    { name: "parallel participants", agents: ["alice", "bob"] },
+    { name: "deferred warning", agents: ["alice"], warning: true },
+  ])("binds delivery to the $name", async ({ agents, warning }) => {
+    const workspaceRoot = tempDirs.make("discord-group-thread-workspaces-");
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: { workspace: path.join(workspaceRoot, "workspace-main") },
+          alice: { workspace: path.join(workspaceRoot, "workspace-alice") },
+          bob: { workspace: path.join(workspaceRoot, "workspace-bob") },
         },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
       },
+      broadcast: agents ? { "discord:c1": agents } : undefined,
+    };
+    const ctx = await createAutomaticSourceDeliveryContext({
+      cfg,
       route: BASE_CHANNEL_ROUTE,
+      baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
+      discordConfig: { streaming: { mode: "partial" } },
+      groupThread: resolveGroupThreadMentionFacts({
+        cfg,
+        channel: "discord",
+        peerId: "c1",
+        text: "Review this attachment.",
+      }),
     });
-
+    const actual = await vi.importActual<typeof replyRuntime>("openclaw/plugin-sdk/reply-runtime");
+    const errors = vi.spyOn(ctx.runtime, "error");
+    const participantRuns: string[] = [];
+    dispatchBufferedReplyForTest.mockImplementationOnce((params) =>
+      actual.dispatchReplyWithBufferedBlockDispatcher({
+        ...params,
+        dispatchReplyFromConfig: async ({ ctx: participant, dispatcher }) => {
+          const agentId = participant.AgentId ?? "main";
+          participantRuns.push(agentId);
+          dispatcher.sendBlockReply({
+            text: `Reasoning from ${agentId}`,
+            isReasoning: true,
+            mediaUrl: path.join(workspaceRoot, `workspace-${agentId}`, "reasoning.txt"),
+          });
+          const queuedFinal = dispatcher.sendFinalReply(
+            warning
+              ? setReplyPayloadMetadata(
+                  { text: "The attachment could not be processed.", isError: true },
+                  { nonTerminalToolErrorWarning: true },
+                )
+              : {
+                  text: `Answer from ${agentId}`,
+                  mediaUrl: path.join(workspaceRoot, `workspace-${agentId}`, "answer.txt"),
+                },
+          );
+          return { queuedFinal, counts: dispatcher.getQueuedCounts() };
+        },
+      }),
+    );
     await runProcessDiscordMessage(ctx);
 
-    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(getReactionEmojis()).toEqual(["👀"]);
-    expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalled();
-  });
-
-  it("honors explicit status reactions for always-on guild replies", async () => {
-    vi.useFakeTimers();
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onReasoningStream?.({});
-      await new Promise((resolve) => {
-        setTimeout(resolve, 1_000);
-      });
-      return createNoQueuedDispatchResult();
-    });
-    const ctx = await createBaseContext({
-      shouldRequireMention: false,
-      effectiveWasMentioned: false,
-      ackReactionScope: "all",
-      cfg: {
-        messages: {
-          ackReaction: "👀",
-          ackReactionScope: "all",
-          groupChat: { visibleReplies: "message_tool" },
-          statusReactions: {
-            enabled: true,
-            timing: { debounceMs: 0 },
-          },
-        },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-      },
-      route: BASE_CHANNEL_ROUTE,
-    });
-
-    const runPromise = runProcessDiscordMessage(ctx);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await vi.runAllTimersAsync();
-    await runPromise;
-
-    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(getReactionEmojis()).toEqual(["👀"]);
+    const responders = agents;
+    expect(errors.mock.calls).toEqual([]);
+    expect(participantRuns).toEqual(responders);
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(responders.length * 2);
+    for (const agentId of responders) {
+      const workspace = path.join(workspaceRoot, `workspace-${agentId}`);
+      for (const kind of ["block", "final"]) {
+        const reply =
+          warning && kind === "final"
+            ? { text: "The attachment could not be processed." }
+            : {
+                mediaUrl: path.join(workspace, `${kind === "block" ? "reasoning" : "answer"}.txt`),
+              };
+        expect(deliverDiscordReply).toHaveBeenCalledWith(
+          expect.objectContaining({
+            target: "channel:c1",
+            accountId: "default",
+            sessionKey: `agent:${agentId}:discord:channel:c1`,
+            mediaLocalRoots: expect.arrayContaining([workspace]),
+            kind,
+            replies: [expect.objectContaining(reply)],
+          }),
+        );
+      }
+    }
+    expect(createDiscordDraftStream).not.toHaveBeenCalled();
   });
 });

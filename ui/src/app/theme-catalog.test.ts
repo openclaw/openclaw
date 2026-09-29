@@ -7,6 +7,7 @@ import type {
   ThemesGetResult,
   ThemesListResult,
 } from "../../../packages/gateway-protocol/src/schema/themes.ts";
+import type { UsersSelfResult } from "../../../packages/gateway-protocol/src/schema/users.ts";
 import {
   BUILTIN_THEMES,
   type ThemeDescriptor,
@@ -39,6 +40,22 @@ const definition = createThemeDefinitionFixture({
   description: descriptor.description,
   dark: createThemePaletteFixture({ background: "#111122" }),
 });
+
+function selfProfile(id: string): UsersSelfResult {
+  return {
+    profile: {
+      id,
+      displayName: null,
+      emails: [],
+      avatarMime: null,
+      hasAvatar: false,
+      githubIdentity: null,
+      mergedInto: null,
+      createdAt: 1,
+      updatedAt: 2,
+    },
+  };
+}
 
 function catalog(themeDefinition = definition): ThemesListResult {
   return {
@@ -256,22 +273,26 @@ it("discards a palette response after the requesting profile changes", async () 
   const applicationTheme = createApplicationTheme(loadSettings(), gateway);
   gateway.start();
   const retired = createDeferred<ThemesListResult>();
-  current().request.mockReturnValue(retired.promise);
+  current().request.mockImplementation((method) =>
+    method === "users.self" ? Promise.resolve(selfProfile("first")) : retired.promise,
+  );
   current().opts.onHello?.({
     ...GATEWAY_STORE_TEST_HELLO,
+    auth: { role: "operator", scopes: ["operator.read"] },
     snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "first" } }] },
   });
   try {
     await vi.waitFor(() => expect(current().request).toHaveBeenCalledWith("themes.list", {}));
-    current().request.mockResolvedValue({
+    const nextCatalog = {
       themes: [...BUILTIN_THEMES],
       theme: expectDefined(BUILTIN_THEMES[0], "default built-in theme"),
       current: { id: "claw", mode: "system", scope: "profile", overrides: {} },
-    } satisfies ThemesListResult);
+    } satisfies ThemesListResult;
+    current().request.mockImplementation(async (method) =>
+      method === "users.self" ? selfProfile("second") : nextCatalog,
+    );
     current().opts.onEvent?.(
-      createGatewayEvent("presence", {
-        presence: [{ instanceId: current().instanceId, user: { id: "second" } }],
-      }),
+      createGatewayEvent("sessions.changed", { reason: "profile-identity" }),
     );
     await vi.waitFor(() => expect(applicationTheme.catalog?.themes).toEqual(BUILTIN_THEMES));
     retired.resolve(catalog());
@@ -570,10 +591,15 @@ it.each(["profile", "client"] as const)(
     const applicationTheme = createApplicationTheme(loadSettings(), gateway);
     gateway.start();
     current().request.mockImplementation((method) =>
-      method === "themes.get" ? retired.promise : Promise.resolve(response),
+      method === "users.self"
+        ? Promise.resolve(selfProfile("first"))
+        : method === "themes.get"
+          ? retired.promise
+          : Promise.resolve(response),
     );
     current().opts.onHello?.({
       ...GATEWAY_STORE_TEST_HELLO,
+      auth: { role: "operator", scopes: ["operator.read"] },
       snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "first" } }] },
     });
     try {
@@ -583,23 +609,27 @@ it.each(["profile", "client"] as const)(
       if (boundary === "client") {
         gateway.connect();
       }
-      current().request.mockResolvedValue({
+      const nextCatalog = {
         ...response,
         theme: personal,
         definition: createThemeDefinitionFixture({
           dark: createThemePaletteFixture({ background: "#443355" }),
         }),
         current: { ...response.current, id: personal.id },
-      } satisfies ThemesListResult);
+      } satisfies ThemesListResult;
+      current().request.mockImplementation(async (method) =>
+        method === "users.self"
+          ? selfProfile(boundary === "profile" ? "second" : "first")
+          : nextCatalog,
+      );
       if (boundary === "profile") {
         current().opts.onEvent?.(
-          createGatewayEvent("presence", {
-            presence: [{ instanceId: current().instanceId, user: { id: "second" } }],
-          }),
+          createGatewayEvent("sessions.changed", { reason: "profile-identity" }),
         );
       } else {
         current().opts.onHello?.({
           ...GATEWAY_STORE_TEST_HELLO,
+          auth: { role: "operator", scopes: ["operator.read"] },
           snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "first" } }] },
         });
       }

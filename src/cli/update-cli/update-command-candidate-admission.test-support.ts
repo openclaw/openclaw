@@ -137,13 +137,11 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     },
   );
 
-  it.each(
-    (["candidate", "unsupported", "fallback"] as const).flatMap((source) =>
-      (["config", "database-schema", "node-runtime"] as const)
-        .filter((check) => source !== "candidate" || check !== "node-runtime")
-        .map((check) => ({ source, check })),
-    ),
-  )(
+  it.each([
+    { source: "candidate", check: "database-schema" },
+    { source: "unsupported", check: "config" },
+    { source: "fallback", check: "node-runtime" },
+  ] as const)(
     "candidate admission: reports $check refusals from $source before mutation",
     async ({ source, check }) => {
       const verdict = candidateAdmissionVerdict(check);

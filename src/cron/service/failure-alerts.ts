@@ -47,17 +47,12 @@ export function failureNotificationDeliveryFromJobState(
   };
 }
 
-function normalizeCronMessageChannel(input: unknown): CronMessageChannel | undefined {
-  const channel = normalizeOptionalLowercaseString(input);
-  return channel ? (channel as CronMessageChannel) : undefined;
-}
-
 function resolveFailureAlertChannel(channel: unknown, to?: string): CronMessageChannel | undefined {
-  const normalized = normalizeCronMessageChannel(channel);
+  const normalized = normalizeOptionalLowercaseString(channel);
   if (normalized && normalized !== "last") {
     return normalizeAnyChannelId(normalized) ?? normalized;
   }
-  return normalizeCronMessageChannel(resolveTargetPrefixedChannel(to)) ?? normalized;
+  return normalizeOptionalLowercaseString(resolveTargetPrefixedChannel(to)) ?? normalized;
 }
 
 function normalizeFailureAlertRecipient(channel: CronMessageChannel, to: string): string {
@@ -204,7 +199,6 @@ function buildFailureAlertPayload(params: {
   error?: string;
   errorReason?: FailoverReason;
   failureNotificationDetail?: CronFailureNotificationDetail;
-  runAtMs?: number;
   consecutiveErrors: number;
   route: ResolvedFailureAlert;
   status: "error" | "skipped";

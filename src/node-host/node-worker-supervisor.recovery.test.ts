@@ -587,10 +587,12 @@ describe("node worker supervisor recovery", () => {
       onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
     });
     const reconciliation = vi
-      .spyOn(NodeWorkerLaunchStore.prototype, "listNonterminal")
-      .mockImplementationOnce(async () => {
-        throw new Error("temporary launch journal failure");
-      });
+      .spyOn(NodeWorkerJournalWorker.prototype, "execute")
+      .mockRejectedValueOnce(new Error("temporary launch journal failure"));
+    const attempts = () =>
+      reconciliation.mock.calls.filter(
+        ([command]) => command.type === "nodeWorker.launch.listNonterminal",
+      ).length;
 
     try {
       const first = supervisor.initialize();
@@ -599,14 +601,14 @@ describe("node worker supervisor recovery", () => {
       expect(concurrent).toBe(first);
       await expect(first).rejects.toThrow("temporary launch journal failure");
       await expect(supervisor.initialize()).resolves.toBeUndefined();
-      expect(reconciliation).toHaveBeenCalledTimes(2);
+      expect(attempts()).toBe(2);
       expect(capacitySnapshots).toEqual([
         { total: 2, available: 0 },
         { total: 2, available: 0 },
         { total: 2, available: 2 },
       ]);
       await expect(supervisor.initialize()).resolves.toBeUndefined();
-      expect(reconciliation).toHaveBeenCalledTimes(2);
+      expect(attempts()).toBe(2);
     } finally {
       reconciliation.mockRestore();
       await supervisor.close().catch(() => undefined);

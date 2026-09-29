@@ -355,7 +355,6 @@ internal class WearProxyController(
         .asArrayOrNull()
         ?.mapNotNull { projectSession(it, agentId) }
         .orEmpty()
-        .toMutableList()
     val selectedSessionValid =
       selectedSessionKey
         ?.takeIf { selectedKey -> sessions.none { session -> session.stringOrNull("key") == selectedKey } }

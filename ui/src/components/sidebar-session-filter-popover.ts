@@ -19,7 +19,8 @@ function keepSheetFocus(panel: HTMLElement, event: KeyboardEvent) {
   const boundary = event.shiftKey ? tabbable[0] : tabbable.at(-1);
   const target = event.shiftKey ? tabbable.at(-1) : tabbable[0];
   // Read focus after inner handlers ran: a closing picker page hands it back to its trigger.
-  if (!target || panel.ownerDocument.activeElement === boundary) {
+  const active = panel.ownerDocument.activeElement;
+  if (!target || active === panel || active === boundary) {
     event.preventDefault();
     target?.focus({ preventScroll: true });
   }
@@ -100,8 +101,11 @@ class SidebarSessionFilterPopover extends OpenClawLightDomContentsElement {
     // Mobile layouts present the panel as a bottom sheet, mirroring the sidebar
     // issues sheet: a backdrop that closes it, a grabber, and top-layer placement.
     const sheet = isMobileNavLayout();
+    // Blank-area taps need a focus owner inside the panel; falling back to the
+    // focusable drawer would dismiss the sheet before click.
     const panel = html`<div
       class="sidebar-session-filter-panel"
+      tabindex="-1"
       role="dialog"
       aria-label=${this.label}
       aria-modal=${sheet ? "true" : nothing}

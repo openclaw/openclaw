@@ -348,6 +348,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         assignmentStore,
         agentId: sessionAgentId,
         assertCurrent: assertRegistrationCurrent,
+        isTurnYielded: () => attemptTools.toolState.yieldDetected,
         retainClient: () => retainSharedCodexAppServerClientIfCurrent(client),
         retainParentThread: (protectedThreadId) =>
           protectCodexAppServerLiveThread(client, protectedThreadId),

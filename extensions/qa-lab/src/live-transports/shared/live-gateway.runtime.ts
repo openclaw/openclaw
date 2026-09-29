@@ -12,7 +12,7 @@ import type { QaProviderMode } from "../../model-selection.js";
 import type { QaMockOpenAiServerOptions } from "../../providers/mock-openai/server-options.js";
 import { startQaProviderServer } from "../../providers/server-runtime.js";
 import type { QaThinkingLevel } from "../../qa-gateway-config.js";
-import type { RuntimeId } from "../../runtime-parity.js";
+import type { RuntimeId } from "../../runtime-id.js";
 
 function omitMemoryCoreEntry<T extends Record<string, unknown> | undefined>(entries: T): T {
   if (!entries || !Object.hasOwn(entries, "memory-core")) {

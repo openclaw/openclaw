@@ -65,13 +65,7 @@ export function resolveCronPreflightCandidates(params: {
   useSubagentFallbacks?: boolean;
   inheritDefaultFallbacksForAgentStringModel?: boolean;
 }): ModelCandidate[] {
-  const fallbacksOverride = resolveCronFallbacksOverride({
-    cfg: params.cfg,
-    job: params.job,
-    agentId: params.agentId,
-    useSubagentFallbacks: params.useSubagentFallbacks,
-    inheritDefaultFallbacksForAgentStringModel: params.inheritDefaultFallbacksForAgentStringModel,
-  });
+  const fallbacksOverride = resolveCronFallbacksOverride(params);
   return resolveModelCandidateChain({
     cfg: params.cfg,
     agentId: params.agentId,
