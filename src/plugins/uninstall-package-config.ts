@@ -176,7 +176,7 @@ export function removePluginRuntimePolicyFromConfig(
     config: {
       ...cfg,
       plugins: Object.keys(cleanedPlugins).length > 0 ? cleanedPlugins : undefined,
-      channels: channels as OpenClawConfig["channels"],
+      ...(actions.channelConfig ? { channels: channels as OpenClawConfig["channels"] } : {}),
     },
     actions,
   };

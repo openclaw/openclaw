@@ -222,33 +222,6 @@ function normalizeMessagePollDeliveryResult(
   };
 }
 
-function buildMessagePollResult(params: {
-  channel: string;
-  to: string;
-  normalized: {
-    question: string;
-    options: string[];
-    maxSelections: number;
-    durationSeconds?: number | null;
-    durationHours?: number | null;
-  };
-  via: MessagePollResult["via"];
-  result?: MessagePollResult["result"];
-  dryRun?: boolean;
-}): MessagePollResult {
-  return {
-    channel: params.channel,
-    to: params.to,
-    question: params.normalized.question,
-    options: params.normalized.options,
-    maxSelections: params.normalized.maxSelections,
-    durationSeconds: params.normalized.durationSeconds ?? null,
-    durationHours: params.normalized.durationHours ?? null,
-    via: params.via,
-    ...(params.dryRun ? { dryRun: true } : { result: params.result }),
-  };
-}
-
 function assertPollOptionSupport(params: {
   channel: string;
   outbound: NonNullable<ChannelPlugin["outbound"]>;
@@ -588,15 +561,22 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
   const normalized = outbound.pollMaxOptions
     ? normalizePollInput(pollInput, { maxOptions: outbound.pollMaxOptions })
     : normalizePollInput(pollInput);
+  const buildResult = (
+    delivery: Pick<MessagePollResult, "result" | "dryRun">,
+  ): MessagePollResult => ({
+    channel,
+    to: params.to,
+    question: normalized.question,
+    options: normalized.options,
+    maxSelections: normalized.maxSelections,
+    durationSeconds: normalized.durationSeconds ?? null,
+    durationHours: normalized.durationHours ?? null,
+    via: deliveryMode === "gateway" ? "gateway" : "direct",
+    ...delivery,
+  });
 
   if (params.dryRun) {
-    return buildMessagePollResult({
-      channel,
-      to: params.to,
-      normalized,
-      via: deliveryMode === "gateway" ? "gateway" : "direct",
-      dryRun: true,
-    });
+    return buildResult({ dryRun: true });
   }
 
   assertPollOptionSupport({
@@ -635,13 +615,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     });
 
-    return buildMessagePollResult({
-      channel,
-      to: params.to,
-      normalized,
-      via: deliveryMode === "gateway" ? "gateway" : "direct",
-      result: normalizeMessagePollDeliveryResult(result),
-    });
+    return buildResult({ result: normalizeMessagePollDeliveryResult(result) });
   }
 
   const result = await callMessageGateway<ChannelPollResult>({
@@ -665,11 +639,5 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     },
   });
 
-  return buildMessagePollResult({
-    channel,
-    to: params.to,
-    normalized,
-    via: "gateway",
-    result: normalizeMessagePollDeliveryResult(result),
-  });
+  return buildResult({ result: normalizeMessagePollDeliveryResult(result) });
 }

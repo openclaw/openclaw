@@ -627,7 +627,7 @@ export function createPluginNativeAdmission(
         },
       };
     },
-    finish(_captureDirectory: string, receipt: NativeReceipt) {
+    finish(receipt: NativeReceipt) {
       if (!files.size) {
         return;
       }

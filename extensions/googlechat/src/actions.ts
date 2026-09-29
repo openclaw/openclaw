@@ -4,6 +4,7 @@ import {
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage } from "./api.js";
 import { resolveGoogleChatOutboundSpace } from "./targets.js";
@@ -21,15 +22,13 @@ function hasGoogleChatOutboundAttachment(params: Record<string, unknown>): boole
   if (!Array.isArray(params.attachments)) {
     return false;
   }
-  return params.attachments.some((attachment) => {
-    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
-      return false;
-    }
-    const record = attachment as Record<string, unknown>;
-    return STRUCTURED_ATTACHMENT_MEDIA_KEYS.some(
-      (key) => readStringParam(record, key) !== undefined,
-    );
-  });
+  return params.attachments.some(
+    (attachment) =>
+      isRecord(attachment) &&
+      STRUCTURED_ATTACHMENT_MEDIA_KEYS.some(
+        (key) => readStringParam(attachment, key) !== undefined,
+      ),
+  );
 }
 
 export async function handleGoogleChatAction({

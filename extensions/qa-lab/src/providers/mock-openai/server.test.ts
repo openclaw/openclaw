@@ -2934,7 +2934,7 @@ describe("qa mock openai server", () => {
         input: [
           makeUserInput(prompt),
           makeUserInput(
-            "[Subagent Context] Every subagent spawned from this session has now settled.\n[Subagent Context] Review the completion results and send your consolidated final answer to the user now.\nALPHA-OK\nBETA-OK",
+            "[Subagent Context] Every subagent in this batch has now settled.\n[Subagent Context] Review the completion results and send your consolidated final answer to the user now.\nALPHA-OK\nBETA-OK",
           ),
         ],
       });
@@ -2971,7 +2971,7 @@ describe("qa mock openai server", () => {
       input: [
         makeUserInput(prompt),
         makeUserInput(
-          "[Subagent Context] Every subagent spawned from this session has now settled.\nALPHA-OK\nBETA-OK",
+          "[Subagent Context] Every subagent in this batch has now settled.\nALPHA-OK\nBETA-OK",
         ),
       ],
     });

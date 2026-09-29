@@ -16,6 +16,7 @@ import { readSessionHistoryPageInWorker } from "../config/sessions/session-histo
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import * as reconcile from "../config/sessions/session-transcript-reconcile.js";
 import type { SessionTranscriptHistoryWorkerInput } from "../config/sessions/session-transcript-worker.types.js";
+import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
 import { AgentDatabaseRegistryChangedError } from "../state/openclaw-agent-db-registry-listing.js";
 import * as stateContext from "../state/openclaw-state-worker-context.js";
@@ -80,9 +81,7 @@ beforeEach(() => {
       env: scope.env,
       path: path.join(path.dirname(scope.storePath), "openclaw-agent.sqlite"),
       ownerStorePath: scope.storePath,
-      ...(scope.sessionKey
-        ? { sessionKey: sqliteScope.normalizeSqliteSessionKey(scope.sessionKey) }
-        : {}),
+      ...(scope.sessionKey ? { sessionKey: normalizeStoreSessionKey(scope.sessionKey) } : {}),
     };
   });
   queued.length = 0;
