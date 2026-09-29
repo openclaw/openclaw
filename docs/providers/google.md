@@ -331,7 +331,8 @@ whispering belongs in `audioProfile`.
 
 Set `speakers` to exactly two `{ speaker, voice, style? }` entries to cast a
 dialogue. Only lines that start with one of those two names followed by a colon
-begin a turn, and the name is not spoken. Every other line is spoken as part of
+begin a turn (`Puck: Hello` and `Puck:Hello` both count), and the name is not
+spoken. Every other line is spoken as part of
 the current turn, including ordinary colon-prefixed prose such as
 `Budget: 10 dollars` and any unconfigured label such as `Alice: Hi`. Words
 before the first label are spoken by that first speaker, not dropped. A

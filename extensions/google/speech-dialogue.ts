@@ -42,7 +42,8 @@ export function readGoogleTtsSpeakers(value: unknown): GoogleTtsDialogueSpeaker[
   return speakers;
 }
 
-// Only the two configured speaker names start a turn. Every other line, including ordinary
+// Only the two configured speaker names start a turn, with or without whitespace after the
+// colon ("Puck: Hello" and "Puck:Hello" both count). Every other line, including ordinary
 // colon-prefixed prose such as "Budget: 10 dollars" or an unconfigured "Alice: Hi", is spoken as
 // part of the current turn. Text before the first label is spoken by the first speaker.
 export function splitGoogleTtsDialogue(
@@ -57,11 +58,12 @@ export function splitGoogleTtsDialogue(
     if (!trimmed) {
       continue;
     }
-    const labeled = /^([^:\n]{1,80}):\s+(\S[\s\S]*)$/u.exec(trimmed);
+    const labeled = /^([^:\n]{1,80}):([\s\S]*)$/u.exec(trimmed);
     const speaker = labeled?.[1]?.trim();
     if (labeled && speaker && names.has(speaker)) {
       const spoken = labeled[2]?.trim();
       if (!spoken) {
+        // A bare "Puck:" line carries no words for this speaker.
         continue;
       }
       if (turns.length === 0 && lead.length > 0) {

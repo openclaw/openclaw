@@ -55,75 +55,81 @@ describe("Google speech dialogue", () => {
     vi.resetModules();
   });
 
-  it("sends a labeled Gemini 3.8 dialogue as two conversational speakers", async () => {
-    const requestMock = installGoogleTtsRequestMock();
-    const provider = buildGoogleSpeechProvider();
+  it.each([
+    { form: "spaced", separator: ": " },
+    { form: "compact", separator: ":" },
+  ])(
+    "sends a labeled Gemini 3.8 dialogue as two conversational speakers ($form labels)",
+    async ({ separator }) => {
+      const requestMock = installGoogleTtsRequestMock();
+      const provider = buildGoogleSpeechProvider();
 
-    await provider.synthesize({
-      text: [
-        "Puck: Headphones on. <laugh> We opened it.",
-        "Kore: It is waiting at the maintainer gate.",
-      ].join("\n"),
-      cfg: {},
-      providerConfig: {
-        apiKey: "***",
-        model: "gemini-3.8-flash-tts",
-        audioProfile: "Keep it brief.",
-        speakers: [
-          { speaker: "Puck", voice: "Puck", style: "bright" },
-          { speaker: "Kore", voice: "Kore", style: "whispered" },
-        ],
-      },
-      target: "audio-file",
-      timeoutMs: 10_000,
-    });
+      await provider.synthesize({
+        text: [
+          `Puck${separator}Headphones on. <laugh> We opened it.`,
+          `Kore${separator}It is waiting at the maintainer gate.`,
+        ].join("\n"),
+        cfg: {},
+        providerConfig: {
+          apiKey: "***",
+          model: "gemini-3.8-flash-tts",
+          audioProfile: "Keep it brief.",
+          speakers: [
+            { speaker: "Puck", voice: "Puck", style: "bright" },
+            { speaker: "Kore", voice: "Kore", style: "whispered" },
+          ],
+        },
+        target: "audio-file",
+        timeoutMs: 10_000,
+      });
 
-    expect(requireFirstRecordArg(requestMock, "Google 3.8 dialogue request")).toMatchObject({
-      url: "https://generativelanguage.googleapis.com/v1beta/interactions",
-      body: {
-        model: "gemini-3.8-flash-tts",
-        store: false,
-        input: [
-          {
-            type: "user_input",
-            content: [
-              {
-                type: "text",
-                text: "Headphones on. <laugh> We opened it.",
-                annotations: [
-                  {
-                    type: "speech_metadata",
-                    speaker: "Puck",
-                    style: "bright\n\nKeep it brief.",
-                  },
-                ],
-              },
-              {
-                type: "text",
-                text: "It is waiting at the maintainer gate.",
-                annotations: [
-                  {
-                    type: "speech_metadata",
-                    speaker: "Kore",
-                    style: "whispered\n\nKeep it brief.",
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-        generation_config: {
-          speech_config: {
-            mode: "conversational",
-            speakers: [
-              { speaker: "Puck", voice: "Puck" },
-              { speaker: "Kore", voice: "Kore" },
-            ],
+      expect(requireFirstRecordArg(requestMock, "Google 3.8 dialogue request")).toMatchObject({
+        url: "https://generativelanguage.googleapis.com/v1beta/interactions",
+        body: {
+          model: "gemini-3.8-flash-tts",
+          store: false,
+          input: [
+            {
+              type: "user_input",
+              content: [
+                {
+                  type: "text",
+                  text: "Headphones on. <laugh> We opened it.",
+                  annotations: [
+                    {
+                      type: "speech_metadata",
+                      speaker: "Puck",
+                      style: "bright\n\nKeep it brief.",
+                    },
+                  ],
+                },
+                {
+                  type: "text",
+                  text: "It is waiting at the maintainer gate.",
+                  annotations: [
+                    {
+                      type: "speech_metadata",
+                      speaker: "Kore",
+                      style: "whispered\n\nKeep it brief.",
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+          generation_config: {
+            speech_config: {
+              mode: "conversational",
+              speakers: [
+                { speaker: "Puck", voice: "Puck" },
+                { speaker: "Kore", voice: "Kore" },
+              ],
+            },
           },
         },
-      },
-    });
-  });
+      });
+    },
+  );
 
   it("keeps an unlabeled transcript on the single-voice Gemini 3.8 path", async () => {
     const requestMock = installGoogleTtsRequestMock();
