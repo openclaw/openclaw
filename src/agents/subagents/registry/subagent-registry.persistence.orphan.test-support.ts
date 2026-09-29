@@ -91,6 +91,9 @@ export function registerSubagentOrphanTaskCases({
         },
       },
     });
+    // The boot snapshot is process-level; drop rows cached by earlier cases so
+    // this fresh state dir (no boot history) takes the unattributed path.
+    loadGatewayBootSegmentsForAttribution(Date.now(), { forceRefresh: true });
 
     restartRegistry();
     await testing.sweepOnceForTests();
