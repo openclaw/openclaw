@@ -237,6 +237,9 @@ judgment and move the repeatable parts into code:
 
 - Put listing and diffing, dedupe, checkpoints or watermarks, and failure counting in
   a workspace script that the payload runs in a single `exec` call.
+- Keep detailed instructions in a workspace file next to the script and have the
+  message reference it (for example, "Follow `scripts/<job>.md`"), so most fixes
+  need only workspace file edits, not a job update.
 - Have the message name the exact tool ids and argument shapes the run should use,
   instead of asking the model to discover them.
 - Cap `toolsAllow` to the tools the run actually needs.

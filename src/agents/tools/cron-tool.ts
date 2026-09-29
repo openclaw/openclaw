@@ -215,7 +215,7 @@ TARGET+PAYLOAD:
 
 PACED LOOP: recurring job + pacing{min?,max?} durations ("15m","4h"; at least one). Inside its run, job calls next_check in:"<dur>" to set the next delay (clamped to bounds, measured from run end; failed runs keep normal backoff). Adaptive polling: tighten when active, back off when quiet.
 
-AUTHORING (recurring): every fire re-runs the same instructions; keep the model for judgment only. Put repeatable logic (listing/diffing, dedupe, checkpoints/watermarks, failure counting) in a workspace script the payload runs in one exec. Message names exact tool ids + argument shapes; cap toolsAllow to what the run needs.${scriptCue}
+AUTHORING (recurring): every fire re-runs the same instructions; keep the model for judgment only. Put repeatable logic (listing/diffing, dedupe, checkpoints/watermarks, failure counting) in a workspace script the payload runs in one exec; keep detailed instructions in a workspace file beside it that the message references ("Follow scripts/<job>.md"), so fixes need only file edits. Message names exact tool ids + argument shapes; cap toolsAllow to what the run needs.${scriptCue}
 
 ${triggerSection}
 
