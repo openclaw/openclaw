@@ -1373,7 +1373,7 @@ src/agents/code-mode-runtime.ts	2
 src/agents/code-mode-script-syntax.ts	1
 src/agents/code-mode.ts	2
 src/agents/codex-mcp-config.ts	1
-src/agents/command/attempt-execution.helpers.ts	7
+src/agents/command/attempt-execution.helpers.ts	6
 src/agents/compaction-planning-projection.ts	6
 src/agents/compaction-planning-worker.ts	1
 src/agents/compaction-planning.ts	1
