@@ -343,6 +343,9 @@ describe("memory index", () => {
   it("counts exact candidate headroom by distinct path instead of chunk", async () => {
     providerFixture.forceNoProvider = true;
     const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
+    // Query by bare stem: the shared persistent index also holds MEMORY.md
+    // bodies containing the token "md", and OR-joined keyword recall would
+    // otherwise pull those unrelated chunks into the result window.
     for (let index = 0; index < 200; index += 1) {
       const dir = path.join(fixture.paths.memory, index.toString().padStart(3, "0"));
       await fs.mkdir(dir, { recursive: true });
@@ -350,7 +353,7 @@ describe("memory index", () => {
     }
     await manager.sync({ reason: "test" });
 
-    const results = await manager.search("foo.md", { maxResults: 204, minScore: 0 });
+    const results = await manager.search("foo", { maxResults: 204, minScore: 0 });
 
     expect(results).toHaveLength(200);
     expect(new Set(results.map((entry) => entry.path)).size).toBe(200);

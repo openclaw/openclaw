@@ -1,14 +1,24 @@
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 
+function quoteMatchTerm(term: string): string {
+  return `"${term.replaceAll('"', "")}"`;
+}
+
 export function buildFtsQuery(raw: string): string | null {
-  return buildMatchQueryFromTerms(normalizeStringEntries(raw.match(/[\p{L}\p{N}_]+/gu) ?? []));
+  const terms = normalizeStringEntries(raw.match(/[\p{L}\p{N}_]+/gu) ?? []);
+  if (terms.length === 0) {
+    return null;
+  }
+  // Natural-language questions rarely repeat every token in the answer chunk.
+  // OR the terms and let BM25 rank by the rare ones (issue #160839).
+  return terms.map(quoteMatchTerm).join(" OR ");
 }
 
 export function buildMatchQueryFromTerms(terms: string[]): string | null {
   if (terms.length === 0) {
     return null;
   }
-  return terms.map((term) => `"${term.replaceAll('"', "")}"`).join(" AND ");
+  return terms.map(quoteMatchTerm).join(" AND ");
 }
 
 export function bm25RankToScore(rank: number): number {

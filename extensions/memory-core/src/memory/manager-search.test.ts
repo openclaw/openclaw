@@ -328,6 +328,52 @@ describe("searchKeyword FTS MATCH fallback", () => {
   });
 });
 
+describe("searchKeyword natural-language questions", () => {
+  function createFtsDb() {
+    const { db, schema } = createMemorySearchDb();
+    if (!schema.ftsAvailable) {
+      db.close();
+      throw new Error(`FTS5 unavailable: ${schema.ftsError ?? "unknown error"}`);
+    }
+    return db;
+  }
+
+  const itWithFts = supportsFts() ? it : it.skip;
+
+  itWithFts(
+    "matches a chunk that holds only some of the question's words (issue #160839)",
+    async () => {
+      const db = createFtsDb();
+      try {
+        insertKeywordFixture(db, {
+          id: "answer",
+          path: "notes/releases.md",
+          text: "Tag v0.78.42.0 is an annotated tag object 0b1698f pointing at the release commit.",
+          endLine: 3,
+        });
+        insertKeywordFixture(db, {
+          id: "unrelated",
+          path: "notes/other.md",
+          text: "What is the deployment process for the gateway service",
+          endLine: 3,
+        });
+
+        const results = await searchKeywordFixture(
+          db,
+          "What is the annotated tag object hash created for v0.78.42.0?",
+        );
+
+        expect(results.map((row) => row.id)).toContain("answer");
+        // BM25 must rank the rare-token answer above the stop-word-only row.
+        expect(results[0]?.id).toBe("answer");
+        expect(results[0]?.textScore).toBeGreaterThan(0);
+      } finally {
+        db.close();
+      }
+    },
+  );
+});
+
 describe("searchKeyword ranked limits", () => {
   it.each(["unicode61", "trigram"] as const)(
     "stops examining scoped candidates after filling the %s result window",
