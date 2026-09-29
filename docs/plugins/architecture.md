@@ -432,7 +432,13 @@ acquired by that context. The first catalog request prepares registrations for t
 agent's known configured and credential providers together; only the requested
 providers run catalog hooks. Newly observed owners extend that context without
 discarding earlier owners. Replacement releases them after admitted work settles.
-Successfully disposed registrations leave their plugin caches.
+Successfully disposed registrations leave their plugin caches. Provider workers load
+provider catalog owners, not native harnesses used only by the parent model picker.
+Their registries retain the loader’s scoped registration config, authored source
+projection, environment, and metadata inventory, including an empty provider scope.
+Binding a catalog request does not rerun setup auto-enable; request-local config
+and authentication still travel with each task. Explicit setup and configuration
+preparation retain their existing probes.
 
 Catalog observation is passive. Inventory requests can ask the catalog owner to
 renew expired providers while returning its accepted rows. Chat metadata and

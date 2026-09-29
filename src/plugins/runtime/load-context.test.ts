@@ -428,6 +428,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       env: context.env,
       logger: context.logger,
       manifestRegistry,
+      metadataSnapshot,
       installRecords: {},
       preferBuiltPluginArtifacts: true,
       cache: false,

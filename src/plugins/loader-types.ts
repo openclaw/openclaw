@@ -6,6 +6,7 @@ import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginModuleLoaderRecovery } from "./plugin-instance.types.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRuntimeArtifact } from "./plugin-runtime-artifact-selection.js";
 import type { PluginRecord, PluginRegistry, PluginRegistryParams } from "./registry-types.js";
 import type { CreatePluginRuntimeOptions } from "./runtime/types.js";
@@ -73,6 +74,8 @@ export type PluginLoadOptions = {
   expectedSourceDigests?: Readonly<Record<string, string>>;
   loadModules?: boolean;
   throwOnLoadError?: boolean;
+  /** Exact lifecycle inventory supplied by a prepared load owner. */
+  metadataSnapshot?: PluginMetadataSnapshot;
   manifestRegistry?: PluginManifestRegistry;
   discovery?: PluginDiscoveryResult;
 };

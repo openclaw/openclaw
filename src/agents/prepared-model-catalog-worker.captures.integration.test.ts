@@ -5,6 +5,7 @@ import { threadId, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sweepPluginSourceCapturesForTest } from "../plugins/plugin-source-capture-directory.test-support.js";
+import { resolvePluginRuntimeLoadContext } from "../plugins/runtime/load-context.resolve.js";
 import { getPreparedModelCatalogWorkerPoolSnapshot } from "./prepared-model-catalog-worker.js";
 import {
   EXTERNAL_AUTH_PROFILE_ID,
@@ -37,9 +38,82 @@ describe("Gateway catalog worker captures", () => {
         spawned.push(message.worker);
       }
     };
+    const nativeId = "unselected-native-fixture";
+    const setupId = "unrelated-setup-fixture";
+    let observations = "";
     try {
       const secondaryId = "worker-catalog-secondary";
       const fixture = await createFleetFixture((seed) => {
+        observations = path.join(seed.root, "registration-observations.jsonl");
+        fs.writeFileSync(observations, "");
+        const observe = (event: string) =>
+          `require("node:fs").appendFileSync(${JSON.stringify(observations)}, JSON.stringify({ event: ${JSON.stringify(event)}, threadId: require("node:worker_threads").threadId }) + "\\n");`;
+        const nativeDir = path.join(seed.root, nativeId);
+        fs.mkdirSync(nativeDir);
+        fs.writeFileSync(
+          path.join(nativeDir, "openclaw.plugin.json"),
+          JSON.stringify({
+            id: nativeId,
+            activation: { onAgentHarnesses: [nativeId] },
+            configSchema: { type: "object", additionalProperties: false },
+          }),
+        );
+        fs.writeFileSync(
+          path.join(nativeDir, "index.cjs"),
+          `
+module.exports = { id: ${JSON.stringify(nativeId)}, register(api) {
+  ${observe("native-register")}
+  api.registerAgentHarness({
+    id: ${JSON.stringify(nativeId)}, label: "Unselected native owner", authBootstrap: "harness",
+    supports: () => ({ supported: true }), runAttempt: async () => ({ ok: false, error: "unused" }),
+    loadModelCatalog: async () => {
+      ${observe("native-catalog")}
+      return [{ provider: ${JSON.stringify(PROVIDER_ID)}, id: "unselected-native-model",
+        name: "Native model", nativeRuntime: ${JSON.stringify(nativeId)} }];
+    },
+  });
+} };`,
+        );
+        const setupDir = path.join(seed.root, setupId);
+        fs.mkdirSync(setupDir);
+        fs.writeFileSync(
+          path.join(setupDir, "package.json"),
+          JSON.stringify({
+            name: setupId,
+            version: "1.0.0",
+            type: "commonjs",
+            openclaw: { extensions: ["./index.cjs"], setupEntry: "./setup-api.cjs" },
+          }),
+        );
+        fs.writeFileSync(
+          path.join(setupDir, "openclaw.plugin.json"),
+          JSON.stringify({
+            id: setupId,
+            setup: { requiresRuntime: true },
+            configSchema: { type: "object", properties: { configured: { type: "boolean" } } },
+          }),
+        );
+        fs.writeFileSync(
+          path.join(setupDir, "index.cjs"),
+          `module.exports = { id: ${JSON.stringify(setupId)}, register() {} };`,
+        );
+        fs.writeFileSync(
+          path.join(setupDir, "setup-api.cjs"),
+          `
+${observe("setup-import")}
+module.exports = { id: ${JSON.stringify(setupId)}, register(api) {
+  api.registerAutoEnableProbe(({ config }) => {
+    ${observe("setup-probe")}
+    return config.acp?.enabled ? "fixture setup configured" : null;
+  });
+} };`,
+        );
+        seed.config.plugins.allow.push(nativeId, setupId);
+        seed.config.plugins.load.paths.push(path.join(nativeDir, "index.cjs"), setupDir);
+        Object.assign(seed.config.plugins.entries, {
+          [nativeId]: { enabled: true },
+          [setupId]: { enabled: true, config: { configured: true } },
+        });
         const original = path.join(seed.root, "plugin");
         const secondary = path.join(seed.root, "secondary-plugin");
         fs.mkdirSync(secondary);
@@ -61,6 +135,16 @@ describe("Gateway catalog worker captures", () => {
         workerChannel.subscribe(recordWorker);
       });
       const { snapshots, agentIds } = fixture;
+      expect(
+        snapshots[0]?.pluginRegistry?.agentHarnesses.map(({ harness }) => harness.id),
+      ).toContain(nativeId);
+      const readObservations = (): Array<{ event: string; threadId: number }> =>
+        fs
+          .readFileSync(observations, "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line));
       await loadCompletedFullCatalog(snapshots[0]!);
       const initialCaptures = new Set(
         readCatalogDiscoveryCaptures(fixture.root)
@@ -114,6 +198,30 @@ describe("Gateway catalog worker captures", () => {
         snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot, { refresh: true })),
       );
       expect(capturedRuntimeSources().size).toBe(2);
+      // Native inventory remains in the parent; provider refreshes must not execute
+      // that harness or unrelated setup code in the shared worker.
+      expect(
+        catalogs.every((catalog) =>
+          catalog.entries.some(
+            (entry) => entry.id === "unselected-native-model" && entry.nativeRuntime === nativeId,
+          ),
+        ),
+      ).toBe(true);
+      expect.soft(readObservations().filter((entry) => entry.threadId !== threadId)).toEqual([]);
+      expect(readObservations()).toContainEqual({ event: "native-catalog", threadId });
+      const setup = resolvePluginRuntimeLoadContext({
+        config: {
+          ...fixture.config,
+          acp: { enabled: true },
+          plugins: { ...fixture.config.plugins, allow: [PROVIDER_ID] },
+        },
+        env: process.env,
+        workspaceDir: fixture.workspaceDir,
+        metadataSnapshot: snapshots[0]!.metadataSnapshot,
+      });
+      expect(setup.config.plugins?.allow).toContain(setupId);
+      expect(setup.autoEnabledReasons[setupId]).toContain("fixture setup configured");
+      expect(readObservations()).toContainEqual({ event: "setup-probe", threadId });
       const filename = [...captures][0]!;
       const captureRoot = filename.slice(0, filename.indexOf(`${path.sep}openclaw-plugin-build-`));
       expect(path.basename(captureRoot)).toMatch(/^openclaw-model-catalog-/);
@@ -143,6 +251,7 @@ describe("Gateway catalog worker captures", () => {
         expect(inventory()).toEqual(retained);
       }
       expect(footprint()).toEqual(initialFootprint);
+      expect(readObservations().filter((entry) => entry.threadId !== threadId)).toEqual([]);
       await closePreparedModelRuntimeSnapshots();
       expect(fs.existsSync(captureRoot)).toBe(false);
     } finally {
