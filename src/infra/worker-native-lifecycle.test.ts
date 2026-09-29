@@ -16,6 +16,7 @@ async function runFixture(
     | "supervisor-loss"
     | "native-resource"
     | "resource-supervisor-loss"
+    | "resource-cold-supervisor-loss"
     | "resource-close-supervisor-loss"
     | "resource-late-attachment"
     | "resource-owner-reply-loss"
@@ -59,6 +60,17 @@ describe("retained native worker lifecycle", () => {
       rejectedWhileBlocked: true,
       retryRejectedWhileBlocked: true,
       joinedOnlyAfterYield: true,
+    });
+  }, 20_000);
+
+  it("rejects cold supervisor recovery until the original broker becomes ready, then retries", async () => {
+    expect(await runFixture("resource-cold-supervisor-loss")).toEqual({
+      ending: "resource-cold-supervisor-loss",
+      unavailableBeforeReady: true,
+      sameSourceRetained: true,
+      sameBrokerRetried: true,
+      neverAdmittedResourceClosed: true,
+      brokerClosed: true,
     });
   }, 20_000);
 
