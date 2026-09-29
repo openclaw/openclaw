@@ -48,7 +48,6 @@ import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scop
 import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import type {
   SessionAccessScope,
-  CapturedSessionEntryReadSource,
   SessionEntryReadScope,
   SessionEntryListScope,
   SessionEntrySummary,
@@ -57,6 +56,11 @@ import type {
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type { SessionColdArchive } from "./session-cold-storage-state.js";
+import type {
+  SessionEntryCurrentFacts,
+  SessionEntryCurrentSource,
+} from "./session-entry-current.types.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { PublishedSessionTranscriptArchive } from "./session-history-archive-pruning.types.js";
 import type {
   SessionHistoryWorkerRequest,
@@ -89,11 +93,6 @@ type SessionTranscriptSearchWorkerInput = {
   kind: "transcript-search";
   database: { agentId: string; path: string };
   params: SessionTranscriptSearchParams;
-};
-
-type SessionTranscriptSearchWorkerResult = {
-  kind: "transcript-search";
-  result: SessionTranscriptSearchResult;
 };
 
 export type PreparedSessionTranscriptHydration =
@@ -190,11 +189,6 @@ export type SessionPreviewWorkerInput = {
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
-type SessionPreviewWorkerResult = {
-  kind: "session-preview";
-  items: SessionPreviewItem[];
-};
-
 type SessionTitleFieldsWorkerInput = {
   kind: "session-title-fields";
   database: { agentId: string; path: string };
@@ -203,20 +197,10 @@ type SessionTitleFieldsWorkerInput = {
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
-type SessionTitleFieldsWorkerResult = {
-  kind: "session-title-fields";
-  fields: SessionTitleFields;
-};
-
 type SessionRowBackfillWorkerInput = {
   kind: "session-row-backfill";
   database: { agentId: string; path: string };
   params: SessionRowTranscriptReadParams;
-};
-
-type SessionRowBackfillWorkerResult = {
-  kind: "session-row-backfill";
-  fields: SessionRowTranscriptFields;
 };
 
 type SessionTranscriptHydrationWorkerInput = {
@@ -310,6 +294,17 @@ type SessionEntryReadWorkerInput = {
   continuation?: CanonicalSessionReaderContinuation;
 };
 
+export type SessionEntryCurrentWorkerInput = Omit<SessionEntryReadWorkerInput, "kind"> & {
+  kind: "session-entry-current";
+  source?: SessionEntryCurrentSource;
+};
+
+export type SessionEntryCurrentWorkerResult = {
+  kind: "session-entry-current";
+  entry: SessionEntryCurrentFacts | undefined;
+  source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
+};
+
 export type SessionDiagnosticTextWorkerInput = {
   kind: "session-diagnostic-text";
   database: { agentId: string; path: string };
@@ -335,18 +330,33 @@ type SessionEntryListWorkerInput = {
   scope: SessionEntryListScope;
 };
 
-type SessionEntryListWorkerResult = {
-  kind: "session-entry-list";
-  entries: SessionEntrySummary[];
-};
-
 export type SessionExactEntriesWorkerInput = {
   kind: "session-exact-entries";
   database: { agentId: string; path: string };
+} & SessionExactEntriesWorkerRequest;
+
+export type SessionExactEntriesWorkerSelection =
+  | {
+      sessionKeys: readonly string[];
+      selection?: never;
+      projection?:
+        | "full"
+        | "backing"
+        | "sharing"
+        | "replacement"
+        | "creation"
+        | "list"
+        | "lifecycle";
+    }
+  | {
+      sessionKeys?: never;
+      selection: { kind: "session-id"; sessionId: string };
+      projection: "sharing";
+    };
+
+type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {
   env: NodeJS.ProcessEnv;
-  sessionKeys: readonly string[];
   lifecycleSessionKey?: string;
-  projection?: "full" | "backing" | "sharing" | "replacement" | "creation" | "list" | "lifecycle";
   includeMembers?: boolean;
   includeParticipantRecords?: boolean;
   includeAuthorization?: boolean;
@@ -422,11 +432,6 @@ type SessionIdentityEvidenceWorkerInput = {
   continuation?: CanonicalSessionReaderContinuation;
 };
 
-type SessionIdentityEvidenceWorkerResult = {
-  kind: "session-identity-evidence";
-  evidence: SessionIdentityEvidenceResult[];
-};
-
 export type SessionBranchSummaryWorkerInput = {
   kind: "branch-summaries";
   request: SessionBranchSummaryReadRequest;
@@ -479,6 +484,7 @@ export type SessionHistoryWorkerInput =
   | SessionPendingInputReceiptsWorkerInput
   | SessionEntryListWorkerInput
   | SessionEntryReadWorkerInput
+  | SessionEntryCurrentWorkerInput
   | SessionDiagnosticTextWorkerInput
   | SessionExactEntriesWorkerInput
   | SessionRowFactsWorkerInput
@@ -499,9 +505,9 @@ export type SessionTranscriptWorkerInput =
 
 type SessionHistoryDatabaseWorkerInput = Extract<SessionHistoryWorkerInput, { database: unknown }>;
 
-export type SessionHistoryWorkerPreparedInput = {
-  [Input in SessionHistoryDatabaseWorkerInput as Input["kind"]]: Omit<Input, "database">;
-}[SessionHistoryDatabaseWorkerInput["kind"]];
+type PreparedHistoryInput<Input> = Input extends unknown ? Omit<Input, "database"> : never;
+export type SessionHistoryWorkerPreparedInput =
+  PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = {
   prewarm: { kind: "prewarm" };
@@ -515,7 +521,7 @@ export type SessionTranscriptWorkerValues = {
     kind: "session-archive-pruning";
     result: PublishedSessionTranscriptArchive | null;
   };
-  "transcript-search": SessionTranscriptSearchWorkerResult;
+  "transcript-search": { kind: "transcript-search"; result: SessionTranscriptSearchResult };
   "transcript-match": { kind: "transcript-match"; result: { event: TranscriptEvent } | undefined };
   "cold-metadata": SessionColdMetadataWorkerResult;
   "transcript-hydration": SessionTranscriptHydrationWorkerResult;
@@ -527,9 +533,9 @@ export type SessionTranscriptWorkerValues = {
   "sqlite-target": { target: ResolvedSqliteStoreTarget };
   "branch-summaries": SessionBranchSummaryReadResult;
   "history-page": SessionHistoryWorkerResult;
-  "session-preview": SessionPreviewWorkerResult;
-  "session-title-fields": SessionTitleFieldsWorkerResult;
-  "session-row-backfill": SessionRowBackfillWorkerResult;
+  "session-preview": { kind: "session-preview"; items: SessionPreviewItem[] };
+  "session-title-fields": { kind: "session-title-fields"; fields: SessionTitleFields };
+  "session-row-backfill": { kind: "session-row-backfill"; fields: SessionRowTranscriptFields };
   "session-row-presence": boolean;
   "projection-status": boolean;
   "session-members": SessionMember[];
@@ -539,8 +545,9 @@ export type SessionTranscriptWorkerValues = {
     kind: "session-pending-input-receipts";
     receipts: ReturnType<typeof listSessionPendingInputReceipts>;
   };
-  "session-entry-list": SessionEntryListWorkerResult;
+  "session-entry-list": { kind: "session-entry-list"; entries: SessionEntrySummary[] };
   "session-entry-read": SessionEntryReadWorkerResult;
+  "session-entry-current": SessionEntryCurrentWorkerResult;
   "session-diagnostic-text": {
     kind: "session-diagnostic-text";
     text: string | undefined;
@@ -555,7 +562,10 @@ export type SessionTranscriptWorkerValues = {
         readError: import("./session-transcript-worker-error.types.js").SessionTranscriptWorkerReadError;
       };
   "session-target-inventory": SessionStoreTargetInventoryResult;
-  "session-identity-evidence": SessionIdentityEvidenceWorkerResult;
+  "session-identity-evidence": {
+    kind: "session-identity-evidence";
+    evidence: SessionIdentityEvidenceResult[];
+  };
   "usage-cache": SessionCostUsageCacheReadResult;
   "model-context": ReturnType<typeof readSessionTranscriptModelContext>;
   "session-reset-recall": {
@@ -607,7 +617,7 @@ export type SessionHistoryWorkerDatabase = {
   ) => Promise<SessionColdMetadataWorkerResult>;
   searchTranscripts: (
     params: SessionTranscriptSearchWorkerInput["params"],
-  ) => Promise<SessionTranscriptSearchWorkerResult["result"]>;
+  ) => Promise<SessionTranscriptSearchResult>;
   generation: number;
   assertCurrent: () => void;
   run: (
@@ -616,13 +626,13 @@ export type SessionHistoryWorkerDatabase = {
   ) => Promise<SessionHistoryWorkerResult>;
   readPreview: (
     input: Omit<SessionPreviewWorkerInput, "kind" | "database">,
-  ) => Promise<SessionPreviewWorkerResult["items"]>;
+  ) => Promise<SessionPreviewItem[]>;
   readTitleFields: (
     input: Omit<SessionTitleFieldsWorkerInput, "kind" | "database">,
-  ) => Promise<SessionTitleFieldsWorkerResult["fields"]>;
+  ) => Promise<SessionTitleFields>;
   readRowBackfill: (
     params: SessionRowBackfillWorkerInput["params"],
-  ) => Promise<SessionRowBackfillWorkerResult["fields"]>;
+  ) => Promise<SessionRowTranscriptFields>;
   readEntryPresence: (scope: SessionRowPresenceWorkerInput["scope"]) => Promise<boolean>;
   readProjectionStatus: (
     input: Omit<SessionProjectionStatusWorkerInput, "kind" | "database">,
@@ -644,15 +654,13 @@ export type SessionHistoryWorkerDatabase = {
     signal?: AbortSignal,
   ) => Promise<ReturnType<typeof readSessionTranscriptActiveStats>>;
   readExactEntries: (
-    input: Omit<SessionExactEntriesWorkerInput, "kind" | "database">,
+    input: SessionExactEntriesWorkerRequest,
     signal?: AbortSignal,
   ) => Promise<SessionExactEntriesWorkerResult>;
   readRowFacts: (
     input: Omit<SessionRowFactsWorkerInput, "kind" | "database">,
   ) => Promise<SessionRowFactsWorkerResult>;
-  readEntries: (
-    scope: SessionEntryListWorkerInput["scope"],
-  ) => Promise<SessionEntryListWorkerResult["entries"]>;
+  readEntries: (scope: SessionEntryListWorkerInput["scope"]) => Promise<SessionEntrySummary[]>;
   readEntryResult: (
     input: Omit<SessionEntryReadWorkerInput, "kind" | "database">,
   ) => Promise<
@@ -661,6 +669,9 @@ export type SessionHistoryWorkerDatabase = {
       unknown
     >
   >;
+  readEntryCurrent: (
+    input: Omit<SessionEntryCurrentWorkerInput, "kind" | "database">,
+  ) => Promise<SessionEntryCurrentFacts | undefined>;
   readDiagnosticText: (
     input: Omit<SessionDiagnosticTextWorkerInput, "kind" | "database">,
   ) => Promise<string | undefined>;

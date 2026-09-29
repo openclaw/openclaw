@@ -2,6 +2,16 @@
 const currentModuleUrl = import.meta.url;
 
 export const updateExecutorNativeEntrypoints = {
+  artifact: {
+    currentModuleUrl,
+    sourceWorkerName: "update-command-artifact",
+    distWorkerPath: "cli/update-cli/update-command-artifact.js",
+  },
+  commandCleanup: {
+    currentModuleUrl,
+    sourceWorkerName: "../../process/exec-result",
+    distWorkerPath: "process/exec-result.js",
+  },
   signalExitBarrier: {
     currentModuleUrl,
     sourceWorkerName: "../signal-exit-barrier",

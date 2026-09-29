@@ -1,4 +1,7 @@
-import { CompactionError } from "../../packages/agent-core/src/harness/types.js";
+import {
+  CompactionError,
+  SummaryOutputBudgetError,
+} from "../../packages/agent-core/src/harness/types.js";
 /**
  * Summarization and fallback helpers for transcript compaction.
  */
@@ -25,14 +28,7 @@ import type {
 import type { SessionModelUsageSink } from "./sessions/compaction/runtime.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { generateSummary } from "./sessions/index.js";
-export {
-  BASE_CHUNK_RATIO,
-  computeAdaptiveChunkRatio,
-  estimateMessagesTokens,
-  MIN_CHUNK_RATIO,
-  SAFETY_MARGIN,
-  SUMMARIZATION_OVERHEAD_TOKENS,
-} from "./compaction-planning.js";
+export { estimateMessagesTokens, SUMMARIZATION_OVERHEAD_TOKENS } from "./compaction-planning.js";
 
 const log = createSubsystemLogger("compaction");
 
@@ -152,7 +148,9 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
           // Caller aborts and transport timeouts are terminal; provider-side
           // AbortErrors without caller cancellation remain retryable.
           shouldRetry: (err) =>
-            !params.signal.aborted && (isAbortError(err) || !isTimeoutError(err)),
+            !params.signal.aborted &&
+            !(err instanceof SummaryOutputBudgetError) &&
+            (isAbortError(err) || !isTimeoutError(err)),
         },
       );
     } catch (err) {

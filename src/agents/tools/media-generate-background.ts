@@ -45,6 +45,8 @@ export type MediaGenerateToolOptions = {
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
   agentSessionKey?: string;
+  /** Durable requester transcript key; task ownership stays on agentSessionKey. */
+  requesterRunSessionKey?: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
@@ -218,6 +220,7 @@ export async function prepareMediaGenerationTask<
   }
   return runMediaGenerationTask({
     ...prepared.params,
+    requesterRunSessionKey: options?.requesterRunSessionKey,
     generationLabel: params.generationLabel,
     resources,
     assertAdmissionCurrent: () => {
@@ -232,6 +235,7 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
   lifecycle: ReturnType<typeof createMediaGenerationTaskLifecycle>;
   generationLabel: "image" | "video" | "music";
   sessionKey?: string;
+  requesterRunSessionKey?: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   prompt: string;
@@ -275,6 +279,7 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
     const title = `${generationLabel.charAt(0).toUpperCase()}${generationLabel.slice(1)}`;
     const handle = await lifecycle.createTaskRun({
       sessionKey: params.sessionKey,
+      requesterRunSessionKey: params.requesterRunSessionKey,
       requesterAgentId: params.requesterAgentId,
       requesterOrigin: params.requesterOrigin,
       prompt: params.prompt,

@@ -24,7 +24,7 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
             runtime: "node",
             devMode: false,
           }),
-        ).resolves.toEqual({ devMode: false, runtimePath: pinned });
+        ).resolves.toEqual({ devMode: false, runtime: "node", runtimePath: pinned });
       } finally {
         fs.rmSync(root, { recursive: true, force: true });
       }
@@ -74,6 +74,7 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
       }),
     ).resolves.toEqual({
       devMode: false,
+      runtime: "node",
       runtimePath: "/custom/node",
     });
   });

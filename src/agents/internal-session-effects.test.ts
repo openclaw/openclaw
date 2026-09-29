@@ -3,10 +3,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   appendTranscriptMessage,
+  applySessionEntryLifecycleMutation,
   listSessionEntriesCore,
   loadExactSessionEntry,
   loadTranscriptEvents,
-  persistSessionResetLifecycle,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -70,21 +70,23 @@ describe("internal session effects", () => {
           }
           const nextTranscript = path.join(dir, "next-internal.jsonl");
 
-          await persistSessionResetLifecycle({
+          await applySessionEntryLifecycleMutation({
             agentId: "main",
-            workspaceDir: dir,
-            cleanupPreviousTranscript: true,
-            nextEntry: {
-              ...previousEntry,
-              sessionFile: nextTranscript,
-              sessionId: "internal-session-effects-rotated",
-              updatedAt: Date.now(),
-            },
-            nextSessionFile: nextTranscript,
-            previousEntry,
-            previousSessionId: target.sessionId,
-            sessionKey: target.sessionKey,
+            activeSessionKey: target.sessionKey,
             storePath,
+            upserts: [
+              {
+                sessionKey: target.sessionKey,
+                entry: {
+                  ...previousEntry,
+                  sessionFile: nextTranscript,
+                  sessionId: "internal-session-effects-rotated",
+                  updatedAt: Date.now(),
+                },
+                resetBoundary: { context: "preserve-tail", reason: "reset", cwd: dir },
+              },
+            ],
+            skipMaintenance: true,
           });
 
           expect(await fs.readdir(dir)).toContain("private-internal.jsonl");

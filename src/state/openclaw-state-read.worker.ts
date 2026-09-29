@@ -45,6 +45,7 @@ import {
 } from "../gateway/worker-environments/store-row-codec.js";
 import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
+import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
@@ -52,9 +53,15 @@ import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
   readInterruptedUpdateCandidate,
+  readUpdateRunStatusInDatabase,
+  readUpdateRunHistoryStatusInDatabase,
   readUpdateRunRecord,
   readUpdateRuns,
 } from "../infra/update-run-read.kernel.js";
+import {
+  inspectUpdateRunReconciliation,
+  readUpdateRunReconciliationCandidates,
+} from "../infra/update-run-reconciliation.read.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
 import {
   pluginBlobLookupInDatabase,
@@ -362,6 +369,37 @@ serveOwnedWorkerTasks(
                 runs: readUpdateRuns(db, command.input),
               };
             }
+            if (command.type === "updateRuns.reconciliationCandidates") {
+              return {
+                type: command.type,
+                candidates: readUpdateRunReconciliationCandidates(db, command.input),
+              };
+            }
+            if (command.type === "updateRuns.reconciliationCandidate") {
+              const run = tableExists(db, "update_runs")
+                ? readUpdateRunRecord(db, command.runId)
+                : undefined;
+              return {
+                type: command.type,
+                candidate: run ? inspectUpdateRunReconciliation(db, run, {}) : undefined,
+              };
+            }
+            if (command.type === "updateRuns.status") {
+              return {
+                type: command.type,
+                status: runSqliteDeferredTransactionSync(db, () =>
+                  readUpdateRunStatusInDatabase(db),
+                ),
+              };
+            }
+            if (command.type === "updateRuns.historyStatus") {
+              return {
+                type: command.type,
+                status: runSqliteDeferredTransactionSync(db, () =>
+                  readUpdateRunHistoryStatusInDatabase(db),
+                ),
+              };
+            }
             if (command.type === "updateRuns.interruptedCandidate") {
               return {
                 type: command.type,
@@ -570,6 +608,9 @@ serveOwnedWorkerTasks(
         );
         return { ok: true, sourceAdmitted: true, ...result };
       });
+      if (process.versions.bun && bunSqliteNativeCleanupPending) {
+        nativeCleanupFailure ??= { error: undefined };
+      }
       return nativeCleanupFailure ? { ...reply, nativeCleanupFailure } : reply;
     } catch (value) {
       const error = toStringifiedError(value);

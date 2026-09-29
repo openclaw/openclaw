@@ -26,6 +26,7 @@ import {
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import { prepareSqliteDatabaseDirectory } from "../infra/sqlite-wal-filesystem.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import {
   configureSqliteConnectionPragmas,
@@ -344,6 +345,7 @@ function* openOpenClawAgentDatabaseSteps(
   let openedWalMaintenance: SqliteWalMaintenance | undefined;
   try {
     ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
+    prepareSqliteDatabaseDirectory(pathname);
     closeIdleOpenClawAgentDatabaseReadOnly(pathname);
     // Ordinary agent state also works with SQLite builds that omit extensions.
     // Trusted borrowers may enable them only when both the runtime and permissions allow it.
@@ -614,16 +616,6 @@ export function isOpenClawAgentDatabaseOpen(pathname: string): boolean {
 export function getOpenClawAgentDatabaseIfOpen(
   options: OpenClawAgentDatabaseOptions,
 ): OpenClawAgentDatabase | undefined {
-  const database = findOpenClawAgentDatabaseIfOpen(options);
-  if (database) {
-    refreshAgentDatabaseIdleTimer(database);
-  }
-  return database;
-}
-
-function findOpenClawAgentDatabaseIfOpen(
-  options: OpenClawAgentDatabaseOptions,
-): OpenClawAgentDatabase | undefined {
   const agentId = normalizeAgentId(options.agentId);
   assertAgentDatabaseAdmitted(agentId, { env: options.env });
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
@@ -649,6 +641,7 @@ function findOpenClawAgentDatabaseIfOpen(
   }
   assertAgentDeletionDatabaseCleanupAccess(database, options);
   observeOpenClawDatabaseMaintenanceResource(database.db);
+  refreshAgentDatabaseIdleTimer(database);
   return database;
 }
 

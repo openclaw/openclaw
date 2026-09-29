@@ -541,7 +541,7 @@ test("a retained kill claim cannot revive durably revoked session cleanup", asyn
   const id = "kill-claim-owner";
   await registerCollector(id);
   expect(
-    claimSubagentRunKill({
+    await claimSubagentRunKill({
       runId: id,
       expected: expectDefined(subagentRuns.get(id), "registered collector"),
       sessionId: "reset-cleanup-session",

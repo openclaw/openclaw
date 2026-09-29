@@ -85,6 +85,11 @@ import {
   withLegacySessionParticipantsSchema,
 } from "./openclaw-agent-participants-migration.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { migrateSessionEntrySnapshotsInTransaction } from "./openclaw-agent-session-snapshots-migration.js";
+import {
+  SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION,
+  withoutSessionEntrySnapshotsSchema,
+} from "./openclaw-agent-session-snapshots-schema.js";
 import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
 import { migrateDeployedTranscriptFtsRowsInTransaction } from "./openclaw-agent-transcript-fts-schema.js";
 import { migrateTranscriptPayloadStorageInTransaction } from "./openclaw-agent-transcript-payload-migration.js";
@@ -340,16 +345,23 @@ function ensureAgentSchema(
         !isEmptyDatabase &&
         previousVersion < AGENT_STORAGE_SCHEMA_VERSION &&
         targetVersion >= AGENT_STORAGE_SCHEMA_VERSION;
-      const migrationSchemaSql = requiresStorageMigration
-        ? withLegacyAgentStorageSchema(schemaSql, previousVersion)
+      const requiresSnapshotMigration =
+        !isEmptyDatabase &&
+        previousVersion < SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION &&
+        targetVersion >= SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION;
+      const storageSchemaSql = requiresSnapshotMigration
+        ? withoutSessionEntrySnapshotsSchema(schemaSql)
         : schemaSql;
+      const migrationSchemaSql = requiresStorageMigration
+        ? withLegacyAgentStorageSchema(storageSchemaSql, previousVersion)
+        : storageSchemaSql;
       if (
         previousVersion < targetVersion &&
         previousVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION - 1 &&
-        previousVersion < AGENT_STORAGE_SCHEMA_VERSION &&
+        previousVersion < SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION &&
         targetVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION
       ) {
-        if (previousVersion === CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
+        if (previousVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
           // Keep schema-21's admitted additive repairs before its exact-shape
           // preflight; the storage cutover must not retire those upgrade paths.
           migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);
@@ -377,7 +389,10 @@ function ensureAgentSchema(
           seedCanonicalSessionValidationPending(db);
         }
         if (requiresStorageMigration) {
-          migrateAgentStorageInTransaction(db, schemaSql, previousVersion);
+          migrateAgentStorageInTransaction(db, storageSchemaSql, previousVersion);
+        }
+        if (requiresSnapshotMigration) {
+          migrateSessionEntrySnapshotsInTransaction(db);
         }
         finishAgentSchemaMigration(
           db,
@@ -470,7 +485,10 @@ function ensureAgentSchema(
         seedCanonicalSessionValidationPending(db);
       }
       if (requiresStorageMigration) {
-        migrateAgentStorageInTransaction(db, schemaSql, previousVersion);
+        migrateAgentStorageInTransaction(db, storageSchemaSql, previousVersion);
+      }
+      if (requiresSnapshotMigration) {
+        migrateSessionEntrySnapshotsInTransaction(db);
       }
       finishAgentSchemaMigration(
         db,

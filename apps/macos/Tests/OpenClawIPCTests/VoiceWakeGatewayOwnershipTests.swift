@@ -5,7 +5,8 @@ import Testing
 @testable import OpenClawKit
 
 extension VoiceWakeGlobalSettingsSyncTests {
-    @Test(arguments: [false, true])
+    // Reload waits have no deadline of their own; the limit only bounds a lost reload.
+    @Test(.timeLimit(.minutes(2)), arguments: [false, true])
     func `new primary connection reloads its current voice wake triggers`(switchGateway: Bool) async throws {
         try await TestIsolation.withIsolatedState {
             let previous = AppStateStore.shared.swabbleTriggerWords
@@ -44,12 +45,12 @@ extension VoiceWakeGlobalSettingsSyncTests {
             let sync = VoiceWakeGlobalSettingsSync(gateway: gateway)
             sync.start()
             do {
-                try await self.waitUntil { AppStateStore.shared.swabbleTriggerWords == ["gateway-a"] }
+                try await self.waitForTriggers(["gateway-a"])
                 await gateway.shutdown()
                 if switchGateway { port.setValue(49261) }
                 triggers.setValue("gateway-b")
                 _ = try await gateway.acquireServerLease()
-                try await self.waitUntil { AppStateStore.shared.swabbleTriggerWords == ["gateway-b"] }
+                try await self.waitForTriggers(["gateway-b"])
             } catch {
                 sync.stop()
                 await gateway.shutdown()
@@ -60,11 +61,20 @@ extension VoiceWakeGlobalSettingsSyncTests {
         }
     }
 
-    private func waitUntil(_ predicate: @MainActor () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(2)
-        while !predicate(), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(5))
+    /// Each reload crosses the connection actor and the fake socket before it lands
+    /// on the main actor. Wait on the observed triggers, not a wall-clock deadline
+    /// that native-suite load can exceed.
+    private func waitForTriggers(_ expected: [String]) async throws {
+        while true {
+            try Task.checkCancellation()
+            let changed = AsyncTestGate()
+            let ready = withObservationTracking {
+                AppStateStore.shared.swabbleTriggerWords == expected
+            } onChange: {
+                changed.open()
+            }
+            if ready { return }
+            await changed.wait()
         }
-        try #require(predicate())
     }
 }

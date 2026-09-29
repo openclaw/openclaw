@@ -6,6 +6,11 @@ openclaw_npm_expected_workflow_ref="${GITHUB_REF}"
 openclaw_npm_expected_workflow_sha="${PARENT_WORKFLOW_SHA}"
 openclaw_npm_run_attempt=""
 
+if [[ "${RELEASE_TAG:-}" == *-alpha.* || "${RELEASE_NPM_DIST_TAG:-}" == alpha || "${GITHUB_REF}" == *tideclaw/alpha/* ]]; then
+  echo "Alpha releases are retired; use a beta prerelease." >&2
+  return 1 2>/dev/null || exit 1
+fi
+
 # Read-only gh calls retry transient API failures; mutations never retry here.
 gh_read() {
   local attempt output status stderr_file
@@ -51,7 +56,7 @@ print_release_resume_command() {
 }
 
 is_stable_release() {
-  [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" && "${RELEASE_TAG}" != *"-alpha."* && "${RELEASE_TAG}" != *"-beta."* ]]
+  [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" && "${RELEASE_TAG}" != *"-beta."* ]]
 }
 
 is_android_release() {
@@ -68,12 +73,12 @@ resolve_child_workflow_ref() {
     return 0
   fi
 
-  if [[ "${workflow_full_ref}" =~ ^refs/heads/(tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z)$ ]]; then
-    printf '%s\n' "${BASH_REMATCH[1]}"
-    return 0
+  if [[ "${workflow_full_ref}" == *tideclaw/alpha/* ]]; then
+    echo "Alpha releases are retired; use protected release-publish tooling for a beta prerelease." >&2
+    return 1
   fi
 
-  echo "Publish children require the parent to run from a protected release-publish tag or a validated Tideclaw alpha branch." >&2
+  echo "Publish children require the parent to run from a protected release-publish tag." >&2
   return 1
 }
 
@@ -348,30 +353,17 @@ dispatch_workflow() {
 }
 
 verify_bootstrap_workflow_sha() {
-  local approved_ref approved_sha current_main_sha
+  local approved_ref approved_sha
   approved_ref="$(jq -er '.bootstrap.ref | select(type == "string" and length > 0)' "${CLAWHUB_PLAN_PATH}")"
   approved_sha="$(jq -er '.bootstrapWorkflowSha | select(test("^[a-f0-9]{40}$"))' "${CLAWHUB_PLAN_PATH}")"
-  if [[ "${approved_ref}" == "main" ]]; then
-    # Tideclaw bootstrap uses separately approved main tooling because the
-    # token-gated bootstrap workflow does not accept alpha branch tooling.
-    current_main_sha="$(
-      gh_read api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
-        --jq '.object.sha | select(test("^[a-f0-9]{40}$"))'
-    )"
-    [[ "${approved_sha}" == "${current_main_sha}" ]] || {
-      echo "Trusted main moved from approved ClawHub bootstrap workflow SHA ${approved_sha} to ${current_main_sha}; rerun release approval." >&2
-      exit 1
-    }
-  else
-    [[ "${approved_ref}" == "${CHILD_WORKFLOW_REF}" ]] || {
-      echo "Approved ClawHub bootstrap workflow ref ${approved_ref} does not match protected child workflow ref ${CHILD_WORKFLOW_REF}." >&2
-      exit 1
-    }
-    [[ "${approved_sha}" == "${PARENT_WORKFLOW_SHA}" ]] || {
-      echo "Approved ClawHub bootstrap workflow SHA ${approved_sha} does not match parent workflow SHA ${PARENT_WORKFLOW_SHA}." >&2
-      exit 1
-    }
-  fi
+  [[ "${approved_ref}" == "${CHILD_WORKFLOW_REF}" ]] || {
+    echo "Approved ClawHub bootstrap workflow ref ${approved_ref} does not match protected child workflow ref ${CHILD_WORKFLOW_REF}." >&2
+    exit 1
+  }
+  [[ "${approved_sha}" == "${PARENT_WORKFLOW_SHA}" ]] || {
+    echo "Approved ClawHub bootstrap workflow SHA ${approved_sha} does not match parent workflow SHA ${PARENT_WORKFLOW_SHA}." >&2
+    exit 1
+  }
   printf '%s\n' "${approved_sha}"
 }
 
@@ -809,7 +801,7 @@ create_or_update_github_release() {
 
   prerelease_arg="--prerelease=false"
   latest_arg="--latest=false"
-  if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
+  if [[ "${RELEASE_TAG}" == *"-beta."* ]]; then
     prerelease_arg="--prerelease"
   elif [[ "${RELEASE_NPM_DIST_TAG}" == "latest" ]]; then
     latest_arg="--latest"

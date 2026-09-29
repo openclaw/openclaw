@@ -40,6 +40,7 @@ import {
   getSubagentRunsForCollectorGroup,
   subagentRuns,
 } from "./subagent-registry-memory.js";
+import type { SubagentRegistryWriteOptions } from "./subagent-registry-persistence.js";
 import { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
 import {
   countPendingDescendantRuns,
@@ -87,7 +88,7 @@ function persistSubagentRuns(...runIds: string[]) {
 
 function persistSubagentRunsAsyncOrThrow(
   context: OpenClawStateWorkerContext,
-  callbacks: { assertCurrent: () => void; onCommitted?: () => void },
+  callbacks: Omit<SubagentRegistryWriteOptions, "context"> & { assertCurrent: () => void },
   ...runIds: string[]
 ): Promise<void> {
   return persistSubagentRunsToDiskAsyncOrThrow(subagentRuns, runIds, {
@@ -133,6 +134,9 @@ const clearPendingLifecycleTimeout = pendingLifecycle.clearTimeout;
 
 const contextCleanup = createSubagentRegistryContextCleanup({
   persist: persistSubagentRuns,
+  persistAsyncOrThrow: persistSubagentRunsAsyncOrThrow,
+  isEndedHookOwnerCurrent: (runId, entry): boolean =>
+    subagentLifecycleController.isEndedHookOwnerCurrent(runId, entry),
   warn: (message, meta) => log.warn(message, meta),
 });
 
@@ -143,6 +147,7 @@ const subagentLifecycleController = new SubagentLifecycleController({
   getRuntimeConfig,
   persist: persistSubagentRuns,
   persistOrThrow: persistSubagentRunsOrThrow,
+  persistAsyncOrThrow: persistSubagentRunsAsyncOrThrow,
   clearPendingLifecycleError,
   // Lifecycle wiring precedes publicApi construction; inject this read query
   // as a late-bound callback instead of threading a partially built API object.
@@ -507,6 +512,8 @@ const subagentListener = createSubagentRegistryListener({
 
 const subagentRunManager = createSubagentRunManager({
   persistAsyncOrThrow: persistSubagentRunsAsyncOrThrow,
+  acquireTerminalCompletionLock: (runId) =>
+    subagentLifecycleController.acquireTerminalCompletionLock(runId),
   runs: subagentRuns,
   getRunsForChildSession: getSubagentRunsForChildSession,
   resumedRuns,
@@ -632,13 +639,14 @@ function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   resetSubagentRegistryRuntimeLoadersForTests();
   contextCleanup.reset();
   clearSubagentRunsReadCacheForTest();
-  subagentSweeper.reset();
+  const sweeperRetirement = subagentSweeper.reset();
   subagentRestorer.reset();
   activeGatewayContextResolver = undefined;
   subagentListener.reset();
   if (opts?.persist !== false) {
     persistSubagentRuns();
   }
+  return sweeperRetirement;
 }
 
 const testing = {

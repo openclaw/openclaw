@@ -54,7 +54,10 @@ import {
 } from "../agent-runtime-identity-token.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
+import {
+  bindWorkerTurnOwner,
+  type WorkerTurnPromptCacheContext,
+} from "./placement-turn-claim-events.js";
 
 type WorkerInitialMessagePlan =
   | { kind: "complete"; messages: WorkerTranscriptMessage[] }
@@ -71,6 +74,7 @@ type PrepareWorkerAgentRuntimeIdentityParams = {
   turn: SessionPlacementTurnParams;
   placements: WorkerSessionPlacementStore;
   sessionTarget: BoundAgentRunSessionTarget;
+  promptCacheContext: WorkerTurnPromptCacheContext;
   assertSourceCurrent: () => void;
 };
 
@@ -116,6 +120,7 @@ export async function prepareWorkerAgentRuntimeIdentity(
     params.turn.prepareAssistantTranscriptMessage,
     operatorAuthority,
     assertPresenceSourceCurrent,
+    params.promptCacheContext,
   );
   capability.receiptAuthority();
   // Worker-local process keys isolate ephemeral state only. The signed caller
@@ -272,13 +277,6 @@ export function parseRuntimeResult(stdout: string): StartedWorkerRuntimeResult {
   return result;
 }
 
-export function assistantText(message: AgentMessage): string {
-  if (message.role !== "assistant") {
-    return "";
-  }
-  return message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
-}
-
 export function buildWorkerTurnResult(params: {
   messages: AgentMessage[];
   modelRef: { provider: string; model: string };
@@ -336,22 +334,6 @@ export function buildWorkerTurnResult(params: {
   };
 }
 
-function resolveTurnModelRef(params: SessionPlacementTurnParams): {
-  provider: string;
-  model: string;
-} {
-  const explicitProvider = params.provider?.trim();
-  const explicitModel = params.model?.trim();
-  const defaults =
-    explicitProvider && explicitModel
-      ? undefined
-      : resolveDefaultModelForAgent({ cfg: params.config ?? {}, agentId: params.agentId });
-  return {
-    provider: explicitProvider ?? defaults?.provider ?? "",
-    model: explicitModel ?? defaults?.model ?? "",
-  };
-}
-
 export function assertSupportedTurn(params: SessionPlacementTurnParams): {
   provider: string;
   model: string;
@@ -359,7 +341,16 @@ export function assertSupportedTurn(params: SessionPlacementTurnParams): {
   if (params.clientTools?.length) {
     throw new Error("Cloud worker turns do not support client-provided tools");
   }
-  const modelRef = resolveTurnModelRef(params);
+  const explicitProvider = params.provider?.trim();
+  const explicitModel = params.model?.trim();
+  const defaults =
+    explicitProvider && explicitModel
+      ? undefined
+      : resolveDefaultModelForAgent({ cfg: params.config ?? {}, agentId: params.agentId });
+  const modelRef = {
+    provider: explicitProvider ?? defaults?.provider ?? "",
+    model: explicitModel ?? defaults?.model ?? "",
+  };
   const explicitRuntime =
     normalizeOptionalAgentRuntimeId(params.agentHarnessId) ??
     normalizeOptionalAgentRuntimeId(params.agentHarnessRuntimeOverride);

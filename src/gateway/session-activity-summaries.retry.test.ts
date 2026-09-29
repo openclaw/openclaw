@@ -9,6 +9,11 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -40,6 +45,7 @@ const scope = (target: ActivitySummaryTarget) => ({
 describe("Activity recap admission, refresh, and provider recovery", () => {
   let testState: OpenClawTestState;
   let service: SessionActivitySummaryService;
+  let scheduler: GatewayScheduler;
   let cfg: OpenClawConfig;
   const complete = vi.fn<typeof defaultCompleteModel>();
   const prepareModel: typeof defaultPrepareModel = async ({ agentId, modelRef }) => ({
@@ -89,6 +95,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
 
   const createService = () =>
     createSessionActivitySummaries({
+      scheduler,
       getConfig: () => cfg,
       onChanged: changed,
       prepareModel: prepare,
@@ -101,10 +108,12 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     complete.mockReset().mockResolvedValue(result);
     prepare.mockReset().mockImplementation(prepareModel);
     changed.mockReset();
+    scheduler = createTestGatewayScheduler("fake-timers");
     service = createService();
   });
   afterEach(async () => {
     await service.dispose();
+    await scheduler.stop();
     vi.useRealTimers();
     vi.restoreAllMocks();
     await testState.cleanup();
@@ -191,6 +200,95 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       service.ensure(target);
       await service.dispose();
       expect(complete).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each(["complete", "shutdown", "continuation"] as const)(
+    "coalesces a late refresh wake and joins its model work on %s",
+    async (outcome) => {
+      await service.dispose();
+      await scheduler.stop();
+      const time = createGatewaySchedulerClock(Date.now());
+      scheduler = createTestGatewayScheduler(time.clock);
+      service = createService();
+      const target = await addSession(1);
+      const initial = createDeferred();
+      changed.mockImplementation(() => {
+        if (view(target)?.state === "current") {
+          initial.resolve();
+        }
+      });
+      service.ensure(target);
+      await initial.promise;
+      await appendWork(target);
+      fakeTime();
+      const started = createDeferred();
+      const completion = createDeferred<typeof result>();
+      const continuation = createDeferred<typeof result>();
+      complete.mockImplementationOnce(() => {
+        started.resolve();
+        return completion.promise;
+      });
+      service.handleTranscript({ target: scope(target) });
+      expect(time.armedAtMs).toBe(time.clock.now() + 90_000);
+      time.setTime(time.clock.now() + 3_600_000);
+      const wake = time.wake();
+      try {
+        await started.promise;
+        expect(complete).toHaveBeenCalledTimes(2);
+        if (outcome === "shutdown") {
+          scheduler.beginClose();
+          const stopped = vi.fn();
+          const disposed = vi.fn();
+          const stop = scheduler.stop().then(stopped);
+          const disposal = service.dispose().then(disposed);
+          await Promise.resolve();
+          await Promise.resolve();
+          expect(stopped).not.toHaveBeenCalled();
+          expect(disposed).not.toHaveBeenCalled();
+          expect(complete.mock.calls[1]![0].abortSignal?.aborted).toBe(true);
+          completion.resolve(result);
+          await Promise.all([stop, disposal]);
+        } else if (outcome === "continuation") {
+          await persistSessionTranscriptTurn(scope(target), {
+            messages: [
+              {
+                eventId: "continued-work",
+                parentId: "new-work",
+                message: { role: "assistant", content: "Verified the follow-on work." },
+              },
+            ],
+            touchSessionEntry: false,
+          });
+          const continued = createDeferred();
+          complete.mockImplementationOnce(() => {
+            continued.resolve();
+            return continuation.promise;
+          });
+          service.ensure(target);
+          completion.resolve(result);
+          await continued.promise;
+          const stopped = vi.fn();
+          const stop = scheduler.stop().then(stopped);
+          await vi.advanceTimersByTimeAsync(0);
+          expect(stopped).not.toHaveBeenCalled();
+          continuation.resolve(result);
+          await stop;
+        } else {
+          completion.resolve(result);
+        }
+        await wake;
+        await time.advanceBy(3_600_000);
+        expect(complete).toHaveBeenCalledTimes(outcome === "continuation" ? 3 : 2);
+        expect(loadSessionEntryReadOnly(scope(target))?.activitySummary?.coveredMessages).toBe(
+          outcome === "shutdown" ? 1 : outcome === "continuation" ? 3 : 2,
+        );
+        expect(time.armedAtMs).toBeNull();
+      } finally {
+        completion.resolve(result);
+        continuation.resolve(result);
+        await wake;
+      }
     },
   );
 

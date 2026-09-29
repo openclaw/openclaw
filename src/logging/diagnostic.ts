@@ -153,18 +153,7 @@ async function recoverStuckSession(
     });
 }
 
-function pushLimitedDiagnosticLabel(
-  labels: string[],
-  state: {
-    sessionId?: string;
-    sessionKey?: string;
-    state: SessionStateValue;
-    queueDepth: number;
-    activeQueuedTurn?: boolean;
-    lastActivity: number;
-  },
-  now: number,
-): void {
+function pushLimitedDiagnosticLabel(labels: string[], state: SessionState, now: number): void {
   const label = state.sessionKey ?? state.sessionId ?? "unknown";
   const ageSeconds = Math.round(Math.max(0, now - state.lastActivity) / 1000);
   const activity = getDiagnosticSessionActivitySnapshot(
@@ -182,11 +171,7 @@ function pushLimitedDiagnosticLabel(
   );
 }
 
-function resolveDiagnosticQueuedBacklog(state: {
-  activeQueuedTurn?: boolean;
-  queueDepth: number;
-  state: SessionStateValue;
-}): number {
+function resolveDiagnosticQueuedBacklog(state: SessionState): number {
   return Math.max(
     0,
     state.queueDepth - (state.state === "processing" && state.activeQueuedTurn ? 1 : 0),

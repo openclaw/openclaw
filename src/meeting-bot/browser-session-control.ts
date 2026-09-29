@@ -34,7 +34,6 @@ async function leaveMeetingInPage<
 }): Promise<{
   departed: boolean;
   clickedLeave: boolean;
-  clickedConfirmation: boolean;
   ownershipRetained?: boolean;
   sessionConflict?: boolean;
   sessionMatched?: boolean;
@@ -42,7 +41,6 @@ async function leaveMeetingInPage<
 }> {
   const deadline = performance.now() + params.timeoutMs;
   let clickedLeave = false;
-  let clickedConfirmation = false;
   let ownershipRetained = false;
   do {
     const remainingMs = Math.floor(deadline - performance.now());
@@ -66,14 +64,12 @@ async function leaveMeetingInPage<
     });
     const step = params.adapter.browser.parseLeaveResult(evaluated);
     clickedLeave ||= step.leaveAction === "leave";
-    clickedConfirmation ||= step.leaveAction === "confirm";
     if (step.sessionMatched === false) {
       const stepOwnershipRetained = clickedLeave && step.sessionConflict !== true;
       if (step.departed || !stepOwnershipRetained) {
         return {
           departed: stepOwnershipRetained ? step.departed : false,
           clickedLeave,
-          clickedConfirmation,
           ownershipRetained: stepOwnershipRetained,
           sessionConflict: step.sessionConflict,
           sessionMatched: false,
@@ -86,13 +82,12 @@ async function leaveMeetingInPage<
       return {
         departed: step.departed,
         clickedLeave,
-        clickedConfirmation,
         ...(ownershipRetained && step.sessionConflict !== true ? { ownershipRetained: true } : {}),
         urlMatched: step.urlMatched,
       };
     }
     if (!step.leaveAction && !clickedLeave) {
-      return { departed: false, clickedLeave, clickedConfirmation, urlMatched: true };
+      return { departed: false, clickedLeave, urlMatched: true };
     }
     if (!step.leaveAction) {
       await sleep(100);
@@ -101,7 +96,6 @@ async function leaveMeetingInPage<
   return {
     departed: false,
     clickedLeave,
-    clickedConfirmation,
     ...(ownershipRetained ? { ownershipRetained: true, sessionMatched: false } : {}),
     urlMatched: true,
   };

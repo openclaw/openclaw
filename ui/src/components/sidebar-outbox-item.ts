@@ -104,6 +104,9 @@ export function renderSidebarOutboxItem(params: {
               return;
             }
             params.onNavigate("chat", target.options);
+            if (entry.dismissal) {
+              context.sidebarAttention.dismiss(entry.dismissal);
+            }
           }}
           >${t("attention.outbox.reviewShort")}</a
         >

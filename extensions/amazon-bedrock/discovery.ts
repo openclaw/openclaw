@@ -31,7 +31,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 import {
   loadBedrockControlPlaneSdk,
   runBedrockControlPlaneRequest,
@@ -176,12 +175,6 @@ function isKnownClaudeMythosPreviewModelId(modelId: string): boolean {
   return [modelId, stripped].some((candidate) =>
     /(?:^|[/.:])anthropic\.claude-mythos-preview(?:$|[-.:/])/i.test(candidate),
   );
-}
-
-function resolveKnownThinkingLevelMap(
-  modelId: string,
-): ModelDefinitionConfig["thinkingLevelMap"] | undefined {
-  return resolveBedrockNativeThinkingLevelMap(modelId);
 }
 
 function resolveKnownMaxTokens(modelId: string): number | undefined {
@@ -330,7 +323,7 @@ function toModelDefinition(
   defaults: { contextWindow: number; maxTokens: number },
 ): ModelDefinitionConfig {
   const id = summary.modelId?.trim() ?? "";
-  const thinkingLevelMap = resolveKnownThinkingLevelMap(id);
+  const thinkingLevelMap = resolveBedrockNativeThinkingLevelMap(id);
   return {
     id,
     name: summary.modelName?.trim() || id,
@@ -448,7 +441,7 @@ function resolveInferenceProfiles(
     const baseModel = baseModelId
       ? foundationModels.get(normalizeLowercaseStringOrEmpty(baseModelId))
       : undefined;
-    const knownThinkingLevelMap = resolveKnownThinkingLevelMap(
+    const knownThinkingLevelMap = resolveBedrockNativeThinkingLevelMap(
       baseModelId ?? profile.inferenceProfileId,
     );
     const contractModelId = baseModelId ?? profile.inferenceProfileId;
@@ -520,9 +513,6 @@ export async function discoverBedrockModels(params: {
 
   const sdk = await loadBedrockControlPlaneSdk();
   const clientFactory = params.clientFactory ?? ((region: string) => sdk.createClient(region));
-  if (!params.clientFactory) {
-    await refreshAwsSharedConfigCacheForBedrock();
-  }
   const client = clientFactory(params.region);
 
   const discoveryPromise = (async () => {

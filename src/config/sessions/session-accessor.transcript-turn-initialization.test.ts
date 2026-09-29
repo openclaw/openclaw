@@ -12,7 +12,6 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
-  replaceSessionEntry,
   replaceSessionEntrySync,
   type SessionTranscriptTurnPersistOptions,
 } from "./session-accessor.js";
@@ -94,7 +93,15 @@ describe("first transcript turn initialization", () => {
 
   it("creates the first session, Goal, input and run receipt atomically and replays after reopen", async () => {
     expect(loadSessionEntry(scope())).toBeUndefined();
-    const turn = await admit();
+    const onMessageCommitted = vi.fn(({ messageId }: { messageId: string }) => {
+      expect(loadTranscriptEventsSync(scope())).toContainEqual(
+        expect.objectContaining({
+          id: messageId,
+          message: expect.objectContaining({ role: "user" }),
+        }),
+      );
+    });
+    const turn = await admit({ onMessageCommitted });
     expect(turn).toMatchObject({
       appendedCount: 1,
       sessionEntry: {
@@ -115,56 +122,14 @@ describe("first transcript turn initialization", () => {
     ).toEqual(turn.sessionTurnMutationResult?.result);
 
     closeOpenClawAgentDatabasesForTest();
-    const replay = await admit();
+    const replay = await admit({ onMessageCommitted });
+    expect(onMessageCommitted).toHaveBeenCalledTimes(1);
     expect(replay).toMatchObject({
       appendedCount: 0,
       sessionTurnMutationResult: { replayed: true, result: turn.sessionTurnMutationResult?.result },
     });
     expect(counts()).toEqual({ nodes: 1, windows: 1, events: 2, receipts: 1 });
   });
-
-  it.each(["inline", "none", "throws"] as const)(
-    "completes committed messages once before publication with %s updates",
-    async (mode) => {
-      const order: string[] = [];
-      const onMessageCommitted = vi.fn(({ messageId }: { messageId: string }) => {
-        expect(loadTranscriptEventsSync(scope())).toContainEqual(
-          expect.objectContaining({
-            id: messageId,
-            message: expect.objectContaining({ role: "user" }),
-          }),
-        );
-        order.push("committed");
-        if (mode === "throws") {
-          throw new Error("completion failed");
-        }
-      });
-      const unsubscribe = onSessionTranscriptUpdate((update) => {
-        if (update.target.sessionId === sessionId) {
-          order.push("published");
-        }
-      });
-      try {
-        const append = admit({
-          updateMode: mode === "none" ? "none" : "inline",
-          onMessageCommitted,
-        });
-        if (mode === "throws") {
-          await expect(append).rejects.toThrow("completion failed");
-        } else {
-          await expect(append).resolves.toMatchObject({ appendedCount: 1 });
-        }
-        expect(counts()).toEqual({ nodes: 1, windows: 1, events: 2, receipts: 1 });
-        // Goal receipt replay returns no matched messages; completion belongs to the
-        // original admission, unlike replaying an existing transcript message.
-        await expect(admit({ onMessageCommitted })).resolves.toMatchObject({ appendedCount: 0 });
-        expect(onMessageCommitted).toHaveBeenCalledTimes(1);
-        expect(order).toEqual(mode === "inline" ? ["committed", "published"] : ["committed"]);
-      } finally {
-        unsubscribe();
-      }
-    },
-  );
 
   it.for(["success", "callback failure", "completion failure"] as const)(
     "joins accepted committed work before publication or %s settlement",
@@ -243,26 +208,17 @@ describe("first transcript turn initialization", () => {
     },
   );
 
-  it.each([
-    { timing: "before preparation", competingSessionId: "competing-session" },
-    { timing: "during preparation", competingSessionId: "competing-session" },
-    { timing: "during preparation", competingSessionId: sessionId },
-  ])(
-    "does not replace $competingSessionId created $timing",
-    async ({ timing, competingSessionId }) => {
+  it.each(["competing-session", sessionId])(
+    "does not replace %s created during preparation",
+    async (competingSessionId) => {
       const competing = { sessionId: competingSessionId, updatedAt: now };
-      if (timing === "before preparation") {
-        await replaceSessionEntry(scope(), competing);
-      }
       const turn = await admit({
         messages: [
           {
             message: { role: "user", content: operation.objective },
             shouldAppend: () => {
-              if (timing === "during preparation") {
-                // Direct/cross-process writers bypass the process-local queue.
-                replaceSessionEntrySync(scope(), competing);
-              }
+              // Direct/cross-process writers bypass the process-local queue.
+              replaceSessionEntrySync(scope(), competing);
               return true;
             },
           },

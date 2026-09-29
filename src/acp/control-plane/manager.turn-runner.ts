@@ -19,13 +19,11 @@ import type { AcceptedTurnState } from "./manager.accepted-turns.js";
 import {
   isFailoverWorthyBackendError,
   resolveBackendCandidatePlan,
-  shouldAttemptBackendFailover,
   type BackendAttempt,
 } from "./manager.backend-failover.js";
 import { cancelManagerActiveTurn } from "./manager.cancel-session.js";
 import { applyManagerRuntimeControls } from "./manager.runtime-controls.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
-import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
 import { prepareFreshManagerRuntimeHandleRetry } from "./manager.runtime-resume-state.js";
 import { consumeAcpTurnStream } from "./manager.turn-stream.js";
@@ -46,7 +44,11 @@ import type {
   SetManagerSessionState,
   WriteManagerSessionMeta,
 } from "./manager.types.js";
-import { acpSessionActorKey, requireReadySessionMeta } from "./manager.utils.js";
+import {
+  assertCurrentAcpActor,
+  acpSessionActorKey,
+  requireReadySessionMeta,
+} from "./manager.utils.js";
 
 const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
 
@@ -94,9 +96,7 @@ export async function runManagerTurn(params: {
     input.signal,
   );
   const assertActorCurrent = () => {
-    if (!params.isCurrentActor()) {
-      throw createSupersededActorError(sessionKey);
-    }
+    assertCurrentAcpActor(params.isCurrentActor(), sessionKey);
   };
   const assertCancellationCurrent = () => {
     assertActorCurrent();
@@ -547,10 +547,7 @@ export async function runManagerTurn(params: {
           if (
             isAcpOwnerRepairRequired(acpError) ||
             !isFailoverWorthyBackendError(backendAttempt) ||
-            !shouldAttemptBackendFailover({
-              backendIndex: backendIdx,
-              candidateBackends,
-            })
+            backendIdx >= candidateBackends.length - 1
           ) {
             await recordBackendFailure(acpError);
           }
@@ -611,9 +608,6 @@ export async function runManagerTurn(params: {
               }
             }
           }
-        }
-        if (retryFreshHandle) {
-          continue;
         }
       }
     }

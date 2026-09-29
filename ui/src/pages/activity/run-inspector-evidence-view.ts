@@ -123,7 +123,11 @@ export function renderRunInspectorPagination(
 function renderReceiptDetail(receipt: DecisionReceiptDisplayV1) {
   const coverage = receipt.enforcement.coverageState;
   return html`
-    <article class="run-inspector__receipt-detail" aria-labelledby="run-inspector-receipt-detail">
+    <article
+      class="run-inspector__receipt-detail"
+      data-receipt-selector-id=${receipt.selectorId}
+      aria-labelledby="run-inspector-receipt-detail"
+    >
       <h4 id="run-inspector-receipt-detail">
         ${t("activity.runInspector.decisions.detailHeading")}
       </h4>
@@ -190,18 +194,14 @@ function renderReceiptDetail(receipt: DecisionReceiptDisplayV1) {
         ${
           receipt.provenance.state === "verified"
             ? html`<dl class="run-inspector__values">
-                  <div>
-                    <dt>${t("activity.runInspector.decisions.durableOwnerLabel")}</dt>
-                    <dd>${renderRunInspectorSafeRef(receipt.provenance.producer)}</dd>
-                  </div>
-                </dl>
-                <p class="run-inspector__reason">
-                  ${t("activity.runInspector.decisions.ownerNote")}
-                </p>`
-            : html`<p class="run-inspector__reason">
-                ${t("activity.runInspector.decisions.ownerNote")}
-              </p>`
+                <div>
+                  <dt>${t("activity.runInspector.decisions.durableOwnerLabel")}</dt>
+                  <dd>${renderRunInspectorSafeRef(receipt.provenance.producer)}</dd>
+                </div>
+              </dl>`
+            : nothing
         }
+        <p class="run-inspector__reason">${t("activity.runInspector.decisions.ownerNote")}</p>
       </section>
       <section aria-labelledby="run-inspector-receipt-evidence">
         <h5 id="run-inspector-receipt-evidence">

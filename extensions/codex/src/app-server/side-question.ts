@@ -9,7 +9,6 @@ import {
   type AgentHarnessSideQuestionParamsV2,
   type AgentHarnessSideQuestionResult,
   type EmbeddedRunAttemptParamsV2,
-  type NativeHookRelayEvent,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
@@ -19,7 +18,6 @@ import {
 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { registerNativeHookRelayForBundledRuntime } from "openclaw/plugin-sdk/native-hook-relay-runtime";
-import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
@@ -102,17 +100,14 @@ import {
   readCodexSupportedReasoningEfforts,
   resolveCodexAppServerReasoningEffort,
 } from "./reasoning-effort.js";
+import type { CodexRunAttemptOptions } from "./run-attempt-types.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
   type CodexSandboxExecEnvironment,
 } from "./sandbox-exec-server.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
-import {
-  sessionBindingIdentity,
-  resolveCodexSessionBinding,
-  type CodexAppServerBindingStore,
-} from "./session-binding.js";
+import { sessionBindingIdentity, resolveCodexSessionBinding } from "./session-binding.js";
 import {
   applyCodexSessionPermissionPolicy,
   CODEX_SESSION_PERMISSION_EXEC_MODES,
@@ -155,20 +150,10 @@ class CodexSideQuestionTimeoutError extends Error {
 }
 export async function runCodexAppServerSideQuestion(
   params: AgentHarnessSideQuestionParamsV2,
-  options: {
-    bindingStore: CodexAppServerBindingStore;
-    runtime?: PluginRuntime;
-    pluginConfig?: unknown;
-    /** Private app-server request identity; public side-run identity remains params.model. */
-    runtimeModelId?: string;
-    nativeHookRelay?: {
-      enabled?: boolean;
-      events?: readonly NativeHookRelayEvent[];
-      ttlMs?: number;
-      gatewayTimeoutMs?: number;
-      hookTimeoutSec?: number;
-    };
-  },
+  options: Pick<
+    CodexRunAttemptOptions,
+    "bindingStore" | "runtime" | "pluginConfig" | "runtimeModelId" | "nativeHookRelay"
+  >,
 ): Promise<AgentHarnessSideQuestionResult> {
   const bindingIdentity = sessionBindingIdentity({
     sessionId: params.sessionId,

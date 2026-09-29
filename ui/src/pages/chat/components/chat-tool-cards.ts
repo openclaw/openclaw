@@ -91,20 +91,6 @@ export function renderBrowserTabPreviews(
     .toReversed();
 }
 
-export function shouldToggleSelectableDisclosure(event: MouseEvent): boolean {
-  if (event.detail === 0) {
-    return true;
-  }
-  const target = event.currentTarget;
-  const selection = window.getSelection();
-  if (!(target instanceof Node) || !selection || selection.isCollapsed) {
-    return true;
-  }
-  return ![selection.anchorNode, selection.focusNode].some(
-    (node) => node !== null && target.contains(node),
-  );
-}
-
 export function renderToolIcon(
   name: string,
   tool?: { toolName: string; pluginToolIcons?: PluginToolIcons },
@@ -531,11 +517,7 @@ export function renderToolCard(
                 aria-expanded=${String(expanded)}
                 @pointerenter=${syncToolDisclosureOverflow}
                 @focus=${syncToolDisclosureOverflow}
-                @click=${(event: MouseEvent) => {
-                  if (shouldToggleSelectableDisclosure(event)) {
-                    opts.onToggleExpanded(card.id);
-                  }
-                }}
+                @click=${() => opts.onToggleExpanded(card.id)}
               >
                 ${rowContent}
               </button>`

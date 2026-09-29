@@ -6,7 +6,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import type { ApprovalChannelReviewer } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
-import type { ChannelApprovalKind } from "../../infra/approval-types.js";
+import { isPluginApprovalRequest, type ChannelApprovalKind } from "../../infra/approval-types.js";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequestPayload,
@@ -19,6 +19,7 @@ import type { OperatorApprovalStoreGuard } from "../operator-approval-store.type
 import {
   type ApprovalRecordLookupResult,
   isApprovalRecordVisibleToClient,
+  readApprovalRequestSource,
   resolvePendingApprovalRecord,
   resolveResolvedApprovalRecord,
   respondPendingApprovalLookupError,
@@ -254,6 +255,7 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
     );
     return;
   }
+  params.authority?.bindSource(readApprovalRequestSource(snapshot));
   const decisionPromise = params.manager.awaitDecision(id);
   if (!decisionPromise) {
     params.respond(
@@ -386,15 +388,21 @@ export async function handlePendingApprovalRequest<
         : await params.manager.trackActiveWork(params.deliverRequest);
     // A turn-source route can approve without an active approval client, so keep
     // the record alive when the originating channel/account can still receive it.
+    const pluginRequest =
+      params.approvalKind === "plugin" && isPluginApprovalRequest(params.requestEvent)
+        ? params.requestEvent
+        : undefined;
     const hasTurnSourceRoute =
       !suppressDelivery &&
       !approvalClientsOnly &&
       !hasApprovalClients &&
       !delivered &&
+      (params.approvalKind !== "plugin" || pluginRequest !== undefined) &&
       hasApprovalTurnSourceRoute({
         turnSourceChannel: params.record.request.turnSourceChannel,
         turnSourceAccountId: params.record.request.turnSourceAccountId,
         approvalKind: params.approvalKind ?? "exec",
+        ...(pluginRequest ? { request: pluginRequest } : {}),
       });
     const deliveryRoute: ApprovalRequestDeliveryRoute = delivered
       ? "forwarder"

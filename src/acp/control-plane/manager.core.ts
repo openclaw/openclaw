@@ -14,10 +14,7 @@ import { runManagerInitializeSession } from "./manager.initialize-session.js";
 import { registerAcpSessionManagerDisposer } from "./manager.lifecycle.js";
 import { registerAcpSessionResetControls } from "./manager.reset-controls.js";
 import { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
-import {
-  createSupersededActorError,
-  ensureManagerRuntimeHandle,
-} from "./manager.runtime-handle-ensure.js";
+import { ensureManagerRuntimeHandle } from "./manager.runtime-handle-ensure.js";
 import {
   runResetManagerSessionRuntimeOptions,
   runSetManagerSessionConfigOption,
@@ -52,6 +49,7 @@ import {
   type WriteManagerSessionMeta,
 } from "./manager.types.js";
 import {
+  createSupersededActorError,
   acpSessionActorKey,
   normalizeAcpErrorCode,
   resolveAcpSessionTarget,

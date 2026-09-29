@@ -26,10 +26,12 @@ import {
   buildRealUpdateEnv,
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
+  isRecoverableWindowsPackagedUpgradeUnsettledExit,
   normalizeRequestedRef,
   parsePackagedUpgradeUpdateTimings,
   resolveDevUpdateVerificationRef,
   resolveExpectedDevUpdateRef,
+  resolvePackagedUpgradeTimeouts,
   shouldRunMainChannelDevUpdate,
   shouldRunPackagedUpgradeStatusProbe,
   shouldUseManagedGatewayService,
@@ -292,22 +294,36 @@ export async function runUpgradeLane(
     }
 
     const updateEnv = buildRealUpdateEnv(env);
-    const updateArgs = buildPackagedUpgradeUpdateArgs(params.candidateUrl);
+    const baselineInstallDurationMs = lane.phaseTimings.find(
+      (phase) => phase.name === "install-baseline",
+    )!.durationMs;
+    const updateTimeouts = resolvePackagedUpgradeTimeouts(baselineInstallDurationMs);
+    result.updateTimeouts = { baselineInstallDurationMs, ...updateTimeouts };
+    const updateArgs = buildPackagedUpgradeUpdateArgs(
+      params.candidateUrl,
+      updateTimeouts.stepTimeoutSeconds,
+    );
     const updateLogPath = join(params.logsDir, "upgrade-update.log");
+    appendFileSync(
+      updateLogPath,
+      `[release-checks] update-timeouts ${JSON.stringify(result.updateTimeouts)}\n`,
+    );
+    const runUpdate = () =>
+      withNpmDiagnostics(lane.homeDir, updateLogPath, updateEnv, () =>
+        runOpenClaw({
+          lane,
+          env: updateEnv,
+          args: updateArgs,
+          logPath: updateLogPath,
+          timeoutMs: updateTimeouts.wrapperTimeoutMs,
+          check: false,
+        }),
+      );
     let updateResult: CommandResult | undefined;
     let usedWindowsPackagedUpgradeTimeoutFallback = false;
     await runTimedLanePhase(lane, "update", async () => {
       try {
-        updateResult = await withNpmDiagnostics(lane.homeDir, updateLogPath, updateEnv, () =>
-          runOpenClaw({
-            lane,
-            env: updateEnv,
-            args: updateArgs,
-            logPath: updateLogPath,
-            timeoutMs: updateTimeoutMs(),
-            check: false,
-          }),
-        );
+        updateResult = await runUpdate();
       } catch (error) {
         if (!isRecoverableWindowsPackagedUpgradeTimeoutError(error, process.platform)) {
           throw error;
@@ -315,7 +331,7 @@ export async function runUpgradeLane(
         usedWindowsPackagedUpgradeTimeoutFallback = true;
         appendFileSync(
           updateLogPath,
-          `\n[release-checks] Windows baseline updater timed out after fetching candidate; falling back to direct candidate install: ${formatError(error)}\n`,
+          `\n[release-checks] Windows baseline updater timed out with process tree terminated; falling back to direct candidate install: ${formatError(error)}\n`,
         );
         updateResult = {
           exitCode: 124,
@@ -327,17 +343,47 @@ export async function runUpgradeLane(
     if (!updateResult) {
       throw new Error("Packaged update completed without a command result.");
     }
-    result.updateTimings = parsePackagedUpgradeUpdateTimings(updateResult.stdout);
-    const updateFallback: PackagedUpgradeFallbackEvidence | undefined =
+    let updateFallback: PackagedUpgradeFallbackEvidence | undefined =
       usedWindowsPackagedUpgradeTimeoutFallback
         ? { reason: "timeout", action: "direct-candidate-install" }
         : isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(updateResult, process.platform)
           ? { reason: "swap-cleanup", action: "direct-candidate-install" }
           : undefined;
+    const isUnsettledBaselineExit = (commandResult: CommandResult) =>
+      process.platform === "win32" &&
+      commandResult.exitCode === 13 &&
+      isRecoverableWindowsPackagedUpgradeUnsettledExit(commandResult, {
+        baselineVersion: baseline.version,
+        installedVersion: readInstalledVersion(lane.prefixDir),
+      });
+    if (isUnsettledBaselineExit(updateResult)) {
+      appendFileSync(
+        updateLogPath,
+        `\n[release-checks] Windows baseline ${baseline.version} updater exited 13 (known shipped liveness defect fixed in 2026.9.7); install remains at baseline; retrying the same update once.\n`,
+      );
+      updateResult = await runTimedLanePhase(lane, "update-retry", runUpdate);
+      if (updateResult.exitCode === 0) {
+        updateFallback = { reason: "unsettled-exit", action: "retry-update" };
+        appendFileSync(
+          updateLogPath,
+          "\n[release-checks] Windows baseline updater retry succeeded; continuing normal candidate verification.\n",
+        );
+      } else if (isUnsettledBaselineExit(updateResult)) {
+        updateFallback = { reason: "unsettled-exit", action: "direct-candidate-install" };
+        appendFileSync(
+          updateLogPath,
+          `\n[release-checks] Windows baseline ${baseline.version} updater retry exited 13 with the same shipped liveness defect; install remains at baseline; falling back to direct candidate install.\n`,
+        );
+      } else {
+        verifyPackagedUpgradeUpdateResult(updateResult);
+      }
+    }
+    result.updateTimings = parsePackagedUpgradeUpdateTimings(updateResult.stdout);
     if (updateFallback) {
       result.updateFallback = updateFallback;
     }
-    const usedWindowsPackagedUpgradeFallback = Boolean(updateFallback);
+    const usedWindowsPackagedUpgradeFallback =
+      updateFallback?.action === "direct-candidate-install";
     if (usedWindowsPackagedUpgradeFallback) {
       await runTimedLanePhase(lane, "update-fallback-install", async () => {
         await installPackageSpec({
@@ -346,6 +392,7 @@ export async function runUpgradeLane(
           packageSpec: params.candidateUrl,
           logPath: join(params.logsDir, "upgrade-update-fallback-install.log"),
           ignoreScripts: true,
+          retryWindowsRemoval: true,
         });
         const fallbackInstalledVersion = readInstalledVersion(lane.prefixDir);
         verifyWindowsPackagedUpgradeFallbackInstall({

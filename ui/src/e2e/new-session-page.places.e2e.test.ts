@@ -495,6 +495,7 @@ suite.define(() => {
       // Pointer light-dismiss still retires the unified popover after its
       // asynchronous hide animation completes.
       await checkoutTrigger.click();
+      await checkoutSelect.getByLabel("Name", { exact: true }).fill("release-proof");
       const afterPointerHide = checkoutSelect.evaluate(
         (element) =>
           new Promise<void>((resolve) => {
@@ -503,6 +504,21 @@ suite.define(() => {
       );
       await page.locator(".agent-chat__welcome h2").click();
       await afterPointerHide;
+      await expect.poll(() => checkoutSelect.getAttribute("open")).toBeNull();
+      await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "Worktree · release-proof",
+      );
+      expect(await checkoutTrigger.getAttribute("aria-label")).toBe(
+        "Checkout: Worktree · release-proof",
+      );
+      expect(await checkoutTrigger.getAttribute("title")).toBe(
+        "Checkout: Worktree · release-proof",
+      );
+      await checkoutTrigger.click();
+      expect(await checkoutSelect.getByLabel("Name", { exact: true }).inputValue()).toBe(
+        "release-proof",
+      );
+      await page.keyboard.press("Escape");
       await expect.poll(() => checkoutSelect.getAttribute("open")).toBeNull();
 
       const message = page.locator(".new-session-page__message");
@@ -514,6 +530,7 @@ suite.define(() => {
         agentId: "main",
         message: "fix the flaky test",
         worktree: true,
+        worktreeName: "release-proof",
         cwd: PICKED,
       });
       expect(createRequest.params).not.toHaveProperty("worktreeBaseRef");

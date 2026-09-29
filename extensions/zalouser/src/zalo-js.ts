@@ -361,7 +361,7 @@ function mapFriend(friend: User): ZcaFriend {
   };
 }
 
-function mapGroup(groupId: string, group: GroupInfo & Record<string, unknown>): ZaloGroup {
+function mapGroup(groupId: string, group: GroupInfo): ZaloGroup {
   const totalMember =
     typeof group.totalMember === "number" && Number.isFinite(group.totalMember)
       ? group.totalMember
@@ -507,9 +507,6 @@ async function fetchGroupsByIds(api: API, ids: string[]): Promise<Map<string, Gr
   const result = new Map<string, GroupInfo>();
   for (let index = 0; index < ids.length; index += GROUP_INFO_CHUNK_SIZE) {
     const chunk = ids.slice(index, index + GROUP_INFO_CHUNK_SIZE);
-    if (chunk.length === 0) {
-      continue;
-    }
     const response = await api.getGroupInfo(chunk);
     const map = response.gridInfoMap ?? {};
     for (const [groupId, info] of Object.entries(map)) {
@@ -767,16 +764,10 @@ export async function listZaloGroups(
         return [];
       }
       const details = await fetchGroupsByIds(api, ids);
-      const rows: ZaloGroup[] = [];
-      for (const id of ids) {
+      return ids.map((id) => {
         const info = details.get(id);
-        if (!info) {
-          rows.push({ groupId: id, name: id });
-          continue;
-        }
-        rows.push(mapGroup(id, info as GroupInfo & Record<string, unknown>));
-      }
-      return rows;
+        return info ? mapGroup(id, info) : { groupId: id, name: id };
+      });
     },
     { credentialPersistence: options?.credentialPersistence ?? "persist" },
   );
@@ -840,17 +831,8 @@ export async function listZaloGroupMembers(
     const profileMap = new Map<string, { displayName?: string; avatar?: string }>();
     if (uniqueIds.length > 0) {
       const profiles = await api.getGroupMembersInfo(uniqueIds);
-      const profileEntries = profiles.profiles as Record<
-        string,
-        {
-          id?: string;
-          displayName?: string;
-          zaloName?: string;
-          avatar?: string;
-        }
-      >;
-      for (const [rawId, profileValue] of Object.entries(profileEntries)) {
-        const id = toNumberId(rawId) || toNumberId((profileValue as { id?: unknown })?.id);
+      for (const [rawId, profileValue] of Object.entries(profiles.profiles)) {
+        const id = toNumberId(rawId) || toNumberId(profileValue?.id);
         if (!id || !profileValue) {
           continue;
         }

@@ -66,8 +66,13 @@ export function registerCopilotActiveRun(params: {
       options?.onQueueAccepted?.(accepted);
     };
     // The host owns question uncertainty; SDK-send rejection must not reopen it.
-    if (await claimPendingUserInputAnswer(text, options)) {
+    const claimed = await claimPendingUserInputAnswer(text, options).catch((error: unknown) => {
+      options?.onQueueSettled?.();
+      throw error;
+    });
+    if (claimed) {
       reportAcceptance(true);
+      options?.onQueueSettled?.();
       return undefined;
     }
     let messageId: string;
@@ -95,14 +100,20 @@ export function registerCopilotActiveRun(params: {
       reportAcceptance(true);
     } catch (error) {
       reportAcceptance(false);
+      options?.onQueueSettled?.();
       throw error;
     }
-    if (options?.waitForTranscriptCommit === true) {
+    const receipt =
+      options?.waitForTranscriptCommit === true || options?.onQueueSettled
+        ? params.transcriptJournal.waitForSdkUserPersisted(messageId)
+        : undefined;
+    if (receipt && options?.onQueueSettled) {
+      // Admission-only callers retain custody until this exact input commits or fails.
+      void receipt.then(options.onQueueSettled, options.onQueueSettled);
+    }
+    if (receipt && options?.waitForTranscriptCommit === true) {
       try {
-        await waitForPersistenceReceipt(
-          params.transcriptJournal.waitForSdkUserPersisted(messageId),
-          options.deliveryTimeoutMs,
-        );
+        await waitForPersistenceReceipt(receipt, options.deliveryTimeoutMs);
       } catch (error) {
         return {
           transcriptCommit: "unconfirmed" as const,

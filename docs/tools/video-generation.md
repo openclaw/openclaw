@@ -69,9 +69,10 @@ Video generation is asynchronous:
    an idempotent direct fallback with the media.
 
 While a job is in flight, duplicate `video_generate` calls in the same
-session return the current task status instead of starting another
+chat return the current task status instead of starting another
 generation. Use `action: "status"` to check without triggering a new
-generation.
+generation. Direct chats keep separate tasks even when they share the main
+session transcript; completion returns to the requesting peer.
 
 Outside of session-backed agent runs (for example, direct tool invocations),
 the tool falls back to inline generation and returns the final media path
@@ -275,6 +276,8 @@ The first skip reason in a request logs at `warn` so operators see when
 their primary provider was passed over; subsequent skips log at `debug` to
 keep long fallback chains quiet. If every candidate is skipped, the
 aggregated error includes the skip reason for each.
+If a candidate fails during generation, its provider, model, and error log at
+`warn` before the next candidate is tried.
 
 ## Actions
 

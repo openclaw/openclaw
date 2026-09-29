@@ -267,10 +267,7 @@ async function createPendingSkillProposal(
     goal: input.goal,
     evidence: input.evidence,
   });
-  if (!prepared.ok) {
-    throw prepared.error.cause;
-  }
-  const { content, draftHash, evidence, goal, scan, supportFiles } = prepared.value;
+  const { content, draftHash, evidence, goal, scan, supportFiles } = prepared;
   const id = createSkillProposalId(kind === "create" ? target.skillName : target.skillKey);
   const origin = normalizeProposalOrigin({
     ...input.origin,

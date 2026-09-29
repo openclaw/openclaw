@@ -689,13 +689,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     }
   }
 
-  /**
-   * Toggle auto-compaction setting.
-   */
-  setAutoCompactionEnabled(enabled: boolean): void {
-    this.settingsManager.setCompactionEnabled(enabled);
-  }
-
   /** Whether auto-compaction is enabled */
   get autoCompactionEnabled(): boolean {
     return this.settingsManager.getCompactionEnabled();

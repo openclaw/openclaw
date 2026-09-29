@@ -1,5 +1,4 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-// Skill contract types describe loaded skill metadata, sources, and prompt surfaces.
 import type { SourceInfo } from "../../agents/sessions/source-info.js";
 
 export interface Skill {

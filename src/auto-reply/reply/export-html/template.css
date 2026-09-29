@@ -533,9 +533,6 @@ body {
   white-space: pre-wrap;
 }
 
-.tool-images {
-}
-
 .tool-image {
   max-width: 100%;
   max-height: 500px;
@@ -810,24 +807,6 @@ body {
   color: var(--mdHeading);
   margin: var(--line-height) 0 0 0;
   font-weight: bold;
-}
-
-.markdown-content h1 {
-  font-size: 1em;
-}
-.markdown-content h2 {
-  font-size: 1em;
-}
-.markdown-content h3 {
-  font-size: 1em;
-}
-.markdown-content h4 {
-  font-size: 1em;
-}
-.markdown-content h5 {
-  font-size: 1em;
-}
-.markdown-content h6 {
   font-size: 1em;
 }
 .markdown-content p {

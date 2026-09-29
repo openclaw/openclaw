@@ -16,6 +16,7 @@ import {
 import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registry-memory.js";
 import {
   persistSubagentRegistryChangesAsync,
+  reconcileRetiredSubagentRegistryWrites,
   supersedePendingSubagentRegistryWrites,
   type SubagentRegistryWriteOptions,
 } from "./subagent-registry-persistence.js";
@@ -43,12 +44,8 @@ import {
   type PreparedSubagentRunsRead,
   type SubagentRunReadSelection,
 } from "./subagent-registry-read-snapshot.js";
+import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
-/**
- * Subagent registry state persistence bridge.
- *
- * Merges live runs with retained SQLite rows under the process-local registry owner.
- */
 import {
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForControllerFromSqlite,
@@ -389,13 +386,13 @@ export function restoreSubagentRunsFromDisk(params: {
   mergeOnly?: boolean;
 }) {
   const restored = loadSubagentRegistryFromSqlite();
+  if (!params.mergeOnly) {
+    reconcileRetiredSubagentRegistryWrites(params.runs, restored);
+  }
   supersedePendingSubagentRegistryWrites();
   const keys = rememberPersistedSubagentRunsSnapshot(restored);
   let added = 0;
   for (const [runId, entry] of restored.entries()) {
-    if (!runId || !entry) {
-      continue;
-    }
     if (params.mergeOnly && params.runs.has(runId)) {
       continue;
     }
@@ -518,6 +515,7 @@ export function getSubagentSessionListRunsSnapshotForRead(
     if (keys.size === 0) {
       return new Map();
     }
+    const matches = (entry: SubagentRunReadRecord) => keys.has(resolveControllerSessionKey(entry));
     const cache = persistedSubagentSessionListRunsReadCache;
     const cached = shouldReadPersistedSubagentRuns()
       ? getPersistedSubagentRunsSnapshot(cache)
@@ -526,8 +524,7 @@ export function getSubagentSessionListRunsSnapshotForRead(
     if (!cached || !lookup) {
       if (!shouldReadPersistedSubagentRuns()) {
         return getSubagentRunsSnapshot(inMemoryRuns, cache, {
-          matches: (entry) =>
-            keys.has(entry.controllerSessionKey?.trim() || entry.requesterSessionKey),
+          matches,
         });
       }
       throw new Error("Subagent session-list facts must be prepared before synchronous reads");
@@ -535,7 +532,7 @@ export function getSubagentSessionListRunsSnapshotForRead(
     return getSubagentRunsSnapshot(inMemoryRuns, cache, {
       fresh: true,
       load: () => indexedSnapshotRows(cached, lookup.selectControllers(keys)),
-      matches: (entry) => keys.has(entry.controllerSessionKey?.trim() || entry.requesterSessionKey),
+      matches,
     });
   }
   return getSubagentRunsSnapshot(inMemoryRuns, persistedSubagentSessionListRunsReadCache);
@@ -628,7 +625,7 @@ export function getSubagentRunsSnapshotForController(
   return getSubagentRunsSnapshot(inMemoryRuns, persistedSubagentRunsReadCache, {
     selectCached: (lookup) => lookup.selectControllers(new Set([key])),
     load: () => loadSubagentRunsForControllerFromSqlite(key),
-    matches: (entry) => (entry.controllerSessionKey?.trim() || entry.requesterSessionKey) === key,
+    matches: (entry) => resolveControllerSessionKey(entry) === key,
   });
 }
 

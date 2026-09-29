@@ -11,10 +11,11 @@ The Full Release Validation umbrella, release publish, and Docker Release dispat
 
 ## Mobile store releases
 
-`iOS Store Release` (`ios-release.yml`) and `Android Store Release`
+`iOS Store Release` (`ios-store-release.yml`) and `Android Store Release`
 (`android-store-release.yml`) are separate manual workflows. Choose `main` and
-click **Run workflow**; neither workflow has input parameters. Each platform
-queues its own runs without cancelling an active upload.
+click **Run workflow** with the defaults; no release parameters are needed.
+The iOS workflow also offers a **screenshots** operation for capture without an
+upload. Each platform queues its own runs without cancelling an active upload.
 
 The workflows run the same commands available from a clean, current local
 `main` checkout: `pnpm ios:release:upload` and `pnpm android:release:upload`.
@@ -116,8 +117,7 @@ regular beta and stable publishes from a protected lightweight
 `release-publish/<tooling-sha12>-<epoch>` tag at the frozen Tooling SHA after the
 release tag exists and after the OpenClaw npm preflight has succeeded (the preflight runs
 `pnpm plugins:sync:check` among its checks). The tag still selects the exact
-release commit, including a commit on `release/YYYY.M.PATCH`; Tideclaw alpha
-publishes keep using their matching alpha branch. For current validation runs,
+release commit, including a commit on `release/YYYY.M.PATCH`. For current validation runs,
 set `preflight_run_id` and `full_release_validation_run_id` to the same successful
 Full Release Validation run ID and pin `full_release_validation_run_attempt`.
 The publisher resolves the independent `Full Release Artifacts` producer from
@@ -207,8 +207,7 @@ SHA through `ref` and `expected_sha`, reuses
 strict exact-target evidence when available, and verifies every child workflow
 `headSha` matches the Tooling SHA. Record that Tooling SHA once and never refresh
 it from moving `main`. Regular release branches accept only their final package
-version or a matching beta prerelease; Tideclaw alpha validation uses its exact
-alpha tag and matching alpha branch.
+version or a matching beta prerelease.
 
 `release_profile` controls live/provider breadth passed into release checks. The
 manual release workflows default to `stable`; use `full` only when you

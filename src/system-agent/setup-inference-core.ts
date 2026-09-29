@@ -8,6 +8,7 @@ import type { AgentRunResultView } from "../agents/agent-run-result.js";
 import type { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import type { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
+import { describeFailoverError } from "../agents/failover-error.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
 import type {
@@ -128,20 +129,13 @@ export type { SetupInferenceFailureStatus };
 export type SetupInferenceStatus = "ok" | SetupInferenceFailureStatus;
 
 export type ActivateSetupInferenceResult =
-  | {
-      ok: true;
-      modelTarget?: "utility";
-      modelRef: string;
-      latencyMs: number;
+  | (Extract<VerifySetupInferenceResult, { ok: true }> & {
       lines: string[];
       gatewayRestartRequired?: true;
-    }
-  | {
-      ok: false;
-      status: SetupInferenceFailureStatus;
-      error: string;
+    })
+  | (Extract<VerifySetupInferenceResult, { ok: false }> & {
       disposition?: SetupInferenceActivationRejection["disposition"];
-    };
+    });
 
 /**
  * The config commit may have happened, so callers must verify current setup
@@ -178,18 +172,14 @@ export type VerifySetupInferenceResult =
     };
 
 export type CompleteSetupInferenceResult =
-  | { ok: true; modelRef: string; latencyMs: number; text: string }
-  | { ok: false; status: SetupInferenceFailureStatus; error: string };
+  | (Omit<Extract<VerifySetupInferenceResult, { ok: true }>, "modelTarget"> & { text: string })
+  | Extract<VerifySetupInferenceResult, { ok: false }>;
 
 export type BoundVerifySetupInferenceResult =
-  | {
-      ok: true;
-      modelTarget?: "utility";
-      modelRef: string;
-      latencyMs: number;
+  | (Extract<VerifySetupInferenceResult, { ok: true }> & {
       binding: SystemAgentVerifiedInferenceBinding;
-    }
-  | { ok: false; status: SetupInferenceFailureStatus; error: string };
+    })
+  | Extract<VerifySetupInferenceResult, { ok: false }>;
 
 export type ActivateSetupInferenceParams = {
   kind: SetupInferenceKind | "api-key" | "provider-auth";
@@ -413,10 +403,32 @@ const SETUP_STATUS_BY_FAILOVER_REASON = {
   unknown: "unknown",
 } satisfies Record<FailoverReason, SetupInferenceFailureStatus>;
 
-export function mapFailoverReasonToSetupStatus(
+function mapFailoverReasonToSetupStatus(
   reason?: FailoverReason | null,
 ): SetupInferenceFailureStatus {
   return reason ? SETUP_STATUS_BY_FAILOVER_REASON[reason] : "unknown";
+}
+
+export function describeSetupInferenceError(
+  error: unknown,
+  route: SystemAgentConfiguredRoute,
+): { status: SetupInferenceFailureStatus; error: string } {
+  const described = describeFailoverError(error);
+  const origin = URL.parse(
+    route.runConfig.models?.providers?.[route.provider]?.baseUrl ?? "",
+  )?.origin;
+  const connectionError = !origin
+    ? undefined
+    : described.code === "ECONNREFUSED"
+      ? `Nothing is listening at ${origin}. Start the server or check the URL, then retry setup.`
+      : described.code === "ENOTFOUND"
+        ? `The server name in ${origin} could not be found. Check the URL and DNS settings, then retry setup.`
+        : described.code === "EHOSTUNREACH" || described.code === "ENETUNREACH"
+          ? `Cannot reach ${origin}. Check the URL and network connection from the Gateway host, then retry setup.`
+          : undefined;
+  return connectionError
+    ? { status: "unavailable", error: `${connectionError} No default model was changed.` }
+    : { status: mapFailoverReasonToSetupStatus(described.reason), error: described.message };
 }
 
 export function validateSetupInferenceOwnerEvidence(params: {

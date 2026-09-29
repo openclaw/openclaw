@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaProviderMode } from "./model-selection.js";
+import type { QaMockProviderServer } from "./providers/shared/types.js";
 import type { QaTransportActionName, QaTransportAdapter } from "./qa-transport.js";
 
 type QaRuntimeGatewayClient = {
@@ -46,9 +47,7 @@ export type QaSuiteRuntimeEnv = {
   providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
-  mock: {
-    baseUrl: string;
-  } | null;
+  mock: Pick<QaMockProviderServer, "baseUrl" | "holdNextContinuation"> | null;
   cfg: OpenClawConfig;
 };
 

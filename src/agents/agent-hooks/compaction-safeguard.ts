@@ -13,7 +13,6 @@ import {
 import {
   computeFileLists,
   formatFileOperations,
-  MAX_FILE_OPS_LIST_CHARS,
   MAX_FILE_OPS_SECTION_CHARS,
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
@@ -30,11 +29,7 @@ import { computeAdaptiveChunkRatioWithWorker } from "../compaction-planning-work
 import { buildHistoryPrunePlan } from "../compaction-planning.js";
 import { isRealConversationMessage } from "../compaction-real-conversation.js";
 import {
-  BASE_CHUNK_RATIO,
-  MIN_CHUNK_RATIO,
-  SAFETY_MARGIN,
   SUMMARIZATION_OVERHEAD_TOKENS,
-  computeAdaptiveChunkRatio,
   resolveContextWindowTokens,
   summarizeInStages,
 } from "../compaction.js";
@@ -166,9 +161,14 @@ function collectPreparationRangeMessages(
   if (firstKeptIndex < 0) {
     return [];
   }
-  return projectBranchEntries(entries.slice(0, firstKeptIndex)).filter(
-    (message) => message.role !== "compactionSummary",
-  );
+  // Keep replay boundaries even when their retained entries precede the physical marker.
+  // The core projector, not the preparation cut, owns which older entries remain visible.
+  return projectBranchEntries(
+    entries.filter(
+      (entry, index) =>
+        index < firstKeptIndex || entry.type === "compaction" || entry.type === "reset",
+    ),
+  ).filter((message) => message.role !== "compactionSummary");
 }
 
 function readSessionBranch(sessionManager: unknown): CoreSessionTreeEntry[] {
@@ -1429,9 +1429,7 @@ const testing = {
   splitPreservedRecentTurns,
   buildPreservedTurnsSection,
   buildCompactionStructureInstructions,
-  buildStructuredFallbackSummary,
   prependPreviousSummaryForRedistill,
-  appendSummarySection,
   resolveRecentTurnsPreserve,
   resolveQualityGuardMaxRetries,
   extractOpaqueIdentifiers,
@@ -1439,14 +1437,9 @@ const testing = {
   capCompactionSummary,
   budgetCompactionSummary,
   formatFileOperations,
-  computeAdaptiveChunkRatio,
-  readWorkspaceContextForSummary,
-  BASE_CHUNK_RATIO,
-  MIN_CHUNK_RATIO,
-  SAFETY_MARGIN,
-  MAX_COMPACTION_SUMMARY_CHARS,
   MAX_FILE_OPS_SECTION_CHARS,
-  MAX_FILE_OPS_LIST_CHARS,
+  readWorkspaceContextForSummary,
+  MAX_COMPACTION_SUMMARY_CHARS,
   SUMMARY_TRUNCATED_MARKER,
   CONTEXT_TRUNCATED_MARKER,
   MAX_SPLIT_TURN_CONTEXT_CHARS,

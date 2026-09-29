@@ -114,17 +114,15 @@ export const resolveMemorySearchConfigMock = vi.fn(() => ({
 export const resolveSessionAgentIdMock = vi.fn<
   typeof import("../agent-scope.js").resolveSessionAgentId
 >(() => "main");
-export const resolveSessionAgentIdsMock = vi.fn<
-  typeof import("../agent-scope.js").resolveSessionAgentIds
->(() => ({
-  defaultAgentId: "main",
-  sessionAgentId: "main",
-}));
-export const resolveAgentConfigMock = vi.fn(
-  (_config?: unknown, _agentId?: string): unknown => undefined,
+const resolveSessionAgentIdsMock = vi.fn<typeof import("../agent-scope.js").resolveSessionAgentIds>(
+  () => ({
+    defaultAgentId: "main",
+    sessionAgentId: "main",
+  }),
 );
+const resolveAgentConfigMock = vi.fn((_config?: unknown, _agentId?: string): unknown => undefined);
 let fixture: { workspaceDir: string; sessionId: string };
-export const resolveDefaultAgentDirMock = vi.fn<() => string>();
+const resolveDefaultAgentDirMock = vi.fn<() => string>();
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
 export const resolveAgentHarnessPolicyMock = vi.fn(() => ({ runtime: "openclaw" }));
 function createSelectedAgentHarnessMock(params: {
@@ -162,7 +160,7 @@ function createDefaultSessionMessages(): unknown[] {
   ];
 }
 export const sessionMessages: unknown[] = createDefaultSessionMessages();
-export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
+const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
 export const runCliAgentMock = vi.fn(async () => ({
   meta: {
     durationMs: 1,
@@ -228,14 +226,14 @@ export const createAgentSessionMock = vi.fn(async (..._args: [unknown?, unknown?
 export const createOpenClawCodingToolsMock = vi.fn<typeof createOpenClawCodingToolsInternal>(
   () => [],
 );
-export const buildEmbeddedExtensionFactoriesMock = vi.fn(() => []);
+const buildEmbeddedExtensionFactoriesMock = vi.fn(() => []);
 export const resolveEffectiveCompactionModeMock = vi.fn(() => "default");
-export const guardSessionManagerMock = vi.fn((sessionManager: Record<string, unknown>) => ({
+const guardSessionManagerMock = vi.fn((sessionManager: Record<string, unknown>) => ({
   ...sessionManager,
   flushPendingToolResults: vi.fn(),
 }));
-export const applyAgentCompactionSettingsFromConfigMock = vi.fn();
-export const createPreparedEmbeddedAgentSettingsManagerMock = vi.fn(() => ({
+const applyAgentCompactionSettingsFromConfigMock = vi.fn();
+const createPreparedEmbeddedAgentSettingsManagerMock = vi.fn(() => ({
   getGlobalSettings: vi.fn(() => ({})),
 }));
 export const listRegisteredPluginAgentPromptGuidanceMock = vi.fn((params?: { surface?: string }) =>
@@ -270,7 +268,7 @@ export const getApiKeyForModelMock: Mock<
 export const resolveProviderEntryApiKeyProfileReferenceMock: Mock<() => unknown> = vi.fn(() => ({
   kind: "none",
 }));
-export const shouldPreferExplicitConfigApiKeyAuthMock = vi.fn(() => false);
+const shouldPreferExplicitConfigApiKeyAuthMock = vi.fn(() => false);
 export const registerProviderStreamForModelMock: Mock<(params?: unknown) => unknown> = vi.fn();
 export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));
 function createDefaultCompactionAuthStore(): AuthProfileStore {
@@ -302,16 +300,6 @@ export const resolveSandboxContextMock = vi.fn<
 export const maybeCompactAgentHarnessSessionMock: Mock<
   (params?: unknown, options?: unknown) => Promise<unknown>
 > = vi.fn(async () => undefined);
-export const rotateTranscriptAfterCompactionMock: Mock<
-  (_params?: unknown) => Promise<{
-    rotated: boolean;
-    sessionId?: string;
-    sessionFile?: string;
-    leafId?: string;
-  }>
-> = vi.fn(async () => ({
-  rotated: false,
-}));
 export const enqueueCommandInLaneMock = vi.fn((_lane: unknown, task: () => unknown) => task());
 
 function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
@@ -500,8 +488,6 @@ export function resetCompactSessionStateMocks(): void {
   );
   resolveContextWindowInfoMock.mockReset();
   resolveContextWindowInfoMock.mockReturnValue({ tokens: 128_000 });
-  rotateTranscriptAfterCompactionMock.mockReset();
-  rotateTranscriptAfterCompactionMock.mockResolvedValue({ rotated: false });
   enqueueCommandInLaneMock.mockReset();
   enqueueCommandInLaneMock.mockImplementation((_lane: unknown, task: () => unknown) => task());
   listRegisteredPluginAgentPromptGuidanceMock.mockReset();

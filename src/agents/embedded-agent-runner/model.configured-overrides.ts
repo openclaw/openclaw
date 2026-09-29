@@ -203,11 +203,8 @@ export function resolveConfiguredProviderConfig(
   provider: string,
 ): InlineProviderConfig | undefined {
   const configuredProviders = cfg?.models?.providers;
-  if (!configuredProviders) {
-    return undefined;
-  }
   return (
-    configuredProviders[provider] ?? findNormalizedProviderValue(configuredProviders, provider)
+    configuredProviders?.[provider] ?? findNormalizedProviderValue(configuredProviders, provider)
   );
 }
 

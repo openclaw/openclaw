@@ -527,7 +527,7 @@ export function toFinitePositive(value: unknown, fallback: number): number {
   return num;
 }
 
-export function toFiniteNonNegativeInt(value: unknown, fallback: number): number {
+export function toFiniteNonNegativeInt(value: unknown, fallback = 0): number {
   const num = Number(value);
   if (!Number.isFinite(num)) {
     return fallback;
@@ -602,29 +602,21 @@ export function normalizeMemoryPathForWorkspace(workspaceDir: string, rawPath: s
   return normalized;
 }
 
-export function toNonNegativeInt(value: unknown): number {
-  const num = Number(value);
-  if (!Number.isFinite(num)) {
-    return 0;
-  }
-  return Math.max(0, Math.floor(num));
-}
-
 export function parseEntryRangeFromKey(
   key: string,
   fallbackStartLine: unknown,
   fallbackEndLine: unknown,
 ): { startLine: number; endLine: number } {
-  const startLine = toNonNegativeInt(fallbackStartLine);
-  const endLine = toNonNegativeInt(fallbackEndLine);
+  const startLine = toFiniteNonNegativeInt(fallbackStartLine);
+  const endLine = toFiniteNonNegativeInt(fallbackEndLine);
   if (startLine > 0 && endLine > 0) {
     return { startLine, endLine };
   }
   const match = key.match(/:(\d+):(\d+)$/);
   if (match) {
     return {
-      startLine: Math.max(1, toNonNegativeInt(match[1])),
-      endLine: Math.max(1, toNonNegativeInt(match[2])),
+      startLine: Math.max(1, toFiniteNonNegativeInt(match[1])),
+      endLine: Math.max(1, toFiniteNonNegativeInt(match[2])),
     };
   }
   return { startLine: 1, endLine: 1 };

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
-  asDateTimestampMs,
+  isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { raceWithTimeoutAndAbort } from "./async.js";
@@ -94,9 +94,7 @@ export async function probeFeishu(
     setCachedProbeResult(cacheKey, { ok: false, appId: creds.appId, error }, PROBE_ERROR_TTL_MS);
   const cached = probeCache.get(cacheKey);
   if (cached) {
-    const now = asDateTimestampMs(Date.now());
-    const expiresAt = asDateTimestampMs(cached.expiresAt);
-    if (now !== undefined && expiresAt !== undefined && expiresAt > now) {
+    if (isFutureDateTimestampMs(cached.expiresAt)) {
       return cached.result;
     }
     probeCache.delete(cacheKey);

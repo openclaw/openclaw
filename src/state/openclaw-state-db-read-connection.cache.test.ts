@@ -307,3 +307,44 @@ it("pins audit schema facts and inspection to one admission snapshot", () => {
     peer.close();
   }
 });
+
+it("keeps Bun readers warm until pool retirement and reports replacement cleanup in the reply", () => {
+  const { root, pathname, read, workerRead, countOpens } = fixture();
+  vi.stubGlobal("process", {
+    ...process,
+    on: process.on.bind(process),
+    removeListener: process.removeListener.bind(process),
+    versions: { ...process.versions, bun: "1.4.2" },
+  });
+  try {
+    expect(workerRead({ type: "nodeHost.config" })).toMatchObject({
+      ok: true,
+      row: { updated_at_ms: 1 },
+    });
+    const previous = read(({ db }) => db);
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+    expect(previous.isOpen).toBe(true);
+    expect(workerRead({ type: "nodeHost.config" })).toMatchObject({
+      ok: true,
+      row: { updated_at_ms: 1 },
+    });
+    expect(countOpens()).toBe(1);
+
+    const replacementPath = path.join(root, "replacement.sqlite");
+    const replacement = sqlite.openNodeSqliteDatabase(replacementPath);
+    replacement.exec(
+      "CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER); INSERT INTO config_machine_state VALUES ('nodeHost.config', '2', 2)",
+    );
+    replacement.close();
+    fs.renameSync(pathname, path.join(root, "previous.sqlite"));
+    fs.renameSync(replacementPath, pathname);
+    expect(workerRead({ type: "nodeHost.config" })).toMatchObject({
+      ok: true,
+      row: { updated_at_ms: 2 },
+      nativeCleanupFailure: { error: undefined },
+    });
+    expect(previous.isOpen).toBe(false);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

@@ -11,7 +11,7 @@ scenario:
   objective: Verify a real QA-channel task reads its evidence, writes a status artifact, and reports only proof-backed Pending, Blocked, and Done claims.
   successCriteria:
     - The agent reads both seeded task files before writing the status artifact.
-    - The durable outbound tool trace records the ordered read, read, write sequence.
+    - Correlated logical tool results prove the ordered read, read, write sequence in direct and Code Mode execution.
     - The status artifact exists before the final channel reply.
     - Pending, Blocked, and Done claims match the artifact without overstating external progress.
   docsRefs:
@@ -19,6 +19,7 @@ scenario:
     - docs/channels/qa-channel.md
   codeRefs:
     - extensions/qa-channel/src/inbound.ts
+    - extensions/qa-lab/src/tool-activity.ts
     - extensions/qa-lab/src/providers/mock-openai/server.ts
     - src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts
     - src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
@@ -90,6 +91,15 @@ flow:
             - ref: env
             - 60000
         - call: reset
+        - set: sessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: transport.accountId, peer: { kind: 'direct', id: `dm:${config.conversationId}` }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+        - call: readSessionTranscriptSummary
+          args:
+            - ref: env
+            - ref: sessionKey
+            - allowEmpty: true
+          saveAs: baseline
         - forEach:
             items:
               expr: "Object.entries(config.workspaceFiles ?? {})"
@@ -149,6 +159,19 @@ flow:
         - set: normalizedArtifact
           value:
             expr: "normalizeLowercaseStringOrEmpty(artifact)"
+        - call: readSessionToolActivity
+          args:
+            - ref: env
+            - ref: sessionKey
+            - afterEventCursor:
+                ref: baseline.eventCursor
+          saveAs: toolActivity
+        - set: taskActivity
+          value:
+            expr: "toolActivity.filter((activity) => activity.kind === 'tool')"
+        - set: expectedTaskPaths
+          value:
+            expr: "['PERSONAL_TASK_LEDGER.md', 'FOLLOWTHROUGH_NOTE.md', config.artifactFile].map((file) => path.resolve(env.gateway.workspaceDir, file))"
         - assert:
             expr: "outbound.replyToId === inbound.id"
             message:
@@ -166,9 +189,12 @@ flow:
             message:
               expr: "`terminal task status overclaimed external progress: ${outbound.text}`"
         - assert:
-            expr: "JSON.stringify(outbound.toolCalls?.map((toolCall) => toolCall.name) ?? []) === JSON.stringify(['read', 'read', 'write'])"
+            expr: "taskActivity.length >= 3 && taskActivity.every((activity, index) => activity.successful && activity.toolName === (index === 2 ? 'write' : 'read') && typeof (activity.input?.path ?? activity.input?.file_path) === 'string' && path.resolve(env.gateway.workspaceDir, activity.input.path ?? activity.input.file_path) === expectedTaskPaths[Math.min(index, 2)])"
             message:
-              expr: "`expected real ordered read/read/write telemetry, got ${JSON.stringify(outbound.toolCalls ?? null)}`"
+              expr: "`expected successful task read/read/write followed only by artifact verification reads; logical=${JSON.stringify(taskActivity.map((activity) => ({ toolName: activity.toolName, completed: activity.completed, successful: activity.successful })))} raw=${JSON.stringify(outbound.toolCalls ?? null)}`"
+        - assert:
+            expr: "taskActivity.every((activity, index) => Number.isFinite(activity.startedAt) && Number.isFinite(activity.timestamp) && activity.startedAt >= inbound.timestamp && activity.timestamp >= activity.startedAt && activity.timestamp <= outbound.timestamp && (index === 0 || taskActivity[index - 1].timestamp < activity.startedAt || (taskActivity[index - 1].timestamp === activity.startedAt && taskActivity[index - 1].resultIndex <= activity.startAfterIndex)))"
+            message: "task tool results did not prove serial read/read/write completion before the terminal claim"
         - assert:
             expr: "JSON.stringify(outbound.toolCalls ?? []).includes('[redacted]') && !JSON.stringify(outbound.toolCalls ?? []).includes('PERSONAL_TASK_LEDGER.md') && !JSON.stringify(outbound.toolCalls ?? []).includes('FOLLOWTHROUGH_NOTE.md') && !JSON.stringify(outbound.toolCalls ?? []).includes(config.artifactFile)"
             message:
@@ -177,4 +203,4 @@ flow:
             expr: "artifactStat.mtimeMs <= outbound.timestamp"
             message:
               expr: "`final Done claim preceded its status artifact: artifactMtime=${artifactStat.mtimeMs} outboundTimestamp=${outbound.timestamp}`"
-      detailsExpr: "`${outbound.text}; artifactBeforeReply=${artifactStat.mtimeMs <= outbound.timestamp}; tools=${outbound.toolCalls?.map((toolCall) => toolCall.name).join(',') ?? 'missing'}`"
+      detailsExpr: "`${outbound.text}; artifactBeforeReply=${artifactStat.mtimeMs <= outbound.timestamp}; logicalTools=${taskActivity.map((activity) => activity.toolName).join(',')}; rawTools=${outbound.toolCalls?.map((toolCall) => toolCall.name).join(',') ?? 'missing'}`"

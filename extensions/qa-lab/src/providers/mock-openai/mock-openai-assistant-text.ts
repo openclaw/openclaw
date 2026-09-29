@@ -241,6 +241,9 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
     return `Protocol note: I checked memory and the project codename is ${orbitCode}.`;
   }
   if (isSnackRecallPrompt(prompt) && snackPreference) {
+    if (prompt.includes("Reply with only the snack preference, verbatim")) {
+      return snackPreference;
+    }
     return `Protocol note: you usually want ${snackPreference} for QA movie night.`;
   }
   if (isSnackRecallPrompt(prompt)) {

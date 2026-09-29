@@ -1,4 +1,5 @@
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import type { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
@@ -13,6 +14,7 @@ import type * as records from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import {
   authorizeIncognitoSessionTarget,
+  authorizeSessionAgentRun,
   resolveSessionVisibility,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
@@ -120,6 +122,15 @@ export function prepareProjectedSessionPresentation(
         }
       : {}),
     sharingRole: sharing.roleForTarget(value),
+    sendDisabledReason:
+      authorizeSessionAgentRun(
+        { cfg: policyConfig, client: client ?? null, target: value },
+        { policy: sharing.policy },
+      )?.message ??
+      sharing.authorizeTarget(value)?.message ??
+      (resolveSendPolicy({ cfg, entry: value.entry, sessionKey: value.canonicalKey }) === "deny"
+        ? "send blocked by session policy"
+        : null),
   });
   const present = (
     captured: records.MaterializedRow,

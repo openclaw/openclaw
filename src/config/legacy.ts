@@ -25,6 +25,15 @@ export function findLegacyConfigIssues(
   extraRules: LegacyConfigRule[] = [],
   _touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
 ): LegacyConfigIssue[] {
+  return findLegacyConfigRuleIssues(raw, [...LEGACY_CONFIG_RULES, ...extraRules], sourceRaw);
+}
+
+/** Evaluate exactly the rules selected by the migration owner. */
+export function findLegacyConfigRuleIssues(
+  raw: unknown,
+  rules: readonly LegacyConfigRule[],
+  sourceRaw?: unknown,
+): LegacyConfigIssue[] {
   if (!raw || typeof raw !== "object") {
     return [];
   }
@@ -32,7 +41,7 @@ export function findLegacyConfigIssues(
   const sourceRoot =
     sourceRaw && typeof sourceRaw === "object" ? (sourceRaw as Record<string, unknown>) : root;
   const issues: LegacyConfigIssue[] = [];
-  for (const rule of [...LEGACY_CONFIG_RULES, ...extraRules]) {
+  for (const rule of rules) {
     const cursor = getPathValue(root, rule.path);
     if (cursor !== undefined && (!rule.match || rule.match(cursor, root))) {
       if (rule.requireSourceLiteral) {

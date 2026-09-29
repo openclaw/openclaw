@@ -60,7 +60,6 @@ async function registerHandlers(params: { runtime?: RuntimeEnv } = {}) {
       );
     },
     getBotOpenId: () => "ou_bot",
-    getBotName: () => "Bot",
   });
 }
 

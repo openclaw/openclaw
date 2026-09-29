@@ -1,4 +1,3 @@
-/** Persists usage, cost, and model metadata after reply runs. */
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { clearCliSession } from "../../agents/cli-session.js";
@@ -31,46 +30,22 @@ function applyCliSessionClearToSessionPatch(
   patch: Partial<SessionEntry>,
 ): Partial<SessionEntry> {
   const cliProvider = params.providerUsed ?? entry.modelProvider;
-  if (!cliProvider) {
+  if (!cliProvider || params.clearCliSessionBinding !== true) {
     return patch;
   }
-  if (params.clearCliSessionBinding === true) {
-    const nextEntry = { ...entry, ...patch };
-    clearCliSession(nextEntry, cliProvider);
-    return {
-      ...patch,
-      cliSessionIds: nextEntry.cliSessionIds,
-      cliSessionBindings: nextEntry.cliSessionBindings,
-      claudeCliSessionId: nextEntry.claudeCliSessionId,
-    };
-  }
-  return patch;
+  const nextEntry = { ...entry, ...patch };
+  clearCliSession(nextEntry, cliProvider);
+  return {
+    ...patch,
+    cliSessionIds: nextEntry.cliSessionIds,
+    cliSessionBindings: nextEntry.cliSessionBindings,
+    claudeCliSessionId: nextEntry.claudeCliSessionId,
+  };
 }
 
 function resolveNonNegativeTokenCount(value: number | undefined): number | undefined {
   const resolved = asNonNegativeFiniteNumber(value);
   return resolved === undefined ? undefined : Math.floor(resolved);
-}
-
-function estimateSessionRunCostUsd(params: {
-  cfg: OpenClawConfig;
-  agentDir?: string;
-  usage?: NormalizedUsage;
-  providerUsed?: string;
-  modelUsed?: string;
-}): number | undefined {
-  if (!hasBillableUsage(params.usage)) {
-    return undefined;
-  }
-  return asNonNegativeFiniteNumber(
-    estimateAggregateUsageCost({
-      usage: params.usage,
-      provider: params.providerUsed,
-      model: params.modelUsed,
-      config: params.cfg,
-      agentDir: params.agentDir,
-    }),
-  );
 }
 
 /** Persists usage accounting and selected runtime metadata to the session store. */
@@ -180,15 +155,18 @@ export async function persistSessionUsageUpdate(params: {
                   promptTokens: params.promptTokens,
                 })
               : undefined;
-          const runEstimatedCostUsd = preserveUserFacingRunState
-            ? undefined
-            : estimateSessionRunCostUsd({
-                cfg,
-                agentDir: params.agentDir,
-                usage: params.usage,
-                providerUsed: params.providerUsed ?? entry.modelProvider,
-                modelUsed: params.modelUsed ?? entry.model,
-              });
+          const runEstimatedCostUsd =
+            preserveUserFacingRunState || !hasBillableUsage(params.usage)
+              ? undefined
+              : asNonNegativeFiniteNumber(
+                  estimateAggregateUsageCost({
+                    config: cfg,
+                    agentDir: params.agentDir,
+                    usage: params.usage,
+                    provider: params.providerUsed ?? entry.modelProvider,
+                    model: params.modelUsed ?? entry.model,
+                  }),
+                );
           const patch: Partial<SessionEntry> = {
             modelProvider: preserveSessionModelState
               ? entry.modelProvider

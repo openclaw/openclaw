@@ -35,7 +35,11 @@ import {
   scheduleRequesterSettleWake,
 } from "./subagent-registry-lifecycle-wake.js";
 import { settleRequesterTurnAfterSessionSpawns } from "./subagent-registry-requester-yield.js";
-import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import type {
+  SubagentCompletionRequest,
+  SubagentRunRecord,
+  SubagentSessionEffects,
+} from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
 export type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle-context.js";
@@ -60,7 +64,10 @@ export class SubagentLifecycleController {
   readonly scheduledRequesterSettleWakeTimers = new Map<string, ScheduledRequesterSettleWake>();
   private readonly terminalCompletionLocks = new Map<string, Promise<void>>();
   private readonly terminalGenerations = new WeakMap<SubagentRunRecord, number>();
-  private readonly terminalSessionEffects = new WeakMap<SubagentRunRecord, () => boolean>();
+  private readonly terminalSessionEffects = new WeakMap<
+    SubagentRunRecord,
+    SubagentSessionEffects
+  >();
   private readonly cleanupGenerations = new WeakMap<SubagentRunRecord, number>();
   readonly progressEndedEntries = new WeakSet<SubagentRunRecord>();
   readonly cleanupFailureCounts = new WeakMap<SubagentRunRecord, number>();
@@ -78,17 +85,40 @@ export class SubagentLifecycleController {
     return latest !== null && compareSubagentRunGeneration(latest, entry) > 0;
   }
 
-  bindTerminalSessionEffects(entry: SubagentRunRecord, isCurrent?: () => boolean): void {
-    if (isCurrent) {
-      this.terminalSessionEffects.set(entry, isCurrent);
+  bindTerminalSessionEffects(entry: SubagentRunRecord, effects?: SubagentSessionEffects): void {
+    if (effects) {
+      this.terminalSessionEffects.set(entry, effects);
     }
   }
 
-  shouldSuppressSessionEffects(entry: SubagentRunRecord): boolean {
+  async shouldSuppressSessionEffects(
+    entry: SubagentRunRecord,
+    prospectiveEffects?: SubagentSessionEffects,
+  ): Promise<boolean> {
+    const boundEffects = this.terminalSessionEffects.get(entry);
+    const effects = prospectiveEffects ?? boundEffects;
     return (
       shouldSuppressSubagentRecoverySessionEffects(entry) ||
-      this.terminalSessionEffects.get(entry)?.() === false
+      (await effects?.isCurrent()) === false ||
+      this.terminalSessionEffects.get(entry) !== boundEffects ||
+      shouldSuppressSubagentRecoverySessionEffects(entry)
     );
+  }
+
+  sessionEffectsHostCurrent(entry: SubagentRunRecord): boolean {
+    if (shouldSuppressSubagentRecoverySessionEffects(entry)) {
+      return false;
+    }
+    try {
+      this.terminalSessionEffects.get(entry)?.assertHostCurrent();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  getSessionEffects(entry: SubagentRunRecord): SubagentSessionEffects | undefined {
+    return this.terminalSessionEffects.get(entry);
   }
 
   async acquireTerminalCompletionLock(runId: string): Promise<() => void> {
@@ -200,9 +230,9 @@ export class SubagentLifecycleController {
   runRequesterSettleWake = (
     entry: SubagentRunRecord,
     run: () => Promise<unknown>,
+    isCurrent: () => boolean,
   ): Promise<unknown> => {
-    const runCurrent = async () =>
-      this.options.runs.get(entry.runId) === entry ? run() : undefined;
+    const runCurrent = async () => (isCurrent() ? run() : undefined);
     // Retry timers can outlive their original async scope. Reserve a detached
     // Gateway root before the limiter, then revalidate row ownership when the
     // execution slot opens; the queued wait still counts during restart drain.
@@ -228,7 +258,10 @@ export class SubagentLifecycleController {
     this.scheduledRequesterSettleWakeRuns.delete(entry);
     // Retryable durable wakes remain startup recovery. Once settlement retires
     // that state, the same run id must return to the ordinary live path.
-    if (!this.options.runs.get(entry.runId)?.requesterSettleWake) {
+    if (
+      !this.options.runs.get(entry.runId)?.requesterSettleWake &&
+      !this.pendingRequesterSettleWakeCommits.get(entry)?.isCurrent(entry)
+    ) {
       this.restoredRequesterSettleWakeRuns.delete(entry.runId);
     }
   };

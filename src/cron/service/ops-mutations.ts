@@ -13,6 +13,7 @@ import {
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
+import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { withCronMutationCommitHook } from "../mutation-completion.js";
 import { normalizeCronRunJobId } from "../run-history.js";
@@ -55,7 +56,7 @@ import {
   registerPendingCronSessionCleanup,
 } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
-import { resolveCurrentDefaultAgentId, resolveEffectiveJobAgentId } from "./ops-shared.js";
+import { resolveCurrentDefaultAgentId } from "./ops-shared.js";
 import {
   cronRunReceiptMutationHooks,
   prepareCronRunReceiptOwnerMutationHooks,
@@ -212,7 +213,7 @@ export async function add(
       );
     }
     await ensureLoadedForOperation(state);
-    const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
+    const agentId = resolveCronJobEffectiveAgentId(input, resolveCurrentDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
       throw new Error(describeUnavailableCronAgent(agentId));
     }
@@ -423,7 +424,7 @@ async function updateLoadedJob(params: {
     configuredChannels,
   });
   if (patch.agentId !== undefined) {
-    const agentId = resolveEffectiveJobAgentId(nextJob, resolveCurrentDefaultAgentId(state));
+    const agentId = resolveCronJobEffectiveAgentId(nextJob, resolveCurrentDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
       throw new Error(describeUnavailableCronAgent(agentId));
     }
@@ -556,7 +557,8 @@ export async function remove(
       transactionHooks: withCronMutationCommitHook("cron.remove"),
     });
     const activeMarker = noteActiveCronJobRemoval(id, opts?.commitGuard);
-    const agentId = resolveEffectiveJobAgentId(removedJob, resolveCurrentDefaultAgentId(state));
+    const activeRunCancellationRequested = activeMarker?.cancellation?.kind === "requested";
+    const agentId = resolveCronJobEffectiveAgentId(removedJob, resolveCurrentDefaultAgentId(state));
     const sessionStorePath =
       state.deps.resolveSessionStorePath?.(agentId) ?? state.deps.sessionStorePath;
     if (
@@ -580,7 +582,11 @@ export async function remove(
     pruneCronJobScratchAfterCommit(state, [id]);
     armTimer(state);
     emit(state, { jobId: id, action: "removed", job: removedJob });
-    return { ok: true, removed: true } as const;
+    return {
+      ok: true,
+      removed: true,
+      ...(activeRunCancellationRequested ? { activeRunCancellationRequested: true as const } : {}),
+    } as const;
   });
   if (!sessionCleanup) {
     return result;
@@ -635,14 +641,14 @@ export async function removeAgentJobsTransactional<T>(
     }
     const defaultAgentId = resolveCurrentDefaultAgentId(state);
     const removedJobs = state.store.jobs.filter(
-      (job) => resolveEffectiveJobAgentId(job, defaultAgentId) === id,
+      (job) => resolveCronJobEffectiveAgentId(job, defaultAgentId) === id,
     );
     if (removedJobs.length === 0) {
       return await commit();
     }
     const snapshot = snapshotStoreForRollback(state);
     state.store.jobs = state.store.jobs.filter(
-      (job) => resolveEffectiveJobAgentId(job, defaultAgentId) !== id,
+      (job) => resolveCronJobEffectiveAgentId(job, defaultAgentId) !== id,
     );
     const postPersistNotifications: DeferredCronNotifications = [];
     recomputeNextRunsForMaintenance(state, { deferredNotifications: postPersistNotifications });

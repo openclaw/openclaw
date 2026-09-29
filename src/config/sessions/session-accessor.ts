@@ -65,7 +65,6 @@ export type {
   SessionEntryPatchOptions,
   SessionEntryPatchResult,
   SessionEntryReadScope,
-  SessionEntryReadSource,
   SessionEntryReadView,
   SessionEntryReplacement,
   SessionEntryReplacementSnapshot,
@@ -233,7 +232,6 @@ export {
 export {
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,
-  persistSessionResetLifecycle,
   SessionInitializationAgentScopeMismatchError,
 } from "./session-accessor.reset.js";
 export {

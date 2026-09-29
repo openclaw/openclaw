@@ -302,8 +302,8 @@ export function backfillCronRunLogEntryJson(db: DatabaseSync): void {
   }
 }
 
-function textField(record: Record<string, unknown>, key: string): string | null {
-  const value = record[key];
+function textField(record: Record<string, unknown> | null, key: string): string | null {
+  const value = record?.[key];
   return typeof value === "string" && value.trim() ? value : null;
 }
 
@@ -349,13 +349,13 @@ export function backfillCronJobsFromJobJson(db: DatabaseSync): void {
     // Legacy defaults are repaired only in the query-bearing projection; job_json owns config.
     const schedule = asNullableRecord(job.schedule);
     const payload = asNullableRecord(job.payload);
-    const scheduleKind = textField(schedule ?? {}, "kind");
-    const payloadKind = textField(payload ?? {}, "kind");
-    const isAt = scheduleKind === "at" && textField(schedule ?? {}, "at");
-    const isEvery = scheduleKind === "every" && asFiniteNumber((schedule ?? {}).everyMs) != null;
-    const isCron = scheduleKind === "cron" && textField(schedule ?? {}, "expr");
-    const isSystemEvent = payloadKind === "systemEvent" && textField(payload ?? {}, "text");
-    const isAgentTurn = payloadKind === "agentTurn" && textField(payload ?? {}, "message");
+    const scheduleKind = textField(schedule, "kind");
+    const payloadKind = textField(payload, "kind");
+    const isAt = scheduleKind === "at" && textField(schedule, "at");
+    const isEvery = scheduleKind === "every" && asFiniteNumber(schedule?.everyMs) != null;
+    const isCron = scheduleKind === "cron" && textField(schedule, "expr");
+    const isSystemEvent = payloadKind === "systemEvent" && textField(payload, "text");
+    const isAgentTurn = payloadKind === "agentTurn" && textField(payload, "message");
     if (
       !schedule ||
       !payload ||
@@ -431,16 +431,14 @@ export function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): voi
     const deliveryContext = asNullableRecord(entry.deliveryContext);
     update.run(
       textField(entry, "kind"),
-      textField(entry, "sessionKey") ?? (session ? textField(session, "key") : null),
+      textField(entry, "sessionKey") ?? textField(session, "key"),
       textField(entry, "channel") ??
-        (route ? textField(route, "channel") : null) ??
-        (deliveryContext ? textField(deliveryContext, "channel") : null),
-      textField(entry, "to") ??
-        (route ? textField(route, "to") : null) ??
-        (deliveryContext ? textField(deliveryContext, "to") : null),
+        textField(route, "channel") ??
+        textField(deliveryContext, "channel"),
+      textField(entry, "to") ?? textField(route, "to") ?? textField(deliveryContext, "to"),
       textField(entry, "accountId") ??
-        (route ? textField(route, "accountId") : null) ??
-        (deliveryContext ? textField(deliveryContext, "accountId") : null),
+        textField(route, "accountId") ??
+        textField(deliveryContext, "accountId"),
       asSafeIntegerInRange(entry.retryCount, { min: 0 }) ?? 0,
       asSafeIntegerInRange(entry.lastAttemptAt, { min: 0 }) ?? null,
       textField(entry, "lastError"),
@@ -451,6 +449,3 @@ export function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): voi
     );
   }
 }
-
-// The caller owns the state.schema.ensure transaction so every probe, DDL
-// change, and backfill observes one authoritative schema across processes.

@@ -74,67 +74,59 @@ export async function runOpenClawStateWorkerOperation<T>(
   operation: (scope: DomainScope) => Promise<T>,
   options?: OperationOptions,
 ): Promise<T | undefined> {
-  return runWithCapturedWorkerContext(context, () =>
-    runAdmittedOpenClawStateWorkerOperation(context, operation, options),
-  );
-}
-
-async function runAdmittedOpenClawStateWorkerOperation<T>(
-  context: OpenClawStateWorkerContext,
-  operation: (scope: DomainScope) => Promise<T>,
-  options?: OperationOptions,
-): Promise<T | undefined> {
-  try {
-    context.admission.assertCurrent();
-    options?.assertCurrent?.();
-    const failure = await getOpenClawStateDatabaseTerminalFailureAsync(context);
-    if (failure) {
-      throw failure;
-    }
-    context.admission.assertCurrent();
-    options?.assertCurrent?.();
-    const store = await owner().open(context, options);
-    context.admission.assertCurrent();
-    if (!store) {
-      if (options?.existingOnly) {
-        return undefined;
-      }
-      throw new Error("Canonical shared-state worker did not open its database");
-    }
-    const releaseOperation = owner().retainOperation(store);
+  return runWithCapturedWorkerContext(context, async () => {
     try {
       context.admission.assertCurrent();
       options?.assertCurrent?.();
-      return await runWithOpenClawStateWorkerStore(
-        store,
-        context,
-        operation,
-        options?.assertCurrent,
-        options?.createAdmission,
-      );
-    } finally {
-      // The owner observes retirement; other clients may await this operation's result.
-      void releaseOperation();
-    }
-  } catch (error) {
-    const hydrated = hydrateOpenClawStateWorkerError(error);
-    const failure = findOpenClawStateDatabaseFailure(hydrated, context.admission.databasePath);
-    if (
-      failure &&
-      !openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(
-        context.admission.databasePath,
-      )
-    ) {
+      const failure = await getOpenClawStateDatabaseTerminalFailureAsync(context);
+      if (failure) {
+        throw failure;
+      }
+      context.admission.assertCurrent();
+      options?.assertCurrent?.();
+      const store = await owner().open(context, options);
+      context.admission.assertCurrent();
+      if (!store) {
+        if (options?.existingOnly) {
+          return undefined;
+        }
+        throw new Error("Canonical shared-state worker did not open its database");
+      }
+      const releaseOperation = owner().retainOperation(store);
       try {
         context.admission.assertCurrent();
-      } catch {
-        // A retired generation cannot publish a refusal against its replacement.
-        throw hydrated;
+        options?.assertCurrent?.();
+        return await runWithOpenClawStateWorkerStore(
+          store,
+          context,
+          operation,
+          options?.assertCurrent,
+          options?.createAdmission,
+        );
+      } finally {
+        // The owner observes retirement; other clients may await this operation's result.
+        void releaseOperation();
       }
-      recordOpenClawStateDatabaseOpenFailure(context.admission.databasePath, failure);
+    } catch (error) {
+      const hydrated = hydrateOpenClawStateWorkerError(error);
+      const failure = findOpenClawStateDatabaseFailure(hydrated, context.admission.databasePath);
+      if (
+        failure &&
+        !openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(
+          context.admission.databasePath,
+        )
+      ) {
+        try {
+          context.admission.assertCurrent();
+        } catch {
+          // A retired generation cannot publish a refusal against its replacement.
+          throw hydrated;
+        }
+        recordOpenClawStateDatabaseOpenFailure(context.admission.databasePath, failure);
+      }
+      throw hydrated;
     }
-    throw hydrated;
-  }
+  });
 }
 
 /** Inspect the existing file without recursively admitting a domain operation. */
@@ -145,34 +137,24 @@ export async function inspectOpenClawStateDatabase(
     input: OpenClawStateWorkerInspectionOperations["database.generationMatches"]["input"];
   },
 ): Promise<boolean | undefined> {
-  return runWithCapturedWorkerContext(context, () =>
-    inspectAdmittedOpenClawStateDatabase(context, command),
-  );
-}
-
-async function inspectAdmittedOpenClawStateDatabase(
-  context: OpenClawStateWorkerContext,
-  command: {
-    type: "database.generationMatches";
-    input: OpenClawStateWorkerInspectionOperations["database.generationMatches"]["input"];
-  },
-): Promise<boolean | undefined> {
-  try {
-    const store = await owner().open(context, { existingOnly: true });
-    context.admission.assertCurrent();
-    if (!store) {
-      return undefined;
-    }
-    const releaseOperation = owner().retainOperation(store);
+  return runWithCapturedWorkerContext(context, async () => {
     try {
+      const store = await owner().open(context, { existingOnly: true });
       context.admission.assertCurrent();
-      return await runWithOpenClawStateWorkerStore(store, context, (scope) =>
-        scope.execute(command),
-      );
-    } finally {
-      void releaseOperation();
+      if (!store) {
+        return undefined;
+      }
+      const releaseOperation = owner().retainOperation(store);
+      try {
+        context.admission.assertCurrent();
+        return await runWithOpenClawStateWorkerStore(store, context, (scope) =>
+          scope.execute(command),
+        );
+      } finally {
+        void releaseOperation();
+      }
+    } catch (error) {
+      throw hydrateOpenClawStateWorkerError(error);
     }
-  } catch (error) {
-    throw hydrateOpenClawStateWorkerError(error);
-  }
+  });
 }

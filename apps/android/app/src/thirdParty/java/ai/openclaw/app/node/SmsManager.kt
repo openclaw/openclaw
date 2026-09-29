@@ -395,14 +395,6 @@ class SmsManager(
       }
     }
 
-    internal fun materializeByPhoneCandidate(
-      candidates: MutableMap<String, SmsMessage>,
-      identityKey: String,
-      message: SmsMessage,
-    ) {
-      candidates[identityKey] = message
-    }
-
     internal fun collectMixedByPhoneCandidate(
       topCandidates: MutableList<Pair<String, SmsMessage>>,
       materializedCandidates: MutableMap<String, SmsMessage>,
@@ -412,7 +404,7 @@ class SmsManager(
       reviewMode: Boolean,
     ) {
       if (reviewMode) {
-        materializeByPhoneCandidate(materializedCandidates, identityKey, message)
+        materializedCandidates[identityKey] = message
       } else {
         upsertTopDateCandidates(topCandidates, identityKey, message, maxCandidates)
       }
@@ -490,29 +482,15 @@ class SmsManager(
     }
   }
 
-  fun hasSmsPermission(): Boolean =
-    ContextCompat.checkSelfPermission(
-      context,
-      Manifest.permission.SEND_SMS,
-    ) == PackageManager.PERMISSION_GRANTED
+  fun hasSmsPermission(): Boolean = hasPermission(Manifest.permission.SEND_SMS)
 
-  fun hasReadSmsPermission(): Boolean =
-    ContextCompat.checkSelfPermission(
-      context,
-      Manifest.permission.READ_SMS,
-    ) == PackageManager.PERMISSION_GRANTED
+  fun hasReadSmsPermission(): Boolean = hasPermission(Manifest.permission.READ_SMS)
 
-  fun hasReadContactsPermission(): Boolean =
-    ContextCompat.checkSelfPermission(
-      context,
-      Manifest.permission.READ_CONTACTS,
-    ) == PackageManager.PERMISSION_GRANTED
+  fun hasReadContactsPermission(): Boolean = hasPermission(Manifest.permission.READ_CONTACTS)
 
   fun canSendSms(): Boolean = hasSmsPermission() && hasTelephonyFeature()
 
-  fun canSearchSms(): Boolean = hasReadSmsPermission() && hasTelephonyFeature()
-
-  fun canReadSms(): Boolean = canSearchSms()
+  fun canReadSms(): Boolean = hasReadSmsPermission() && hasTelephonyFeature()
 
   fun hasTelephonyFeature(): Boolean = context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
 
@@ -662,8 +640,10 @@ class SmsManager(
       }
     }
 
+  private fun hasPermission(permission: String): Boolean = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
   private suspend fun ensurePermission(permission: String): Boolean {
-    if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) return true
+    if (hasPermission(permission)) return true
     val requester = permissionRequester ?: return false
     return requester.requestIfMissing(listOf(permission))[permission] == true
   }

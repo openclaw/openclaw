@@ -36,9 +36,6 @@ function formatCharsAndTokens(chars: number): string {
 }
 
 function parseContextArgs(commandBodyNormalized: string): string {
-  if (commandBodyNormalized === "/context") {
-    return "";
-  }
   if (commandBodyNormalized.startsWith("/context ")) {
     return commandBodyNormalized.slice(8).trim();
   }
@@ -295,15 +292,14 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const sandboxLine = `Sandbox: mode=${report.sandbox?.mode ?? "unknown"} sandboxed=${report.sandbox?.sandboxed ?? false}`;
   const toolSchemaLine = `Tool schemas (JSON): ${formatCharsAndTokens(report.tools.schemaChars)} (counts toward context; not shown as text)`;
   const toolListLine = `Tool list (system prompt text): ${formatCharsAndTokens(report.tools.listChars)}`;
-  const skillNameSet = new Set(report.skills.entries.map((s) => s.name));
-  const skillNames = Array.from(skillNameSet);
+  const skillNames = [...new Set(report.skills.entries.map((s) => s.name))];
   const toolNames = report.tools.entries.map((t) => t.name);
   const formatNameList = (names: string[], cap: number) =>
     names.length <= cap
       ? names.join(", ")
       : `${names.slice(0, cap).join(", ")}, … (+${names.length - cap} more)`;
-  const skillsLine = `Skills list (system prompt text): ${formatCharsAndTokens(report.skills.promptChars)} (${skillNameSet.size} skills)`;
-  const skillsNamesLine = skillNameSet.size
+  const skillsLine = `Skills list (system prompt text): ${formatCharsAndTokens(report.skills.promptChars)} (${skillNames.length} skills)`;
+  const skillsNamesLine = skillNames.length
     ? `Skills: ${formatNameList(skillNames, 20)}`
     : "Skills: (none)";
   const toolsNamesLine = toolNames.length
@@ -334,24 +330,15 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     bootstrapTotalMaxChars,
   });
   const truncatedBootstrapFiles = bootstrapAnalysis.truncatedFiles;
-  const truncationCauseCounts = truncatedBootstrapFiles.reduce(
-    (acc, file) => {
-      for (const cause of file.causes) {
-        if (cause === "per-file-limit") {
-          acc.perFile += 1;
-        } else if (cause === "total-limit") {
-          acc.total += 1;
-        }
-      }
-      return acc;
-    },
-    { perFile: 0, total: 0 },
-  );
+  const perFile = truncatedBootstrapFiles.filter((file) =>
+    file.causes.includes("per-file-limit"),
+  ).length;
+  const total = truncatedBootstrapFiles.filter((file) =>
+    file.causes.includes("total-limit"),
+  ).length;
   const truncationCauseParts = [
-    truncationCauseCounts.perFile > 0
-      ? `${truncationCauseCounts.perFile} file(s) exceeded max/file`
-      : null,
-    truncationCauseCounts.total > 0 ? `${truncationCauseCounts.total} file(s) hit max/total` : null,
+    perFile > 0 ? `${perFile} file(s) exceeded max/file` : null,
+    total > 0 ? `${total} file(s) hit max/total` : null,
   ].filter(Boolean);
   const bootstrapWarningLines =
     truncatedBootstrapFiles.length > 0

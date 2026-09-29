@@ -97,23 +97,19 @@ function applyNodeAgentOptions(agent: HttpAgent, options: NodeProxyAgentOptions 
   if (typeof options.keepAlive === "boolean") {
     agentWithOptions.keepAlive = options.keepAlive;
   }
-  if (typeof options.keepAliveMsecs === "number") {
-    agentWithOptions.keepAliveMsecs = options.keepAliveMsecs;
-  }
-  if (typeof options.maxFreeSockets === "number") {
-    agentWithOptions.maxFreeSockets = options.maxFreeSockets;
-  }
-  if (typeof options.maxSockets === "number") {
-    agentWithOptions.maxSockets = options.maxSockets;
-  }
-  if (typeof options.maxTotalSockets === "number") {
-    agentWithOptions.maxTotalSockets = options.maxTotalSockets;
+  for (const key of [
+    "keepAliveMsecs",
+    "maxFreeSockets",
+    "maxSockets",
+    "maxTotalSockets",
+    "timeout",
+  ] as const) {
+    if (typeof options[key] === "number") {
+      agentWithOptions[key] = options[key];
+    }
   }
   if (options.scheduling === "fifo" || options.scheduling === "lifo") {
     agentWithOptions.scheduling = options.scheduling;
-  }
-  if (typeof options.timeout === "number") {
-    agentWithOptions.timeout = options.timeout;
   }
 }
 

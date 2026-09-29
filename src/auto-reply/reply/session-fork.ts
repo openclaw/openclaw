@@ -108,18 +108,14 @@ function normalizeForkTarget(params: { canonicalKey: string; storeKeys?: readonl
   canonicalKey: string;
   storeKeys: string[];
 } {
-  const keys = new Set<string>();
-  const remember = (value: string) => {
-    const trimmed = value.trim();
-    if (trimmed) {
-      keys.add(trimmed);
-    }
+  return {
+    canonicalKey: params.canonicalKey,
+    storeKeys: [
+      ...new Set(
+        [params.canonicalKey, ...(params.storeKeys ?? [])].map((key) => key.trim()).filter(Boolean),
+      ),
+    ],
   };
-  remember(params.canonicalKey);
-  for (const key of params.storeKeys ?? []) {
-    remember(key);
-  }
-  return { canonicalKey: params.canonicalKey, storeKeys: [...keys] };
 }
 
 /**

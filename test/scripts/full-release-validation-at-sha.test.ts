@@ -190,6 +190,7 @@ function createDispatchFixture(
     witnessOverrides?: Record<string, unknown>;
     witnessInputs?: Record<string, unknown>;
     witnessMissing?: boolean;
+    witnessMissingReads?: number;
     witnessDuplicate?: boolean;
     ghRoute?: "path" | "explicit";
     tokenPresent?: boolean;
@@ -236,6 +237,7 @@ function createDispatchFixture(
   const pathGhCallsPath = join(root, "path-gh-calls.jsonl");
   const parentRunIndexPath = join(root, "parent-run-index.txt");
   const runDiscoveryIndexPath = join(root, "run-discovery-index.txt");
+  const witnessReadIndexPath = join(root, "witness-read-index.txt");
   const acceptedRunPath = join(root, "accepted-run.json");
   const artifactFixturePath = join(root, "artifact-fixture.cjs");
   const fetchCallsPath = join(root, "fetch-calls.txt");
@@ -649,7 +651,11 @@ if (args[0] === "api" && method === "POST" && endpoint.endsWith("/git/refs")) {
   });
 } else if (args[0] === "api" && endpoint.endsWith("/artifacts") && (fields.get("name") || "").startsWith("full-release-dispatch-inputs-")) {
   require(${JSON.stringify(artifactFixturePath)})().then(({ metadata }) => {
-    const artifacts = ${JSON.stringify(options.witnessMissing ?? false)} ? []
+    const witnessReads = fs.existsSync(${JSON.stringify(witnessReadIndexPath)})
+      ? Number(fs.readFileSync(${JSON.stringify(witnessReadIndexPath)}, "utf8")) : 0;
+    fs.writeFileSync(${JSON.stringify(witnessReadIndexPath)}, String(witnessReads + 1));
+    const artifacts = ${JSON.stringify(options.witnessMissing ?? false)} ||
+      witnessReads < ${JSON.stringify(options.witnessMissingReads ?? 0)} ? []
       : ${JSON.stringify(options.witnessDuplicate ?? false)} ? [metadata, metadata] : [metadata];
     console.log(JSON.stringify({ total_count: artifacts.length, artifacts }));
   });
@@ -1114,7 +1120,9 @@ describe("full-release-validation-at-sha", () => {
     const readVersion = (version: string) => () => JSON.stringify({ version });
 
     expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-beta.4"))).toBe("beta");
-    expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-alpha.4"))).toBe("beta");
+    expect(() => releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-alpha.4"))).toThrow(
+      "Alpha releases are retired;",
+    );
     expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1"))).toBe("stable");
     expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-1"))).toBe("stable");
   });
@@ -1487,6 +1495,30 @@ describe("full-release-validation-at-sha", () => {
       expect(
         calls.filter((args) => ghApiEndpoint(args).endsWith("/actions/workflows/17/runs")),
       ).toHaveLength(4);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("keeps waiting while the exact run is queued before its witness upload", () => {
+    const queued = { conclusion: null, status: "queued" };
+    const fixture = createDispatchFixture({
+      dispatchReturnsRunUrl: false,
+      parentRunStates: [
+        ...Array.from({ length: 6 }, () => queued),
+        { conclusion: "success", status: "completed" },
+      ],
+      witnessMissingReads: 6,
+    });
+    try {
+      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toContain("dispatch=pending-witness: run 123 (queued)");
+      expect(fixture.readWaits()).toEqual([30_000, 60_000, 120_000, 120_000, 120_000, 120_000]);
+      expect(JSON.parse(readFileSync(fixture.requestPath(), "utf8"))).toMatchObject({
+        phase: "observed",
+        run: { id: 123, attempt: 1 },
+      });
     } finally {
       fixture.cleanup();
     }

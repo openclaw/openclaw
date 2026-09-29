@@ -131,17 +131,7 @@ export function resolveMemoryFallbackProviderRequest(params: {
   cfg: OpenClawConfig;
   settings: ResolvedMemorySearchConfig;
   currentProviderId: string | null;
-}): {
-  provider: string;
-  model: string;
-  remote: ResolvedMemorySearchConfig["remote"];
-  inputType: ResolvedMemorySearchConfig["inputType"];
-  queryInputType: ResolvedMemorySearchConfig["queryInputType"];
-  documentInputType: ResolvedMemorySearchConfig["documentInputType"];
-  outputDimensionality: ResolvedMemorySearchConfig["outputDimensionality"];
-  fallback: "none";
-  local: ResolvedMemorySearchConfig["local"];
-} | null {
+}) {
   const fallback = params.settings.fallback;
   if (
     !fallback ||
@@ -159,7 +149,7 @@ export function resolveMemoryFallbackProviderRequest(params: {
     queryInputType: params.settings.queryInputType,
     documentInputType: params.settings.documentInputType,
     outputDimensionality: params.settings.outputDimensionality,
-    fallback: "none",
+    fallback: "none" as const,
     local: params.settings.local,
   };
 }
