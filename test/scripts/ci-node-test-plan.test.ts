@@ -4021,6 +4021,35 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       createNodeTestShards({ includeReleaseOnlyPluginShards: false }),
     );
   });
+  it.each([
+    {
+      owner: "infra",
+      prefix: "core-runtime-infra-",
+      config: "test/vitest/vitest.infra.config.ts",
+      expectedFiles: () => [
+        ...new Set([...listTestFiles("src/infra"), ...databaseWorkerCoreTestFiles]),
+      ],
+    },
+    {
+      owner: "cron",
+      prefix: "core-runtime-cron-",
+      config: undefined,
+      expectedFiles: () => listTestFiles("src/cron"),
+    },
+  ])(
+    "covers every $owner test exactly once across split shards",
+    ({ prefix, config, expectedFiles }) => {
+      const actual = defaultShards
+        .filter((shard) => shard.shardName.startsWith(prefix))
+        .filter((shard) => !config || shard.configs.includes(config))
+        .flatMap((shard) => shard.includePatterns ?? [])
+        .toSorted((a, b) => a.localeCompare(b));
+
+      expect(actual).toEqual(expectedFiles().toSorted((a, b) => a.localeCompare(b)));
+      expect(new Set(actual).size).toBe(actual.length);
+    },
+  );
+
   it("covers every auto-reply reply test exactly once across split shards", () => {
     const actual = defaultShards
       .filter((shard) => shard.shardName.startsWith("auto-reply-reply-"))
