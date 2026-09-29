@@ -192,8 +192,9 @@ request matches its filters. Disabling Slack exec approvals does not disable
 native plugin approval delivery enabled through `approvals.plugin`, which uses
 Slack plugin approvers instead. `approvals.plugin.slack.approvers` sets the
 default Slack plugin reviewer list; `approvals.plugin.slack.plugins` can override
-it for a selected native tool plugin and individual tools. Reviewer IDs have the form
-`team:<workspace-id>:user:<user-id>`. An explicit empty list denies Slack
+it for a selected native tool plugin and individual tools. Reviewer IDs can be raw
+`U…`/`W…` IDs within the selected account or `team:<workspace-id>:user:<user-id>`.
+An explicit empty list denies Slack
 decisions for that scope. See [Plugin permission requests](/plugins/plugin-permission-requests#route-approval-prompts)
 for the precedence and tool-key format.
 

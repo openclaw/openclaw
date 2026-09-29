@@ -259,6 +259,12 @@ enforce that recipient list, even when the target names a reviewer. If the
 native Slack handler is unavailable, generic forwarding will not send a card;
 connect the bot or an approval-capable Gateway client and retry.
 
+Reviewer lists are checked when routing a new request and again when accepting
+an approval decision. Changing the list does not retract existing cards or
+cancel messages already queued for delivery. A former reviewer may still see
+such a card, but cannot approve it after losing access. Cards for expired or
+cancelled requests cannot authorize an action.
+
 When a prompt includes manual approval text, resolve it with one of the offered
 decisions:
 
