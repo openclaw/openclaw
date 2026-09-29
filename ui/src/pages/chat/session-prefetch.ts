@@ -537,7 +537,7 @@ class SessionPrefetcher {
 
 type SessionPrefetchHost = ReactiveControllerHost & HTMLElement;
 
-class SessionPrefetchController implements ReactiveController {
+export class SessionPrefetchController implements ReactiveController {
   private readonly prefetcher: SessionPrefetcher;
   private context: SessionPrefetchContext | undefined;
   private subscriptions: Array<() => void> = [];
@@ -650,13 +650,4 @@ class SessionPrefetchController implements ReactiveController {
     this.subscriptions = [];
     this.context = undefined;
   }
-}
-
-export function installSessionPrefetch(
-  host: SessionPrefetchHost,
-  cache: ChatMessageCache,
-  snapshotStore: SessionSnapshotStore,
-  readContext: () => SessionPrefetchContext | undefined,
-): ReactiveController {
-  return new SessionPrefetchController(host, cache, snapshotStore, readContext);
 }
