@@ -124,6 +124,12 @@ function applyLogicalOverrides(
     return entry;
   }
   const thinkingLevelMap = mergeConfiguredThinkingLevelMap(entry, overrides);
+  // An authored thinking map owns the row's effort metadata: drop catalog
+  // provenance so a runtime capability refresh cannot replace it (#160758).
+  if (overrides.thinkingLevelMap !== undefined) {
+    const { catalogReasoningEfforts: _catalogReasoningEfforts, ...authored } = entry;
+    return { ...authored, ...overrides, ...(thinkingLevelMap ? { thinkingLevelMap } : {}) };
+  }
   return { ...entry, ...overrides, ...(thinkingLevelMap ? { thinkingLevelMap } : {}) };
 }
 

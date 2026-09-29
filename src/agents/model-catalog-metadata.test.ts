@@ -69,6 +69,19 @@ describe("catalog-derived effort provenance overlays", () => {
     expect(entry.compat).toBeUndefined();
   });
 
+  it("drops the marker when the overlay declares only an effort mapping", () => {
+    const entry = overlayCatalogMetadata(catalogBase, {
+      id: catalogBase.id,
+      name: "Configured name",
+      provider: "openrouter",
+      reasoning: true,
+      compat: { reasoningEffortMap: { high: "medium" } },
+    });
+
+    expect(entry.catalogReasoningEfforts).toBeUndefined();
+    expect(entry.compat?.reasoningEffortMap).toEqual({ high: "medium" });
+  });
+
   it("carries catalog-derived effort provenance onto projected entries", () => {
     const entry = modelCatalogRowToEntry({
       id: catalogBase.id,

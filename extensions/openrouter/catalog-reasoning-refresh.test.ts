@@ -139,4 +139,46 @@ describe("OpenRouter catalog-derived thinking efforts", () => {
     // The proxy catalog's discovered efforts stay authoritative on its route.
     expect(profile?.levels.map((level) => level.id)).toEqual(["high", "xhigh"]);
   });
+
+  it("keeps operator-authored thinking maps even with a warm capability cache", async () => {
+    catalogFetch(["xhigh", "high", "medium", "low"]);
+    const catalog = await buildOpenrouterLiveProvider({ apiKey: "OPENROUTER_API_KEY" });
+    const row = catalog.models.find((model) => model.id === MODEL_ID);
+
+    // A warm cache refresh advertises a different generation.
+    loadedCapabilities.set(MODEL_ID, {
+      compat: { supportedReasoningEfforts: ["medium", "low"] },
+      thinkingLevelMap: { off: null },
+    });
+
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    // The prepared row was projected with an operator-authored thinking map;
+    // route projection and the config merge clear catalog provenance for it.
+    const authoredContext: ProviderDefaultThinkingPolicyContext = {
+      provider: "openrouter",
+      modelId: MODEL_ID,
+      api: "openai-completions",
+      baseUrl: catalog.baseUrl ?? CANONICAL_BASE_URL,
+      reasoning: row?.reasoning,
+      compat: row?.compat,
+      thinkingLevelMap: { off: null, low: "high", high: "high" },
+    };
+    const authoredProfile = provider.resolveThinkingProfile?.(authoredContext);
+    // The authored row keeps its own discovered efforts; the cached
+    // generation ["medium", "low"] cannot replace them.
+    expect(authoredProfile?.levels.map((level) => level.id)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+
+    // Counterfactual: the same row still carrying the marker would be
+    // clobbered onto the cached generation, dropping authored "high"/"xhigh".
+    const markedProfile = provider.resolveThinkingProfile?.({
+      ...authoredContext,
+      catalogReasoningEfforts: true,
+    });
+    expect(markedProfile?.levels.map((level) => level.id)).toEqual(["low", "medium"]);
+  });
 });

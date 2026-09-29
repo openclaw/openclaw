@@ -120,7 +120,8 @@ export function overlayCatalogMetadata(
   const overlayDeclaresEfforts =
     overlay.thinkingLevelMap !== undefined ||
     overlay.compat?.supportedReasoningEfforts !== undefined ||
-    overlay.compat?.supportsReasoningEffort !== undefined;
+    overlay.compat?.supportsReasoningEffort !== undefined ||
+    overlay.compat?.reasoningEffortMap !== undefined;
   const replacesContextWindows = overlay.contextWindows !== undefined;
   const contextWindows = replacesContextWindows ? overlay.contextWindows : routeBase.contextWindows;
   const contextWindowDefault = replacesContextWindows
