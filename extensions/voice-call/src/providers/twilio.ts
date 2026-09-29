@@ -34,6 +34,7 @@ import { guardedJsonApiRequest, readProviderCallStatus } from "./shared/guarded-
 import { resolveTwilioApiBaseUrl, type TwilioRegion } from "./twilio-region.js";
 import type { TwilioProviderOptions } from "./twilio.types.js";
 import { TwilioApiError, twilioApiRequest } from "./twilio/api.js";
+import { buildTwilioSpeechGatherVerbs, buildTwilioSpeechOnlyTail } from "./twilio/speech-gather.js";
 import { decideTwimlResponse, readTwimlRequestView } from "./twilio/twiml-policy.js";
 import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
 export type { TwilioProviderOptions } from "./twilio.types.js";
@@ -615,12 +616,18 @@ export class TwilioProvider implements VoiceCallProvider {
     );
 
     const pollyVoice = mapVoiceToPolly(input.voice);
+    // Conversation greetings listen in this same update. Notify and direct speech
+    // still need a verb after <Say>, or Twilio completes the call when playback ends.
+    const tail = input.listenAfterPlayback
+      ? buildTwilioSpeechGatherVerbs({ webhookUrl, language: input.locale })
+      : buildTwilioSpeechOnlyTail({
+          webhookUrl,
+          holdBeforeHangupSec: input.holdBeforeHangupSec,
+        });
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${pollyVoice}" language="${input.locale || "en-US"}">${escapeXml(input.text)}</Say>
-  <Gather input="speech" speechTimeout="auto" action="${escapeXml(webhookUrl)}" method="POST">
-    <Say>.</Say>
-  </Gather>
+${tail}
 </Response>`;
 
     await this.updateLiveCallTwiml(input.providerCallId, twiml, "playTts");
@@ -760,15 +767,13 @@ export class TwilioProvider implements VoiceCallProvider {
       throw new Error("Missing webhook URL for this call (provider state not initialized)");
     }
 
-    const actionUrl = new URL(webhookUrl);
-    if (input.turnToken) {
-      actionUrl.searchParams.set("turnToken", input.turnToken);
-    }
-
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Gather input="speech" speechTimeout="auto" language="${input.language || "en-US"}" action="${escapeXml(actionUrl.toString())}" method="POST">
-  </Gather>
+${buildTwilioSpeechGatherVerbs({
+  webhookUrl,
+  language: input.language,
+  turnToken: input.turnToken,
+})}
 </Response>`;
 
     await this.updateLiveCallTwiml(input.providerCallId, twiml, "startListening");

@@ -519,9 +519,10 @@ describe("TwilioProvider", () => {
     });
 
     expectApiRequestEndpoint(apiRequest, 0, "/Calls/CA-inbound.json");
-    expect(expectDefined(apiRequest.mock.calls[0], "Twilio API call")[1]).toMatchObject({
-      Twiml: expect.stringContaining('action="https://example.ngrok.app/voice/twilio"'),
-    });
+    const twiml = expectDefined(apiRequest.mock.calls[0], "Twilio API call")[1].Twiml as string;
+    expect(twiml).toContain('action="https://example.ngrok.app/voice/twilio"');
+    expect(twiml).toContain('timeout="120"');
+    expect(twiml).toContain("<Redirect");
   });
 
   it("uses a stable fallback dedupeKey for identical request payloads", () => {
@@ -624,7 +625,7 @@ describe("TwilioProvider", () => {
     expect(apiRequest).not.toHaveBeenCalled();
   });
 
-  it("falls back to TwiML when no active stream exists and telephony TTS is unavailable", async () => {
+  it("keeps direct speech open with a post-Say gather when no media stream is active", async () => {
     const { provider, apiRequest } = configureTelephonyTwiMlFallback({
       providerCallId: "CA-nostream",
     });
@@ -639,7 +640,71 @@ describe("TwilioProvider", () => {
     expect(apiRequest).toHaveBeenCalledTimes(1);
     const [endpoint, params] = expectDefined(apiRequest.mock.calls[0], "Twilio API call");
     expect(endpoint).toBe("/Calls/CA-nostream.json");
+    const twiml = params.Twiml as string;
+    expect(twiml).toContain("<Say");
+    expect(twiml.indexOf("<Gather")).toBeGreaterThan(twiml.indexOf("</Say>"));
+    expect(twiml).toContain('speechTimeout="auto"');
+    expect(twiml).not.toContain('timeout="120"');
+    expect(twiml).not.toContain("<Pause");
+    expect(twiml).not.toContain("<Hangup");
+  });
+
+  it("holds a notify call with pause and hangup for the configured delay", async () => {
+    const { provider, apiRequest } = configureTelephonyTwiMlFallback({
+      providerCallId: "CA-notify-hold",
+    });
+
+    await provider.playTts({
+      callId: "call-notify-hold",
+      providerCallId: "CA-notify-hold",
+      text: "Package delivered",
+      holdBeforeHangupSec: 3,
+    });
+
+    const twiml = expectDefined(apiRequest.mock.calls[0], "Twilio API call")[1].Twiml as string;
+    expect(twiml.indexOf('<Pause length="3"/>')).toBeGreaterThan(twiml.indexOf("</Say>"));
+    expect(twiml.indexOf("<Hangup")).toBeGreaterThan(twiml.indexOf("<Pause"));
+    expect(twiml).not.toContain("<Gather");
+    expect(twiml).not.toContain("<Redirect");
+  });
+
+  it("hangs up immediately after notify speech when the hold delay is zero", async () => {
+    const { provider, apiRequest } = configureTelephonyTwiMlFallback({
+      providerCallId: "CA-notify-now",
+    });
+
+    await provider.playTts({
+      callId: "call-notify-now",
+      providerCallId: "CA-notify-now",
+      text: "Done",
+      holdBeforeHangupSec: 0,
+    });
+
+    const twiml = expectDefined(apiRequest.mock.calls[0], "Twilio API call")[1].Twiml as string;
+    expect(twiml.indexOf("<Hangup")).toBeGreaterThan(twiml.indexOf("</Say>"));
+    expect(twiml).not.toContain("<Pause");
+    expect(twiml).not.toContain("<Gather");
+  });
+
+  it("adds speech gather with timeout and redirect when listenAfterPlayback is set", async () => {
+    const { provider, apiRequest } = configureTelephonyTwiMlFallback({
+      providerCallId: "CA-listen-say",
+    });
+
+    await provider.playTts({
+      callId: "call-listen-say",
+      providerCallId: "CA-listen-say",
+      text: "Hello and listen",
+      listenAfterPlayback: true,
+    });
+
+    const params = expectDefined(apiRequest.mock.calls[0], "Twilio API call")[1];
     expect(params.Twiml).toContain("<Say");
+    expect(params.Twiml).toContain('timeout="120"');
+    expect(params.Twiml).toContain("<Redirect");
+    expect(params.Twiml).not.toContain("<Say>.</Say>");
+    expect(params.Twiml).not.toContain("<Pause");
+    expect(params.Twiml).not.toContain("<Hangup");
   });
 
   it("retries TwiML fallback when Twilio briefly rejects a live-call update as not in progress", async () => {

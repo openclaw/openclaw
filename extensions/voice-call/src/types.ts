@@ -181,6 +181,11 @@ export type PlayTtsInput = CallControlInput & {
   locale?: string;
   /** Keep collecting speech after playback when the provider owns the listening XML. */
   listenAfterPlayback?: boolean;
+  /**
+   * Notify calls: seconds to keep the line up after playback before hangup.
+   * `0` hangs up as soon as speech ends.
+   */
+  holdBeforeHangupSec?: number;
 };
 
 export type SendDtmfInput = CallControlInput & {

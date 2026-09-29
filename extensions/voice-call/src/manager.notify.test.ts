@@ -155,6 +155,7 @@ describe("CallManager notify and mapping", () => {
       await vi.advanceTimersByTimeAsync(1_000);
 
       expect(provider.hangupCalls).toHaveLength(1);
+      expect(requireFirstPlayTtsCall(provider).holdBeforeHangupSec).toBe(1);
       expect(manager.getCall(callId)).toBeDefined();
       expect(warn).toHaveBeenCalledWith(
         `[voice-call] Notify mode failed to hang up call ${callId}: synthetic hangup failure`,
@@ -180,9 +181,32 @@ describe("CallManager notify and mapping", () => {
       await answerCall(manager, callId, `evt-2-${providerName}`);
 
       expectFirstPlayTtsText(provider, "Hello there");
+      expect(requireFirstPlayTtsCall(provider).holdBeforeHangupSec).toBe(3);
+      expect(requireFirstPlayTtsCall(provider).listenAfterPlayback).toBeUndefined();
       await expectNotifyHangup(manager, provider, callId);
     },
   );
+
+  it("speaks the Twilio Say fallback greeting in one update when streaming is disabled", async () => {
+    const { manager, provider } = await createManagerHarness(
+      { streaming: { enabled: false } },
+      new FakeProvider("twilio"),
+    );
+
+    const callId = await initiateCallWithMessage(
+      manager,
+      "+15550000004",
+      "Twilio non-stream",
+      "conversation",
+    );
+    await answerCall(manager, callId, "evt-conversation-twilio-no-stream");
+
+    expectFirstPlayTtsText(provider, "Twilio non-stream");
+    expect(requireFirstPlayTtsCall(provider).listenAfterPlayback).toBe(true);
+    expect(requireFirstPlayTtsCall(provider).holdBeforeHangupSec).toBeUndefined();
+    expect(provider.startListeningCalls).toHaveLength(0);
+    expect(requireCall(manager, callId).state).toBe("listening");
+  });
 
   it("lets realtime conversations own the initial greeting instead of posting legacy TwiML", async () => {
     const { manager, provider } = await createManagerHarness(
@@ -234,6 +258,9 @@ describe("CallManager notify and mapping", () => {
     await answerCall(manager, callId, "evt-conversation-twilio-stream-unavailable");
 
     expectFirstPlayTtsText(provider, "Twilio stream unavailable");
+    expect(requireFirstPlayTtsCall(provider).listenAfterPlayback).toBe(true);
+    expect(requireFirstPlayTtsCall(provider).holdBeforeHangupSec).toBeUndefined();
+    expect(provider.startListeningCalls).toHaveLength(0);
   });
 
   it("starts listening after the initial greeting for Telnyx conversation calls", async () => {
@@ -255,20 +282,20 @@ describe("CallManager notify and mapping", () => {
   });
 
   it("logs fire-and-forget initial-message failures instead of leaking unhandled rejections", async () => {
-    const provider = new FailStartListeningProvider("twilio");
+    const provider = new FailStartListeningProvider("telnyx");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const { manager } = await createManagerHarness({ streaming: { enabled: false } }, provider);
+      const { manager } = await createManagerHarness({}, provider);
 
       const callId = await initiateCallWithMessage(
         manager,
         "+15550000013",
-        "Twilio hello",
+        "Telnyx hello",
         "conversation",
       );
       await answerCall(manager, callId, "evt-initial-message-start-listening-fails");
 
-      expectFirstPlayTtsText(provider, "Twilio hello");
+      expectFirstPlayTtsText(provider, "Telnyx hello");
       const startListeningCall = requireSingleStartListeningCall(provider);
       expect(startListeningCall.callId).toBe(callId);
       expect(startListeningCall.providerCallId).toBe("call-uuid");
