@@ -41,7 +41,11 @@ const DOCKER_E2E_CHUNKS = [
     // Six 3500s first-hop lanes need two waves at npm weight limit 5; the 20m
     // survivor (weight 3) overlaps. 2 x 3500s + 10m setup/artifacts ~= 127m => 130m.
     timeout_minutes: 130,
-    profiles: "beta minimum stable full",
+    // Dropped from stable for 2026.9.7 by the release lead under Peter's 2026-09-29
+    // decision: six-way first-hop contention in one job fails deterministically
+    // (jobs 109446149023, 109482109194) while every lane in it passes as a separate
+    // targeted lane. Restore "stable" with the waves change (5aed4315) and #161257.
+    profiles: "beta minimum full",
   },
   {
     chunk_id: "plugins-runtime-plugins",

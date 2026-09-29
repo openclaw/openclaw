@@ -244,7 +244,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
           if (!nativeDirectory?.removed || !nativeDirectory.recovering) {
             if (!cleanup) {
               try {
-                // Re-imported callers can hold another registry; this owner keeps its original readers.
+                // Re-imported callers share this reader fence with the retained native owner.
                 sealRetainedSnapshotTempDirectory(directory);
                 cleanup = pool.startCloseResources(directory);
               } catch (error) {

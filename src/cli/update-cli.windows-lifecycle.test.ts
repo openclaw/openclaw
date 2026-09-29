@@ -76,6 +76,7 @@ describe("update-cli", () => {
   registerFailureSelectorTests({
     updateCommand,
     updateFinalizeCommand,
+    updateGitCheckout,
     readConfigFileSnapshot,
     profileStateDir: fixture.profileStateDir,
     runUpdateFailureTriage,

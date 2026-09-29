@@ -1952,7 +1952,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/commands/agents.add.test.ts",
   "src/commands/agents.commands.list.test.ts",
   "src/commands/agents.delete.test.ts",
-  "src/commands/agents.delete.workspace.test.ts",
   "src/commands/agents.identity.persistence.test.ts",
   "src/commands/agents.identity.test.ts",
   "src/commands/agents.roles.test.ts",

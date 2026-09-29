@@ -93,7 +93,7 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 ## Build Chunking
 
-- `ui/config/control-ui-boot-modules.json` is generated from ready `/new` and `/chat` captures. Shared modules and each route's exclusive modules get separate `control-ui-boot-*` groups in `ui/config/control-ui-chunking.ts`, reducing requests without pulling chat-only code into New Session. Regenerate with `pnpm ui:boot-manifest:gen` when boot-path surfaces change materially; it builds into a temporary directory with all measured boot groups disabled so stale entries cannot feed back into the capture. Rebuild with `pnpm ui:build` afterward to verify grouped output. Do not hand-edit the manifest.
+- `ui/config/control-ui-boot-modules.json` is generated from ready `/new` and `/chat` captures. Shared modules and each route's exclusive modules get separate `control-ui-boot-*` groups in `ui/config/control-ui-chunking.ts`, reducing requests without pulling chat-only code into New Session. Its `entries` record contains the dynamic entry points actually requested by each route; `control-ui-boot-preloads.ts` follows their static dependencies to emit inert route preload templates, which the Gateway activates for the requested route. CSS hints preload bytes without changing stylesheet insertion order. Regenerate with `pnpm ui:boot-manifest:gen` when boot-path surfaces change materially; it builds into a temporary directory with all measured boot groups disabled and inactive preload templates so stale entries cannot feed back into the capture. Rebuild with `pnpm ui:build` afterward to verify grouped output. Do not hand-edit the manifest.
 
 ## Live Verification
 
