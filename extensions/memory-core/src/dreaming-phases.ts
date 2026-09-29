@@ -70,7 +70,12 @@ import {
   type SessionIngestionSource,
   type SessionIngestionState,
 } from "./session-ingestion.js";
-import { compareStoreTimestampDesc } from "./short-term-promotion-utils.js";
+import {
+  compareStoreTimestampDesc,
+  containsRawSessionMetadataBlock,
+  isContaminatedDreamingSnippet,
+  isShortTermSessionCorpusPath,
+} from "./short-term-promotion-utils.js";
 import {
   filterLiveShortTermRecallEntries,
   filterFreshLightDreamingEntries,
@@ -461,23 +466,37 @@ function buildDailyIngestionResults(params: {
     defaultObservedAt: params.defaultObservedAt,
     ...(params.recorded ? { recorded: params.recorded } : {}),
   });
-  return buildDailySnippetChunks(
-    stripManagedDailyDreamingLines(params.raw.split(/\r?\n/)),
-    params.limit,
-  ).map((chunk) =>
-    Object.assign(
-      {
-        path: params.path,
-        startLine: chunk.startLine,
-        endLine: chunk.endLine,
-        score: DAILY_INGESTION_SCORE,
-        snippet: chunk.snippet,
-        source: "memory" as const,
-        provenance: { ...provenance, sessionKind: "unknown" as const },
-      },
-      chunk.identitySnippet ? { identitySnippet: chunk.identitySnippet } : {},
-    ),
-  );
+  const strippedLines = stripManagedDailyDreamingLines(params.raw.split(/\r?\n/));
+  return buildDailySnippetChunks(strippedLines, params.limit)
+    .filter((chunk) => !isChunkInsideSessionMetadataBlock(strippedLines, chunk))
+    .map((chunk) =>
+      Object.assign(
+        {
+          path: params.path,
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          score: DAILY_INGESTION_SCORE,
+          snippet: chunk.snippet,
+          source: "memory" as const,
+          provenance: { ...provenance, sessionKind: "unknown" as const },
+        },
+        chunk.identitySnippet ? { identitySnippet: chunk.identitySnippet } : {},
+      ),
+    );
+}
+
+// Daily notes are chunked line-by-line, so a session header block (Session
+// Key + Session ID on adjacent lines) never co-occurs inside one chunk and
+// the single-snippet contamination predicate cannot see it. Testing the chunk
+// plus its immediate neighbors recovers the shape without touching
+// legitimate nearby content: only the co-occurrence of both labels matches.
+function isChunkInsideSessionMetadataBlock(
+  lines: string[],
+  chunk: { startLine: number; endLine: number },
+): boolean {
+  const from = Math.max(0, chunk.startLine - 1 - 2);
+  const to = Math.min(lines.length, chunk.endLine + 2);
+  return containsRawSessionMetadataBlock(lines.slice(from, to).join("\n"));
 }
 
 function entryWithinLookback(entry: ShortTermRecallEntry, cutoffMs: number): boolean {
@@ -1348,6 +1367,32 @@ async function ingestDreamingPhaseSignals(
   return nowMs;
 }
 
+// Staging confers candidate status, so every phase enforces the same
+// existing contamination predicate the record/rank/apply path already uses,
+// with the same session-corpus allowance for transcript turns: corpus turns
+// are legitimate pipeline content (owner utterances included) and stay
+// eligible here exactly as they are at record time. Filtered items stay
+// observable via the per-phase report count; the short-term store and source
+// files retain them unchanged.
+export function partitionContaminatedDreamingEntries<
+  T extends Pick<ShortTermRecallEntry, "snippet" | "path">,
+>(entries: readonly T[]): { cleanEntries: T[]; filteredContaminated: number } {
+  const cleanEntries: T[] = [];
+  let filteredContaminated = 0;
+  for (const entry of entries) {
+    if (
+      isContaminatedDreamingSnippet(entry.snippet, {
+        allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(entry.path),
+      })
+    ) {
+      filteredContaminated += 1;
+      continue;
+    }
+    cleanEntries.push(entry);
+  }
+  return { cleanEntries, filteredContaminated };
+}
+
 async function runLightDreaming(
   params: DreamingPhaseRunParams<LightDreamingConfig>,
 ): Promise<DreamNarrativeOutcome> {
@@ -1372,8 +1417,10 @@ async function runLightDreaming(
         }),
       })
     ).filter((entry) => !isPromotionOriginBlocked(entry));
+    const { cleanEntries, filteredContaminated } =
+      partitionContaminatedDreamingEntries(recentEntries);
     const rankedEntries = dedupeEntries(
-      recentEntries.toSorted((a, b) => {
+      cleanEntries.toSorted((a, b) => {
         const byTime = compareStoreTimestampDesc(a.lastRecalledAt, b.lastRecalledAt);
         if (byTime !== 0) {
           return byTime;
@@ -1389,11 +1436,16 @@ async function runLightDreaming(
     const entries = prioritizeLightEntriesByDiaryCoverage(rankedEntries, recentDiaryEntries);
     const capped = entries.slice(0, params.config.limit);
     const bodyLines = buildLightDreamingBody(capped);
+    if (filteredContaminated > 0) {
+      bodyLines.push(`- Filtered ${filteredContaminated} contaminated candidate(s).`);
+    }
     await writeDailyDreamingPhaseBlock({
       workspaceDir: params.workspaceDir,
       phase: "light",
       bodyLines,
-      hasContent: capped.length > 0,
+      // A fully-filtered sweep still did observable work: like Deep's
+      // rejection summaries, the filtered count is worth a report.
+      hasContent: capped.length > 0 || filteredContaminated > 0,
       nowMs,
       timezone: params.config.timezone,
       storage: params.config.storage,
@@ -1453,6 +1505,7 @@ async function runRemDreaming(
         }),
       })
     ).filter((entry) => !isPromotionOriginBlocked(entry));
+    const { cleanEntries, filteredContaminated } = partitionContaminatedDreamingEntries(allEntries);
     // Prefer entries staged by light sleep so REM synthesises from the
     // sequential light→REM pipeline instead of rescanning the full store.
     const lightKeys = await readLightStagedKeys({
@@ -1460,18 +1513,22 @@ async function runRemDreaming(
       nowMs,
     });
     const stagedEntries =
-      lightKeys.size > 0 ? allEntries.filter((entry) => lightKeys.has(entry.key)) : [];
-    const entries = stagedEntries.length > 0 ? stagedEntries : allEntries;
+      lightKeys.size > 0 ? cleanEntries.filter((entry) => lightKeys.has(entry.key)) : [];
+    const entries = stagedEntries.length > 0 ? stagedEntries : cleanEntries;
     const preview = previewRemDreaming({
       entries,
       limit: params.config.limit,
       minPatternStrength: params.config.minPatternStrength,
     });
+    const remBodyLines =
+      filteredContaminated > 0
+        ? [...preview.bodyLines, `- Filtered ${filteredContaminated} contaminated candidate(s).`]
+        : preview.bodyLines;
     await writeDailyDreamingPhaseBlock({
       workspaceDir: params.workspaceDir,
       phase: "rem",
-      bodyLines: preview.bodyLines,
-      hasContent: entries.length > 0,
+      bodyLines: remBodyLines,
+      hasContent: entries.length > 0 || filteredContaminated > 0,
       nowMs,
       timezone: params.config.timezone,
       storage: params.config.storage,
@@ -1497,7 +1554,11 @@ async function runRemDreaming(
     return { entries, preview };
   });
   const { entries, preview } = prepared;
-  // Generate dream diary narrative from REM reflections.
+  // Generate dream diary narrative from REM reflections. Entries reaching
+  // this point already passed the contamination partition above (and the
+  // read-time normalization before it), so the fallback below narrates
+  // clean-but-unvalidated staged material — REM's documented reflection
+  // purpose — never residue matching a known contamination shape.
   if (params.subagent && entries.length > 0) {
     const snippets = preview.candidateTruths.map((t) => t.snippet).filter(Boolean);
     const themes = preview.reflections.filter(

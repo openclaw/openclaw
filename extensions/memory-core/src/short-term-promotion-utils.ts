@@ -24,7 +24,14 @@ const DREAMING_TRANSCRIPT_PROMPT_LINE_RE =
   /\[[^\]]*dreaming-narrative[^\]]*]\s*(?:User|Assistant):\s*Write a dream diary entry from these memory fragments:?/i;
 const RAW_SESSION_METADATA_RE =
   /\bSession Key\b.{0,260}\bSession ID\b|\bSession ID\b.{0,260}\bSession Key\b/i;
-const RAW_CONVERSATION_SUMMARY_RE = /^(?:[-*+]\s*)?Conversation Summary:/i;
+// Multi-line form of the session-metadata shape above. Daily ingestion chunks a
+// note line-by-line, so a session header block never co-occurs in one chunk;
+// testing the chunk plus its immediate neighbors recovers the shape the
+// single-snippet predicate cannot see. Both labels must co-occur, so bare
+// identifiers, timestamps, and unrelated neighbors never match.
+const RAW_SESSION_METADATA_BLOCK_RE =
+  /\bSession Key\b.{0,600}\bSession ID\b|\bSession ID\b.{0,600}\bSession Key\b/i;
+const RAW_CONVERSATION_SUMMARY_PREFIX_RE = /^(?:[-*+]\s*)?Conversation Summary:\s*/i;
 const RAW_TRANSCRIPT_TURN_RE = /^(?:[-*+]\s*)?(?:user|assistant):\s/i;
 const MEMORY_FLUSH_PROMPT_RE =
   /Save important context from this session to the daily memory file\.\s*STRICT RULES:/i;
@@ -152,6 +159,32 @@ function hasDreamingNarrativeLead(snippet: string): boolean {
   return /\b(?:Candidate|Reflections?):/i.test(head) || /#{1,6}\s+Reflections?\b/i.test(head);
 }
 
+// A "Conversation Summary:" label is only contamination when it wraps raw
+// transcript/metadata material (the shape PR #94636 targeted: a summary
+// header quoting turns verbatim). The daily chunker prepends the active
+// heading to ordinary bullets, so "Conversation Summary: <prose>" with an
+// ordinary remainder is legitimate content and must be preserved.
+function isRawConversationSummary(
+  snippet: string,
+  opts: { allowTranscriptTurnSnippet?: boolean },
+): boolean {
+  const prefix = snippet.match(RAW_CONVERSATION_SUMMARY_PREFIX_RE);
+  if (!prefix) {
+    return false;
+  }
+  const remainder = snippet.slice(prefix[0].length).trim();
+  if (!remainder) {
+    return true;
+  }
+  return (
+    RAW_SESSION_METADATA_RE.test(remainder) ||
+    (!opts.allowTranscriptTurnSnippet && RAW_TRANSCRIPT_TURN_RE.test(remainder)) ||
+    MEMORY_FLUSH_PROMPT_RE.test(remainder) ||
+    PROMOTION_SCORE_METADATA_RE.test(remainder) ||
+    DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(remainder)
+  );
+}
+
 export function isContaminatedDreamingSnippet(
   raw: string,
   opts: { allowTranscriptTurnSnippet?: boolean } = {},
@@ -164,7 +197,7 @@ export function isContaminatedDreamingSnippet(
     /<!--\s*openclaw-memory-promotion:/i.test(snippet) ||
     DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet) ||
     RAW_SESSION_METADATA_RE.test(snippet) ||
-    RAW_CONVERSATION_SUMMARY_RE.test(snippet) ||
+    isRawConversationSummary(snippet, opts) ||
     (!opts.allowTranscriptTurnSnippet && RAW_TRANSCRIPT_TURN_RE.test(snippet)) ||
     MEMORY_FLUSH_PROMPT_RE.test(snippet) ||
     PROMOTION_SCORE_METADATA_RE.test(snippet)
@@ -186,6 +219,11 @@ export function isContaminatedDreamingSnippet(
     hasEvidence &&
     ((hasStatus && hasRecalls) || hasReflectionNote)
   );
+}
+
+export function containsRawSessionMetadataBlock(raw: string): boolean {
+  const text = normalizeSnippet(raw);
+  return text.length > 0 && RAW_SESSION_METADATA_BLOCK_RE.test(text);
 }
 
 export function normalizeMemoryPath(rawPath: string): string {

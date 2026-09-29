@@ -17,6 +17,7 @@ import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/se
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   filterRecallEntriesWithinLookback,
+  partitionContaminatedDreamingEntries,
   previewRemDreaming,
   runDreamingSweepPhases,
   seedHistoricalDailyMemorySignals,
@@ -3475,6 +3476,161 @@ describe("previewRemHarness", () => {
     expect(preview.rem.candidateTruths).toStrictEqual([]);
     expect(preview.rem.bodyLines).toStrictEqual([]);
     expect(preview.deep.candidates[0]?.snippet).toContain("Always check weather");
+  });
+});
+
+describe("dreaming contamination boundary", () => {
+  function createFullSweepConfig(workspaceDir: string): OpenClawConfig {
+    const base = createNarrativeDreamingSweepConfig(workspaceDir);
+    const pluginConfig = resolveMemoryDreamingPluginConfig(base) ?? {};
+    const dreaming = (pluginConfig.dreaming ?? {}) as Record<string, unknown>;
+    const phases = (dreaming.phases ?? {}) as Record<string, unknown>;
+    return {
+      ...base,
+      plugins: {
+        ...base.plugins,
+        entries: {
+          ...base.plugins?.entries,
+          "memory-core": {
+            config: {
+              ...pluginConfig,
+              dreaming: {
+                ...dreaming,
+                phases: {
+                  ...phases,
+                  light: { ...phases.light, enabled: true },
+                  rem: { ...phases.rem, enabled: true },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+  }
+
+  it("holds session-header residue at ingestion while staging nearby legitimate content", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await writeDailyNote(workspaceDir, [
+      "# Session: 2026-04-05 10:00:00 UTC",
+      "",
+      "- **Session Key**: agent:main:main",
+      "- **Session ID**: abc123-def456",
+      "- **Source**: webchat",
+      "",
+      "## Workshop notes",
+      "",
+      "- Router VLAN 20 carries lab traffic across the workshop switch.",
+    ]);
+    const testConfig = createFullSweepConfig(workspaceDir);
+    const subagent = createMockNarrativeSubagent();
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    await runDreamingSweepPhases({
+      agentId: "main",
+      workspaceDir,
+      cfg: testConfig,
+      pluginConfig: resolveMemoryDreamingPluginConfig(testConfig),
+      logger,
+      subagent,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+
+    // The header fragments never become short-term candidates.
+    const snippets = await readCandidateSnippets(workspaceDir, "2026-04-05T10:05:00.000Z");
+    expect(snippets).toEqual(
+      expect.arrayContaining([expect.stringContaining("Router VLAN 20 carries lab traffic")]),
+    );
+    for (const snippet of snippets) {
+      expect(snippet).not.toContain("Session Key");
+      expect(snippet).not.toContain("Session ID");
+    }
+
+    // The Light report stages the legitimate line and never the residue
+    // (the source note itself correctly retains its header).
+    const lightReport = await fs.readFile(
+      path.join(workspaceDir, "memory", "dreaming", "light", `${DREAMING_TEST_DAY}.md`),
+      "utf-8",
+    );
+    expect(lightReport).toContain("Router VLAN 20 carries lab traffic");
+    expect(lightReport).not.toContain("Session Key");
+    expect(lightReport).not.toContain("Session ID");
+
+    // No narrative prompt ever carried the residue.
+    for (const call of subagent.complete.mock.calls) {
+      const message = String((call[0] as { message: string }).message);
+      expect(message).not.toContain("Session ID");
+    }
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it("stages legitimate bullets under a summary heading while dropping wrapped turns", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await writeDailyNote(workspaceDir, [
+      `# ${DREAMING_TEST_DAY}`,
+      "",
+      "## Conversation Summary",
+      "",
+      "- Router VLAN 20 carries lab traffic across the workshop switch.",
+      "- assistant: Traced all three. No changes made.",
+    ]);
+    const testConfig = createFullSweepConfig(workspaceDir);
+    const subagent = createMockNarrativeSubagent();
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    await runDreamingSweepPhases({
+      agentId: "main",
+      workspaceDir,
+      cfg: testConfig,
+      pluginConfig: resolveMemoryDreamingPluginConfig(testConfig),
+      logger,
+      subagent,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+
+    // The chunker prefixes both bullets with the heading; only the ordinary
+    // prose remainder survives the narrowed summary predicate.
+    const snippets = await readCandidateSnippets(workspaceDir, "2026-04-05T10:05:00.000Z");
+    expect(snippets).toEqual(
+      expect.arrayContaining([expect.stringContaining("Router VLAN 20 carries lab traffic")]),
+    );
+    for (const snippet of snippets) {
+      expect(snippet).not.toContain("Traced all three");
+    }
+    for (const call of subagent.complete.mock.calls) {
+      const message = String((call[0] as { message: string }).message);
+      expect(message).not.toContain("Traced all three");
+    }
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it("partitions staged entries with rank-identical corpus semantics", () => {
+    const entry = (snippet: string, path: string) => ({ snippet, path });
+    // Full-shape contamination is filtered on any path.
+    expect(
+      partitionContaminatedDreamingEntries([
+        entry("Session Key: a Session ID: b", "memory/2026-04-05.md"),
+        entry("Move backups to S3 Glacier.", "memory/2026-04-05.md"),
+      ]),
+    ).toEqual({
+      cleanEntries: [entry("Move backups to S3 Glacier.", "memory/2026-04-05.md")],
+      filteredContaminated: 1,
+    });
+    // Transcript turns stay eligible on session-corpus paths, exactly as at
+    // record and rank time.
+    expect(
+      partitionContaminatedDreamingEntries([
+        entry(
+          "Assistant: Gateway restart config-patch ok",
+          "memory/.dreams/session-corpus/2026-04-05.txt",
+        ),
+      ]).filteredContaminated,
+    ).toBe(0);
+    expect(
+      partitionContaminatedDreamingEntries([
+        entry("Assistant: Gateway restart config-patch ok", "memory/2026-04-05.md"),
+      ]).filteredContaminated,
+    ).toBe(1);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
