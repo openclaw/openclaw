@@ -1188,8 +1188,7 @@ packages/ai/src/env-api-keys.ts	10
 packages/ai/src/internal/anthropic-inline-images.ts	1
 packages/ai/src/internal/default-runtime.ts	2
 packages/ai/src/openai-completions-messages.ts	7
-packages/ai/src/provider-transcript-transform.ts	3
-packages/ai/src/provider-types.ts	1
+packages/ai/src/provider-transcript-transform.ts	2
 packages/ai/src/providers/agent-tools-parameter-schema.ts	13
 packages/ai/src/providers/anthropic-model-contract.ts	1
 packages/ai/src/providers/anthropic-refusal.ts	1
@@ -1200,7 +1199,7 @@ packages/ai/src/providers/anthropic-usage.ts	3
 packages/ai/src/providers/anthropic.ts	6
 packages/ai/src/providers/azure-openai-responses.ts	1
 packages/ai/src/providers/clean-for-gemini.ts	8
-packages/ai/src/providers/google-shared.ts	3
+packages/ai/src/providers/google-shared.ts	2
 packages/ai/src/providers/mistral.ts	5
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
 packages/ai/src/providers/openai-chatgpt-responses.ts	20
@@ -1223,11 +1222,11 @@ packages/ai/src/transports/anthropic-transport-stream.ts	5
 packages/ai/src/transports/openai-compatible-conversation-turn.ts	2
 packages/ai/src/transports/openai-completions-compat.ts	2
 packages/ai/src/transports/openai-completions-params.ts	7
-packages/ai/src/transports/openai-completions-replay.ts	9
+packages/ai/src/transports/openai-completions-replay.ts	6
 packages/ai/src/transports/openai-completions-stream.ts	8
 packages/ai/src/transports/openai-completions-string-content.ts	5
 packages/ai/src/transports/openai-completions-transport.ts	9
-packages/ai/src/transports/openai-responses-client.ts	12
+packages/ai/src/transports/openai-responses-client.ts	11
 packages/ai/src/transports/openai-responses-compact-request.ts	2
 packages/ai/src/transports/openai-responses-continuation.ts	2
 packages/ai/src/transports/openai-responses-contracts.ts	1
@@ -1307,7 +1306,6 @@ packages/session-url-contract/src/parse.ts	1
 packages/terminal-core/src/note.ts	1
 packages/terminal-core/src/prompt-select-styled-params.ts	1
 packages/terminal-core/src/stream-writer.ts	1
-packages/tool-call-repair/src/stream-normalizer.ts	1
 src/acp/client.ts	1
 src/acp/control-plane/manager.runtime-controls.ts	3
 src/acp/control-plane/manager.runtime-handle-cache.ts	1
