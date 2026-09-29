@@ -344,6 +344,7 @@ static void SetPhaseEPassword(const wchar_t* name) {
 // last byte selects one exact slot; teardown can therefore never enumerate or
 // alter an unrelated FWPM object.
 static const GUID kFwpmSublayer = {0x9f1d8d41,0x80c7,0x4d02,{0x8e,0x3a,0x90,0x2f,0x17,0x8b,0x61,0x10}};
+constexpr UINT16 kFwpmSublayerWeight = 0x8000;
 static GUID SlotFilterKey(size_t index) { return GUID{0x9f1d8d42,0x80c7,0x4d02,{0x8e,0x3a,0x90,0x2f,0x17,0x8b,0x61,static_cast<unsigned char>(0x11+index)}}; }
 static bool SameGuid(const GUID& left,const GUID& right) { return !memcmp(&left,&right,sizeof(GUID)); }
 static void FwpmStage(size_t index,const char* stage) {
@@ -362,6 +363,25 @@ static void RequireFwpmReadback(size_t index,const char* field,bool matches,
           index+1,field,actual,expected);
   fflush(stderr);
   throw std::string("PHASE_E_FWPM_OWNERSHIP_MISMATCH");
+}
+static void FwpmSublayerStatus(const char* operation,DWORD status) {
+  fprintf(stderr,"PHASE_E_FWPM_SUBLAYER_STATUS:%s:%lu\n",operation,
+          static_cast<unsigned long>(status));
+  fflush(stderr);
+}
+static void RequireFwpmSublayerReadback(const char* field,bool matches,
+                                        unsigned long long actual,unsigned long long expected) {
+  if(matches)return;
+  fprintf(stderr,"PHASE_E_FWPM_SUBLAYER_READBACK_MISMATCH:%s:%llu:%llu\n",
+          field,actual,expected);
+  fflush(stderr);
+  throw std::string("PHASE_E_FWPM_OWNERSHIP_MISMATCH");
+}
+static void VerifyOwnedSublayer(const FWPM_SUBLAYER0* sublayer) {
+  RequireFwpmSublayerReadback("pointer",sublayer!=nullptr,sublayer?1:0,1);
+  RequireFwpmSublayerReadback("key",SameGuid(sublayer->subLayerKey,kFwpmSublayer),0,1);
+  RequireFwpmSublayerReadback("weight",sublayer->weight==kFwpmSublayerWeight,
+                              sublayer->weight,kFwpmSublayerWeight);
 }
 static std::string FwpmFilterAddFailure(size_t index,DWORD status) {
   return std::string("PHASE_E_FWPM_FILTER_ADD_FAILED:")+std::to_string(index+1)+":"+
@@ -438,15 +458,15 @@ static void ReconcileFwpm(const std::vector<Account>& accounts) {
   if(FwpmEngineOpen0(nullptr,RPC_C_AUTHN_WINNT,nullptr,nullptr,&engine)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_OPEN_FAILED");
   try { if(FwpmTransactionBegin0(engine,0)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_TRANSACTION_FAILED");
     FWPM_SUBLAYER0* existing=nullptr; DWORD status=FwpmSubLayerGetByKey0(engine,&kFwpmSublayer,&existing);
-    if(status==FWP_E_SUBLAYER_NOT_FOUND) { FWPM_SUBLAYER0 sublayer{}; sublayer.subLayerKey=kFwpmSublayer; sublayer.displayData.name=const_cast<wchar_t*>(L"SRT Phase E owned sublayer"); sublayer.weight=0x8000; if(FwpmSubLayerAdd0(engine,&sublayer,nullptr)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_SUBLAYER_ADD_FAILED"); }
-    else { if(status!=ERROR_SUCCESS || !existing || existing->weight!=0x8000)throw std::string("PHASE_E_FWPM_OWNERSHIP_MISMATCH"); FwpmFreeMemory0(reinterpret_cast<void**>(&existing)); }
+    if(status==FWP_E_SUBLAYER_NOT_FOUND) { FWPM_SUBLAYER0 sublayer{}; sublayer.subLayerKey=kFwpmSublayer; sublayer.displayData.name=const_cast<wchar_t*>(L"SRT Phase E owned sublayer"); sublayer.weight=kFwpmSublayerWeight; if(FwpmSubLayerAdd0(engine,&sublayer,nullptr)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_SUBLAYER_ADD_FAILED"); }
+    else { if(status!=ERROR_SUCCESS) { FwpmSublayerStatus("query",status); throw std::string("PHASE_E_FWPM_QUERY_FAILED"); } VerifyOwnedSublayer(existing); FwpmFreeMemory0(reinterpret_cast<void**>(&existing)); }
     for(size_t i=0;i<accounts.size();++i) { GUID key=SlotFilterKey(i); FWPM_FILTER0* found=nullptr; status=FwpmFilterGetByKey0(engine,&key,&found);
       if(status==ERROR_SUCCESS) { VerifyOwnedFilter(found,accounts[i],i); FwpmFreeMemory0(reinterpret_cast<void**>(&found)); continue; }
       if(status!=FWP_E_FILTER_NOT_FOUND)throw std::string("PHASE_E_FWPM_QUERY_FAILED"); PSID sid=nullptr; if(!ConvertStringSidToSidW(accounts[i].sid.c_str(),&sid))throw std::string("PHASE_E_SID_RESOLUTION_FAILED"); ULONG descriptorLength=0; PSECURITY_DESCRIPTOR descriptor=nullptr; try { descriptor=UserFilterSecurityDescriptor(sid,&descriptorLength); } catch(...) { LocalFree(sid); throw; } FWP_BYTE_BLOB descriptorBlob{descriptorLength,static_cast<UINT8*>(descriptor)}; FWPM_FILTER_CONDITION0 condition{}; condition.fieldKey=FWPM_CONDITION_ALE_USER_ID; condition.matchType=FWP_MATCH_EQUAL; condition.conditionValue.type=FWP_SECURITY_DESCRIPTOR_TYPE; condition.conditionValue.sd=&descriptorBlob; FWPM_FILTER0 filter{}; filter.filterKey=key; filter.displayData.name=const_cast<wchar_t*>(L"SRT Phase E owned slot filter"); filter.layerKey=FWPM_LAYER_ALE_AUTH_CONNECT_V4; filter.subLayerKey=kFwpmSublayer; filter.numFilterConditions=1; filter.filterCondition=&condition; filter.action.type=FWP_ACTION_BLOCK; filter.weight.type=FWP_UINT8; filter.weight.uint8=kFwpmFilterWeight; FwpmStage(i,"before-filter-add"); status=FwpmFilterAdd0(engine,&filter,nullptr,nullptr); FwpmStatus(i,"filter-add",status); LocalFree(descriptor); LocalFree(sid); if(status!=ERROR_SUCCESS)throw FwpmFilterAddFailure(i,status); FwpmStage(i,"after-filter-add"); }
     if(FwpmTransactionCommit0(engine)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_TRANSACTION_FAILED");
   } catch(...) { FwpmTransactionAbort0(engine); FwpmEngineClose0(engine); throw; } FwpmEngineClose0(engine);
 }
-static void RemoveOwnedFwpm(const std::vector<Account>& accounts) { HANDLE engine=nullptr; if(FwpmEngineOpen0(nullptr,RPC_C_AUTHN_WINNT,nullptr,nullptr,&engine)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_OPEN_FAILED"); try { if(FwpmTransactionBegin0(engine,0)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_TRANSACTION_FAILED"); for(size_t i=0;i<accounts.size();++i){GUID key=SlotFilterKey(i); FWPM_FILTER0* found=nullptr; DWORD status=FwpmFilterGetByKey0(engine,&key,&found); if(status==FWP_E_FILTER_NOT_FOUND)continue; if(status!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_QUERY_FAILED"); VerifyOwnedFilter(found,accounts[i],i); FwpmFreeMemory0(reinterpret_cast<void**>(&found)); if(FwpmFilterDeleteByKey0(engine,&key)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_REMOVE_FAILED");} FWPM_SUBLAYER0* sublayer=nullptr; DWORD status=FwpmSubLayerGetByKey0(engine,&kFwpmSublayer,&sublayer); if(status==ERROR_SUCCESS){if(!sublayer||sublayer->weight!=0x8000)throw std::string("PHASE_E_FWPM_OWNERSHIP_MISMATCH"); FwpmFreeMemory0(reinterpret_cast<void**>(&sublayer)); if(FwpmSubLayerDeleteByKey0(engine,&kFwpmSublayer)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_REMOVE_FAILED");} else if(status!=FWP_E_SUBLAYER_NOT_FOUND)throw std::string("PHASE_E_FWPM_QUERY_FAILED"); if(FwpmTransactionCommit0(engine)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_TRANSACTION_FAILED"); } catch(...) { FwpmTransactionAbort0(engine); FwpmEngineClose0(engine); throw; } FwpmEngineClose0(engine); }
+static void RemoveOwnedFwpm(const std::vector<Account>& accounts) { HANDLE engine=nullptr; if(FwpmEngineOpen0(nullptr,RPC_C_AUTHN_WINNT,nullptr,nullptr,&engine)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_OPEN_FAILED"); try { if(FwpmTransactionBegin0(engine,0)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_TRANSACTION_FAILED"); for(size_t i=0;i<accounts.size();++i){GUID key=SlotFilterKey(i); FWPM_FILTER0* found=nullptr; DWORD status=FwpmFilterGetByKey0(engine,&key,&found); if(status==FWP_E_FILTER_NOT_FOUND)continue; if(status!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_QUERY_FAILED"); VerifyOwnedFilter(found,accounts[i],i); FwpmFreeMemory0(reinterpret_cast<void**>(&found)); if(FwpmFilterDeleteByKey0(engine,&key)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_REMOVE_FAILED");} FWPM_SUBLAYER0* sublayer=nullptr; DWORD status=FwpmSubLayerGetByKey0(engine,&kFwpmSublayer,&sublayer); if(status==ERROR_SUCCESS){VerifyOwnedSublayer(sublayer); FwpmFreeMemory0(reinterpret_cast<void**>(&sublayer)); if(FwpmSubLayerDeleteByKey0(engine,&kFwpmSublayer)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_REMOVE_FAILED");} else if(status!=FWP_E_SUBLAYER_NOT_FOUND){FwpmSublayerStatus("query",status); throw std::string("PHASE_E_FWPM_QUERY_FAILED");} if(FwpmTransactionCommit0(engine)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_TRANSACTION_FAILED"); } catch(...) { FwpmTransactionAbort0(engine); FwpmEngineClose0(engine); throw; } FwpmEngineClose0(engine); }
 static void CreatePool(FaultPoint fault) {
   size_t legacy; auto prior=Inspect(&legacy); if(!prior.empty()) throw std::string("PHASE_E_NAMESPACE_AMBIGUOUS"); std::vector<std::wstring> made;
   std::vector<Account> accounts;

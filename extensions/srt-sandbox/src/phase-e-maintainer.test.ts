@@ -227,6 +227,20 @@ describe("Phase E maintainer policy", () => {
       expect(source).toContain(`RequireFwpmReadback(index,"${field}"`);
     }
   });
+  it("reports and verifies exact WFP sublayer readback before deletion", async () => {
+    const source = await import("node:fs/promises").then((fs) =>
+      fs.readFile(new URL("../native/phase-e-maintainer.cc", import.meta.url), "utf8"),
+    );
+    expect(source).toContain('"PHASE_E_FWPM_SUBLAYER_STATUS:%s:%lu\\n"');
+    expect(source).toContain('"PHASE_E_FWPM_SUBLAYER_READBACK_MISMATCH:%s:%llu:%llu\\n"');
+    expect(source).toContain("constexpr UINT16 kFwpmSublayerWeight = 0x8000");
+    expect(source).toContain('RequireFwpmSublayerReadback("pointer"');
+    expect(source).toContain('RequireFwpmSublayerReadback("key"');
+    expect(source).toContain('RequireFwpmSublayerReadback("weight"');
+    expect(source).toContain("VerifyOwnedSublayer(existing)");
+    expect(source).toContain("VerifyOwnedSublayer(sublayer)");
+    expect(source).not.toContain("sublayer->weight!=0x8000");
+  });
   it("uses a legal and ownership-verified WFP filter weight", async () => {
     const source = await import("node:fs/promises").then((fs) =>
       fs.readFile(new URL("../native/phase-e-maintainer.cc", import.meta.url), "utf8"),
