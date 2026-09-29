@@ -35,6 +35,10 @@
   --muted-foreground: #8b8b94;
   --file-icon-glyph: var(--muted);
 
+  /* GitHub references share an opaque neutral surface; only their ink carries status. */
+  --github-item-bg: color-mix(in srgb, var(--text) 6%, var(--bg));
+  --github-item-hover-bg: color-mix(in srgb, var(--text) 10%, var(--bg));
+
   /* Border - Whisper-thin, barely there */
   --border: #1e2028;
   --border-strong: #2e3040;
@@ -591,6 +595,8 @@
   --muted: #6e6960;
   --muted-strong: #56524a;
   --muted-foreground: #6e6960;
+  --github-item-bg: color-mix(in srgb, var(--text) 5%, var(--bg));
+  --github-item-hover-bg: color-mix(in srgb, var(--text) 9%, var(--bg));
 
   --border: #e8e4dc;
   --border-strong: #d6d0c5;
