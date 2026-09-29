@@ -50,6 +50,17 @@ describe("default pattern table", () => {
       expect(redactSensitiveText(`user: bot\rpass: ${value}`, { mode: "tools" })).toBe(
         "user: bot\rpass: opaque…7890",
       );
+      expect(redactSensitiveText(`user=bot pass: ${value}`, { mode: "tools" })).toBe(
+        "user=bot pass: opaque…7890",
+      );
+      expect(redactSensitiveText(`host:db.example.test pass: ${value}`, { mode: "tools" })).toBe(
+        "host:db.example.test pass: opaque…7890",
+      );
+      expect(redactSensitiveText(`login (pass: ${value})`, { mode: "tools" })).toBe(
+        "login (pass: opaque…7890)",
+      );
+      const moreProse = "Release notes: all suites pass: nothing else changed. Both pass: done.";
+      expect(redactSensitiveText(moreProse, { mode: "tools" })).toBe(moreProse);
     });
 
     it("keeps mid-sentence pass: prose when it lands on a bounded-replacement chunk start", () => {
