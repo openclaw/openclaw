@@ -404,6 +404,8 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
     rebasePluginMetadataSnapshotManifestRegistry,
     resolvePluginMetadataSnapshot: (...args: unknown[]) =>
       state.resolvePluginMetadataSnapshotMock(...args),
+    resolvePluginMetadataSnapshotAsync: (...args: unknown[]) =>
+      state.resolvePluginMetadataSnapshotMock(...args),
   };
 });
 
