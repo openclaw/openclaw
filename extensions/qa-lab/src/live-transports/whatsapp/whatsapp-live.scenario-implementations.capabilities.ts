@@ -1,23 +1,27 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { WhatsAppQaScenarioImplementation } from "./whatsapp-live.contracts.js";
-import { sendWhatsAppQaMediaAndObserve } from "./whatsapp-live.media.js";
 import {
-  WHATSAPP_QA_AUDIO_OGG_OPUS_MIME,
-  WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_MARKER,
-  WHATSAPP_QA_ONE_PIXEL_PNG,
   callWhatsAppGatewayMessageAction,
   callWhatsAppGatewayPoll,
   callWhatsAppGatewaySend,
   callWhatsAppGatewaySendConcurrently,
+  writeWhatsAppQaWorkspaceFixture,
+} from "./whatsapp-live.gateway.js";
+import {
+  sendWhatsAppQaMediaAndObserve,
+  WHATSAPP_QA_AUDIO_OGG_OPUS_MIME,
+  WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_MARKER,
+  WHATSAPP_QA_ONE_PIXEL_PNG,
   createWhatsAppQaAudioOggOpusBuffer,
   createWhatsAppQaPdfBuffer,
-  requireWhatsAppTriggerMessageId,
   runWhatsAppStructuredInboundChecks,
+} from "./whatsapp-live.media.js";
+import {
+  requireWhatsAppTriggerMessageId,
   waitForScenarioObservedMessage,
   waitForWhatsAppSutReactionToTrigger,
-  writeWhatsAppQaWorkspaceFixture,
-} from "./whatsapp-live.operations.js";
+} from "./whatsapp-live.observations.js";
 
 function createWhatsAppOutboundPollScenario(
   target: "dm" | "group",

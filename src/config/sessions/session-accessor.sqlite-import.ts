@@ -19,7 +19,6 @@ import {
 } from "./session-accessor.sqlite-import-stage.js";
 import { invalidateSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
 import {
-  formatSqliteSessionReferenceForScope,
   getSessionKysely,
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
@@ -107,10 +106,7 @@ function importSqliteSessionRowsInTransaction(
   const importedEntry = {
     ...params.entry,
     ...(preservedHarnessId ? { agentHarnessId: preservedHarnessId } : {}),
-    sessionFile: formatSqliteSessionReferenceForScope({
-      ...resolved,
-      sessionId: params.entry.sessionId,
-    }),
+    sessionFile: resolved.sessionKey,
   };
   let preserveHistoricalNode = false;
   if (params.historicalOnly) {

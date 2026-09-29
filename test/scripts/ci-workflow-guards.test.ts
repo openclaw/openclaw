@@ -4232,7 +4232,7 @@ setImmediate(() => {
       "docker-seed-e2e": "blacksmith-16vcpu-ubuntu-2404",
       "qa-smoke-ci-profile": "blacksmith-16vcpu-ubuntu-2404",
       "check-test-types-hosted-core-shard": "blacksmith-16vcpu-ubuntu-2404",
-      "check-lint-hosted-core-shard": "blacksmith-8vcpu-ubuntu-2404",
+      "check-lint-hosted-core-shard": "blacksmith-16vcpu-ubuntu-2404",
       "ci-gate": "blacksmith-4vcpu-ubuntu-2404",
       "checks-ui": "blacksmith-8vcpu-ubuntu-2404",
       "checks-windows": "blacksmith-16vcpu-windows-2025",
@@ -4281,7 +4281,9 @@ setImmediate(() => {
           { runnerBackend: "runson" },
           jobName === "check-plan" || jobName === "checks-baseline-ratchets"
             ? hostedRunner
-            : expectedHybridFirstAttemptRunners[jobName as keyof typeof expectedHostedRunners],
+            : jobName === "check-lint-hosted-core-shard"
+              ? "blacksmith-8vcpu-ubuntu-2404"
+              : expectedHybridFirstAttemptRunners[jobName as keyof typeof expectedHostedRunners],
         ],
         ["RunsOn retry", { runnerBackend: "runson", runAttempt: 2 }, hostedRunner],
         [
@@ -4355,12 +4357,20 @@ setImmediate(() => {
       for (const [label, overrides, expected] of [
         ["main", { eventName: "push" }, runner],
         [
-          "heavy packed core stripe",
+          "first packed core stripe",
           { runnerProfile: "hybrid", matrix: { stripe: 1 } },
           jobName === "check-lint-hosted-core-shard" ? "blacksmith-16vcpu-ubuntu-2404" : runner,
         ],
-        ["lighter packed core stripe", { runnerProfile: "hybrid", matrix: { stripe: 2 } }, runner],
-        ["unpaired core stripe", { runnerProfile: "github", matrix: { stripe: 1 } }, runner],
+        [
+          "second packed core stripe",
+          { runnerProfile: "hybrid", matrix: { stripe: 2 } },
+          jobName === "check-lint-hosted-core-shard" ? "blacksmith-16vcpu-ubuntu-2404" : runner,
+        ],
+        [
+          "unpaired core stripe",
+          { runnerProfile: "github", matrix: { stripe: 1 } },
+          jobName === "check-lint-hosted-core-shard" ? "blacksmith-8vcpu-ubuntu-2404" : runner,
+        ],
         ["noncanonical", { repository: "contributor/openclaw" }, "ubuntu-24.04"],
         ["manual", { eventName: "workflow_dispatch" }, "ubuntu-24.04"],
         [
@@ -4368,7 +4378,9 @@ setImmediate(() => {
           { headRepository: "contributor/openclaw", runnerProfile: "github" },
           jobName === "check-plan" || jobName === "checks-baseline-ratchets"
             ? "ubuntu-24.04"
-            : runner,
+            : jobName === "check-lint-hosted-core-shard"
+              ? "blacksmith-8vcpu-ubuntu-2404"
+              : runner,
         ],
         ["frozen target", { frozenTarget: true }, jobName === "ci-gate" ? runner : "ubuntu-24.04"],
         [
@@ -4376,6 +4388,7 @@ setImmediate(() => {
           {
             eventName: "workflow_dispatch",
             runnerBackend: "github",
+            runnerProfile: "hybrid",
             preflightOutputs: {
               ci_qualification: "true",
               qualification_runner_backend: "hybrid",
@@ -4407,7 +4420,9 @@ setImmediate(() => {
           },
           jobName === "check-plan" || jobName === "checks-baseline-ratchets"
             ? "ubuntu-24.04"
-            : runner,
+            : jobName === "check-lint-hosted-core-shard"
+              ? "blacksmith-8vcpu-ubuntu-2404"
+              : runner,
         ],
         [
           "qualification retry",

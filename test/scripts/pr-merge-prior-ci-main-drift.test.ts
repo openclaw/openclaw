@@ -71,16 +71,27 @@ describePosix("prior-CI forward main admission", () => {
       const state = f.state();
       state.observations =
         stage === "settlement"
-          ? [
-              { pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } },
-              { main, pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" } },
-            ]
+          ? [{ pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } }]
           : [{}, {}, {}, {}, { main }];
+      if (stage === "settlement") {
+        state.restObservation = {
+          main,
+          pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" },
+        };
+      }
       f.save(state);
 
       const result = f.adminPriorCi(f.path);
 
       expect(result.status, result.output).toBe(0);
+      if (stage === "settlement") {
+        expect(f.state()).toMatchObject({
+          observationReads: 1,
+          observations: [],
+          restObservation: null,
+          restObservationAppliedAt: 0,
+        });
+      }
       expect(f.state().mutations).toBe(1);
       expect(f.state().restMergePayload).toMatchObject({ sha: f.head, merge_method: "squash" });
       expect(f.record()).toMatchObject({

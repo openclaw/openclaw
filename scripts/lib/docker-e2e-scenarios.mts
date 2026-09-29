@@ -66,8 +66,7 @@ const updateMigrationCommand = upgradeSurvivorScriptCommand(
 const dreamingCronDoctorCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.9.6 OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE=current OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=dreaming-cron-doctor OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=manual OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=0 OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS= OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=0",
 );
-// One lane per recorded source release so the hops run concurrently; each hop
-// takes ~9-11 minutes on hosted runners as of 2026.9.6.
+// One lane per recorded source release so the hops can run concurrently.
 const updateFirstHopCompatLanes = listRecordedFirstHopSourceVersions().map((version) =>
   npmLane(
     updateFirstHopCompatLaneName(version),
@@ -75,7 +74,9 @@ const updateFirstHopCompatLanes = listRecordedFirstHopSourceVersions().map((vers
     {
       resources: ["service"],
       stateScenario: "upgrade-survivor",
-      timeoutMs: 25 * 60 * 1000,
+      // Run 36465355074: (3 x 310s + 130s + 150s) x ~1.5 => 1800s inner;
+      // add 300s for host-side fixtures, package preparation, and cleanup.
+      timeoutMs: 35 * 60 * 1000,
       weight: 1,
     },
   ),

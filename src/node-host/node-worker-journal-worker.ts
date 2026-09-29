@@ -26,6 +26,10 @@ export class NodeWorkerJournalWorker {
 
   constructor(private readonly options: { env?: NodeJS.ProcessEnv; path?: string }) {}
 
+  operation<Key extends keyof NodeWorkerJournalWorkerOperations>(type: Key) {
+    return (...input: OpenClawStateWorkerOperations[Key]["input"]) => this.execute({ type, input });
+  }
+
   execute<Key extends keyof NodeWorkerJournalWorkerOperations>(
     command: {
       type: Key;

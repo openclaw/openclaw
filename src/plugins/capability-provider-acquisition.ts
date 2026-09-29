@@ -204,25 +204,21 @@ export async function finishCapabilityOperation<T>(
   outcome: Result<T, unknown>,
   release: () => Promise<void>,
 ): Promise<T> {
-  let result = outcome;
   try {
     await release();
   } catch (cleanupError) {
-    result = {
-      ok: false,
-      error: outcome.ok
-        ? cleanupError
-        : new AggregateError(
-            [outcome.error, cleanupError],
-            "Capability operation and registration cleanup failed",
-            { cause: outcome.error },
-          ),
-    };
+    throw outcome.ok
+      ? cleanupError
+      : new AggregateError(
+          [outcome.error, cleanupError],
+          "Capability operation and registration cleanup failed",
+          { cause: outcome.error },
+        );
   }
-  if (!result.ok) {
-    throw result.error;
+  if (!outcome.ok) {
+    throw outcome.error;
   }
-  return result.value;
+  return outcome.value;
 }
 
 /** Keeps callback-shaped operations on the same acquisition and actual-work owner. */

@@ -66,8 +66,7 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
   // split). resolveIntegerOption rejects non-finite values and would fall back to 1,
   // shattering the text into one chunk per character; emit the whole IR as one chunk.
   if (options.limit === Number.POSITIVE_INFINITY) {
-    const source = prepareChunkForMessageBoundary(options, options.ir);
-    return [{ source, rendered: options.renderChunk(source) }];
+    return [renderCandidate(options, options.ir).output];
   }
 
   const normalizedLimit = resolveIntegerOption(options.limit, 1, { min: 1 });
@@ -102,11 +101,8 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
       finalized.push(candidate);
       continue;
     }
-    for (let index = split.length - 1; index >= 0; index -= 1) {
-      const next = split[index];
-      if (next) {
-        pending.push(next);
-      }
+    for (const next of split.toReversed()) {
+      pending.push(next);
     }
   }
 

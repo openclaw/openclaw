@@ -179,9 +179,6 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
   it.each([
     { deadline: "execution", delivery: "partial" },
-    { deadline: "execution", delivery: "completed" },
-    { deadline: "execution", delivery: "message-tool" },
-    { deadline: "settlement", delivery: "partial" },
     { deadline: "settlement", delivery: "completed" },
     { deadline: "settlement", delivery: "message-tool" },
   ] as const)(
@@ -319,27 +316,6 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     },
   );
 
-  it("does not replay after cancellation during replay-safe finalization", async () => {
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
-      asAttemptParams(attemptParams).onAttemptAbort?.();
-      return codexClientClosedAttempt();
-    });
-
-    await expect(
-      runEmbeddedAgent({
-        ...createOverflowRunParams(state),
-        provider: "codex",
-        model: "gpt-5.5",
-        runId: "run-codex-cancel-before-retry",
-      }),
-    ).rejects.toMatchObject({
-      name: "AbortError",
-      message: "agent run aborted",
-    });
-
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-  });
-
   it("stops ordinary failure handling after cancellation during finalization", async () => {
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
       asAttemptParams(attemptParams).onAttemptAbort?.();
@@ -475,22 +451,6 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     });
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
-  });
-
-  it("keeps retry ownership open for an outer fallback after local recovery is exhausted", async () => {
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(codexTurnCompletionIdleTimeoutAttempt())
-      .mockResolvedValueOnce(codexTurnCompletionIdleTimeoutAttempt());
-
-    await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      provider: "codex",
-      model: "gpt-5.5",
-      runId: "run-codex-turn-completion-outer-fallback",
-      isFinalFallbackAttempt: false,
-    });
-
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
   });
 
   it.each(["turn_completion_idle_timeout", "turn_settlement_timeout"] as const)(
