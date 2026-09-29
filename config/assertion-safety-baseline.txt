@@ -1149,6 +1149,7 @@ extensions/xai/src/x-search-config.ts	3
 extensions/xai/stream.ts	3
 extensions/xai/tts.ts	1
 extensions/xai/x-search.ts	5
+extensions/xiaomi/onboard.ts	1
 extensions/zai/index.ts	2
 extensions/zai/model-definitions.ts	1
 extensions/zalo/setup-api.ts	3

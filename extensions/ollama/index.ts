@@ -1,12 +1,10 @@
+import { collectConfiguredModelRefValues } from "@openclaw/model-catalog-core/configured-model-refs";
+import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import {
-  collectConfiguredModelRefValues,
-  findNormalizedProviderKey,
-  splitTrailingAuthProfile,
-} from "openclaw/plugin-sdk/model-ref-parse";
+import { splitTrailingAuthProfile } from "openclaw/plugin-sdk/model-ref-parse";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,

@@ -70,10 +70,9 @@ export async function prepareOpencodeZenModel(params: {
   return snapshot?.get(params.modelId.trim().toLowerCase())?.model;
 }
 
-export const {
-  buildStaticProvider: buildStaticOpencodeZenProviderConfig,
-  buildLiveProvider: buildOpencodeZenLiveProviderConfig,
-} = opencodeZenCatalog;
+export const { buildStaticProvider: buildStaticOpencodeZenProviderConfig } = opencodeZenCatalog;
+export const buildOpencodeZenLiveProviderConfig =
+  opencodeZenCatalog.buildLiveProvider.bind(opencodeZenCatalog);
 
 export async function resolveOpencodeZenStarterModel(params: {
   apiKey: string;

@@ -66,10 +66,9 @@ const opencodeGoCatalog = createUpstreamProviderCatalog({
       : model,
 });
 
-export const {
-  buildStaticProvider: buildStaticOpencodeGoProviderConfig,
-  buildLiveProvider: buildOpencodeGoLiveProviderConfig,
-} = opencodeGoCatalog;
+export const { buildStaticProvider: buildStaticOpencodeGoProviderConfig } = opencodeGoCatalog;
+export const buildOpencodeGoLiveProviderConfig =
+  opencodeGoCatalog.buildLiveProvider.bind(opencodeGoCatalog);
 
 export async function resolveOpencodeGoStarterModel(params: {
   apiKey: string;

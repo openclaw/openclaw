@@ -657,6 +657,14 @@ function shouldRetryGoogleGemini3FirstResponse(params: {
   return isGoogleGemini3ProModel(params.model.id) || isGoogleGemini3FlashModel(params.model.id);
 }
 
+// Retry copies retain JSON wire semantics, including omitted undefined fields.
+function cloneGoogleGenerateContentRequest(
+  params: GoogleGenerateContentRequest,
+): GoogleGenerateContentRequest {
+  const serialized = JSON.stringify(params);
+  return JSON.parse(serialized) as GoogleGenerateContentRequest;
+}
+
 function buildGoogleGemini3FirstResponseRetryParams(params: {
   model: GoogleTransportModel;
   request: GoogleGenerateContentRequest;
@@ -668,7 +676,7 @@ function buildGoogleGemini3FirstResponseRetryParams(params: {
   if (!thinkingLevel) {
     return undefined;
   }
-  const retryRequest = JSON.parse(JSON.stringify(params.request)) as GoogleGenerateContentRequest;
+  const retryRequest = cloneGoogleGenerateContentRequest(params.request);
   const generationConfig =
     retryRequest.generationConfig && typeof retryRequest.generationConfig === "object"
       ? retryRequest.generationConfig

@@ -18,12 +18,7 @@ For lightweight model-reference normalization, use
 and `normalizeAntigravityPreviewModelId` exports share the catalog's alias
 rules without loading provider replay or transport helpers.
 Use `splitTrailingAuthProfile` to separate a trailing auth profile while preserving
-model-version and local quantization suffixes, `collectConfiguredModelRefValues`
-to enumerate configured model selections, and `isCloudModelRef` to recognize an
-unambiguous hosted-source suffix. `findNormalizedProviderKey` and
-`findNormalizedProviderValue` find the first matching provider key or value using
-the shared provider-ID normalization rules. Check an exact key first when that
-provider's contract gives exact spelling precedence.
+model-version and local quantization suffixes.
 
 ## Live model discovery
 
