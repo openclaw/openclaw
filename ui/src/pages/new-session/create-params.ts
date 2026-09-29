@@ -17,7 +17,7 @@ export type DraftSessionCreateOverrides = Partial<
 export type DraftSessionCreateSelection = Partial<
   Pick<
     SessionCreateParams,
-    "attachments" | "permissionMode" | "catalogId" | "category" | "displayName"
+    "attachments" | "permissionMode" | "sandbox" | "catalogId" | "category" | "displayName"
   >
 > & {
   message: string;
@@ -55,6 +55,7 @@ export function buildDraftSessionCreateParams(draft: {
   fastMode?: SessionCreateParams["fastMode"];
   toolOverrides?: SessionCreateParams["toolOverrides"] | null;
   permissionMode?: SessionCreateParams["permissionMode"];
+  sandbox?: SessionCreateParams["sandbox"];
   visibility?: NewSessionVisibility;
   attachments?: SessionCreateParams["attachments"];
   projectId?: string;
@@ -124,6 +125,7 @@ export function buildDraftSessionCreateParams(draft: {
     ...(!catalogId && draft.fastMode !== undefined ? { fastMode: draft.fastMode } : {}),
     ...(draft.toolOverrides ? { toolOverrides: draft.toolOverrides } : {}),
     ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
+    ...(draft.sandbox === "required" ? { sandbox: "required" as const } : {}),
     ...(projectId ? { projectId } : {}),
     ...(projectGitUrl ? { projectGitUrl } : {}),
     ...(repository ? { repository: { ...repository } } : {}),

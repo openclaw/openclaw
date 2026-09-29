@@ -146,7 +146,7 @@ async function createFixture(
   await initializeSessionReadContext(context);
   const key = "agent:main:dashboard:account-authority";
   const respond = vi.fn();
-  const create = (selection?: string, idempotent = true) =>
+  const create = (selection?: string, idempotent = true, sandbox?: "required") =>
     handleGatewayRequest({
       req: {
         type: "req",
@@ -156,6 +156,7 @@ async function createFixture(
           key,
           ...(selection ? { model: selection } : {}),
           ...(idempotent ? { idempotencyKey: "create-once" } : {}),
+          ...(sandbox ? { sandbox } : {}),
         },
       },
       client,
@@ -167,13 +168,13 @@ async function createFixture(
 }
 
 test.each([
-  { scope: "operator.sessions.write", selection: "none", idempotent: false },
-  { scope: "operator.sessions.write", selection: "none", idempotent: true },
-  { scope: "operator.sessions.write", selection: "default", idempotent: true },
-  { scope: "operator.write", selection: "default", idempotent: true },
-  { scope: "operator.write", selection: "explicit", idempotent: true },
+  { scope: "operator.sessions.write", selection: "none", idempotent: false, sandbox: "required" },
+  { scope: "operator.sessions.write", selection: "none", idempotent: true, sandbox: undefined },
+  { scope: "operator.sessions.write", selection: "default", idempotent: true, sandbox: undefined },
+  { scope: "operator.write", selection: "default", idempotent: true, sandbox: undefined },
+  { scope: "operator.write", selection: "explicit", idempotent: true, sandbox: undefined },
 ] as const)(
-  "sessions.create with $scope preserves the $selection account choice (idempotent=$idempotent)",
+  "sessions.create with $scope preserves the $selection account choice (idempotent=$idempotent, sandbox=$sandbox)",
   async (row) => {
     await withOpenClawTestState({ layout: "state-only" }, async () => {
       const fixture = await createFixture(row.scope, row.selection !== "none");
@@ -183,6 +184,7 @@ test.each([
           ? `${model}@${expectDefined(fixture.authProfileId, "owned account")}`
           : undefined,
         row.idempotent,
+        row.sandbox,
       );
 
       expect(fixture.respond.mock.calls[0]?.slice(0, 2)).toEqual([
@@ -193,6 +195,7 @@ test.each([
       expect(entry).toMatchObject({
         createdActor: { type: "human", source: "profile", id: fixture.owner.id },
       });
+      expect(entry?.sandbox).toBe(row.sandbox);
       expect(entry?.authProfileOverride).toBe(fixture.authProfileId);
       expect(entry?.authProfileOverrideSource).toBe(
         row.selection === "none" ? undefined : row.selection === "explicit" ? "user" : "user-link",

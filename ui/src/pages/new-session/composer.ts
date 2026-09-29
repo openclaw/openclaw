@@ -36,6 +36,7 @@ import {
 import {
   renderNewSessionDraftVisibility,
   renderNewSessionPlusMenu,
+  renderNewSessionSandboxRequirement,
   renderNewSessionSelectionStatus,
 } from "./composer-capability-controls.ts";
 import type { NewSessionComposerOptions } from "./composer-types.ts";
@@ -476,6 +477,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
           <div class="agent-chat__composer-lead">
             ${options.nativeTerminal ? nothing : renderNewSessionPlusMenu(options, attachmentProps)}
             ${options.permissionControl ?? nothing}
+            ${options.nativeTerminal ? nothing : renderNewSessionSandboxRequirement(options)}
             ${
               !options.nativeTerminal && options.draftAvailable
                 ? renderNewSessionDraftVisibility(options)

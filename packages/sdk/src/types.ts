@@ -328,6 +328,7 @@ type SDKSessionCreateKeys =
   | "label"
   | "model"
   | "thinkingLevel"
+  | "sandbox"
   | "parentSessionKey"
   | "emitCommandHooks"
   | "succeedsParent"

@@ -43,6 +43,12 @@ export const SessionsCreateParamsSchema = closedObject({
   permissionMode: Type.Optional(SessionPermissionModeSchema),
   toolOverrides: Type.Optional(SessionToolOverridesSchema),
   incognito: Type.Optional(Type.Boolean()),
+  sandbox: Type.Optional(
+    Type.Literal("required", {
+      description:
+        "Permanently require sandboxed execution for this new session. Cannot be added to an existing session.",
+    }),
+  ),
   visibility: Type.Optional(SessionVisibilitySchema),
   catalogId: Type.Optional(NonEmptyString),
   parentSessionKey: Type.Optional(NonEmptyString),

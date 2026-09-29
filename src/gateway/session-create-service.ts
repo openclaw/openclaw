@@ -75,6 +75,7 @@ import {
   prepareSessionPatchRuntimeSelection,
   refreshSessionPatchQueuedSelection,
 } from "./server-methods/sessions-patch-model-selection.js";
+import { resolveExistingSessionCreateIntentError } from "./session-create-existing-intent.js";
 import { existingSessionSelectionWouldChange } from "./session-create-existing-selection.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import {
@@ -109,7 +110,7 @@ import {
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { invalidSessionRequest, sessionCreationFailure } from "./session-request-error.js";
-import { isSessionVisibilityAllowed, resolveSessionVisibility } from "./session-sharing.js";
+import { isSessionVisibilityAllowed } from "./session-sharing.js";
 import {
   loadGatewaySessionEntryReadOnly,
   resolveGatewaySessionStoreTarget,
@@ -418,7 +419,7 @@ export async function createGatewaySession(
     params.emitCommandHooks === true &&
     !requestedKey &&
     params.resetMainWhenUnspecified === true &&
-    !requestedToolOverrides &&
+    !(requestedToolOverrides || params.explicitSandboxRequirement) &&
     !parentIncognito &&
     // Catalog targets need a fresh locked row; resetting main would return before
     // the catalog-owned model/runtime pair is persisted.
@@ -734,17 +735,17 @@ export async function createGatewaySession(
             ),
           };
         }
-        if (params.initialEntry && existingEntry !== undefined) {
-          return invalidSessionRequest("trusted initial session state requires a new session");
-        }
-        if (params.catalogTarget && existingEntry !== undefined) {
-          return invalidSessionRequest("catalog session target requires a new session");
-        }
-        if ((pendingProjectGitUrl || pendingWorktree) && existingEntry !== undefined) {
-          return invalidSessionRequest("workspace preparation requires a new session");
-        }
-        if (spawnToolPolicy && existingEntry !== undefined) {
-          return invalidSessionRequest("spawn tool policy requires a new session");
+        const existingIntentError = resolveExistingSessionCreateIntentError({
+          existingEntry,
+          hasTrustedInitialState: Boolean(params.initialEntry),
+          requiresSandbox: params.explicitSandboxRequirement === true,
+          hasCatalogTarget: Boolean(params.catalogTarget),
+          hasWorkspacePreparation: Boolean(pendingProjectGitUrl || pendingWorktree),
+          hasSpawnToolPolicy: Boolean(spawnToolPolicy),
+          visibility: params.visibility,
+        });
+        if (existingIntentError) {
+          return invalidSessionRequest(existingIntentError);
         }
         if (
           params.visibility &&
@@ -754,13 +755,6 @@ export async function createGatewaySession(
           return invalidSessionRequest(`session visibility is disabled: ${params.visibility}`, {
             details: { code: "SESSION_VISIBILITY_DISABLED", visibility: params.visibility },
           });
-        }
-        if (
-          params.visibility &&
-          existingEntry !== undefined &&
-          resolveSessionVisibility(existingEntry) !== params.visibility
-        ) {
-          return invalidSessionRequest("sessions.create visibility requires a new session");
         }
         // Adoption of an existing key must not stamp provenance or emit a
         // `created` event; only a genuinely new row is a node creation.

@@ -16963,6 +16963,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let permissionmode: SessionPermissionMode?
     public let tooloverrides: [String: AnyCodable]?
     public let incognito: Bool?
+    public let sandbox: String?
     public let visibility: SessionVisibility?
     public let catalogid: String?
     public let parentsessionkey: String?
@@ -17002,6 +17003,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         permissionmode: SessionPermissionMode? = nil,
         tooloverrides: [String: AnyCodable]? = nil,
         incognito: Bool? = nil,
+        sandbox: String? = nil,
         visibility: SessionVisibility? = nil,
         catalogid: String? = nil,
         parentsessionkey: String? = nil,
@@ -17040,6 +17042,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.permissionmode = permissionmode
         self.tooloverrides = tooloverrides
         self.incognito = incognito
+        self.sandbox = sandbox
         self.visibility = visibility
         self.catalogid = catalogid
         self.parentsessionkey = parentsessionkey
@@ -17080,6 +17083,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case permissionmode = "permissionMode"
         case tooloverrides = "toolOverrides"
         case incognito
+        case sandbox
         case visibility
         case catalogid = "catalogId"
         case parentsessionkey = "parentSessionKey"

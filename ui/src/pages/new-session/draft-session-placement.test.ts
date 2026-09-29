@@ -94,6 +94,7 @@ describe("new-session placement target", () => {
           agentId: "main",
           message: "",
           permissionMode: "guarded",
+          sandbox: "required",
           visibility: "draft",
           toolOverrides: { skills: { release: false } },
           worktree: true,
@@ -109,6 +110,7 @@ describe("new-session placement target", () => {
       },
       draft: {
         permissionMode: "guarded",
+        sandbox: "required",
         visibility: "draft",
         toolOverrides: { skills: { release: false } },
       },

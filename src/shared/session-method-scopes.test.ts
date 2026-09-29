@@ -9,6 +9,7 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
   it.each([
     { agentId: "main", message: "hello", worktree: true },
     { agentId: "main", message: "hello", projectId: "openclaw" },
+    { agentId: "main", sandbox: "required" },
   ])("keeps ordinary session creation write-scoped %#", (params) => {
     expect(resolveDynamicSessionMutationRequiredScope("sessions.create", params)).toBe(
       "operator.write",

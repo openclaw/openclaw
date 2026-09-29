@@ -103,6 +103,10 @@ const enNewSessionSetup = {
       "Keep this session for 24 hours or until the Gateway restarts, whichever comes first",
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
+    requireSandbox: "Require sandbox",
+    requireSandboxDescription:
+      "Permanently require sandboxed tool execution for this session. This cannot be changed after creation.",
+    requireSandboxRole: "Your role requires sandboxing",
     messagePlaceholder: "What should this session work on?",
     dictate: "Dictate",
     readingAttachment: "Reading attachment",

@@ -88,6 +88,9 @@ export function renderNewSessionDraftView(options: {
         getMentions: () => submission.mentions,
         visibility: submission.visibility,
         draftAvailable: capabilities.canStartAsDraft(context),
+        sandboxAvailable: true,
+        sandboxCanChange: !submission.sandboxRequiredByRole,
+        sandboxRequired: submission.sandboxRequired,
         ...capabilities.composerProps(context, gateway, place.agentId),
         modelControl: place.modelControl,
         permissionControl: isCatalogTarget
@@ -119,6 +122,15 @@ export function renderNewSessionDraftView(options: {
         onVisibilityChange: (visibility) => {
           if (!submission.submitting && !submission.pendingPlacement.sessionKey) {
             submission.setVisibility(visibility);
+          }
+        },
+        onSandboxRequiredChange: (required) => {
+          if (
+            !submission.sandboxRequiredByRole &&
+            !submission.submitting &&
+            !submission.pendingPlacement.sessionKey
+          ) {
+            submission.setSandboxRequired(required);
           }
         },
         onSubmit: () => void submission.submit(),

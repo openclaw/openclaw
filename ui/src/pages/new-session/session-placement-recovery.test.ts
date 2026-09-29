@@ -424,6 +424,8 @@ describe("session placement recovery", () => {
     { name: "a whitespace runtime", value: { agentRuntime: "  " } },
     { name: "a non-string runtime", value: { agentRuntime: 42 } },
     { name: "a null runtime", value: { agentRuntime: null } },
+    { name: "an inheriting sandbox request", value: { sandbox: "inherit" } },
+    { name: "a disabled sandbox request", value: { sandbox: "off" } },
     { name: "malformed tool overrides", value: { toolOverrides: { webSearch: "yes" } } },
     { name: "an unknown field", value: { unknown: true } },
   ])("rejects $name in creating parameters", ({ value }) => {
@@ -440,6 +442,22 @@ describe("session placement recovery", () => {
         "cloud",
       ),
     ).toBeNull();
+  });
+
+  it("preserves an admitted sandbox requirement in creating parameters", () => {
+    expect(
+      parseSessionPlacementCreateParams(
+        {
+          key: recovery.sessionKey,
+          agentId: "cloud",
+          message: "",
+          sandbox: "required",
+          worktree: true,
+        },
+        recovery.sessionKey,
+        "cloud",
+      ),
+    ).toMatchObject({ sandbox: "required" });
   });
 
   it("arbitrates matching sessions without blocking another session", () => {

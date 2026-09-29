@@ -284,6 +284,7 @@ describe("gateway identity scope grants", () => {
             sessions: { others: "view" },
             agents: "*",
             scopes: ["operator.read", "operator.write"],
+            sandbox: "required",
           },
           "admin-only": {
             sessions: { others: "write" },
@@ -315,6 +316,9 @@ describe("gateway identity scope grants", () => {
         expect(connected.ok).toBe(true);
         expect((await rpcReq(ws, "status")).ok).toBe(scenario.expectedScopes.length > 0);
         expect(responseAuth(connected)?.scopes).toEqual(scenario.expectedScopes);
+        expect((connected.payload as HelloOk).policy.sandbox).toBe(
+          scenario.assignedRole ? undefined : "required",
+        );
         if (scenario.assignedRole === "read-only") {
           expect(
             await rpcReq(ws, "sessions.patch", { key: "agent:main:denied", label: "denied" }),
@@ -465,6 +469,7 @@ describe("gateway identity scope grants", () => {
               sessions: { others: "none" },
               agents: [],
               scopes: ["operator.read"],
+              sandbox: "required",
             },
           },
         },
@@ -482,6 +487,7 @@ describe("gateway identity scope grants", () => {
         });
         expect(connected.ok).toBe(true);
         expect(responseAuth(connected)?.scopes).toEqual(["operator.read", "operator.write"]);
+        expect((connected.payload as HelloOk).policy.sandbox).toBeUndefined();
         const deviceToken = responseAuth(connected)?.deviceToken;
         expect(deviceToken).toBeTypeOf("string");
 

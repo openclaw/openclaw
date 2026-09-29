@@ -4,6 +4,7 @@ import {
   PROTOCOL_VERSION,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { resolveControlUiLinkLocation } from "../../../config/control-ui-link-base.js";
+import { getRuntimeConfig } from "../../../config/io.js";
 import { sha256Base64Url } from "../../../infra/crypto-digest.js";
 import {
   redeemDeviceBootstrapTokenProfile,
@@ -35,6 +36,7 @@ import {
 import { canReadDetailedUpdateMetadata } from "../../events.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
+import { resolveOperatorRolePolicy } from "../../operator-role-policy.js";
 import { resolveBrowserAuthOrigin } from "../../provider-browser-auth.js";
 import {
   MAX_BUFFERED_BYTES,
@@ -151,6 +153,10 @@ export async function sendGatewayHello(
     ? ("configured" as const)
     : ("bundled" as const);
   const serverBuildId = resolveRuntimeServiceBuildId();
+  const sandbox =
+    role === "operator"
+      ? resolveOperatorRolePolicy(context.handler.getClient(), getRuntimeConfig())?.sandbox
+      : undefined;
   const helloOk = {
     type: "hello-ok",
     // Admission already verified range overlap; this field reports the server's current protocol.
@@ -232,6 +238,7 @@ export async function sendGatewayHello(
       attachments: resolveChatAttachmentPolicy(context.configSnapshot),
       allowedSessionVisibilities: allowedSessionVisibilities(context.configSnapshot),
       hasMultipleSessionSharingIdentities: hasMultipleSessionSharingIdentities(),
+      ...(sandbox === "required" ? { sandbox } : {}),
     },
   };
   advanceHandshakePhase("hello_payload_prepared");

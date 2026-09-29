@@ -167,12 +167,12 @@
   content: "";
 }
 
-.palette-session-settings__worktree[aria-checked="true"] .palette-session-settings__switch {
+.palette-session-settings__toggle[aria-checked="true"] .palette-session-settings__switch {
   border-color: var(--accent);
   background: var(--accent);
 }
 
-.palette-session-settings__worktree[aria-checked="true"] .palette-session-settings__switch::after {
+.palette-session-settings__toggle[aria-checked="true"] .palette-session-settings__switch::after {
   left: 14px;
   background: var(--accent-foreground);
 }

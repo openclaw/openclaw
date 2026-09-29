@@ -18,6 +18,9 @@ type NewSessionComposerCapabilityOptions = {
   messageLocked?: boolean;
   visibility?: NewSessionVisibility;
   draftAvailable?: boolean;
+  sandboxAvailable?: boolean;
+  sandboxCanChange?: boolean;
+  sandboxRequired?: boolean;
   capabilityMenu?: CapabilityMenuProps;
   toolOverrides?: SessionToolOverrides | null;
   textareaController: {
@@ -26,6 +29,7 @@ type NewSessionComposerCapabilityOptions = {
   };
   requestUpdate: () => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
+  onSandboxRequiredChange?: (required: boolean) => void;
 };
 
 export function renderNewSessionDraftVisibility(options: NewSessionComposerCapabilityOptions) {
@@ -35,7 +39,7 @@ export function renderNewSessionDraftVisibility(options: NewSessionComposerCapab
   return html`
     <button
       type="button"
-      class="new-session-page__visibility new-session-page__visibility--draft ${
+      class="new-session-page__composer-option new-session-page__visibility new-session-page__visibility--draft ${
         active ? "new-session-page__visibility--active" : ""
       }"
       role="switch"
@@ -46,7 +50,39 @@ export function renderNewSessionDraftVisibility(options: NewSessionComposerCapab
       @click=${() => options.onVisibilityChange?.(active ? "normal" : "draft")}
     >
       <span class="new-session-page__visibility-icon" aria-hidden="true">${icons.pencil}</span>
-      <span class="new-session-page__visibility-label">${label}</span>
+      <span class="new-session-page__composer-option-label new-session-page__visibility-label"
+        >${label}</span
+      >
+    </button>
+  `;
+}
+
+export function renderNewSessionSandboxRequirement(options: NewSessionComposerCapabilityOptions) {
+  if (!options.sandboxAvailable) {
+    return nothing;
+  }
+  const active = options.sandboxRequired === true;
+  const disabled =
+    options.submitting || options.messageLocked === true || options.sandboxCanChange !== true;
+  const label = t("newSession.requireSandbox");
+  const title = options.sandboxCanChange
+    ? t("newSession.requireSandboxDescription")
+    : t("newSession.requireSandboxRole");
+  return html`
+    <button
+      type="button"
+      class="new-session-page__composer-option new-session-page__sandbox ${
+        active ? "new-session-page__sandbox--active" : ""
+      }"
+      role="switch"
+      aria-label=${label}
+      aria-checked=${String(active)}
+      ?disabled=${disabled}
+      title=${title}
+      @click=${() => options.onSandboxRequiredChange?.(!active)}
+    >
+      <span class="new-session-page__sandbox-icon" aria-hidden="true">${icons.shieldLock}</span>
+      <span class="new-session-page__composer-option-label">${label}</span>
     </button>
   `;
 }
@@ -58,14 +94,8 @@ export function renderNewSessionPlusMenu(
   const draftEnabled = options.visibility === "draft";
   const disabled = options.submitting || options.messageLocked === true;
   const controller = options.textareaController;
-  return renderChatComposerPlusMenu({
-    attachments,
-    capabilityMenu: options.capabilityMenu,
-    disabled,
-    open: controller.capabilityMenuOpen,
-    view: controller.capabilityMenuView,
-    toolOverrides: options.toolOverrides,
-    rootToggles: options.draftAvailable
+  const rootToggles = [
+    ...(options.draftAvailable
       ? [
           {
             value: "new-session-draft",
@@ -74,10 +104,36 @@ export function renderNewSessionPlusMenu(
             checked: draftEnabled,
             disabled,
             title: t("newSession.draftDescription"),
-            onChange: (checked) => options.onVisibilityChange?.(checked ? "draft" : "normal"),
+            onChange: (checked: boolean) =>
+              options.onVisibilityChange?.(checked ? "draft" : "normal"),
           },
         ]
-      : undefined,
+      : []),
+    ...(options.sandboxAvailable
+      ? [
+          {
+            value: "new-session-require-sandbox",
+            label: t("newSession.requireSandbox"),
+            icon: icons.shieldLock,
+            checked: options.sandboxRequired === true,
+            disabled: disabled || options.sandboxCanChange !== true,
+            title:
+              options.sandboxCanChange === true
+                ? t("newSession.requireSandboxDescription")
+                : t("newSession.requireSandboxRole"),
+            onChange: (checked: boolean) => options.onSandboxRequiredChange?.(checked),
+          },
+        ]
+      : []),
+  ];
+  return renderChatComposerPlusMenu({
+    attachments,
+    capabilityMenu: options.capabilityMenu,
+    disabled,
+    open: controller.capabilityMenuOpen,
+    view: controller.capabilityMenuView,
+    toolOverrides: options.toolOverrides,
+    rootToggles: rootToggles.length ? rootToggles : undefined,
     onOpenChange: (open) => {
       controller.capabilityMenuOpen = open;
       if (!open) {

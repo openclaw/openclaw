@@ -65,7 +65,7 @@ describe("session sharing sandbox requirements", () => {
       const guestId = guest.authenticatedUserProfile!.profileId;
       const maintainerId = maintainer.authenticatedUserProfile!.profileId;
       const hostSessionKey = "agent:main:maintainer-host-session";
-      const sandboxSessionKey = "agent:main:guest-sandbox-session";
+      const sandboxSessionKey = "agent:main:maintainer-sandbox-session";
 
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: hostSessionKey },
@@ -79,10 +79,10 @@ describe("session sharing sandbox requirements", () => {
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: sandboxSessionKey },
         {
-          sessionId: "guest-sandbox-session",
+          sessionId: "maintainer-sandbox-session",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: guestId },
+          createdActor: { type: "human", source: "profile", id: maintainerId },
           sandbox: "required",
         },
       );
@@ -92,6 +92,14 @@ describe("session sharing sandbox requirements", () => {
           identityId: guestId,
           addedBy: maintainerId,
           expectedSessionId: "maintainer-host-session",
+        },
+      );
+      addSessionMember(
+        { agentId: "main", sessionKey: sandboxSessionKey },
+        {
+          identityId: guestId,
+          addedBy: maintainerId,
+          expectedSessionId: "maintainer-sandbox-session",
         },
       );
 
@@ -153,6 +161,14 @@ describe("session sharing sandbox requirements", () => {
           }).error,
         ).toBeNull();
       }
+      const sandboxTarget = resolveSessionSharingTarget({ cfg, sessionKey: sandboxSessionKey });
+      expect(sandboxTarget).not.toBeNull();
+      if (!sandboxTarget) {
+        throw new Error("expected persisted sandbox-required session");
+      }
+      expect(resolveSessionSharingRole({ cfg, client: guest, target: sandboxTarget })).toBe(
+        "member",
+      );
 
       cfg.gateway!.roles!.definitions.view!.sandbox = "inherit";
       const admittedHostRun = resolveSessionMutationAuthorization({

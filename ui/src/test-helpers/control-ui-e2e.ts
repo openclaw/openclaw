@@ -35,6 +35,7 @@ import { createMockGatewayControls } from "./control-ui-e2e-controls.ts";
 import {
   defaultControlUiFeatureMethods,
   createControlUiDefaultResponses,
+  createControlUiHelloPolicy,
 } from "./control-ui-e2e-defaults.ts";
 import {
   installControlUiE2ePageDiagnosticRing,
@@ -485,6 +486,8 @@ export type ControlUiMockGatewayScenario = {
   omitConnectHelloAuth?: boolean;
   /** Operator scopes returned by the mocked connect handshake. */
   operatorScopes?: string[];
+  /** Creator-role sandbox policy returned by the mocked connect handshake. */
+  sandbox?: "required";
   /** Selected fixture and event default; use controlUiSessionUrl to select it in the UI. */
   sessionKey?: string;
   sessionScope?: AgentsListResult["scope"];
@@ -500,8 +503,9 @@ export type ControlUiMockGatewayScenario = {
 };
 
 type NormalizedControlUiMockGatewayScenario = Required<
-  Omit<ControlUiMockGatewayScenario, "nativePlugins" | "awaitInitialRoster">
->;
+  Omit<ControlUiMockGatewayScenario, "nativePlugins" | "awaitInitialRoster" | "sandbox">
+> &
+  Pick<ControlUiMockGatewayScenario, "sandbox">;
 
 const DEFAULT_MOCK_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
 const DEFAULT_MOCK_ATTACHMENT_MAX_BYTES = Math.floor(
@@ -944,6 +948,7 @@ function normalizeScenario(
     presenceUsers: scenario.presenceUsers ?? [],
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
     omitConnectHelloAuth: scenario.omitConnectHelloAuth ?? false,
+    sandbox: scenario.sandbox,
     operatorScopes: scenario.operatorScopes ?? [
       "operator.admin",
       "operator.read",
@@ -1019,7 +1024,7 @@ export function createControlUiMockGatewayInitScript(
     protocolVersion: PROTOCOL_VERSION,
     scenario: normalizeScenario(scenario),
   };
-  return `${json5BrowserSource}\n;(() => { const __name = (target) => target; (${installControlUiMockGateway.toString()})(${JSON.stringify(input)}, globalThis.JSON5.parse, ${createControlUiSessionFixtures.toString()}, ${createControlUiAttachmentFacts.toString()}, ${createControlUiMockResponses.toString()}, ${createControlUiMockSessionSubscriptions.toString()}); })();`;
+  return `${json5BrowserSource}\n;(() => { const __name = (target) => target; (${installControlUiMockGateway.toString()})(${JSON.stringify(input)}, globalThis.JSON5.parse, ${createControlUiSessionFixtures.toString()}, ${createControlUiAttachmentFacts.toString()}, ${createControlUiMockResponses.toString()}, ${createControlUiMockSessionSubscriptions.toString()}, ${createControlUiHelloPolicy.toString()}); })();`;
 }
 
 function installControlUiMockGateway(
@@ -1032,6 +1037,7 @@ function installControlUiMockGateway(
   createAttachmentFacts: typeof createControlUiAttachmentFacts,
   createResponses: typeof createControlUiMockResponses,
   createSubscriptions: typeof createControlUiMockSessionSubscriptions,
+  createHelloPolicy: typeof createControlUiHelloPolicy,
 ) {
   const NativeWebSocket = window.WebSocket;
   type BrowserFrame = {
@@ -1913,17 +1919,7 @@ function installControlUiMockGateway(
             connId: "control-ui-e2e",
             version: scenario.serverVersion,
           },
-          policy: {
-            maxPayload: scenario.maxPayload,
-            maxBufferedBytes: 1_048_576,
-            tickIntervalMs: 30_000,
-            attachments: {
-              maxBytes: scenario.attachmentMaxBytes,
-              maxImageBytes: Math.min(scenario.attachmentMaxBytes, 5 * 1024 * 1024),
-            },
-            allowedSessionVisibilities: scenario.allowedSessionVisibilities,
-            hasMultipleSessionSharingIdentities: scenario.hasMultipleSessionSharingIdentities,
-          },
+          policy: createHelloPolicy(scenario),
           snapshot: {
             ...(scenario.authMode ? { authMode: scenario.authMode } : {}),
             suspension: { phase: scenario.gatewaySuspensionPhase },

@@ -408,6 +408,8 @@ dispatch so authorization failures have one canonical structured response:
 - `sessions.create` accepts `operator.sessions.write` for ordinary own-session
   creation, including a `projectId`, or the broader `operator.write` scope.
   Incognito sessions and any `execNode` request require `operator.admin`.
+  The creation-only `sandbox: "required"` option uses the same write access and
+  permanently stamps the session and cannot upgrade an existing unsandboxed key.
   For non-admin callers, the handler limits `cwd` to configured agent
   workspaces. `projectId` cannot be combined with `cwd` or `execNode`.
 - `environments.list` needs `operator.read` for plain inventory and

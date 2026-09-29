@@ -126,6 +126,21 @@ describe("buildDraftSessionCreateParams", () => {
     });
   });
 
+  it("adds the immutable sandbox requirement only when selected", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "run this in isolation",
+        sandbox: "required",
+        worktree: false,
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "run this in isolation",
+      sandbox: "required",
+    });
+  });
+
   it("includes initial-message attachments", () => {
     const attachments = [
       { type: "image", mimeType: "image/png", fileName: "pixel.png", content: "aGVsbG8=" },

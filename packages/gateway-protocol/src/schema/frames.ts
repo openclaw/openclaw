@@ -163,6 +163,8 @@ export const HelloOkSchema = closedObject({
     ),
     allowedSessionVisibilities: Type.Optional(Type.Array(SessionVisibilitySchema)),
     hasMultipleSessionSharingIdentities: Type.Optional(Type.Boolean()),
+    /** Authenticated role's creation requirement; omission leaves sandboxing selectable. */
+    sandbox: Type.Optional(Type.Literal("required")),
   }),
 });
 

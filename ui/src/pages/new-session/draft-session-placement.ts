@@ -81,6 +81,7 @@ export function projectDraftSessionPlacementRecovery(recovery: SessionPlacementR
       visibility,
       toolOverrides: recovery.createParams?.toolOverrides ?? null,
       permissionMode: recovery.createParams?.permissionMode,
+      sandbox: recovery.createParams?.sandbox,
     },
   };
 }

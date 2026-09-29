@@ -45,12 +45,16 @@ export type NewSessionComposerOptions = {
   draftAvailable?: boolean;
   capabilityMenu?: CapabilityMenuProps;
   toolOverrides?: SessionToolOverrides | null;
+  sandboxAvailable?: boolean;
+  sandboxCanChange?: boolean;
+  sandboxRequired?: boolean;
   onAttachmentsChange: (attachments: ChatAttachment[]) => void;
   onPendingReadsChange: (delta: 1 | -1) => void;
   onInput: (message: string, mentions?: readonly HumanMention[]) => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
+  onSandboxRequiredChange?: (required: boolean) => void;
   onSubmit: () => void;
   onBackgroundSubmit?: () => void;
 };

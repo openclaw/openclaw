@@ -59,7 +59,7 @@ async function changePicker(
   ]);
 }
 
-function captureAfter(page: Page, name: string) {
+function captureAfter(page: Page, name: string, mask: Locator[] = []) {
   const directory =
     process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
       ? createControlUiE2eArtifactDir(name, suite.artifactDir)
@@ -70,6 +70,7 @@ function captureAfter(page: Page, name: string) {
       const options = {
         path: path.join(directory, stage + ".png"),
         animations: "disabled" as const,
+        mask,
       };
       if (await palette.isVisible()) {
         await palette.screenshot(options);
@@ -601,6 +602,58 @@ suite.define(() => {
       expect(await gateway.getRequests("chat.send")).toEqual([]);
     });
   });
+
+  it.each([undefined, "required"] as const)(
+    "includes a selected or role-required sandbox requirement (%s) in compact creation",
+    async (sandbox) => {
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          ...scenario({
+            "sessions.create": {
+              key: "agent:main:dashboard:palette-sandbox-required",
+              runStarted: true,
+              runId: "palette-sandbox-run",
+            },
+          }),
+          operatorScopes: ["operator.read", "operator.write"],
+          sandbox,
+        });
+        const { palette, input } = await openFromForeground(page, suite.server.baseUrl);
+        await input.fill("Run this compact task in a sandbox");
+        const settings = palette.locator("wa-popover.palette-session-settings");
+        await changePicker(settings, "wa-after-show", () =>
+          palette.getByRole("button", { name: "New session settings", exact: true }).click(),
+        );
+        const requireSandbox = settings.getByRole("switch", {
+          name: "Require sandbox",
+          exact: true,
+        });
+        if (sandbox === "required") {
+          await expect.poll(() => requireSandbox.isDisabled()).toBe(true);
+        } else {
+          await expect.poll(() => requireSandbox.isEnabled()).toBe(true);
+          await requireSandbox.click();
+        }
+        await expect.poll(() => requireSandbox.getAttribute("aria-checked")).toBe("true");
+        await captureAfter(page, sandbox ? "sandbox-role-required" : "sandbox-selected", [
+          page.locator("[data-chat-model-select]"),
+        ])("settings");
+        await changePicker(settings, "wa-after-hide", () =>
+          settings.locator("button:not(:disabled)").first().press("Escape"),
+        );
+        await input.focus();
+        await input.press("ControlOrMeta+Enter");
+
+        await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
+          params: {
+            agentId: "main",
+            message: "Run this compact task in a sandbox",
+            sandbox: "required",
+          },
+        });
+      });
+    },
+  );
 
   it.each([
     { destination: "local", width: 1280 },

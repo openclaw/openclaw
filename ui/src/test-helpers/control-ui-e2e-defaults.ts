@@ -1,4 +1,4 @@
-import type { UserProfile } from "../../../packages/gateway-protocol/src/index.ts";
+import type { HelloOk, UserProfile } from "../../../packages/gateway-protocol/src/index.ts";
 import { BUILTIN_THEMES } from "../../../packages/gateway-protocol/src/theme.js";
 import type { ControlUiMockPresenceUser } from "./control-ui-e2e-contract.ts";
 
@@ -60,6 +60,27 @@ export const defaultControlUiFeatureMethods = [
   "update.status",
   "worktrees.branches",
 ] as const;
+
+export function createControlUiHelloPolicy(scenario: {
+  maxPayload: number;
+  attachmentMaxBytes: number;
+  allowedSessionVisibilities: HelloOk["policy"]["allowedSessionVisibilities"];
+  hasMultipleSessionSharingIdentities: boolean;
+  sandbox?: HelloOk["policy"]["sandbox"];
+}): HelloOk["policy"] {
+  return {
+    maxPayload: scenario.maxPayload,
+    maxBufferedBytes: 1_048_576,
+    tickIntervalMs: 30_000,
+    attachments: {
+      maxBytes: scenario.attachmentMaxBytes,
+      maxImageBytes: Math.min(scenario.attachmentMaxBytes, 5 * 1024 * 1024),
+    },
+    allowedSessionVisibilities: scenario.allowedSessionVisibilities,
+    hasMultipleSessionSharingIdentities: scenario.hasMultipleSessionSharingIdentities,
+    ...(scenario.sandbox ? { sandbox: scenario.sandbox } : {}),
+  };
+}
 
 export function createControlUiDefaultResponses(scenario: {
   presenceUsers?: ControlUiMockPresenceUser[];

@@ -2,6 +2,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
+import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
@@ -24,6 +25,7 @@ export function buildDraftSubmissionCreateParams(
   draft: {
     capabilities: Pick<NewSessionCapabilityController, "toolOverrides">;
     permission: Pick<NewSessionPermissionSelection, "value">;
+    sandbox: SessionCreateParams["sandbox"];
     visibility: NewSessionVisibility;
   },
   snapshot: DraftSubmissionSnapshot,
@@ -34,6 +36,7 @@ export function buildDraftSubmissionCreateParams(
     message: options.message ?? "",
     toolOverrides: draft.capabilities.toolOverrides,
     permissionMode: draft.permission.value,
+    sandbox: draft.sandbox,
     visibility: options.visibility ?? draft.visibility,
     catalogId: snapshot.data?.catalogId,
     category: gateway.resolvedGroupCategory(),
