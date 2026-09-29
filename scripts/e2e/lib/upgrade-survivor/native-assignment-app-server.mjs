@@ -116,7 +116,8 @@ function thread(id) {
   return value;
 }
 
-function startThread(params, id) {
+function startThread(params, requestedId) {
+  let id = requestedId;
   if (id === undefined) {
     parentSequence += 1;
     id = parentSequence === 1 ? parentId : `${parentId}-${parentSequence}`;

@@ -313,18 +313,22 @@ async function handoff() {
         ) {
           const observed = interruption;
           interruption = undefined;
-          message.params.turn.status === "interrupted"
-            ? observed.resolve()
-            : observed.reject(new Error("Native handoff did not interrupt the seed-parent turn"));
+          if (message.params.turn.status === "interrupted") {
+            observed.resolve();
+          } else {
+            observed.reject(new Error("Native handoff did not interrupt the seed-parent turn"));
+          }
         }
         return;
       }
       const request = pending.get(message.id);
       if (request) {
         pending.delete(message.id);
-        message.error
-          ? request.reject(new Error(message.error.message))
-          : request.resolve(message.result);
+        if (message.error) {
+          request.reject(new Error(message.error.message));
+        } else {
+          request.resolve(message.result);
+        }
       }
     } catch (error) {
       fail(error);
