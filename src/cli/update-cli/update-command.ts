@@ -244,7 +244,7 @@ async function updateCommandInternal(
   opts: UpdateCommandOptions,
   recoveryState: UpdateCommandRecoveryState,
   invocationCwd: string | undefined,
-  prepared: NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>,
+  prepared: PreparedUpdate,
   presentation: ReturnType<typeof createUpdateProgress>,
   executor: UpdateCommandExecutor,
   retainRuntime: RetainUpdateRuntime,

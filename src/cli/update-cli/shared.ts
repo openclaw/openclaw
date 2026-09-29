@@ -201,7 +201,7 @@ export async function resolveTargetVersion(
   if (direct) {
     return { version: direct };
   }
-  const res = await fetchNpmTagVersion({
+  return await fetchNpmTagVersion({
     tag,
     timeoutMs,
     spec: options.spec,
@@ -209,7 +209,6 @@ export async function resolveTargetVersion(
     cwd: options.cwd,
     env: options.env,
   });
-  return res;
 }
 
 export async function isGitCheckout(root: string): Promise<boolean> {
