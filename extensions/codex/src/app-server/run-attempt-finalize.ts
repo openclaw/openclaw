@@ -146,12 +146,19 @@ export async function finalizeCodexAttempt(
       (!resourceState.executionDisconnectError &&
         (projectedTerminal.aborted ||
           (runAbortController.signal.aborted && !state.clientClosedAbort)));
+    const inputSettlementError =
+      state.inputSettlementError && projectedTerminal.promptError
+        ? new AggregateError(
+            [projectedTerminal.promptError, state.inputSettlementError],
+            "Codex turn and input transcript confirmation failed.",
+          )
+        : state.inputSettlementError;
     const currentPromptError = (fallback: unknown) =>
       resourceState.executionDisconnectError ??
       state.clientClosedPromptError ??
       (state.timeout
         ? `codex app-server ${state.timeout.kind === "execution" ? "execution budget" : "terminal settlement"} timed out`
-        : fallback);
+        : (inputSettlementError ?? fallback));
     let enrichedPromptError = currentPromptError(projectedTerminal.promptError);
     const enrichedPromptErrorMessage =
       typeof enrichedPromptError === "string"
@@ -226,7 +233,7 @@ export async function finalizeCodexAttempt(
       const clientClosedPromptErrorForFinal = state.clientClosedPromptError;
       const finalPromptError = currentPromptError(enrichedPromptError);
       const finalPromptErrorSource =
-        effectiveTimedOut || clientClosedPromptErrorForFinal
+        effectiveTimedOut || clientClosedPromptErrorForFinal || inputSettlementError
           ? "prompt"
           : projectedTerminal.promptErrorSource;
       const codexAppServerFailureKind = clientClosedPromptErrorForFinal

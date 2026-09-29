@@ -147,6 +147,8 @@ export function captureDirectEmbeddedMessageInjectionTarget(
           sessionId,
           backend,
           canInject,
+          captureSteerConfirmation: toolAuthority.captureSteerConfirmation,
+          trackMessageInjection: toolAuthority.trackMessageInjection,
           options:
             params.options?.isInboundUserMessage && params.allowPendingUserInputAnswer !== false
               ? { ...params.options, terminalReplyExpectation: "required" }

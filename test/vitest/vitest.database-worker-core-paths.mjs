@@ -4,6 +4,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/session-repository-workspaces.test.ts",
   "src/infra/update-run-reconciliation.worker.test.ts",
   "src/infra/update-run-interruption.worker.test.ts",
+  "src/sessions/user-turn-transcript-steering-store.test.ts",
+  "src/agents/harness/tool-authority.steering.test.ts",
   "src/channels/turn/durable-delivery.reload.test.ts",
   "test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts",
   "src/channels/message/durable-receive.test.ts",

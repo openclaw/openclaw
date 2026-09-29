@@ -3,6 +3,10 @@ import {
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  ACTIVE_EMBEDDED_RUNS,
+  ACTIVE_EMBEDDED_RUN_REGISTRATIONS,
+} from "../../agents/embedded-agent-runner/run-state.js";
 import { canSteerEmbeddedRunDuringCompaction } from "../../agents/embedded-agent-runner/runs.probes.js";
 import {
   QuestionAnswerUnconfirmedError,
@@ -12,6 +16,7 @@ import {
 import { SessionPendingInputCustodyError } from "../../config/sessions/session-pending-input-custody-error.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { hasPromptImageInput } from "../../media/prompt-image-input.js";
+import type { CaptureSteeredUserTurnConfirmation } from "../../sessions/user-turn-transcript-steering.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createMessageInjectionAuthority,
@@ -167,6 +172,7 @@ export function resolveReplyMessageInjectionRejection(params: {
     return { reason: "stale_run" };
   }
   const backend = getAttachedBackend(operation);
+  const embedded = ACTIVE_EMBEDDED_RUNS.get(operation.sessionId);
   const canInject = () => {
     return (
       replyRunState.activeRunsByKey.get(operation.key) === operation &&
@@ -181,6 +187,14 @@ export function resolveReplyMessageInjectionRejection(params: {
     backend,
     canInject,
     toolAuthorityFingerprint: operation.toolAuthorityFingerprint,
+    trackMessageInjection:
+      embedded && embedded === backend
+        ? ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(embedded)?.toolAuthority?.trackMessageInjection
+        : undefined,
+    captureSteerConfirmation:
+      embedded && embedded === backend
+        ? ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(embedded)?.toolAuthority?.captureSteerConfirmation
+        : undefined,
   });
 }
 
@@ -189,6 +203,8 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
   sessionId: string;
   backend: ReplyBackendHandle | undefined;
   canInject: () => boolean;
+  captureSteerConfirmation?: CaptureSteeredUserTurnConfirmation;
+  trackMessageInjection?: typeof import("../../shared/async-work-scope.js").trackAsyncWork;
   toolAuthorityFingerprint?: string;
   options?: ReplyBackendQueueMessageOptions;
   allowPendingUserInputAnswer?: false;
@@ -240,6 +256,7 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
   ) {
     return {
       backend,
+      trackMessageInjection: params.trackMessageInjection,
       injection: {
         isAvailable: () => true,
         queueMessage: async (text, options) => {
@@ -261,7 +278,18 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
             ? injection.cancelPendingUserInput
             : undefined,
       }
-    : { backend, injection };
+    : {
+        backend,
+        injection,
+        trackMessageInjection: params.trackMessageInjection,
+        confirmTranscript:
+          params.options?.waitForTranscriptCommit && params.options.userTurnTranscriptRecorder
+            ? params.captureSteerConfirmation?.(
+                params.options.userTurnTranscriptRecorder,
+                createMessageInjectionAuthority(canInject),
+              )
+            : undefined,
+      };
 }
 
 function resolveReplyMessageInjectionFailure(
@@ -394,7 +422,6 @@ export function beginReplyMessageInjectionTarget(
     };
   }
   const targetRunId = normalizeOptionalString(resolved.backend.runId);
-  const userTurnTranscriptRecorder = queueOptions?.userTurnTranscriptRecorder;
   // The backend selected at the final admission check owns steering identity.
   // Durable provenance is confirmed only after this exact queue operation proves
   // transcript commitment; acceptance alone is insufficient.
@@ -442,28 +469,41 @@ export function beginReplyMessageInjectionTarget(
     settleAcceptance(outcome.status === "indeterminate");
     return outcome;
   };
-  let queued: Promise<void | ReplyBackendQueueMessageResult>;
-  try {
-    queued = resolved.injection.queueMessage(text, runtimeQueueOptions);
-  } catch (error) {
-    return {
-      targetRunId,
-      acceptance: acceptance.promise,
-      outcome: Promise.resolve(failed(error)),
-    };
-  }
-  const outcome = queued.then(async (result): Promise<ReplyMessageInjectionOutcome> => {
-    recordParticipant();
-    settleAcceptance(true);
-    if (
-      targetRunId &&
-      queueOptions?.waitForTranscriptCommit === true &&
-      result?.transcriptCommit !== "unconfirmed"
-    ) {
-      await userTurnTranscriptRecorder?.confirmSteerTargetRunIdForPersistence?.(targetRunId);
+  const runInjection = () => {
+    let queued: Promise<void | ReplyBackendQueueMessageResult>;
+    try {
+      queued = resolved.injection.queueMessage(text, runtimeQueueOptions);
+    } catch (error) {
+      return Promise.resolve(failed(error));
     }
-    return result ? { status: "accepted", result } : { status: "accepted" };
-  }, failed);
+    return queued.then(async (result): Promise<ReplyMessageInjectionOutcome> => {
+      recordParticipant();
+      settleAcceptance(true);
+      if (
+        targetRunId &&
+        queueOptions?.waitForTranscriptCommit === true &&
+        result?.transcriptCommit !== "unconfirmed"
+      ) {
+        // Confirmation failures are terminal producer failures, not replayable queue
+        // rejection. Its private capability retains both source and concrete run authority.
+        if (resolved.confirmTranscript) {
+          await resolved.confirmTranscript();
+        } else {
+          // Shipped queue/V1 backends may lack the private embedded binding. Keep
+          // their public source-only confirmation; never use it after a bound refusal.
+          await queueOptions.userTurnTranscriptRecorder?.confirmSteerTargetRunIdForPersistence?.(
+            targetRunId,
+          );
+        }
+      }
+      return result ? { status: "accepted", result } : { status: "accepted" };
+    }, failed);
+  };
+  // Reserve before queue dispatch: native consumption and refresh can arrive in
+  // the same notification batch, before the confirmation continuation runs.
+  const outcome = resolved.trackMessageInjection
+    ? resolved.trackMessageInjection(runInjection)
+    : runInjection();
   return {
     targetRunId,
     acceptance: acceptance.promise,

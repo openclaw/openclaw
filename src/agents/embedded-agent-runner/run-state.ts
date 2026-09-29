@@ -22,6 +22,7 @@ import {
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-activity.js";
+import type { CaptureSteeredUserTurnConfirmation } from "../../sessions/user-turn-transcript-steering.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OperationalRunInstanceRef } from "../admitted-run-context.js";
 import type { ReplyExpectation } from "../reply-completion.js";
@@ -115,6 +116,8 @@ export type EmbeddedRunToolAuthorityBinding = (registration: {
   project: (overlay: ReplyToolAuthorityOverlay) => string | undefined;
   assertActive: () => void;
   personalToolParticipants?: ReplyTurnParticipants;
+  captureSteerConfirmation?: CaptureSteeredUserTurnConfirmation;
+  trackMessageInjection?: typeof import("../../shared/async-work-scope.js").trackAsyncWork;
 };
 
 export type EmbeddedRunRegistration = {

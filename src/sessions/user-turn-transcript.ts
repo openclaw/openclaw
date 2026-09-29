@@ -7,10 +7,8 @@ import {
   persistSessionTranscriptTurn,
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
-  publishTranscriptUpdate,
   readActiveTranscriptEntryAnchor,
   resolveSessionTranscriptRuntimeTarget,
-  rewriteTranscriptMessageAtAnchor,
   type TranscriptEntryAnchor,
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
@@ -20,6 +18,7 @@ import {
   registerUserTurnTranscriptAdmissionOwner,
   resolveUserTurnTranscriptAdmission,
 } from "./user-turn-transcript-admission.js";
+import { confirmRecorderSteerTarget } from "./user-turn-transcript-steering.js";
 import {
   buildLateResolvedMediaMessage,
   isUserMessage,
@@ -172,39 +171,6 @@ async function resolveUserTurnTranscriptTarget(
   target: UserTurnTranscriptTargetResolver,
 ): Promise<UserTurnTranscriptTarget | undefined> {
   return typeof target === "function" ? await target() : target;
-}
-
-async function confirmPersistedSteerTargetRunId(params: {
-  admission: UserTurnTranscriptAdmissionReceipt;
-  targetRunId: string;
-}): Promise<
-  | {
-      admission: UserTurnTranscriptAdmissionReceipt;
-      message: PersistedUserTurnMessage;
-    }
-  | undefined
-> {
-  const rewritten = await rewriteTranscriptMessageAtAnchor(params.admission, (message) => {
-    if (!isUserMessage(message)) {
-      return undefined;
-    }
-    const currentTarget = normalizePersistedSteerTargetRunId(
-      message["__openclaw"]?.steerTargetRunId,
-    );
-    return currentTarget === params.targetRunId
-      ? undefined
-      : rewritePersistedSteerTargetRunId(message, params.targetRunId);
-  });
-  if (!rewritten) {
-    return undefined;
-  }
-  const admission = { ...params.admission, generation: rewritten.generation };
-  await publishTranscriptUpdate(admission, {
-    message: rewritten.message,
-    messageId: admission.entryId,
-    messageSeq: admission.activeMessagePosition + 1,
-  });
-  return { admission, message: rewritten.message };
 }
 
 export function createUserTurnTranscriptRecorder(
@@ -532,6 +498,11 @@ export function createUserTurnTranscriptRecorder(
       throw error;
     }
   };
+  const confirmSteerTarget = (runId: string) => {
+    confirmedSteerTargetRunId = runId;
+    message = applyMessageOverrides(message);
+    resolvedMessagePromise = undefined;
+  };
   const recorder: UserTurnTranscriptRecorder = {
     get message() {
       return message;
@@ -620,31 +591,21 @@ export function createUserTurnTranscriptRecorder(
       resolvedMessagePromise = undefined;
     },
     confirmSteerTargetRunIdForPersistence: async (targetRunId) => {
-      const normalizedTargetRunId = normalizePersistedSteerTargetRunId(targetRunId);
-      if (!normalizedTargetRunId || confirmedSteerTargetRunId === normalizedTargetRunId) {
+      const normalized = normalizePersistedSteerTargetRunId(targetRunId);
+      if (!normalized || confirmedSteerTargetRunId === normalized) {
         return;
       }
-      confirmedSteerTargetRunId = normalizedTargetRunId;
-      message = applyMessageOverrides(message);
-      resolvedMessagePromise = undefined;
-
-      const pendingSelfPersistence = selfPersistencePromise;
-      await waitForRuntimePersistence();
-      await pendingSelfPersistence?.catch(() => undefined);
-      if (!admissionReceipt) {
+      // Public producers may confirm before starting persistence. In-flight and
+      // committed inputs instead use the exact private snapshot and guarded writer.
+      if (!admissionReceipt && !selfPersistencePromise && !runtimePersistencePromise) {
+        confirmSteerTarget(normalized);
         return;
       }
       try {
-        const confirmed = await confirmPersistedSteerTargetRunId({
-          admission: admissionReceipt,
-          targetRunId: normalizedTargetRunId,
-        });
-        if (!confirmed) {
-          return;
-        }
-        refreshAdmission(confirmed.admission, confirmed.message);
+        await confirmRecorderSteerTarget(recorder, normalized);
       } catch (error) {
         handlePersistenceError(error);
+        throw error;
       }
     },
     getPersistedMessage: () =>
@@ -728,6 +689,14 @@ export function createUserTurnTranscriptRecorder(
     blocked: () => blocked || confirmedSteerTargetRunId !== undefined,
     sentToProvider: () => sentToProvider,
     refresh: refreshAdmission,
+    confirmSteerTarget,
+    reportPublicationError: handlePersistenceError,
+    waitForPersistence: async () => {
+      const pendingSelf = selfPersistencePromise;
+      await runtimePersistencePromise;
+      await admissionWrite.pending;
+      await pendingSelf;
+    },
   });
   return recorder;
 }

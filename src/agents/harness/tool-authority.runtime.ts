@@ -7,10 +7,18 @@ import {
 } from "../../auto-reply/reply/reply-tool-authority.js";
 import { readChannelSourceTurnId } from "../../auto-reply/reply/source-turn-id.js";
 import { withSessionTranscriptQuestionAnswers } from "../../config/sessions/session-transcript-read-fence.js";
+import { bindSteeredUserTurnConfirmation } from "../../sessions/user-turn-transcript-steering.js";
+import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import {
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../admitted-run-context.js";
+import {
+  ACTIVE_EMBEDDED_RUNS,
+  ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
+  ACTIVE_EMBEDDED_RUN_REGISTRATIONS,
+  type EmbeddedRunToolAuthorityBinding,
+} from "../embedded-agent-runner/run-state.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import {
   getGatewayToolCallerIdentity,
@@ -38,6 +46,7 @@ type ToolAuthorityAttempt = Pick<
   | "abortSignal"
   | "toolAuthorityFingerprint"
   | "userTurnTranscriptRecorder"
+  | "sessionTarget"
 > & { hostCapabilities?: AgentHarnessAttemptParamsV2["hostCapabilities"] };
 
 /** Execution-only: policy preparation must finish before authority reaches a publisher. */
@@ -54,6 +63,8 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
   const source = inherited?.operationalRunInstance === instance ? inherited : undefined;
   const { sessionId, sessionKey, sessionFile, agentId, runId } = attempt;
   const route = { provider: attempt.provider, model: attempt.modelId };
+  const recorder = attempt.userTurnTranscriptRecorder;
+  const sessionTarget = attempt.sessionTarget ? { ...attempt.sessionTarget } : undefined;
   // Maintenance borrows an operation for cancellation, not its injection snapshot.
   const operation = attempt.toolAuthorityFingerprint ? internal.replyOperation : undefined;
   const assertHostActive = attempt.hostCapabilities?.assertActive;
@@ -188,7 +199,40 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
               operation.toolAuthorityRoute?.provider === route.provider &&
               operation.toolAuthorityRoute.model === route.model);
           assertRegistered();
-          return {
+          const assertSteeringActive = () => {
+            assertRegistered();
+            const current = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
+            if (
+              !ownsOperation() ||
+              ACTIVE_EMBEDDED_RUNS.get(sessionId) !== handle ||
+              ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(runId) !== handle ||
+              current?.toolAuthority !== binding ||
+              current.operationalRunInstance !== instance ||
+              handle.isAborted?.() ||
+              handle.isStopped?.()
+            ) {
+              throw new Error("steering transcript authority is no longer active");
+            }
+          };
+          const binding: ReturnType<EmbeddedRunToolAuthorityBinding> = {
+            // The registering runtime owns input settlement, not the external
+            // caller that later delivers a message through this retained binding.
+            trackMessageInjection: captureAsyncWorkTracker(),
+            captureSteerConfirmation: bindSteeredUserTurnConfirmation({
+              recorder,
+              targetRunId: runId,
+              target: sessionTarget?.storePath
+                ? {
+                    ...sessionTarget,
+                    agentId,
+                    sessionId,
+                    sessionKey,
+                    storePath: sessionTarget.storePath,
+                  }
+                : undefined,
+              signal: attempt.abortSignal,
+              assertCurrent: assertSteeringActive,
+            }),
             personalToolParticipants,
             source: operation ? "reply" : "attempt",
             sourceTurnId: readChannelSourceTurnId(internal) ?? runId,
@@ -205,6 +249,7 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
               return ownsOperation() ? projected : undefined;
             },
           };
+          return binding;
         },
       },
       runPrepared,

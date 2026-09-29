@@ -79,6 +79,7 @@ export function activateCodexAttemptTurn(
     completion,
     userInputBridgeRef,
     steeringQueueRef,
+    inputWork,
     deadlines,
     noteProgress,
     completeTurn,
@@ -322,7 +323,7 @@ export function activateCodexAttemptTurn(
   const assertSteeringActive = () => {
     connection.assertCurrent();
     runAbortController.signal.throwIfAborted();
-    if (state.completed || state.terminalTurnNotificationQueued) {
+    if (state.completed || state.terminalTurnNotificationQueued || inputWork.isClosing) {
       throw new Error("codex app-server turn is no longer accepting steering");
     }
   };
@@ -532,6 +533,7 @@ export function activateCodexAttemptTurn(
     isAvailable: () =>
       !state.completed &&
       !state.terminalTurnNotificationQueued &&
+      !inputWork.isClosing &&
       !runAbortController.signal.aborted,
     queueMessage,
     claimPendingUserInputAnswer,
@@ -639,12 +641,17 @@ export function activateCodexAttemptTurn(
         );
       }
       params.replyOperation?.attachBackend(handle);
-      setActiveEmbeddedRun(
-        params.sessionId,
-        handle,
-        params.sessionKey,
-        params.sessionFile,
-        sessionAgentId,
+      // Core captures this generic work owner in its private handle binding.
+      // Host confirmation belongs to this attempt even when another request
+      // delivers the input and native consumption resolves before persistence.
+      inputWork.run(() =>
+        setActiveEmbeddedRun(
+          params.sessionId,
+          handle,
+          params.sessionKey,
+          params.sessionFile,
+          sessionAgentId,
+        ),
       );
       if (
         !runAbortController.signal.aborted &&

@@ -94,7 +94,8 @@ export function createCodexAttemptServerRequestController(
       // Replies resume the old model. Persist every admitted result before stopping;
       // Codex's interrupt completion does not depend on receiving these replies.
       void turnRuntime
-        .interruptTurn(turnId, { locallyCompleted: true })
+        .settleInputWork()
+        .then(() => turnRuntime.interruptTurn(turnId, { locallyCompleted: true }))
         .then(async (confirmed) => {
           if (!confirmed) {
             throw new Error("Plugin reload could not confirm the previous Codex turn stopped.");
@@ -105,6 +106,11 @@ export function createCodexAttemptServerRequestController(
             params.oneShotCliRun === true,
             waitForNativeItems,
           );
+          // A producer failure still owes native stop, but cannot authorize a
+          // continuation whose required transcript confirmation did not commit.
+          if (state.inputSettlementError) {
+            throw state.inputSettlementError;
+          }
         })
         .then(refreshDrain.resolve, refreshDrain.reject)
         .finally(turnRuntime.completeTurn);

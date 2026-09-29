@@ -505,6 +505,7 @@ describe("user turn transcript persistence", () => {
     it("adds confirmed steering provenance after runtime persistence", async () => {
       const dir = tempDirs.make("openclaw-user-turn-recorder-confirm-steer-");
       const target = createSqliteTranscriptTarget({ dir });
+      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
       const input = {
         text: "tighten the answer",
         idempotencyKey: "confirm-steer:user",

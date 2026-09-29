@@ -72,8 +72,10 @@ export async function cleanupCodexAttempt(
     );
   }
   try {
-    await state.pluginRuntimeRefreshStop;
+    // Exceptional exits also owe accepted host work before detaching the handle.
     steeringQueueRef.current?.cancel();
+    await turnRuntime.settleInputWork();
+    await state.pluginRuntimeRefreshStop;
     if (params.isFinalFallbackAttempt !== false) {
       await maybeEmitFastModeAutoResetBestEffort();
     }

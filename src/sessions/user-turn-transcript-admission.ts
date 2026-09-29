@@ -10,6 +10,9 @@ type AdmissionOwner = {
   message: () => PersistedUserTurnMessage | undefined;
   blocked: () => boolean;
   sentToProvider: () => boolean;
+  waitForPersistence: () => Promise<void>;
+  confirmSteerTarget: (runId: string) => void;
+  reportPublicationError: (error: unknown) => void;
   refresh: (
     admission: UserTurnTranscriptAdmissionReceipt,
     message: PersistedUserTurnMessage,

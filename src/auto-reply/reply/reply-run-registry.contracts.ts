@@ -228,6 +228,10 @@ export type ReplyMessageInjectionResolution =
   | {
       backend: ReplyBackendHandle;
       injection: ReplyBackendMessageInjection;
+      /** Host-private, captured before queueing; never rediscovers a recorder by run id. */
+      confirmTranscript?: () => Promise<void>;
+      /** Private lifetime captured by the concrete backend at registration. */
+      trackMessageInjection?: typeof import("../../shared/async-work-scope.js").trackAsyncWork;
     };
 
 /** An adapter over one existing execution owner; it never acquires another run slot. */

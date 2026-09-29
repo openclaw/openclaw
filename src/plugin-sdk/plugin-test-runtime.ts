@@ -44,8 +44,45 @@ export async function createAgentHarnessHostCapabilitiesForTest(params: {
     pluginId: params.pluginId,
     nativeModelPolicySupport: params.nativeModelPolicySupport,
   });
+  const { withPreparedEmbeddedRunToolAuthority } =
+    await import("../agents/harness/tool-authority.runtime.js");
+  const { beginReplyMessageInjectionTarget, replyRunRegistry } =
+    await import("../auto-reply/reply/reply-run-registry.js");
   return {
     capabilities: host.capabilities,
+    run: <T>(run: (attempt: AgentHarnessHostTestAttempt) => Promise<T>) => {
+      const { sessionFile, sessionId, workspaceDir, provider, modelId } = params.attempt;
+      if (!sessionFile || !sessionId || !workspaceDir || !provider || !modelId) {
+        throw new Error("Test tool authority requires a prepared session and model");
+      }
+      return withPreparedEmbeddedRunToolAuthority(
+        { admittedRunContext },
+        {
+          ...params.attempt,
+          sessionFile,
+          sessionId,
+          workspaceDir,
+          provider,
+          modelId,
+          hostCapabilities: host.capabilities,
+        },
+        undefined,
+        run,
+      );
+    },
+    injectMessage: (
+      text: string,
+      options: Parameters<typeof beginReplyMessageInjectionTarget>[2],
+    ) => {
+      const { sessionKey } = params.attempt;
+      const target = sessionKey
+        ? replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey)
+        : undefined;
+      if (!target) {
+        throw new Error("Test attempt has no current injection target");
+      }
+      return beginReplyMessageInjectionTarget(target, text, options);
+    },
     close: () => {
       host.close();
       admission.close();

@@ -1466,6 +1466,36 @@ describe("reply run registry", () => {
     expect(replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)).toBeUndefined();
   });
 
+  it.each(["queue", "v1"] as const)(
+    "confirms committed input through the public recorder for an unbound %s backend",
+    async (kind) => {
+      const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+      const queueMessage = vi.fn(async () => {});
+      operation.attachBackend({
+        kind: "embedded",
+        runId: "legacy-run",
+        cancel: vi.fn(),
+        ...(kind === "queue"
+          ? { queueMessage }
+          : { messageInjection: { isAvailable: () => true, queueMessage } }),
+      });
+      operation.setPhase("running");
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "legacy steering" },
+        target: createTestUserTurnTranscriptTarget(),
+      });
+      const confirm = vi.spyOn(recorder, "confirmSteerTargetRunIdForPersistence");
+      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
+      const attempt = beginReplyMessageInjectionTarget(target, "legacy steering", {
+        waitForTranscriptCommit: true,
+        userTurnTranscriptRecorder: recorder,
+      });
+      await expect(attempt.outcome).resolves.toEqual({ status: "accepted" });
+      expect(confirm).toHaveBeenCalledExactlyOnceWith("legacy-run");
+      expect(recorder.message?.["__openclaw"]?.steerTargetRunId).toBe("legacy-run");
+    },
+  );
+
   it.each([
     { source: "sync", unconfirmed: false },
     { source: "async", unconfirmed: true },

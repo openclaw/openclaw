@@ -70,6 +70,9 @@ export const runtimeProcessEntrypoints = {
   sessionTranscriptProjectionPublication: runtimeProcessEntrypoint(
     "config/sessions/session-transcript-projection-publication.worker",
   ),
+  userTurnTranscriptSteering: runtimeProcessEntrypoint(
+    "sessions/user-turn-transcript-steering.worker",
+  ),
   sessionTranscriptReports: runtimeProcessEntrypoint(
     "config/sessions/session-accessor.sqlite-transcript-reports.worker",
   ),

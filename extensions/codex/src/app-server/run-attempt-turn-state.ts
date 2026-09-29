@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAgentHarnessToolExecutionRegistry } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import { AsyncWorkScope } from "openclaw/plugin-sdk/concurrency-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -30,6 +31,7 @@ class CodexAttemptState {
   completed = false;
   abortCleanup = Promise.resolve();
   pluginRuntimeRefreshStop?: Promise<void>;
+  inputSettlementError?: AggregateError;
   // Only completed native cleanup can advance this state to confirmed.
   permissionChangeRestart?: "requested" | "confirmed";
   localCompletionRequested = false;
@@ -72,6 +74,22 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   const { connection } = prompt.context.runtime;
   const { params, options, runAbortController } = connection;
   const state = new CodexAttemptState();
+  const inputFailures = new Set<unknown>();
+  const inputWork = new AsyncWorkScope(inputFailures);
+  const settleInputWork = async () => {
+    // Closing a work scope aborts its descendants. First join the accepted
+    // input and its host receipt installation, then retire the idle lifetime.
+    await AsyncWorkScope.runWhenAllIdle(
+      () => [inputWork],
+      () => inputWork.drain(),
+    );
+    if (inputFailures.size > 0) {
+      state.inputSettlementError ??= new AggregateError(
+        [...inputFailures],
+        "Codex input transcript confirmation failed.",
+      );
+    }
+  };
   const { promise: completion, resolve: resolveCompletion } = createDeferred<void>();
   const settlementExpired = createDeferred<void>();
   const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
@@ -85,14 +103,21 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   const turnIdRef: { current?: string } = {};
   const userInputBridgeRef: { current?: ReturnType<typeof createCodexUserInputBridge> } = {};
   const steeringQueueRef: { current?: ReturnType<typeof createCodexSteeringQueue> } = {};
+  let completing = false;
   const completeTurn = () => {
-    if (state.completed) {
+    if (state.completed || completing) {
       return;
     }
-    state.completed = true;
+    completing = true;
+    state.terminalTurnNotificationQueued = true;
     steeringQueueRef.current?.cancel();
     deadlines.beginSettlement(Date.now());
-    resolveCompletion();
+    // Native terminal closes input admission, not the live registration needed
+    // by confirmations already admitted through that registration.
+    void settleInputWork().then(() => {
+      state.completed = true;
+      resolveCompletion();
+    });
   };
   const interruptTurn = async (
     turnId: string,
@@ -230,6 +255,8 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     turnIdRef,
     userInputBridgeRef,
     steeringQueueRef,
+    inputWork,
+    settleInputWork,
     completeTurn,
     interruptTurn,
     noteProgress,
