@@ -344,16 +344,15 @@ export const skillsLibraryHandlers: GatewayRequestHandlers = {
       }
       const existing = await readSkillLibrary(authority, params.skillId, params.expectedRevision);
       const filesByPath = new Map(existing.files.map((file) => [file.path, file]));
-      const selected = new Set<string>();
       const retained = retainFiles.map((path) => {
         const file = filesByPath.get(path);
-        if (!file || selected.has(path)) {
+        if (!file) {
           throw new SkillLibraryError(
             "INVALID_BUNDLE",
             "Retained skill files must name distinct support files in expectedRevision.",
           );
         }
-        selected.add(path);
+        filesByPath.delete(path);
         return file;
       });
       // The save owner rechecks write authority, CAS, and the complete merged bundle.

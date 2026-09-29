@@ -1,4 +1,3 @@
-// Manual transcript trimming and model-backed session compaction.
 import { randomUUID } from "node:crypto";
 import {
   ErrorCodes,

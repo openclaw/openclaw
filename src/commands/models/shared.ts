@@ -1,5 +1,3 @@
-/** Shared helpers for model commands that read or mutate model config. */
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
@@ -37,14 +35,12 @@ import { createModelCatalogProviderAliasCanonicalizer } from "./provider-aliases
 
 export { formatTokenK } from "./list.format.js";
 
-/** Rejects conflicting machine-readable output modes. */
 export function ensureFlagCompatibility(opts: { json?: boolean; plain?: boolean }): void {
   if (opts.json && opts.plain) {
     throw new Error("Choose either --json or --plain, not both.");
   }
 }
 
-/** Formats millisecond durations for model command output. */
 export const formatMs = (value?: number | null) => {
   if (value === null || value === undefined) {
     return "-";
@@ -58,7 +54,6 @@ export const formatMs = (value?: number | null) => {
   return `${Math.round(value / 100) / 10}s`;
 };
 
-/** Loads config from disk and throws a formatted error when validation fails. */
 export async function loadValidConfigSnapshotOrThrow(): Promise<ConfigFileSnapshot> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
@@ -68,7 +63,6 @@ export async function loadValidConfigSnapshotOrThrow(): Promise<ConfigFileSnapsh
   return snapshot;
 }
 
-/** Runtime config snapshot supplied to model config mutators. */
 type UpdateConfigContext = {
   runtimeConfig: OpenClawConfig;
   canonicalModelKeys?: ReadonlyMap<string, string | undefined>;
@@ -182,7 +176,6 @@ function resolveModelInput(params: { raw: string; cfg: OpenClawConfig }) {
   });
 }
 
-/** Resolves a CLI model reference through aliases and catalog provider aliases. */
 export function resolveModelTarget(params: { raw: string; cfg: OpenClawConfig }): {
   provider: string;
   model: string;
@@ -202,7 +195,6 @@ function resolveAuthoredModelAliasTarget(params: {
   return resolved?.alias ? resolved.ref : undefined;
 }
 
-/** Resolves model reference strings to index-aligned canonical refs. */
 export function resolveModelRefsFromEntries(params: {
   cfg: OpenClawConfig;
   entries: readonly string[];
@@ -223,7 +215,6 @@ export function resolveModelRefsFromEntries(params: {
   });
 }
 
-/** Projects canonical model refs into index-aligned keys for config comparisons. */
 export function resolveModelKeysFromEntries(
   params: Parameters<typeof resolveModelRefsFromEntries>[0],
 ): Array<string | undefined> {
@@ -272,7 +263,6 @@ export function resolveModelsTargetAgent(
   return { agentId, agentDir: agentDirOverride ?? agentDir };
 }
 
-/** Normalized primary/fallback config shape used by text and image defaults. */
 type PrimaryFallbackConfig = { primary?: string; fallbacks?: string[] };
 
 /** Upserts the canonical model entry and folds legacy key metadata into it. */
@@ -313,7 +303,6 @@ export function upsertCanonicalModelConfigEntry(
   return key;
 }
 
-/** Merges primary/fallback patches while normalizing refs for config storage. */
 export function mergePrimaryFallbackConfig(
   existing: PrimaryFallbackConfig | undefined,
   patch: { primary?: string; fallbacks?: string[] },
@@ -329,7 +318,6 @@ export function mergePrimaryFallbackConfig(
   return next;
 }
 
-/** Applies a default text/image primary-model update and ensures the model entry exists. */
 export function applyDefaultModelPrimaryUpdate(params: {
   cfg: OpenClawConfig;
   resolveCfg?: OpenClawConfig;
@@ -369,7 +357,6 @@ function resolveDefaultModelPrimaryTarget(params: {
     : resolveModelTarget({ raw: params.modelRaw, cfg: params.cfg });
 }
 
-/** Validates and persists one default text/image model selection. */
 export async function updateDefaultModelPrimaryConfig(params: {
   modelRaw: string;
   field: "model" | "imageModel";

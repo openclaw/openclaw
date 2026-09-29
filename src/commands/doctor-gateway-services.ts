@@ -1,4 +1,3 @@
-/** Doctor repairs for installed gateway service config and duplicate legacy services. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -281,12 +280,7 @@ export async function maybeRepairGatewayServiceConfig(
   const serviceRepairDeferred = isServiceRepairDeferred(serviceRepairPolicy);
 
   const service = resolveGatewayService();
-  let command: Awaited<ReturnType<typeof service.readCommand>> | null;
-  try {
-    command = await service.readCommand(process.env);
-  } catch {
-    command = null;
-  }
+  const command = await service.readCommand(process.env).catch(() => null);
   if (!command) {
     const audit = await auditGatewayServiceConfig({
       env: process.env,
@@ -659,9 +653,6 @@ export async function maybeRepairGatewayServiceConfig(
   return cfgForServiceInstall;
 }
 
-/**
- * Reports duplicate gateway-like services and removes legacy user services after confirmation.
- */
 export async function maybeScanExtraGatewayServices(
   options: DoctorOptions,
   runtime: RuntimeEnv,

@@ -81,10 +81,8 @@ export function recordWorkerLiveTrajectoryEvent(
         ...prepareWorkerLiveEventData(event),
         backend: "cloud-worker",
       });
-    } else if (event.payload.phase === "fallback_step") {
-      recorder.recordEvent("model.fallback_step", prepareWorkerLiveEventData(event));
-    } else if (event.payload.phase === "finishing") {
-      recorder.recordEvent("model.finishing", prepareWorkerLiveEventData(event));
+    } else if (event.payload.phase === "fallback_step" || event.payload.phase === "finishing") {
+      recorder.recordEvent(`model.${event.payload.phase}`, prepareWorkerLiveEventData(event));
     } else if (
       (event.payload.phase === "end" || event.payload.phase === "error") &&
       isDefinitiveWorkerTerminalEvent(event)

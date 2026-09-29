@@ -120,7 +120,7 @@ describe("source update build output transaction", () => {
     const observed: boolean[] = [];
     const siblingEnv = { HOME: path.join(scratch, "sibling-home"), OPENCLAW_PROFILE: "sibling" };
     vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([
-      { profile: "sibling", env: siblingEnv },
+      { env: siblingEnv },
     ]);
     vi.spyOn(gatewayBindings, "readManagedGatewayBindingState").mockImplementation(async () => {
       observed.push(consumerLive);

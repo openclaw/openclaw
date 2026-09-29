@@ -187,7 +187,6 @@ export function createChatSendReplyDispatch(params: {
   });
   const deliveredReplies: DeliveredChatSendReply[] = [];
   const finalizedAgentMediaTranscriptKeys = new Set<string>();
-  let appendedWebchatAgentMedia = false;
   let preparingTranscript = false;
   const prepareAssistantTranscriptMessage: PrepareAssistantTranscriptMessage = (
     message,
@@ -508,7 +507,6 @@ export function createChatSendReplyDispatch(params: {
       }
     }
     if (rewritten && transcriptScope) {
-      appendedWebchatAgentMedia = true;
       finalizedAgentMediaTranscriptKeys.add(finalizationKey);
       if (assistantContent?.length) {
         await attachManagedOutgoingMediaToMessage({
@@ -582,7 +580,6 @@ export function createChatSendReplyDispatch(params: {
       },
     });
     if (appended.ok) {
-      appendedWebchatAgentMedia = true;
       finalizedAgentMediaTranscriptKeys.add(finalizationKey);
       return;
     }
@@ -706,7 +703,7 @@ export function createChatSendReplyDispatch(params: {
     captureAgentTranscriptStart,
     deliveredReplies,
     dispatcherOptions,
-    hasAppendedWebchatAgentMedia: () => appendedWebchatAgentMedia,
+    hasAppendedWebchatAgentMedia: () => finalizedAgentMediaTranscriptKeys.size > 0,
     onModelSelected,
     prepareAssistantTranscriptMessage,
     resolveReplyDelivery,

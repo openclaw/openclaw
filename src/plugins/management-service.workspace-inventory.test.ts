@@ -486,7 +486,7 @@ it("persists management disable before a cold context-engine runtime turn", asyn
         await lease.dispose();
       }
     }
-    expect(listContextEngineQuarantines()).toEqual([]);
+    expect(await listContextEngineQuarantines()).toEqual([]);
   });
   expect(warn).not.toHaveBeenCalled();
   expect(fs.existsSync(fixture.runtimeMarker)).toBe(false);

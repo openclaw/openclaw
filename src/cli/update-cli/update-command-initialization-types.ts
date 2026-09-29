@@ -10,6 +10,7 @@ export type UpdateInitializationAdmission = {
   configPath: string;
   target?: {
     configSnapshot: ConfigFileSnapshot;
+    configReadFailure?: Error;
     legacyConfigPlan?: LegacyConfigUpdatePlan;
     updateInstallKind?: "git" | "package" | "unknown";
   };

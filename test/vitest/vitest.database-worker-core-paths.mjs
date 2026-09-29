@@ -1,5 +1,13 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/status/status-plugin-health.runtime.test.ts",
+  "src/status/status-plugin-health.installed.test.ts",
+  "src/agents/tool-schema-quarantine.test.ts",
+  "src/context-engine/context-engine.test.ts",
+  "src/context-engine/host-param-projection.test.ts",
+  "src/context-engine/quarantine-health.test.ts",
+  "src/context-engine/registry.factory-admission.test.ts",
+  "src/context-engine/registry.selection.test.ts",
   "src/infra/update-candidate-canary.test.ts",
   "src/state/session-repository-workspaces.test.ts",
   "src/infra/update-run-reconciliation.worker.test.ts",
@@ -281,7 +289,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/program/register.configure.persistence.test.ts",
   "src/cli/run-main.profile-env.test.ts",
   "src/cli/skills-cli.workshop-cache.test.ts",
-  "src/cli/skills-cli.workshop.test.ts",
   "src/cli/update-cli.deferred-completion.test.ts",
   "src/cli/update-cli.admission-ledger.test.ts",
   "src/cli/update-cli.already-current.test.ts",

@@ -412,7 +412,6 @@ src/config/io.observe-recovery.ts
 src/config/io.observe-state.ts
 src/config/io.observe-suspicious.ts
 src/config/io.observe.ts
-src/config/io.owner-display-secret.ts
 src/config/io.plugin-metadata.ts
 src/config/io.read-helpers.ts
 src/config/io.recovery.ts

@@ -4,14 +4,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
  *
  * Provider and CLI plugins can rewrite prompt/event text without owning the transport implementation.
  */
-import type { AssistantMessageEvent } from "../llm/types.js";
+import type { AssistantMessage, AssistantMessageEvent } from "../llm/types.js";
 import type { PluginTextReplacement, PluginTextTransforms } from "../plugins/cli-backend.types.js";
 import type { StreamFn } from "./runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "./stream-compat.js";
 import { createStreamIteratorWrapper } from "./stream-iterator-wrapper.js";
 
-// Applies plugin-defined text replacement transforms to stream input/output.
-// Used by provider/CLI plugins that need compatibility rewrites at boundaries.
 /** Merge multiple plugin text-transform sets. */
 export function mergePluginTextTransforms(
   ...transforms: Array<PluginTextTransforms | undefined>
@@ -146,14 +144,10 @@ function transformAssistantEventText(
       arguments: transformToolCallArgumentText(next.toolCall.arguments, replacements),
     };
   }
-  if (Object.hasOwn(next, "partial")) {
-    next.partial = transformMessageText(next.partial, replacements);
-  }
-  if (Object.hasOwn(next, "message")) {
-    next.message = transformMessageText(next.message, replacements);
-  }
-  if (Object.hasOwn(next, "error")) {
-    next.error = transformMessageText(next.error, replacements);
+  for (const field of ["partial", "message", "error"]) {
+    if (Object.hasOwn(next, field)) {
+      next[field] = transformMessageText(next[field], replacements);
+    }
   }
   return next as AssistantMessageEvent;
 }
@@ -166,27 +160,26 @@ function wrapStreamTextTransforms(
     return stream;
   }
   const originalResult = stream.result.bind(stream);
-  stream.result = async () => transformMessageText(await originalResult(), replacements) as never;
+  stream.result = async () =>
+    transformMessageText(await originalResult(), replacements) as AssistantMessage;
 
   // Wrap async iteration so streamed deltas and the final result receive the
   // same output replacement policy.
   const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      return createStreamIteratorWrapper({
-        iterator,
-        next: async (streamIterator) => {
-          const result = await streamIterator.next();
-          return result.done
-            ? result
-            : {
-                done: false as const,
-                value: transformAssistantEventText(result.value, replacements),
-              };
-        },
-      });
-    };
+  stream[Symbol.asyncIterator] = function () {
+    return createStreamIteratorWrapper({
+      iterator: originalAsyncIterator(),
+      next: async (streamIterator) => {
+        const result = await streamIterator.next();
+        return result.done
+          ? result
+          : {
+              done: false as const,
+              value: transformAssistantEventText(result.value, replacements),
+            };
+      },
+    });
+  };
   return stream;
 }
 

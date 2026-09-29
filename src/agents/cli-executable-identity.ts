@@ -551,10 +551,9 @@ async function resolveWindowsIdentity(params: {
   if (candidate.resolution === "direct" && hasShebang(invocationFile.prefix)) {
     return undefined;
   }
-  const scriptEntrypoint = commandEntrypoint;
-  const runtimeArtifact = scriptEntrypoint
+  const runtimeArtifact = commandEntrypoint
     ? await resolvePackageTreeArtifact({
-        entrypointPath: scriptEntrypoint.path,
+        entrypointPath: commandEntrypoint.path,
         policy: params.runtimeArtifact,
       })
     : allowsSelfContainedExecutable(

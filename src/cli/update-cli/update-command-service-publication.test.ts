@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runNodeMain } from "../../../scripts/run-node.mts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as serviceFiles from "../../daemon/inspect-files.js";
 import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import type { GatewayService } from "../../daemon/service.js";
@@ -460,6 +461,85 @@ it.each([
     } finally {
       other?.release();
     }
+  }),
+);
+
+it.each([
+  { label: "already live", late: false, output: "dist-runtime", shared: "dist-runtime" },
+  {
+    label: "discovered before the effect",
+    late: true,
+    output: "dist-runtime",
+    shared: "dist-runtime",
+  },
+  { label: "physically disjoint", late: false, output: "dist-runtime", shared: undefined },
+  {
+    label: "custom output shared",
+    late: false,
+    output: "custom-runtime",
+    shared: "custom-runtime",
+  },
+  {
+    label: "custom output disjoint",
+    late: false,
+    output: "custom-runtime",
+    shared: "dist-runtime",
+  },
+])("fences runtime-only publication against a sibling that is $label", ({ late, output, shared }) =>
+  withRuntimePublicationFixture(async ({ home, root, env, service }) => {
+    const sibling = path.join(home, "sibling");
+    await fs.mkdir(path.join(sibling, "dist"), { recursive: true });
+    await fs.writeFile(path.join(sibling, "package.json"), JSON.stringify({ name: "openclaw" }));
+    await fs.writeFile(path.join(sibling, "dist", "entry.js"), "export {};\n");
+    await fs.mkdir(path.join(root, output), { recursive: true });
+    if (shared) {
+      await fs.symlink(path.join(root, shared), path.join(sibling, shared), "junction");
+    }
+    const directory = path.join(home, ".config", "systemd", "user");
+    await fs.mkdir(directory, { recursive: true });
+    const scan = serviceFiles.scanSystemdDir;
+    vi.spyOn(serviceFiles, "scanSystemdDir").mockImplementation((params) =>
+      params.dir === directory ? scan(params) : Promise.resolve([]),
+    );
+    const unit = "openclaw-gateway-sibling.service";
+    const discoverSibling = () =>
+      fs.writeFile(
+        path.join(directory, unit),
+        `[Service]\nEnvironment="OPENCLAW_PROFILE=sibling" "OPENCLAW_SERVICE_MARKER=openclaw" "OPENCLAW_SERVICE_KIND=gateway"\nExecStart=${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(sibling, "dist", "entry.js"))} gateway\n`,
+      );
+    if (!late) {
+      await discoverSibling();
+    }
+    vi.mocked(service.readCommand).mockImplementation(async (serviceEnv) => ({
+      programArguments: [
+        process.execPath,
+        path.join(serviceEnv?.OPENCLAW_SYSTEMD_UNIT === unit ? sibling : root, "dist", "entry.js"),
+        "gateway",
+      ],
+    }));
+    vi.mocked(service.readRuntime).mockImplementation(async (serviceEnv) => ({
+      status: serviceEnv?.OPENCLAW_SYSTEMD_UNIT === unit ? "running" : "stopped",
+      systemd: { managerUid: 2001 },
+    }));
+    const artifact = path.join(root, output, "published.txt");
+    await fs.writeFile(artifact, "original");
+    const publication = withGatewayRuntimeArtifactPublication(
+      { root, env, timeoutMs: 200, assertCurrent() {}, outputPaths: [output] },
+      async (assertPublicationCurrent) => {
+        if (late) {
+          await discoverSibling();
+        }
+        await assertPublicationCurrent();
+        await fs.writeFile(artifact, "candidate");
+      },
+    );
+    const overlaps = shared === output;
+    if (overlaps) {
+      await expect(publication).rejects.toMatchObject({ reason: "runtime-artifact-publication" });
+    } else {
+      await expect(publication).resolves.toBeUndefined();
+    }
+    expect(await fs.readFile(artifact, "utf8")).toBe(overlaps ? "original" : "candidate");
   }),
 );
 

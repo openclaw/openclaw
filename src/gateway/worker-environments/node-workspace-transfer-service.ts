@@ -29,26 +29,25 @@ import {
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 
-type DownloadCapability = {
-  direction: "download";
-  token: string;
+type TransferBinding = {
   environmentId: string;
   ownerEpoch: number;
   sessionId: string;
   generation: number;
+};
+
+type DownloadCapability = TransferBinding & {
+  direction: "download";
+  token: string;
   manifestRef: string;
   expiresAtMs: number;
   isAuthorized?: () => boolean;
   signal?: AbortSignal;
 };
 
-type UploadOperation = {
+type UploadOperation = TransferBinding & {
   direction: "upload";
   token: string;
-  environmentId: string;
-  ownerEpoch: number;
-  sessionId: string;
-  generation: number;
   baseManifestRef: string;
   expiresAtMs: number;
   state: "ready" | "receiving" | "completed";
@@ -59,11 +58,7 @@ type UploadOperation = {
   disposal?: Promise<void>;
 };
 
-type TransferContext = {
-  environmentId: string;
-  ownerEpoch: number;
-  sessionId: string;
-  generation: number;
+type TransferContext = TransferBinding & {
   localPath?: string;
   temporaryRoot: string;
   currentManifestRef: string;

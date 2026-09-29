@@ -380,9 +380,10 @@ export async function readUpdateChannelConfig(
       readError: { code: null },
     });
   }
-  const legacyConfigPlan = channelRequested
-    ? await planUpdateChannelLegacyConfig(configSnapshot)
-    : undefined;
+  let legacyConfigPlan: LegacyConfigUpdatePlan | undefined;
+  if (channelRequested) {
+    ({ configSnapshot, legacyConfigPlan } = await planUpdateChannelLegacyConfig(configSnapshot));
+  }
   const plannedConfig =
     legacyConfigPlan?.config ??
     (configSnapshot.valid
@@ -401,22 +402,29 @@ export async function readUpdateChannelConfig(
 /** Preserve authored bytes during target admission; the projection grants no write authority. */
 async function planUpdateChannelLegacyConfig(
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
-): Promise<LegacyConfigUpdatePlan | undefined> {
+): Promise<{
+  configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  legacyConfigPlan?: LegacyConfigUpdatePlan;
+}> {
   if (snapshot.valid || snapshot.legacyIssues.length === 0) {
-    return undefined;
+    return { configSnapshot: snapshot };
   }
   const { planLegacyConfigForUpdateChannel } =
     await import("../../commands/doctor/legacy-config-repair.js");
   const plan = planLegacyConfigForUpdateChannel(snapshot);
   if (!plan || !snapshot.includedPaths?.length) {
-    return plan;
+    return { configSnapshot: snapshot, legacyConfigPlan: plan };
   }
   const current = await createConfigIO({
     observe: false,
     pluginValidation: "skip",
   }).readConfigFileSnapshotForWrite();
+  if (snapshot.path !== current.snapshot.path) {
+    throw new Error(
+      "Legacy configuration path changed during update planning; retry against the current source.",
+    );
+  }
   const keys = [
-    "path",
     "exists",
     "raw",
     "hash",
@@ -425,11 +433,16 @@ async function planUpdateChannelLegacyConfig(
     "sourceConfig",
   ] as const;
   if (keys.some((key) => !isDeepStrictEqual(snapshot[key], current.snapshot[key]))) {
-    throw new Error(
-      "Legacy configuration changed during update planning; retry against the current source.",
+    defaultRuntime.error(
+      `Warning: Configuration changed during update planning at ${snapshot.path}; continuing with the current configuration.`,
     );
   }
-  return planLegacyConfigForUpdateChannel(snapshot, current.writeOptions);
+  return {
+    configSnapshot: current.snapshot,
+    legacyConfigPlan: current.snapshot.valid
+      ? undefined
+      : planLegacyConfigForUpdateChannel(current.snapshot, current.writeOptions),
+  };
 }
 
 export async function maybeRepairLegacyConfigForUpdateChannel(params: {

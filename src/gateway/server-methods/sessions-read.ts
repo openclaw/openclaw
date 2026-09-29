@@ -1,4 +1,3 @@
-// Read-only session queries.
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
