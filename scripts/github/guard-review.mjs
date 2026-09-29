@@ -188,16 +188,29 @@ function snapshot(pr) {
   };
 }
 
-function assertPullRequestUnchanged(pullRequest, current, { allowFileCountChange = false } = {}) {
+function assertPullRequestUnchanged(
+  pullRequest,
+  current,
+  { allowFileCountChange = false, allowMerged = false } = {},
+) {
   if (
     current.number === pullRequest.number &&
     isSupersededHead(pullRequest.head?.sha, current.head?.sha)
   ) {
     throw new ObsoleteReviewError();
   }
-  const expected = allowFileCountChange
-    ? { ...pullRequest, changed_files: current.changed_files }
-    : pullRequest;
+  const expected = {
+    ...pullRequest,
+    ...(allowFileCountChange ? { changed_files: current.changed_files } : {}),
+    // A force-merge must not discard the running review's operational evidence.
+    // Only execution reviews opt in; merge admission and cleanup stay strict.
+    ...(allowMerged &&
+    pullRequest.state === "open" &&
+    current.state === "closed" &&
+    current.merged === true
+      ? { state: "closed" }
+      : {}),
+  };
   const currentSnapshot = snapshot(current);
   const changedFields = Object.entries(snapshot(expected))
     // Keep the original array serialization's null/undefined equivalence.
@@ -233,7 +246,10 @@ function assertPullRequestUnchanged(pullRequest, current, { allowFileCountChange
 
 export async function assertGuardUnchanged(guard, options) {
   const current = await guard.api.request(guard.pullPath);
-  return assertPullRequestUnchanged(guard.pullRequest, current, options);
+  return assertPullRequestUnchanged(guard.pullRequest, current, {
+    allowMerged: guard.allowMerged === true,
+    ...options,
+  });
 }
 
 async function readGuardFileSnapshot(review) {
@@ -245,7 +261,11 @@ async function readGuardFileSnapshot(review) {
       `GitHub did not return a consistent, complete changed-file list (expected ${expected}, received ${files.length}, current count ${current.changed_files}).`,
     );
   }
-  return { pullRequest: current, files };
+  // Main can advance (including a merge) without changing this review's inputs.
+  return {
+    pullRequest: { ...current, base: { ...current.base, sha: review.pullRequest.base.sha } },
+    files,
+  };
 }
 
 export async function readGuardReview(previousReview) {
@@ -291,10 +311,11 @@ export async function readGuardReview(previousReview) {
   });
   const pullRequest = await api.request(pullPath);
   if (previousReview) {
-    // Only diff counts may settle across recovery. Other PR changes still
-    // invalidate the original evaluation before any new writes or approvals.
+    // Diff counts may settle and merged reviews may finish across recovery.
+    // Other PR changes still invalidate the original evaluation.
     assertPullRequestUnchanged(previousReview.pullRequest, pullRequest, {
       allowFileCountChange: true,
+      allowMerged: previousReview.allowMerged === true,
     });
   }
   const expectedHead = process.env.OPENCLAW_SECURITY_REVIEW_HEAD_SHA;
@@ -317,19 +338,28 @@ export async function readGuardReview(previousReview) {
     throw new Error("Invalid pull request review eligibility.");
   }
   if (
-    pullRequest.state === "closed" ||
+    (pullRequest.state === "closed" &&
+      !(pullRequest.merged === true && expectedHead === pullRequest.head.sha)) ||
     pullRequest.draft ||
     pullRequest.base.ref !== defaultBranch
   ) {
     console.log("The pull request is outside security review scope; skipping this evaluation.");
     return null;
   }
+  if (pullRequest.state === "closed") {
+    console.log(
+      "The pull request has merged; completing security review evidence for the scheduled head.",
+    );
+  }
   review = {
     api,
     owner,
     repo,
     event,
-    pullRequest,
+    pullRequest: previousReview
+      ? { ...pullRequest, base: { ...pullRequest.base, sha: previousReview.pullRequest.base.sha } }
+      : pullRequest,
+    allowMerged: true,
     pullPath,
     issuePath: `/repos/${owner}/${repo}/issues/${number}`,
     runUrl: `https://github.com/${owner}/${repo}/actions/runs/${GITHUB_RUN_ID}`,

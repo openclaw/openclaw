@@ -507,11 +507,11 @@ export async function createAutoscrubCommit(
   }
   // Recheck after reading file contents: neither an old workflow event nor the
   // detection job authorizes a write after the PR or its approval has changed.
-  await assertGuardUnchanged(guard);
+  await assertGuardUnchanged(guard, { allowMerged: false });
   if (await findMaintainerApproval(guard)) {
     return null;
   }
-  await assertGuardUnchanged(guard);
+  await assertGuardUnchanged(guard, { allowMerged: false });
   const data = await writeApi
     .graphql(
       `mutation CreateAutoscrubCommit($input: CreateCommitOnBranchInput!) {
@@ -637,7 +637,7 @@ export async function reviewDependencyChanges(
       dependencyManifestChanges,
     });
   const autoscrubTarget =
-    autoscrubCandidate && !approval && !removalOnly
+    autoscrubCandidate && pullRequest.state === "open" && !approval && !removalOnly
       ? autoscrubTargetRepository({ owner, repo, pullRequest })
       : null;
   if (mode === "detect") {
