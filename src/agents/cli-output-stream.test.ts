@@ -758,6 +758,61 @@ describe("createCliJsonlStreamingParser", () => {
 
     expect(commentaryTexts).toEqual(expectedCommentary);
   });
+
+  it.each([
+    {
+      name: "a streamed final answer",
+      frames: [claudeMessageStart(), claudeTextDelta("Final answer"), claudeMessageStop()],
+      expected: "Final answer",
+    },
+    {
+      name: "a final answer after pre-tool commentary",
+      frames: [
+        claudeMessageStart(),
+        claudeTextDelta("Checking now."),
+        claudeBlockStart({ type: "tool_use", id: "toolu_1", name: "Read", input: {} }, 1),
+        claudeMessageStop(),
+        claudeMessageStart(),
+        claudeTextDelta("Final answer"),
+        claudeMessageStop(),
+      ],
+      expected: "Final answer",
+    },
+    {
+      name: "a tool-only ending after commentary",
+      frames: [
+        claudeMessageStart(),
+        claudeTextDelta("Checking now."),
+        claudeBlockStart({ type: "tool_use", id: "toolu_1", name: "Read", input: {} }, 1),
+        claudeMessageStop(),
+      ],
+      expected: "",
+    },
+  ])(
+    "records the final message with commentary classification on ($name)",
+    ({ frames, expected }) => {
+      const parser = createCliJsonlStreamingParser({
+        backend: claudeBackend,
+        providerId: "claude-cli",
+        onAssistantDelta: () => undefined,
+        onCommentaryText: () => undefined,
+      });
+
+      parser.push(
+        joinJsonlFrames(
+          { type: "init", session_id: "session-commentary-final" },
+          ...frames,
+          { type: "result", session_id: "session-commentary-final", result: "" },
+          "",
+        ),
+      );
+      parser.finish();
+
+      // rawFinalText is omitted when the final message equals the reply text.
+      const output = parser.getOutput();
+      expect(output?.rawFinalText ?? output?.text.trim()).toBe(expected);
+    },
+  );
 });
 
 it.each([

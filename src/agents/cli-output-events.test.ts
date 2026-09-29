@@ -127,6 +127,8 @@ describe("createCliJsonlStreamingParser events", () => {
     ]);
     expect(parser.getOutput()).toEqual({
       text: "Checking tools. Done.",
+      // Diagnostics record only the post-tool message as the final answer.
+      rawFinalText: "Done.",
       sessionId: "gemini-session-stream",
       usage: {
         input: 4,
