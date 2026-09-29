@@ -18,3 +18,13 @@ Windows ARM64 Node distribution containing `include\\node` and `node.lib`:
 
 The gate produces `phase_e_maintainer.node` with `cl.exe` and `link.exe` using
 `/MACHINE:ARM64`; retain its SHA-256 output with the validation evidence.
+
+After the native gate, execute the credential-RNG path from the same elevated
+interactive session-1 console. It loads the actual ARM64 addon, requires the
+credential fault to reach its injected boundary, and verifies that rollback
+leaves no canonical account or Phase E root:
+
+```powershell
+.\extensions\srt-sandbox\scripts\exercise-windows-arm64-phase-e-rng.ps1 `
+  -AddonPath C:\phase-e-build\phase_e_maintainer.node
+```

@@ -228,4 +228,15 @@ describe("Phase E maintainer policy", () => {
       /CreateProcess|ShellExecute|WinExec|schtasks|powershell|cmd\.exe|netsh|CoCreateInstance/i,
     );
   });
+  it("uses the system CSPRNG and wipes temporary credential memory in the native boundary", async () => {
+    const source = await import("node:fs/promises").then((fs) =>
+      fs.readFile(new URL("../native/phase-e-maintainer.cc", import.meta.url), "utf8"),
+    );
+    expect(source).toContain("BCryptGenRandom(nullptr, random");
+    expect(source).toContain("BCRYPT_USE_SYSTEM_PREFERRED_RNG");
+    expect(source).toContain("class SecureWipe");
+    expect(source).toContain("SecureWipe randomWipe");
+    expect(source).toContain("SecureWipe passwordWipe");
+    expect(source).not.toContain("CryptGenRandom(0");
+  });
 });

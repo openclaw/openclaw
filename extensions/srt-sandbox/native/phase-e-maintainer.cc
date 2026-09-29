@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <lm.h>
 #include <fwpmu.h>
+#include <bcrypt.h>
 #include <wincrypt.h>
 #include <sddl.h>
 #include <aclapi.h>
@@ -20,6 +21,7 @@
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "fwpuclnt.lib")
 #pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "bcrypt.lib")
 
 constexpr wchar_t kPool[][10] = {L"srt-w0-01",L"srt-w0-02",L"srt-w0-03",L"srt-w0-04",L"srt-w0-05",L"srt-w0-06",L"srt-w0-07",L"srt-w0-08"};
 constexpr wchar_t kRoot[] = L"C:\\ProgramData\\srt-sandbox";
@@ -29,6 +31,16 @@ constexpr wchar_t kLock[] = L"C:\\ProgramData\\srt-sandbox\\lease-store.lock";
 constexpr wchar_t kProfiles[] = L"C:\\ProgramData\\srt-sandbox\\profiles";
 constexpr wchar_t kScratch[] = L"C:\\ProgramData\\srt-sandbox\\scratch";
 struct Account { std::wstring name, sid; };
+class SecureWipe {
+ public:
+  SecureWipe(void* data, size_t length) : data_(data), length_(length) {}
+  ~SecureWipe() { if (data_ && length_) SecureZeroMemory(data_, length_); }
+  SecureWipe(const SecureWipe&) = delete;
+  SecureWipe& operator=(const SecureWipe&) = delete;
+ private:
+  void* data_;
+  size_t length_;
+};
 enum class FaultPoint { None, Account, Credential, RootStore, ProfileScratch, Fwpm };
 static FaultPoint ParseFault(const char* value) {
   if(!value || !*value) return FaultPoint::None;
@@ -147,7 +159,21 @@ static void VerifyPersistedOwnership(const std::vector<Account>& accounts) { HAN
 static void VerifyPersistedStore(const std::vector<Account>& accounts) { HANDLE store=OpenSafe(kStore,OPEN_EXISTING); std::string json=ReadAll(store); CloseHandle(store); if(json.find("\"version\":1")==std::string::npos||json.find("\"generation\":1")==std::string::npos||accounts.size()!=8)throw std::string("PHASE_E_LEASE_STORE_INVALID"); std::vector<std::string> sids; for(const auto& account:accounts){std::string sid=SidJsonText(account.sid);if(json.find("\"name\":\""+std::string(account.name.begin(),account.name.end())+"\",\"sid\":\""+sid+"\",\"state\":\"free\"")==std::string::npos)throw std::string("PHASE_E_LEASE_STORE_INVALID");sids.push_back(sid);} if(json.find("\"crc32\":\""+LeaseCrc(1,sids)+"\"")==std::string::npos)throw std::string("PHASE_E_LEASE_STORE_INVALID"); }
 static void PersistOwnedState(const std::vector<Account>& accounts) { EnsureSafeRoot(); std::vector<std::string> accountFacts, sidFacts; for(const auto& account:accounts){std::string name(account.name.begin(),account.name.end()),sid=SidJsonText(account.sid);accountFacts.push_back(name+":"+sid);sidFacts.push_back(sid);} std::sort(accountFacts.begin(),accountFacts.end()); std::string json="{\"version\":1,\"generation\":1,\"owner\":\"srt-phase-e-maintainer\",\"maintainer\":{\"pid\":"+std::to_string(GetCurrentProcessId())+",\"creationTime\":\""+ProcessCreationTime()+"\"},\"invocationId\":\"phase-e-generation-1\",\"createdAccounts\":["; for(size_t i=0;i<accounts.size();i++){if(i)json+=',';json+="{\"name\":\""+std::string(accounts[i].name.begin(),accounts[i].name.end())+"\",\"sid\":\""+SidJsonText(accounts[i].sid)+"\"}";} json+= "],\"crc32\":\""+LeaseCrc(1,accountFacts)+"\"}"; DATA_BLOB plain{static_cast<DWORD>(json.size()),reinterpret_cast<BYTE*>(&json[0])},sealed{}; if(!CryptProtectData(&plain,L"srt-phase-e-manifest",nullptr,nullptr,nullptr,CRYPTPROTECT_UI_FORBIDDEN,&sealed))throw std::string("PHASE_E_DPAPI_SEAL_FAILED"); HANDLE manifest=OpenSafe(kManifest,CREATE_ALWAYS); NormalizeOwnedSecurity(manifest); WriteAll(manifest,Hex(sealed.pbData,sealed.cbData)); CloseHandle(manifest); LocalFree(sealed.pbData); HANDLE lock=OpenSafe(kLock,OPEN_ALWAYS); NormalizeOwnedSecurity(lock); CloseHandle(lock); std::string store="{\"version\":1,\"generation\":1,\"slots\":["; for(size_t i=0;i<accounts.size();++i){if(i)store+=',';store+="{\"name\":\""+std::string(accounts[i].name.begin(),accounts[i].name.end())+"\",\"sid\":\""+SidJsonText(accounts[i].sid)+"\",\"state\":\"free\"}";} store+= "],\"crc32\":\""+LeaseCrc(1,sidFacts)+"\"}"; HANDLE file=OpenSafe(kStore,CREATE_ALWAYS); NormalizeOwnedSecurity(file); WriteAll(file,store); CloseHandle(file); }
 static void RemoveOwnedState() { HANDLE manifest=CreateFileW(kManifest,DELETE,0,nullptr,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,nullptr); if(manifest!=INVALID_HANDLE_VALUE){BY_HANDLE_FILE_INFORMATION info{}; if(!GetFileInformationByHandle(manifest,&info)||(info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)){CloseHandle(manifest);throw std::string("PHASE_E_REPARSE_DETECTED");} CloseHandle(manifest); if(!DeleteFileW(kManifest))throw std::string("PHASE_E_MANIFEST_REMOVE_FAILED");} }
-static void SetPhaseEPassword(const wchar_t* name) { BYTE random[24]; if(!CryptGenRandom(0,sizeof random,random))throw std::string("PHASE_E_CREDENTIAL_RANDOM_FAILED"); std::wstring password; static const wchar_t alphabet[]=L"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#%"; for(auto byte:random)password+=alphabet[byte%(sizeof(alphabet)/sizeof(*alphabet)-1)]; USER_INFO_1003 credential{}; credential.usri1003_password=const_cast<wchar_t*>(password.c_str()); if(NetUserSetInfo(nullptr,name,1003,reinterpret_cast<LPBYTE>(&credential),nullptr)!=NERR_Success)throw std::string("PHASE_E_CREDENTIAL_SET_FAILED"); SecureZeroMemory(&password[0],password.size()*sizeof(wchar_t)); }
+static void SetPhaseEPassword(const wchar_t* name) {
+  BYTE random[24]{};
+  SecureWipe randomWipe(random, sizeof random);
+  if (BCryptGenRandom(nullptr, random, static_cast<ULONG>(sizeof random),
+                      BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0)
+    throw std::string("PHASE_E_CREDENTIAL_RANDOM_FAILED");
+  std::wstring password;
+  static const wchar_t alphabet[] = L"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#%";
+  for (auto byte : random) password += alphabet[byte % (sizeof(alphabet) / sizeof(*alphabet) - 1)];
+  SecureWipe passwordWipe(password.data(), password.size() * sizeof(wchar_t));
+  USER_INFO_1003 credential{};
+  credential.usri1003_password = password.data();
+  if (NetUserSetInfo(nullptr, name, 1003, reinterpret_cast<LPBYTE>(&credential), nullptr) != NERR_Success)
+    throw std::string("PHASE_E_CREDENTIAL_SET_FAILED");
+}
 // These GUIDs are plugin-owned constants, not names or prefix searches.  The
 // last byte selects one exact slot; teardown can therefore never enumerate or
 // alter an unrelated FWPM object.

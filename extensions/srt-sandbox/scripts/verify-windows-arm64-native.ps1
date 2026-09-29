@@ -28,7 +28,7 @@ $addon = Join-Path $OutputDirectory "phase_e_maintainer.node"
   /I $nodeInclude /c $source /Fo$object
 if ($LASTEXITCODE -ne 0) { throw "ARM64 native compilation failed." }
 
-& link.exe /nologo /DLL /MACHINE:ARM64 /OUT:$addon $object $nodeLibrary netapi32.lib advapi32.lib fwpuclnt.lib crypt32.lib
+& link.exe /nologo /DLL /MACHINE:ARM64 /OUT:$addon $object $nodeLibrary netapi32.lib advapi32.lib fwpuclnt.lib crypt32.lib bcrypt.lib
 if ($LASTEXITCODE -ne 0) { throw "ARM64 native linking failed." }
 
 $header = [System.IO.File]::ReadAllBytes($addon)[0..1]
