@@ -3,8 +3,9 @@
  *
  * Supports `${VAR_NAME}` syntax in string values, substituted at config load time.
  * - Only uppercase env vars are matched: `[A-Z_][A-Z0-9_]*`
+ * - `${VAR_NAME:-fallback}` uses `fallback` when the var is unset or empty
  * - Escape with `$${}` to output literal `${}`
- * - Missing env vars throw `MissingEnvVarError` with context
+ * - Missing env vars without a fallback throw `MissingEnvVarError` with context
  *
  * @example
  * ```json5
@@ -28,6 +29,17 @@ import { parseEnvTemplateSecretRef } from "./types.secrets.js";
 
 const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 
+/**
+ * Bash-style default-value operator: `${VAR:-fallback}`.
+ *
+ * Only `:-` is recognized, the form the reported issue names. Bash also has `-`, which
+ * substitutes when the var is unset but not when it is set to `""`. That is implementable
+ * here as a local branch on the missing test below, so it is left out by choice, not by
+ * constraint: `${VAR}` already treats `""` as missing, and putting `${VAR-x}` beside
+ * `${VAR:-x}` would place two different notions of "set" in one config file.
+ */
+const DEFAULT_VALUE_OPERATOR = ":-";
+
 /** Error thrown when a config value references a missing or empty environment variable. */
 export class MissingEnvVarError extends Error {
   constructor(
@@ -39,44 +51,97 @@ export class MissingEnvVarError extends Error {
   }
 }
 
-type EnvToken =
-  | { kind: "escaped"; name: string; end: number }
-  | { kind: "substitution"; name: string; end: number };
+/** One recognized `${VAR}` / `${VAR:-fallback}` placeholder, without its position. */
+export type EnvTemplateToken = {
+  kind: "escaped" | "substitution";
+  name: string;
+  /** Authored fallback text, or `undefined` for a bare reference. `""` is a real empty fallback. */
+  defaultValue?: string;
+};
+
+type EnvToken = EnvTemplateToken & { end: number };
+
+/**
+ * Parses the text between `${` and the first following `}`.
+ *
+ * A fallback is recognized only when it carries no `$` and no `{`. That keeps the scan
+ * for the closing brace a plain `indexOf("}")`, so no input that is left literal today
+ * starts parsing differently: `${A:-${B}}` still falls through to the literal path and
+ * its inner `${B}` is still the only thing that substitutes, exactly as before.
+ */
+function parseEnvTokenBody(body: string): Omit<EnvTemplateToken, "kind"> | null {
+  if (ENV_VAR_NAME_PATTERN.test(body)) {
+    return { name: body };
+  }
+
+  const operatorIndex = body.indexOf(DEFAULT_VALUE_OPERATOR);
+  if (operatorIndex === -1) {
+    return null;
+  }
+
+  const name = body.slice(0, operatorIndex);
+  if (!ENV_VAR_NAME_PATTERN.test(name)) {
+    return null;
+  }
+
+  const defaultValue = body.slice(operatorIndex + DEFAULT_VALUE_OPERATOR.length);
+  if (defaultValue.includes("$") || defaultValue.includes("{")) {
+    return null;
+  }
+  return { name, defaultValue };
+}
+
+/** Rebuilds the authored placeholder text for a parsed token. */
+function renderEnvTemplateToken(token: EnvTemplateToken): string {
+  return token.defaultValue === undefined
+    ? `\${${token.name}}`
+    : `\${${token.name}${DEFAULT_VALUE_OPERATOR}${token.defaultValue}}`;
+}
 
 function parseEnvTokenAt(value: string, index: number): EnvToken | null {
   if (value[index] !== "$") {
     return null;
   }
 
-  const next = value[index + 1];
-  const afterNext = value[index + 2];
-
-  // Escaped: $${VAR} -> ${VAR}
-  if (next === "$" && afterNext === "{") {
-    // Parse escaped placeholders before substitutions so "$${VAR}" never resolves from env.
-    const start = index + 3;
+  // Parse escaped placeholders first so "$${VAR}" never resolves from env.
+  const escaped = value[index + 1] === "$" && value[index + 2] === "{";
+  if (escaped || value[index + 1] === "{") {
+    const start = index + (escaped ? 3 : 2);
     const end = value.indexOf("}", start);
     if (end !== -1) {
-      const name = value.slice(start, end);
-      if (ENV_VAR_NAME_PATTERN.test(name)) {
-        return { kind: "escaped", name, end };
-      }
-    }
-  }
-
-  // Substitution: ${VAR} -> value
-  if (next === "{") {
-    const start = index + 2;
-    const end = value.indexOf("}", start);
-    if (end !== -1) {
-      const name = value.slice(start, end);
-      if (ENV_VAR_NAME_PATTERN.test(name)) {
-        return { kind: "substitution", name, end };
+      const body = parseEnvTokenBody(value.slice(start, end));
+      if (body) {
+        return { kind: escaped ? "escaped" : "substitution", ...body, end };
       }
     }
   }
 
   return null;
+}
+
+/**
+ * Lists every recognized placeholder in authoring order.
+ *
+ * Exported so config write-back preservation shares this grammar instead of keeping its
+ * own copy; a second scanner would silently stop restoring authored templates the moment
+ * the two drifted.
+ */
+export function scanEnvTemplateTokens(value: string): EnvTemplateToken[] {
+  return Array.from(iterateEnvTemplateTokens(value), (token) => ({
+    kind: token.kind,
+    name: token.name,
+    defaultValue: token.defaultValue,
+  }));
+}
+
+function* iterateEnvTemplateTokens(value: string): Generator<EnvToken & { start: number }> {
+  for (let index = value.indexOf("$"); index !== -1; index = value.indexOf("$", index + 1)) {
+    const token = parseEnvTokenAt(value, index);
+    if (token) {
+      yield { ...token, start: index };
+      index = token.end;
+    }
+  }
 }
 
 /** Missing environment variable warning emitted when substitution is configured to continue. */
@@ -109,83 +174,51 @@ function substituteString(
     opts?.onPendingEnvSecretRef?.(authoredRef.id, configPath);
   }
   const chunks: string[] = [];
-
-  for (let i = 0; i < value.length; i += 1) {
-    const char = value.charAt(i);
-    if (char !== "$") {
-      chunks.push(char);
+  let end = 0;
+  for (const token of iterateEnvTemplateTokens(value)) {
+    chunks.push(value.slice(end, token.start));
+    end = token.end + 1;
+    if (token.kind === "escaped") {
+      chunks.push(renderEnvTemplateToken(token));
       continue;
     }
-
-    const token = parseEnvTokenAt(value, i);
-    if (token?.kind === "escaped") {
-      chunks.push(`\${${token.name}}`);
-      i = token.end;
-      continue;
-    }
-    if (token?.kind === "substitution") {
-      const envValue = env[token.name];
-      if (envValue === undefined || envValue === "") {
-        if (opts?.onMissing) {
-          opts.onMissing({ varName: token.name, configPath });
-          if (authoredRef?.id === token.name) {
-            opts.onPendingEnvSecretRef?.(token.name, configPath);
-          }
-          // Preserve the original placeholder so the value is visibly unresolved.
-          chunks.push(`\${${token.name}}`);
-          i = token.end;
-          continue;
+    const envValue = env[token.name];
+    if (envValue === undefined || envValue === "") {
+      if (token.defaultValue !== undefined) {
+        // An authored fallback resolves the reference without a missing or pending signal.
+        chunks.push(token.defaultValue);
+        continue;
+      }
+      if (opts?.onMissing) {
+        opts.onMissing({ varName: token.name, configPath });
+        if (authoredRef?.id === token.name) {
+          opts.onPendingEnvSecretRef?.(token.name, configPath);
         }
-        throw new MissingEnvVarError(token.name, configPath);
+        // Preserve the original placeholder so the value is visibly unresolved.
+        chunks.push(renderEnvTemplateToken(token));
+        continue;
       }
-      if (authoredRef?.id === token.name) {
-        opts?.onResolvedEnvSecretRef?.(token.name, configPath);
-      }
-      chunks.push(envValue);
-      i = token.end;
-      continue;
+      throw new MissingEnvVarError(token.name, configPath);
     }
-
-    // Leave untouched if not a recognized pattern
-    chunks.push(char);
+    if (authoredRef?.id === token.name) {
+      opts?.onResolvedEnvSecretRef?.(token.name, configPath);
+    }
+    chunks.push(envValue);
   }
+  chunks.push(value.slice(end));
 
   return chunks.join("");
 }
 
 /** Detects unescaped `${VAR}` references without treating escaped `$${VAR}` as references. */
 export function containsEnvVarReference(value: string): boolean {
-  if (!value.includes("$")) {
-    return false;
-  }
-
-  for (let i = 0; i < value.length; i += 1) {
-    const char = value[i];
-    if (char !== "$") {
-      continue;
-    }
-
-    const token = parseEnvTokenAt(value, i);
-    if (token?.kind === "escaped") {
-      i = token.end;
-      continue;
-    }
-    if (token?.kind === "substitution") {
+  for (const token of iterateEnvTemplateTokens(value)) {
+    if (token.kind === "substitution") {
       return true;
     }
   }
-
   return false;
 }
-
-type SubstituteTask = {
-  value: unknown;
-  path: string;
-  /** Output container holding this value's slot; array slots use numeric keys. */
-  slot: Record<string, unknown> | unknown[];
-  /** Key of this value's slot inside `slot`. */
-  key: string;
-};
 
 function substituteAny(
   value: unknown,
@@ -193,88 +226,51 @@ function substituteAny(
   path: string,
   opts?: SubstituteOptions,
 ): unknown {
-  if (typeof value === "string") {
-    return substituteString(value, env, path, opts);
-  }
-
-  const rootIsArray = Array.isArray(value);
-  if (!rootIsArray && !isPlainObject(value)) {
-    // Primitives (number, boolean, null) pass through unchanged
-    return value;
-  }
-
-  // Driver loop: each pending container becomes a heap frame instead of a
-  // call frame, so document depth costs heap and previously accepted deep
-  // configs keep substituting instead of overflowing the call stack. Slots
-  // are allocated while expanding the parent so object key order follows the
-  // source document, and children are pushed in reverse so leaves resolve in
-  // the same depth-first order as the recursive walk.
-  const result: Record<string, unknown> | unknown[] = rootIsArray ? [] : {};
-  const stack: SubstituteTask[] = [];
-
-  const writeSlot = (
-    slot: Record<string, unknown> | unknown[],
-    key: string,
-    resolved: unknown,
-  ): void => {
-    if (Array.isArray(slot)) {
-      slot[Number(key)] = resolved;
-    } else {
-      slot[key] = resolved;
+  // Resume one parent at a time so callbacks retain recursive depth-first order
+  // without consuming the engine stack for deeply nested replacement values.
+  const pending: Array<() => boolean> = [];
+  const visit = (current: unknown, currentPath: string): unknown => {
+    if (typeof current === "string") {
+      return substituteString(current, env, currentPath, opts);
     }
+    if (Array.isArray(current)) {
+      const length = current.length;
+      const result: unknown[] = [];
+      result.length = length;
+      let index = 0;
+      pending.push(() => {
+        while (index < length) {
+          const key = index++;
+          if (key in current) {
+            result[key] = visit(current[key], `${currentPath}[${key}]`);
+            return true;
+          }
+        }
+        return false;
+      });
+      return result;
+    }
+    if (isPlainObject(current)) {
+      const result: Record<string, unknown> = {};
+      const entries = Object.entries(current)[Symbol.iterator]();
+      pending.push(() => {
+        const entry = entries.next();
+        if (entry.done) {
+          return false;
+        }
+        const [key, child] = entry.value;
+        result[key] = visit(child, appendConfigPathSegment(currentPath, key));
+        return true;
+      });
+      return result;
+    }
+    return current;
   };
-
-  const expandContainer = (
-    source: Record<string, unknown> | unknown[],
-    containerPath: string,
-    slot: Record<string, unknown> | unknown[],
-  ): void => {
-    const sourceIsArray = Array.isArray(source);
-    const children: SubstituteTask[] = [];
-    for (const [key, val] of Object.entries(source)) {
-      const childPath = sourceIsArray
-        ? `${containerPath}[${key}]`
-        : appendConfigPathSegment(containerPath, key);
-      const childIsArray = Array.isArray(val);
-      const childIsObject = !childIsArray && isPlainObject(val);
-      if (childIsArray || childIsObject) {
-        const child: Record<string, unknown> | unknown[] = childIsArray ? [] : {};
-        writeSlot(slot, key, child);
-        children.push({ value: val, path: childPath, slot: child, key });
-      } else {
-        // Reserve the slot now so key order matches the document; the leaf
-        // task below overwrites it with the resolved value without moving it.
-        writeSlot(slot, key, undefined);
-        children.push({ value: val, path: childPath, slot, key });
-      }
+  const result = visit(value, path);
+  for (let next = pending.at(-1); next; next = pending.at(-1)) {
+    if (!next()) {
+      pending.pop();
     }
-    for (const child of children.toReversed()) {
-      stack.push(child);
-    }
-  };
-
-  if (Array.isArray(value)) {
-    expandContainer(value, path, result);
-  } else if (isPlainObject(value)) {
-    expandContainer(value, path, result);
-  }
-  while (stack.length > 0) {
-    const task = stack.pop()!;
-    if (Array.isArray(task.value)) {
-      expandContainer(task.value, task.path, task.slot);
-      continue;
-    }
-    if (isPlainObject(task.value)) {
-      expandContainer(task.value, task.path, task.slot);
-      continue;
-    }
-    writeSlot(
-      task.slot,
-      task.key,
-      typeof task.value === "string"
-        ? substituteString(task.value, env, task.path, opts)
-        : task.value,
-    );
   }
   return result;
 }
