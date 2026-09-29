@@ -162,7 +162,8 @@ attachments and output file transfers. Self-hosted input attachments use the
 registered workspace provider's existing staging service. It prepares admitted
 originals on the executor workspace and returns execution-only paths without
 changing their Gateway media references or transcript provenance. Admission
-requires a completed preparation result; the harness does not infer availability
+requires a completed preparation result for every attachment; one unavailable
+file stops the request with an error. The harness does not infer availability
 from a path in the prompt. Repeated preparation reuses the same owned staging
 files. A self-hosted deployment without this provider must configure it or use
 an OpenAI-hosted environment for attachments. This does not add native image

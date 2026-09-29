@@ -434,8 +434,15 @@ export async function prepareAgentWorkspaceAttachments(params: {
   if (!access?.prepareTurnAttachments && !localExecution && !params.requirePreparation) {
     return undefined;
   }
+  const signal = params.requirePreparation
+    ? AbortSignal.any([
+        AbortSignal.timeout(params.turn.timeoutMs),
+        ...(params.turn.abortSignal ? [params.turn.abortSignal] : []),
+      ])
+    : params.turn.abortSignal;
+  const deadline = performance.now() + params.turn.timeoutMs;
   const assertCurrent = () => {
-    params.turn.abortSignal?.throwIfAborted();
+    signal?.throwIfAborted();
     params.assertCurrent();
     if (getAgentWorkspaceAccess(params.workspaceDir) !== access) {
       throw new Error("Workspace access changed during attachment preparation");
@@ -447,34 +454,60 @@ export async function prepareAgentWorkspaceAttachments(params: {
   assertCurrent();
   // Deferred originals can differ from both the initial snapshot and runtime media.
   const facts = (message ? readPersistedMediaFacts(message) : undefined) ?? params.turn.media ?? [];
-  if (!facts.some((fact) => fact.path?.trim() || fact.url?.trim())) {
+  const attachments = facts.filter((fact) => fact.path?.trim() || fact.url?.trim());
+  if (!attachments.length) {
     return undefined;
   }
-  let note: string | undefined;
-  if (access?.prepareTurnAttachments) {
-    note = await access.prepareTurnAttachments(
-      {
-        config: params.turn.config,
-        media: facts,
-        timeoutMs: params.turn.timeoutMs,
-        abortSignal: params.turn.abortSignal,
-      },
-      assertCurrent,
-    );
-  } else if (localExecution) {
-    const { prepareLocalWorkspaceAttachments } = await import("./workspace-attachments.local.js");
-    assertCurrent();
-    note = await prepareLocalWorkspaceAttachments({
-      media: facts,
-      execution: localExecution,
-      assertCurrent,
-    });
-  }
-  assertCurrent();
-  if (params.requirePreparation && !note) {
+  if (params.requirePreparation && !access?.prepareTurnAttachments && !localExecution) {
     throw new Error(
       "Workspace attachments require a registered attachment provider; configure one for this execution environment before retrying",
     );
   }
-  return note;
+  // A batch note can describe only a subset of the inputs. Require a result for
+  // each attachment under the same binding and overall preparation deadline.
+  const batches = params.requirePreparation ? attachments.map((fact) => [fact]) : [facts];
+  const notes = new Set<string>();
+  let noteChars = 0;
+  for (const [index, media] of batches.entries()) {
+    assertCurrent();
+    let note: string | undefined;
+    if (access?.prepareTurnAttachments) {
+      note = await access.prepareTurnAttachments(
+        {
+          config: params.turn.config,
+          media,
+          timeoutMs: params.requirePreparation
+            ? Math.max(0, Math.ceil(deadline - performance.now()))
+            : params.turn.timeoutMs,
+          abortSignal: signal,
+        },
+        assertCurrent,
+      );
+    } else if (localExecution) {
+      const { prepareLocalWorkspaceAttachments } = await import("./workspace-attachments.local.js");
+      assertCurrent();
+      note = await prepareLocalWorkspaceAttachments({
+        media,
+        execution: localExecution,
+        assertCurrent,
+      });
+    }
+    assertCurrent();
+    if (!params.requirePreparation) {
+      return note;
+    }
+    if (!note?.trim()) {
+      throw new Error(
+        `Workspace attachment ${index + 1} could not be prepared; ensure every attachment is available to the registered attachment provider before retrying`,
+      );
+    }
+    if (!notes.has(note)) {
+      noteChars += note.length + (notes.size ? 1 : 0);
+      if (localExecution && noteChars > localExecution.maxChars) {
+        throw new Error("Prepared workspace attachment paths exceed the available context budget");
+      }
+      notes.add(note);
+    }
+  }
+  return [...notes].join("\n");
 }

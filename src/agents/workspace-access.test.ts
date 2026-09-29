@@ -440,12 +440,15 @@ describe("workspace attachment preparation", () => {
     { input: "deferred", host: "absent" },
     { input: "declared", host: "bridge-only" },
     { input: "declared", host: "empty-note" },
+    { input: "declared", host: "blank-note" },
   ])("rejects required $input attachments with provider state $host", async ({ input, host }) => {
     const root = workspace();
     if (host !== "absent") {
       bindWorkspace(root, {
         ...provider(),
-        ...(host === "empty-note" ? { prepareTurnAttachments: async () => undefined } : {}),
+        ...(host === "empty-note" || host === "blank-note"
+          ? { prepareTurnAttachments: async () => (host === "blank-note" ? " \n\t" : undefined) }
+          : {}),
       });
     }
     const attachmentTurn =
@@ -466,9 +469,46 @@ describe("workspace attachment preparation", () => {
         requirePreparation: true,
       }),
     ).rejects.toThrow(
-      "Workspace attachments require a registered attachment provider; configure one for this execution environment before retrying",
+      host === "empty-note" || host === "blank-note"
+        ? "Workspace attachment 1 could not be prepared; ensure every attachment is available to the registered attachment provider before retrying"
+        : "Workspace attachments require a registered attachment provider; configure one for this execution environment before retrying",
     );
   });
+
+  it.each([false, true])(
+    "preserves deferred attachment notes with required preparation %s",
+    async (requirePreparation) => {
+      const root = workspace();
+      bindWorkspace(root, {
+        ...provider(),
+        prepareTurnAttachments: async ({ media }) =>
+          media
+            ?.map((fact) => `[media attached: /executor/${path.basename(fact.path!)}]`)
+            .join("\n"),
+      });
+      const recorder = createDeferredRecorder({
+        text: "Read both attachments",
+        media: [
+          { path: "media://inbound/one.txt" },
+          { path: "media://inbound/one.txt" },
+          { path: "media://inbound/two.txt" },
+        ],
+      });
+
+      await expect(
+        prepareAgentWorkspaceAttachments({
+          workspaceDir: root,
+          turn: { ...turn, userTurnTranscriptRecorder: recorder },
+          assertCurrent: () => {},
+          requirePreparation,
+        }),
+      ).resolves.toBe(
+        requirePreparation
+          ? "[media attached: /executor/one.txt]\n[media attached: /executor/two.txt]"
+          : "[media attached: /executor/one.txt]\n[media attached: /executor/one.txt]\n[media attached: /executor/two.txt]",
+      );
+    },
+  );
 
   it("allows a text-only recorder when attachment preparation is required without a provider", async () => {
     const recorder = createDeferredRecorder({ text: "Text-only request" });

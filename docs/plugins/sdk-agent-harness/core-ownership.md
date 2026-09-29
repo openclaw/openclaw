@@ -130,8 +130,10 @@ check that authority and signal before each transport command.
 A failed enabled transfer prevents dispatch. Harnesses that require prepared
 files pass `requirePreparation: true` to `prepareAgentWorkspaceAttachments`.
 This resolves canonical attachment facts, including deferred transcript input,
-and rejects files with a path or URL when preparation returns no execution-path
-note. Text-only input still needs no attachment provider.
+and requires a nonblank execution-path note for each file with a path or URL.
+Preparation runs one file at a time under the same workspace binding and total
+timeout. If any file cannot be prepared, dispatch fails even when other files
+were prepared successfully. Text-only input still needs no attachment provider.
 
 When `requirePreparation` is omitted, bindings without the optional callback
 keep their existing input handling, including inline images; they do not gain

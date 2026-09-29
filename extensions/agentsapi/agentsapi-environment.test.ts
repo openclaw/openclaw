@@ -462,19 +462,24 @@ describe("Agents API attempt environment selection", () => {
       let binding: AgentsApiBinding | undefined;
       try {
         for (const job of ["initial-import", "continued-import"]) {
-          const bytes = Buffer.from(
-            `INFO import queued\nINFO import completed job_id=${job} rows_processed=42\n`,
-          );
-          const saved = await saveMediaBuffer(bytes, "text/plain", "inbound");
-          const media = [
-            {
-              path: saved.path,
-              url: `media://inbound/${saved.id}`,
-              fileName: "import-job.log",
-              contentType: "text/plain",
-              sizeBytes: bytes.length,
-            },
+          const contents = [
+            Buffer.from(
+              `INFO import queued\nINFO import completed job_id=${job} rows_processed=42\n`,
+            ),
+            Buffer.from(`ERROR job_id=${job} record 9 has an invalid amount\n`),
           ];
+          const media = await Promise.all(
+            contents.map(async (bytes, index) => {
+              const saved = await saveMediaBuffer(bytes, "text/plain", "inbound");
+              return {
+                path: saved.path,
+                url: `media://inbound/${saved.id}`,
+                fileName: `import-job-${index}.log`,
+                contentType: "text/plain",
+                sizeBytes: bytes.length,
+              };
+            }),
+          );
           const originalMedia = structuredClone(media);
           const prompt = `Check ${job} with grep.`;
           const createRecorder = recorderMedia
@@ -512,11 +517,12 @@ describe("Agents API attempt environment selection", () => {
           const attachmentPaths = [...text.matchAll(/\[media attached: ([^\]]+)\]/gu)].map(
             (match) => match[1]!,
           );
-          expect(attachmentPaths).toHaveLength(1);
-          const attachmentPath = attachmentPaths[0]!;
-          expect(attachmentPath.startsWith(`${fixture.remoteRoot}${path.sep}`)).toBe(true);
-          expect(text).toContain(`${prompt}\n\n[media attached: ${attachmentPath}]`);
-          expect(await fs.readFile(attachmentPath)).toEqual(bytes);
+          expect(attachmentPaths).toHaveLength(2);
+          expect(text).toContain(`${prompt}\n\n[media attached: ${attachmentPaths[0]}]`);
+          for (const [index, attachmentPath] of attachmentPaths.entries()) {
+            expect(attachmentPath.startsWith(`${fixture.remoteRoot}${path.sep}`)).toBe(true);
+            expect(await fs.readFile(attachmentPath)).toEqual(contents[index]);
+          }
           expect(media).toEqual(originalMedia);
           binding ??= submitted.bind.mock.calls[0]![0];
           mocks.fetch.mockClear();
@@ -526,6 +532,30 @@ describe("Agents API attempt environment selection", () => {
       }
     },
   );
+
+  it("rejects a mixed managed and HTTPS-only attachment batch before session submission", async () => {
+    const fixture = await workspaceAttachmentFixture();
+    const saved = await saveMediaBuffer(Buffer.from("managed attachment"), "text/plain", "inbound");
+    try {
+      const { result } = await attempt("self_hosted", undefined, fixture.gatewayRoot, [
+        { path: saved.path, url: `media://inbound/${saved.id}` },
+        { url: "https://example.com/unavailable.txt", fileName: "unavailable.txt" },
+      ]);
+
+      expect(result).toMatchObject({
+        terminal: {
+          kind: "failed",
+          error: expect.objectContaining({
+            message:
+              "Workspace attachment 2 could not be prepared; ensure every attachment is available to the registered attachment provider before retrying",
+          }),
+        },
+      });
+      expect(mocks.fetch).not.toHaveBeenCalled();
+    } finally {
+      fixture.release();
+    }
+  });
 
   it("keeps text-only transcript recorders usable without attachments", async () => {
     const fixture = await workspaceAttachmentFixture();
