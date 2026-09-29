@@ -71,6 +71,22 @@ async function captureStdout(run: () => Promise<void>): Promise<string> {
   }
 }
 
+async function captureStderr(run: () => Promise<void>): Promise<string> {
+  let output = "";
+  const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(((
+    chunk: string | Uint8Array,
+  ) => {
+    output += String(chunk);
+    return true;
+  }) as typeof process.stderr.write);
+  try {
+    await run();
+    return output;
+  } finally {
+    writeSpy.mockRestore();
+  }
+}
+
 async function runTranscriptsCli(args: string[], startup = false): Promise<string> {
   return captureStdout(async () => {
     const program = new Command().name("openclaw");
@@ -271,5 +287,30 @@ describe("transcripts CLI", () => {
     const artifact = JSON.parse(await runTranscriptsCli(["path", "design-review", "--json"]));
     expect(artifact).toMatchObject({ path: path.join(sessionDir, "summary.md"), exists: true });
     expect(ownershipReads, "standalone export ownership SQL on the caller thread").toEqual([]);
+  });
+
+  it.each([
+    ["--dir", "--metadata"],
+    ["--dir", "--transcript"],
+    ["--metadata", "--transcript"],
+  ])("warns about conflicting artifact selectors %s and %s", async (...selectors) => {
+    const sessionDir = await writeSession(stateDir, "design-review");
+    const expectedPath =
+      selectors[0] === "--dir"
+        ? sessionDir
+        : path.join(
+            sessionDir,
+            selectors[0] === "--metadata" ? "metadata.json" : "transcript.jsonl",
+          );
+
+    let output = "";
+    const warning = await captureStderr(async () => {
+      output = await runTranscriptsCli(["path", "design-review", ...selectors]);
+    });
+
+    expect(output.trim()).toBe(expectedPath);
+    expect(warning).toBe(
+      `warning: transcripts path received multiple artifact selectors; using ${selectors[0]} (${selectors.join(", ")}).\n`,
+    );
   });
 });

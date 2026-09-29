@@ -106,6 +106,11 @@ openclaw transcripts path <session> --json
 | `path <session> --transcript` | Materialize and print `transcript.jsonl`.            |
 | `--json`                      | Print machine-readable output (any subcommand).      |
 
+The `--dir`, `--metadata`, and `--transcript` options select one artifact. If
+multiple selectors are provided, `path` prints a warning and keeps the existing
+precedence order (`--dir`, then `--metadata`, then `--transcript`); provide one
+selector to avoid ambiguity.
+
 Use the selector printed by `list` to address an exact capture. An existing
 canonical selector takes priority over a raw session ID with the same text.
 Otherwise, `show` and `path` accept `YYYY-MM-DD/<raw-session-id>`, keeping the
