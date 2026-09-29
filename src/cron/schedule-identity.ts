@@ -7,15 +7,12 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { parseCronPacingBounds } from "./pacing.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import { normalizeCronStaggerMs } from "./stagger.js";
+import type { CronSchedule } from "./types.js";
 
 type CronScheduleIdentityInput = { schedule?: unknown; enabled?: unknown } & Record<
   string,
   unknown
 >;
-
-function readScheduleTime(record: Record<string, unknown>, key: string): number | undefined {
-  return coerceFiniteScheduleNumber(record[key]);
-}
 
 function readScheduleInteger(record: Record<string, unknown>, key: string): number | undefined {
   const parsed = parseStrictFiniteNumber(record[key]);
@@ -25,26 +22,12 @@ function readScheduleInteger(record: Record<string, unknown>, key: string): numb
   });
 }
 
-function schedulePayloadFromRecord(schedule: Record<string, unknown>):
-  | { kind: "at"; at: string }
-  | { kind: "every"; everyMs: number; anchorMs?: number }
-  | { kind: "cron"; expr: string; tz?: string; staggerMs?: number }
-  | { kind: "on-exit"; command: string; cwd?: string }
-  | {
-      kind: "stream";
-      command: string[];
-      cwd?: string;
-      mode?: "line" | "match";
-      match?: string;
-      batchMs?: number;
-      maxBatchBytes?: number;
-    }
-  | undefined {
+function schedulePayloadFromRecord(schedule: Record<string, unknown>): CronSchedule | undefined {
   const rawKind = normalizeOptionalString(schedule.kind)?.toLowerCase();
   const expr = normalizeOptionalString(schedule.expr);
   const at = normalizeOptionalString(schedule.at);
-  const everyMs = readScheduleTime(schedule, "everyMs");
-  const anchorMs = readScheduleTime(schedule, "anchorMs");
+  const everyMs = coerceFiniteScheduleNumber(schedule.everyMs);
+  const anchorMs = coerceFiniteScheduleNumber(schedule.anchorMs);
   const tz = normalizeOptionalString(schedule.tz);
   const staggerMs = normalizeCronStaggerMs(schedule.staggerMs);
   const kind =

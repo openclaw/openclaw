@@ -164,6 +164,40 @@ describe("IMAP sender admission", () => {
     }
   });
 
+  it("requires the explicit trusted-header relaxation for asserted admission", async () => {
+    const parsed = await message([
+      "From: trusted@example.com",
+      "Authentication-Results: mx.example.com; dmarc=pass header.from=example.com",
+    ]);
+    const authenticator = vi.fn(async () => createImapAuthResult("none"));
+
+    await expect(
+      evaluateImapSender({ ...parsed, account: account(), authenticator }),
+    ).resolves.toMatchObject({
+      accepted: false,
+      strength: "unverified",
+      reason: "unverified-authentication",
+    });
+
+    await expect(
+      evaluateImapSender({
+        ...parsed,
+        account: account({
+          senderAuth: {
+            min: "asserted",
+            trustedAuthservIds: ["mx.example.com"],
+            acceptTrustedAuthservId: true,
+          },
+        }),
+        authenticator,
+      }),
+    ).resolves.toMatchObject({
+      accepted: true,
+      strength: "asserted",
+      reason: "trusted-authserv-dmarc-pass",
+    });
+  });
+
   it("rejects untrusted Authentication-Results authorities", async () => {
     const configured = account({
       senderAuth: {

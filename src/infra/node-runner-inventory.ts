@@ -77,7 +77,12 @@ const WorkerHost = z.union([
     preparedWorkspace: z.literal(NODE_WORKER_PREPARED_WORKSPACE_VERSION).optional(),
     capturedExecPolicy: z.literal(true).optional(),
     launchToolNames: LaunchToolNames.optional(),
-  }).refine((host) => host.bundleStatus === undefined || host.bundleRetention !== undefined),
+    idleRetention: z.literal(true).optional(),
+  }).refine(
+    (host) =>
+      (host.bundleStatus === undefined || host.bundleRetention !== undefined) &&
+      (host.capacity.reclaimableIdle === undefined || host.idleRetention === true),
+  ),
 ]);
 export type NodeWorkerCapacitySnapshot = Readonly<z.infer<typeof CapacitySnapshot>>;
 export type NodeWorkerHostDeclaration = z.infer<typeof WorkerHost>;

@@ -907,7 +907,7 @@ extension DashboardWindowSmokeTests {
         #expect(routeBController.auth.token == "route-b-device-token")
     }
 
-    @Test func `route change without fresh credential blanks prior dashboard`() async throws {
+    @Test func `route change without accepted native authority blanks prior dashboard`() async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
         let url = server.url("/#token=route-a-device-token")
@@ -923,6 +923,7 @@ extension DashboardWindowSmokeTests {
         controller.show()
         let manager = DashboardManager._testMake(
             authTokenProvider: { _ in nil },
+            legacyCredentialsProvider: { _, _ in throw CancellationError() },
             routeProbe: { purpose in #expect(purpose == .authentication) })
         manager._testSetController(controller)
         defer { manager.close() }
@@ -935,8 +936,8 @@ extension DashboardWindowSmokeTests {
             routeRevision: 2))
 
         let replacement = try #require(manager._testController())
-        #expect(replacement !== controller)
-        #expect(!controller.isWindowOpen)
+        #expect(replacement.isShowingFailurePage)
+        #expect(!replacement.canDeliverNativeCommands)
         #expect(replacement.currentURL == URL(string: "about:blank"))
         #expect(replacement.auth.token == nil)
         #expect(replacement.documentHost.nativeGatewayAuthProvider == nil)

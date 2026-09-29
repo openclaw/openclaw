@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
+  NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -181,6 +182,41 @@ describe("node worker launch adapter", () => {
       resetGatewayWorkAdmission();
     }
   });
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])(
+    "negotiates idle retention only for node=%s and bundle=%s",
+    async (nodeSupports, bundleSupports) => {
+      const input = launchInput();
+      if (!bundleSupports) {
+        input.descriptor.admission.handshake.protocolFeatures =
+          input.descriptor.admission.handshake.protocolFeatures.filter(
+            (feature) => feature !== NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
+          );
+      }
+      const node = nodeProof();
+      if (nodeSupports) {
+        node.workerHost.idleRetention = true;
+      }
+      const expected = {
+        ...input,
+        ...(nodeSupports && bundleSupports ? { idleRetention: true as const } : {}),
+      };
+      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+        expect(request.params).toEqual(expected);
+        return wire(receipt(expected, "completed"));
+      });
+      const adapter = createNodeWorkerLaunchAdapter({
+        getTransport: () => transportWith(invoke, async () => [node]),
+      });
+      expect(await adapter.launch(launchRequest(input))).toEqual(receipt(expected, "completed"));
+      expect(input).not.toHaveProperty("idleRetention");
+      expect(invoke).toHaveBeenCalledOnce();
+    },
+  );
 
   it("cancels an in-flight status wait through the existing terminal cancellation receipt", async () => {
     const input = launchInput();

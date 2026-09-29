@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
@@ -210,13 +211,23 @@ describe("direct compactor through the context-engine delegate", () => {
         expectedLifecycleRevision: "caller-private-revision",
         unrelatedCapability: "caller-private-capability",
       };
+      const sql = observeHostDataSql();
+      hookRunner.runBeforeCompaction.mockImplementationOnce(async () => {
+        sql.restore();
+        return undefined;
+      });
       const result = await delegate({
         sessionId: target.sessionId,
         sessionKey: target.sessionKey,
         sessionTarget,
         runtimeContext: fixture.runtimeContext,
-      });
+      }).finally(sql.restore);
       expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
+      expect(
+        sql.queries.filter(
+          (query) => /\bselect\b/i.test(query) && /\btranscript_events\b/i.test(query),
+        ),
+      ).toEqual([]);
       const returned = result.result?.sessionTarget;
       expect(returned).toEqual({ ...target, ...(threadId !== undefined ? { threadId } : {}) });
       expect(result.result).not.toHaveProperty("sessionFile");
@@ -346,6 +357,74 @@ describe("direct compactor through the context-engine delegate", () => {
       expect(reopened.buildSessionContext().messages).toEqual(fixture.originalMessages);
       expect(fixture.recordCompaction).not.toHaveBeenCalled();
       expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["abort", "owner-replaced"] as const)(
+    "discards a hydrated compaction transcript after %s before publication",
+    async (transition) => {
+      const fixture = await createFixture("summary");
+      const { historyLane } =
+        await import("../../config/sessions/session-transcript-worker-resources.js");
+      const { withSessionTranscriptWriteAssertion } =
+        await import("../../config/sessions/transcript-write-context.js");
+      const received = createDeferred();
+      const release = createDeferred();
+      const controller = new AbortController();
+      let current = true;
+      const reason = new Error("compaction preparation no longer current");
+      const read = vi.spyOn(historyLane.pool, "run").mockImplementationOnce((input, options) => {
+        read.mockRestore();
+        return historyLane.pool.run(input, options).then(async (snapshot) => {
+          received.resolve();
+          await release.promise;
+          return snapshot;
+        });
+      });
+      const pending = withSessionTranscriptWriteAssertion(
+        fixture.target,
+        () => {
+          if (!current) {
+            throw reason;
+          }
+        },
+        () =>
+          delegate({
+            sessionId: fixture.target.sessionId,
+            sessionKey: fixture.target.sessionKey,
+            sessionTarget: fixture.target,
+            runtimeContext: fixture.runtimeContext,
+            abortSignal: controller.signal,
+          }),
+      );
+      try {
+        await Promise.race([
+          received.promise,
+          pending.then(() => {
+            throw new Error("Compaction completed before the native hydration reply");
+          }),
+        ]);
+        if (transition === "abort") {
+          controller.abort(reason);
+        } else {
+          current = false;
+        }
+        release.resolve();
+        expect(await pending).toMatchObject({ ok: false, compacted: false });
+        expect(fixture.stream).not.toHaveBeenCalled();
+        expect(hookRunner.runBeforeCompaction).not.toHaveBeenCalled();
+        expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+        expect(fixture.recordCompaction).not.toHaveBeenCalled();
+        await databases.closeOpenClawAgentDatabasesAsync();
+        databases.closeOpenClawAgentDatabasesForTest();
+        expect(sessions.SessionManager.open(fixture.target).getEntries()).toEqual(
+          fixture.originalEntries,
+        );
+      } finally {
+        release.resolve();
+        read.mockRestore();
+        await pending.catch(() => undefined);
+      }
     },
   );
 
