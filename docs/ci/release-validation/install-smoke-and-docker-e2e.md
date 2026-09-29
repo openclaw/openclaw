@@ -99,17 +99,29 @@ The scheduler declares `anthropic-api-key` for this lane, and both full-chunk an
 targeted-lane preflights require `ANTHROPIC_API_KEY` specifically; OAuth credentials
 remain accepted for the other Anthropic lanes that support them.
 
-First-hop compatibility lanes share a 1,800-second inner container budget and a
-2,100-second outer lane budget. Hosted run `36465355074` measured candidate-driven
-hops at 280–310 seconds, published-driver hops at 103–118 seconds, and complete
-lanes at 1,140–1,168 seconds. Three 310-second candidate hops, a 130-second
-published hop, and 150 seconds of setup/assertions give about 1,210 seconds;
-a roughly 1.5× slow-host margin gives 1,800 seconds, with another 300 seconds for
-host-side work. The self-upgrade job allows 80 minutes: six first-hop source
-versions need two 35-minute waves under the unchanged npm weight limit of five;
-the 20-minute, weight-three survivor overlaps those waves, with ten minutes left
-for job setup and artifacts. Targeted first-hop jobs retain their 60-minute job
-budget. Phase and update-step durations are printed in the lane log.
+First-hop compatibility lanes share a 3,200-second inner container budget and a
+3,500-second outer lane budget. Hosted 4-vCPU run `36506342273` spent about 1,558
+seconds before its final candidate hop; another 560 seconds for that hop and about
+five seconds for assertions project roughly 2,125 seconds for a complete lane.
+A roughly 1.5× slow-host margin gives 3,200 seconds, with another 300 seconds for
+host-side work. The self-upgrade job allows 130 minutes: six first-hop source
+versions need two 3,500-second waves under the unchanged npm weight limit of five;
+the 20-minute, weight-three survivor overlaps those waves. Adding ten minutes for
+job setup and artifacts gives about 127 minutes, rounded to 130. Targeted
+first-hop jobs retain their 60-minute job budget. Phase and update-step durations
+are printed in the lane log.
+
+Authenticated update restart uses a 2,280-second container budget and a
+2,580-second (43-minute) lane budget: hosted run `36506342273` exceeded 1,515
+seconds, multiplied by roughly 1.5 with another 300 seconds for host-side work.
+Its restart command took 856 seconds in hosted run `36506210440` and 993 seconds
+on four-CPU Crabbox; 993 × 1.5 gives a lane-specific 1,500-second command timeout.
+The shared 900-second command default stays unchanged. The `package-update-openai`
+job allows 160 minutes: its five weight-three npm lanes serialize under the npm
+limit of five, with budgets of 30 + 30 + 20 + 25 + 43 = 148 minutes. The ten-minute
+chat lane overlaps them; ten minutes for setup and artifacts gives 158 minutes,
+rounded to 160. CI's 60-minute `docker-seed-e2e` job does not select
+`update-restart-auth`, so its budget stays unchanged.
 
 Provider-neutral package checks run in three balanced rows: onboarding and install switching, channel/published migrations, and self-upgrades. This avoids serializing eight npm-heavy lanes behind one runner's npm resource limit. The aggregate `package-update-core` and `package-update` names remain available for manual runs. The `package-update-openai` row also runs root-managed VPS upgrade and authenticated update restart proof. Scheduler resource limits remain unchanged. Credential preflight failures remain blocking while the following diagnostic pool drains non-live lanes; earlier setup failures and cancellation still prevent execution.
 

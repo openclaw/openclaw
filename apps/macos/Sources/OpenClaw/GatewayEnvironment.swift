@@ -155,11 +155,6 @@ enum GatewayEnvironment {
             isDebug: CLIInstallBuild.isDebug)
     }
 
-    /// Exposed for tests so we can inject fake version checks without rewriting bundle metadata.
-    static func expectedGatewayVersion(from versionString: String?) -> Semver? {
-        Semver.parse(versionString)
-    }
-
     static func check() async -> GatewayEnvironmentStatus {
         let searchPaths = await CommandResolver.preferredPathsAsync()
         return await self.resolveEnvironment(searchPaths: searchPaths)
@@ -233,13 +228,9 @@ enum GatewayEnvironment {
 
             let gatewayLabel = gatewayBin != nil ? "global" : "local"
             let gatewayVersionText = installedRaw ?? "unknown"
-            // Avoid repeating "(local)" twice; if using the local entrypoint, show the path once.
-            let localPathHint = gatewayBin == nil && projectEntrypoint != nil
-                ? " (local: \(projectEntrypoint ?? "unknown"))"
-                : ""
             let gatewayLabelText = gatewayBin != nil
                 ? "(\(gatewayLabel))"
-                : localPathHint.isEmpty ? "(\(gatewayLabel))" : localPathHint
+                : " (local: \(projectEntrypoint ?? "unknown"))"
             return GatewayEnvironmentStatus(
                 kind: .ok,
                 nodeVersion: runtime.version.description,

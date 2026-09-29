@@ -825,7 +825,7 @@ merge_run() {
   fi
 
   local crabbox_final_main_sha="" route=immediate
-  local MERGE_ADMISSION_ACTIVE=true
+  local MERGE_ADMISSION_ACTIVE=true MERGE_PRIOR_CI_OBSERVED_MAIN=""
   local admission_attempt previous_observation=""
   # Only fresh admission waits for calculation; retained intent reconciles immediately.
   # Pin PR/policy facts and each projection as soon as it becomes known.

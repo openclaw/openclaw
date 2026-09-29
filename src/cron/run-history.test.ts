@@ -55,6 +55,28 @@ function outcome(storeKey: string, receipt: string): CronRunHistoryWrite {
   };
 }
 
+it.each(["asc", "desc"] as const)("orders history timestamps and ties %s", (sortDir) => {
+  const records: CronRunRecord[] = [
+    { id: "tie-a", createdAt: 5, endedAt: 20 },
+    { id: "created-only", createdAt: 15 },
+    { id: "ended", createdAt: 10, endedAt: 20, lastEventAt: 90 },
+    { id: "tie-b", createdAt: 5, endedAt: 20 },
+    { id: "last-event", createdAt: 0, lastEventAt: 30 },
+  ].map((record) => ({
+    ...record,
+    jobId: "job",
+    status: "succeeded",
+    detail: { kind: "cron-run", storeKey: "store", status: "ok", runId: record.id },
+  }));
+  const newestFirst = ["last-event", "ended", "tie-b", "tie-a", "created-only"];
+
+  const page = projectCronRunHistoryPage(records, { storeKey: "store", sortDir });
+
+  expect(page.entries.map((entry) => entry.runId)).toEqual(
+    sortDir === "desc" ? newestFirst : newestFirst.toReversed(),
+  );
+});
+
 it("retains history across worker reads, isolates stores, and recovers only an exact receipt", async () => {
   await withOpenClawTestState(
     { layout: "state-only", prefix: "cron-native-history-" },

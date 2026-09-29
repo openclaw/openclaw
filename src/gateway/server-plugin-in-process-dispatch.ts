@@ -663,6 +663,7 @@ export async function dispatchGatewayMethodInProcessRaw(
       onExecution: options?.onExecution,
       onSignalAbort: options?.onSignalAbort,
       requestIdPrefix: "plugin-subagent",
+      prepareDispatchCurrent: options?.prepareDispatchCurrent,
       sessionMutationCommitGuard: () => {
         resolved.assertContextCurrent();
         resolved.assertInvocationCurrent();
@@ -705,6 +706,7 @@ export async function dispatchGatewayMethodInProcess<T>(
       });
       return method === "agent"
         ? await facade.dispatch<T>(params as AgentRunRequest, {
+            prepareDispatchCurrent: options?.prepareDispatchCurrent,
             assertAdmissionCurrent: () => {
               resolved.assertInvocationCurrent();
               options?.sessionMutationCommitGuard?.();
@@ -724,6 +726,7 @@ export async function dispatchGatewayMethodInProcess<T>(
             options?.timeoutMs,
             options?.signal,
             options?.onSignalAbort,
+            options?.prepareDispatchCurrent,
           );
     });
   }

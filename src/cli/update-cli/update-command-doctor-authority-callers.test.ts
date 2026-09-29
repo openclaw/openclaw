@@ -357,6 +357,7 @@ describe("unproved Doctor authority callers", () => {
       const maintenance = {
         signal: new AbortController().signal,
         run: <T>(operation: () => T) => operation(),
+        repairSqliteNoCow: async () => {},
         releaseState: vi.fn(async () => {}),
         finish: vi.fn(async () => {}),
         release: vi.fn(async () => {}),
@@ -469,6 +470,7 @@ describe("unproved Doctor authority callers", () => {
       const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue({
         signal: new AbortController().signal,
         run: (operation) => operation(),
+        repairSqliteNoCow: async () => {},
         releaseState: async () => {},
         release: async () => {},
         finish: async () => {

@@ -670,6 +670,11 @@ final class NodeAppModel {
         self.isAppleReviewDemoModeEnabled || self.isScreenshotFixtureModeEnabled
     }
 
+    /// Demo and capture screens must neither read nor expose the installed user's saved gateways.
+    func loadDisplayedGatewayRegistry() -> GatewaySettingsStore.GatewayRegistry {
+        self.isLocalGatewayFixtureEnabled ? .empty : GatewaySettingsStore.loadGatewayRegistry()
+    }
+
     var chatTransportModeID: String {
         if self.isScreenshotFixtureModeEnabled { return "screenshots" }
         if self.isAppleReviewDemoModeEnabled { return "apple-review-demo" }

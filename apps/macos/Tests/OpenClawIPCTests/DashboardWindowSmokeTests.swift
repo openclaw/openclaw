@@ -332,7 +332,7 @@ struct DashboardWindowSmokeTests {
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
-        #expect(controller._testNavigationWebViewIdentity == controller._testDashboardWebViewIdentity)
+        #expect(controller._testNavigationWebViewIdentity == ObjectIdentifier(controller.webView))
 
         try controller.nativeBrowser.open(tabId: "mac-focused", url: readerServer.url("/docs/"), sessionKey: "")
         let readingWebView = try #require(controller.nativeBrowser.webView(for: "mac-focused"))
@@ -342,7 +342,7 @@ struct DashboardWindowSmokeTests {
         #expect(controller.window?.makeFirstResponder(readingWebView) == true)
         #expect(controller._testNavigationWebViewIdentity == ObjectIdentifier(readingWebView))
         #expect(controller.window?.makeFirstResponder(controller.webView) == true)
-        #expect(controller._testNavigationWebViewIdentity == controller._testDashboardWebViewIdentity)
+        #expect(controller._testNavigationWebViewIdentity == ObjectIdentifier(controller.webView))
     }
 
     @Test func `first Mac tab requests browser import and retries until the offer completes`() async throws {
@@ -743,11 +743,11 @@ extension DashboardWindowSmokeTests {
         try await waitForNativeDashboardDocument(controller)
         #expect(try await controller.webView.evaluateJavaScript("window.initialChrome") as? Bool == true)
         #expect(controller.window?.titlebarAccessoryViewControllers.isEmpty == true)
-        #expect(controller._testAllowsBackForwardGestures)
+        #expect(controller.webView.allowsBackForwardNavigationGestures)
     }
 
     @Test func `dashboard javascript confirm alert maps actions`() {
-        let alert = DashboardWindowController._testJavaScriptConfirmAlert(
+        let alert = ControlUIDocumentHost.makeJavaScriptConfirmAlert(
             message: "Delete 1 session?",
             host: "127.0.0.1")
 
@@ -755,11 +755,11 @@ extension DashboardWindowSmokeTests {
         #expect(alert.informativeText.contains("127.0.0.1 is asking:"))
         #expect(alert.informativeText.contains("Delete 1 session?"))
         #expect(alert.buttons.map(\.title) == ["OK", "Cancel"])
-        #expect(DashboardWindowController._testJavaScriptConfirmResult(
+        #expect(ControlUIDocumentHost.javaScriptConfirmResult(
             for: .alertFirstButtonReturn))
-        #expect(!DashboardWindowController._testJavaScriptConfirmResult(
+        #expect(!ControlUIDocumentHost.javaScriptConfirmResult(
             for: .alertSecondButtonReturn))
-        #expect(!DashboardWindowController._testJavaScriptConfirmResult(for: .cancel))
+        #expect(!ControlUIDocumentHost.javaScriptConfirmResult(for: .cancel))
     }
 
     @Test func `dashboard failure state opens in dashboard window`() async throws {

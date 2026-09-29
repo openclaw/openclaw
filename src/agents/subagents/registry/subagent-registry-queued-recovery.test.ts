@@ -24,7 +24,7 @@ vi.mock("../../../config/sessions/session-accessor.js", () => ({
   },
 }));
 vi.mock("../../../config/sessions/session-accessor.sqlite-replacement-projection.js", () => ({
-  applySessionEntryExactReplacements: vi.fn(async () => null),
+  applySessionEntryExactReplacements: vi.fn(async () => undefined),
 }));
 vi.mock("./subagent-control-session.js", () => ({
   prepareSubagentKillSession: async (

@@ -260,14 +260,14 @@ extensions/discord/src/components-registry.ts	3
 extensions/discord/src/components.builders.ts	1
 extensions/discord/src/components.parse.ts	12
 extensions/discord/src/doctor-contract.ts	4
-extensions/discord/src/internal/api.guild.ts	9
-extensions/discord/src/internal/api.messages.ts	9
+extensions/discord/src/internal/api.guild.ts	3
+extensions/discord/src/internal/api.messages.ts	5
 extensions/discord/src/internal/api.reactions.ts	1
 extensions/discord/src/internal/api.users.ts	3
 extensions/discord/src/internal/api.webhooks.ts	1
 extensions/discord/src/internal/command-comparison.ts	1
 extensions/discord/src/internal/command-deploy.ts	3
-extensions/discord/src/internal/commands.ts	6
+extensions/discord/src/internal/commands.ts	5
 extensions/discord/src/internal/components.message.ts	9
 extensions/discord/src/internal/components.modal.ts	1
 extensions/discord/src/internal/embeds.ts	1
@@ -1952,9 +1952,7 @@ src/cli/program/action-reparse.ts	1
 src/cli/program/command-tree.ts	1
 src/cli/program/json-mode.ts	2
 src/cli/program/message/helpers.ts	1
-src/cli/program/message/register.emoji-sticker.ts	1
 src/cli/program/message/register.permissions-search.ts	2
-src/cli/program/message/register.poll.ts	1
 src/cli/program/preaction.ts	1
 src/cli/program/program-context.ts	2
 src/cli/program/register-lazy-command.ts	1
