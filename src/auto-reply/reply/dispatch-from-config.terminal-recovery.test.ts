@@ -18,7 +18,11 @@ import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { expectedNoQueuedReplyResult } from "./dispatch-result-expectations.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
-import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  type ReplyOperationRunState,
+  resolveReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
@@ -490,4 +494,34 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       }
     },
   );
+
+  it("keeps a queued channel turn accepted when the busy session frees before final admission", async () => {
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    sessionStoreMocks.currentEntry = { sessionId: "active-session", updatedAt: Date.now() };
+    const runState: ReplyOperationRunState = {};
+    const dispatchParams = createVisibleDispatchParams(async () => {
+      // The turn queues behind pending follow-up work; the owner settles before
+      // dispatch reacquires the now-idle session for final delivery.
+      runState.admission = { status: "accepted", mode: "followup" };
+      activeOperation.complete();
+      return undefined;
+    });
+
+    await expect(
+      dispatchReplyFromConfig({
+        ...dispatchParams,
+        replyOptions: {
+          [REPLY_OPERATION_RUN_STATE]: runState,
+          turnAdoptionLifecycle: { admission: "exclusive", onAdopted: () => {} },
+        },
+      }),
+    ).resolves.toMatchObject({ queuedFinal: false });
+    expect(dispatchParams.dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+  });
 });

@@ -435,7 +435,9 @@ export function createDispatchReplyOperationCoordinator(params: {
         ? admission.operation.sessionId
         : admission.sessionEntry?.sessionId;
     const runState = resolveReplyOperationRunState(params.replyOptions);
-    if (runState) {
+    // A turn already accepted into the queue or active run keeps that custody when
+    // dispatch later finds the session idle; the queued turn owns its answer.
+    if (runState && runState.admission?.status !== "accepted") {
       runState.admission =
         admission.status === "owned"
           ? { status: "owned" }
