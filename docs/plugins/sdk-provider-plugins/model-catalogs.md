@@ -17,6 +17,8 @@ For lightweight model-reference normalization, use
 `openclaw/plugin-sdk/model-ref-parse`. Its `normalizeGooglePreviewModelId`
 and `normalizeAntigravityPreviewModelId` exports share the catalog's alias
 rules without loading provider replay or transport helpers.
+Use `splitTrailingAuthProfile` to separate a trailing auth profile while preserving
+model-version and local quantization suffixes.
 
 ## Live model discovery
 

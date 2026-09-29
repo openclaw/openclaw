@@ -478,7 +478,7 @@ export function createPdfTool(options?: {
     const loadedPdfs: Array<{
       buffer: Buffer;
       filename: string;
-      resolvedPath: string;
+      resolvedInput: string;
       rewrittenFrom?: string;
     }> = [];
 
@@ -548,7 +548,7 @@ export function createPdfTool(options?: {
       loadedPdfs.push({
         buffer: media.buffer,
         filename,
-        resolvedPath,
+        resolvedInput: resolvedPath,
         ...(rewrittenFrom ? { rewrittenFrom } : {}),
       });
     }
@@ -605,12 +605,7 @@ export function createPdfTool(options?: {
       getExtractions,
     });
 
-    const pdfDetails = buildMediaReferenceDetails({
-      entries: loadedPdfs,
-      singleKey: "pdf",
-      pluralKey: "pdfs",
-      getResolvedInput: (pdf) => pdf.resolvedPath,
-    });
+    const pdfDetails = buildMediaReferenceDetails(loadedPdfs, "pdf");
 
     const truncationNotices = result.native
       ? []

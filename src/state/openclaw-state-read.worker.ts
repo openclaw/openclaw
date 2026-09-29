@@ -103,7 +103,7 @@ import type {
 } from "./openclaw-state-read.types.js";
 import { isReadRequest } from "./openclaw-state-read.validation.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
-import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.js";
+import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 import {
   listUserChannelIdentitiesInDatabase,
   resolveUserChannelIdentityInDatabase,

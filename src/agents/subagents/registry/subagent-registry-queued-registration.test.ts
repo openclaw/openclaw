@@ -48,15 +48,19 @@ vi.mock("../../../infra/agent-events.js", () => ({
   getAgentEventLifecycleGeneration: () => mocks.lifecycle,
   isAgentEventLifecycleGenerationCurrent: (value: string) => value === mocks.lifecycle,
 }));
-vi.mock("../../../state/openclaw-state-worker-context.js", () => ({
-  captureOpenClawStateWorkerContext: () => ({
+vi.mock("../../../state/openclaw-state-worker-context.js", () => {
+  const captureContext = () => ({
     ...mocks.context,
     admission: {
       ...mocks.context?.admission,
       identity: { key: mocks.database, canonicalPath: "/synthetic/state.sqlite" },
     },
-  }),
-}));
+  });
+  return {
+    captureOpenClawStateWorkerContext: captureContext,
+    captureOpenClawStateReadContext: captureContext,
+  };
+});
 vi.mock("./subagent-session-reconciliation.js", () => ({
   loadSubagentSessionEntry: () => undefined,
 }));

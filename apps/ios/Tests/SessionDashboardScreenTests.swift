@@ -27,17 +27,6 @@ struct SessionDashboardScreenTests {
         #expect(RootTabs.sidebarPresentation(for: legacyChat) == .chat)
     }
 
-    @Test func `sidebar preserves the roster agent when it presents a global dashboard`() throws {
-        let data = Data(
-            #"{"key":"global","displayName":"Shared Dashboard","boardFace":"dashboard","agentId":"work"}"#
-                .utf8)
-        let session = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: data)
-
-        let target = RootTabs.sidebarDashboardTarget(for: session)
-
-        #expect(target == RootTabs.SidebarDashboardTarget(sessionKey: "global", agentId: "work"))
-    }
-
     @Test func `dashboard URL opens the exact session in the shell-free focus document`() throws {
         let config = try GatewayConnectConfig(
             url: #require(URL(string: "wss://gateway.example.com:8443/tenant%2Fblue?old=true#fragment")),

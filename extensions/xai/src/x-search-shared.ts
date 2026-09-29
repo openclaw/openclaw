@@ -25,13 +25,6 @@ export type XaiXSearchOptions = {
   enableVideoUnderstanding?: boolean;
 };
 
-type XaiXSearchResult = {
-  content: string;
-  citations: string[];
-  inlineCitations?: XaiWebSearchResponse["inline_citations"];
-  truncated?: true;
-};
-
 export function resolveXaiXSearchModel(config?: Record<string, unknown>): string {
   return resolveNormalizedXaiToolModel({
     config,
@@ -97,7 +90,7 @@ export async function requestXaiXSearch(params: {
   maxTurns?: number;
   options: XaiXSearchOptions;
   signal?: AbortSignal;
-}): Promise<XaiXSearchResult> {
+}) {
   params.signal?.throwIfAborted();
   return await requestXaiResponsesTool(
     {

@@ -2,6 +2,7 @@ import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/
 import {
   resolveClaudeThinkingProfile,
   supportsClaudeNativeMaxEffort,
+  type ModelDefinitionConfig,
   type ModelProviderConfig,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
@@ -21,12 +22,11 @@ import {
   resolveFoundryTargetProfileId,
 } from "./shared.js";
 
-type FoundryProviderHooks = Pick<ProviderPlugin, "wrapStreamFn">;
+const { wrapStreamFn: wrapOpenAIResponsesStreamFn } = buildProviderStreamFamilyHooks(
+  "openai-responses-defaults",
+);
 
-const openAIResponsesStreamHooks = buildProviderStreamFamilyHooks("openai-responses-defaults");
-const wrapOpenAIResponsesStreamFn = openAIResponsesStreamHooks.wrapStreamFn;
-
-const wrapMicrosoftFoundryStreamFn: NonNullable<FoundryProviderHooks["wrapStreamFn"]> = (ctx) => {
+const wrapMicrosoftFoundryStreamFn: NonNullable<ProviderPlugin["wrapStreamFn"]> = (ctx) => {
   if (ctx.model?.api !== "openai-responses") {
     return ctx.streamFn ?? null;
   }
@@ -55,6 +55,56 @@ const wrapMicrosoftFoundryStreamFn: NonNullable<FoundryProviderHooks["wrapStream
     }) ?? streamFnWithResponsesReplayIds
   );
 };
+
+function normalizeFoundryModel<
+  T extends Pick<ModelDefinitionConfig, "reasoning" | "thinkingLevelMap" | "params" | "compat">,
+>(
+  model: T,
+  endpoint: string,
+  modelId: string,
+  capabilities: ReturnType<typeof resolveFoundryModelCapabilities>,
+  preserveExplicitReasoningEffort: boolean,
+) {
+  const explicitSupportsReasoningEffort =
+    typeof model.compat?.supportsReasoningEffort === "boolean"
+      ? model.compat.supportsReasoningEffort
+      : undefined;
+  const explicitMaxTokensField =
+    typeof model.compat?.maxTokensField === "string"
+      ? model.compat.maxTokensField
+      : preserveExplicitReasoningEffort
+        ? "max_completion_tokens"
+        : undefined;
+  return {
+    ...model,
+    name: capabilities.modelName,
+    api: capabilities.api,
+    baseUrl: buildFoundryProviderBaseUrl(
+      endpoint,
+      modelId,
+      capabilities.modelName,
+      capabilities.api,
+    ),
+    reasoning: capabilities.reasoning || model.reasoning,
+    thinkingLevelMap: capabilities.thinkingLevelMap ?? model.thinkingLevelMap,
+    params: { ...model.params, canonicalModelId: capabilities.modelName },
+    input: capabilities.input,
+    ...(capabilities.compat
+      ? {
+          compat: {
+            ...model.compat,
+            ...capabilities.compat,
+            ...(explicitSupportsReasoningEffort !== undefined
+              ? { supportsReasoningEffort: explicitSupportsReasoningEffort }
+              : preserveExplicitReasoningEffort
+                ? { supportsReasoningEffort: true }
+                : undefined),
+            ...(explicitMaxTokensField ? { maxTokensField: explicitMaxTokensField } : {}),
+          },
+        }
+      : {}),
+  };
+}
 
 export function buildMicrosoftFoundryProvider(): ProviderPlugin {
   return {
@@ -97,48 +147,15 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
           return model;
         }
         const selectedModelEndpoint = extractFoundryEndpoint(model.baseUrl) ?? providerEndpoint;
-        const selectedModelBaseUrl = buildFoundryProviderBaseUrl(
+        return normalizeFoundryModel(
+          model,
           selectedModelEndpoint,
           selectedModelId,
-          selectedModelCapabilities.modelName,
-          selectedModelCapabilities.api,
-        );
-        const nextModel = Object.assign({}, model, {
-          name: selectedModelCapabilities.modelName,
-          api: selectedModelCapabilities.api,
-          baseUrl: selectedModelBaseUrl,
-          reasoning: selectedModelCapabilities.reasoning || model.reasoning,
-          thinkingLevelMap: selectedModelCapabilities.thinkingLevelMap ?? model.thinkingLevelMap,
-          params: { ...model.params, canonicalModelId: selectedModelCapabilities.modelName },
-          input: selectedModelCapabilities.input,
-        });
-        if (selectedModelCapabilities.compat) {
-          const explicitSupportsReasoningEffort =
-            typeof model.compat?.supportsReasoningEffort === "boolean"
-              ? model.compat.supportsReasoningEffort
-              : undefined;
-          const preserveExplicitReasoningEffort =
-            !selectedModelCapabilities.reasoning &&
+          selectedModelCapabilities,
+          !selectedModelCapabilities.reasoning &&
             model.reasoning &&
-            explicitSupportsReasoningEffort !== false;
-          const explicitMaxTokensField =
-            typeof model.compat?.maxTokensField === "string"
-              ? model.compat.maxTokensField
-              : preserveExplicitReasoningEffort
-                ? "max_completion_tokens"
-                : undefined;
-          nextModel.compat = {
-            ...model.compat,
-            ...selectedModelCapabilities.compat,
-            ...(explicitSupportsReasoningEffort !== undefined
-              ? { supportsReasoningEffort: explicitSupportsReasoningEffort }
-              : preserveExplicitReasoningEffort
-                ? { supportsReasoningEffort: true }
-                : undefined),
-            ...(explicitMaxTokensField ? { maxTokensField: explicitMaxTokensField } : {}),
-          };
-        }
-        return nextModel;
+            model.compat?.supportsReasoningEffort !== false,
+        );
       });
       if (!nextModels.some((model) => model.id === selectedModelId)) {
         nextModels.push(
@@ -184,45 +201,13 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
         isFoundryProviderApi(model.api) ? model.api : undefined,
         model.input,
       );
-      const explicitSupportsReasoningEffort =
-        typeof model.compat?.supportsReasoningEffort === "boolean"
-          ? model.compat.supportsReasoningEffort
-          : undefined;
-      const preserveExplicitReasoningEffort = !capabilities.reasoning && model.reasoning;
-      const explicitMaxTokensField =
-        typeof model.compat?.maxTokensField === "string"
-          ? model.compat.maxTokensField
-          : preserveExplicitReasoningEffort
-            ? "max_completion_tokens"
-            : undefined;
-      const compat = capabilities.compat
-        ? {
-            ...model.compat,
-            ...capabilities.compat,
-            ...(explicitSupportsReasoningEffort !== undefined
-              ? { supportsReasoningEffort: explicitSupportsReasoningEffort }
-              : preserveExplicitReasoningEffort
-                ? { supportsReasoningEffort: true }
-                : undefined),
-            ...(explicitMaxTokensField ? { maxTokensField: explicitMaxTokensField } : {}),
-          }
-        : undefined;
-      return {
-        ...model,
-        name: capabilities.modelName,
-        api: capabilities.api,
-        reasoning: capabilities.reasoning || model.reasoning,
-        thinkingLevelMap: capabilities.thinkingLevelMap ?? model.thinkingLevelMap,
-        params: { ...model.params, canonicalModelId: capabilities.modelName },
-        input: capabilities.input,
-        baseUrl: buildFoundryProviderBaseUrl(
-          endpoint,
-          modelId,
-          capabilities.modelName,
-          capabilities.api,
-        ),
-        ...(compat ? { compat } : {}),
-      };
+      return normalizeFoundryModel(
+        model,
+        endpoint,
+        modelId,
+        capabilities,
+        !capabilities.reasoning && model.reasoning,
+      );
     },
     wrapStreamFn: wrapMicrosoftFoundryStreamFn,
     prepareRuntimeAuth: prepareFoundryRuntimeAuth,

@@ -19,7 +19,6 @@ import {
   formatAcpInheritedToolDenyError,
 } from "../inherited-tool-deny.js";
 import { optionalStringEnum } from "../schema/typebox.js";
-import type { SpawnedToolContext } from "../spawned-context.js";
 import { withParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagents/spawn/subagent-attachments.js";
 import {
@@ -65,7 +64,7 @@ import {
 } from "./sessions-helpers.js";
 import {
   maybeSpawnVisibleSession,
-  type VisibleSessionsSpawnDeps,
+  type SessionsSpawnToolOptions,
 } from "./sessions-spawn-visible.js";
 import { VISIBLE_SESSIONS_SPAWN_SCHEMA } from "./sessions-spawn-visible.schema.js";
 
@@ -311,32 +310,7 @@ function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: Ope
   return 'runtime="acp" is unavailable in this session because no ACP runtime backend is loaded. Enable the acpx plugin or use runtime="subagent".';
 }
 
-export function createSessionsSpawnTool(
-  opts?: {
-    agentSessionKey?: string;
-    requesterTurnRunId?: string;
-    /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
-    completionOwnerKey?: string;
-    agentChannel?: string;
-    agentAccountId?: string;
-    agentTo?: string;
-    agentThreadId?: string | number;
-    currentMessagingTarget?: string;
-    currentChannelId?: string;
-    currentThreadTs?: string;
-    currentMessageId?: string | number;
-    sandboxed?: boolean;
-    config?: OpenClawConfig;
-    /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
-    requesterAgentIdOverride?: string;
-    requesterRunId?: string;
-    swarmCollector?: boolean;
-    /** Backend-derived parent incarnation; never sourced from model arguments. */
-    expectedParentSessionId?: string;
-    signal?: AbortSignal;
-  } & VisibleSessionsSpawnDeps &
-    SpawnedToolContext,
-): AnyAgentTool {
+export function createSessionsSpawnTool(opts?: SessionsSpawnToolOptions): AnyAgentTool {
   const effectiveConfig = opts?.config ?? getRuntimeConfig();
   const acpAvailable = isAcpRuntimeSpawnAvailable({
     config: effectiveConfig,

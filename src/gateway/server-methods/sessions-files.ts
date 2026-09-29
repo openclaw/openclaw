@@ -299,7 +299,7 @@ async function loadSessionFiles(params: {
   agentId?: string;
   context: GatewayRequestContext;
 }): Promise<
-  LoadedSessionFiles & { repository?: ReturnType<typeof resolveRepositoryWorkspaceAccess> }
+  LoadedSessionFiles & { repository?: Awaited<ReturnType<typeof resolveRepositoryWorkspaceAccess>> }
 > {
   const loaded = loadSessionFileRoot(params);
   const { storePath, entry, canonicalKey, agentId } = loaded;
@@ -326,7 +326,7 @@ async function loadSessionFiles(params: {
       async () => {},
     );
   }
-  const repository = resolveRepositoryWorkspaceAccess(loaded, params.context);
+  const repository = await resolveRepositoryWorkspaceAccess(loaded, params.context);
   const scope = {
     agentId,
     sessionEntry: entry,
@@ -510,7 +510,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       respondSessionFileNotFound(respond, params.path);
       return;
     }
-    const repository = resolveRepositoryWorkspaceAccess(loaded, context);
+    const repository = await resolveRepositoryWorkspaceAccess(loaded, context);
     if (repository?.kind === "stored") {
       throw new Error("Start this cloud session before editing its repository files.");
     }

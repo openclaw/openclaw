@@ -32,7 +32,7 @@ function rejectSchedulerWrite(jobId: string) {
   const db = openOpenClawStateDatabase().db;
   // Run history commits independently of the scheduler's outcome write.
   db.exec(`
-    CREATE TEMP TRIGGER reject_identity_scheduler_write
+    CREATE TRIGGER reject_identity_scheduler_write
     BEFORE UPDATE ON cron_jobs
     WHEN NEW.job_id = '${jobId.replaceAll("'", "''")}'
     BEGIN SELECT RAISE(ABORT, 'scheduler write unavailable'); END;

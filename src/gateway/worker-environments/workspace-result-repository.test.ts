@@ -152,7 +152,7 @@ describe("repository workspace result ownership", () => {
     // Only pristine source bytes are shared; checkpoints and Git refs stay case-owned.
     await fs.cp(seed, origin, { recursive: true });
     const store = getSessionRepositoryWorkspaceStore();
-    const repository = store.create({
+    const repository = await store.create({
       agentId: sessionTarget.agentId,
       sessionKey: sessionTarget.sessionKey,
       url: pathToFileURL(origin).href,
@@ -215,7 +215,7 @@ describe("repository workspace result ownership", () => {
       assertCurrent: () => {},
     });
     const remote = synced.remoteWorkspaceDir;
-    const initialCheckpointRef = store.get(repository.workspaceId)!.checkpointRef;
+    const initialCheckpointRef = (await store.get(repository.workspaceId))!.checkpointRef;
     await seedActivePlacement(executionMode, remote, synced.manifestRef);
     const beginTurn = async (claimId: string, markResultPending = true) => {
       const placement = placements.get(SESSION_ID);
@@ -233,7 +233,7 @@ describe("repository workspace result ownership", () => {
       }
       return { placement, turnClaim };
     };
-    const finishTurn = (
+    const finishTurn = async (
       owned: Awaited<ReturnType<typeof beginTurn>>,
       publishAcceptedWorkspace?: () => Promise<void>,
     ) =>
@@ -241,7 +241,7 @@ describe("repository workspace result ownership", () => {
         ...owned,
         placements,
         workspaceOperations,
-        workspace: { kind: "repository", repository: store.get(repository.workspaceId)! },
+        workspace: { kind: "repository", repository: (await store.get(repository.workspaceId))! },
         transcriptTarget: sessionTarget,
         tunnel,
         publishAcceptedWorkspace,
@@ -271,7 +271,7 @@ describe("repository workspace result ownership", () => {
     };
     const resolveWorkspace = async () => ({
       kind: "repository" as const,
-      repository: store.get(repository.workspaceId)!,
+      repository: (await store.get(repository.workspaceId))!,
     });
     const mutations = createRepositoryWorkspaceMutationService({
       placements,
@@ -315,7 +315,7 @@ describe("repository workspace result ownership", () => {
     "fences $executionMode editor checkpoint writes at $boundary (drained=$drained)",
     async ({ executionMode, boundary, drained }, { signal }) => {
       const f = await fixture(executionMode);
-      const before = f.store.get(f.repository.workspaceId)!;
+      const before = (await f.store.get(f.repository.workspaceId))!;
       const artifactRoot = f.store.artifactPath(before.workspaceId);
       const refs = () => requireWorkspaceResultGit(artifactRoot, ["show-ref"]);
       const beforeRefs = await refs();
@@ -454,7 +454,7 @@ describe("repository workspace result ownership", () => {
         const writesBefore = publicationWrites();
         expect(importsBefore).toBe(boundary === "publication-metadata" ? 1 : 0);
         expect(writesBefore).toBe(0);
-        expect(f.store.get(before.workspaceId)).toEqual(before);
+        expect(await f.store.get(before.workspaceId)).toEqual(before);
         if (drained) {
           const draining = placements.startWorkspaceResultDrain(claim);
           expect(draining).toMatchObject({
@@ -475,7 +475,7 @@ describe("repository workspace result ownership", () => {
         const outcome = await saving;
         await queueOwner;
         const remainingCandidates = await candidates();
-        const after = f.store.get(before.workspaceId)!;
+        const after = (await f.store.get(before.workspaceId))!;
         const pending = placements.listPendingWorkspaceResults(SESSION_ID);
         // The intermediate copy is gone; only the real private import inputs exist.
         const importRoots: string[] = [];
@@ -584,7 +584,7 @@ describe("repository workspace result ownership", () => {
           await fs.writeFile(path.join(f.remote, `edit-${index}.txt`), content(index));
         }
         await fs.writeFile(path.join(f.remote, "edit-0.txt"), "before\n");
-        const access = resolveRepositoryWorkspaceAccess(
+        const access = await resolveRepositoryWorkspaceAccess(
           loadGatewaySessionEntryReadOnly(sessionTarget.sessionKey),
           context,
         );
@@ -645,7 +645,7 @@ describe("repository workspace result ownership", () => {
       expect(stageCosts[0]!.callbacks).toBeGreaterThan(0);
       expect(stageCosts[0]!.statements).toBeGreaterThan(0);
       expect(stageCosts[1]).toEqual(stageCosts[0]);
-      const accepted = f.store.get(f.repository.workspaceId);
+      const accepted = await f.store.get(f.repository.workspaceId);
       await expect(
         f.mutations.mutate({
           ...sessionTarget,
@@ -653,7 +653,7 @@ describe("repository workspace result ownership", () => {
           mutate: async () => ({ changed: false, value: "unchanged" }),
         }),
       ).resolves.toBe("unchanged");
-      expect(f.store.get(f.repository.workspaceId)).toEqual(accepted);
+      expect(await f.store.get(f.repository.workspaceId)).toEqual(accepted);
       expect(placements.listPendingWorkspaceResults()).toEqual([]);
       expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
     },
@@ -756,7 +756,9 @@ describe("repository workspace result ownership", () => {
         },
       }),
     ).rejects.toThrow("not durably accepted");
-    expect(f.store.get(f.repository.workspaceId)?.checkpointRef).toBe(f.initialCheckpointRef);
+    expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBe(
+      f.initialCheckpointRef,
+    );
     expect(placements.listPendingWorkspaceResults()).toMatchObject([
       { workspaceAcceptedAtMs: null, recoveryRequestedAtMs: expect.any(Number) },
     ]);
@@ -794,7 +796,9 @@ describe("repository workspace result ownership", () => {
         },
       }),
     ).rejects.toThrow("lost its exact session placement owner");
-    expect(f.store.get(f.repository.workspaceId)?.checkpointRef).toBe(f.initialCheckpointRef);
+    expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBe(
+      f.initialCheckpointRef,
+    );
     expect(placements.listPendingWorkspaceResults()).toMatchObject([
       {
         recoveryRequestedAtMs: expect.any(Number),
@@ -807,7 +811,7 @@ describe("repository workspace result ownership", () => {
     "retains setup and cumulative %s changes through turns, editor saves, and Stop",
     async (executionMode) => {
       const f = await fixture(executionMode, true);
-      const pinned = f.store.get(f.repository.workspaceId)!;
+      const pinned = (await f.store.get(f.repository.workspaceId))!;
       expect(pinned.manifestHash).not.toBe(pinned.baseManifestHash);
       await fs.writeFile(path.join(f.remote, "first.txt"), "first turn\n");
       const first = await f.beginTurn("first");
@@ -848,7 +852,9 @@ describe("repository workspace result ownership", () => {
           expect(snapshot.baseManifestRef).toBe(pinned.baseManifestHash);
         },
       );
-      expect(f.store.get(f.repository.workspaceId)?.baseManifestHash).toBe(pinned.baseManifestHash);
+      expect((await f.store.get(f.repository.workspaceId))?.baseManifestHash).toBe(
+        pinned.baseManifestHash,
+      );
       const artifactRoot = f.store.artifactPath(f.repository.workspaceId);
       expect(
         await requireWorkspaceResultGit(artifactRoot, ["rev-parse", "--is-bare-repository"]),
@@ -870,7 +876,7 @@ describe("repository workspace result ownership", () => {
   it("binds a staged repository result to its exact immutable session owner", async () => {
     const f = await fixture("worker-turn");
     const { turnClaim } = await f.beginTurn("source-binding");
-    const foreign = f.store.create({
+    const foreign = await f.store.create({
       agentId: sessionTarget.agentId,
       sessionKey: "agent:main:other-repository",
       url: f.repository.url,
@@ -942,7 +948,7 @@ describe("repository workspace result ownership", () => {
         record.mockRestore();
       }
       const checkpointRef = workerWorkspaceResultRef(owned.turnClaim.claimId);
-      expect(f.store.get(f.repository.workspaceId)?.checkpointRef).toBe(checkpointRef);
+      expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBe(checkpointRef);
       expect(placements.listPendingWorkspaceResults()).toMatchObject([
         materialized
           ? {
@@ -984,7 +990,10 @@ describe("repository workspace result ownership", () => {
             resolveWorkspace: async () =>
               materialized
                 ? { kind: "local", path: destination }
-                : { kind: "repository", repository: f.store.get(f.repository.workspaceId)! },
+                : {
+                    kind: "repository",
+                    repository: (await f.store.get(f.repository.workspaceId))!,
+                  },
             reportFailure: reportWorkspaceResultRecoveryFailure,
           }),
         },
