@@ -4,13 +4,13 @@ import {
   modelFallbackOverrideFromAvailability,
   resolveModelFallbackAvailability,
 } from "../../agents/agent-scope.js";
-import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
+import {\n  findModelInCatalog,\n  modelSupportsInput,\n  prepareModelRunCapabilities,\n} from "../../agents/model-catalog-lookup.js";
 import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js";
 import {
   findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
 } from "../../config/model-provider-config.js";
-import { isReasoningTagProvider } from "../../utils/provider-utils.js";
+import { isReasoningTagProvider } from "../../utils/provider-utils.js";\nimport { needsThinkHydration, normalizeThinkingCatalogProviders } from "../../agents/thinking-runtime.js";
 import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profile.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -95,6 +95,30 @@ export async function buildEmbeddedRunBaseParams(params: {
   const config = params.run.config;
   const { modelFallbackAvailability, fallbacksOverride: modelFallbacksOverride } =
     resolveModelFallbackOptions(params.run);
+  let thinkingCatalog = params.run.thinkingCatalog;
+  if (
+    params.agentRuntime &&
+    needsThinkHydration(thinkingCatalog, params.provider, params.model, params.agentRuntime)
+  ) {
+    const { loadProviderScopedThinkingCatalog } =
+      await import("../../agents/model-catalog.runtime.js");
+    thinkingCatalog = normalizeThinkingCatalogProviders(
+      await loadProviderScopedThinkingCatalog({
+        config,
+        provider: params.provider,
+        model: params.model,
+        agentId: params.run.agentId,
+        agentDir: params.run.agentDir,
+        workspaceDir: params.run.workspaceDir,
+      }),
+    );
+  }
+  const modelThinkingCapability = params.agentRuntime
+    ? prepareModelRunCapabilities(
+        [thinkingCatalog, []],
+        [params.provider, params.model, params.agentRuntime],
+      ).modelThinkingCapability
+    : undefined;
   const enforceFinalTag =
     !params.run.skipProviderRuntimeHints &&
     (params.run.enforceFinalTag ||
@@ -138,7 +162,7 @@ export async function buildEmbeddedRunBaseParams(params: {
     skillLibraryAuthoring: params.run.skillLibraryAuthoring,
     provider: params.provider,
     model: params.model,
-    modelHasVision: await resolveRunModelHasVision(params),
+    modelHasVision: await resolveRunModelHasVision(params),\n    ...(modelThinkingCapability ? { modelThinkingCapability } : {}),
     requestedRouteResolution: "resolved" as const,
     modelSelectionLocked: params.run.modelSelectionLocked,
     modelFallbackAvailability,
