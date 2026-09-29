@@ -95,6 +95,12 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "cold-metadata", ...input }),
       (value) => value,
     ),
+    readActiveStats: reader(
+      "active-stats",
+      "active transcript statistics",
+      (input) => ({ kind: "active-stats", ...input }),
+      (value) => value.stats,
+    ),
     searchTranscripts: reader(
       "transcript-search",
       "search",

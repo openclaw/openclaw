@@ -8,9 +8,25 @@ import {
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { PreparedModelRuntimeLease } from "../prepared-model-runtime.js";
+import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import type { ContextEngineMaintenanceResources } from "./context-engine-maintenance-work.js";
 import { log } from "./logger.js";
+import {
+  isEmbeddedAgentRunHandleActive,
+  resolveActiveEmbeddedRunHandleSessionId,
+  resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
+} from "./runs.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
+
+export function resolveManualCompactionActiveRunSessionId(
+  params: CompactEmbeddedAgentSessionParams,
+): string | undefined {
+  return (
+    (isEmbeddedAgentRunHandleActive(params.sessionId) ? params.sessionId : undefined) ??
+    (params.sessionKey ? resolveActiveEmbeddedRunHandleSessionId(params.sessionKey) : undefined) ??
+    resolveActiveEmbeddedRunHandleSessionIdBySessionFile(params.sessionFile)
+  );
+}
 
 export type ForegroundCompactionOwner = {
   adoptLease: (lease: PreparedModelRuntimeLease) => ContextEngineMaintenanceResources;

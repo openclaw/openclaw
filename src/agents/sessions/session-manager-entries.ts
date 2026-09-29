@@ -35,7 +35,6 @@ import { SessionManagerSuffixPersistence } from "./session-manager-suffix-persis
 import type {
   AppendPersistenceOptions,
   BranchSummaryEntry,
-  CompactionEntry,
   CustomEntry,
   CustomMessageEntry,
   LabelEntry,
@@ -501,34 +500,6 @@ export class SessionManagerEntries extends SessionManagerSuffixPersistence {
       lifecycleRevision,
       appended,
     };
-  }
-
-  appendCompaction(
-    summary: string,
-    firstKeptEntryId: string,
-    tokensBefore: number,
-    details?: unknown,
-    fromHook?: boolean,
-    metadata?: CompactionEntry["__openclaw"],
-    tokensAfter?: number,
-  ): string {
-    const entry: CompactionEntry = {
-      type: "compaction",
-      id: generateSessionEntryId(),
-      parentId: this.appendParentId,
-      timestamp: new Date().toISOString(),
-      summary,
-      firstKeptEntryId,
-      tokensBefore,
-      ...(tokensAfter !== undefined ? { tokensAfter } : {}),
-      details,
-      fromHook,
-      ...(metadata?.runId || metadata?.itemId ? { __openclaw: metadata } : {}),
-    };
-    this.appendEntry(entry, {
-      invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
-    });
-    return entry.id;
   }
 
   appendResetBoundary(reason: ResetReason, firstKeptEntryId?: string): string {

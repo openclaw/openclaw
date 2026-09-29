@@ -319,6 +319,7 @@ export async function handleCompactCommand(
       throw new Error("command session changed");
     }
   };
+  let hostAccountingCommitted = false;
   const compaction = runtime.compactEmbeddedAgentSession(
     {
       abortSignal: params.opts?.abortSignal,
@@ -391,8 +392,12 @@ export async function handleCompactCommand(
           params.sessionStore[params.sessionKey] = accepted.entry;
         }
       },
-      onHostCompactionCommitted: () => {
+      onHostCompactionCommitted: (commit) => {
         compactionAccepted = true;
+        hostAccountingCommitted = commit.accountingCommitted === true;
+        if (hostAccountingCommitted && params.sessionStore) {
+          params.sessionStore[params.sessionKey] = commit.entry;
+        }
       },
     },
   );
@@ -414,7 +419,7 @@ export async function handleCompactCommand(
               : "Compacted"
         : "Compaction skipped"
       : "Compaction failed";
-  if (didCompact) {
+  if (didCompact && !hostAccountingCommitted) {
     const compactionCount = await runtime.incrementCompactionCount({
       agentId: sessionAgentId,
       sessionEntry: expectedSession,

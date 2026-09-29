@@ -20,6 +20,7 @@ import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent
 import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-contract.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-active-context.js";
+import type { readSessionTranscriptActiveStats } from "./session-accessor.sqlite-active-events.js";
 import type { TranscriptArchivePresenceRead } from "./session-accessor.sqlite-archive-types.js";
 import type {
   SessionBranchSummaryReadRequest,
@@ -210,6 +211,11 @@ type SessionTranscriptHydrationWorkerInput = {
   limits?: { maxBytes: number; maxEvents: number };
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
+
+type SessionTranscriptActiveStatsWorkerInput = Omit<
+  SessionTranscriptHydrationWorkerInput,
+  "kind" | "limits"
+> & { kind: "active-stats" };
 
 type SessionTranscriptCurrentTurnEntryWorkerInput = Omit<
   SessionTranscriptHydrationWorkerInput,
@@ -464,6 +470,7 @@ export type SessionHistoryWorkerInput =
   | SessionArchivePresenceWorkerInput
   | SessionColdMetadataWorkerInput
   | SessionTranscriptHydrationWorkerInput
+  | SessionTranscriptActiveStatsWorkerInput
   | SessionTranscriptCurrentTurnEntryWorkerInput
   | SessionTranscriptHistoryWorkerInput
   | SessionPreviewWorkerInput
@@ -518,6 +525,10 @@ export type SessionTranscriptWorkerValues = {
   "transcript-match": { kind: "transcript-match"; result: { event: TranscriptEvent } | undefined };
   "cold-metadata": SessionColdMetadataWorkerResult;
   "transcript-hydration": SessionTranscriptHydrationWorkerResult;
+  "active-stats": {
+    kind: "active-stats";
+    stats: ReturnType<typeof readSessionTranscriptActiveStats>;
+  };
   "current-turn-entry": SessionTranscriptCurrentTurnEntryRead;
   "sqlite-target": { target: ResolvedSqliteStoreTarget };
   "branch-summaries": SessionBranchSummaryReadResult;
@@ -638,6 +649,10 @@ export type SessionHistoryWorkerDatabase = {
     input: Omit<SessionTranscriptCurrentTurnEntryWorkerInput, "kind" | "database">,
     signal?: AbortSignal,
   ) => Promise<SessionTranscriptCurrentTurnEntryRead>;
+  readActiveStats: (
+    input: Omit<SessionTranscriptActiveStatsWorkerInput, "kind" | "database">,
+    signal?: AbortSignal,
+  ) => Promise<ReturnType<typeof readSessionTranscriptActiveStats>>;
   readExactEntries: (
     input: SessionExactEntriesWorkerRequest,
     signal?: AbortSignal,

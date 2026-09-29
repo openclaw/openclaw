@@ -32,7 +32,10 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import { embeddedRunMock, onceMessage, agentDiscoveryMock, rpcReq } from "./test-helpers.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import { testConfigRoot } from "./test-helpers.runtime-state.js";
-import { holdCompaction } from "./test/server-sessions-compaction.test-helpers.js";
+import {
+  holdCompaction,
+  seedTranscriptRows,
+} from "./test/server-sessions-compaction.test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionStoreEntry,
@@ -85,22 +88,7 @@ async function createCompactionSession(
     storePath,
   };
   await upsertSessionEntryCore(scope, sessionStoreEntry(sessionId, entry));
-  if (totalLines > 0) {
-    await appendTranscriptEvent(scope, {
-      type: "session",
-      version: 3,
-      id: sessionId,
-      timestamp: "2026-06-19T12:00:00.000Z",
-      cwd: "/tmp",
-    });
-  }
-  for (let index = 0; index < totalLines - 1; index += 1) {
-    await appendTranscriptMessage(scope, {
-      cwd: "/tmp",
-      message: { role: "user", content: `line-${index}`, timestamp: index },
-      now: Date.parse(`2026-06-19T12:00:${String(index % 60).padStart(2, "0")}.000Z`),
-    });
-  }
+  await seedTranscriptRows({ ...scope, totalLines });
   return { ...scope, dir };
 }
 
@@ -349,67 +337,6 @@ test("sessions.compact keeps prior usage stale when the compactor returns a nega
   } finally {
     ws.close();
   }
-});
-
-test("sessions.compact records terminal Codex native compaction", async () => {
-  const scope = await createCompactionSession("sess-codex", {
-    totalLines: 2,
-    entry: {
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-      compactionCount: 2,
-      totalTokens: 54_321,
-      totalTokensFresh: true,
-      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-      cliSessionIds: { "codex-cli": "thread-1" },
-      cliSessionBindings: { "codex-cli": { sessionId: "thread-1" } },
-    },
-  });
-  const details = {
-    backend: "codex-app-server",
-    threadId: "thread-1",
-    signal: "thread/compact/start",
-    pending: false,
-    completed: true,
-  };
-  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
-    ok: true,
-    compacted: true,
-    compactionKind: "native-harness",
-    result: {
-      summary: "",
-      firstKeptEntryId: "",
-      tokensBefore: 54_321,
-      details,
-    },
-  });
-
-  const { ws } = await openClient();
-  await rpcReq(ws, "sessions.subscribe", {});
-  const endEventPromise = onceMessage(ws, (message) => isCompactOperationEvent(message, "end"));
-
-  const compacted = await rpcReq(ws, "sessions.compact", { key: "main" });
-  expectMainCompactionResult(compacted, true);
-  expect(compacted.payload).toMatchObject({ result: { details } });
-  const endEvent = await endEventPromise;
-  expect(endEvent.payload).toMatchObject({
-    operation: "compact",
-    phase: "end",
-    sessionKey: "agent:main:main",
-    completed: true,
-  });
-
-  const codexEntry = loadSessionEntry(scope);
-  expect(codexEntry).toMatchObject({
-    compactionCount: 3,
-    cliSessionIds: { "codex-cli": "thread-1" },
-    cliSessionBindings: { "codex-cli": { sessionId: "thread-1" } },
-    totalTokens: 54_321,
-    totalTokensFresh: false,
-  });
-  expect(codexEntry?.totalTokensVersion).toBeUndefined();
-
-  ws.close();
 });
 
 test("sessions.compact targets the persisted native CLI session", async () => {

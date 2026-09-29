@@ -492,7 +492,11 @@ serveOwnedWorkerTasks(
               items: readSessionPreviewItemsReadOnly(request),
             };
           }
-          if (request.kind === "transcript-hydration" || request.kind === "current-turn-entry") {
+          if (
+            request.kind === "transcript-hydration" ||
+            request.kind === "current-turn-entry" ||
+            request.kind === "active-stats"
+          ) {
             const { readOpenClawDatabaseQuarantineFailure } =
               await import("../../state/openclaw-quarantine-store.js");
             const quarantine = readOpenClawDatabaseQuarantineFailure(
@@ -505,6 +509,15 @@ serveOwnedWorkerTasks(
             if (quarantine) {
               throw quarantine;
             }
+            const readOptions = { readOnly: true, resolvedScope: request.resolvedScope };
+            if (request.kind === "active-stats") {
+              const { readSessionTranscriptActiveStats } =
+                await import("./session-accessor.sqlite-active-events.js");
+              return {
+                kind: "active-stats" as const,
+                stats: readSessionTranscriptActiveStats(request.target, readOptions),
+              };
+            }
             if (request.kind === "current-turn-entry") {
               const { readSessionTranscriptCurrentTurnEntry } =
                 await import("./session-accessor.sqlite-current-turn.js");
@@ -512,8 +525,7 @@ serveOwnedWorkerTasks(
                 entryId: request.entryId,
                 version: request.version,
                 includeEntry: request.includeEntry,
-                readOnly: true,
-                resolvedScope: request.resolvedScope,
+                ...readOptions,
               });
             }
             const { readSessionTranscriptBoundedActiveContextCore } =
@@ -525,8 +537,7 @@ serveOwnedWorkerTasks(
                 kind: "bounded" as const,
                 snapshot: readSessionTranscriptBoundedActiveContextCore(request.target, {
                   ...request.limits,
-                  readOnly: true,
-                  resolvedScope: request.resolvedScope,
+                  ...readOptions,
                 }),
               };
             }
@@ -616,10 +627,7 @@ serveOwnedWorkerTasks(
   },
   {
     transferList(reply) {
-      if (!reply.ok) {
-        return [];
-      }
-      const value = reply.value;
+      const value = reply.ok ? reply.value : undefined;
       if (
         typeof value !== "object" ||
         value === null ||

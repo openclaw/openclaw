@@ -15,7 +15,6 @@ import {
   appendTranscriptMessageSync,
   loadSessionEntry,
   listSessionPendingInputs,
-  persistCompactionBoundaryWithSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
@@ -175,20 +174,30 @@ describe("guardSessionManager transcript updates", () => {
     for (const runId of ["run-first", "run-second"]) {
       const guarded = guardSessionManager(sessionManager, {
         runId,
-        withCompactionPersistence: (prepared) =>
-          persistCompactionBoundaryWithSessionEntrySync(target, {
-            prepared,
+        withCompactionPersistence: {
+          assertActive: () => {},
+          onCommitted: () => {},
+          prepare: () => ({
+            scope: target,
             transcriptByteCompactionLatch: {
               activeBytes: 2048,
               sessionId: target.sessionId,
               maxBytes: 1024,
             },
           }),
+        },
       });
       const keptId = guarded.appendMessage({ role: "user", content: runId, timestamp: 1 });
-      guarded.appendCompaction("summary", keptId, 100, { source: "hook" }, true, {
-        itemId: `compaction-${runId}`,
-      });
+      const db = openOpenClawAgentDatabase({ agentId: target.agentId, path: target.storePath });
+      const hostExec = vi.spyOn(db.db, "exec");
+      try {
+        await guarded.appendCompactionAsync("summary", keptId, 100, { source: "hook" }, true, {
+          itemId: `compaction-${runId}`,
+        });
+        expect(hostExec.mock.calls.filter(([sql]) => /^BEGIN\b/iu.test(sql))).toEqual([]);
+      } finally {
+        hostExec.mockRestore();
+      }
     }
     const compactions = SessionManager.open(target, root)
       .getBranch()
@@ -212,18 +221,24 @@ describe("guardSessionManager transcript updates", () => {
     const { sessionManager, root, target } = await openPersistedSessionManager();
     const keptId = sessionManager.appendMessage(makeUserMessage("keep", 1));
     const guarded = guardSessionManager(sessionManager, {
-      withCompactionPersistence: (prepared) =>
-        persistCompactionBoundaryWithSessionEntrySync(target, {
-          prepared: { ...prepared, event: { ...prepared.event, id: keptId } },
-          transcriptByteCompactionLatch: {
-            activeBytes: 2048,
-            sessionId: target.sessionId,
-            maxBytes: 1024,
-          },
-        }),
+      withCompactionPersistence: {
+        assertActive: () => {},
+        onCommitted: () => {},
+        prepare: (prepared) => {
+          prepared.event.id = keptId;
+          return {
+            scope: target,
+            transcriptByteCompactionLatch: {
+              activeBytes: 2048,
+              sessionId: target.sessionId,
+              maxBytes: 1024,
+            },
+          };
+        },
+      },
     });
 
-    expect(() => guarded.appendCompaction("summary", keptId, 100)).toThrow(
+    await expect(guarded.appendCompactionAsync("summary", keptId, 100)).rejects.toThrow(
       `Session transcript entry was not persisted: ${keptId}: transcript-event-not-appended`,
     );
     expect(sessionManager.getLeafId()).toBe(keptId);

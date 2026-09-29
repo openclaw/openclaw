@@ -419,16 +419,19 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       );
     }
 
-    const committed = await withSessionManagerWrite(this.sessionManager, () => {
-      const currentController = isManual
+    const isCurrentCompaction = () => {
+      const controller = isManual
         ? this.compactionAbortController
         : this.autoCompactionAbortController;
-      if (
-        options.signal.aborted ||
-        currentController?.signal !== options.signal ||
-        this.assertContextReplacementActive !== assertContextReplacementActive ||
-        this.onContextReplaced !== onContextReplaced
-      ) {
+      return (
+        !options.signal.aborted &&
+        controller?.signal === options.signal &&
+        this.assertContextReplacementActive === assertContextReplacementActive &&
+        this.onContextReplaced === onContextReplaced
+      );
+    };
+    const committed = await withSessionManagerWrite(this.sessionManager, async () => {
+      if (!isCurrentCompaction()) {
         return undefined;
       }
       // Revalidate after admission too. In-memory transcripts have no SQLite
@@ -443,7 +446,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
             pendingTokens: 0,
           })
         : estimateContextTokens(replacementMessages).tokens;
-      const entryId = this.sessionManager.appendCompaction(
+      const entryId = await this.sessionManager.appendCompactionAsync(
         completedCompaction.summary,
         completedCompaction.firstKeptEntryId,
         completedCompaction.tokensBefore,
@@ -451,12 +454,25 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         fromExtension,
         { itemId: options.itemId },
         tokensAfter,
+        {
+          assertActive: () => {
+            options.signal.throwIfAborted();
+            if (!isCurrentCompaction()) {
+              throw new Error("Compaction context was replaced before commit");
+            }
+            assertContextReplacementActive?.();
+          },
+          onCommitted: () => onContextReplaced?.(tokensAfter, completedCompaction.tokensBefore),
+        },
       );
+      // A committed receipt survives cancellation; a replacement context never
+      // adopts the old compaction's messages after worker settlement.
+      if (!isCurrentCompaction()) {
+        return undefined;
+      }
+      assertContextReplacementActive?.();
       const sessionContext = this.sessionManager.buildSessionContext();
-      // Compaction replaces the prefix; sanitize replay and publish accounting
-      // before any await can let cancellation hide the committed replacement.
       this.agent.state.messages = sanitizeCompactionReplayMessages(sessionContext.messages);
-      onContextReplaced?.(tokensAfter, completedCompaction.tokensBefore);
       return { entryId, tokensAfter };
     });
     if (committed === undefined) {

@@ -72,7 +72,7 @@ export function consumeTranscriptBytePreflightClaim(
   return (lockedHarnessRuntime ?? params.agentHarnessId) === authority.id &&
     params.preflightRequired === true &&
     params.preflightCompactionTrigger === "transcript_bytes" &&
-    params.trigger === "budget" &&
+    (params.trigger === "budget" || params.trigger === "manual") &&
     expected?.agentId === sessionTarget.agentId &&
     expected.sessionId === sessionTarget.sessionId &&
     expected.sessionKey === sessionTarget.sessionKey &&

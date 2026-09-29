@@ -19,6 +19,34 @@ import { createReplyOperation } from "./reply-run-registry.js";
 describe("handleCompactCommand lifecycle authority", () => {
   beforeEach(resetCompactCommandMocks);
 
+  it("keeps host byte compaction accounting when manual native compaction settles", async () => {
+    const entry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      compactionCount: 3,
+      transcriptByteCompactionLatch: { sessionId: "session-1", activeBytes: 200, maxBytes: 100 },
+    };
+    vi.mocked(resolveCurrentSessionEntry).mockReturnValue(entry);
+    vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async (_input, host) => {
+      await host?.onHostCompactionCommitted?.({
+        entry,
+        compactionKind: "context-engine",
+        accountingCommitted: true,
+      });
+      return { ok: true, compacted: true, compactionKind: "context-engine" };
+    });
+    const params = {
+      ...buildCompactParams("/compact", { commands: { text: true } }),
+      sessionEntry: entry,
+    };
+
+    const result = await handleCompactCommand(params, true);
+
+    expect(result?.sessionCompaction?.compacted).toBe(true);
+    expect(params.sessionStore?.["agent:main:main"]).toEqual(entry);
+    expect(incrementCompactionCount).not.toHaveBeenCalled();
+  });
+
   it("rejects owner revocation while compaction waits for the active run to drain", async () => {
     let ownerCurrent = true;
     vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
