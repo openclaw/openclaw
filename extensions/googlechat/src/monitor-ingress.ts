@@ -21,12 +21,13 @@ export type GoogleChatIngressLifecycle = Omit<
   "onAdoptionFinalizing"
 >;
 
-type GoogleChatIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
-
 type GoogleChatIngressDispatch = (
   event: GoogleChatEvent,
   lifecycle: GoogleChatIngressLifecycle,
-) => Promise<GoogleChatIngressDispatchResult | void> | GoogleChatIngressDispatchResult | void;
+) =>
+  | Promise<ChannelIngressMonitorDeliveryResult | void>
+  | ChannelIngressMonitorDeliveryResult
+  | void;
 
 const GoogleChatIngressPermanentError = createChannelIngressError<
   "invalid-event" | "googlechat-auth"
@@ -164,7 +165,7 @@ export function createGoogleChatIngressMonitor(options: {
         getGoogleChatRuntime().state.openChannelIngressQueue<GoogleChatIngressPayload>({
           accountId: options.accountId,
         })),
-    inspect: (rawEvent) => inspectGoogleChatIngressEvent(rawEvent),
+    inspect: inspectGoogleChatIngressEvent,
     payload: {
       serialize: serializeForIngress,
       deserialize: (rawEvent, { claim }) => deserializeGoogleChatIngressEvent(rawEvent, claim.id),

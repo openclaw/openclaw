@@ -93,10 +93,7 @@ export function parseControlUiSessionPath(
     if (!sessionKey) {
       return null;
     }
-    if (forceLiteral) {
-      return { namespace, kind: "literal", agentId, sessionKey };
-    }
-    if (literalRestSegments.length !== 1) {
+    if (forceLiteral || literalRestSegments.length !== 1) {
       return { namespace, kind: "literal", agentId, sessionKey };
     }
     const segment = literalRestSegments[0] ?? "";

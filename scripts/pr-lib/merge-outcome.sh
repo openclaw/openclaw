@@ -184,7 +184,8 @@ merge_outcome_load_local() {
          else true end) and
         (.method == "squash" or .method == "merge" or .method == "rebase") and
         (.route == "immediate" or .route == "admin" or .route == "auto" or .route == "queue") and
-        (if has("transport") then .transport == "rest" and .method == "squash" and .route == "immediate" else true end) and
+        (if has("transport") then .transport == "rest" and .method == "squash" and
+          (.route == "immediate" or (.route == "admin" and .priorCiAdmin.dispatchTransport == "rest")) else true end) and
         (if has("priorCiAdmin") then . as $record | .route == "admin" and .method == "squash" and
           (.priorCiAdmin | .version == 1 and .head == $record.head and .pr == $record.pr and
             .repository == $record.repo.nameWithOwner and (.priorHead | oid) and
@@ -409,6 +410,13 @@ merge_outcome_dispatch_prior_ci_squash() (
 
 merge_read() {
   local mode="$1" pr="$2" repo="${3:-${MERGE_REPO_URL:-}}" first="${MERGE_TRANSPORT:-rest}" second response status query checks_err checks_error
+  if [ "$mode" = observe ] && [ "${MERGE_PRIOR_CI_REST_OBSERVATION:-false}" = true ] &&
+    [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ]; then
+    # This complete read reports policy/check facts; prior-CI admission still owns their verdict.
+    response=$(merge_rest observe-prior-ci "$pr") || return 1
+    printf '%s\n' "$response" | jq -c '{transport:"rest",payload:.}'
+    return
+  fi
   if [ "$first" = rest ]; then second=graphql; else second=rest; fi
   local transport
   for transport in "$first" "$second"; do

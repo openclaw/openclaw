@@ -81,7 +81,7 @@ export const googlechatPlugin = createChatChannelPlugin({
     message: googlechatMessageAdapter,
     resolver: {
       resolveTargets: async ({ inputs, kind }) => {
-        const resolved = inputs.map((input) => {
+        return inputs.map((input) => {
           const normalized = normalizeGoogleChatTarget(input);
           if (!normalized) {
             return { input, resolved: false, note: "empty target" };
@@ -98,7 +98,6 @@ export const googlechatPlugin = createChatChannelPlugin({
             note: "use spaces/{space} or users/{user}",
           };
         });
-        return resolved;
       },
     },
     actions: googlechatMessageActions,
@@ -176,13 +175,7 @@ export const googlechatPlugin = createChatChannelPlugin({
     ...googlechatOutboundAdapter,
     base: {
       ...googlechatOutboundAdapter.base,
-      shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
-        shouldSuppressLocalGoogleChatExecApprovalPrompt({
-          cfg,
-          accountId,
-          payload,
-          hint,
-        }),
+      shouldSuppressLocalPayloadPrompt: shouldSuppressLocalGoogleChatExecApprovalPrompt,
     },
   },
 });

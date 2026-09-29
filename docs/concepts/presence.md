@@ -194,7 +194,8 @@ ID matching a profile ID never combines their watched sessions, connection facts
 or viewer counts. The Gateway uses the same namespace boundary for online/activity
 timing and collaborative typing counts. Overlapping tabs share timing facts only
 within their namespace. Later activity stays separate if a raw tab gains profile
-qualification. Self exclusion follows the authenticated user's recorded
+qualification. The Online roster includes your own connected identity. Session
+viewer indicators exclude you according to the authenticated user's recorded
 qualification, using the current connection only when that user is unavailable.
 Only a displayed owner with the exact qualified profile identity is deduplicated
 from a session's live viewers. The [people card](/concepts/multi-user#people-cards) keeps online duration

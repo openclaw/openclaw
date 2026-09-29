@@ -32,12 +32,24 @@ function normalizeRegistration(
   if (!sourceSessionKey || !targetSessionKey || !targetSessionId || !idempotencyKey) {
     return undefined;
   }
+  const settleBatch = params.settleBatch;
+  if (
+    settleBatch &&
+    (!settleBatch.isCurrent() ||
+      settleBatch.sourceSessionKeys[0] !== sourceSessionKey ||
+      settleBatch.sourceSessionKeys.some((key) => !key.trim()))
+  ) {
+    return undefined;
+  }
   return {
     sourceSessionKey,
     ...(sourceSessionId ? { sourceSessionId } : {}),
     targetSessionKey,
     targetSessionId,
     idempotencyKey,
+    ...(settleBatch
+      ? { settleBatch: { ...settleBatch, sourceSessionKeys: [...settleBatch.sourceSessionKeys] } }
+      : {}),
   };
 }
 
@@ -82,6 +94,7 @@ export function cancelSubagentCompletionToolHandoff(handoffId: string | undefine
  */
 export function consumeSubagentCompletionToolHandoff(params: {
   handoffId?: string;
+  sourceTool: string | undefined;
   sourceSessionKey?: string;
   sourceSessionId?: string;
   targetSessionKey?: string;
@@ -115,7 +128,11 @@ export function consumeSubagentCompletionToolHandoff(params: {
   const entry = handoffs.get(handoffId);
   if (
     !entry ||
-    entry.sourceSessionKey !== sourceSessionKey ||
+    params.sourceTool !== (entry.settleBatch ? "subagent_settle" : "subagent_announce") ||
+    entry.settleBatch?.isCurrent() === false ||
+    (entry.settleBatch
+      ? !entry.settleBatch.sourceSessionKeys.includes(sourceSessionKey)
+      : entry.sourceSessionKey !== sourceSessionKey) ||
     entry.sourceSessionId !== sourceSessionId ||
     entry.targetSessionKey !== targetSessionKey ||
     entry.targetSessionId !== targetSessionId ||
@@ -132,5 +149,6 @@ export function consumeSubagentCompletionToolHandoff(params: {
     targetSessionId,
     provider,
     model,
+    ...(entry.settleBatch ? { settleBatch: entry.settleBatch } : {}),
   };
 }

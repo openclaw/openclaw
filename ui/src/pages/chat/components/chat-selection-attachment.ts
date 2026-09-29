@@ -9,7 +9,8 @@ import { encodeTextAsDataUrl } from "./chat-attachment-text.ts";
 
 export function createChatSelectionAttachment(
   annotation: ChatSelectionAnnotation,
-  limits?: ChatAttachmentControlsProps["attachmentLimits"],
+  limits: ChatAttachmentControlsProps["attachmentLimits"],
+  stagedBytes: number,
 ): ChatAttachment | null {
   const text = [
     `Selected text:\n${annotation.text}`,
@@ -23,7 +24,7 @@ export function createChatSelectionAttachment(
     ].join("\n"),
   ].join("\n\n");
   const file = new File([text], "selection-comment.txt", { type: "text/plain" });
-  if (admitAttachmentFiles([file], limits).length === 0) {
+  if (admitAttachmentFiles([file], limits, stagedBytes).length === 0) {
     return null;
   }
   return registerChatAttachmentPayload({

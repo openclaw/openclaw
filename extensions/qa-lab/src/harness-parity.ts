@@ -4,8 +4,8 @@ import {
   normalizeTextForParity,
   stableHash,
 } from "./parity-shared.js";
+import type { RuntimeId } from "./runtime-id.js";
 import type {
-  RuntimeId,
   RuntimeParityCell,
   RuntimeParityDrift,
   RuntimeParityUsage,

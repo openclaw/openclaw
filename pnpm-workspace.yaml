@@ -10,6 +10,8 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
+  # Maintainer-approved for Bun-only npm plugin installs; remove after 2026-09-29T21:29:31.258Z.
+  - npm@11.20.0
   # Reviewed ACPX release; remove after 2026-09-29T10:05:37.124Z.
   - acpx@0.19.1
   - "@openai/codex"
@@ -40,7 +42,7 @@ overrides:
   "chevrotain>lodash-es": 4.18.1
   "@chevrotain/cst-dts-gen>lodash-es": 4.18.1
   "@chevrotain/gast>lodash-es": 4.18.1
-  "@agentclientprotocol/codex-acp@1.12.0>@openai/codex": 0.155.1
+  "@agentclientprotocol/codex-acp@1.12.0>@openai/codex": 0.158.0
   "@codemirror/commands@6.11.1>@codemirror/view": 6.43.12
   "@anthropic-ai/sdk": 0.127.0
   "@anthropic-ai/vertex-sdk@0.19.10>google-auth-library": 11.1.0
@@ -123,3 +125,4 @@ patchedDependencies:
   vitest@5.0.1: patches/vitest@5.0.1.patch
   "@awesome.me/webawesome@3.13.0": patches/@awesome.me__webawesome@3.13.0.patch
   "@openclaw/proxyline@0.3.12": patches/@openclaw__proxyline@0.3.12.patch
+  ghostty-web@0.4.0: patches/ghostty-web@0.4.0.patch

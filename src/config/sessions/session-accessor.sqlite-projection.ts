@@ -68,7 +68,6 @@ import {
 } from "./session-accessor.sqlite-maintenance.js";
 import { appendSessionResetBoundary } from "./session-accessor.sqlite-reset-boundary.js";
 import {
-  cloneSessionEntry,
   captureLifecycleDatabaseScope,
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
@@ -172,7 +171,7 @@ export async function applySessionStoreProjection<T>(params: {
                   for (const sessionKey of changedKeys) {
                     const entry = projected[sessionKey];
                     if (entry) {
-                      writeSessionEntry(transactionDb, sessionKey, cloneSessionEntry(entry), {
+                      writeSessionEntry(transactionDb, sessionKey, structuredClone(entry), {
                         previousEntry: before[sessionKey] ?? null,
                       });
                     } else {
@@ -606,7 +605,7 @@ export async function purgeDeletedAgentSessionEntries(
         if (!entry) {
           continue;
         }
-        entryRemovals.push({ expectedEntry: cloneSessionEntry(entry), sessionKey });
+        entryRemovals.push({ expectedEntry: structuredClone(entry), sessionKey });
         removedEntriesToArchive.push(entry);
         delete remainingStore[sessionKey];
       }
@@ -702,5 +701,3 @@ export async function purgeDeletedAgentSessionEntries(
   ];
   emitArchivedTranscriptUpdates(archivedTranscripts);
 }
-
-/** Fully replaces rows for one transcript in the additive SQLite transcript store. */

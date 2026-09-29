@@ -62,6 +62,7 @@ import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approva
 import { runExec } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { prepareSkillBundle } from "../skills/library/bundle.js";
+import * as workerTranscriptRuntime from "./embedded-agent-transcript.runtime.js";
 import {
   buildWorkerConnectParams,
   parseWorkerLaunchDescriptor,
@@ -74,7 +75,11 @@ import {
   WorkerConnectionStoppedError,
 } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
-import { parseWorkerProcessResult, type WorkerProcessResult } from "./worker-process-protocol.js";
+import {
+  buildWorkerProcessTurn,
+  parseWorkerProcessMessage,
+  type WorkerProcessResult,
+} from "./worker-process-protocol.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
 import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
 import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
@@ -179,6 +184,7 @@ type FakeGatewayOptions = {
   heartbeatIntervalMs?: number;
   computerSnapshot?: string;
   computerCleanupFailure?: boolean;
+  onComputerClose?: () => void;
 };
 
 function assistantMessage(
@@ -309,6 +315,9 @@ class FakeWorkerGateway {
         this.computerRequests.push(parsed.params);
         const closing = parsed.params.command === "computer.act";
         this.applicationOrder.push(closing ? "computer:close" : "computer:snapshot");
+        if (closing) {
+          this.options.onComputerClose?.();
+        }
         this.send(
           socket,
           this.options.computerCleanupFailure && closing
@@ -1182,21 +1191,64 @@ describe("worker runtime", () => {
 
   registerWorkerGatewayToolAvailabilityTests({ setup });
 
-  it("materializes exactly the Browser tool and disposes it before finishing", async () => {
-    const { gateway, launch } = await setup();
-    browserRuntimeMocks.dispose.mockImplementationOnce(async () => {
-      gateway.applicationOrder.push("browser:dispose");
+  it("settles Browser, computer, and transcript owners concurrently before finishing", async () => {
+    const browserRelease = createDeferred();
+    let browserPending = false;
+    let overlappingComputerClose = false;
+    let overlappingTranscriptSettlement = false;
+    const { gateway, launch } = await setup({
+      inferencePlans: ["computer", "text"],
+      computerSnapshot: createSolidPngBuffer(512, 512, { r: 0, g: 128, b: 255 }).toString("base64"),
+      onComputerClose: () => {
+        overlappingComputerClose = browserPending;
+        browserRelease.resolve();
+      },
     });
-    launch.assignment.toolAuthority.allowedToolNames = ["browser"];
+    browserRuntimeMocks.dispose.mockImplementationOnce(async () => {
+      browserPending = true;
+      await browserRelease.promise;
+      browserPending = false;
+      gateway.applicationOrder.push("browser:disposed");
+    });
+    const createTranscript = workerTranscriptRuntime.createWorkerTranscriptRuntime;
+    const transcriptSpy = vi
+      .spyOn(workerTranscriptRuntime, "createWorkerTranscriptRuntime")
+      .mockImplementation((client, signal) => {
+        const runtime = createTranscript(client, signal);
+        const settle = runtime.withSessionWriteSettlement;
+        runtime.withSessionWriteSettlement = (operation) => {
+          overlappingTranscriptSettlement ||= browserPending;
+          return settle(operation);
+        };
+        return runtime;
+      });
+    launch.assignment.toolAuthority.allowedToolNames = ["browser", "computer"];
     launch.assignment.browser = {
       cdpUrl: "http://127.0.0.1:9222",
       launcherPath: "/usr/local/bin/openclaw-worker-browser",
     };
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+    launch.assignment.computer = {
+      nodeId: "worker-desktop",
+      computerUse: {
+        contractVersion: 2,
+        provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+        actions: ["screenshot"],
+        targets: ["screen"],
+        deliveryModes: ["foreground"],
+        observations: ["image"],
+        features: { recording: false, agentCursor: false, multiDisplay: false },
+      },
+    };
+    try {
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+    } finally {
+      browserRelease.resolve();
+      transcriptSpy.mockRestore();
+    }
 
     expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
       "browser",
+      "computer",
     ]);
     expect(browserRuntimeMocks.createWorkerBrowserToolRuntime).toHaveBeenCalledWith({
       descriptor: launch.assignment.browser,
@@ -1205,9 +1257,17 @@ describe("worker runtime", () => {
       workspaceDir: await realpath(launch.assignment.workspaceDir),
     });
     expect(browserRuntimeMocks.dispose).toHaveBeenCalledOnce();
-    expect(gateway.applicationOrder.indexOf("browser:dispose")).toBeLessThan(
+    expect(overlappingComputerClose).toBe(true);
+    expect(overlappingTranscriptSettlement).toBe(true);
+    expect(gateway.applicationOrder.indexOf("browser:disposed")).toBeLessThan(
       gateway.applicationOrder.indexOf("live:lifecycle:finishing"),
     );
+    expect(gateway.applicationOrder.indexOf("computer:close")).toBeLessThan(
+      gateway.applicationOrder.indexOf("live:lifecycle:finishing"),
+    );
+    expect(
+      gateway.applicationOrder.findLastIndex((entry) => entry.startsWith("transcript:")),
+    ).toBeLessThan(gateway.applicationOrder.indexOf("live:lifecycle:finishing"));
   });
 
   it.each(["text", "error", "setup"] as const)(
@@ -1798,8 +1858,8 @@ describe("worker runtime", () => {
       const output = new PassThrough();
       const results: WorkerProcessResult[] = [];
       output.on("data", (chunk: Buffer) => {
-        const result = parseWorkerProcessResult(JSON.parse(chunk.toString("utf8")));
-        if (result) {
+        const result = parseWorkerProcessMessage(JSON.parse(chunk.toString("utf8")));
+        if (result?.type === "result") {
           results.push(result);
         }
       });
@@ -2056,7 +2116,7 @@ describe("worker runtime", () => {
         const profileDir = path.join(
           environment.stateDir,
           "github-profiles",
-          createHash("sha256").update(launch.assignment.runId).digest("hex").slice(0, 16),
+          createHash("sha256").update(launch.assignment.turnId).digest("hex").slice(0, 16),
         );
         const output =
           toolResult?.content
@@ -2115,10 +2175,13 @@ describe("worker runtime", () => {
       const input = new PassThrough();
       const output = new PassThrough();
       const results: WorkerProcessResult[] = [];
+      const idleReady = createDeferred<string>();
       output.on("data", (chunk: Buffer) => {
-        const result = parseWorkerProcessResult(JSON.parse(chunk.toString("utf8")));
-        if (result) {
-          results.push(result);
+        const message = parseWorkerProcessMessage(JSON.parse(chunk.toString("utf8")));
+        if (message?.type === "result") {
+          results.push(message);
+        } else if (message?.type === "idle-ready") {
+          idleReady.resolve(message.turnId);
         }
       });
       const command = runWorkerCommand({ managed: true, input, output });
@@ -2127,9 +2190,7 @@ describe("worker runtime", () => {
       const scopeKey = `worker:${SESSION_ID}`;
       const supervisor = getProcessSupervisor();
       try {
-        input.write(
-          `${JSON.stringify({ type: "turn", turnId: launch.assignment.turnId, descriptor: launch })}\n`,
-        );
+        input.write(`${JSON.stringify(buildWorkerProcessTurn(launch, true))}\n`);
         await waitForFast(() => expect(results).toHaveLength(1), { timeout: 30_000 });
         expect(results[0]).toMatchObject({
           turnId: launch.assignment.turnId,
@@ -2161,9 +2222,7 @@ describe("worker runtime", () => {
           token: "worker-turn-b-token",
           branch: "openclaw/session-fixture",
         };
-        input.write(
-          `${JSON.stringify({ type: "turn", turnId: next.assignment.turnId, descriptor: next })}\n`,
-        );
+        input.write(`${JSON.stringify(buildWorkerProcessTurn(next, true))}\n`);
         await waitForFast(() => expect(results).toHaveLength(2), { timeout: 30_000 });
         expect(results[1]).toMatchObject({
           turnId: next.assignment.turnId,
@@ -2179,24 +2238,25 @@ describe("worker runtime", () => {
         });
         expect(settled).not.toHaveBeenCalled();
 
-        await writeFile(path.join(workspaceDir, "retained-marker"), "read");
-        const retainedRead = await waitForFast(() =>
-          readFile(path.join(workspaceDir, "retained-read.txt"), "utf8"),
-        );
-        expect(retainedRead).not.toContain(launch.assignment.github.token);
-        expect(retainedRead).not.toContain(next.assignment.github.token);
-        expect(retainedRead).toMatch(/No such file|ENOENT/u);
-        expect(retainedRead).toMatch(/exit=[1-9]\d*/u);
-        await expect(stat(previousProfileDir)).rejects.toMatchObject({ code: "ENOENT" });
         const nextProfileDir = path.join(
           stateDir,
           "github-profiles",
-          createHash("sha256").update(next.assignment.runId).digest("hex").slice(0, 16),
+          createHash("sha256").update(next.assignment.turnId).digest("hex").slice(0, 16),
         );
         const hosts = await readFile(path.join(nextProfileDir, "hosts.yml"), "utf8");
         expect(hosts).toContain("worker-b");
         expect(hosts).not.toContain("worker-a");
         expect(hosts).not.toContain(launch.assignment.github.token);
+        await writeFile(path.join(workspaceDir, "retained-marker"), "read");
+        const retainedRead = await waitForFast(() =>
+          readFile(path.join(workspaceDir, "retained-read.txt"), "utf8"),
+        );
+        expect(retainedRead).toContain(launch.assignment.github.token);
+        expect(retainedRead).not.toContain(next.assignment.github.token);
+        expect(retainedRead).toMatch(/exit=0/u);
+        expect(await idleReady.promise).toBe(next.assignment.turnId);
+        await expect(stat(previousProfileDir)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(stat(nextProfileDir)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
         input.end();
         try {

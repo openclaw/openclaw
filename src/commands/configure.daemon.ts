@@ -8,11 +8,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { confirm, select } from "./configure.shared.js";
 import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
-import {
-  DEFAULT_GATEWAY_DAEMON_RUNTIME,
-  GATEWAY_DAEMON_RUNTIME_OPTIONS,
-  type GatewayDaemonRuntime,
-} from "./daemon-runtime.js";
+import { GATEWAY_DAEMON_RUNTIME_OPTIONS, type GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { resolveGatewaySetupRuntime } from "./gateway-setup-runtime.js";
 import { guardCancel } from "./onboard-helpers.js";
@@ -79,15 +75,15 @@ export async function maybeInstallDaemon(params: {
       env: process.env,
       existingCommand,
       runtime: params.daemonRuntime,
-      selectRuntime: async () => {
+      selectRuntime: async (suggested) => {
         if (GATEWAY_DAEMON_RUNTIME_OPTIONS.length === 1) {
-          return GATEWAY_DAEMON_RUNTIME_OPTIONS[0]?.value ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
+          return GATEWAY_DAEMON_RUNTIME_OPTIONS[0]?.value ?? suggested;
         }
         return guardCancel(
           await select({
             message: "Gateway service runtime",
             options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
-            initialValue: DEFAULT_GATEWAY_DAEMON_RUNTIME,
+            initialValue: suggested,
           }),
           params.runtime,
           1,
@@ -120,6 +116,8 @@ export async function maybeInstallDaemon(params: {
           env: selection.env,
           port: params.port,
           runtime: selection.runtime,
+          runtimeExplicit: selection.runtimeExplicit,
+          runtimePath: selection.runtimePath,
           pinnedRuntimePath: selection.pinnedRuntimePath,
           existingCommand,
           warn: (message, title) => note(message, title),

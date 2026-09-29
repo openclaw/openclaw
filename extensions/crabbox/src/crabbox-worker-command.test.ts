@@ -29,6 +29,29 @@ describe("Crabbox lease absence classification", () => {
       absent: true,
     },
     {
+      // Crabbox 0.67 inspect adds a query string to the lease read.
+      name: "authoritative metadata query on the inspect read",
+      result: {
+        stderr: readError.replace(`${LEASE_ID}:`, `${LEASE_ID}?providerMetadata=authoritative:`),
+      },
+      absent: false,
+      inspect: true,
+    },
+    {
+      name: "authoritative metadata query on the stop read",
+      result: {
+        stderr: absentOutput.replace(`${LEASE_ID}:`, `${LEASE_ID}?providerMetadata=authoritative:`),
+      },
+      absent: true,
+    },
+    {
+      name: "query on a different lease read",
+      result: {
+        stderr: `coordinator GET /v1/leases/cbx_other?providerMetadata=authoritative: http 404: {"error":"not_found"}\n${releaseError}`,
+      },
+      absent: false,
+    },
+    {
       name: "diagnostics split across streams",
       result: { stderr: `${readError}\n`, stdout: releaseError },
       absent: true,

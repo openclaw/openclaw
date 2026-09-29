@@ -110,11 +110,10 @@ export async function stageQueuePayloadMedia(
   // or expires it; enqueue then consumes it atomically or fails closed.
   const mediaStageId =
     artifacts.length > 0
-      ? createDeliveryQueueMediaRetention(
+      ? await createDeliveryQueueMediaRetention(
           artifacts,
           "outbound-media-stage",
           stateDir,
-          undefined,
           context,
         )
       : undefined;
@@ -180,7 +179,7 @@ export async function stageQueuePayloadMedia(
       stagedPayloads.push(staged);
     }
   } catch (err) {
-    cancelDeliveryQueueMediaRetention(mediaStageId, stateDir, context);
+    await cancelDeliveryQueueMediaRetention(mediaStageId, stateDir, context);
     await releaseSpoolArtifacts(artifacts, stateDir);
     throw err;
   }

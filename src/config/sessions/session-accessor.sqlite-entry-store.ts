@@ -41,7 +41,7 @@ import {
 import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-projection.js";
 import { resolveSessionEntryProvenanceRow } from "./session-accessor.sqlite-provenance.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
-import { getSessionKysely, normalizeSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
   bindSessionNode,
   bindSessionRoot,
@@ -69,7 +69,10 @@ import {
   projectCanonicalSessionEntryShape,
   stripRuntimeOnlySessionSkillsFields,
 } from "./store-entry-shape.js";
-import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
+import {
+  normalizeStoreSessionKey,
+  resolveDeliveryProvenCanonicalSessionKey,
+} from "./store-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export {
   parseReadableSqliteSessionEntryRow,
@@ -79,7 +82,6 @@ export {
   readSessionEntryRow,
   type ResolvedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
-export { collectSessionEntryLookupKeys } from "./store-entry.js";
 export {
   iterateSessionEntryKeys,
   readSessionEntryCount,
@@ -180,14 +182,17 @@ export function readLifecycleTargetSnapshot(
   return row ? [row] : [];
 }
 
-export function normalizeLifecycleTarget(target: { canonicalKey: string; storeKeys: string[] }): {
+export function normalizeLifecycleTarget(target: {
+  canonicalKey: string;
+  storeKeys: readonly string[];
+}): {
   canonicalKey: string;
   storeKeys: string[];
 } {
-  const canonicalKey = normalizeSqliteSessionKey(target.canonicalKey);
+  const canonicalKey = normalizeStoreSessionKey(target.canonicalKey);
   return {
     canonicalKey,
-    storeKeys: uniqueStrings([canonicalKey, ...target.storeKeys.map(normalizeSqliteSessionKey)]),
+    storeKeys: uniqueStrings([canonicalKey, ...target.storeKeys.map(normalizeStoreSessionKey)]),
   };
 }
 

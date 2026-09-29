@@ -7,7 +7,7 @@ import type {
   SessionTranscriptRawDeltaResult,
 } from "./session-accessor.sqlite-contract.js";
 import type { CurrentTranscriptProjection } from "./session-accessor.sqlite-projection-read.js";
-import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
+import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import { normalizeVisibleMessageLimit } from "./session-accessor.sqlite-visible-cursor.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
@@ -30,8 +30,6 @@ type RawTranscriptCursor = {
   sessionId: string;
   version: typeof RAW_TRANSCRIPT_CURSOR_VERSION;
 };
-
-type ResolvedTranscriptReadScope = ReturnType<typeof resolveSqliteTranscriptReadScope>;
 
 function encodeRawTranscriptCursor(cursor: RawTranscriptCursor): string {
   return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
