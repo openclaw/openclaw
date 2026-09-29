@@ -771,6 +771,7 @@ describe("package source preflight", () => {
 
     const noPackageArtifactName =
       result.artifactTuple.output.package_artifact_present === "true" ? whitespace : "";
+    expect(noPackageArtifactName).toBe("");
     const reportDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-live-source-report-"));
     try {
       await writeRunSummary(

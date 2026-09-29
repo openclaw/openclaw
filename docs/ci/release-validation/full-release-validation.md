@@ -11,10 +11,11 @@ The Full Release Validation umbrella, release publish, and Docker Release dispat
 
 ## Mobile store releases
 
-`iOS Store Release` (`ios-release.yml`) and `Android Store Release`
+`iOS Store Release` (`ios-store-release.yml`) and `Android Store Release`
 (`android-store-release.yml`) are separate manual workflows. Choose `main` and
-click **Run workflow**; neither workflow has input parameters. Each platform
-queues its own runs without cancelling an active upload.
+click **Run workflow** with the defaults; no release parameters are needed.
+The iOS workflow also offers a **screenshots** operation for capture without an
+upload. Each platform queues its own runs without cancelling an active upload.
 
 The workflows run the same commands available from a clean, current local
 `main` checkout: `pnpm ios:release:upload` and `pnpm android:release:upload`.

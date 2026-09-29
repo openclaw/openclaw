@@ -648,6 +648,8 @@ async function planWorkflowAdmission(input) {
   ) {
     sourcePaths.add("scripts/lib/upgrade-survivor-scenarios.json");
     sourcePaths.add("scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    // Legacy-operator planning stages the candidate's official providers for prepublish.
+    sourcePaths.add("scripts/lib/official-external-provider-catalog.json");
   }
   if (docker.length > 256) {
     throw new Error("too many selected Docker groups");
@@ -1177,6 +1179,11 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
     }
     for (const path of supportFiles[consumer] ?? []) {
       required(sources.tooling, `scripts/e2e/lib/${path}`);
+    }
+    if (
+      ["npm-onboard-channel-agent", "codex-on-demand", "update-corrupt-plugin"].includes(consumer)
+    ) {
+      required(sources.tooling, "scripts/lib/record-shared.mjs");
     }
     if (consumer === "update-corrupt-plugin") {
       required(sources.tooling, "scripts/lib/update-compat-contract.mjs");

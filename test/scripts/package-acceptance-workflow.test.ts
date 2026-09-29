@@ -3240,6 +3240,8 @@ function runReleaseChecksInputValidation(
     "scripts/lib/full-release-candidate-reuse.mjs",
     "scripts/lib/full-release-evidence.mjs",
     "scripts/lib/cross-os-release-checks/suite-filter.mjs",
+    "scripts/lib/canonical-json.mjs",
+    "scripts/lib/record-shared.mjs",
   ]);
   const outputPath = resolve(workdir, "github-output");
   mkdirSync(resolve(workdir, "waiver-target"));
@@ -14388,24 +14390,28 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       version: "2026.8.1-1",
       tag: "v2026.8.1-1",
       branch: "release/2026.8.1-1",
+      accepted: true,
     },
     {
       name: "a same-source correction with only the base branch",
       version: "2026.8.1",
       tag: "v2026.8.1-1",
       branch: "release/2026.8.1",
+      accepted: true,
     },
     {
       name: "a beta on its frozen release branch",
       version: "2026.8.1-beta.1",
       tag: "v2026.8.1-beta.1",
       branch: "release/2026.8.1",
+      accepted: true,
     },
     {
       name: "a stable version on its frozen release branch",
       version: "2026.8.1",
       tag: "v2026.8.1",
       branch: "release/2026.8.1",
+      accepted: true,
     },
   ])("validates frozen npm release ancestry for $name", (scenario) => {
     const metadata = workflowStep(
@@ -14499,11 +14505,16 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         },
       },
     );
-    expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(factsPath, "utf8").trim().split("\n")).toEqual([
-      scenario.tag,
-      "refs/remotes/origin/" + scenario.branch,
-    ]);
+    expect(result.status, result.stderr).toBe(scenario.accepted ? 0 : 1);
+    if (scenario.accepted) {
+      expect(readFileSync(factsPath, "utf8").trim().split("\n")).toEqual([
+        scenario.tag,
+        "refs/remotes/origin/" + scenario.branch,
+      ]);
+    } else {
+      expect(result.stderr).toContain("Tagged commit is not reachable from main.");
+      expect(existsSync(factsPath)).toBe(false);
+    }
   });
 
   it("keeps optional Windows promotion downstream of published npm and GitHub releases", () => {
