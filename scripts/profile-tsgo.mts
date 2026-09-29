@@ -2,13 +2,15 @@
 
 // Profiles selected tsgo graphs and writes diagnostics/trace artifacts for
 // TypeScript graph size and performance investigations.
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isCommandCancellation, runCancelableCommand } from "./lib/cancelable-command.mts";
+import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
+import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { applyLocalTsgoPolicy, resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
-import { createManagedCommandInvocation } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { runSemanticCheck } from "./lib/semantic-check-admission.mts";
 import { TSGO_CORE_TEST_SHARDS, type TsgoCoreTestShard } from "./lib/tsgo-core-test-shards.mts";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const artifactRoot = path.resolve(repoRoot, ".artifacts/tsgo-profile");
@@ -60,7 +62,7 @@ type ProfileOptions = {
   outDir: string;
 };
 type Diagnostics = Record<string, number>;
-type ProfileGraphResult = ReturnType<typeof profileGraph>;
+type ProfileGraphResult = Awaited<ReturnType<typeof profileGraph>>;
 type ProfileReport = {
   generatedAt: string;
   options: { graphs: GraphName[]; deep: boolean; explain: boolean; reuse: boolean };
@@ -155,41 +157,146 @@ function removeIfFreshMode(filePath: string, reuse: boolean): void {
   }
 }
 
-function runTsgo(
+async function runTsgo(
   label: string,
   args: string[],
-  params: { maxBuffer?: number } = {},
-): { elapsedMs: number; stdout: string; stderr: string } {
+  signal: AbortSignal,
+  artifactOutput?: (stream: "stdout" | "stderr", chunk: string) => void,
+): Promise<{ elapsedMs: number; stdout: string; stderr: string }> {
   const { args: finalArgs, env } = applyLocalTsgoPolicy(args, process.env, {
     logicalCpuCount:
       typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length,
     totalMemoryBytes: os.totalmem(),
   });
   const startedAt = Date.now();
-  const tsgo = createManagedCommandInvocation({
-    args: finalArgs,
-    bin: tsgoPath,
-    env,
-  });
-  const result = spawnSync(tsgo.command, tsgo.args, {
-    cwd: repoRoot,
-    env,
-    encoding: "utf8",
-    maxBuffer: params.maxBuffer ?? 128 * 1024 * 1024,
-    shell: tsgo.shell,
-    windowsVerbatimArguments: tsgo.windowsVerbatimArguments,
-  });
-  const elapsedMs = Date.now() - startedAt;
-  const stdout = result.stdout ?? "";
-  const stderr = result.stderr ?? "";
-  if (result.error) {
-    throw result.error;
+  const outputAbort = new AbortController();
+  // Artifact phases retain the previous per-stream 256 MiB ceiling on disk.
+  // Supervisor captures stay small outside the compiler's memory scope.
+  const maxBytes = (artifactOutput ? 256 : 16) * 1024 * 1024;
+  const outputBytes = { stdout: 0, stderr: 0 };
+  let outputFailure: Error | undefined;
+  let capturing = true;
+  let stdout = "";
+  let stderr = "";
+  let status: number;
+  try {
+    status = await runSemanticCheck({
+      bin: tsgoPath,
+      args: finalArgs,
+      cwd: repoRoot,
+      env,
+      signal: AbortSignal.any([signal, outputAbort.signal]),
+      stdio: ["ignore", "pipe", "pipe"],
+      onReady(child) {
+        for (const [name, stream] of [
+          ["stdout", child.stdout!],
+          ["stderr", child.stderr!],
+        ] as const) {
+          stream.setEncoding("utf8");
+          stream.on("data", (chunk: string) => {
+            if (!capturing || outputAbort.signal.aborted) {
+              return;
+            }
+            outputBytes[name] += Buffer.byteLength(chunk);
+            const bytes = artifactOutput
+              ? outputBytes[name]
+              : outputBytes.stdout + outputBytes.stderr;
+            try {
+              if (bytes > maxBytes) {
+                throw new Error(`${label} exceeded its ${maxBytes}-byte output limit`);
+              }
+              // Synchronous chunk writes apply backpressure without accumulating
+              // pending writes. Artifact phases keep only a diagnostic tail in RAM.
+              artifactOutput?.(name, chunk);
+              if (name === "stdout") {
+                stdout = artifactOutput ? (stdout + chunk).slice(-65536) : stdout + chunk;
+              } else {
+                stderr = artifactOutput ? (stderr + chunk).slice(-65536) : stderr + chunk;
+              }
+            } catch (error) {
+              outputFailure = error instanceof Error ? error : new Error(String(error));
+              outputAbort.abort();
+            }
+          });
+        }
+      },
+    });
+  } catch (error) {
+    // Overflow is reported only after joined cancellation; cleanup uncertainty
+    // must retain its identity for the surrounding artifact owner.
+    if (outputFailure && isCommandCancellation(error)) {
+      throw new Error(outputFailure.message, { cause: error });
+    }
+    throw error;
+  } finally {
+    capturing = false;
   }
-  if ((result.status ?? 1) !== 0) {
+  signal.throwIfAborted();
+  if (outputFailure) {
+    throw outputFailure;
+  }
+  const elapsedMs = Date.now() - startedAt;
+  if (status !== 0) {
     const output = [stdout, stderr].filter(Boolean).join("\n");
-    throw new Error(`${label} failed with exit code ${result.status ?? 1}\n${output}`);
+    throw new Error(`${label} failed with exit code ${status}\n${output}`);
   }
   return { elapsedMs, stdout, stderr };
+}
+
+/** Preserve stdout-then-stderr artifact ordering without retaining either body. */
+async function runArtifactPhase(
+  label: string,
+  args: string[],
+  signal: AbortSignal,
+  artifact: string,
+  includeStderr = false,
+) {
+  const stderrArtifact = artifact + ".stderr";
+  const stdoutFd = fs.openSync(artifact, "w");
+  let stderrFd: number | undefined;
+  let completed: { elapsedMs: number } | undefined;
+  const failures: unknown[] = [];
+  try {
+    stderrFd = fs.openSync(stderrArtifact, "w");
+    const result = await runTsgo(label, args, signal, (stream, chunk) => {
+      fs.writeFileSync(stream === "stdout" ? stdoutFd : stderrFd!, Buffer.from(chunk));
+    });
+    if (includeStderr) {
+      for await (const chunk of fs.createReadStream(stderrArtifact)) {
+        signal.throwIfAborted();
+        fs.writeFileSync(stdoutFd, chunk as Buffer);
+      }
+    }
+    completed = { elapsedMs: result.elapsedMs };
+  } catch (error) {
+    failures.push(error);
+  } finally {
+    // Preserve uncertain child ownership through cleanup failures, and attempt
+    // both closes even when the first fails. Artifact ownership reads this chain.
+    for (const fd of [stdoutFd, stderrFd]) {
+      if (fd === undefined) {
+        continue;
+      }
+      try {
+        fs.closeSync(fd);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (completed && failures.length === 0) {
+      try {
+        fs.rmSync(stderrArtifact);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+  }
+  if (failures.length) {
+    throw failures.length === 1
+      ? failures[0]
+      : new AggregateError(failures, "Profiler artifact cleanup failed");
+  }
+  return completed!;
 }
 
 function parseDiagnostics(output: string): Diagnostics {
@@ -243,33 +350,55 @@ function classifyFile(relativePath: string): string {
   return first || "(unknown)";
 }
 
-function countBy<T>(values: T[], keyFn: (value: T) => string) {
+async function summarizeFiles(artifact: string) {
   const counts = new Map<string, number>();
-  for (const value of values) {
-    const key = keyFn(value);
+  let totalFiles = 0;
+  let projectRelativeFiles = 0;
+  let testFiles = 0;
+  // The inventory stays on disk; retain only group counts and one input line.
+  const recordFile = (line: string) => {
+    const file = normalizeFilePath(line);
+    if (!file || file.startsWith("Files:")) {
+      return;
+    }
+    totalFiles++;
+    if (path.isAbsolute(file) || /^[A-Za-z]:/u.test(file)) {
+      return;
+    }
+    projectRelativeFiles++;
+    if (/\.test\.[cm]?[tj]sx?$/u.test(file)) {
+      testFiles++;
+    }
+    const key = classifyFile(file);
     counts.set(key, (counts.get(key) ?? 0) + 1);
+  };
+  let pending = "";
+  for await (const chunk of fs.createReadStream(artifact, { encoding: "utf8" })) {
+    pending += chunk;
+    let end: number;
+    while ((end = pending.indexOf("\n")) !== -1) {
+      recordFile(pending.slice(0, end));
+      pending = pending.slice(end + 1);
+    }
   }
-  return [...counts.entries()]
-    .map(([key, count]) => ({ key, count }))
-    .toSorted((left, right) => right.count - left.count || left.key.localeCompare(right.key));
+  if (pending) {
+    recordFile(pending);
+  }
+  return {
+    totalFiles,
+    projectRelativeFiles,
+    testFiles,
+    groups: [...counts.entries()]
+      .map(([key, count]) => ({ key, count }))
+      .toSorted((left, right) => right.count - left.count || left.key.localeCompare(right.key))
+      .slice(0, 40),
+  };
 }
 
-function summarizeFiles(stdout: string) {
-  const files = stdout
-    .split(/\r?\n/u)
-    .map(normalizeFilePath)
-    .filter(Boolean)
-    .filter((line) => !line.startsWith("Files:"));
-
-  const projectRelativeFiles = files.filter(
-    (file) => !path.isAbsolute(file) && !/^[A-Za-z]:/u.test(file),
-  );
-  const testFiles = projectRelativeFiles.filter((file) => /\.test\.[cm]?[tj]sx?$/u.test(file));
+function summarizeDiagnostics(result: Awaited<ReturnType<typeof runTsgo>>) {
   return {
-    totalFiles: files.length,
-    projectRelativeFiles: projectRelativeFiles.length,
-    testFiles: testFiles.length,
-    groups: countBy(projectRelativeFiles, classifyFile).slice(0, 40),
+    elapsedMs: result.elapsedMs,
+    diagnostics: parseDiagnostics(`${result.stdout}\n${result.stderr}`),
   };
 }
 
@@ -341,7 +470,7 @@ function renderTextReport(report: ProfileReport): string {
   return `${lines.join("\n")}\n`;
 }
 
-function profileGraph(name: GraphName, options: ProfileOptions) {
+async function profileGraph(name: GraphName, options: ProfileOptions, signal: AbortSignal) {
   const graph = GRAPH_DEFINITIONS[name];
   const outDir = options.outDir;
   const graphCacheRoot = path.join(outDir, "cache");
@@ -353,19 +482,30 @@ function profileGraph(name: GraphName, options: ProfileOptions) {
   removeIfFreshMode(noCheckBuildInfo, options.reuse);
 
   const baseArgs = ["-p", configPath, "--pretty", "false"];
-  const listFiles = runTsgo(`${name}:listFilesOnly`, [...baseArgs, "--listFilesOnly"], {
-    maxBuffer: 256 * 1024 * 1024,
-  });
   const filesArtifact = path.join(outDir, `${name}.files.txt`);
-  fs.writeFileSync(filesArtifact, listFiles.stdout);
-  const noCheck = runTsgo(`${name}:noCheck`, [
-    ...baseArgs,
-    "--noCheck",
-    "--incremental",
-    "--tsBuildInfoFile",
-    noCheckBuildInfo,
-    "--extendedDiagnostics",
-  ]);
+  // Retain summaries only before starting the next admitted compiler phase.
+  await runArtifactPhase(
+    `${name}:listFilesOnly`,
+    [...baseArgs, "--listFilesOnly"],
+    signal,
+    filesArtifact,
+  );
+  const files = {
+    ...(await summarizeFiles(filesArtifact)),
+    artifact: path.relative(repoRoot, filesArtifact),
+  };
+  const noCheck = await runTsgo(
+    `${name}:noCheck`,
+    [
+      ...baseArgs,
+      "--noCheck",
+      "--incremental",
+      "--tsBuildInfoFile",
+      noCheckBuildInfo,
+      "--extendedDiagnostics",
+    ],
+    signal,
+  ).then(summarizeDiagnostics);
 
   const checkArgs = [
     ...baseArgs,
@@ -387,50 +527,40 @@ function profileGraph(name: GraphName, options: ProfileOptions) {
       profileDir: path.relative(repoRoot, profileDir),
     };
   }
-  const check = runTsgo(`${name}:check`, checkArgs);
+  const check = await runTsgo(`${name}:check`, checkArgs, signal).then(summarizeDiagnostics);
   let explain: { artifact: string; elapsedMs: number } | undefined;
   if (options.explain) {
     const explainArtifact = path.join(outDir, `${name}.explain.txt`);
-    const explainResult = runTsgo(
+    const explainResult = await runArtifactPhase(
       `${name}:explainFiles`,
       [...baseArgs, "--listFilesOnly", "--explainFiles"],
-      {
-        maxBuffer: 256 * 1024 * 1024,
-      },
+      signal,
+      explainArtifact,
+      true,
     );
-    fs.writeFileSync(explainArtifact, `${explainResult.stdout}${explainResult.stderr}`);
     explain = {
       artifact: path.relative(repoRoot, explainArtifact),
       elapsedMs: explainResult.elapsedMs,
     };
   }
 
-  const checkDiagnostics = parseDiagnostics(`${check.stdout}\n${check.stderr}`);
-  const noCheckDiagnostics = parseDiagnostics(`${noCheck.stdout}\n${noCheck.stderr}`);
   return {
     name,
     config: configPath,
     description: graph.description,
-    files: {
-      ...summarizeFiles(listFiles.stdout),
-      artifact: path.relative(repoRoot, filesArtifact),
-    },
-    noCheck: {
-      elapsedMs: noCheck.elapsedMs,
-      diagnostics: noCheckDiagnostics,
-    },
-    check: {
-      elapsedMs: check.elapsedMs,
-      diagnostics: checkDiagnostics,
-    },
-    typeCost: diffDiagnostics(checkDiagnostics, noCheckDiagnostics),
+    files,
+    noCheck,
+    check,
+    typeCost: diffDiagnostics(check.diagnostics, noCheck.diagnostics),
     ...(deep ? { deep } : {}),
     ...(explain ? { explain } : {}),
   };
 }
 
-async function main(argv: string[]): Promise<void> {
-  const { options, selectedGraphs } = parseArgs(argv);
+async function writeProfileReport(
+  { options, selectedGraphs }: ReturnType<typeof parseArgs>,
+  signal: AbortSignal,
+): Promise<void> {
   ensureDirs(options.outDir);
   const report: ProfileReport = {
     generatedAt: new Date().toISOString(),
@@ -446,9 +576,10 @@ async function main(argv: string[]): Promise<void> {
 
   for (const graphName of selectedGraphs) {
     process.stderr.write(`[tsgo-profile] profiling ${graphName}\n`);
-    report.graphs.push(profileGraph(graphName, options));
+    report.graphs.push(await profileGraph(graphName, options, signal));
   }
 
+  signal.throwIfAborted();
   const timestamp = new Date()
     .toISOString()
     .replaceAll(":", "")
@@ -471,9 +602,16 @@ async function main(argv: string[]): Promise<void> {
   process.stdout.write(options.json ? json : text);
 }
 
-try {
-  await main(process.argv.slice(2));
-} catch (error) {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exit(1);
-}
+await runWithFailedTrailer("tsgo-profile", async () => {
+  const parsed = parseArgs(process.argv.slice(2));
+  process.exitCode = await runCancelableCommand((signal) =>
+    withDistArtifactOwnership(
+      repoRoot,
+      async () => {
+        await writeProfileReport(parsed, signal);
+        return 0;
+      },
+      signal,
+    ),
+  );
+});

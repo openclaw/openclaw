@@ -334,6 +334,42 @@ Tests that discover real bundled provider runtimes declare that prerequisite in
 `scripts/lib/vitest-build-prerequisites.mts`, including Telegram sticker-model
 selection. Local runners and CI prepare those artifacts before admitting workers.
 
+## Compiler memory profiling
+
+Run `pnpm tsgo:profile ui --explain` on a Linux worker with cgroup-v2 memory
+controls and a systemd user manager. From macOS or Windows, use
+`node scripts/crabbox-wrapper.mjs run -- pnpm tsgo:profile ui --explain` or a
+memory-limited Linux VM. Unsupported native platforms refuse execution.
+
+The profiler acquires checkout artifact ownership before the shared host/account
+semantic slot. Each compiler runs under a kernel process-tree cap: the smaller
+of 8 GiB, half the effective machine/container capacity, and half the available
+headroom measured after admission. Less than 512 MiB of budget refuses startup.
+Queueing counts toward the command's 15-minute deadline. Existing Go settings
+remain unchanged; a Go heap target alone does not cap native or Node allocations.
+
+Only one admitted semantic command runs per host/account, across clones and
+worktrees. This does not yet apply to other compiler/lint entry points or raw
+tool invocations. Different OS accounts have independent slots. Profiling wall
+time includes queueing and cleanup; compare performance on an otherwise idle
+worker.
+
+File lists and explanations stream to disk, preserving the previous 256 MiB
+limit per output stream. Inventory summaries retain group counts rather than
+complete file lists. Explanation artifacts preserve stdout followed by stderr.
+Diagnostic phases capture at most 16 MiB of combined stdout/stderr; artifact
+phases retain only short diagnostic tails in memory. Exceeding an output limit
+cancels and joins the compiler, then fails without publishing a report.
+
+Cancellation joins the active compiler and releases both owners before returning.
+A failed or canceled graph does not publish a new complete report. Incomplete
+cleanup retains admission and a uniquely named scope receipt in the account's
+`.cache/openclaw/semantic-checks` directory. The lock names that receipt, which
+records the planned systemd unit; it does not prove the unit started or stopped.
+After a supervisor crash, inspect that exact unit and its cgroup before manually
+recovering ownership. Neither age nor a dead supervisor PID permits automatic
+reclamation.
+
 ## Local PR gate
 
 For local PR land/gate checks, run:
