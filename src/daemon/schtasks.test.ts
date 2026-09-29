@@ -298,6 +298,7 @@ describe("readScheduledTaskCommand", () => {
     'node gateway.js\r\nset "OPENCLAW_PROFILE=other"',
     'node gateway.js\r\ncd /d "C:\\Other"',
     "node gateway.js & node another.js",
+    'node gateway.js >> "C:\\Logs\\gateway.log"2>&1',
   ])("rejects an ambiguous effective launcher body: %s", async (body) => {
     await withScheduledTaskScript({ scriptLines: ["@echo off", body] }, async (env) => {
       await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
@@ -312,7 +313,6 @@ describe("readScheduledTaskCommand", () => {
     "node gateway.js %1",
     "node gateway.js !WORKSPACE!",
     'cd /d "%WORKSPACE%"\r\nnode gateway.js',
-    'node gateway.js < NUL >> "%USERPROFILE%\\gateway.log" 2>&1',
   ])("rejects dynamic CMD expansion during strict inspection: %s", async (body) => {
     await withScheduledTaskScript({ scriptLines: ["@echo off", body] }, async (env) => {
       await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
@@ -769,7 +769,7 @@ describe("readScheduledTaskCommand", () => {
   it.each([
     "< NUL",
     '>> "C:\\Logs\\gateway stdout.log" 2>&1 < NUL',
-    '< NUL >> "%%USERPROFILE%%\\gateway.log" 2>&1',
+    '< NUL >> "%USERPROFILE%\\.openclaw\\logs\\gateway-stdout.log" 2>&1',
     "1>>gateway.log 2>&1",
     "2>&1",
     '2>error.log 1>output.log 0<"nul"',
@@ -808,7 +808,8 @@ describe("readScheduledTaskCommand", () => {
     ['gateway.js --port "18789">out.log', ["gateway.js", "--port", "18789"]],
   ])("preserves arguments beside quoted or attached operators: %s", async (line, args) => {
     await withScheduledTaskScript({ scriptLines: ["@echo off", `node ${line}`] }, async (env) => {
-      expect((await readScheduledTaskCommand(env))?.programArguments).toEqual(["node", ...args]);
+      const result = await readScheduledTaskCommand(env, { requireEffective: true });
+      expect(result?.programArguments).toEqual(["node", ...args]);
     });
   });
 
