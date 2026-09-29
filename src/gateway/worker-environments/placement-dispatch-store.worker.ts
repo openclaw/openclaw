@@ -9,6 +9,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { readWorkerPlacementMovesReadOnly } from "./placement-move-intent.js";
+import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import {
   nextGeneration,
   normalizeIdentity,
@@ -16,7 +17,6 @@ import {
   type WorkerPlacementDispatchStoreOperations,
   type WorkerSessionPlacementRecord,
 } from "./placement-record.js";
-import { assertWorkerPlacementDispatchSource } from "./placement-request-preconditions.js";
 import { ensureLocal, getRequired, query } from "./placement-row-codec.js";
 import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.js";
 import { hasWorkerWorkspacePendingResult } from "./placement-workspace-result.js";
@@ -34,9 +34,25 @@ export function startWorkerPlacementDispatchInWorker(
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
       const current = ensureLocal(db, identity, input.nowMs);
       assertSessionWorkspaceUnreserved(db, identity.sessionId);
-      assertWorkerPlacementDispatchSource(current, { ...input.placement, ...identity });
+      if (
+        current.state !== "local" &&
+        current.state !== "reclaimed" &&
+        current.state !== "failed"
+      ) {
+        throw new Error(
+          `Cannot dispatch session ${identity.sessionId} from placement ${current.state}`,
+        );
+      }
       const expected = input.placement.expectedPlacement;
       if (expected) {
+        if (
+          !matchesWorkerPlacementTarget(current, expected) ||
+          current.executionMode !== executionMode ||
+          (current.state !== "reclaimed" && current.state !== "failed") ||
+          current.turnClaim
+        ) {
+          throw new Error(`Worker placement ${identity.sessionId} changed before redispatch`);
+        }
         const journal = executeSqliteQuerySync(
           db,
           getNodeSqliteKysely<Pick<DB, "worker_workspace_reconciliations">>(db)

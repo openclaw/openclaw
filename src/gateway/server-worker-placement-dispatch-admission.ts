@@ -1,99 +1,10 @@
 import { getRuntimeConfig } from "../config/config.js";
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import {
-  beginSessionWorkAdmission,
-  closeSessionWorkAdmissions,
-  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-  startSessionWorkAdmissionInterruption,
-  waitForSessionWorkAdmissionRelease,
-} from "../sessions/session-lifecycle-admission.js";
+import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import type { WorkerPlacementSessionRuntime } from "./server-worker-placement-reclaim.js";
-import type { WorkerPlacementDrain } from "./worker-environments/placement-dispatch-coordinator.js";
-import { assertWorkerPlacementMoveSource } from "./worker-environments/placement-move-intent.js";
-import { assertWorkerPlacementDispatchSource } from "./worker-environments/placement-request-preconditions.js";
-import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import {
   WorkerPlacementAdmissionTargetError,
   type WorkerPlacementDispatchAdmission,
 } from "./worker-environments/service-contract.js";
-
-export function createGatewayWorkerPlacementDrain(
-  placements: Pick<
-    WorkerSessionPlacementStore,
-    "waitForTurnClaimRelease" | "prepareRuntimeRefresh"
-  >,
-  loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>,
-): WorkerPlacementDrain {
-  return async (params) => {
-    const { request, action, authorize, signal } = params;
-    const { sessionId, sessionKey, agentId } = request;
-    signal?.throwIfAborted();
-    const runtime = await racePromiseWithAbortSignal(loadSessionRuntime(), signal);
-    const prepared = await placements.prepareRuntimeRefresh(sessionId);
-    let release: (() => void) | undefined;
-    try {
-      signal?.throwIfAborted();
-      const target = runtime.resolveGatewaySessionStoreTargetWithStore({
-        cfg: getRuntimeConfig(),
-        key: sessionKey,
-        agentId,
-        clone: false,
-        exactRead: true,
-      });
-      const lifecycle = {
-        scope: target.storePath,
-        identities: [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId],
-      };
-      // Interrupting by key must never reach a session that replaced this one.
-      if (
-        runtime.resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys)
-          ?.sessionId !== sessionId
-      ) {
-        throw new WorkerPlacementAdmissionTargetError(
-          `Session ${sessionKey} changed before cloud worker ${action === "move" ? "placement move" : "dispatch"}. Retry.`,
-        );
-      }
-      authorize?.();
-      if (params.action === "move") {
-        // A retry may interrupt the same draining owner; intent conflicts stay durable.
-        assertWorkerPlacementMoveSource(prepared.placement, params.request, {
-          allowDraining: true,
-        });
-      } else {
-        assertWorkerPlacementDispatchSource(prepared.placement, params.request);
-      }
-      // Fence ingress without a mutex so targeted result recovery can still release the claim.
-      prepared.assertCurrent();
-      release = closeSessionWorkAdmissions({
-        ...lifecycle,
-        reason: new Error("Session work admission interrupted"),
-      });
-      const { released } = startSessionWorkAdmissionInterruption(lifecycle);
-      if (
-        !(await waitForSessionWorkAdmissionRelease(
-          racePromiseWithAbortSignal(released, signal),
-          SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-        ))
-      ) {
-        throw new Error(
-          `Session ${sessionKey} is still active; ${action === "move" ? "placement move interrupted" : "dispatch stopped"}`,
-        );
-      }
-      signal?.throwIfAborted();
-      await placements.waitForTurnClaimRelease(sessionId, {
-        timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-        signal,
-      });
-      signal?.throwIfAborted();
-      return { release };
-    } catch (error) {
-      release?.();
-      throw error;
-    } finally {
-      prepared.release();
-    }
-  };
-}
 
 export function createGatewayWorkerDispatchAdmission(
   loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>,

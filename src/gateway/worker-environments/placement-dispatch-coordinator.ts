@@ -7,22 +7,11 @@ import type {
 } from "./placement-dispatch-failure.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
+import type { WorkerPlacementRecoveryAdmission } from "./placement-recovery-contract.js";
 import type {
   WorkerPlacementDispatchAdmission,
-  WorkerPlacementDispatchRequest,
   WorkerPlacementCancellationTarget,
-  WorkerPlacementMoveRequest,
 } from "./service-contract.js";
-
-export type WorkerPlacementDrain = (
-  params: (
-    | { action: "dispatch"; request: WorkerPlacementDispatchRequest }
-    | { action: "move"; request: WorkerPlacementMoveRequest }
-  ) & {
-    authorize?: () => void;
-    signal?: AbortSignal;
-  },
-) => Promise<{ release: () => void }>;
 
 function trackPlacementOperation<T extends WorkerDispatchPlacement | void>(
   run: (report: (placement: WorkerDispatchPlacement) => void) => Promise<T>,
@@ -63,8 +52,8 @@ export function coordinateWorkerPlacementDispatch(
   admitDispatch: WorkerPlacementDispatchAdmission,
   recoverInitialPlacement?: (placement: WorkerProvisioningDispatchPlacement) => Promise<void>,
   reportReconciliation?: (operation: () => Promise<void>) => Promise<void>,
-  drain?: WorkerPlacementDrain,
 ): WorkerPlacementDispatchService & {
+  awaitTurnClaimRelease(sessionId: string, wait: () => Promise<void>): Promise<void>;
   isPlacementOperationInFlight(sessionId: string): boolean;
   hasPendingPlacementLifecycleOperation(sessionId: string): boolean;
   getPendingDeviceDispatchCount(deviceId: string, excludeSessionId?: string): number;
@@ -75,6 +64,7 @@ export function coordinateWorkerPlacementDispatch(
   ): Promise<WorkerDispatchPlacement>;
 } {
   const sessionTails = new Map<string, Promise<void>>();
+  const claimWaits = new Map<string, { settled: Promise<void> }>();
   const reserveSessions = (sessionIds: readonly string[]) => {
     const keys = [...new Set(sessionIds)];
     const ready = Promise.all(keys.map((key) => sessionTails.get(key) ?? Promise.resolve())).then(
@@ -106,8 +96,19 @@ export function coordinateWorkerPlacementDispatch(
     };
   };
   const recoveryAdmission =
-    (wait: boolean) =>
-    async (sessionIds: readonly string[], run: () => Promise<void>): Promise<boolean> => {
+    (wait: boolean): WorkerPlacementRecoveryAdmission =>
+    async (sessionIds, run) => {
+      const claimWait = wait && sessionIds.length === 1 && claimWaits.get(sessionIds[0]!);
+      if (claimWait) {
+        // Borrow only the claim wait, and preserve ordering among its result recoveries.
+        const recovery = claimWait.settled.then(() => run("results-only"));
+        claimWait.settled = recovery.then(
+          () => undefined,
+          () => undefined,
+        );
+        await recovery;
+        return true;
+      }
       if (!wait && sessionIds.some((key) => sessionTails.has(key) || operationsInFlight.has(key))) {
         return false;
       }
@@ -186,6 +187,17 @@ export function coordinateWorkerPlacementDispatch(
     return result;
   };
   return {
+    async awaitTurnClaimRelease(sessionId, wait) {
+      const claimWait = { settled: Promise.resolve() };
+      claimWaits.set(sessionId, claimWait);
+      try {
+        await wait();
+      } finally {
+        // Close before joining: later units must queue behind the original holder.
+        claimWaits.delete(sessionId);
+        await claimWait.settled;
+      }
+    },
     isPlacementOperationInFlight: (sessionId) => operationsInFlight.has(sessionId),
     hasPendingPlacementLifecycleOperation: (sessionId) =>
       pendingOperations(sessionId).some((operation) => operation.kind !== "recovery"),
@@ -301,8 +313,10 @@ export function coordinateWorkerPlacementDispatch(
           callerSignal,
         );
       }
-      // Drain only after earlier placement owners settle; a later Stop still cancels this work.
-      const predecessors = pendingOperations(request.sessionId);
+      // Capture only earlier Stops. A later Stop must drain this dispatch, not precede it.
+      const predecessors = pendingOperations(request.sessionId).filter(
+        (pending) => pending.kind === "reclaim",
+      );
       const tracked = trackPlacementOperation(async (report) => {
         await racePromiseWithAbortSignal(
           Promise.allSettled(predecessors.map((pending) => pending.operation)),
@@ -310,28 +324,16 @@ export function coordinateWorkerPlacementDispatch(
         );
         return await admitDispatch(
           request,
-          async (signal) => {
+          (signal) => {
             signal?.throwIfAborted();
-            const drained = await drain?.({ request, action: "dispatch", authorize, signal });
-            try {
-              signal?.throwIfAborted();
-              const admission = reserveSessions([request.sessionId]);
-              return await admission.hold(
-                (async () => {
-                  await racePromiseWithAbortSignal(admission.ready, signal);
-                  signal?.throwIfAborted();
-                  return await service.dispatch(
-                    request,
-                    report,
-                    authorize,
-                    signal,
-                    drained?.release,
-                  );
-                })(),
-              );
-            } finally {
-              drained?.release();
-            }
+            const admission = reserveSessions([request.sessionId]);
+            return admission.hold(
+              (async () => {
+                await racePromiseWithAbortSignal(admission.ready, signal);
+                signal?.throwIfAborted();
+                return await service.dispatch(request, report, authorize, signal);
+              })(),
+            );
           },
           authorize,
           callerSignal,
@@ -387,29 +389,23 @@ export function coordinateWorkerPlacementDispatch(
         }
         return await joinOperation(inFlight.operation, authorize);
       }
-      const predecessors = pendingOperations(request.sessionId);
+      const predecessors = pendingOperations(request.sessionId).filter(
+        (pending) => pending.kind === "reclaim",
+      );
       const tracked = trackPlacementOperation(async (report) => {
         await Promise.allSettled(predecessors.map((pending) => pending.operation));
         return await admitDispatch(
           request,
-          async (signal) => {
+          (signal) => {
             signal?.throwIfAborted();
-            const drained = request.abandonSource
-              ? undefined
-              : await drain?.({ request, action: "move", authorize, signal });
-            try {
-              signal?.throwIfAborted();
-              const admission = reserveSessions([request.sessionId]);
-              return await admission.hold(
-                (async () => {
-                  await racePromiseWithAbortSignal(admission.ready, signal);
-                  signal?.throwIfAborted();
-                  return await service.move(request, report, authorize, signal, drained?.release);
-                })(),
-              );
-            } finally {
-              drained?.release();
-            }
+            const admission = reserveSessions([request.sessionId]);
+            return admission.hold(
+              (async () => {
+                await racePromiseWithAbortSignal(admission.ready, signal);
+                signal?.throwIfAborted();
+                return await service.move(request, report, authorize, signal);
+              })(),
+            );
           },
           authorize,
         );

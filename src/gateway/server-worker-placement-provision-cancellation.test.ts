@@ -100,7 +100,7 @@ describe("dispatch Stop before provider allocation", () => {
     });
   });
 
-  it("admits targeted claim settlement before the local dispatch barrier writes requested", async () => {
+  it("lends local dispatch admission to targeted claim settlement after writing requested", async () => {
     const createDispatch = runtimeFactoryMocks.createDispatch.getMockImplementation()!;
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const claim = await placements.claimTurn({
@@ -122,7 +122,7 @@ describe("dispatch Stop before provider allocation", () => {
       return waiting;
     });
     let stateAtRecovery: string | undefined;
-    const recover = vi.fn(async () => {
+    const recover = vi.fn(async (_mode?: "results-only") => {
       stateAtRecovery = placements.get(REQUEST.sessionId)?.state;
       await placements.releaseTurn(claim);
     });
@@ -161,8 +161,9 @@ describe("dispatch Stop before provider allocation", () => {
       await targetedAdmission.promise;
       await runtime.dispatchService.reconcileActive("unrelated");
       expect(recover).toHaveBeenCalledOnce();
+      expect(recover).toHaveBeenCalledWith("results-only");
       await recovery;
-      expect(stateAtRecovery).toBe("local");
+      expect(stateAtRecovery).toBe("requested");
       expect(placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
       await expect(dispatching).resolves.toMatchObject({
         message: "fixture: barrier complete",

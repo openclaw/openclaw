@@ -5,10 +5,7 @@ import {
   closeSessionWorkAdmissions,
 } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  coordinateWorkerPlacementDispatch,
-  type WorkerPlacementDrain,
-} from "./placement-dispatch-coordinator.js";
+import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import {
   ACTIVE_PLACEMENT,
   admittedRecovery,
@@ -26,72 +23,187 @@ import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 type DispatchService = WorkerPlacementDispatchService;
 
 describe("worker placement dispatch coordinator", () => {
-  it.each([
-    { predecessor: "dispatch", successor: "move" },
-    { predecessor: "move", successor: "dispatch" },
-    { predecessor: "recovery", successor: "dispatch" },
-    { predecessor: "recovery", successor: "move" },
-  ] as const)(
-    "drains $successor only after earlier $predecessor settlement",
-    async ({ predecessor, successor }) => {
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const block = async () => {
-        entered.resolve();
-        await release.promise;
-      };
-      const drain = vi.fn<WorkerPlacementDrain>(async () => ({ release: () => {} }));
-      const coordinated = coordinateWorkerPlacementDispatch(
-        createCoordinatorTestService({
-          dispatch: async (request) => {
-            if (predecessor === "dispatch" && request.sessionId === REQUEST.sessionId) {
-              await block();
-            }
-            return { ...ACTIVE_PLACEMENT, ...request };
-          },
-          move: async () => {
-            if (predecessor === "move") {
-              await block();
-            }
-            return LOCAL_PLACEMENT;
-          },
-          resumeProvisioning: admittedRecovery(block),
-        }),
-        (_request, run) => run(),
-        undefined,
-        undefined,
-        drain,
+  it.each(["resolve", "reject"] as const)(
+    "joins lent result recovery before the claim waiter can %s or queued reservations can run",
+    async (outcome) => {
+      const claimWait = createDeferredCore();
+      const waiting = createDeferredCore();
+      const firstRecovery = createDeferredCore();
+      const firstEntered = createDeferredCore();
+      const secondRecovery = createDeferredCore();
+      const secondEntered = createDeferredCore();
+      const events: string[] = [];
+      const waitError = new Error("claim wait canceled");
+      const recover = vi.fn(async (label: string, mode?: "results-only") => {
+        events.push(`${label}:${mode ?? "ordinary"}`);
+        if (label === "first") {
+          firstEntered.resolve();
+          await firstRecovery.promise;
+          throw new Error("first recovery failed");
+        }
+        if (label === "second") {
+          secondEntered.resolve();
+          await secondRecovery.promise;
+        }
+      });
+      const environment = createDispatchEnvironmentFixtures().ready;
+      const coordinated: ReturnType<typeof coordinateWorkerPlacementDispatch> =
+        coordinateWorkerPlacementDispatch(
+          createCoordinatorTestService({
+            dispatch: async (request) => {
+              if (request.sessionId === REQUEST.sessionId) {
+                try {
+                  await coordinated.awaitTurnClaimRelease(request.sessionId, () => {
+                    waiting.resolve();
+                    return claimWait.promise;
+                  });
+                } finally {
+                  events.push("holder-settled");
+                }
+              }
+              return { ...ACTIVE_PLACEMENT, ...request };
+            },
+            reconcileActive: async (label, admit) => {
+              await admit!([REQUEST.sessionId], (mode) => recover(label ?? "full", mode));
+            },
+            reconcile: async (_mode, admit) => {
+              await admit!([REQUEST.sessionId], (mode) => recover("startup", mode));
+            },
+            getEnvironmentAttachedSessionIds: () => [REQUEST.sessionId],
+            readEnvironmentSessionIds: async () => [REQUEST.sessionId],
+            forceDestroyEnvironment: async () => {
+              events.push("destroy");
+              return environment;
+            },
+            reclaim: preparedReclaim(async () => {
+              events.push("reclaim");
+              return LOCAL_PLACEMENT;
+            }),
+            resumeProvisioning: admittedRecovery(async () => {
+              events.push("provisioning");
+            }),
+          }),
+          (_request, run) => run(),
+        );
+      const holder = coordinated.dispatch(REQUEST).catch((error: unknown) => error);
+      await waiting.promise;
+      const first = coordinated.reconcileActive("first").catch((error: unknown) => error);
+      await firstEntered.promise;
+      const second = coordinated.reconcileActive("second");
+      const destroy = coordinated.forceDestroyEnvironment(environment.environmentId);
+      const reclaim = coordinated.reclaim(REQUEST);
+      const provisioning = coordinated.resumeProvisioning(
+        { ...PROVISIONING_PLACEMENT, ...REQUEST },
+        async () => {},
       );
-      const earlier =
-        predecessor === "dispatch"
-          ? coordinated.dispatch(REQUEST)
-          : predecessor === "move"
-            ? coordinated.move(MOVE_REQUEST)
-            : coordinated.resumeProvisioning(
-                { ...PROVISIONING_PLACEMENT, ...REQUEST },
-                async () => {},
-              );
-      await entered.promise;
-      const later =
-        successor === "dispatch" ? coordinated.dispatch(REQUEST) : coordinated.move(MOVE_REQUEST);
-      const sessionDrains = () =>
-        drain.mock.calls
-          .filter(([params]) => params.request.sessionId === REQUEST.sessionId)
-          .map(([request]) => request.action);
+      let late: Promise<void> | undefined;
       try {
+        await coordinated.reconcileActive();
+        await coordinated.reconcile("startup");
+        expect(events).toEqual(["first:results-only"]);
+        if (outcome === "resolve") {
+          claimWait.resolve();
+        } else {
+          claimWait.reject(waitError);
+        }
+        // This independent owner completes after the settled wait closes its lending window.
         await coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
-        expect(sessionDrains()).toEqual(predecessor === "recovery" ? [] : [predecessor]);
+        late = coordinated.reconcileActive("late");
+        expect(events).toEqual(["first:results-only"]);
+        firstRecovery.resolve();
+        await secondEntered.promise;
+        expect(events).toEqual(["first:results-only", "second:results-only"]);
       } finally {
-        release.resolve();
-        await Promise.allSettled([earlier, later]);
+        claimWait.resolve();
+        firstRecovery.resolve();
+        secondRecovery.resolve();
+        await Promise.allSettled([holder, first, second, destroy, reclaim, provisioning, late]);
       }
-      await later;
-      expect(sessionDrains()).toEqual([
-        ...(predecessor === "recovery" ? [] : [predecessor]),
-        successor,
+      expect(await first).toMatchObject({ message: "first recovery failed" });
+      expect(await holder).toMatchObject(
+        outcome === "reject" ? { message: waitError.message } : { state: "active" },
+      );
+      expect(events).toEqual([
+        "first:results-only",
+        "second:results-only",
+        "holder-settled",
+        "destroy",
+        "reclaim",
+        "provisioning",
+        "late:ordinary",
       ]);
     },
   );
+
+  it("lends only to a single matching session during the wait without superseding setup", async () => {
+    const beforeWait = createDeferredCore();
+    const enterWait = createDeferredCore();
+    const waiting = createDeferredCore();
+    const releaseWait = createDeferredCore();
+    const otherEntered = createDeferredCore();
+    const releaseOther = createDeferredCore();
+    const recover = vi.fn(async (_label: string, _mode?: "results-only") => {});
+    const coordinated: ReturnType<typeof coordinateWorkerPlacementDispatch> =
+      coordinateWorkerPlacementDispatch(
+        createCoordinatorTestService({
+          dispatch: async (request, report) => {
+            const placement = { ...ACTIVE_PLACEMENT, ...request };
+            report?.(placement);
+            if (request.sessionId === "other") {
+              otherEntered.resolve();
+              await releaseOther.promise;
+            } else if (request.sessionId === REQUEST.sessionId) {
+              beforeWait.resolve();
+              await enterWait.promise;
+              await coordinated.awaitTurnClaimRelease(request.sessionId, () => {
+                waiting.resolve();
+                return releaseWait.promise;
+              });
+            }
+            return placement;
+          },
+          reconcileActive: async (label, admit) => {
+            const sessions =
+              label === "other"
+                ? ["other"]
+                : label === "multi"
+                  ? [REQUEST.sessionId, "other"]
+                  : [REQUEST.sessionId];
+            await admit!(sessions, (mode) => recover(label!, mode));
+          },
+        }),
+        (_request, run) => run(),
+      );
+    const holder = coordinated.dispatch(REQUEST);
+    await beforeWait.promise;
+    const setup = coordinated.waitForInitialPlacement(ACTIVE_PLACEMENT);
+    const early = coordinated.reconcileActive("early");
+    const other = coordinated.dispatch({ ...REQUEST, sessionId: "other" });
+    await otherEntered.promise;
+    enterWait.resolve();
+    await waiting.promise;
+    const otherRecovery = coordinated.reconcileActive("other");
+    const multi = coordinated.reconcileActive("multi");
+    try {
+      await coordinated.reconcileActive("lent");
+      expect(recover.mock.calls).toEqual([["lent", "results-only"]]);
+    } finally {
+      enterWait.resolve();
+      releaseWait.resolve();
+      releaseOther.resolve();
+      await Promise.allSettled([holder, setup, early, other, otherRecovery, multi]);
+    }
+    await expect(setup).resolves.toMatchObject({ state: "active" });
+    expect(recover.mock.calls).toHaveLength(4);
+    expect(recover.mock.calls).toEqual(
+      expect.arrayContaining([
+        ["lent", "results-only"],
+        ["early", undefined],
+        ["other", undefined],
+        ["multi", undefined],
+      ]),
+    );
+  });
 
   it.each(["dispatch", "move"] as const)(
     "rejects admission-cancelled %s after its same-session predecessor settles",
@@ -389,13 +501,7 @@ describe("worker placement dispatch coordinator", () => {
       authorize,
     );
 
-    expect(dispatch).toHaveBeenCalledWith(
-      REQUEST,
-      expect.any(Function),
-      authorize,
-      undefined,
-      undefined,
-    );
+    expect(dispatch).toHaveBeenCalledWith(REQUEST, expect.any(Function), authorize, undefined);
     expect(authorize).toHaveBeenCalledOnce();
     expect(observer).toHaveBeenCalledExactlyOnceWith(placement);
   });

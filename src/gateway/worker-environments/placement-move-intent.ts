@@ -48,27 +48,6 @@ export type WorkerPlacementMoveSource = {
   ownerEpoch: number;
 };
 
-export function assertWorkerPlacementMoveSource(
-  current: WorkerSessionPlacementRecord | undefined,
-  request: { sessionId: string; source: WorkerPlacementMoveSource; abandonSource?: true },
-  options: { allowDraining?: true } = {},
-): void {
-  const { source, sessionId } = request;
-  if (
-    !current ||
-    current.environmentId !== source.environmentId ||
-    current.activeOwnerEpoch !== source.ownerEpoch ||
-    !(
-      (options.allowDraining && current.state === "draining") ||
-      (current.generation === source.generation &&
-        (current.state === "active" ||
-          (request.abandonSource && isForceAbandonedWorkerPlacement(current))))
-    )
-  ) {
-    throw new Error(`Cannot move stale worker placement for session ${sessionId}`);
-  }
-}
-
 export type WorkerPlacementMoveIntent = {
   operationId: string;
   sessionId: string;
@@ -452,11 +431,15 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
           return { intent: existing, placement: getRequired(db, sessionId), joined: true };
         }
         const current = getRequired(db, sessionId);
-        assertWorkerPlacementMoveSource(current, {
-          sessionId,
-          source,
-          ...(abandonSource ? { abandonSource: true } : {}),
-        });
+        if (
+          (current.state !== "active" &&
+            !(abandonSource && isForceAbandonedWorkerPlacement(current))) ||
+          current.generation !== source.generation ||
+          current.environmentId !== source.environmentId ||
+          current.activeOwnerEpoch !== source.ownerEpoch
+        ) {
+          throw new Error(`Cannot move stale worker placement for session ${sessionId}`);
+        }
         if (current.state === "active") {
           requireExactAttachedEnvironment(db, { sessionId, ...source });
         }

@@ -14,6 +14,7 @@ import type { WorkerSessionPlacementStore } from "./worker-environments/placemen
 
 export function createGatewayWorkerPlacementMoveBarrier(params: {
   placements: Pick<WorkerSessionPlacementStore, "waitForTurnClaimRelease">;
+  awaitTurnClaimRelease: (sessionId: string, wait: () => Promise<void>) => Promise<void>;
   loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>;
   revokeSessionAuthority: (request: { sessionId: string; sessionKeys: readonly string[] }) => void;
   persistAbandonedPartial?: (request: {
@@ -30,7 +31,6 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
     sourceDisposition,
     authorize,
     signal,
-    releaseDrain,
     begin,
   }) => {
     const sessionRuntime = await params.loadSessionRuntime();
@@ -48,7 +48,6 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
       identities: lifecycleIdentities,
       signal,
       prepare: async () => {
-        releaseDrain?.();
         resolveWorkerPlacementSessionTarget({
           sessionRuntime,
           config: getRuntimeConfig(),
@@ -86,10 +85,12 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
         if (!released) {
           throw new Error(`Session ${sessionKey} is still active; placement move interrupted`);
         }
-        await params.placements.waitForTurnClaimRelease(sessionId, {
-          timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-          signal,
-        });
+        await params.awaitTurnClaimRelease(sessionId, () =>
+          params.placements.waitForTurnClaimRelease(sessionId, {
+            timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+            signal,
+          }),
+        );
         await runExclusiveSessionStoreWrite(target.storePath, async () => {}, {
           reentrant: true,
         });

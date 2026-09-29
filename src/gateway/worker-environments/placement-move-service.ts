@@ -42,7 +42,6 @@ export type WorkerPlacementMoveBarrier = (
   params: MoveSessionIdentity & {
     authorize?: WorkerPlacementAuthorization;
     signal?: AbortSignal;
-    releaseDrain?: () => void;
     sourceDisposition: WorkerPlacementMoveSourceDisposition;
     begin: (prepareNew?: (runId: string) => Promise<void>) => Promise<WorkerMoveBeginResult>;
   },
@@ -93,7 +92,6 @@ export function createWorkerPlacementMoveService(options: {
     onTransition?: (placement: WorkerDispatchPlacement) => void,
     authorize?: WorkerPlacementAuthorization,
     signal?: AbortSignal,
-    releaseDrain?: () => void,
   ): Promise<WorkerMovePlacement> => {
     const assertCurrent = signal
       ? () => {
@@ -122,7 +120,6 @@ export function createWorkerPlacementMoveService(options: {
         sourceDisposition: request.abandonSource ? "abandon" : "reconcile",
         authorize: assertCurrent,
         signal,
-        releaseDrain,
         begin: async (prepareNew) => {
           const moveRequest = {
             sessionId: request.sessionId,
