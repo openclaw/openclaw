@@ -1,12 +1,20 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
 
-/** Pause the real admitted native commit while a later writer enters its existing FIFO. */
-export function holdLifecycleProjectionAdmission(databasePath: string) {
-  const commitEntered = createDeferred();
-  const commitRelease = createDeferred();
-  let commitRequests = 0;
+export function holdReclamationAdmission(
+  databasePath: string,
+  kind: "lifecycle-projection-commit" | "maintenance-finalize",
+  phase: "before-writer" | "inside-writer",
+) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  let admissions = 0;
+  const pause = async () => {
+    admissions += 1;
+    entered.resolve();
+    await release.promise;
+  };
   const withWorker = reclamationWorker.withSqliteReclamationWorker;
   vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
     (options, claim, run, assertCurrent, signal) =>
@@ -16,23 +24,22 @@ export function holdLifecycleProjectionAdmission(databasePath: string) {
         async (worker) => {
           const execute = worker.run.bind(worker);
           const spy = vi.spyOn(worker, "run").mockImplementation((params) => {
-            if (
-              params.plan.kind !== "lifecycle-projection-commit" ||
-              params.plan.databaseOptions.path !== databasePath
-            ) {
+            if (params.plan.databaseOptions.path !== databasePath || params.plan.kind !== kind) {
               return execute(params);
             }
             return execute({
               ...params,
-              withWriteAdmission: (performWrite, diagnostics) =>
-                params.withWriteAdmission(async (...admissionArgs) => {
-                  if (!admissionArgs[0]) {
-                    commitRequests += 1;
-                    commitEntered.resolve();
-                    await commitRelease.promise;
+              withWriteAdmission: async (performWrite, diagnostics) => {
+                if (phase === "before-writer") {
+                  await pause();
+                }
+                return params.withWriteAdmission(async (...admissionArgs) => {
+                  if (!admissionArgs[0] && phase === "inside-writer") {
+                    await pause();
                   }
                   return performWrite(...admissionArgs);
-                }, diagnostics),
+                }, diagnostics);
+              },
             });
           });
           try {
@@ -46,8 +53,18 @@ export function holdLifecycleProjectionAdmission(databasePath: string) {
       ),
   );
   return {
-    entered: commitEntered.promise,
-    release: () => commitRelease.resolve(),
-    requests: () => commitRequests,
+    release,
+    count: () => admissions,
+    async expectPending(operation: Promise<unknown>) {
+      expect(
+        await Promise.race([
+          entered.promise.then(() => "admitted"),
+          operation.then(
+            () => "completed",
+            () => "failed",
+          ),
+        ]),
+      ).toBe("admitted");
+    },
   };
 }

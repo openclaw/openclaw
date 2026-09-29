@@ -373,6 +373,17 @@ accepted writes. A newer conversation choice or reset invalidates a pending
 remembered-session restore. The existing scope keys, heartbeat filtering,
 SQLite rows, missing-store behavior, and update behavior are unchanged.
 
+Repository workspace lookup, creation, base binding, checkpoint acceptance, and
+deletion execute in the shared-state worker. Revision comparisons and immutable
+base checks remain in its synchronous transactions. Native commit receipts publish
+current repository facts before session observers run; a lost ordinary reply does
+not discard a committed workspace identity. File cleanup follows settled row
+deletion. Synchronous Git, placement, and publication guards consume prepared
+facts bound to the original database lifecycle, refusing unsettled mutations.
+Session presentation prepares repository rows alongside its other metadata;
+private rows retain facts only for the request's synchronous publication frame.
+Schemas, stored values, permissions, retention, and update behavior are unchanged.
+
 ## Migrate a caller
 
 Completed-child archive lookups resolve durable store ownership and check exact

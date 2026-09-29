@@ -40,7 +40,7 @@ import {
   settleChatCommandComposer,
   snapshotChatAttachments,
   submittedCommandScopeIsVisible,
-  type ChatCommandComposerRecovery,
+  type PendingComposerSnapshot,
 } from "./chat-send-composer.ts";
 import type { ChatHost, ChatSendSubmitOptions } from "./chat-send-contract.ts";
 import { chatOutboxDrainDependencies, deliverChatQueueItem } from "./chat-send-delivery.ts";
@@ -326,18 +326,7 @@ export async function handleSendChat(
         scheduleChatScroll(host, true, false, { source: "manual" });
         await sendDetachedCommandMessage(host, message, {
           attachments: deliveredAttachments.length ? deliveredAttachments : undefined,
-          recovery: captureChatCommandComposerRecovery(
-            host,
-            recoveryScope,
-            cleared.previousDraft === undefined
-              ? undefined
-              : {
-                  draft: cleared.previousDraft,
-                  mentions: cleared.previousMentions,
-                  replyTarget: cleared.previousReplyTarget,
-                  attachments: cleared.previousAttachments ?? [],
-                },
-          ),
+          recovery: captureChatCommandComposerRecovery(host, recoveryScope, cleared),
         });
       });
       return undefined;
@@ -394,21 +383,14 @@ export async function handleSendChat(
           return;
         }
         let prevDraft = messageOverride == null ? previousDraft : undefined;
-        let recoveryComposer: ChatCommandComposerRecovery["composer"];
+        let recoveryComposer: PendingComposerSnapshot | undefined;
         const recoveryScope = resolveUiConversationIdentity(host, submittedSessionKey);
         if (messageOverride == null) {
           recordNonTranscriptInputHistory(host, userMessage);
           if (parsed.command.key !== "export-session") {
             const cleared = clearComposer();
             prevDraft = cleared.previousDraft;
-            if (cleared.previousDraft !== undefined) {
-              recoveryComposer = {
-                draft: cleared.previousDraft,
-                mentions: cleared.previousMentions,
-                replyTarget: cleared.previousReplyTarget,
-                attachments: cleared.previousAttachments ?? [],
-              };
-            }
+            recoveryComposer = cleared;
           }
         }
         const recovery = captureChatCommandComposerRecovery(host, recoveryScope, recoveryComposer);
@@ -440,9 +422,9 @@ export async function handleSendChat(
           }
         }
         if (dispatchResult === "failed" || dispatchResult === "cancelled") {
-          settleChatCommandComposer(host, recovery, false, recovery.composer?.attachments);
+          settleChatCommandComposer(host, recovery, false, recovery.composer?.previousAttachments);
         } else if (dispatchResult === "completed") {
-          settleChatCommandComposer(host, recovery, true, recovery.composer?.attachments);
+          settleChatCommandComposer(host, recovery, true, recovery.composer?.previousAttachments);
         }
       };
       if (waitsForPicker) {

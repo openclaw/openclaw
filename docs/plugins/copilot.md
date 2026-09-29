@@ -261,19 +261,6 @@ unvalidated so the next run creates a fresh SDK session instead of trusting a
 partial transcript. Only the post-append transcript update notification is
 best-effort and logged.
 
-Native subagent task updates retain their original completion or failure result
-when task persistence fails. A later terminal event or parent cleanup retries
-that same result instead of replacing it with cancellation. Bookkeeping is
-retired only after the tracked task is durably terminal or no longer exists.
-Creation and completion use asynchronous task persistence and share the attempt's
-event queue. Cleanup detaches listeners, drains accepted events, and awaits task
-settlement before disconnecting the SDK session, including deferred compaction
-cleanup. Custom task adapters must support exact-assignment transitions before a
-native task is admitted. These checks run on the native start event, so ordinary
-turns without native subagents remain available to legacy adapters and supported
-older hosts. A host without asynchronous exact-assignment task capabilities reports
-an upgrade requirement before creating a mirrored task.
-
 ## Side questions (`/btw`)
 
 `/btw` is **not** native on this harness. `createCopilotAgentHarness()`

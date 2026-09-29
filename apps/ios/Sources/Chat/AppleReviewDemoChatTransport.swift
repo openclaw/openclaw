@@ -412,11 +412,15 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
         AsyncStream { continuation in
             continuation.yield(.health(ok: true))
-            self.registerFixtureEventContinuation(continuation)
+            guard ScreenshotFixtureMode.holdsInitialChatRun else {
+                continuation.finish()
+                return
+            }
+            Task {
+                await self.store.setEventContinuation(continuation)
+            }
         }
     }
-
-    func setActiveSessionKey(_: String) async throws {}
 
     func resetSession(sessionKey _: String) async throws {
         await self.store.reset()
@@ -732,19 +736,5 @@ private actor LocalFixtureChatStore {
 extension ScreenshotFixtureMode {
     static var holdsInitialChatRun: Bool {
         ProcessInfo.processInfo.arguments.contains("--openclaw-hold-initial-chat-run")
-    }
-}
-
-extension LocalFixtureChatTransport {
-    private func registerFixtureEventContinuation(
-        _ continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation)
-    {
-        guard ScreenshotFixtureMode.holdsInitialChatRun else {
-            continuation.finish()
-            return
-        }
-        Task {
-            await self.store.setEventContinuation(continuation)
-        }
     }
 }

@@ -1,14 +1,21 @@
+import type { WorkerOptions } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { loadSessionEntryReadOnly } from "./session-accessor.sqlite-entry.js";
+import { withWorkerSqliteIntegrityCounter } from "./session-accessor.sqlite-integrity-counter.test-support.js";
+import { applySessionEntryReplacements } from "./session-accessor.sqlite-projection.js";
 import {
   createFixture,
   leasesFor,
@@ -18,13 +25,138 @@ import {
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import type { SqliteReclamationWorkerMessage } from "./session-accessor.sqlite-reclamation-worker.types.js";
 
+const integrity = vi.hoisted(() => ({
+  counts: undefined as SharedArrayBuffer | undefined,
+  release: undefined as SharedArrayBuffer | undefined,
+  entered: undefined as (() => void) | undefined,
+}));
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      private readonly observeIntegrity: (() => void) | undefined;
+
+      constructor(filename: string | URL, options?: WorkerOptions) {
+        const data: unknown = options?.workerData;
+        const reclaimer = isRecord(data) && data.operation === "reclaim";
+        super(
+          filename,
+          reclaimer
+            ? withWorkerSqliteIntegrityCounter(options, integrity.counts, integrity.release)
+            : options,
+        );
+        this.observeIntegrity = reclaimer ? integrity.entered : undefined;
+      }
+
+      override emit(event: string | symbol, ...args: unknown[]): boolean {
+        const message = args[0];
+        if (
+          this.observeIntegrity &&
+          event === "message" &&
+          args.length === 1 &&
+          isRecord(message) &&
+          Object.keys(message).length === 2 &&
+          message.type === "test-integrity-check" &&
+          (message.phase === "checking" || message.phase === "checked")
+        ) {
+          if (message.phase === "checking") {
+            this.observeIntegrity();
+          }
+          return true;
+        }
+        return super.emit(event, ...args);
+      }
+    },
+  };
+});
+
 afterEach(async () => {
+  integrity.counts = undefined;
+  integrity.release = undefined;
+  integrity.entered = undefined;
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
+});
+
+test("commits foreground replacement while cold reclamation holds native integrity", async () => {
+  const fixture = createFixture(["victim", "foreground"]);
+  await closeOpenClawAgentDatabaseByPathAsync(fixture.database.path);
+  invalidateOpenClawAgentDatabaseValidation(fixture.database.path);
+  clearOpenClawAgentIntegrityVerification(fixture.database.path, fixture.options.env);
+  const entered = createDeferredCore();
+  const counts = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const release = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  integrity.counts = counts;
+  integrity.release = release;
+  integrity.entered = () => entered.resolve();
+  const spawned = observeReclamationWorkers();
+  const work = runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[0]! });
+  let settled = false;
+  void work.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  try {
+    expect(
+      await Promise.race([
+        entered.promise.then(() => "native integrity"),
+        work.then(
+          () => "completed",
+          () => "failed",
+        ),
+      ]),
+    ).toBe("native integrity");
+    expect(Atomics.load(new Int32Array(counts), 0)).toBe(1);
+    await applySessionEntryReplacements({
+      env: fixture.options.env,
+      storePath: fixture.database.path,
+      sessionKeys: [fixture.scopes[1]!.sessionKey],
+      skipMaintenance: true,
+      update: (entries) => ({
+        result: undefined,
+        replacements: entries.map(({ entry, sessionKey }) => {
+          if (!entry) {
+            throw new Error("Foreground fixture entry disappeared");
+          }
+          return { sessionKey, entry: { ...entry, label: "foreground committed" } };
+        }),
+      }),
+    });
+    expect(loadSessionEntryReadOnly(fixture.scopes[1]!)).toMatchObject({
+      sessionId: "foreground",
+      label: "foreground committed",
+    });
+    expect(loadSessionEntryReadOnly(fixture.scopes[0]!)).toMatchObject({ sessionId: "victim" });
+    expect(settled).toBe(false);
+    Atomics.store(new Int32Array(release), 0, 1);
+    Atomics.notify(new Int32Array(release), 0);
+    await expect(work).resolves.toMatchObject({
+      kind: "lifecycle-artifacts",
+      value: { removedEntries: 1 },
+    });
+    expect(loadSessionEntryReadOnly(fixture.scopes[0]!)).toBeUndefined();
+    expect(loadSessionEntryReadOnly(fixture.scopes[1]!)).toMatchObject({
+      sessionId: "foreground",
+      label: "foreground committed",
+    });
+  } finally {
+    Atomics.store(new Int32Array(release), 0, 1);
+    Atomics.notify(new Int32Array(release), 0);
+    await Promise.allSettled([work]);
+    await closeOpenClawAgentDatabaseByPathAsync(fixture.database.path);
+  }
+  expect(spawned).toHaveLength(1);
+  expect(spawned[0]!.threadId).toBe(-1);
+  expect(leasesFor(fixture)).toHaveLength(0);
 });
 
 test.each(["caller refusal", "source retirement"] as const)(

@@ -274,7 +274,7 @@ describe("cross-region Home composer ownership", () => {
       const recovery = captureChatCommandComposerRecovery(
         page.current,
         resolveUiConversationIdentity(page.current, page.current.sessionKey),
-        { draft: "/steer submitted", attachments: [submitted] },
+        { previousDraft: "/steer submitted", previousAttachments: [submitted] },
       );
       page.view.presented = false;
       const dock = presentation(context, owner, "dock");
@@ -328,8 +328,8 @@ describe("cross-region Home composer ownership", () => {
         attachments: [submitted],
       });
       const recovery = captureChatCommandComposerRecovery(page.current, scope, {
-        draft: "/steer submitted",
-        attachments: [submitted],
+        previousDraft: "/steer submitted",
+        previousAttachments: [submitted],
       });
       page.view.presented = false;
       const dock = presentation(context, owner, "dock");
@@ -366,7 +366,7 @@ describe("cross-region Home composer ownership", () => {
     const recovery = captureChatCommandComposerRecovery(
       page.current,
       resolveUiConversationIdentity(page.current, page.current.sessionKey),
-      { draft: "/steer submitted", attachments: [] },
+      { previousDraft: "/steer submitted", previousAttachments: [] },
     );
 
     expect(recovery.owner).toBeUndefined();
@@ -383,7 +383,7 @@ describe("cross-region Home composer ownership", () => {
     const recovery = captureChatCommandComposerRecovery(
       page.current,
       resolveUiConversationIdentity(page.current, page.current.sessionKey),
-      { draft: "/steer submitted", attachments: [] },
+      { previousDraft: "/steer submitted", previousAttachments: [] },
     );
     page.handoff.dispose();
 
@@ -404,8 +404,8 @@ describe("cross-region Home composer ownership", () => {
     const unreferenced = storedAttachment("completed-command", "text/plain");
     const scope = resolveUiConversationIdentity(page.current, page.current.sessionKey);
     const recovery = captureChatCommandComposerRecovery(page.current, scope, {
-      draft: "/steer submitted",
-      attachments: [staged, fallback, unreferenced],
+      previousDraft: "/steer submitted",
+      previousAttachments: [staged, fallback, unreferenced],
     });
     page.view.presented = false;
     const dock = presentation(context, owner, "dock");
@@ -448,8 +448,8 @@ describe("cross-region Home composer ownership", () => {
       attachments: [submitted],
     });
     const recovery = captureChatCommandComposerRecovery(page.current, scope, {
-      draft: "/approve request allow-once",
-      attachments: [submitted],
+      previousDraft: "/approve request allow-once",
+      previousAttachments: [submitted],
     });
     page.view.presented = false;
     const dock = presentation(context, owner, "dock");
@@ -483,8 +483,8 @@ describe("cross-region Home composer ownership", () => {
         attachments: [submitted],
       });
       const recovery = captureChatCommandComposerRecovery(page.current, scope, {
-        draft: "/steer submitted",
-        attachments: [submitted],
+        previousDraft: "/steer submitted",
+        previousAttachments: [submitted],
       });
       page.view.presented = false;
       const dock = presentation(context, owner, "dock");

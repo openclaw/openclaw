@@ -58,8 +58,6 @@ export type RealtimeTalkEventInput<TPayload = unknown> = Omit<
 
 export type RealtimeTalkSessionResult = RealtimeVoiceBrowserSession & {
   voiceSessionId?: string;
-  consultThinkingLevel?: string;
-  consultFastMode?: boolean;
 };
 
 export type RealtimeTalkWebRtcSdpSessionResult = Extract<
@@ -95,8 +93,6 @@ export type RealtimeTalkTransportContext = {
   callbacks: RealtimeTalkCallbacks;
   input: Pick<RealtimeTalkInputController, "stream" | "adopt" | "stop">;
   videoDeviceId?: string;
-  consultThinkingLevel?: string;
-  consultFastMode?: boolean;
 };
 
 export function createRealtimeTalkEventEmitter(

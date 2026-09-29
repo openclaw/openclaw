@@ -602,22 +602,15 @@ export async function testFoundryConnection(params: {
       timeoutMs: 15_000,
     });
     try {
-      if (res.status === 400) {
+      if (!res.ok) {
         const body = await readResponseTextLimited(
           res,
           FOUNDRY_CONNECTION_TEST_ERROR_BODY_LIMIT_BYTES,
         ).catch(() => "");
         await params.ctx.prompter.note(
-          `Endpoint is reachable but returned 400 Bad Request - check your deployment name and API version.\n${truncateUtf16Safe(body, 200)}`,
-          "Connection Test",
-        );
-      } else if (!res.ok) {
-        const body = await readResponseTextLimited(
-          res,
-          FOUNDRY_CONNECTION_TEST_ERROR_BODY_LIMIT_BYTES,
-        ).catch(() => "");
-        await params.ctx.prompter.note(
-          `Warning: test request returned ${res.status}. ${truncateUtf16Safe(body, 200)}\nProceeding anyway - you can fix the endpoint later.`,
+          res.status === 400
+            ? `Endpoint is reachable but returned 400 Bad Request - check your deployment name and API version.\n${truncateUtf16Safe(body, 200)}`
+            : `Warning: test request returned ${res.status}. ${truncateUtf16Safe(body, 200)}\nProceeding anyway - you can fix the endpoint later.`,
           "Connection Test",
         );
       } else {

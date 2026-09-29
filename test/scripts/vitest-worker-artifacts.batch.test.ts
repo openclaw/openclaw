@@ -76,6 +76,8 @@ process.exitCode = await runVitestBatch({
 
 const coreWorker = "src/infra/sqlite-worker-operation-attachment.test.ts";
 const infraConfig = "test/vitest/vitest.infra.config.ts";
+const packageContract = "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts";
+const contractsConfig = "test/vitest/vitest.contracts-plugin.config.ts";
 
 it.for([
   { name: "worker", args: [coreWorker], prepare: true },
@@ -99,18 +101,21 @@ it.for([
 );
 
 it.runIf(process.platform !== "win32").for(
-  ["direct", "projects"].flatMap((route) =>
-    [
-      "ready",
-      "failure",
-      "cancel",
-      "excluded",
-      "watch",
-      "metadata",
-      "custom-root",
-      "custom-project",
-      ...(route === "direct" ? ["include-worker", "include-excluded"] : []),
-    ].map((mode) => ({
+  ["direct", "projects", "contracts-direct", "contracts-projects"].flatMap((route) =>
+    (route.startsWith("contracts-")
+      ? ["ready", "excluded"]
+      : [
+          "ready",
+          "failure",
+          "cancel",
+          "excluded",
+          "watch",
+          "metadata",
+          "custom-root",
+          "custom-project",
+          ...(route === "direct" ? ["include-worker", "include-excluded"] : []),
+        ]
+    ).map((mode) => ({
       route,
       mode,
     })),
@@ -119,6 +124,8 @@ it.runIf(process.platform !== "win32").for(
   "$route runner owns pre-spawn worker preparation through $mode",
   ({ route, mode }, { workerArtifacts }) =>
     workerArtifacts.fixtureLifetime.run(async () => {
+      const selectedFile = route.startsWith("contracts-") ? packageContract : coreWorker;
+      const selectedConfig = route.startsWith("contracts-") ? contractsConfig : infraConfig;
       const { node } = workerArtifacts.createFixtureCommands();
       const directory = workerArtifacts.fixtureDirectory();
       const compiled = path.join(directory, "compiled.jsonl");
@@ -187,7 +194,7 @@ syncFixtureBuiltinExports();
       );
       const controls =
         mode === "excluded"
-          ? ["--exclude", coreWorker]
+          ? ["--exclude", selectedFile]
           : mode === "watch"
             ? ["--watch"]
             : mode === "metadata"
@@ -202,13 +209,13 @@ syncFixtureBuiltinExports();
         fs.writeFileSync(leaf, "if(process.connected) process.disconnect();\n");
       }
       const args =
-        route === "direct"
-          ? ["scripts/run-vitest.mjs", "run", "--config", infraConfig, coreWorker, ...controls]
+        route === "direct" || route === "contracts-direct"
+          ? ["scripts/run-vitest.mjs", "run", "--config", selectedConfig, selectedFile, ...controls]
           : [
               "--import",
               "./scripts/tsx.mjs",
               "scripts/test-projects.mts",
-              coreWorker,
+              selectedFile,
               "--",
               ...controls,
             ];
