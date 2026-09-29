@@ -72,8 +72,11 @@ and execution; OpenClaw does not create another Gateway transport for these tool
 Exact `toolFilter.include` names are forwarded as the native allowlist. Exclusions
 and session tool denials require an explicit include list and are subtracted from
 it. Wildcards, Gateway-managed OAuth, legacy SSE and custom TLS settings are not
-supported. Requester-scoped connections are omitted. Changes to effective MCP
-configuration or credentials require a session reset.
+supported. Unsupported servers and servers whose headers cannot be resolved are
+omitted with an error log, while supported servers remain available. This includes
+requester-scoped connections and URL-only definitions, which retain the legacy SSE
+default. Changes to effective MCP configuration or credentials require a session
+reset.
 
 Stdio MCP forwarding remains a deferred implementation gap. The executor's native
 MCP lifecycle will own those processes when support is added.
@@ -85,6 +88,8 @@ diagnostics, and the names of omitted requester-scoped servers, without opening
 connections. The same SDK exports `decodeHeaderEnvPlaceholder` for recognizing
 `${NAME}` and `Bearer ${NAME}` header references; the harness resolves the value
 for its own transport.
+`resolveOpenClawMcpTransportAlias` resolves CLI `type` aliases using OpenClaw's
+canonical mapping; an explicit `transport` takes precedence.
 
 ## Runtime strictness
 

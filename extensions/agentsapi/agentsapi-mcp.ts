@@ -2,10 +2,16 @@ import type { AgentToolParam } from "openai/resources/beta/agents/agents";
 import {
   decodeHeaderEnvPlaceholder,
   embeddedAgentLog,
+  formatErrorMessage,
   loadAgentHarnessMcpConfig,
+  resolveOpenClawMcpTransportAlias,
   type AgentHarnessAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isRecord, normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+  normalizeTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export async function buildAgentsApiMcpTools(
   params: AgentHarnessAttemptParamsV2,
@@ -18,31 +24,34 @@ export async function buildAgentsApiMcpTools(
   for (const diagnostic of loaded.diagnostics) {
     embeddedAgentLog.warn(`Agents API MCP: ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
-  if (loaded.requesterScopedServerNames.length) {
-    embeddedAgentLog.warn(
-      `Agents API does not support requester-scoped MCP connections: ${loaded.requesterScopedServerNames.join(", ")}`,
-    );
+  for (const name of loaded.requesterScopedServerNames) {
+    skipUnsupportedServer(name, "requester-scoped connections are not supported");
   }
   return Object.entries(loaded.config.mcpServers)
     .toSorted(([left], [right]) => left.localeCompare(right))
     .flatMap(([name, server]) => {
       // Command-bearing definitions belong to the deferred executor stdio path.
       if (server.command || server.transport === "stdio" || server.type === "stdio") {
-        return [];
+        return skipUnsupportedServer(name, "stdio forwarding is not supported");
       }
       if (typeof server.url !== "string" || !server.url.trim()) {
-        return [];
+        return skipUnsupportedServer(name, "an HTTP URL is required");
       }
-      if (server.transport === "sse" || server.type === "sse") {
-        throw new Error(`Agents API MCP server ${name} requires Streamable HTTP, not legacy SSE`);
+      const transport =
+        normalizeLowercaseStringOrEmpty(server.transport) ||
+        resolveOpenClawMcpTransportAlias(server.type) ||
+        "sse";
+      if (transport !== "streamable-http") {
+        return skipUnsupportedServer(name, "an explicit Streamable HTTP transport is required");
       }
       if (server.auth === "oauth" || server.oauth) {
-        throw new Error(
-          `Agents API MCP server ${name} cannot use Gateway OAuth; configure HTTP authentication headers`,
+        return skipUnsupportedServer(
+          name,
+          "Gateway OAuth is not supported; configure HTTP authentication headers",
         );
       }
       if (server.clientCert || server.clientKey || server.sslVerify === false) {
-        throw new Error(`Agents API MCP server ${name} cannot forward custom TLS settings`);
+        return skipUnsupportedServer(name, "custom TLS settings are not supported");
       }
       const filter = isRecord(server.toolFilter) ? server.toolFilter : {};
       const include = normalizeTrimmedStringList(filter.include);
@@ -51,17 +60,23 @@ export async function buildAgentsApiMcpTools(
         ...(params.toolOverrides?.mcpToolsDeny?.[name] ?? []),
       ];
       if ([...include, ...exclude].some((tool) => tool.includes("*"))) {
-        throw new Error(`Agents API MCP server ${name} requires exact tool names in tool filters`);
+        return skipUnsupportedServer(name, "tool filters require exact tool names");
       }
       if (exclude.length && !include.length) {
-        throw new Error(
-          `Agents API MCP server ${name} requires toolFilter.include to enforce tool exclusions`,
+        return skipUnsupportedServer(
+          name,
+          "toolFilter.include is required to enforce tool exclusions",
         );
       }
       const allowedTools = include.length
         ? include.filter((tool) => !exclude.includes(tool)).toSorted()
         : undefined;
-      const headers = resolveHeaders(name, server.headers);
+      let headers: Record<string, string> | undefined;
+      try {
+        headers = resolveHeaders(name, server.headers);
+      } catch (error) {
+        return skipUnsupportedServer(name, formatErrorMessage(error));
+      }
       return [
         {
           type: "mcp",
@@ -78,6 +93,11 @@ export async function buildAgentsApiMcpTools(
         } satisfies AgentToolParam.AgentToolConfigParamMcp,
       ];
     });
+}
+
+function skipUnsupportedServer(name: string, reason: string): never[] {
+  embeddedAgentLog.error(`Agents API MCP server ${name} skipped: ${reason}`);
+  return [];
 }
 
 function resolveHeaders(serverName: string, raw: unknown): Record<string, string> | undefined {

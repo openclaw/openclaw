@@ -25,7 +25,7 @@ enabled plugin's MCP bundle. For example:
 The harness forwards these definitions as native Agents API MCP tools. Connections
 originate from the session's execution environment, so a self-hosted executor can
 reach private HTTP services. The Gateway does not open a second MCP connection.
-Configured servers are required: native initialization failures fail the turn.
+Supported servers are required: native initialization failures fail the turn.
 HTTP `headers` support explicit values and environment-variable references such as
 `Bearer ${MCP_ACCESS_TOKEN}`. The API receives these credentials to authenticate the
 MCP connection. Gateway OAuth profiles and requester-scoped connections are not
@@ -33,8 +33,12 @@ forwarded. Configure headers for services requiring authentication.
 
 Exact `toolFilter.include` names become the native tool allowlist. Configured
 exclusions and session tool denials are subtracted from that list; exclusions
-without an explicit include list and wildcard filters are rejected. Legacy SSE and
-custom TLS settings are unsupported. Connection/request timeouts and parallel-call
+without an explicit include list and wildcard filters are unsupported. The harness
+logs an error and omits unsupported servers, including stdio, Gateway OAuth,
+requester-scoped connections, legacy SSE, custom TLS, unsupported filters, and
+headers it cannot resolve. Other supported servers remain available. Set an
+explicit Streamable HTTP transport; URL-only definitions retain OpenClaw's legacy
+SSE interpretation and are omitted. Connection/request timeouts and parallel-call
 settings remain controlled by the native API.
 
 Updating MCP definitions in an existing native session is an MVP implementation
