@@ -458,6 +458,11 @@ describe("persisted subagent requester wakes", () => {
             batchRunIds,
           });
         }
+        if (transport.mock.calls.length > 0) {
+          expect(
+            loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.requesterSettleWake,
+          ).toMatchObject({ status: "dispatching", attemptCount: 1, replayCount: 1 });
+        }
         transport();
         if (transport.mock.calls.length === 1) {
           await params.transitionBatch(batch, {
@@ -503,7 +508,9 @@ describe("persisted subagent requester wakes", () => {
         database.db.exec("DROP TRIGGER reject_replay");
         await advanceRequesterWakeTime(30_000);
         expect(replayAttempts).toBe(3);
-        expect(transport).toHaveBeenCalledOnce();
+        expect(transport).toHaveBeenCalledTimes(2);
+        await driver.wake.mock.results.at(-1)?.value;
+        // A later sweep must not duplicate the continuation resumed after publication.
         await advanceRequesterWakeTime(0, () =>
           driver.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent),
         );

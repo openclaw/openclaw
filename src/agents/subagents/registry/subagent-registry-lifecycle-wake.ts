@@ -38,6 +38,7 @@ import {
 import {
   commitRequesterWake,
   getPendingWakeCommit,
+  rearmRequesterWakeAfterCommit,
   retryPendingWakeCommit,
   shouldReportRequesterSettleWakeFailure,
 } from "./subagent-registry-requester-wake-commit.js";
@@ -435,6 +436,7 @@ export function scheduleRequesterSettleWake(
             const pending = getPendingWakeCommit(context, entry);
             if (pending) {
               await retryPendingWakeCommit(context, pending);
+              rearmRequesterWakeAfterCommit(context, pending, entry, isSourceCurrent);
               return;
             }
             if (
@@ -464,7 +466,7 @@ export function scheduleRequesterSettleWake(
                   batch,
                   state.rearmGeneration,
                   async (members, episode) => {
-                    const reconciling = episode.committedWake !== undefined;
+                    const retrying = episode.failures > 0;
                     const committed = await commitRequesterSettleWakeMutation(
                       context,
                       members,
@@ -474,10 +476,10 @@ export function scheduleRequesterSettleWake(
                     );
                     if (committed) {
                       published = true;
-                      // A retried publication finishes this write, then re-enters the existing
-                      // wake owner. Its durable dispatching state retains the same attempt key.
-                      if (reconciling) {
-                        context.pendingRequesterSettleWakeRearms.add(entry);
+                      // The retrying member claims continuation after this shared episode
+                      // clears, including when a sibling now owns the execution slot.
+                      if (retrying) {
+                        episode.needsWakeContinuation = true;
                       }
                     }
                     return committed;
