@@ -104,7 +104,7 @@ export async function resolveChannelSetupState(deps: SystemAgentCommandDeps | un
   const isConfigured =
     deps?.isChannelConfigured ??
     (await import("../config/channel-configured-shared.js")).isStaticallyChannelConfigured;
-  const { shouldShowChannelInSetup } = await import("../commands/channel-setup/discovery.js");
+  const { isChannelVisibleInSetup } = await import("../channels/plugins/exposure.js");
   const snapshot = await readConfigFileSnapshotLazy();
   const cfg = snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
   const installedPlugins = listPlugins();
@@ -116,7 +116,7 @@ export async function resolveChannelSetupState(deps: SystemAgentCommandDeps | un
       ...resolved,
       // Match the connect/list surfaces: setup-hidden channels stay invisible
       // to chat listings and channel info alike.
-      entries: resolved.entries.filter((entry) => shouldShowChannelInSetup(entry.meta)),
+      entries: resolved.entries.filter((entry) => isChannelVisibleInSetup(entry.meta)),
     },
     isConfigured,
   };

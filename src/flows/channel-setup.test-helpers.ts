@@ -196,7 +196,6 @@ export function createChannelSetupMocks() {
     discovery: () => ({
       resolveChannelSetupEntries: (params: Parameters<ResolveChannelSetupEntries>[0]) =>
         resolveChannelSetupEntries(params),
-      shouldShowChannelInSetup: () => true,
     }),
     pluginInstall: () => ({
       ensureChannelSetupPluginInstalled: (

@@ -1,5 +1,6 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
+import { isChannelVisibleInSetup } from "../channels/plugins/exposure.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listActiveChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type {
@@ -13,10 +14,7 @@ import type {
 } from "../channels/plugins/setup-wizard-types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { normalizeExternalChannelSetupConfig } from "../commands/channel-setup/config-compatibility.js";
-import {
-  resolveChannelSetupEntries,
-  shouldShowChannelInSetup,
-} from "../commands/channel-setup/discovery.js";
+import { resolveChannelSetupEntries } from "../commands/channel-setup/discovery.js";
 import { loadChannelSetupPluginRegistrySnapshotForChannel } from "../commands/channel-setup/plugin-install.js";
 import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
 import {
@@ -179,12 +177,12 @@ export async function setupChannels(
     const merged = new Map<string, ChannelSetupPlugin>();
     const registryPlugins = listActiveChannelSetupPlugins().map(rememberActivePlugin);
     for (const plugin of registryPlugins) {
-      if (shouldShowChannelInSetup(plugin.meta)) {
+      if (isChannelVisibleInSetup(plugin.meta)) {
         merged.set(plugin.id, plugin);
       }
     }
     for (const plugin of scopedPluginsById.values()) {
-      if (shouldShowChannelInSetup(plugin.meta)) {
+      if (isChannelVisibleInSetup(plugin.meta)) {
         merged.set(plugin.id, plugin);
       }
     }
@@ -368,7 +366,7 @@ export async function setupChannels(
       const { entries, installableCatalogById: catalogById } = resolveVisibleChannelEntries();
       const disabledHints = new Map<ChannelChoice, string | undefined>();
       for (const entry of entries) {
-        if (shouldShowChannelInSetup(entry.meta)) {
+        if (isChannelVisibleInSetup(entry.meta)) {
           disabledHints.set(entry.id, await resolveDisabledHint(entry.id));
         }
       }
