@@ -149,12 +149,13 @@ export function openNodeSqliteDatabase(
   // resolvers; location normalization must remain idempotent for those forms.
   const resolvedLocation = resolveNodeSqliteLocation(location);
   const database = new sqlite.DatabaseSync(resolvedLocation, options ?? {});
+  // Schema tracking must precede the statement-cache authorizer wrapper.
+  trackSqliteSchema(database, sqlite);
   if (process.versions.bun) {
     registerNodeSqliteDisposeCallback(database, () => {
       bunSqliteNativeCleanupPending = true;
     });
   }
-  trackSqliteSchema(database, sqlite);
   registerSqliteReaderConnection(database);
   return database;
 }
