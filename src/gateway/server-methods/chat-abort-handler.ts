@@ -21,7 +21,7 @@ import {
   type QueuedChatTurnEntry,
 } from "../chat-queued-turns.js";
 import { chatRunBelongsToAgent } from "../chat-run-owner.js";
-import { pendingChatSendDedupeKey } from "../server-shared.js";
+import { pendingChatSendDedupeKey, type DedupeEntry } from "../server-shared.js";
 import {
   resolveRequestedSessionAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
@@ -51,7 +51,7 @@ import {
 import { persistAbortedPartials } from "./chat-transcript-persistence.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type ChatAbortLifecycle = {
@@ -423,9 +423,7 @@ export async function handleChatAbortRequestWithLifecycle(
     });
   };
   if (!active) {
-    const readPendingRunForAbort = (
-      entry: GatewayRequestContext["dedupe"] extends Map<string, infer T> ? T | undefined : never,
-    ) => {
+    const readPendingRunForAbort = (entry: DedupeEntry | undefined) => {
       for (const sessionKey of new Set([canonicalAbortSessionKey, rawSessionKey])) {
         const payload = readPreRegisteredAgentDedupePayloadForSession({
           entry,

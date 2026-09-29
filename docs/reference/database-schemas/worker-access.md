@@ -633,9 +633,21 @@ removed a terminal receipt.
 
 Uncertain outcomes stay fenced. Definite failures retain the existing delivery
 failure and replay rules, and outcome-bearing settlement publishes its new
-delivery receipt. Initial requester-yield creation and requester/session reads
-remain separate worker migration work. Schema, retention, and update behavior
-are unchanged.
+delivery receipt.
+
+Initial requester yield and cohort creation use the same queued registry writer
+and publication episode. Session authority is captured before cold registry
+restoration yields. A cohort commit retains its original requester-turn marker
+until host promotion finishes; a second acknowledged commit releases that marker
+before scheduling its wake. Restoration reads fresh complete rows through the
+existing state read worker and continues only the same recorded cohort, without
+repeating its first write or treating a persisted flag as a completed handoff.
+Retired episodes preserve known or uncertain native outcomes and refuse further
+writes until canonical reconciliation can establish a current owner.
+
+Other requester/session reads, including process-held incognito authority
+acquisition, remain separate worker migration work. Schema, retention, and update
+behavior are unchanged.
 
 Concurrent first opens wait for owner-record publication and a transient schema
 initializer within one database busy timeout. Incomplete records never grant

@@ -345,6 +345,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt-stream-prepare.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-stream-settle.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-yield-handoff.test.ts",
+  "src/agents/openclaw-tools.requester-yield.test.ts",
   "src/agents/openclaw-tools.sessions-steering.test.ts",
   "src/agents/openclaw-tools.sessions-send-child-coordination.test.ts",
   "src/agents/openclaw-tools.sessions.test.ts",

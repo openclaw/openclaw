@@ -173,7 +173,7 @@ beforeEach(() => {
   vi.mocked(ensureContextEnginesInitialized).mockImplementation(() => {});
   vi.mocked(registryState.persistSubagentRunsToDisk).mockImplementation(() => {});
   vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockImplementation(() => {});
-  vi.mocked(registryState.restoreSubagentRunsFromDisk).mockReturnValue(0);
+  vi.mocked(registryState.restoreSubagentRunsFromDisk).mockResolvedValue(0);
   vi.mocked(resolveContextEngine).mockImplementation(async () => ({
     info: { id: "test", name: "Test" },
     assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),

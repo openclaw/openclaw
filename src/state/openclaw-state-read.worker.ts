@@ -12,6 +12,7 @@ import {
 } from "../agents/mcp-oauth-store.kernel.js";
 import {
   loadSubagentMaintenanceRunsInDatabase,
+  loadSubagentRegistryFromSqlite,
   loadSubagentRunsByRunIdsFromSqlite,
   loadSubagentRunsForSessionsInDatabase,
   loadSubagentRunsForChildSessionFromSqlite,
@@ -242,6 +243,9 @@ serveOwnedWorkerTasks(
               return readChannelIngressInDatabase(db, command);
             }
             if (command.type === "subagents.runs") {
+              if (command.scope.kind === "all") {
+                return { type: command.type, runs: loadSubagentRegistryFromSqlite({ db }) };
+              }
               if (command.scope.kind === "maintenance") {
                 const maintenance = loadSubagentMaintenanceRunsInDatabase({ db });
                 return {

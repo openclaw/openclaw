@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getRuntimeConfig } from "../../../config/config.js";
-import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../../config/sessions/session-store-path.js";
 import {
   runWithOwnedSessionTranscriptWrite,
@@ -86,7 +85,11 @@ import {
   registerRequesterSettleRetirementTests,
   registerNativeCompletionAuthorityTest,
 } from "./subagent-registry-lifecycle-completion.test-support.js";
-import { createLifecycleControllerFixture } from "./subagent-registry-lifecycle-controller.test-support.js";
+import {
+  createLifecycleControllerFixture,
+  createRunEntry,
+  type RunEntryOverrides,
+} from "./subagent-registry-lifecycle-controller.test-support.js";
 import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
@@ -97,6 +100,7 @@ import {
   markRequesterTurnYieldedInRuns,
   settleRequesterTurnAfterSessionSpawns,
 } from "./subagent-registry-requester-yield.js";
+import { createRequesterInitialTransferFixture } from "./subagent-registry-requester-yield.test-support.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import { registerTerminalStateSignalAuthorityTests } from "./subagent-registry-terminal-state.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -246,37 +250,9 @@ vi.mock("./subagent-registry-helpers.js", () => ({
   updateSubagentArchiveAtMs: () => false,
 }));
 
-type RunEntryOverrides = Omit<Partial<SubagentRunRecord>, "execution"> & {
-  execution?: SubagentRunRecord["execution"];
-  startedAt?: number;
-  endedAt?: number;
-  outcome?: SubagentRunRecord["execution"]["outcome"];
-};
 type RunModeCleanupEntryOverrides = Omit<RunEntryOverrides, "execution"> & {
   execution?: Partial<SubagentRunRecord["execution"]>;
 };
-
-function createRunEntry(overrides: RunEntryOverrides = {}): SubagentRunRecord {
-  const { startedAt = 2_000, endedAt, outcome, execution, ...recordOverrides } = overrides;
-  return {
-    runId: "run-1",
-    childSessionKey: "agent:main:subagent:child",
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
-    task: "finish the task",
-    cleanup: "keep",
-    createdAt: 1_000,
-    ...recordOverrides,
-    execution: execution
-      ? { startedAt, ...execution }
-      : {
-          status: endedAt !== undefined || outcome !== undefined ? "terminal" : "running",
-          startedAt,
-          ...(endedAt === undefined ? {} : { endedAt }),
-          ...(outcome === undefined ? {} : { outcome }),
-        },
-  };
-}
 
 describe("pending final delivery payload", () => {
   it("uses the authoritative completion reply after a retry payload was captured", () => {
@@ -3992,7 +3968,7 @@ describe("subagent registry lifecycle hardening", () => {
       controller.startSubagentAnnounceCleanupFlow(entry.runId, entry);
       await waitForLifecycleState(() => expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce());
       entry.requesterTurnYielded = true;
-      controller.settleRequesterTurnAfterSessionSpawns({
+      await controller.settleRequesterTurnAfterSessionSpawns({
         requesterSessionKey: entry.requesterSessionKey,
         requesterTurnRunId: "run-requester",
         requesterYielded: true,
@@ -4088,7 +4064,7 @@ describe("subagent registry lifecycle hardening", () => {
         expect(announceParams.isCompletionDeliveryAllowed?.()).toBe(true);
         entry.requesterTurnYielded = true;
         expect(
-          controller.settleRequesterTurnAfterSessionSpawns({
+          await controller.settleRequesterTurnAfterSessionSpawns({
             requesterSessionKey: entry.requesterSessionKey,
             requesterTurnRunId: "run-requester",
             requesterYielded: true,
@@ -4097,7 +4073,7 @@ describe("subagent registry lifecycle hardening", () => {
         ).toBe(true);
         await waitForLifecycleState(() => expect(entry.delivery?.status).toBe("delivered"));
         expect.soft(entry.delivery).toMatchObject({ payload: undefined, attemptCount: undefined });
-        expect(entry.requesterSettleWake).toBeUndefined();
+        await waitForLifecycleState(() => expect(entry.requesterSettleWake).toBeUndefined());
         expect(announceParams.isCompletionOwnedByRequesterYield?.()).toBe(false);
         expect.soft(announceParams.isCompletionDeliveryAllowed?.()).toBe(false);
 
@@ -4937,7 +4913,7 @@ describe("requester settle wake trigger", () => {
     await Promise.resolve();
     expect(settleWake).not.toHaveBeenCalled();
 
-    controller.settleRequesterTurnAfterSessionSpawns({
+    await controller.settleRequesterTurnAfterSessionSpawns({
       requesterSessionKey: entry.requesterSessionKey,
       requesterTurnRunId: "run-requester",
       requesterYielded: true,
@@ -5133,7 +5109,7 @@ describe("requester settle wake trigger", () => {
     const before = structuredClone(runs);
     persistOrThrow.mockClear();
     expect(
-      controller.settleRequesterTurnAfterSessionSpawns({
+      await controller.settleRequesterTurnAfterSessionSpawns({
         requesterSessionKey: entry.requesterSessionKey,
         requesterTurnRunId: "requester-turn",
         requesterYielded: true,
@@ -5245,9 +5221,22 @@ describe("requester settle wake trigger", () => {
       });
       const requesterSessionKey = entry.requesterSessionKey;
       const runs = new Map([[entry.runId, entry]]);
-      const sessionRead = vi.spyOn(sessionAccessor, "loadSessionEntryReadOnly").mockReturnValue({
-        sessionId: requesterSessionId,
-        updatedAt: 1,
+      const sharing = await import("../../../gateway/session-sharing-preparation.js");
+      const target = {
+        agentId: "main",
+        canonicalKey: requesterSessionKey,
+        storeKey: requesterSessionKey,
+        storeKeys: [requesterSessionKey],
+        storePath: "/synthetic/requester.sqlite",
+      };
+      const sessionFacts = vi.spyOn(sharing, "prepareSessionMutationFacts").mockResolvedValue({
+        storageTarget: target,
+        bindCreation: vi.fn(),
+        readCurrent: () => ({
+          target: { ...target, entry: { sessionId: requesterSessionId, updatedAt: 1 } },
+          membership: new Set(),
+        }),
+        release: vi.fn(),
       });
       const { operationalRunInstance } = createTestAdmittedRunContext(requesterTurnRunId);
       const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
@@ -5272,19 +5261,19 @@ describe("requester settle wake trigger", () => {
             },
             async () => {
               expect(
-                markRequesterTurnYieldedInRuns({
+                await markRequesterTurnYieldedInRuns({
                   requesterSessionKey,
                   requesterAgentId: "main",
                   requesterTurnRunId,
                   runs,
-                  persistOrThrow: () => undefined,
+                  transfer: createRequesterInitialTransferFixture(runs, () => undefined),
                 }),
               ).toBe(1);
             },
           ),
         );
         expect(
-          settleRequesterTurnAfterSessionSpawns({
+          await settleRequesterTurnAfterSessionSpawns({
             requesterSessionKey,
             requesterAgentId: "main",
             requesterTurnRunId,
@@ -5297,7 +5286,7 @@ describe("requester settle wake trigger", () => {
               },
             ],
             runs,
-            persistOrThrow: () => undefined,
+            transfer: createRequesterInitialTransferFixture(runs, () => undefined),
             schedule: () => undefined,
           }),
         ).toBe(true);
@@ -5358,7 +5347,7 @@ describe("requester settle wake trigger", () => {
         revokeRequesterCronAuthority(requesterSessionKey);
         releaseAgentRunDelegatedAuthority(authority);
         clearAgentRunContext(requesterTurnRunId);
-        sessionRead.mockRestore();
+        sessionFacts.mockRestore();
       }
     },
   );
@@ -5441,7 +5430,7 @@ describe("requester settle wake trigger", () => {
     expect(entry.retireAfterRequesterTurn).toBeUndefined();
     expect(settleWake).not.toHaveBeenCalled();
 
-    controller.settleRequesterTurnAfterSessionSpawns({
+    await controller.settleRequesterTurnAfterSessionSpawns({
       requesterSessionKey: entry.requesterSessionKey,
       requesterTurnRunId: "run-requester",
       requesterYielded: false,
@@ -5773,7 +5762,7 @@ describe("requester settle wake trigger", () => {
       entry.requesterTurnRunId = "run-requester";
       entry.requesterTurnYielded = true;
       expect(
-        controller.settleRequesterTurnAfterSessionSpawns({
+        await controller.settleRequesterTurnAfterSessionSpawns({
           requesterSessionKey: entry.requesterSessionKey,
           requesterTurnRunId: "run-requester",
           requesterYielded: true,
@@ -5986,7 +5975,7 @@ describe("requester settle wake trigger", () => {
         entry.requesterTurnRunId = "run-requester";
         entry.requesterTurnYielded = true;
         expect(
-          controller.settleRequesterTurnAfterSessionSpawns({
+          await controller.settleRequesterTurnAfterSessionSpawns({
             requesterSessionKey: entry.requesterSessionKey,
             requesterTurnRunId: "run-requester",
             requesterYielded: true,

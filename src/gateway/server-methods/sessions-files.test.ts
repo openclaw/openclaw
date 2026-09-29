@@ -89,10 +89,16 @@ describe("sessions.files RPC handlers", () => {
 
   function mockSession(
     entry: Record<string, unknown>,
-    canonicalKey = "agent:main:main",
+    agentId = "main",
     storePath = path.join(workspaceRoot, ".sessions.json"),
   ) {
-    hoisted.loadSessionEntry.mockReturnValue({ canonicalKey, cfg: {}, storePath, entry });
+    hoisted.loadSessionEntry.mockReturnValue({
+      agentId,
+      canonicalKey: `agent:${agentId}:main`,
+      cfg: {},
+      storePath,
+      entry,
+    });
   }
 
   beforeEach(() => {
@@ -383,7 +389,7 @@ describe("sessions.files RPC handlers", () => {
         sessionId: "sess-main",
         sessionFile: "sess-main.jsonl",
       },
-      "agent:aiden:main",
+      "aiden",
     );
     mockVisibleMessages([assistantToolCall("read", { path: "src/readme.md" })]);
 
@@ -574,6 +580,7 @@ describe("sessions.files RPC handlers", () => {
       "utf8",
     );
     hoisted.loadSessionEntry.mockReturnValue({
+      agentId: "main",
       canonicalKey: "agent:main:main",
       cfg: {},
       storePath: path.join(sessionsDir, "sessions.json"),

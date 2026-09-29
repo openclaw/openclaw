@@ -1,4 +1,3 @@
-// Gateway RPC handlers for channel lifecycle, status, and account operations.
 import {
   ErrorCodes,
   errorShape,
@@ -106,14 +105,6 @@ async function respondWithChannelOperationPayload<TPayload>(params: {
 const CHANNEL_STATUS_MAX_TIMEOUT_MS = 30_000;
 const CHANNEL_STATUS_PROBE_CONCURRENCY = 5;
 
-function channelStatusTimeoutPayload(step: string, timeoutMs: number): Record<string, unknown> {
-  return {
-    ok: false,
-    timedOut: true,
-    error: `${step} timed out after ${timeoutMs}ms`,
-  };
-}
-
 type TimeoutRaceResult<T> =
   | { kind: "value"; value: T }
   | { kind: "error"; error: unknown }
@@ -146,59 +137,28 @@ async function raceWithTimeout<T>(params: {
   return result;
 }
 
+type ChannelStatusResult =
+  | { ok: true; value: unknown }
+  | { ok: false; error: string; timedOut?: boolean };
+
 async function runChannelStatusHook(params: {
-  accountId: string;
+  accountId?: string;
   channelId: ChannelId;
-  step: "audit" | "probe";
-  timeoutMs: number;
-  warnings: string[];
-  run: () => Promise<unknown>;
-}): Promise<unknown> {
-  const timeoutMs = Math.max(1, params.timeoutMs);
-  // Channel probes come from plugin code and external services. Convert slow or
-  // failing hooks into partial status data so one channel cannot block the UI.
-  const result = await raceWithTimeout({
-    timeoutMs,
-    run: params.run,
-  });
-  if (result.kind === "value") {
-    return result.value;
-  }
-  const warningPrefix = `${params.channelId}:${params.accountId} ${params.step}`;
-  if (result.kind === "timeout") {
-    params.warnings.push(`${warningPrefix} timed out after ${timeoutMs}ms`);
-    return channelStatusTimeoutPayload(params.step, timeoutMs);
-  }
-  const message = formatForLog(result.error);
-  params.warnings.push(`${warningPrefix} failed: ${message}`);
-  return {
-    ok: false,
-    error: message,
-  };
-}
-
-type Summary = { ok: true; value: unknown } | { ok: false; error: string; timedOut?: boolean };
-
-async function runChannelStatusSummary(params: {
-  channelId: ChannelId;
+  step: "audit" | "probe" | "summary";
   timeoutMs: number;
   warnings: string[];
   run: () => unknown;
-}): Promise<Summary> {
+}): Promise<ChannelStatusResult> {
   const timeoutMs = Math.max(1, params.timeoutMs);
-  const result = await raceWithTimeout({
-    timeoutMs,
-    run: params.run,
-  });
-  const warningPrefix = `${params.channelId} summary`;
+  // Plugin hooks can be slow or fail independently; keep the remaining status usable.
+  const result = await raceWithTimeout({ timeoutMs, run: params.run });
   if (result.kind === "value") {
-    // Summary hooks return the final public record, after account snapshot sanitization.
-    return { ok: true, value: redactChannelStatusSummaryBaseUrl(result.value) };
+    return { ok: true, value: result.value };
   }
+  const warningPrefix = `${params.channelId}${params.accountId === undefined ? "" : `:${params.accountId}`} ${params.step}`;
   if (result.kind === "timeout") {
-    const error = `summary timed out after ${timeoutMs}ms`;
     params.warnings.push(`${warningPrefix} timed out after ${timeoutMs}ms`);
-    return { ok: false, timedOut: true, error };
+    return { ok: false, timedOut: true, error: `${params.step} timed out after ${timeoutMs}ms` };
   }
   const message = formatForLog(result.error);
   params.warnings.push(`${warningPrefix} failed: ${message}`);
@@ -224,7 +184,6 @@ function resolveChannelsStatusTimeoutMs(params: { probe: boolean; timeoutMsRaw: 
   return Math.min(Math.max(1000, params.timeoutMsRaw), CHANNEL_STATUS_MAX_TIMEOUT_MS);
 }
 
-/** Start one channel account through its owning channel plugin. */
 async function startChannelAccount(params: ChannelAccountParams): Promise<ChannelStartPayload> {
   if (!params.plugin.gateway?.startAccount) {
     throw new Error(`Channel ${params.channelId} does not support runtime start`);
@@ -265,7 +224,6 @@ async function startChannelAccount(params: ChannelAccountParams): Promise<Channe
   };
 }
 
-/** Stop one channel account through its owning channel plugin. */
 async function stopChannelAccount(params: ChannelAccountParams): Promise<ChannelStopPayload> {
   const resolvedAccountId = resolveChannelGatewayAccountId(params, () =>
     params.context.getRuntimeSnapshot({ channelId: params.channelId, inspectAccounts: false }),
@@ -288,7 +246,6 @@ async function stopChannelAccount(params: ChannelAccountParams): Promise<Channel
   };
 }
 
-/** Gateway request handlers for channel list, status, start, stop, and logout. */
 export const channelsHandlers: GatewayRequestHandlers = {
   "channels.status": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateChannelsStatusParams, "channels.status", respond)) {
@@ -364,7 +321,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
           configured = await plugin.config.isConfigured(account, cfg);
         }
         if (configured) {
-          probeResult = await runChannelStatusHook({
+          const result = await runChannelStatusHook({
             channelId,
             accountId,
             step: "probe",
@@ -377,6 +334,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
                 cfg,
               }),
           });
+          probeResult = result.ok ? result.value : result;
           lastProbeAt = Date.now();
         }
       }
@@ -387,7 +345,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
           configured = await plugin.config.isConfigured(account, cfg);
         }
         if (configured) {
-          auditResult = await runChannelStatusHook({
+          const result = await runChannelStatusHook({
             channelId,
             accountId,
             step: "audit",
@@ -401,6 +359,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
                 probe: probeResult,
               }),
           });
+          auditResult = result.ok ? result.value : result;
         }
       }
       const snapshot = await buildChannelAccountSnapshotFromAccount({
@@ -530,7 +489,8 @@ export const channelsHandlers: GatewayRequestHandlers = {
           plugin.status?.buildChannelSummary &&
           Object.hasOwn(resolvedAccounts, defaultAccountId)
         ) {
-          const summaryResult = await runChannelStatusSummary({
+          const summaryResult = await runChannelStatusHook({
+            step: "summary",
             channelId: plugin.id,
             timeoutMs,
             warnings: statusWarnings,
@@ -546,7 +506,9 @@ export const channelsHandlers: GatewayRequestHandlers = {
                   } as ChannelAccountSnapshot),
               }),
           });
-          summary = summaryResult.ok ? summaryResult.value : fallbackSummary(summaryResult.error);
+          summary = summaryResult.ok
+            ? redactChannelStatusSummaryBaseUrl(summaryResult.value)
+            : fallbackSummary(summaryResult.error);
         }
         return { pluginId: plugin.id, summary, accounts, defaultAccountId };
       }),

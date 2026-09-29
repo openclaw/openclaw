@@ -9,7 +9,14 @@ import {
   runWithGatewayIndependentRootWorkContinuation,
 } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import { captureGatewayToolCallerAssertion } from "../../tools/gateway-caller-context.js";
+import {
+  prepareRequesterCronAuthority,
+  type PreparedRequesterCronAuthority,
+} from "../requester-cron-authority.js";
 import {
   ensureCompletionState,
   ensureDeliveryState,
@@ -34,7 +41,13 @@ import {
   completeCleanupBookkeeping,
   scheduleRequesterSettleWake,
 } from "./subagent-registry-lifecycle-wake.js";
-import { settleRequesterTurnAfterSessionSpawns } from "./subagent-registry-requester-yield.js";
+import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
+import { commitRequesterInitialTransfer } from "./subagent-registry-requester-wake-commit.js";
+import {
+  markRequesterTurnYieldedInRuns,
+  settleRequesterTurnAfterSessionSpawns,
+  type RequesterInitialTransfer,
+} from "./subagent-registry-requester-yield.js";
 import type {
   SubagentCompletionRequest,
   SubagentRunRecord,
@@ -174,6 +187,10 @@ export class SubagentLifecycleController {
     this.scheduledResumeTimers.clear();
     for (const scheduled of this.scheduledRequesterSettleWakeTimers.values()) {
       clearTimeout(scheduled.timer);
+      this.pendingRequesterSettleWakeCommits.get(scheduled.entry)?.initialTransfer?.retire();
+    }
+    for (const entry of this.options.runs.values()) {
+      this.pendingRequesterSettleWakeCommits.get(entry)?.initialTransfer?.retire();
     }
     this.scheduledRequesterSettleWakeTimers.clear();
     this.pendingRequesterSettleWakeRearms = new WeakSet();
@@ -341,6 +358,56 @@ export class SubagentLifecycleController {
   cancelRequesterSettleWake = (entry: SubagentRunRecord, assertCurrent: () => void) =>
     cancelRequesterSettleWake(this, entry, assertCurrent);
 
+  private prepareRequesterInitialTransfer(
+    assertCurrent?: () => void,
+    stateContext = captureOpenClawStateWorkerContext(),
+  ): RequesterInitialTransfer {
+    const assertCallerCurrent = captureGatewayToolCallerAssertion();
+    return (params) =>
+      commitRequesterInitialTransfer(this, {
+        ...params,
+        stateContext,
+        assertCurrent: () => {
+          assertSubagentRegistryWriteSourceCurrent(stateContext);
+          assertCallerCurrent?.();
+          assertCurrent?.();
+        },
+        scheduleRetry: (entry) =>
+          scheduleRequesterSettleWake(this, entry.runId, entry, stateContext),
+      });
+  }
+
+  markRequesterTurnYielded = async (args: {
+    requesterSessionKey: string;
+    requesterAgentId?: string;
+    requesterTurnRunId: string;
+    assertCurrent?: () => void;
+    stateContext?: OpenClawStateWorkerContext;
+    preparedAuthority?: PreparedRequesterCronAuthority | null;
+  }) => {
+    const ownsPreparation = args.preparedAuthority === undefined;
+    const preparedAuthority =
+      args.preparedAuthority === undefined
+        ? prepareRequesterCronAuthority(args)
+        : args.preparedAuthority;
+    try {
+      return await markRequesterTurnYieldedInRuns({
+        ...args,
+        preparedAuthority: preparedAuthority ?? null,
+        runs: this.options.runs,
+        transfer: this.prepareRequesterInitialTransfer(() => {
+          args.assertCurrent?.();
+          preparedAuthority?.assertCurrent();
+        }, args.stateContext),
+      });
+    } finally {
+      const release = ownsPreparation ? preparedAuthority?.release() : undefined;
+      if (release) {
+        await release;
+      }
+    }
+  };
+
   settleRequesterTurnAfterSessionSpawns = (
     args: {
       requesterSessionKey: string;
@@ -349,13 +416,15 @@ export class SubagentLifecycleController {
       requesterYielded: boolean;
       acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
       progressPresentation?: ProgressContinuationState;
+      assertCurrent?: () => void;
+      stateContext?: OpenClawStateWorkerContext;
     },
     source: "live" | "restore" = "live",
   ) =>
     settleRequesterTurnAfterSessionSpawns({
       ...args,
       runs: this.options.runs,
-      persistOrThrow: (...runIds) => this.options.persistOrThrow(...runIds),
+      transfer: this.prepareRequesterInitialTransfer(args.assertCurrent, args.stateContext),
       schedule: (runId, entry, kind) => {
         if (kind === "completion") {
           if (!this.cleanupFailureCounts.has(entry)) {

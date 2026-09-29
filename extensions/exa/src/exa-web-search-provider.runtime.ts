@@ -26,6 +26,7 @@ import {
   isRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
@@ -143,10 +144,7 @@ function resolveExaSearchEndpoint(
 function resolveExaDescription(result: ExaSearchResult): string {
   const highlights = result.highlights;
   if (Array.isArray(highlights)) {
-    const highlightText = highlights
-      .map((entry) => normalizeOptionalString(entry))
-      .filter((entry): entry is string => Boolean(entry))
-      .join("\n");
+    const highlightText = normalizeTrimmedStringList(highlights).join("\n");
     if (highlightText) {
       return highlightText;
     }

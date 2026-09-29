@@ -50,13 +50,8 @@ type WorkerCredentialBrokerOptions = {
 };
 
 export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOptions) {
-  const { store } = options;
+  const { store, now, inState, move, serviceError, withLock } = options;
   const tunnels = options.tunnelManager;
-  const now = options.now;
-  const inState = options.inState;
-  const move = options.move;
-  const serviceError = options.serviceError;
-  const withLock = options.withLock;
   const pendingCredentials = new Map<string, MintedWorkerCredential>();
 
   const credentialExpiry = () => {

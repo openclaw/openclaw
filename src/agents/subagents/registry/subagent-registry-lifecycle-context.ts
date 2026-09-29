@@ -118,6 +118,14 @@ export type PendingRequesterSettleWakeCommit = {
   committedWake?: RequesterWakeCommittedWrite;
   /** One current retry caller must resume the published transition. */
   needsWakeContinuation?: boolean;
+  initialTransfer?: {
+    kind: "intent" | "yielded-cohort" | "completed-cohort";
+    completion: Promise<void>;
+    published: boolean;
+    completed: boolean;
+    blocked: boolean;
+    retire(): void;
+  };
   stateContext?: OpenClawStateWorkerContext;
   isPublishedRetirement(entry: SubagentRunRecord): boolean;
   adoptPublished(entries: readonly SubagentRunRecord[]): void;

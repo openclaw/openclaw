@@ -7,6 +7,35 @@ import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+export type RunEntryOverrides = Omit<Partial<SubagentRunRecord>, "execution"> & {
+  execution?: SubagentRunRecord["execution"];
+  startedAt?: number;
+  endedAt?: number;
+  outcome?: SubagentRunRecord["execution"]["outcome"];
+};
+
+export function createRunEntry(overrides: RunEntryOverrides = {}): SubagentRunRecord {
+  const { startedAt = 2_000, endedAt, outcome, execution, ...recordOverrides } = overrides;
+  return {
+    runId: "run-1",
+    childSessionKey: "agent:main:subagent:child",
+    requesterSessionKey: "agent:main:main",
+    requesterDisplayKey: "main",
+    task: "finish the task",
+    cleanup: "keep",
+    createdAt: 1_000,
+    ...recordOverrides,
+    execution: execution
+      ? { startedAt, ...execution }
+      : {
+          status: endedAt !== undefined || outcome !== undefined ? "terminal" : "running",
+          startedAt,
+          ...(endedAt === undefined ? {} : { endedAt }),
+          ...(outcome === undefined ? {} : { outcome }),
+        },
+  };
+}
+
 type RequesterSettleWakeParams = Parameters<
   SubagentLifecycleOptions["maybeWakeRequesterAfterAllChildrenSettled"]
 >[0];

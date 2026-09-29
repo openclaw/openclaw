@@ -198,13 +198,7 @@ export async function waitProviderOperationPollInterval(params: {
 }): Promise<void> {
   const pollIntervalMs = resolveTimerTimeoutMs(params.pollIntervalMs, 1);
   const deadlineAtMs = params.deadline.deadlineAtMs;
-  if (typeof deadlineAtMs !== "number") {
-    await new Promise((resolve) => {
-      setTimeout(resolve, pollIntervalMs);
-    });
-    return;
-  }
-  const remainingMs = deadlineAtMs - Date.now();
+  const remainingMs = typeof deadlineAtMs === "number" ? deadlineAtMs - Date.now() : pollIntervalMs;
   if (remainingMs <= 0) {
     throw createProviderOperationTimeoutError(params.deadline);
   }
