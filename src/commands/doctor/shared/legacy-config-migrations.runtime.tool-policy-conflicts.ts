@@ -13,7 +13,6 @@ import {
   getRecord,
   type LegacyConfigMigrationSpec,
 } from "../../../config/legacy.shared.js";
-import { visitConfigValueTree } from "../../../config/value-tree.js";
 import { visitAgentEntries } from "./legacy-config-record-shared.js";
 import { isToolPolicyPath, TOOL_POLICY_ROOTS } from "./legacy-tool-policy-scopes.js";
 
@@ -105,37 +104,43 @@ function readGrantList(
   return list.every((entry) => typeof entry === "string") ? list : null;
 }
 
+function visitConflictingToolPolicies(value: unknown, path: string[], conflicts: Conflict[]): void {
+  if (Array.isArray(value)) {
+    for (const [index, entry] of value.entries()) {
+      visitConflictingToolPolicies(entry, [...path, String(index)], conflicts);
+    }
+    return;
+  }
+  if (!isRecord(value)) {
+    return;
+  }
+  // Sandbox allow and alsoAllow inherit independently; merging either scope can widen grants.
+  if (path.at(-2) === "tools" && path.at(-1) === "sandbox") {
+    return;
+  }
+  if (isToolPolicyPath(path)) {
+    const allow = readGrantList(value, "allow");
+    const alsoAllow = readGrantList(value, "alsoAllow");
+    if (allow && alsoAllow) {
+      const label = path.reduce(
+        (prefix, key) =>
+          /^[a-zA-Z_$][\w$]*$/.test(key)
+            ? `${prefix}${prefix ? "." : ""}${key}`
+            : `${prefix}[${JSON.stringify(key)}]`,
+        "",
+      );
+      conflicts.push({ scope: value, path: label, allow, alsoAllow });
+    }
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    visitConflictingToolPolicies(entry, [...path, key], conflicts);
+  }
+}
+
 /** Reports tool policy scopes that set both allow and alsoAllow, without changing them. */
 function findConflicts(value: unknown, path: string[]): Conflict[] {
   const conflicts: Conflict[] = [];
-  visitConfigValueTree(
-    value,
-    (candidate, currentPath) => {
-      if (!isRecord(candidate)) {
-        return true;
-      }
-      // Sandbox allow and alsoAllow inherit independently; merging either scope can widen grants.
-      if (currentPath.at(-2) === "tools" && currentPath.at(-1) === "sandbox") {
-        return false;
-      }
-      if (isToolPolicyPath(currentPath)) {
-        const allow = readGrantList(candidate, "allow");
-        const alsoAllow = readGrantList(candidate, "alsoAllow");
-        if (allow && alsoAllow) {
-          const label = currentPath.reduce(
-            (prefix, key) =>
-              /^[a-zA-Z_$][\w$]*$/.test(key)
-                ? `${prefix}${prefix ? "." : ""}${key}`
-                : `${prefix}[${JSON.stringify(key)}]`,
-            "",
-          );
-          conflicts.push({ scope: candidate, path: label, allow, alsoAllow });
-        }
-      }
-      return true;
-    },
-    path,
-  );
+  visitConflictingToolPolicies(value, path, conflicts);
   return conflicts;
 }
 
