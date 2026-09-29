@@ -227,6 +227,10 @@ const ERROR_PATTERNS = {
     /out of extra usage/i,
     /draw from your extra usage/i,
     /extra usage is required(?: for long context requests)?/i,
+    // Claude subscription exhaustion surfaced by the claude-cli runtime. Without this,
+    // embedded terminal errors are accepted as terminal and skip the configured fallback;
+    // thrown CLI errors retry as unknown but skip billing profile disablement (#122010).
+    /\bout of usage credits\b/i,
     // Chinese provider billing messages
     "余额不足",
     "欠费",
