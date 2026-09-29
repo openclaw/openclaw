@@ -17,29 +17,35 @@ function isReasoningReplayPart(value: unknown): boolean {
 }
 
 function stripReasoningReplayFields(value: unknown): void {
-  if (!value || typeof value !== "object") {
-    return;
-  }
-
-  const record = value as Record<string, unknown>;
-  for (const field of REASONING_REPLAY_FIELDS) {
-    delete record[field];
-  }
-
-  const content = record.content;
-  if (Array.isArray(content)) {
-    const nextContent = [];
-    for (const part of content) {
-      if (isReasoningReplayPart(part)) {
-        continue;
-      }
-      stripReasoningReplayFields(part);
-      nextContent.push(part);
+  const pending = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current || typeof current !== "object") {
+      continue;
     }
-    record.content =
-      nextContent.length > 0
-        ? nextContent
-        : [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }];
+
+    const record = current as Record<string, unknown>;
+    for (const field of REASONING_REPLAY_FIELDS) {
+      delete record[field];
+    }
+
+    const content = record.content;
+    if (Array.isArray(content)) {
+      const nextContent = [];
+      for (const part of content) {
+        if (!isReasoningReplayPart(part)) {
+          nextContent.push(part);
+        }
+      }
+      record.content =
+        nextContent.length > 0
+          ? nextContent
+          : [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }];
+      // Preserve traversal order without consuming a call frame per nested part.
+      for (let index = nextContent.length - 1; index >= 0; index--) {
+        pending.push(nextContent[index]);
+      }
+    }
   }
 }
 
