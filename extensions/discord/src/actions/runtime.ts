@@ -5,6 +5,7 @@ import { createDiscordActionGate } from "../accounts.js";
 import { handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordMessagingAction } from "./runtime.messaging.js";
 import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";
+import { isDiscordModerationAction } from "./runtime.moderation-shared.js";
 import { handleDiscordModerationAction } from "./runtime.moderation.js";
 import { handleDiscordPresenceAction } from "./runtime.presence.js";
 
@@ -52,8 +53,6 @@ const guildActions = new Set([
   "channelPermissionRemove",
 ]);
 
-const moderationActions = new Set(["timeout", "kick", "ban"]);
-
 export async function handleDiscordAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
@@ -69,7 +68,7 @@ export async function handleDiscordAction(
   if (guildActions.has(action)) {
     return await handleDiscordGuildAction(action, params, isActionEnabled, cfg, options);
   }
-  if (moderationActions.has(action)) {
+  if (isDiscordModerationAction(action)) {
     return await handleDiscordModerationAction(action, params, isActionEnabled, cfg);
   }
   if (action === "setPresence") {

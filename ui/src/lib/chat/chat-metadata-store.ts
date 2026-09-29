@@ -174,12 +174,6 @@ function metadataEntryFor(
   return entry;
 }
 
-function waitForMetadataRetry(delayMs: number): Promise<void> {
-  return new Promise((resolve) => {
-    globalThis.setTimeout(resolve, delayMs);
-  });
-}
-
 async function requestChatMetadata(
   client: GatewayBrowserClient,
   params: ChatMetadataParams,
@@ -217,7 +211,9 @@ async function requestChatMetadata(
       }
 
       latestStartupError = requestError;
-      await waitForMetadataRetry(Math.min(retryAfterMs, retryRemainingMs));
+      await new Promise<void>((resolve) => {
+        globalThis.setTimeout(resolve, Math.min(retryAfterMs, retryRemainingMs));
+      });
     }
   }
 }

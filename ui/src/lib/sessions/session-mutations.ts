@@ -15,6 +15,7 @@ import { projectSessionResultRows } from "./reconcile.ts";
 import { createSessionArchiveState, projectSessionArchiveFields } from "./session-archive-state.ts";
 import type {
   SessionCapability,
+  SessionConnectionScope,
   SessionCreateReconciliation,
   SessionRefreshOutcome,
   SessionResetOptions,
@@ -47,6 +48,11 @@ import {
 import { createSessionRowLocalPatch } from "./session-row-local-patch.ts";
 
 export function createSessionMutations(host: SessionMutationsHost) {
+  const reportError = (scope: SessionConnectionScope, error: unknown) => {
+    if (host.connection.isCurrent(scope)) {
+      host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
+    }
+  };
   const modelOverrides = createSessionModelOverrides(host);
   const archiveState = createSessionArchiveState(
     host.publishedRow,
@@ -113,9 +119,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       const reconciliation = host.reconcileMutation(params.agentId);
       if (options.reconciliation === "background") {
         void reconciliation.catch((error: unknown) => {
-          if (host.connection.isCurrent(scope)) {
-            host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
-          }
+          reportError(scope, error);
         });
       } else {
         await reconciliation;
@@ -127,9 +131,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       return result;
     } catch (error) {
-      if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
-      }
+      reportError(scope, error);
       return null;
     }
   };
@@ -510,9 +512,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       await requestSessionReset(scope.client, key, options);
       return host.connection.isCurrent(scope) ? "completed" : "uncertain";
     } catch (error) {
-      if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
-      }
+      reportError(scope, error);
       // Reset can commit before awaited lifecycle work rejects; never infer safe retry.
       return "uncertain";
     }
@@ -553,9 +553,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       return result.owner;
     } catch (error) {
-      if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
-      }
+      reportError(scope, error);
       return null;
     }
   };

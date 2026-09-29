@@ -51,7 +51,7 @@ function resolveDangerousSandboxDockerBooleans(
   agentDocker?: Partial<SandboxDockerConfig>,
   globalDocker?: Partial<SandboxDockerConfig>,
 ): DangerousSandboxDockerBooleans {
-  const resolved = {} as DangerousSandboxDockerBooleans;
+  const resolved: DangerousSandboxDockerBooleans = {};
   for (const key of DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS) {
     resolved[key] = agentDocker?.[key] ?? globalDocker?.[key];
   }

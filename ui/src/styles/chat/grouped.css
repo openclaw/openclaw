@@ -639,16 +639,8 @@ img.chat-avatar.user {
   display: grid;
 }
 
-.chat-avatar.assistant {
-  background: var(--secondary);
-  color: var(--muted);
-}
-
-.chat-avatar.other {
-  background: var(--secondary);
-  color: var(--muted);
-}
-
+.chat-avatar.assistant,
+.chat-avatar.other,
 .chat-avatar.tool {
   background: var(--secondary);
   color: var(--muted);

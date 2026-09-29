@@ -3,10 +3,7 @@ import pMap from "p-map";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { SessionsListParamsSchema } from "../../../packages/gateway-protocol/src/schema/sessions-list.js";
-import {
-  SessionRunStatusSchema,
-  type SessionRunStatus,
-} from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { SessionRunStatusSchema } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deriveSessionTitle, prepareSessionTitleRead } from "../../gateway/session-utils-core.js";
@@ -128,10 +125,6 @@ const SESSIONS_LIST_MAX_RESULT_BYTES = 64 * 1024;
 function projectInventoryActor(actor: NonNullable<SessionListRow["createdActor"]>) {
   const { type, id, label, identity } = actor;
   return { type, id, label, identity };
-}
-
-function readSessionRunStatus(value: unknown): SessionRunStatus | undefined {
-  return Value.Check(SessionRunStatusSchema, value) ? value : undefined;
 }
 
 export function createSessionsListTool(opts?: {
@@ -455,7 +448,7 @@ export function createSessionsListTool(opts?: {
         const contextTokens =
           typeof entry.contextTokens === "number" ? entry.contextTokens : undefined;
         const totalTokens = typeof entry.totalTokens === "number" ? entry.totalTokens : undefined;
-        const status = readSessionRunStatus(entry.status);
+        const status = Value.Check(SessionRunStatusSchema, entry.status) ? entry.status : undefined;
         const abortedLastRun =
           typeof entry.abortedLastRun === "boolean" ? entry.abortedLastRun : undefined;
         const childSessions = Array.isArray(entry.childSessions)

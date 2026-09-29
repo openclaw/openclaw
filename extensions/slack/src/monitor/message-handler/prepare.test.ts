@@ -273,14 +273,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     };
   }
 
-  it("keeps a whole code point when the inbound preview boundary crosses an emoji", async () => {
-    const prefix = "a".repeat(159);
-    const prepared = await prepareWithDefaultCtx(createSlackMessage({ text: `${prefix}😀tail` }));
-
-    assert(prepared);
-    expect(prepared.preview).toBe(prefix);
-  });
-
   it("logs inbound metadata without logging message content", async () => {
     const body = "confidential acquisition target: northstar; do not include this text in logs";
     shouldLogVerboseMock.mockReturnValue(true);

@@ -717,9 +717,16 @@ through native settlement; only committed receipts transfer to callers, and a
 conflict retries only after confirmed rollback. Owner edits observe receipts
 through the read worker before their existing synchronous authority capture.
 Pending work retains the partition queue and fences retired service generations,
-including deferred startup jobs. Remaining manual or timer finalizers retain
-their native implementation as migration debt. Schemas, retention, configuration,
-and update behavior are unchanged.
+including deferred startup jobs. Manual and timer finalization use that same
+worker owner to update authoritative job rows and terminal receipts in one
+transaction. The host prepares outcome policy from transaction-held facts and
+rechecks it at commit. Reservation custody retains the original physical store
+through execution, finalization, supersession, and deferred runner settlement.
+Retirement suppresses live publication without abandoning the exact receipt's
+durable result. Unknown outcomes are not replayed. Guarded configuration edits,
+current-authority reads, scratch operations, and Doctor maintenance remain
+separate migration work. Schemas, retention, configuration, and update behavior
+are unchanged.
 
 Direct compaction hydrates durable transcripts through the existing read worker
 before preparing hooks or model calls. The read retains the captured transcript

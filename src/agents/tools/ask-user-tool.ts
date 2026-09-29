@@ -437,17 +437,15 @@ export function beginAskUserPromptDelivery(params: {
     questionId,
     hasSubscriber: reserved !== undefined || params.deliverPrompt !== undefined,
     markReady() {
-      if (reserved) {
+      if (reserved || params.deliverPrompt) {
         markAskUserPromptReady(questionId, params.questions);
-        return;
+      } else {
+        transitionAskUserQuestion(state, { kind: "answerable" });
       }
-      if (params.deliverPrompt) {
+      if (!reserved && params.deliverPrompt) {
         // Nothing reserved this prompt, so this run publishes it and settles its own wait.
-        markAskUserPromptReady(questionId, params.questions);
         settleAfterOwnPromptDelivery(questionId, params.deliverPrompt(questionId));
-        return;
       }
-      transitionAskUserQuestion(state, { kind: "answerable" });
     },
     waitForDelivery(signal?: AbortSignal) {
       return waitForPromptDelivery(state, signal);
