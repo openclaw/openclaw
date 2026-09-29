@@ -220,10 +220,9 @@ it.each(["nondelegating", "delegated", "failing"] as const)(
     });
     provider.append(host);
     document.body.append(provider);
-
-    await vi.waitFor(() => {
-      expect(provider.querySelectorAll(".chat-queue__item")).toHaveLength(1);
-    });
+    await host.updateComplete;
+    await provider.querySelector<LitElement>("openclaw-plugin-view")?.updateComplete;
+    expect(provider.querySelectorAll(".chat-queue__item")).toHaveLength(1);
     const row = provider.querySelector<HTMLElement>(".chat-queue__item");
     expect(row?.getAttribute("data-chat-queue-item")).toBe("local-row");
     row?.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
