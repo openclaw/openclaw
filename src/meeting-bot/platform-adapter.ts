@@ -316,13 +316,8 @@ function parseMeetingTranscript<Transcript extends MeetingTranscriptSnapshot>(
         const identity =
           source.success && source.data.epoch === payload.epoch ? source.data : undefined;
         // Legacy rows keep their shape; observation facts do not grant action authority.
-        const transcriptLine: MeetingTranscriptLine = { text: line.text };
-        if (line.at !== undefined) {
-          transcriptLine.at = line.at;
-        }
-        if (line.speaker !== undefined) {
-          transcriptLine.speaker = line.speaker;
-        }
+        const { source: _source, provenance: _provenance, text, ...fields } = line;
+        const transcriptLine: MeetingTranscriptLine = { text, ...fields };
         if (line.provenance !== undefined || line.source !== undefined) {
           transcriptLine.provenance = normalizeMeetingObservationProvenance(line.provenance, {
             observer: adapterId,

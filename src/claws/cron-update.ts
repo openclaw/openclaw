@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage } from "@openclaw/normalization-core";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   CLAW_CRON_REF_SCHEMA_VERSION,
@@ -12,6 +11,7 @@ import {
   type ClawCronGateway,
   type PersistedClawCronRef,
 } from "./cron.js";
+import { digestClawValue as digest } from "./digest.js";
 import type { ClawCronJob, ClawManifest } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
 import { collectClawRollbackFailures } from "./update-rollback.js";
@@ -29,10 +29,6 @@ export class ClawCronUpdateError extends Error {
     super(message);
     this.name = "ClawCronUpdateError";
   }
-}
-
-function digest(value: unknown): string {
-  return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
 }
 
 function targetRef(params: {
