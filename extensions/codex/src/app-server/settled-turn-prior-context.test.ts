@@ -38,6 +38,33 @@ function laterExchanges(): AgentMessage[] {
   ]).flat();
 }
 
+/** Fixed prior-context projection of Codex's native failed-run notice. */
+const FIXED_FAILED_RUN_NOTICE = {
+  type: "message",
+  role: "user",
+  content: [
+    {
+      type: "input_text",
+      text:
+        "[A previous turn ended without an assistant reply. Use its recorded tool results " +
+        "to determine what completed; do not repeat completed actions.]",
+    },
+  ],
+};
+
+function failedRunNotice(identity: string, content: string, details: unknown): AgentMessage {
+  return message(
+    {
+      role: "custom",
+      customType: "run-failed-before-reply",
+      display: true,
+      content,
+      details,
+    },
+    identity,
+  );
+}
+
 function project(prior: AgentMessage[]) {
   const current = exchange("current", "current-call");
   return projectVerifiedSettledCodexMessages([...prior, ...current], {
@@ -189,5 +216,127 @@ describe("settled prior-history validation", () => {
       { type: "function_call_output", call_id: "current-call", output: "Verified." },
     ]);
     expect(history).toEqual(before);
+  });
+
+  it("keeps native prior failed-run notices as bounded fixed notices", () => {
+    const detailsOne = { reason: "NATIVE_FAILURE_DETAIL_ONE" };
+    const detailsTwo = { reason: "NATIVE_FAILURE_DETAIL_TWO" };
+    const prior = [
+      message({ role: "user", content: "Prior question." }, "prior:noticed:prompt"),
+      failedRunNotice("prior:failed-1", "NATIVE_FAILURE_CONTENT_ONE", detailsOne),
+      failedRunNotice("prior:failed-2", "NATIVE_FAILURE_CONTENT_TWO", detailsTwo),
+      ...exchange("prior", "prior-call"),
+    ];
+
+    const result = project(prior);
+
+    // Each native notice replays as the same fixed item; its own payload never does.
+    expect(result.slice(1, 3)).toEqual([FIXED_FAILED_RUN_NOTICE, FIXED_FAILED_RUN_NOTICE]);
+    const serialized = JSON.stringify(result);
+    for (const excluded of [
+      "NATIVE_FAILURE_CONTENT_ONE",
+      "NATIVE_FAILURE_DETAIL_ONE",
+      "NATIVE_FAILURE_CONTENT_TWO",
+      "NATIVE_FAILURE_DETAIL_TWO",
+    ]) {
+      expect(serialized).not.toContain(excluded);
+    }
+  });
+
+  it("keeps a completed prior tool exchange paired around a native failed-run notice", () => {
+    const prior = [
+      ...exchange("prior", "prior-call"),
+      failedRunNotice("prior:failed", "NATIVE_FAILURE_CONTENT", { reason: "failed" }),
+    ];
+
+    const result = project(prior);
+
+    expect(result.slice(0, 4)).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "Check the result." }],
+      },
+      { type: "function_call", call_id: "prior-call", name: "lookup", arguments: "{}" },
+      { type: "function_call_output", call_id: "prior-call", output: "Verified." },
+      FIXED_FAILED_RUN_NOTICE,
+    ]);
+  });
+
+  it("does not let a native failed-run notice settle a pending prior tool call", () => {
+    const prior = [
+      message({ role: "user", content: "Prior question." }, "prior:pending:prompt"),
+      message(
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "prior-pending", name: "lookup", arguments: {} }],
+        },
+        "prior:pending:call",
+      ),
+      failedRunNotice("prior:pending:failed", "NATIVE_FAILURE_CONTENT", { reason: "failed" }),
+    ];
+
+    expect(() => project(prior)).toThrow(new CodexHistoryRejection("incomplete_pairing"));
+  });
+
+  it.each([
+    {
+      name: "unknown custom type",
+      record: {
+        role: "custom",
+        customType: "openclaw.system-note",
+        display: true,
+        content: "note",
+        details: {},
+      },
+    },
+    {
+      name: "missing display flag",
+      record: {
+        role: "custom",
+        customType: "run-failed-before-reply",
+        content: "failed",
+        details: {},
+      },
+    },
+    {
+      name: "hidden notice",
+      record: {
+        role: "custom",
+        customType: "run-failed-before-reply",
+        display: false,
+        content: "failed",
+        details: {},
+      },
+    },
+    {
+      name: "block content",
+      record: {
+        role: "custom",
+        customType: "run-failed-before-reply",
+        display: true,
+        content: [{ type: "text", text: "failed" }],
+        details: {},
+      },
+    },
+    {
+      name: "non-record details",
+      record: {
+        role: "custom",
+        customType: "run-failed-before-reply",
+        display: true,
+        content: "failed",
+        details: "failed",
+      },
+    },
+  ])("rejects a $name in prior history", ({ record }) => {
+    const prior = [
+      message({ role: "user", content: "Prior question." }, "prior:prompt"),
+      message(record, "prior:custom"),
+    ];
+
+    expect(() => project(prior)).toThrow(
+      expect.objectContaining({ reason: "unsupported_content" }),
+    );
   });
 });

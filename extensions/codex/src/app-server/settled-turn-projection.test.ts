@@ -127,6 +127,22 @@ describe("projectSettledCodexMessages", () => {
     ).toThrowError(new CodexHistoryRejection("invalid_content"));
   });
 
+  it("rejects a native failed-run notice in current-turn evidence", () => {
+    expect(() =>
+      projectSettledCodexMessages([
+        message({
+          role: "custom",
+          customType: "run-failed-before-reply",
+          display: true,
+          content: "A previous turn failed before producing a reply.",
+          details: { reason: "native failure" },
+        }),
+        toolCall(),
+        toolResult(),
+      ]),
+    ).toThrowError(new CodexHistoryRejection("unsupported_content"));
+  });
+
   it("preserves failed tool-result status in the projected output", () => {
     expect(
       projectSettledCodexMessages([
