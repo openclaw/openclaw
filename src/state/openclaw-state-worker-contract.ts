@@ -99,6 +99,10 @@ import type {
 import type { TuiLastSessionWorkerOperations } from "../tui/tui-last-session.contract.js";
 import type { AgentProvenance } from "./agent-provenance.types.js";
 import type { PreparedBackupRunRecord } from "./backup-run-records.kernel.js";
+import type {
+  GitHubSessionReceiptGeneration,
+  GitHubSessionReceiptIdentities,
+} from "./github-publication-read.types.js";
 import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.contract.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
@@ -168,6 +172,19 @@ export type OpenClawStateWorkerOperations = UpdateRunReconciliationOperations &
     "updateRuns.reconcileInterrupted": {
       input: InterruptedUpdateSettlement;
       output: InterruptedUpdateSettlementResult;
+    };
+    "githubPublication.prepareSessionReceiptDeletion": {
+      input: { agentId: string; sessionKeys: readonly string[] };
+      output: GitHubSessionReceiptIdentities;
+    };
+    "githubPublication.deleteSessionReceipts": {
+      input: {
+        agentId: string;
+        sessionKeys: readonly string[];
+        generations: readonly GitHubSessionReceiptGeneration[];
+        receipts: GitHubSessionReceiptIdentities;
+      };
+      output: void;
     };
     "githubRepository.personalPending": {
       input: RepositoryGitHubPublicationPendingQuery;

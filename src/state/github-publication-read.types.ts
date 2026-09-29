@@ -32,3 +32,24 @@ export type GitHubPublicationSessionLifecycle = Pick<
   DB["github_publication_session_lifecycles"],
   "lifecycle_revision" | "requester_authority_json"
 >;
+
+export type GitHubSessionReceiptGeneration = {
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision: string | null;
+};
+
+export type GitHubSessionReceiptIdentities = {
+  personal: {
+    request_id: string;
+    session_id: string;
+    session_key: string;
+    created_at_ms: number;
+  }[];
+  repository: {
+    request_id: string;
+    session_id: string;
+    session_key: string;
+    created_at_ms: number;
+  }[];
+};

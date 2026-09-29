@@ -29,10 +29,10 @@ import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
 import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import {
   createHistoryEvictionReclamationPlan,
   runExclusiveSqliteSessionReclamation,
-  runSqliteSessionReclamation,
 } from "./session-accessor.sqlite-reclamation.js";
 import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-references.js";
 import {

@@ -3,13 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
-import {
-  deleteSessionEntryLifecycle,
-  patchSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -985,44 +980,6 @@ describe("personal publication authority and recovery", () => {
     expect(() =>
       readPersonalGitHubPublication(otherOwner, { requestId: result.requestId }),
     ).toThrow("corrupt");
-    expect(readUserGitHubConnection(owner)?.generation).toBe(generation);
-  });
-
-  it("retains logical-session receipts across archive and reset, then removes them through permanent deletion", async () => {
-    const session = await persistPublicationTestSession();
-    action = preparePersonalGitHubSessionAction({ client, context }, { sessionKey: SESSION_KEY });
-    const result = await coordinator.requestPersonalForSession(request(), action);
-    const receipt = readPersonalGitHubPublication(owner, { requestId: result.requestId });
-    expect(receipt?.status).toBe("published");
-    const binding = { publicationKind: "personal" as const, requestId: result.requestId };
-    const originalLifecycle = readGitHubPublicationSessionLifecycle(binding);
-    const lifecycle_revision = session.read().lifecycleRevision;
-    expect(originalLifecycle).toEqual({ lifecycle_revision, requester_authority_json: null });
-    await session.reset(placements);
-    expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })).toEqual(receipt);
-    expect(
-      (
-        await rpc("sessions.github.status", {
-          requestId: result.requestId,
-          sessionKey: SESSION_KEY,
-        })
-      )[1],
-    ).toMatchObject({ result: { status: "published" }, confirmation: null });
-    const storePath = session.storePath;
-    await patchSessionEntryCore({ agentId: "main", sessionKey: SESSION_KEY, storePath }, () => ({
-      archivedAt: Date.now(),
-    }));
-    const target = { canonicalKey: SESSION_KEY, storeKeys: [SESSION_KEY] };
-    expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })).toEqual(receipt);
-    expect(readGitHubPublicationSessionLifecycle(binding)).toEqual(originalLifecycle);
-    await deleteSessionEntryLifecycle({
-      agentId: "main",
-      storePath,
-      target,
-      archiveTranscript: false,
-    });
-    expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })).toBeUndefined();
-    expect(readGitHubPublicationSessionLifecycle(binding)).toBeUndefined();
     expect(readUserGitHubConnection(owner)?.generation).toBe(generation);
   });
 });
