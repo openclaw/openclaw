@@ -57,7 +57,6 @@ export function createAuditEventWriter(options: {
   let stopped = false;
   let draining = false;
   let shutdownExpired = false;
-  let unavailable = false;
   let maintenancePending = true;
   let readyPending = true;
   let scheduled: ReturnType<typeof setImmediate> | undefined;
@@ -256,13 +255,9 @@ export function createAuditEventWriter(options: {
   schedule();
 
   const enqueue = (message: AuditWriterRequest): boolean => {
-    if (stopped || unavailable || queue.length >= maxPending) {
+    if (stopped || queue.length >= maxPending) {
       if (!stopped) {
-        fail(
-          unavailable
-            ? "audit event writer is unavailable; dropping metadata"
-            : `audit event queue is full (${maxPending}); dropping metadata`,
-        );
+        fail(`audit event queue is full (${maxPending}); dropping metadata`);
       }
       return false;
     }
