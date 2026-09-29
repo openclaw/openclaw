@@ -344,7 +344,12 @@ static void SetPhaseEPassword(const wchar_t* name) {
 // last byte selects one exact slot; teardown can therefore never enumerate or
 // alter an unrelated FWPM object.
 static const GUID kFwpmSublayer = {0x9f1d8d41,0x80c7,0x4d02,{0x8e,0x3a,0x90,0x2f,0x17,0x8b,0x61,0x10}};
-constexpr UINT16 kFwpmSublayerWeight = 0x8000;
+// BFE assigns the closest available sublayer weight rather than guaranteeing
+// that the requested value is persisted.  The native gate proved that the
+// previously requested 0x8000 is stored as 0x7FFD on the supported host.  Use
+// that exact free value for new objects and require the same value on readback,
+// preserving fail-closed ownership for the already-created object as well.
+constexpr UINT16 kFwpmSublayerWeight = 0x7FFD;
 static GUID SlotFilterKey(size_t index) { return GUID{0x9f1d8d42,0x80c7,0x4d02,{0x8e,0x3a,0x90,0x2f,0x17,0x8b,0x61,static_cast<unsigned char>(0x11+index)}}; }
 static bool SameGuid(const GUID& left,const GUID& right) { return !memcmp(&left,&right,sizeof(GUID)); }
 static void FwpmStage(size_t index,const char* stage) {

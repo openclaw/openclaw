@@ -233,7 +233,8 @@ describe("Phase E maintainer policy", () => {
     );
     expect(source).toContain('"PHASE_E_FWPM_SUBLAYER_STATUS:%s:%lu\\n"');
     expect(source).toContain('"PHASE_E_FWPM_SUBLAYER_READBACK_MISMATCH:%s:%llu:%llu\\n"');
-    expect(source).toContain("constexpr UINT16 kFwpmSublayerWeight = 0x8000");
+    expect(source).toContain("constexpr UINT16 kFwpmSublayerWeight = 0x7FFD");
+    expect(source).toContain("BFE assigns the closest available sublayer weight");
     expect(source).toContain('RequireFwpmSublayerReadback("pointer"');
     expect(source).toContain('RequireFwpmSublayerReadback("key"');
     expect(source).toContain('RequireFwpmSublayerReadback("weight"');
