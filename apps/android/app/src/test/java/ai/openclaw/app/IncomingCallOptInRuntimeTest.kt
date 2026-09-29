@@ -6,6 +6,7 @@ import ai.openclaw.app.calls.IncomingCallStatus
 import ai.openclaw.app.calls.IncomingCallTelecomShadow
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
+import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.node.InvokeDispatcher
 import ai.openclaw.app.voice.TalkModeManager
 import android.Manifest
@@ -15,7 +16,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlinx.serialization.json.buildJsonObject
@@ -158,16 +161,18 @@ class IncomingCallOptInRuntimeTest {
         val runtime = createRuntime(prefs)
         var starts = 0
         var stops = 0
+        var connected = true
         // Keep Android admission/controller transitions real; replace only Gateway/audio transport.
         val calls =
           IncomingCallController(
             context = app,
             scope = backgroundScope,
             prefs = prefs,
-            gatewayId = { "synthetic-gateway" },
-            captureAuthority = { { true } },
+            gatewayId = { "synthetic-gateway".takeIf { connected } },
+            captureAuthority = { if (connected) ({ connected }) else null },
+            captureRecoveryAuthority = { { true } },
             isBusy = { false },
-            startAudio = { _, _ -> starts++ },
+            startAudio = { _, _, _ -> starts++ },
             stopAudio = { stops++ },
             setMuted = {},
           )
@@ -191,10 +196,30 @@ class IncomingCallOptInRuntimeTest {
         assertEquals(IncomingCallStatus.Active, calls.state.value?.status)
         assertEquals(1, starts)
 
+        // Exercise the registered role-socket disconnect callbacks, not a controller-only shortcut.
+        for (role in listOf("operatorSession", "nodeSession")) {
+          connected = false
+          val session = ReflectionHelpers.getField<GatewaySession>(runtime, role)
+          ReflectionHelpers.getField<(String) -> Unit>(session, "onDisconnected")("network interrupted")
+          assertEquals(IncomingCallStatus.Connecting, calls.state.value?.status)
+          assertTrue(calls.ownsForegroundService(service))
+          connected = true
+          calls.transportConnected()
+          advanceTimeBy(1_001)
+          runCurrent()
+          assertEquals(IncomingCallStatus.Active, calls.state.value?.status)
+        }
+        assertEquals(3, starts)
+        connected = false
+        calls.transportInterrupted()
         runtime.setIncomingCallsEnabled(false)
 
         assertEquals(IncomingCallStatus.Ended, calls.state.value?.status)
-        assertEquals(1, stops)
+        connected = true
+        calls.transportConnected()
+        advanceTimeBy(30_001)
+        runCurrent()
+        assertEquals(IncomingCallStatus.Ended, calls.state.value?.status)
         assertFalse(prefs.incomingCallsEnabled.value)
         assertFalse(createPrefs().incomingCallsEnabled.value)
         assertTrue(commands.buildInvokeCommands().none { it in incomingCommands })
@@ -203,7 +228,7 @@ class IncomingCallOptInRuntimeTest {
           assertFalse(result.ok)
           assertEquals("CALL_DISABLED", result.error?.code)
         }
-        assertEquals(1, starts)
+        assertEquals(3, starts)
       } finally {
         Dispatchers.resetMain()
       }

@@ -48,7 +48,7 @@ internal fun transitionIncomingCall(
     when (state.status) {
       IncomingCallStatus.Ringing -> next in setOf(IncomingCallStatus.Connecting, IncomingCallStatus.Declined, IncomingCallStatus.Missed, IncomingCallStatus.Ended, IncomingCallStatus.Error)
       IncomingCallStatus.Connecting -> next in setOf(IncomingCallStatus.Active, IncomingCallStatus.Ended, IncomingCallStatus.Error)
-      IncomingCallStatus.Active -> next in setOf(IncomingCallStatus.Ended, IncomingCallStatus.Error)
+      IncomingCallStatus.Active -> next in setOf(IncomingCallStatus.Connecting, IncomingCallStatus.Ended, IncomingCallStatus.Error)
       else -> false
     }
   return if (allowed) state.copy(status = next, detail = detail?.take(240)) else state

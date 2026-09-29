@@ -1,6 +1,7 @@
 package ai.openclaw.app.calls
 
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewaySession
 import android.Manifest
 import android.app.Notification
@@ -31,6 +32,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
@@ -55,9 +57,10 @@ internal class IncomingCallController(
   private val gatewayId: () -> String?,
   private val captureAuthority: () -> (() -> Boolean)?,
   private val isBusy: () -> Boolean,
-  private val startAudio: suspend (String, String) -> Unit,
+  private val startAudio: suspend (String, String, Boolean) -> Unit,
   private val stopAudio: (String) -> Unit,
   private val setMuted: (Boolean) -> Unit,
+  private val captureRecoveryAuthority: () -> (() -> Boolean)? = captureAuthority,
 ) {
   companion object {
     const val CHANNEL_ID = "openclaw_incoming_calls"
@@ -84,6 +87,11 @@ internal class IncomingCallController(
   private var connection: Connection? = null
   private var expiryJob: Job? = null
   private var audioJob: Job? = null
+  private var recoveryDeadlineJob: Job? = null
+  private var recovering = false
+  private var recoveryAttempt = 0
+  private var audioGeneration = 0L
+  private var recoveryAuthority: (() -> Boolean)? = null
   private var foregroundService: IncomingCallForegroundService? = null
   private var authority: (() -> Boolean)? = null
   private val _muted = MutableStateFlow(false)
@@ -96,7 +104,7 @@ internal class IncomingCallController(
   val audioOutput: StateFlow<String> = _audioOutput
   private var endpoints: List<CallEndpoint> = emptyList()
   private var currentRouteIsEarpiece = false
-  private val proximity = IncomingCallProximity(context)
+  private val proximity = IncomingCallProximity(context, scope)
   private val completed = LinkedHashMap<String, IncomingCallState>()
   private val notificationManager = context.getSystemService(NotificationManager::class.java)
 
@@ -140,6 +148,7 @@ internal class IncomingCallController(
   private fun receive(invite: IncomingCallInvite): GatewaySession.InvokeResult {
     val owner = gatewayId() ?: error("Gateway must be connected for data calls")
     val currentAuthority = captureAuthority() ?: error("Gateway connection is changing")
+    val currentRecoveryAuthority = captureRecoveryAuthority() ?: error("Gateway connection is changing")
     find(invite.callId)?.let {
       require(it.gatewayId == owner && it.invite == invite) { "callId cannot be reused for a different invitation" }
       return result(it)
@@ -156,8 +165,9 @@ internal class IncomingCallController(
     require(telecom.isIncomingCallPermitted(accountHandle(context))) { "Android cannot accept another call now" }
     // Persist only IDs/expiry, never topic/session content; prevents a late retry ringing after process death.
     require(prefs.consumeIncomingCallId(invite.callId, invite.expiresAtMs)) { "Invitation already handled or replay ledger full" }
-    require(currentAuthority()) { "Gateway connection is changing" }
+    require(currentAuthority() && currentRecoveryAuthority()) { "Gateway connection is changing" }
     authority = currentAuthority
+    recoveryAuthority = currentRecoveryAuthority
     localMuted = false
     platformMuted = false
     updateMute()
@@ -181,8 +191,15 @@ internal class IncomingCallController(
 
   private fun isCurrent(id: String): Boolean {
     val call = _state.value ?: return false
-    return call.invite.callId == id && !call.status.isTerminal && prefs.isIncomingCallAllowed(call.gatewayId) && call.gatewayId == gatewayId() && authority?.invoke() == true
+    return hasRecoveryAuthority(id) && call.gatewayId == gatewayId() && authority?.invoke() == true
   }
+
+  private fun hasRecoveryAuthority(id: String): Boolean {
+    val call = _state.value ?: return false
+    return call.invite.callId == id && !call.status.isTerminal && prefs.isIncomingCallAllowed(call.gatewayId) && recoveryAuthority?.invoke() == true
+  }
+
+  private fun canControl(id: String): Boolean = if (recovering) hasRecoveryAuthority(id) else isCurrent(id)
 
   fun attachConnection(
     id: String,
@@ -198,7 +215,7 @@ internal class IncomingCallController(
   }
 
   fun toggleMute(id: String) {
-    if (!isCurrent(id)) return
+    if (!canControl(id)) return
     if (platformMuted) {
       _state.value = _state.value?.copy(detail = "Use Android call controls to turn off system mute")
       return
@@ -211,7 +228,7 @@ internal class IncomingCallController(
     id: String,
     muted: Boolean,
   ) {
-    if (!isCurrent(id)) return
+    if (!canControl(id)) return
     platformMuted = muted
     if (!muted && _state.value?.detail == "Use Android call controls to turn off system mute") _state.value = _state.value?.copy(detail = null)
     updateMute()
@@ -227,7 +244,7 @@ internal class IncomingCallController(
     id: String,
     available: List<CallEndpoint>,
   ) {
-    if (!isCurrent(id)) return
+    if (!canControl(id)) return
     endpoints = available
     _audioRoutes.value = available.map { it.identifier.toString() to it.endpointName.toString() }
   }
@@ -237,7 +254,7 @@ internal class IncomingCallController(
     id: String,
     endpoint: CallEndpoint,
   ) {
-    if (!isCurrent(id)) return
+    if (!canControl(id)) return
     _audioOutput.value = endpoint.endpointName.toString()
     currentRouteIsEarpiece = endpoint.endpointType == CallEndpoint.TYPE_EARPIECE
     updateProximity()
@@ -248,7 +265,7 @@ internal class IncomingCallController(
     id: String,
     audio: CallAudioState,
   ) {
-    if (!isCurrent(id) || Build.VERSION.SDK_INT >= 34) return
+    if (!canControl(id) || Build.VERSION.SDK_INT >= 34) return
     platformMuteChanged(id, audio.isMuted)
     _audioRoutes.value =
       listOf(
@@ -267,7 +284,7 @@ internal class IncomingCallController(
     proximity.setEarpieceCallActive(
       currentRouteIsEarpiece && call != null &&
         (call.status == IncomingCallStatus.Connecting || call.status == IncomingCallStatus.Active) &&
-        isCurrent(call.invite.callId),
+        canControl(call.invite.callId),
     )
   }
 
@@ -276,7 +293,7 @@ internal class IncomingCallController(
     id: String,
     route: String,
   ) {
-    if (!isCurrent(id)) return
+    if (!canControl(id)) return
     val current = connection ?: return
     if (Build.VERSION.SDK_INT >= 34) {
       val endpoint = endpoints.firstOrNull { it.identifier.toString() == route } ?: return
@@ -287,7 +304,7 @@ internal class IncomingCallController(
           override fun onResult(result: Void?) = Unit
 
           override fun onError(error: CallEndpointException) {
-            if (isCurrent(id)) _state.value = _state.value?.copy(detail = "Audio route unavailable; choose another output")
+            if (canControl(id)) _state.value = _state.value?.copy(detail = "Audio route unavailable; choose another output")
           }
         },
       )
@@ -332,7 +349,7 @@ internal class IncomingCallController(
     service: IncomingCallForegroundService,
   ): Boolean {
     val call = _state.value ?: return false
-    if (!isCurrent(id) || call.status != IncomingCallStatus.Connecting || foregroundService != null) return false
+    if (!canControl(id) || call.status != IncomingCallStatus.Connecting || foregroundService != null) return false
     foregroundService = service
     expiryJob?.cancel()
     try {
@@ -341,28 +358,143 @@ internal class IncomingCallController(
       finish(IncomingCallStatus.Error, "Android could not keep the call active")
       return false
     }
-    audioJob =
-      scope.launch(Dispatchers.Main.immediate) {
-        try {
-          // Answer is the sole microphone-start boundary. The captured owner is checked again after setup.
-          startAudio(id, call.invite.sessionKey)
-          if (!isCurrent(id)) {
-            stopAudio(id)
-            return@launch
+    if (recovering) {
+      startRecoveryAttempt()
+    } else {
+      val generation = ++audioGeneration
+      audioJob =
+        scope.launch(Dispatchers.Main.immediate, start = CoroutineStart.LAZY) {
+          try {
+            // Answer is the sole microphone-start boundary; reconnects retain that accepted call.
+            startAudio(id, call.invite.sessionKey, false)
+            if (generation != audioGeneration) return@launch
+            if (!isCurrent(id)) {
+              transportInterrupted()
+              return@launch
+            }
+            audioConnected()
+          } catch (_: GatewayRequestNotEnqueued) {
+            if (generation == audioGeneration) transportInterrupted()
+          } catch (error: TimeoutCancellationException) {
+            if (generation == audioGeneration && isCurrent(id)) finish(IncomingCallStatus.Error, "Live voice connection timed out")
+          } catch (error: CancellationException) {
+            throw error
+          } catch (error: Exception) {
+            if (generation == audioGeneration && isCurrent(id)) finish(IncomingCallStatus.Error, "Live voice could not connect. Check Gateway Talk configuration.")
           }
-          _state.value = transitionIncomingCall(_state.value ?: return@launch, IncomingCallStatus.Active)
-          updateProximity()
-          connection?.setActive()
+        }
+      audioJob?.start()
+    }
+    return true
+  }
+
+  /** Transient network loss keeps only the already-answered call, never a microphone lease. */
+  fun transportInterrupted() {
+    val interruptedId = _state.value?.invite?.callId ?: return
+    scope.launch(Dispatchers.Main.immediate) {
+      val call = _state.value ?: return@launch
+      if (call.invite.callId != interruptedId || call.status.isTerminal) return@launch
+      if (!hasRecoveryAuthority(call.invite.callId) || call.status == IncomingCallStatus.Ringing) {
+        finish(IncomingCallStatus.Ended, "Gateway connection closed")
+        return@launch
+      }
+      ++audioGeneration
+      audioJob?.cancel()
+      audioJob = null
+      authority = null
+      stopAudio(call.invite.callId)
+      if (!recovering) {
+        recovering = true
+        recoveryAttempt = 0
+        // Independent of startup/retry cancellation: flapping cannot extend this deadline.
+        recoveryDeadlineJob =
+          scope.launch(Dispatchers.Main.immediate) {
+            delay(30_000)
+            if (recovering && _state.value?.invite?.callId == call.invite.callId) {
+              finish(IncomingCallStatus.Error, "Live voice connection timed out")
+            }
+          }
+      }
+      _state.value = transitionIncomingCall(call, IncomingCallStatus.Connecting)
+      updateProximity()
+      if (foregroundService != null) {
+        try {
           showNotification()
-        } catch (error: TimeoutCancellationException) {
-          if (isCurrent(id)) finish(IncomingCallStatus.Error, "Live voice connection timed out")
-        } catch (error: CancellationException) {
-          throw error
-        } catch (error: Exception) {
-          if (isCurrent(id)) finish(IncomingCallStatus.Error, "Live voice could not connect. Check Gateway Talk configuration.")
+        } catch (_: Exception) {
+          finish(IncomingCallStatus.Error, "Android could not keep the call active")
+          return@launch
         }
       }
-    return true
+      startRecoveryAttempt()
+    }
+  }
+
+  fun transportConnected() {
+    scope.launch(Dispatchers.Main.immediate) {
+      if (recovering) startRecoveryAttempt()
+    }
+  }
+
+  private fun startRecoveryAttempt() {
+    if (!recovering || foregroundService == null || audioJob?.isActive == true) return
+    val call = _state.value ?: return
+    val id = call.invite.callId
+    val generation = ++audioGeneration
+    audioJob =
+      scope.launch(Dispatchers.Main.immediate, start = CoroutineStart.LAZY) {
+        while (recovering && generation == audioGeneration) {
+          val retryDelay =
+            when (recoveryAttempt++) {
+              0 -> 1_000L
+              1 -> 2_000L
+              else -> 4_000L
+            }
+          delay(retryDelay)
+          if (generation != audioGeneration) return@launch
+          if (!hasRecoveryAuthority(id) || !hasPermission(Manifest.permission.RECORD_AUDIO)) {
+            finish(IncomingCallStatus.Ended, "Gateway connection closed")
+            return@launch
+          }
+          if (call.gatewayId != gatewayId() || isBusy()) continue
+          val freshAuthority = captureAuthority() ?: continue
+          if (!freshAuthority()) continue
+          authority = freshAuthority
+          try {
+            updateMute()
+            startAudio(id, call.invite.sessionKey, true)
+            // Never let an old completion stop a newer attempt sharing the same call id.
+            if (generation != audioGeneration) return@launch
+            if (!isCurrent(id)) {
+              stopAudio(id)
+              continue
+            }
+            audioConnected()
+            return@launch
+          } catch (error: CancellationException) {
+            if (error !is TimeoutCancellationException) throw error
+          } catch (_: Exception) {
+            // Recovery failures retry inside the original deadline, not a new timeout window.
+          }
+          if (generation != audioGeneration) return@launch
+          stopAudio(id)
+        }
+      }
+    audioJob?.start()
+  }
+
+  private fun audioConnected() {
+    recovering = false
+    recoveryAttempt = 0
+    recoveryDeadlineJob?.cancel()
+    recoveryDeadlineJob = null
+    _state.value = transitionIncomingCall(_state.value ?: return, IncomingCallStatus.Active)
+    try {
+      updateProximity()
+      connection?.setActive()
+      showNotification()
+    } catch (_: Exception) {
+      finish(IncomingCallStatus.Error, "Android could not keep the call active")
+    }
   }
 
   internal fun ownsForegroundService(service: IncomingCallForegroundService): Boolean = foregroundService === service && _state.value?.status?.isTerminal == false
@@ -402,7 +534,12 @@ internal class IncomingCallController(
     currentRouteIsEarpiece = false
     proximity.setEarpieceCallActive(false)
     expiryJob?.cancel()
+    ++audioGeneration
     audioJob?.cancel()
+    audioJob = null
+    recovering = false
+    recoveryDeadlineJob?.cancel()
+    recoveryDeadlineJob = null
     stopAudio(call.invite.callId)
     val ended = transitionIncomingCall(call, status, detail)
     _state.value = ended
@@ -412,6 +549,7 @@ internal class IncomingCallController(
     connection?.destroy()
     connection = null
     authority = null
+    recoveryAuthority = null
     endpoints = emptyList()
     _audioRoutes.value = emptyList()
     _audioOutput.value = "System audio"

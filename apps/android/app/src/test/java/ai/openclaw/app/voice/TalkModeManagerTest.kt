@@ -9,6 +9,7 @@ import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.GatewayClientInfo
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.testDeviceIdentityStore
@@ -1184,6 +1185,16 @@ class TalkModeManagerTest {
 
           proof.manager.stopAllCapture()
           proof.drainCancelledCapture()
+          proof.manager.prepareIncomingCall(incomingSessionKey, resuming = true)
+          proof.manager.setEnabled(true)
+          awaitTalkWork(proof) { proof.manager.isListening.value }
+          val resumed = requests.last { it.getValue("method").jsonPrimitive.content == "talk.session.create" }.getValue("params").jsonObject
+          assertEquals(incomingSessionKey, resumed.getValue("sessionKey").jsonPrimitive.content)
+          assertFalse("Recovery must not repeat the opening greeting", resumed.containsKey("greeting"))
+          assertNull(readPrivateField(proof.manager, "recognizer"))
+
+          proof.manager.stopAllCapture()
+          proof.drainCancelledCapture()
           proof.manager.prepareIncomingCall(null)
           proof.manager.setEnabled(true)
           awaitTalkWork(proof) { proof.manager.isListening.value }
@@ -1193,8 +1204,68 @@ class TalkModeManagerTest {
             proof.manager.statusText.value
               .contains("Native Talk:"),
           )
-          assertEquals(1, requests.count { it.getValue("method").jsonPrimitive.content == "talk.session.create" })
+          assertEquals(2, requests.count { it.getValue("method").jsonPrimitive.content == "talk.session.create" })
         }
+      }
+    }
+
+  @Test
+  fun incomingCallRetriesTransportFailureButNotAuthorizationFailure() =
+    runBlocking {
+      for (code in listOf("UNAVAILABLE", "FORBIDDEN")) {
+        val append = CompletableDeferred<Pair<String, WebSocket>>()
+        var interrupted = 0
+        var stopped = 0
+        withStartedTalk(
+          incomingCallSessionKey = "agent:assistant:prepared-call",
+          captureRelayStopNotification = { { current -> if (current()) stopped++ } },
+          captureRelayInterruptionNotification = { { current -> if (current()) interrupted++ } },
+          interceptRequest = { request, socket ->
+            if (request.getValue("method").jsonPrimitive.content == "talk.session.appendAudio") {
+              append.complete(request.getValue("id").jsonPrimitive.content to socket)
+              true
+            } else {
+              false
+            }
+          },
+        ) { proof ->
+          val (id, socket) = append.await()
+          socket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"$code","message":"synthetic failure"}}""")
+          awaitTalkWork(proof) { interrupted + stopped == 1 }
+          assertEquals(if (code == "UNAVAILABLE") 1 else 0, interrupted)
+          assertEquals(if (code == "FORBIDDEN") 1 else 0, stopped)
+          assertFalse(proof.manager.isEnabled.value)
+          assertFalse(proof.manager.isListening.value)
+          // The callback above records intent but has not settled the outer call owner.
+          // Its concurrent readiness waiter must see the same transport classification.
+          val readinessFailure = runCatching { proof.manager.awaitIncomingCallReady() }.exceptionOrNull()
+          assertEquals(code == "UNAVAILABLE", readinessFailure is GatewayRequestNotEnqueued)
+          assertNotNull(readinessFailure)
+          assertNull(readPrivateField(proof.manager, "recognizer"))
+        }
+      }
+    }
+
+  @Test
+  fun incomingCallLostTransportBeforeDisconnectNotificationRemainsRecoverable() =
+    runBlocking {
+      var interrupted = 0
+      var stopped = 0
+      withStartedTalk(
+        incomingCallSessionKey = "agent:assistant:prepared-call",
+        captureRelayStopNotification = { { current -> if (current()) stopped++ } },
+        captureRelayInterruptionNotification = { { current -> if (current()) interrupted++ } },
+      ) { proof ->
+        proof.manager.stopAllCapture()
+        proof.drainCancelledCapture()
+        proof.session.disconnectAndJoin()
+        // The UI still reports the previous hello; its physical request lease is already gone.
+        proof.manager.prepareIncomingCall("agent:assistant:prepared-call", resuming = true)
+        proof.manager.setEnabled(true)
+        awaitTalkWork(proof) { interrupted + stopped == 1 }
+        assertEquals(1, interrupted)
+        assertEquals(0, stopped)
+        assertFalse(proof.manager.isListening.value)
       }
     }
 
@@ -3038,6 +3109,7 @@ class TalkModeManagerTest {
     sessionKey: String = "main",
     incomingCallSessionKey: String? = null,
     captureRelayStopNotification: () -> ((() -> Boolean) -> Unit) = { {} },
+    captureRelayInterruptionNotification: () -> ((() -> Boolean) -> Unit) = captureRelayStopNotification,
     responseForRequest: (JsonObject, WebSocket) -> String? = { _, _ -> null },
     interceptRequest: (JsonObject, WebSocket) -> Boolean = { _, _ -> false },
     block: suspend (RealtimePlaybackProof) -> Unit,
@@ -3085,6 +3157,7 @@ class TalkModeManagerTest {
         realtimeCaptureDispatcher = captureDispatcher,
         realtimePlaybackDispatcher = StandardTestDispatcher(scheduler),
         captureRelayStopNotification = captureRelayStopNotification,
+        captureRelayInterruptionNotification = captureRelayInterruptionNotification,
       )
     val writes = mutableListOf<Triple<AudioTrack, ByteArray, AudioFormat>>()
     val listener = ShadowAudioTrack.OnAudioDataWrittenListener { track, bytes, format -> writes += Triple(track, bytes, format) }

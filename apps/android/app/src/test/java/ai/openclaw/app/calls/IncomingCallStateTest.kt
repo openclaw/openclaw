@@ -39,4 +39,17 @@ class IncomingCallStateTest {
     val declined = transitionIncomingCall(ringing, IncomingCallStatus.Declined)
     assertEquals(declined, transitionIncomingCall(declined, IncomingCallStatus.Connecting))
   }
+
+  @Test
+  fun `answered call can reconnect without reopening terminal calls`() {
+    val active = IncomingCallState(invite, "gateway-one", IncomingCallStatus.Active)
+    val reconnecting = transitionIncomingCall(active, IncomingCallStatus.Connecting)
+    assertEquals(IncomingCallStatus.Connecting, reconnecting.status)
+    assertEquals(invite, reconnecting.invite)
+    assertEquals(IncomingCallStatus.Active, transitionIncomingCall(reconnecting, IncomingCallStatus.Active).status)
+    for (terminal in IncomingCallStatus.entries.filter { it.isTerminal }) {
+      val ended = active.copy(status = terminal)
+      assertEquals(ended, transitionIncomingCall(ended, IncomingCallStatus.Connecting))
+    }
+  }
 }

@@ -75,7 +75,7 @@ class IncomingCallInteractionTest {
           gatewayId = { app.prefs.gatewayRegistry.activeStableId.value },
           captureAuthority = { { true } },
           isBusy = { false },
-          startAudio = { _, _ -> starts++ },
+          startAudio = { _, _, _ -> starts++ },
           stopAudio = { stopped = true },
           setMuted = { muted = it },
         )

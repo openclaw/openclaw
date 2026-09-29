@@ -1690,6 +1690,7 @@ class NodeRuntime private constructor(
         // Method and scope snapshots are synchronous above; refresh only after both so
         // this route cannot inherit readiness from the connection it replaced.
         systemAgentChatController.refresh(startIfNeeded = false)
+        incomingCalls.transportConnected()
         micCapture.onGatewayConnectionChanged(true)
         wearProxyBridge()?.publishConnection(connected = true, status = "Connected")
         scope.launch {
@@ -1704,7 +1705,7 @@ class NodeRuntime private constructor(
       },
       onDisconnected = { message ->
         if (wearRealtimeTalkControllerLazy.isInitialized()) wearRealtimeTalkController.abort()
-        incomingCalls.invalidate()
+        incomingCalls.transportInterrupted()
         clearOperatorGatewayState(retirePendingCronRuns = false)
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
@@ -1723,6 +1724,7 @@ class NodeRuntime private constructor(
         )
       },
       onConnectFailure = { error, pauseReconnect ->
+        if (pauseReconnect) incomingCalls.invalidate()
         if (wearRealtimeTalkControllerLazy.isInitialized()) wearRealtimeTalkController.abort()
         val problem = gatewayConnectionProblem(error, pauseReconnect)
         updateStatus {
@@ -2091,6 +2093,7 @@ class NodeRuntime private constructor(
           _nodeConnected.value = true
           nodeStatusText = "Connected"
         }
+        incomingCalls.transportConnected()
         notificationOutbox.onConnected()
         publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Connect)
         startNodeHostStatsReporting()
@@ -2105,7 +2108,7 @@ class NodeRuntime private constructor(
       },
       onDisconnected = { message ->
         invalidateNodeCapabilityApprovalState()
-        incomingCalls.invalidate()
+        incomingCalls.transportInterrupted()
         nodeHostStatsJob?.cancel()
         nodeHostStatsJob = null
         updateStatus {
@@ -2115,6 +2118,7 @@ class NodeRuntime private constructor(
         }
       },
       onConnectFailure = { error, pauseReconnect ->
+        if (pauseReconnect) incomingCalls.invalidate()
         updateStatus {
           nodeConnectionProblem = gatewayConnectionProblem(error, pauseReconnect)
           nodeStatusText = nodeConnectionProblem?.message ?: error.message
@@ -2431,15 +2435,28 @@ class NodeRuntime private constructor(
       },
       onBeforeSpeak = { micCapture.pauseForTts() },
       onAfterSpeak = { micCapture.resumeAfterTts() },
-      captureRelayStopNotification = {
-        val ownershipEpoch = voiceCaptureOwnershipEpoch.get()
-
-        fun(isCurrent: () -> Boolean) {
-          finishTalkModeAfterRelayClose(ownershipEpoch, isCurrent)
-          if (isCurrent()) incomingCalls.invalidate()
-        }
-      },
+      captureRelayStopNotification = { captureIncomingRelayStop(recoverable = false) },
+      captureRelayInterruptionNotification = { captureIncomingRelayStop(recoverable = true) },
     )
+  }
+
+  private fun captureIncomingRelayStop(recoverable: Boolean): (() -> Boolean) -> Unit {
+    val ownershipEpoch = voiceCaptureOwnershipEpoch.get()
+    return { isCurrent ->
+      scope.launch(Dispatchers.Main.immediate) {
+        val ownsCapture =
+          synchronized(voiceCaptureOwnershipLock) {
+            voiceCaptureOwnershipEpoch.get() == ownershipEpoch && isCurrent()
+          }
+        if (ownsCapture) {
+          if (incomingCallCaptureId != null) {
+            if (recoverable) incomingCalls.transportInterrupted() else incomingCalls.invalidate()
+          } else {
+            finishTalkModeAfterRelayClose(ownershipEpoch, isCurrent)
+          }
+        }
+      }
+    }
   }
 
   @Volatile private var incomingCallCaptureId: String? = null
@@ -2455,14 +2472,27 @@ class NodeRuntime private constructor(
         val operatorLease = operatorSession.captureRequestLease(connectedEndpoint?.stableId)
         if (nodeLease == null || operatorLease == null) null else ({ nodeLease.isCurrent() && operatorLease.isCurrent() })
       },
+      captureRecoveryAuthority = {
+        val connection = activeGatewayConnection
+        val endpointId = connectedEndpoint?.stableId
+        if (connection == null || endpointId == null) {
+          null
+        } else {
+          {
+            activeGatewayConnection === connection && connectedEndpoint?.stableId == endpointId &&
+              prefs.gatewayRegistry.activeStableId.value == endpointId && prefs.isIncomingCallAllowed(endpointId)
+          }
+        }
+      },
       isBusy = {
         _voiceCaptureMode.value != VoiceCaptureMode.Off || voiceNoteOwnsMic || dictationOwnsMic || cameraAudioOwnsMic || gatewayConnectionHandoff.value.pending
       },
-      startAudio = { callId, sessionKey ->
+      startAudio = { callId, sessionKey, resuming ->
         synchronized(voiceCaptureOwnershipLock) {
           check(incomingCallCaptureId == null && _voiceCaptureMode.value == VoiceCaptureMode.Off && !voiceNoteOwnsMic && !dictationOwnsMic && !cameraAudioOwnsMic) { "Microphone busy" }
           incomingCallCaptureId = callId
-          talkMode.prepareIncomingCall(sessionKey)
+          talkMode.prepareIncomingCall(sessionKey, resuming)
+          talkMode.setIncomingCallMuted(incomingCalls.muted.value)
           setVoiceCaptureMode(VoiceCaptureMode.TalkMode)
         }
         talkMode.awaitIncomingCallReady()

@@ -3,6 +3,7 @@ package ai.openclaw.app.calls
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
+import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
@@ -14,8 +15,10 @@ import android.telecom.CallAudioState
 import android.telecom.CallEndpoint
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -24,6 +27,7 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -66,6 +70,12 @@ class IncomingCallControllerTest {
     val app = RuntimeEnvironment.getApplication()
     val prefs = SecurePrefs(app, app.getSharedPreferences("secure-calls-test", Context.MODE_PRIVATE))
     var authority = true
+    var lifecycleAuthority = true
+    var busy = false
+    var appliedMute = false
+    val resumptions = mutableListOf<Boolean>()
+    val targets = mutableListOf<Pair<String, String>>()
+    val startMuted = mutableListOf<Boolean>()
     var gateway: String? = "synthetic-gateway"
     var starts = 0
     var stops = 0
@@ -94,13 +104,17 @@ class IncomingCallControllerTest {
           prefs = prefs,
           gatewayId = { gateway },
           captureAuthority = { { authority } },
-          isBusy = { false },
-          startAudio = { _, _ ->
+          captureRecoveryAuthority = { { lifecycleAuthority } },
+          isBusy = { busy },
+          startAudio = { callId, sessionKey, resuming ->
             starts++
+            resumptions += resuming
+            targets += callId to sessionKey
+            startMuted += appliedMute
             start()
           },
           stopAudio = { stops++ },
-          setMuted = {},
+          setMuted = { appliedMute = it },
         )
     }
   }
@@ -568,6 +582,301 @@ class IncomingCallControllerTest {
         assertFalse(f.controller.invoke("talk.incoming", f.payload).ok)
         assertEquals(null, f.controller.state.value)
         assertEquals(0, f.starts)
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  private fun status(f: Fixture) =
+    f.controller.state.value
+      ?.status
+
+  private suspend fun answered(f: Fixture): IncomingCallForegroundService {
+    assertTrue(f.controller.invoke("talk.incoming", f.payload).ok)
+    f.controller.answer(f.id)
+    val service = Robolectric.buildService(IncomingCallForegroundService::class.java).create().get()
+    assertTrue(f.controller.foregroundServiceReady(f.id, service))
+    return service
+  }
+
+  @Test
+  fun `socket loss preserves answered call service mute route and invited session then resumes with fresh authority`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        val f = Fixture(this)
+        val service = answered(f)
+        f.controller.toggleMute(f.id)
+        setEndpoint(f, CallEndpoint.TYPE_SPEAKER, "Speaker")
+        f.gateway = null
+        f.authority = false
+        f.controller.transportInterrupted()
+        assertEquals(IncomingCallStatus.Connecting, status(f))
+        assertTrue(f.controller.ownsForegroundService(service))
+        assertEquals(1, f.stops)
+        f.controller.toggleMute(f.id)
+        assertFalse(f.controller.muted.value)
+        f.controller.toggleMute(f.id)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(1, f.starts)
+        f.gateway = "synthetic-gateway"
+        f.controller.transportConnected()
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals("Stale transport authority cannot restart capture", 1, f.starts)
+        f.authority = true
+        f.controller.transportConnected()
+        advanceTimeBy(4_000)
+        runCurrent()
+        assertEquals(IncomingCallStatus.Active, status(f))
+        assertEquals(listOf(false, true), f.resumptions)
+        assertEquals(listOf(f.id to "agent:assistant:test-call", f.id to "agent:assistant:test-call"), f.targets)
+        assertEquals(listOf(false, true), f.startMuted)
+        assertEquals("Speaker", f.controller.audioOutput.value)
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertEquals(IncomingCallStatus.Active, status(f))
+        f.controller.end(f.id)
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun `flapping and failed resumes never renew the original thirty second deadline`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        var fail = false
+        val f = Fixture(this) { if (fail) error("temporary network error") }
+        val service = answered(f)
+        fail = true
+        f.controller.transportInterrupted()
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(2, f.starts)
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(3, f.starts)
+        advanceTimeBy(4_000)
+        runCurrent()
+        assertEquals(4, f.starts)
+        advanceTimeBy(22_999)
+        runCurrent()
+        f.controller.transportInterrupted()
+        assertEquals(IncomingCallStatus.Connecting, status(f))
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(IncomingCallStatus.Error, status(f))
+        assertFalse(f.controller.ownsForegroundService(service))
+        val starts = f.starts
+        fail = false
+        f.controller.transportConnected()
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertEquals(starts, f.starts)
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun `ringing cannot recover or start microphone without answer`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        val f = Fixture(this)
+        assertTrue(f.controller.invoke("talk.incoming", f.payload).ok)
+        f.gateway = null
+        f.controller.transportInterrupted()
+        f.gateway = "synthetic-gateway"
+        f.controller.transportConnected()
+        f.controller.answer(f.id)
+        advanceTimeBy(35_000)
+        runCurrent()
+        assertEquals(IncomingCallStatus.Ended, status(f))
+        assertEquals(0, f.starts)
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun `revocation invalidation and local end during outage prevent resurrection`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        for (reason in listOf("consent", "lifecycle", "invalidate", "end", "microphone")) {
+          val f = Fixture(this)
+          answered(f)
+          f.gateway = null
+          f.controller.transportInterrupted()
+          when (reason) {
+            "consent" -> f.prefs.setIncomingCallsEnabled(false)
+            "lifecycle" -> f.lifecycleAuthority = false
+            "invalidate" -> f.controller.invalidate()
+            "end" -> f.controller.end(f.id)
+            "microphone" -> shadowOf(f.app).denyPermissions(Manifest.permission.RECORD_AUDIO)
+          }
+          f.gateway = "synthetic-gateway"
+          f.controller.transportConnected()
+          advanceTimeBy(1_000)
+          runCurrent()
+          assertTrue("$reason must end recovery", status(f)?.isTerminal == true)
+          assertEquals(1, f.starts)
+        }
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun `busy capture blocks resume without stealing the microphone`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        val f = Fixture(this)
+        answered(f)
+        f.controller.transportInterrupted()
+        f.busy = true
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(1, f.starts)
+        assertEquals(1, f.stops)
+        f.busy = false
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(2, f.starts)
+        assertEquals(IncomingCallStatus.Active, status(f))
+        f.controller.end(f.id)
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun `loss between answer and foreground service adoption remains recoverable`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        val f = Fixture(this)
+        assertTrue(f.controller.invoke("talk.incoming", f.payload).ok)
+        f.controller.answer(f.id)
+        f.gateway = null
+        f.controller.transportInterrupted()
+        val service = Robolectric.buildService(IncomingCallForegroundService::class.java).create().get()
+        assertTrue(f.controller.foregroundServiceReady(f.id, service))
+        assertEquals(0, f.starts)
+        f.gateway = "synthetic-gateway"
+        f.controller.transportConnected()
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(listOf(true), f.resumptions)
+        assertEquals(IncomingCallStatus.Active, status(f))
+        f.controller.end(f.id)
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun `stale cancelled startup completion cannot stop or activate a newer recovery attempt`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        val release = CompletableDeferred<Unit>()
+        var attempt = 0
+        val f =
+          Fixture(this) {
+            if (++attempt == 1) withContext(NonCancellable) { release.await() }
+          }
+        answered(f)
+        assertEquals(IncomingCallStatus.Connecting, status(f))
+        f.controller.transportInterrupted()
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(IncomingCallStatus.Active, status(f))
+        val stops = f.stops
+        release.complete(Unit)
+        runCurrent()
+        assertEquals(stops, f.stops)
+        assertEquals(IncomingCallStatus.Active, status(f))
+        f.controller.end(f.id)
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun `recovery deadline still closes suspended noncancellable startup without resurrection`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        val release = CompletableDeferred<Unit>()
+        var attempt = 0
+        val f =
+          Fixture(this) {
+            if (++attempt > 1) withContext(NonCancellable) { release.await() }
+          }
+        answered(f)
+        f.controller.transportInterrupted()
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertEquals(IncomingCallStatus.Error, status(f))
+        val stops = f.stops
+        release.complete(Unit)
+        runCurrent()
+        assertEquals(stops, f.stops)
+        assertEquals(IncomingCallStatus.Error, status(f))
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun `synchronous transport failure during startup cannot overwrite the recovery job`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        lateinit var f: Fixture
+        var attempt = 0
+        f =
+          Fixture(this) {
+            if (++attempt == 1) f.controller.transportInterrupted()
+          }
+        answered(f)
+        f.controller.transportConnected()
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(2, f.starts)
+        assertEquals(1, f.stops)
+        assertEquals(IncomingCallStatus.Active, status(f))
+        f.controller.end(f.id)
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun `initial relay transport failure recovers before asynchronous failure notification arrives`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        var attempt = 0
+        val f =
+          Fixture(this) {
+            if (++attempt == 1) throw GatewayRequestNotEnqueued("socket interrupted")
+          }
+        val service = answered(f)
+        assertEquals(IncomingCallStatus.Connecting, status(f))
+        assertTrue(f.controller.ownsForegroundService(service))
+        assertEquals(1, f.stops)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(IncomingCallStatus.Active, status(f))
+        assertEquals(listOf(false, true), f.resumptions)
+        f.controller.end(f.id)
       } finally {
         Dispatchers.resetMain()
       }
