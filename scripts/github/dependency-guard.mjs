@@ -4,7 +4,7 @@
 // lockfile-only PR changes without executing contributor code.
 import { appendFile } from "node:fs/promises";
 import {
-  SupersededReviewError,
+  ObsoleteReviewError,
   assertGuardUnchanged,
   findMaintainerApproval,
   finishGuard,
@@ -723,7 +723,7 @@ export async function reviewDependencyChanges(
           error instanceof GitHubRateLimitError ||
           error instanceof GitHubReadTimeoutError ||
           error instanceof GitHubDiffDataError ||
-          error instanceof SupersededReviewError
+          error instanceof ObsoleteReviewError
         ) {
           throw error;
         }
@@ -797,7 +797,17 @@ export async function reviewDependencyChanges(
     }),
   );
   if (mode === "autoscrub") {
-    await assertGuardUnchanged(guard);
+    try {
+      await assertGuardUnchanged(guard);
+    } catch (error) {
+      // A lifecycle stop must not hide a cleanup mutation that already failed.
+      if (autoscrubStatus?.kind === "failed") {
+        throw new Error(`Dependency lockfile autoscrub failed: ${autoscrubStatus.reason}`, {
+          cause: error,
+        });
+      }
+      throw error;
+    }
   }
   await upsertComment(existingGuardComment, body);
   await writeSummary(body);
@@ -810,7 +820,7 @@ export async function reviewDependencyChanges(
 if (import.meta.url === `file://${process.argv[1]}`) {
   reviewDependencyChanges().catch(
     /** @param {unknown} error */ (error) => {
-      if (error instanceof SupersededReviewError) {
+      if (error instanceof ObsoleteReviewError) {
         console.log(error.message);
         return;
       }

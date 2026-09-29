@@ -19,6 +19,11 @@ const pr = {
   head: { sha: head, ref: "change", repo: { id: 2 } },
   base: { sha: "b".repeat(40), ref: "main", repo: { id: 1 } },
 };
+const lifecycleChanges = [
+  { name: "closed PR", changedPr: { ...pr, state: "closed" } },
+  { name: "draft PR", changedPr: { ...pr, draft: true } },
+  { name: "target branch", changedPr: { ...pr, base: { ...pr.base, ref: "stable" } } },
+];
 const rollout = {
   number: 152415,
   state: "closed",
@@ -66,7 +71,10 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadli
   writeFileSync(environmentPath, "");
   writeFileSync(logPath, "");
   // The resolver selects the PR for CI-completion events as well as PR/comments.
-  writeFileSync(eventPath, JSON.stringify({ workflow_run: { id: 10 } }));
+  writeFileSync(
+    eventPath,
+    JSON.stringify({ repository: { default_branch: "main" }, workflow_run: { id: 10 } }),
+  );
   writeFileSync(
     fixturePath,
     JSON.stringify({
@@ -347,6 +355,46 @@ describe("combined security review entry point", () => {
     }
   });
 
+  it("preserves a failed cleanup mutation when the PR then closes", () => {
+    const cleanupPr = {
+      ...pr,
+      changed_files: 1,
+      head: { ...pr.head, repo: { id: 1, full_name: "openclaw/openclaw" } },
+    };
+    const result = evaluate(
+      {
+        [`GET ${pullPath}`]: {
+          responses: [
+            cleanupPr,
+            cleanupPr,
+            cleanupPr,
+            cleanupPr,
+            { ...cleanupPr, state: "closed" },
+          ],
+        },
+        [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml", status: "modified" }],
+        [rolePath]: { role_name: "read" },
+        [`GET /repos/openclaw/openclaw/dependency-graph/compare/${pr.base.sha}...${head}`]: [],
+        [`GET /repos/openclaw/openclaw/compare/${pr.base.sha}...${head}`]: {
+          base_commit: { sha: pr.base.sha },
+          merge_base_commit: { sha: pr.base.sha },
+        },
+        [`GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml`]: {
+          type: "file",
+          encoding: "base64",
+          content: Buffer.from("lockfileVersion: '9.0'\n").toString("base64"),
+        },
+        "POST /graphql": { httpError: 500 },
+      },
+      "autoscrub",
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Dependency lockfile autoscrub failed");
+    expect(result.stderr).toContain("Fixture API failure");
+    expect(result.requests.filter((entry) => entry.path === "/graphql")).toHaveLength(1);
+    expect(result.combined).not.toContain("success");
+  });
+
   it("does not replay a failed notice write when a sibling read later times out", () => {
     const commentPath = "/repos/openclaw/openclaw/issues/7/comments";
     const result = evaluate({
@@ -502,13 +550,12 @@ describe("combined security review entry point", () => {
 
   it.each([
     { name: "head", changedPr: { ...pr, head: { ...pr.head, sha: "d".repeat(40) } }, status: 0 },
-    { name: "target branch", changedPr: { ...pr, base: { ...pr.base, ref: "stable" } }, status: 1 },
+    ...lifecycleChanges.map(({ name, changedPr }) => ({ name, changedPr, status: 0 })),
     {
       name: "author",
       changedPr: { ...pr, user: { id: 2, login: "other-author", type: "User" } },
       status: 1,
     },
-    { name: "state", changedPr: { ...pr, state: "closed" }, status: 1 },
   ])("stops for a changed $name during file-list recovery", ({ changedPr, status }) => {
     const result = evaluate({
       [`GET ${pullPath}`]: { responses: [pr, pr, changedPr] },
@@ -516,7 +563,7 @@ describe("combined security review entry point", () => {
     });
     expect(result.status).toBe(status);
     expect(result.stdout + result.stderr).toContain(
-      status === 0 ? "Superseded" : "pull request changed",
+      status === 0 ? "skipping" : "pull request changed",
     );
     expect(result.requests.some((entry) => entry.body?.state === "success")).toBe(false);
   });
@@ -969,6 +1016,66 @@ describe("combined security review entry point", () => {
     },
   );
 
+  it.each(lifecycleChanges)("skips an ineligible $name at each workflow step", ({ changedPr }) => {
+    for (const mode of ["detect", "autoscrub", "enforce"]) {
+      const result = evaluate({ [`GET ${pullPath}`]: changedPr }, mode);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.requests.every((entry) => entry.method === "GET")).toBe(true);
+    }
+  });
+
+  it.each(lifecycleChanges)("stops a $name before reading more file pages", ({ changedPr }) => {
+    const page = Array.from({ length: 100 }, (_, index) => ({
+      filename: `docs/page-${index}.md`,
+      status: "modified",
+    }));
+    const result = evaluate({
+      [`GET ${pullPath}`]: {
+        settlesAt: "2026-01-02T00:00:30Z",
+        before: { ...pr, changed_files: 202 },
+        after: { ...changedPr, changed_files: 202 },
+      },
+      [`GET ${pullPath}/files`]: {
+        responses: [
+          { advanceMs: 15_000, response: page },
+          { advanceMs: 15_000, response: page },
+          files,
+        ],
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.requests.filter((entry) => entry.path === `${pullPath}/files`)).toHaveLength(2);
+    expect(result.requests.at(-1)).toMatchObject({ method: "GET", path: pullPath });
+    expect(result.requests.some((entry) => entry.body?.state === "success")).toBe(false);
+  });
+
+  it.each(lifecycleChanges)(
+    "preserves an earlier guard error after a $name change",
+    ({ changedPr }) => {
+      const result = evaluate({
+        [rolePath]: { httpError: 403 },
+        [`GET ${pullPath}`]: { responses: [pr, pr, changedPr] },
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Fixture API failure");
+      expect(result.combined.at(-1)).toBe("failure");
+    },
+  );
+
+  it.each([
+    { ...pr, state: "unknown" },
+    { ...pr, draft: "true" },
+    { ...pr, base: { ...pr.base, ref: "" } },
+    { ...pr, state: "closed", maintainer_can_modify: false },
+    { ...pr, draft: true, user: { ...pr.user, id: 2 } },
+    { ...pr, base: { ref: "stable", repo: { id: 3 } } },
+  ])("keeps invalid or authority-changing transitions as failures: %j", (changedPr) => {
+    const result = evaluate({ [`GET ${pullPath}`]: { responses: [pr, changedPr] } });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("pull request changed");
+    expect(result.combined).not.toContain("success");
+  });
+
   it.each([undefined, "", "main"])(
     "does not treat an invalid live head %s as superseded",
     (sha) => {
@@ -1356,11 +1463,7 @@ describe("combined security review entry point", () => {
       changedPr: { ...pr, head: { ...pr.head, sha: "d".repeat(40) } },
       changedFields: [],
     },
-    {
-      name: "target branch",
-      changedPr: { ...pr, base: { ...pr.base, ref: "stable" } },
-      changedFields: ["base.ref"],
-    },
+    ...lifecycleChanges.map(({ name, changedPr }) => ({ name, changedPr, changedFields: [] })),
     {
       name: "missing head",
       changedPr: { ...pr, head: { ...pr.head, sha: undefined } },
@@ -1381,11 +1484,11 @@ describe("combined security review entry point", () => {
         responses: [pr, pr, pr, pr, pr, changedPr],
       },
     });
-    const superseded = changedFields.length === 0;
-    expect(result.status).toBe(superseded ? 0 : 1);
+    const obsolete = changedFields.length === 0;
+    expect(result.status).toBe(obsolete ? 0 : 1);
     expect(result.combined).not.toContain("success");
-    if (superseded) {
-      expect(result.stdout).toContain("Superseded");
+    if (obsolete) {
+      expect(result.stdout).toContain("skipping");
       expect(result.stderr).toBe("");
       expect(result.requests.at(-1)).toMatchObject({ method: "GET", path: pullPath });
       expect(
