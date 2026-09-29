@@ -1,5 +1,6 @@
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { WebInboundCallbackMessage } from "./inbound/types.js";
 import { jidToE164 } from "./targets-runtime.js";
 
 const WHATSAPP_LID_RE = /@(lid|hosted\.lid)$/i;
@@ -22,34 +23,24 @@ export type WhatsAppReplyContext = {
 };
 
 type LegacySenderLike = {
-  platform: {
-    sender?: WhatsAppIdentity;
-    senderJid?: string;
-    senderE164?: string;
-    senderName?: string;
-  };
+  platform: Pick<
+    WebInboundCallbackMessage["platform"],
+    "sender" | "senderJid" | "senderE164" | "senderName"
+  >;
 };
 
 type LegacySelfLike = {
-  platform: {
-    self?: WhatsAppSelfIdentity;
-    selfJid?: string | null;
-    selfLid?: string | null;
-    selfE164?: string | null;
-  };
+  platform: Pick<
+    WebInboundCallbackMessage["platform"],
+    "self" | "selfJid" | "selfLid" | "selfE164"
+  >;
 };
 
 type LegacyReplyLike = {
-  quote?: {
-    context?: WhatsAppReplyContext;
-    id?: string;
-    body?: string;
-    sender?: {
-      displayName?: string;
-      jid?: string;
-      e164?: string;
-    };
-  };
+  quote?: Pick<
+    NonNullable<WebInboundCallbackMessage["quote"]>,
+    "context" | "id" | "body" | "sender"
+  >;
 };
 
 type LegacyMentionsLike = {
