@@ -368,7 +368,7 @@ describe("llama-server setup", () => {
       for (const invalid of [
         "not a valid URL",
         "ftp://localhost:8080",
-        "http://user:password@localhost:8080",
+        "http://operator@localhost:8080",
       ]) {
         expect(prompt.validate?.(invalid)).toMatch(/HTTP.*URL/i);
       }
