@@ -190,7 +190,6 @@ extensions/slack/src/monitor/provider.ts
 extensions/slack/src/monitor/replies.test.ts
 extensions/slack/src/monitor/slash.test.ts
 extensions/slack/src/monitor/slash.ts
-extensions/slack/src/send.blocks.test.ts
 extensions/slack/src/send.ts
 extensions/telegram/src/action-runtime.ts
 extensions/telegram/src/bot-message-context.session.ts
@@ -382,7 +381,6 @@ src/cli/command-secret-gateway.ts
 src/cli/config-cli.test.ts
 src/cli/cron-cli.test.ts
 src/cli/daemon-cli/status.gather.test.ts
-src/cli/daemon-cli/status.print.test.ts
 src/cli/devices-cli.runtime.ts
 src/cli/devices-cli.test.ts
 src/cli/exec-approvals-cli.ts
@@ -400,7 +398,6 @@ src/cli/plugins-cli.runtime.ts
 src/cli/plugins-cli.update.test.ts
 src/cli/run-main.exit.test.ts
 src/cli/run-main.ts
-src/cli/skills-cli.commands.test.ts
 src/cli/skills-cli.ts
 src/commands/agent-via-gateway.test.ts
 src/commands/agent-via-gateway.ts
@@ -412,7 +409,6 @@ src/commands/daemon-install-helpers.test.ts
 src/commands/daemon-install-helpers.ts
 src/commands/doctor-auth-flat-profiles.test.ts
 src/commands/doctor-auth-flat-profiles.ts
-src/commands/doctor-config-flow.test.ts
 src/commands/doctor-gateway-services.test.ts
 src/commands/doctor-legacy-config.migrations.test.ts
 src/commands/doctor-memory-search.test.ts
@@ -599,7 +595,6 @@ src/node-host/invoke-system-run-plan.test.ts
 src/node-host/invoke-system-run.test.ts
 src/node-host/invoke-system-run.ts
 src/node-host/invoke.ts
-src/plugin-sdk/approval-native-helpers.ts
 src/plugin-sdk/core.ts
 src/plugin-sdk/provider-auth.test.ts
 src/plugin-sdk/provider-stream-shared.test.ts

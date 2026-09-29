@@ -1,7 +1,6 @@
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isOpenAIResponsesReplayContext } from "./openai-responses-compaction-replay.js";
 import {
   responsesContinuationPrefixFingerprint,
   type ResponsesContinuationRequest,
@@ -13,6 +12,7 @@ import {
 } from "./openai-responses-replay-messages-internal.js";
 import {
   buildProviderReplayContext,
+  isProviderReplayContext,
   providerReplayContextMatches,
 } from "./provider-replay-context.js";
 import { sha256Hex } from "./transport-utils.js";
@@ -114,7 +114,7 @@ export function resolveResponsesContextUsageBoundary(
     const { projection, prefixHash, prefixLength, promptTokens, totalTokens, includeSystemPrompt } =
       state;
     if (
-      !isOpenAIResponsesReplayContext(state) ||
+      !isProviderReplayContext(state) ||
       !providerReplayContextMatches(state, buildProviderReplayContext(model, identity)) ||
       message.provider !== model.provider ||
       message.api !== model.api ||

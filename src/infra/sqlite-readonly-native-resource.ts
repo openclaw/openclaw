@@ -6,6 +6,7 @@ import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
+import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
 import type {
@@ -351,7 +352,8 @@ export function createNativeWorkerResource(
         if (
           allocating &&
           !session.native.notStarted &&
-          !(error instanceof SqliteSnapshotAllocationRefusedError)
+          !(error instanceof SqliteSnapshotAllocationRefusedError) &&
+          !isPrivateDirectoryCreationRefused(error)
         ) {
           uncertainAllocations.push(
             new SqliteSnapshotCleanupError(

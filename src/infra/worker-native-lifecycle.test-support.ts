@@ -12,6 +12,7 @@ import {
   withRuntimeWorkerGeneration,
 } from "./runtime-worker-generation.js";
 import { getTrackedWorkerLifecycleSnapshot } from "./worker-cpu.js";
+import { runNativeColdRecovery } from "./worker-native-lifecycle.cold-recovery.test-support.js";
 import {
   captureRetainedNativeWorkerSource,
   createRetainedNativeWorker,
@@ -587,6 +588,7 @@ assert.ok(
     ending === "supervisor-loss" ||
     ending === "native-resource" ||
     ending === "resource-supervisor-loss" ||
+    ending === "resource-cold-supervisor-loss" ||
     ending === "resource-close-supervisor-loss" ||
     ending === "resource-late-attachment" ||
     ending === "resource-owner-reply-loss" ||
@@ -603,6 +605,8 @@ if (ending === "generation") {
   await runSupervisorLoss();
 } else if (ending === "native-resource") {
   await runNativeResourceLifecycle(directory, serviceNativeUntil);
+} else if (ending === "resource-cold-supervisor-loss") {
+  await runNativeColdRecovery(directory, serviceNativeUntil);
 } else if (ending === "resource-supervisor-loss") {
   await runNativeResourceLifecycle(directory, serviceNativeUntil, true);
 } else if (ending === "resource-close-supervisor-loss") {

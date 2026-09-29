@@ -1202,7 +1202,7 @@ packages/ai/src/transports/openai-responses-client.ts	11
 packages/ai/src/transports/openai-responses-compact-request.ts	2
 packages/ai/src/transports/openai-responses-continuation.ts	2
 packages/ai/src/transports/openai-responses-contracts.ts	1
-packages/ai/src/transports/openai-responses-debug.ts	12
+packages/ai/src/transports/openai-responses-debug.ts	11
 packages/ai/src/transports/openai-responses-params-internal.ts	8
 packages/ai/src/transports/openai-responses-payload-policy.ts	3
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
@@ -1274,7 +1274,6 @@ packages/normalization-core/src/stable-stringify.ts	1
 packages/normalization-core/src/string-coerce.ts	1
 packages/sdk/src/event-hub.ts	2
 packages/sdk/src/transport.ts	3
-packages/session-url-contract/src/parse.ts	1
 packages/terminal-core/src/note.ts	1
 packages/terminal-core/src/prompt-select-styled-params.ts	1
 packages/terminal-core/src/stream-writer.ts	1
@@ -1406,7 +1405,6 @@ src/agents/embedded-agent-runner/compact.hooks.harness.ts	7
 src/agents/embedded-agent-runner/compaction-diagnostics.ts	5
 src/agents/embedded-agent-runner/context-engine-maintenance.ts	3
 src/agents/embedded-agent-runner/delivery-evidence.ts	1
-src/agents/embedded-agent-runner/direct-compaction-preparation.ts	1
 src/agents/embedded-agent-runner/extensions.ts	1
 src/agents/embedded-agent-runner/extra-params.ts	4
 src/agents/embedded-agent-runner/google-prompt-cache.ts	5
@@ -1420,8 +1418,7 @@ src/agents/embedded-agent-runner/model.registry-resolution.ts	3
 src/agents/embedded-agent-runner/model.ts	5
 src/agents/embedded-agent-runner/openrouter-model-capabilities.ts	2
 src/agents/embedded-agent-runner/prompt-cache-observability.ts	2
-src/agents/embedded-agent-runner/replay-history.ts	23
-src/agents/embedded-agent-runner/result-fallback-classifier.ts	2
+src/agents/embedded-agent-runner/replay-history.ts	20
 src/agents/embedded-agent-runner/run-entry.ts	2
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts	4
 src/agents/embedded-agent-runner/run/attempt-before-agent-run.ts	2
@@ -1429,7 +1426,7 @@ src/agents/embedded-agent-runner/run/attempt-client-tools.ts	2
 src/agents/embedded-agent-runner/run/attempt-context-summary.ts	2
 src/agents/embedded-agent-runner/run/attempt-execution-phase.ts	1
 src/agents/embedded-agent-runner/run/attempt-finalize.ts	2
-src/agents/embedded-agent-runner/run/attempt-history.ts	13
+src/agents/embedded-agent-runner/run/attempt-history.ts	11
 src/agents/embedded-agent-runner/run/attempt-llm-boundary.ts	11
 src/agents/embedded-agent-runner/run/attempt-normalization.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-build.ts	1
@@ -2538,7 +2535,6 @@ src/infra/windows-port-pids.ts	2
 src/infra/windows-powershell-spawn.ts	1
 src/infra/windows-shell-command.ts	1
 src/interactive/payload.ts	1
-src/llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.ts	2
 src/llm/providers/stream-wrappers/google-thinking-payload.ts	3
 src/llm/providers/stream-wrappers/moonshot-thinking.ts	2
 src/llm/providers/stream-wrappers/openai.ts	12
@@ -2661,13 +2657,11 @@ src/plugin-sdk/provider-entry.ts	3
 src/plugin-sdk/provider-onboard.ts	5
 src/plugin-sdk/provider-stream-shared.ts	14
 src/plugin-sdk/provider-stream.ts	1
-src/plugin-sdk/provider-tools.ts	5
+src/plugin-sdk/provider-tools.ts	4
 src/plugin-sdk/qa-channel-protocol.ts	1
-src/plugin-sdk/qa-channel.ts	15
 src/plugin-sdk/qa-lab.ts	2
 src/plugin-sdk/qa-runtime.ts	5
 src/plugin-sdk/reply-payload.ts	2
-src/plugin-sdk/runtime-store-registry.ts	1
 src/plugin-sdk/runtime-store.ts	2
 src/plugin-sdk/secret-ref-runtime.ts	2
 src/plugin-sdk/session-store-runtime-internal.ts	1
@@ -2836,7 +2830,7 @@ src/secrets/runtime-owner-assignments.ts	1
 src/secrets/runtime-secret-scan.ts	1
 src/secrets/runtime-state.ts	4
 src/secrets/runtime-web-tools.shared.ts	1
-src/secrets/runtime-web-tools.ts	4
+src/secrets/runtime-web-tools.ts	3
 src/secrets/runtime.ts	4
 src/secrets/store/secret-store.ts	2
 src/secrets/target-registry-query.ts	1
@@ -2858,10 +2852,10 @@ src/sessions/user-turn-transcript.ts	5
 src/shared/account-enabled.ts	1
 src/shared/bounded-serial-queue.ts	1
 src/shared/chat-content.ts	2
-src/shared/chat-message-content.ts	7
+src/shared/chat-message-content.ts	1
 src/shared/config-eval.ts	1
 src/shared/deferred.ts	1
-src/shared/frontmatter.ts	5
+src/shared/frontmatter.ts	1
 src/shared/global-singleton.ts	4
 src/shared/json-schema-defaults.ts	25
 src/shared/message-content-blocks.ts	2
@@ -2872,7 +2866,6 @@ src/shared/pid-alive.ts	2
 src/shared/runtime-import.ts	1
 src/shared/safe-record.ts	1
 src/shared/store-writer-queue.ts	1
-src/shared/transcript-only-openclaw-assistant.ts	4
 src/shared/worker-bundle-archive.ts	1
 src/skills/lifecycle/clawhub-install-core.ts	2
 src/skills/lifecycle/clawhub-store.ts	4

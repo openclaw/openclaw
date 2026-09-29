@@ -76,6 +76,11 @@ Public failure reports retain the rejected schema area, such as `gateway.*`,
 while hiding operator-defined keys and rejected values. Admission still runs
 when the selected package version matches the installed version; the no-op
 decision follows validation of the selected artifact and live installation.
+When switching channels, Doctor can prepare a read-only projection of supported
+legacy fields for database checks. Each projection stays bound to its original
+config bytes and include files. If the managed service uses another profile,
+caller and service projections remain separate; inspecting the caller does not
+rewrite its configuration.
 Guided recovery recognizes the saved config failure after a later successful
 update and still verifies the installed runtime and Gateway readiness.
 
