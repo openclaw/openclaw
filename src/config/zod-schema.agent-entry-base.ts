@@ -93,6 +93,8 @@ const AgentRuntimeSchema = z
 const AgentEntryEmbeddedAgentConfigSchema = z
   .object({
     executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
+    /** Disable only the host-owned summary pass after a settled tool turn. */
+    settledTurnFinalization: z.boolean().optional(),
   })
   .strict()
   .optional();

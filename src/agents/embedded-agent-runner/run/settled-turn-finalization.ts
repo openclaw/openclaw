@@ -79,6 +79,8 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   terminalBase: TerminalPreparationBase;
   lastRunPromptUsage: TerminalPreparationInput["lastRunPromptUsage"];
   finalization: {
+    /** Omitted preserves automatic finalization; false retains the original terminal result. */
+    enabled?: boolean;
     preparedAttempt: EmbeddedRunAttemptParams;
     sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
     sessionWriterFence?: SessionTranscriptWriterFence;
@@ -129,6 +131,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     terminalState: initial.terminalState,
     replyDeliveryState,
     settledTurnFinalizationAvailable:
+      input.finalization.enabled !== false &&
       !input.terminalBase.runParams.providerReviewAcknowledgment &&
       typeof input.finalization.harness.finalizeSettledTurn === "function",
   });

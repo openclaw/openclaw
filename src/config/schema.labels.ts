@@ -4,6 +4,7 @@ import { GATEWAY_FIELD_LABELS } from "./schema.gateway-labels.js";
 import { AGENT_MODEL_FIELD_LABELS } from "./schema.labels.agent-models.js";
 import { APPROVAL_FIELD_LABELS } from "./schema.labels.approvals.js";
 import { BROWSER_FIELD_LABELS } from "./schema.labels.browser.js";
+import { EMBEDDED_AGENT_FIELD_LABELS } from "./schema.labels.embedded-agent.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
 import { WORKSPACE_FIELD_LABELS } from "./schema.labels.workspace.js";
 import { META_FIELD_LABELS } from "./schema.meta.js";
@@ -511,12 +512,7 @@ export const FIELD_LABELS: Record<string, string> = {
     "Compaction Memory Flush Soft Threshold",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
     "Compaction Memory Flush Transcript Size Threshold",
-  "agents.defaults.embeddedAgent": "Embedded OpenClaw",
-  "agents.defaults.embeddedAgent.projectSettingsPolicy":
-    "Embedded OpenClaw Project Settings Policy",
-  "agents.defaults.embeddedAgent.executionContract": "Embedded OpenClaw Execution Contract",
-  "agents.entries.*.embeddedAgent": "Agent Embedded OpenClaw",
-  "agents.entries.*.embeddedAgent.executionContract": "Agent Embedded OpenClaw Execution Contract",
+  ...EMBEDDED_AGENT_FIELD_LABELS,
   "agents.defaults.heartbeat.directPolicy": "Heartbeat Direct Policy",
   "agents.defaults.heartbeat.agentId": "Heartbeat Agent",
   "agents.entries.*.heartbeat.directPolicy": "Heartbeat Direct Policy",

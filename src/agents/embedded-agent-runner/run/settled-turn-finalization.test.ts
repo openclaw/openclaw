@@ -261,64 +261,81 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     },
   );
 
-  it("replaces a settled failed-tool warning with failure-honest final output", async () => {
-    const attempt = settledFailedAttempt();
-    const finalAssistant = buildEmbeddedRunnerAssistant({
-      content: [{ type: "text", text: "The exec tool failed: post-processing error." }],
-    });
-    backendMocks.runSettledFinalization.mockResolvedValueOnce({
-      outcome: "answered",
-      result: {
-        assistant: finalAssistant,
-        usage: finalAssistant.usage,
-        diagnosticTrace: { traceId: "trace-final", spanId: "span-final" },
-      },
-    });
+  it.each([undefined, true, false])(
+    "retains failed-tool evidence with finalization enabled=%s",
+    async (enabled) => {
+      const attempt = settledFailedAttempt();
+      const input = finalizationInput(attempt);
+      input.finalization.enabled = enabled;
+      const usage = structuredClone(input.terminalBase.usageAccumulator);
+      const finalAssistant = buildEmbeddedRunnerAssistant({
+        content: [{ type: "text", text: "The exec tool failed: post-processing error." }],
+      });
+      backendMocks.runSettledFinalization.mockResolvedValueOnce({
+        outcome: "answered",
+        result: {
+          assistant: finalAssistant,
+          usage: finalAssistant.usage,
+          diagnosticTrace: { traceId: "trace-final", spanId: "span-final" },
+        },
+      });
 
-    const result = await prepareTerminalWithSettledTurnFinalization(finalizationInput(attempt));
+      const result = await prepareTerminalWithSettledTurnFinalization(input);
+      if (enabled === false) {
+        expect(backendMocks.runSettledFinalization).not.toHaveBeenCalled();
+        expect(input.finalization.createAttemptControls).not.toHaveBeenCalled();
+        expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).not.toHaveBeenCalled();
+        expect(input.terminalBase.usageAccumulator).toEqual(usage);
+        expect(result.finalizationOutcome).toBe("not-attempted");
+        expect(result.attempt).toBe(attempt);
+        expect(result.terminalState).toBe(input.initial.terminalState);
+        expect(result.attempt.lastToolError).toBe(attempt.lastToolError);
+        return;
+      }
 
-    expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
-    const [preparedAttempt, settledAttempt] =
-      backendMocks.runSettledFinalization.mock.calls[0] ?? [];
-    expect(preparedAttempt).toMatchObject({
-      operation: "settled-tool-finalization",
-      disableTools: true,
-      skipPreparedUserTurnMessage: true,
-      suppressNextUserMessagePersistence: true,
-      initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
-    });
-    expect(settledAttempt).toBe(attempt);
-    expect(result.finalizationOutcome).toBe("answered");
-    expect(result.prepared.payloadsWithToolMedia).toEqual([
-      expect.objectContaining({ text: "The exec tool failed: post-processing error." }),
-    ]);
-    expect(getReplyPayloadMetadata(result.prepared.payloadsWithToolMedia?.[0] ?? {})).toMatchObject(
-      {
+      expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
+      const [preparedAttempt, settledAttempt] =
+        backendMocks.runSettledFinalization.mock.calls[0] ?? [];
+      expect(preparedAttempt).toMatchObject({
+        operation: "settled-tool-finalization",
+        disableTools: true,
+        skipPreparedUserTurnMessage: true,
+        suppressNextUserMessagePersistence: true,
+        initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
+      });
+      expect(settledAttempt).toBe(attempt);
+      expect(result.finalizationOutcome).toBe("answered");
+      expect(result.prepared.payloadsWithToolMedia).toEqual([
+        expect.objectContaining({ text: "The exec tool failed: post-processing error." }),
+      ]);
+      expect(
+        getReplyPayloadMetadata(result.prepared.payloadsWithToolMedia?.[0] ?? {}),
+      ).toMatchObject({
         deliverDespiteSourceReplySuppression: true,
-      },
-    );
-    expect(result.attempt).toMatchObject({
-      latestMcpAppChannelView: { viewId: "view-after-tools" },
-      successfulCronAdds: 1,
-      successfulNestedToolNames: ["memory_search"],
-      codeModeEngaged: true,
-      itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-      replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
-    expect(result.prepared.agentMeta).toMatchObject({
-      codeModeEngaged: true,
-      assistantTurns: 2,
-      bridgeCalls: { search: 1, describe: 2, call: 3 },
-    });
-    expect(result.prepared.failureSignal).toEqual({
-      kind: "execution_denied",
-      source: "tool",
-      toolName: "exec",
-      code: "SYSTEM_RUN_DENIED",
-      message: "post-processing error",
-      fatalForCron: true,
-    });
-  });
+      });
+      expect(result.attempt).toMatchObject({
+        latestMcpAppChannelView: { viewId: "view-after-tools" },
+        successfulCronAdds: 1,
+        successfulNestedToolNames: ["memory_search"],
+        codeModeEngaged: true,
+        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      });
+      expect(result.prepared.agentMeta).toMatchObject({
+        codeModeEngaged: true,
+        assistantTurns: 2,
+        bridgeCalls: { search: 1, describe: 2, call: 3 },
+      });
+      expect(result.prepared.failureSignal).toEqual({
+        kind: "execution_denied",
+        source: "tool",
+        toolName: "exec",
+        code: "SYSTEM_RUN_DENIED",
+        message: "post-processing error",
+        fatalForCron: true,
+      });
+    },
+  );
 
   it.each(["empty", "failed"] as const)(
     "preserves the command failure when summary recovery is %s",

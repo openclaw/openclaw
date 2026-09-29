@@ -388,9 +388,15 @@ describe("plugin runtime refresh admission", () => {
       ),
     ).toHaveLength(1);
   });
-  it.each([false, true])(
-    "uses only producer-owned settled finalization context (present: %s)",
-    async (hasContext) => {
+  it.each([
+    { hasContext: false, enabled: undefined, bySession: false },
+    { hasContext: true, enabled: undefined, bySession: false },
+    { hasContext: true, enabled: true, bySession: false },
+    { hasContext: true, enabled: false, bySession: false },
+    { hasContext: true, enabled: false, bySession: true },
+  ])(
+    "uses only admitted per-agent settled finalization (context: $hasContext, enabled: $enabled, session: $bySession)",
+    async ({ hasContext, enabled, bySession }) => {
       const assistant = buildEmbeddedRunnerAssistant({
         stopReason: "toolUse",
         content: [
@@ -460,7 +466,15 @@ describe("plugin runtime refresh admission", () => {
         provider: "fixture-provider",
         model: "fixture-model",
         agentHarnessId: "handoff-fixture",
+        agentId: bySession ? undefined : "main",
         config: {
+          agents: {
+            ownership: "explicit",
+            entries: {
+              main: { embeddedAgent: { settledTurnFinalization: enabled } },
+              other: { embeddedAgent: { settledTurnFinalization: enabled === false } },
+            },
+          },
           models: {
             providers: {
               "fixture-provider": {
@@ -482,16 +496,18 @@ describe("plugin runtime refresh admission", () => {
             },
           },
         },
-        sessionKey: undefined,
+        sessionKey: bySession ? "agent:main:settled-finalization" : undefined,
       });
       expect(runAttempt).toHaveBeenCalledOnce();
-      if (hasContext) {
+      if (hasContext && enabled !== false) {
         expect(finalizer).toHaveBeenCalledOnce();
         expect(result.meta.error).toBeUndefined();
         expect(result.payloads).toEqual([{ text: "Recovered summary" }]);
       } else {
         expect(finalizer).not.toHaveBeenCalled();
         expect(result.meta.error?.message).toContain(handoffError.message);
+        expect(result.meta.error?.kind).toBe("incomplete_turn");
+        expect(result.payloads).toContainEqual(expect.objectContaining({ isError: true }));
         expect(result.payloads).not.toContainEqual({ text: "Recovered summary" });
       }
     },

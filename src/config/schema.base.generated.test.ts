@@ -142,6 +142,15 @@ describe("base config schema", () => {
     });
   });
 
+  it("publishes the per-agent settled-turn finalization switch", () => {
+    const setting = "agents.entries.*.embeddedAgent.settledTurnFinalization";
+    expect(
+      schemaAt(BASE_SCHEMA, ["agents", "entries", "*", "embeddedAgent", "settledTurnFinalization"]),
+    ).toMatchObject({ type: "boolean" });
+    expect(BASE_CONFIG_SCHEMA.uiHints[setting]?.help).toContain("default: true");
+    expect(BASE_CONFIG_SCHEMA.uiHints[setting]?.label).toBe("Agent Settled-Turn Finalization");
+  });
+
   it("includes explicit URL-secret tags for sensitive URL fields", () => {
     expect(BASE_CONFIG_SCHEMA.uiHints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(BASE_CONFIG_SCHEMA.uiHints["models.providers.*.baseUrl"]?.tags).toContain(

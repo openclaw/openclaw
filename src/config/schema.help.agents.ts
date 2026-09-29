@@ -185,9 +185,11 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.embeddedAgent.executionContract":
     'Embedded OpenClaw execution contract: "default" keeps the standard runner behavior, while "strict-agentic" enables structured plan tracking and non-visible turn recovery for supported OpenAI/OpenAI Codex GPT-5-family runs.',
   "agents.entries.*.embeddedAgent":
-    "Optional per-agent embedded OpenClaw overrides. Use this to opt specific agents into stricter GPT-5 execution behavior without changing the global default.",
+    "Optional per-agent embedded OpenClaw overrides for execution behavior and settled-turn summaries.",
   "agents.entries.*.embeddedAgent.executionContract":
     'Optional per-agent embedded OpenClaw execution contract override. Set "strict-agentic" to enable structured plan tracking and non-visible turn recovery for that agent on supported OpenAI/OpenAI Codex GPT-5-family runs, or "default" to inherit the standard runner behavior.',
+  "agents.entries.*.embeddedAgent.settledTurnFinalization":
+    "Allow the host to request a separate tool-free summary when a settled tool turn lacks a final answer (default: true). Set false for this agent to skip that model call and retain the original terminal result, including incomplete-turn warnings. Ordinary turns, continuation and compaction behavior are unchanged.",
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",
