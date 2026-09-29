@@ -301,28 +301,22 @@ it("coalesces queued revisions without moving the session behind later arrivals"
 });
 
 it.each([
-  { count: 3, cursor: true, omitted: false, error: false },
-  { count: 3, cursor: true, omitted: true, error: false },
-  { count: 0, cursor: true, omitted: false, error: false },
-  { count: 0, cursor: false, omitted: true, error: false },
-  { count: 0, cursor: true, omitted: true, error: false },
-  { count: 0, cursor: false, omitted: false, error: true },
-  { count: 0, cursor: true, omitted: true, error: true },
-  { count: 0, cursor: false, omitted: false, error: false },
+  { count: 3, cursor: true, error: false },
+  { count: 0, cursor: true, error: false },
+  { count: 0, cursor: false, error: true },
+  { count: 0, cursor: false, error: false },
 ])(
   "keeps image discovery feedback inside its media inset (%j)",
-  async ({ count, cursor, omitted, error }) => {
+  async ({ count, cursor, error }) => {
     vi.useFakeTimers();
     const continued = createDeferred<ArtifactsListResult>();
     try {
       const result: ArtifactsListResult = {
         ...images("preview", count),
         ...(cursor ? { nextCursor: "older" } : {}),
-        ...(omitted ? { omittedOversized: true } : {}),
       };
-      // With a notice and an error, the first page carries the notice and the next page fails.
       const request = vi.fn(async () => {
-        if (error && (!omitted || request.mock.calls.length > 1)) {
+        if (error) {
           throw new Error("Image discovery failed");
         }
         return result;
@@ -344,16 +338,13 @@ it.each([
       await row.updateComplete;
 
       const media = row.querySelector(".activity-feed__media");
-      expect(Boolean(media)).toBe(count > 0 || cursor || omitted || error);
+      expect(Boolean(media)).toBe(count > 0 || cursor || error);
       expect(row.querySelectorAll(".chat-image-frame")).toHaveLength(count);
       const note = row.querySelector(".activity-feed__note");
-      expect(Boolean(note)).toBe(error || omitted || (count === 0 && cursor));
+      expect(Boolean(note)).toBe(error || (count === 0 && cursor));
       if (note) {
         expect(note.parentElement).toBe(media);
       }
-      expect(note?.textContent?.includes("Images too large to preview here") ?? false).toBe(
-        omitted,
-      );
       if (error) {
         expect(note?.querySelector('[role="status"]')?.textContent).toBe("Couldn't load images");
         expect(note?.querySelector("button")?.textContent?.trim()).toBe("Retry");
@@ -382,3 +373,219 @@ it.each([
     }
   },
 );
+
+it.each([
+  { count: 1, error: false },
+  { count: 0, error: false },
+  { count: 1, error: true },
+])(
+  "keeps settled media DOM unchanged during revision revalidation (%j)",
+  async ({ count, error }) => {
+    vi.useFakeTimers();
+    const refresh = createDeferred<ArtifactsListResult>();
+    const older = createDeferred<ArtifactsListResult>();
+    try {
+      const request = vi
+        .fn()
+        .mockResolvedValue({ ...images("settled", count), nextCursor: "older" });
+      if (error) {
+        request
+          .mockResolvedValueOnce({ ...images("settled", count), nextCursor: "older" })
+          .mockRejectedValueOnce(new Error("Unavailable"));
+      }
+      const harness = createGatewayHarness(createTestGatewayClient(request));
+      const context = createContext(harness.gateway, createSessions("main", []));
+      render(
+        html`<openclaw-activity-session-media
+          .context=${context}
+          sessionKey="agent:main:stable"
+          agentId="main"
+        ></openclaw-activity-session-media>`,
+        container,
+      );
+      const row = container.querySelector<LitElement & { revision: number }>(
+        "openclaw-activity-session-media",
+      )!;
+      await row.updateComplete;
+      observers.get(row)?.(true);
+      await vi.advanceTimersByTimeAsync(0);
+      await row.updateComplete;
+      const media = row.querySelector(".activity-feed__media")!;
+      const nodes = [...media.querySelectorAll("*")];
+      const markup = media.innerHTML;
+      expect(row.querySelectorAll(".chat-image-frame")).toHaveLength(count);
+      expect(media.textContent).toContain(error ? "Couldn't load images" : "Older images");
+      const settledCalls = request.mock.calls.length;
+      request.mockReturnValueOnce(refresh.promise);
+      row.revision++;
+      await row.updateComplete;
+      expect(request).toHaveBeenCalledTimes(settledCalls + 1);
+      expect(row.querySelector(".activity-feed__media")).toBe(media);
+      expect(media.innerHTML).toBe(markup);
+      for (const [index, node] of [...media.querySelectorAll("*")].entries()) {
+        expect(node).toBe(nodes[index]);
+      }
+      expect(media.querySelector<HTMLButtonElement>(".activity-feed__note-action")?.disabled).toBe(
+        false,
+      );
+      if (!error) {
+        request.mockReturnValueOnce(older.promise);
+        const button = media.querySelector<HTMLButtonElement>(".activity-feed__note-action")!;
+        button.click();
+        await row.updateComplete;
+        expect(request).toHaveBeenLastCalledWith("artifacts.list", {
+          sessionKey: "agent:main:stable",
+          agentId: "main",
+          type: "image",
+          limit: 4 - count,
+          cursor: "older",
+        });
+        expect(button.disabled).toBe(true);
+        expect(button.textContent?.trim()).toBe("Loading…");
+        older.resolve(images("older", 1));
+        await vi.advanceTimersByTimeAsync(0);
+        await row.updateComplete;
+        expect(row.querySelectorAll(".chat-image-frame")).toHaveLength(count + 1);
+      }
+      refresh.resolve(images("replacement"));
+      await vi.advanceTimersByTimeAsync(0);
+      await row.updateComplete;
+      expect(row.querySelectorAll(".chat-image-frame")).toHaveLength(4);
+      expect(row.querySelector("img")?.getAttribute("alt")).toBe("replacement-0");
+      expect(row.querySelector(".activity-feed__note-action")).toBeNull();
+      expect(row.querySelector(".activity-feed__note")).toBeNull();
+    } finally {
+      refresh.resolve({ artifacts: [] });
+      older.resolve({ artifacts: [] });
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("downloads reference-only images through the shared inline bytes path with their agent", async () => {
+  vi.useFakeTimers();
+  try {
+    const artifact = {
+      id: "reference-image",
+      type: "image",
+      title: "Inline screenshot",
+      mimeType: "image/png",
+      download: { mode: "bytes" },
+    };
+    const request = vi.fn(async (method: string) =>
+      method === "artifacts.list"
+        ? { artifacts: [artifact, artifact] }
+        : { artifact, encoding: "base64", data: "cG5n" },
+    );
+    const harness = createGatewayHarness(createTestGatewayClient(request));
+    const context = createContext(harness.gateway, createSessions("main", []));
+    render(
+      html`<openclaw-activity-session-media
+        .context=${context}
+        sessionKey="global"
+        agentId="work"
+      ></openclaw-activity-session-media>`,
+      container,
+    );
+    const row = container.querySelector<LitElement>("openclaw-activity-session-media")!;
+    await row.updateComplete;
+    observers.get(row)?.(true);
+    await vi.advanceTimersByTimeAsync(0);
+    await row.updateComplete;
+    expect(request).toHaveBeenCalledWith(
+      "artifacts.download",
+      {
+        sessionKey: "global",
+        agentId: "work",
+        artifactId: "reference-image",
+      },
+      { timeoutMs: 30_000 },
+    );
+    expect(row.querySelectorAll("img")).toHaveLength(1);
+    const imageSource = row.querySelector("img")!.src;
+    expect(imageSource).toMatch(/^blob:/);
+    const downloaded = await fetch(imageSource);
+    expect(downloaded.headers.get("content-type")).toBe("image/png");
+    expect(await downloaded.text()).toBe("png");
+    expect(row.querySelector("img")?.getAttribute("alt")).toBe("Inline screenshot");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("keeps queued pagination separate from background revalidation", async () => {
+  vi.useFakeTimers();
+  const blockers = [createDeferred<ArtifactsListResult>(), createDeferred<ArtifactsListResult>()];
+  const refresh = createDeferred<ArtifactsListResult>();
+  const older = createDeferred<ArtifactsListResult>();
+  try {
+    let settled = false;
+    const request = vi.fn(
+      async (_method: string, params: { sessionKey: string; cursor?: string }) => {
+        if (params.sessionKey === "target") {
+          return settled
+            ? params.cursor
+              ? older.promise
+              : refresh.promise
+            : { ...images("queued", 1), nextCursor: "older" };
+        }
+        return blockers[Number(params.sessionKey)]!.promise;
+      },
+    );
+    const harness = createGatewayHarness(createTestGatewayClient(request));
+    const context = createContext(harness.gateway, createSessions("main", []));
+    render(
+      html`${["target", "0", "1"].map((sessionKey) => html`<openclaw-activity-session-media .context=${context} .sessionKey=${sessionKey} agentId="main"></openclaw-activity-session-media>`)}`,
+      container,
+    );
+    const rows = [
+      ...container.querySelectorAll<LitElement & { revision: number }>(
+        "openclaw-activity-session-media",
+      ),
+    ];
+    const row = rows[0]!;
+    await Promise.all(rows.map((element) => element.updateComplete));
+    observers.get(row)?.(true);
+    await vi.advanceTimersByTimeAsync(0);
+    settled = true;
+    for (const element of rows.slice(1)) {
+      observers.get(element)?.(true);
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    row.revision++;
+    await row.updateComplete;
+    row.querySelector<HTMLButtonElement>(".activity-feed__note-action")!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    await row.updateComplete;
+    expect(row.querySelector("img")?.getAttribute("alt")).toBe("queued-0");
+    expect(row.querySelector<HTMLButtonElement>(".activity-feed__note-action")?.disabled).toBe(
+      true,
+    );
+    blockers[0]!.resolve({ artifacts: [] });
+    blockers[1]!.resolve({ artifacts: [] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request).toHaveBeenLastCalledWith("artifacts.list", {
+      sessionKey: "target",
+      agentId: "main",
+      type: "image",
+      limit: 3,
+      cursor: "older",
+    });
+    older.resolve(images("older", 1));
+    await vi.advanceTimersByTimeAsync(0);
+    await row.updateComplete;
+    expect(row.querySelectorAll("img")).toHaveLength(2);
+    refresh.resolve(images("new"));
+    await vi.advanceTimersByTimeAsync(0);
+    await row.updateComplete;
+    expect(row.querySelectorAll("img")).toHaveLength(4);
+    expect(row.querySelector("img")?.getAttribute("alt")).toBe("new-0");
+  } finally {
+    for (const blocker of blockers) {
+      blocker.resolve({ artifacts: [] });
+    }
+    refresh.resolve({ artifacts: [] });
+    older.resolve({ artifacts: [] });
+    vi.useRealTimers();
+  }
+});

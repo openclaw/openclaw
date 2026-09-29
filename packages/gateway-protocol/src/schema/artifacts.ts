@@ -53,7 +53,6 @@ export const ArtifactsListParamsSchema = closedObject({
 export const ArtifactsListResultSchema = closedObject({
   artifacts: Type.Array(ArtifactSummarySchema),
   nextCursor: Type.Optional(NonEmptyString),
-  omittedOversized: Type.Optional(Type.Boolean()),
 });
 
 /** Get request payload for one artifact summary. */

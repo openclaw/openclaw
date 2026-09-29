@@ -42,11 +42,12 @@ import {
 import type { SessionTranscriptReader } from "./session-transcript-read-kernel.js";
 import {
   parseTranscriptImageArtifactId,
+  projectTranscriptImageArtifacts,
   resolveTranscriptImageArtifactBlock,
 } from "./transcript-image-artifacts.js";
 
 const IMAGE_PAGE_MESSAGES = 32;
-const IMAGE_PAGE_BYTES = 256 * 1024;
+const IMAGE_PAGE_BYTES = 1024 * 1024;
 
 type SessionArtifactFilters = Pick<ArtifactsListParams, "runId" | "messageRole">;
 type ArtifactReaders = Pick<
@@ -95,7 +96,6 @@ export type SessionArtifactReadResult =
       kind: "image-page";
       artifacts: ArtifactSummary[];
       next?: { beforeSeq: number; imageOffset: number; readWindow: TranscriptReadWindow };
-      omittedOversized?: boolean;
     }
   | { kind: "image"; artifact?: ArtifactRecord }
   | {
@@ -239,8 +239,12 @@ function collectArtifactsFromMessage(params: {
       `${type} ${params.collection.count}`;
     const declaredArtifactId =
       asNonEmptyString(block.artifactId) ?? asNonEmptyString(attachment?.artifactId);
+    const transcriptImage =
+      params.imagesOnly && declaredArtifactId
+        ? parseTranscriptImageArtifactId(declaredArtifactId)
+        : undefined;
     const id =
-      declaredArtifactId && parseManagedOutgoingArtifactId(declaredArtifactId)
+      declaredArtifactId && (parseManagedOutgoingArtifactId(declaredArtifactId) || transcriptImage)
         ? declaredArtifactId
         : artifactId({
             sessionKey: params.sessionKey,
@@ -256,15 +260,21 @@ function collectArtifactsFromMessage(params: {
     const includeData = params.includeDownloadData !== false;
     const download = resolveBlockDownload(attachment ?? block, { includeData });
     const source = asOptionalRecord(block.source);
-    const previewOnly = params.imagesOnly && !parseManagedOutgoingArtifactId(id);
-    const imageUrl = params.imagesOnly
-      ? download.data !== undefined
-        ? `data:${download.mimeType ?? "image/png"};base64,${download.data}`
-        : (asNonEmptyString(attachment?.url) ??
+    const previewOnly =
+      params.imagesOnly && !transcriptImage && !parseManagedOutgoingArtifactId(id);
+    const imageUrl =
+      params.imagesOnly && !transcriptImage
+        ? (asNonEmptyString(attachment?.url) ??
           asNonEmptyString(block.url) ??
           asNonEmptyString(source?.url) ??
           mediaUrlValue(block.image_url))
-      : undefined;
+        : undefined;
+    if (
+      params.imagesOnly &&
+      (transcriptImage ? download.mode !== "bytes" : !imageUrl || /^data:/i.test(imageUrl))
+    ) {
+      continue;
+    }
     const summary: ArtifactRecord = {
       id: previewOnly ? `preview_${id}` : id,
       type,
@@ -431,6 +441,7 @@ export async function selectSessionArtifacts(
       beforeSeq: query.beforeSeq,
       maxMessages: IMAGE_PAGE_MESSAGES,
       maxBytes: IMAGE_PAGE_BYTES,
+      allowOversizedFirst: true,
       readOnly: true,
       captureReadWindow: true,
       expectedReadWindow: query.readWindow,
@@ -448,18 +459,16 @@ export async function selectSessionArtifacts(
       }
       const collected: ArtifactRecord[] = [];
       collectArtifactsFromMessage({
-        message,
+        message: projectTranscriptImageArtifacts(message),
         messageFallbackSeq: 1,
         collection: { artifacts: collected, count: 0 },
         sessionKey: query.sessionKey,
         runId: query.runId,
         messageRole: query.messageRole,
         imagesOnly: true,
+        includeDownloadData: false,
       });
-      const images = collected
-        .filter((artifact) => artifact.image)
-        .map(toArtifactSummary)
-        .toReversed();
+      const images = collected.map(toArtifactSummary).toReversed();
       const start = query.beforeSeq === seq + 1 ? (query.imageOffset ?? 0) : 0;
       for (let index = start; index < images.length; index++) {
         const image = images[index];
@@ -490,7 +499,6 @@ export async function selectSessionArtifacts(
       ...(next && next.beforeSeq > 1 && page.readWindow
         ? { next: { ...next, readWindow: page.readWindow } }
         : {}),
-      ...(page.omittedOversized ? { omittedOversized: true } : {}),
     };
   }
   const artifact = await readTranscriptImageArtifact(scope, query, readers);

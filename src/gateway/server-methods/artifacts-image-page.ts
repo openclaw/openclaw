@@ -34,7 +34,7 @@ export async function readArtifactImagePage(params: {
   limit: number;
   sessionKey: string;
   filters: Pick<ArtifactsListParams, "runId" | "messageRole">;
-}): Promise<{ artifacts: ArtifactSummary[]; nextCursor?: string; omittedOversized?: boolean }> {
+}): Promise<{ artifacts: ArtifactSummary[]; nextCursor?: string }> {
   const owner = params.client ?? internalCaller;
   let state = cursors.get(owner);
   if (!state) {
@@ -90,6 +90,5 @@ export async function readArtifactImagePage(params: {
   return {
     artifacts: page.artifacts,
     ...(nextCursor ? { nextCursor } : {}),
-    ...(page.omittedOversized ? { omittedOversized: true } : {}),
   };
 }

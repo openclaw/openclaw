@@ -1771,22 +1771,18 @@ public struct ArtifactsListParams: Codable, Sendable {
 public struct ArtifactsListResult: Codable, Sendable {
     public let artifacts: [ArtifactSummary]
     public let nextcursor: String?
-    public let omittedoversized: Bool?
 
     public init(
         artifacts: [ArtifactSummary],
-        nextcursor: String? = nil,
-        omittedoversized: Bool? = nil)
+        nextcursor: String? = nil)
     {
         self.artifacts = artifacts
         self.nextcursor = nextcursor
-        self.omittedoversized = omittedoversized
     }
 
     private enum CodingKeys: String, CodingKey {
         case artifacts
         case nextcursor = "nextCursor"
-        case omittedoversized = "omittedOversized"
     }
 }
 

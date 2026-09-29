@@ -8,7 +8,6 @@ const enActivity = {
     images: {
       failed: "Couldn't load images",
       older: "Older images",
-      incomplete: "Images too large to preview here",
     },
     pulse: {
       sessions: "sessions",

@@ -21,15 +21,19 @@ const scope = {
   sessionId: "activity-images",
 };
 
-async function list(params: Record<string, unknown> = {}, client: GatewayClient | null = null) {
+async function invoke(
+  method: "artifacts.list" | "artifacts.download",
+  params: Record<string, unknown>,
+  client: GatewayClient | null = null,
+) {
   let result: { ok: boolean; payload?: unknown; error?: unknown } | undefined;
   await expectDefined(
-    artifactsHandlers["artifacts.list"],
-    "artifact list handler",
+    artifactsHandlers[method],
+    "artifact handler",
   )({
-    params: { sessionKey: scope.sessionKey, type: "image", limit: 4, ...params },
+    params: { sessionKey: scope.sessionKey, ...params },
     context: createDirectChatContext(),
-    req: { type: "req", id: "images", method: "artifacts.list" },
+    req: { type: "req", id: "images", method },
     client,
     isWebchatConnect: () => false,
     respond: (ok, payload, error) => {
@@ -37,6 +41,10 @@ async function list(params: Record<string, unknown> = {}, client: GatewayClient 
     },
   });
   return expectDefined(result, "artifact response");
+}
+
+function list(params: Record<string, unknown> = {}, client: GatewayClient | null = null) {
+  return invoke("artifacts.list", { type: "image", limit: 4, ...params }, client);
 }
 
 function page(result: Awaited<ReturnType<typeof list>>): ArtifactsListResult {
@@ -175,13 +183,23 @@ describe("bounded Activity image discovery", () => {
       expect(second.artifacts.map((artifact) => artifact.image?.url)).toEqual([
         "https://images.example.test/1.png",
         "https://images.example.test/0.png",
-        "data:image/png;base64,aGVsbG8=",
+        undefined,
       ]);
+      expect(second.artifacts[2]).toMatchObject({
+        id: expect.stringMatching(/^artifact_transcript_image_/),
+        type: "image",
+        title: "inline",
+        mimeType: "image/png",
+        sizeBytes: 5,
+        source: "session-transcript",
+        download: { mode: "bytes" },
+      });
+      expect(second.artifacts[2]).not.toHaveProperty("image");
       expect(second.nextCursor).toBeUndefined();
     });
   });
 
-  it("bounds sparse transcript work and advances past oversized events", async () => {
+  it("bounds sparse transcript work and continues into older messages", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       await append([{ type: "image", url: "https://images.example.test/old.png" }]);
@@ -193,16 +211,55 @@ describe("bounded Activity image discovery", () => {
       expect(first.nextCursor).toEqual(expect.any(String));
       const second = page(await list({ cursor: first.nextCursor }));
       expect(second.artifacts).toHaveLength(1);
-      await append([{ type: "image", data: "a".repeat(400_000), mimeType: "image/png" }]);
-      const oversized = page(await list());
-      expect(oversized.artifacts).toEqual([]);
-      expect(oversized.omittedOversized).toBe(true);
-      expect(Buffer.byteLength(JSON.stringify(oversized))).toBeLessThan(1024);
-      expect(page(await list({ cursor: oversized.nextCursor })).nextCursor).toEqual(
-        expect.any(String),
-      );
       expect(await list({ limit: 5 })).toMatchObject({ ok: false });
       expect(await list({ type: undefined, limit: 2 })).toMatchObject({ ok: false });
+    });
+  });
+
+  it("discovers oversized inline images as downloadable references after newer text", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const data = Buffer.alloc(1.5 * 1024 * 1024, 1).toString("base64");
+      await append([{ type: "image", data, mimeType: "image/png", title: "Screenshot" }]);
+      await append("newer text");
+      await append("newest text");
+      const first = page(await list());
+      expect(first.artifacts).toEqual([]);
+      const oversized = page(
+        await list({ cursor: expectDefined(first.nextCursor, "image cursor") }),
+      );
+      expect(oversized.artifacts).toHaveLength(1);
+      const image = expectDefined(oversized.artifacts[0], "inline image reference");
+      expect(image).toMatchObject({
+        id: expect.stringMatching(/^artifact_transcript_image_/),
+        type: "image",
+        title: "Screenshot",
+        mimeType: "image/png",
+        sizeBytes: 1.5 * 1024 * 1024,
+        source: "session-transcript",
+        download: { mode: "bytes" },
+      });
+      expect(image).not.toHaveProperty("image");
+      expect(Buffer.byteLength(JSON.stringify(oversized))).toBeLessThan(2 * 1024);
+      expect(oversized.nextCursor).toBeUndefined();
+      expect(await invoke("artifacts.download", { artifactId: image.id })).toMatchObject({
+        ok: true,
+        payload: { encoding: "base64", data },
+      });
+    });
+  });
+
+  it("omits data URL images that have no transcript download reference", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const url = "data:image/png;base64,aGVsbG8=";
+      await append([
+        { type: "image", url },
+        { type: "image", source: { url } },
+        { type: "image_url", image_url: { url } },
+        { type: "attachment", attachment: { kind: "image", url } },
+      ]);
+      expect(page(await list()).artifacts).toEqual([]);
     });
   });
 

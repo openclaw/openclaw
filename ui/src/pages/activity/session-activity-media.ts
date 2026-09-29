@@ -1,9 +1,7 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
-import type {
-  ArtifactsDownloadResult,
-  ArtifactsListResult,
-} from "../../../../packages/gateway-protocol/src/index.ts";
+import type { ArtifactsListResult } from "../../../../packages/gateway-protocol/src/index.ts";
+import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -30,7 +28,6 @@ type ImageEntry = {
   pending?: Promise<void>;
   cursor?: string;
   error?: boolean;
-  omitted?: boolean;
 };
 type ImageQueueAdmission = "run" | "superseded" | "full";
 type ConnectionImages = {
@@ -98,6 +95,7 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
   private visible = false;
   private observer?: IntersectionObserver;
   private entry?: ImageEntry;
+  private settledEntry?: ImageEntry;
   private displayedImages: ImageBlock[] = [];
   private owner?: ConnectionImages;
   private key = "";
@@ -155,14 +153,10 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
   override willUpdate() {
     const { client, hello, phase } = this.context.gateway.snapshot;
     const owner = client && phase === "connected" ? connectionImages(client, hello) : undefined;
-    const key = JSON.stringify([
-      this.agentId,
-      this.sessionKey,
-      this.session?.sessionId,
-      this.revision,
-    ]);
     const imageIdentity = this.imageIdentity;
+    const key = JSON.stringify([imageIdentity, this.revision]);
     if (owner !== this.owner || imageIdentity !== this.boundImageIdentity) {
+      this.settledEntry = undefined;
       this.displayedImages = [];
       this.closeImage();
       releaseChatMediaResourceSubscriber(this.refresh);
@@ -193,21 +187,20 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
       this.observedPending = this.entry.pending;
       void this.observedPending.then(this.refresh);
     }
-    if (
-      this.entry?.loaded &&
-      !this.entry.pending &&
-      (!this.entry.error || this.displayedImages.length === 0)
-    ) {
-      this.displayedImages = this.entry.images.slice(0, 4);
+    if (this.entry?.loaded && !this.entry.pending) {
+      this.settledEntry = this.entry;
+    }
+    const settled = this.settledEntry;
+    if (settled && !settled.pending && (!settled.error || this.displayedImages.length === 0)) {
+      this.displayedImages = settled.images.slice(0, 4);
     }
   }
 
-  private load = () => {
+  private load = (entry = this.entry) => {
     const gateway = this.context.gateway;
     const { client, hello } = gateway.snapshot;
     const owner = this.owner;
-    const entry = this.entry;
-    const key = this.key;
+    const imageIdentity = this.imageIdentity;
     const sessionKey = this.sessionKey;
     const agentId = this.agentId;
     if (!client || !owner || !entry || entry.pending) {
@@ -217,7 +210,8 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
       this.isConnected &&
       this.visible &&
       this.owner === owner &&
-      this.key === key &&
+      this.imageIdentity === imageIdentity &&
+      (this.entry === entry || this.settledEntry === entry) &&
       gateway.snapshot.client === client &&
       gateway.snapshot.hello === hello &&
       gateway.snapshot.phase === "connected";
@@ -226,7 +220,9 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
       entry.images = [];
     }
     entry.error = false;
-    entry.pending = queued(owner, JSON.stringify([agentId, sessionKey]), async () => {
+    // Explicit pagination must not supersede a queued background refresh.
+    const queueKey = JSON.stringify([agentId, sessionKey, entry === this.settledEntry]);
+    entry.pending = queued(owner, queueKey, async () => {
       try {
         // A viewport visit searches at most three bounded pages. Older history is explicit.
         for (let page = 0; page < 3 && entry.images.length < 4 && current(); page++) {
@@ -242,18 +238,25 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
           }
           entry.loaded = true;
           entry.cursor = result.nextCursor;
-          entry.omitted ||= result.omittedOversized;
           for (const artifact of result.artifacts) {
+            const image: ImageBlock | undefined = artifact.image?.url
+              ? {
+                  url: artifact.image.url,
+                  artifactId:
+                    artifact.source === "session-transcript-preview" ? undefined : artifact.id,
+                  alt: artifact.title,
+                }
+              : artifact.type === "image" && artifact.download.mode !== "unsupported"
+                ? { artifactId: artifact.id, alt: artifact.title }
+                : undefined;
             if (
-              artifact.image &&
-              !entry.images.some((image) => image.url === artifact.image?.url)
+              image &&
+              !entry.images.some(
+                (existing) =>
+                  (existing.url ?? existing.artifactId) === (image.url ?? image.artifactId),
+              )
             ) {
-              entry.images.push({
-                url: artifact.image.url,
-                artifactId:
-                  artifact.source === "session-transcript-preview" ? undefined : artifact.id,
-                alt: artifact.title,
-              });
+              entry.images.push(image);
             }
           }
           if (!entry.cursor) {
@@ -281,7 +284,7 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
   };
 
   override render() {
-    const entry = this.entry;
+    const entry = this.settledEntry ?? this.entry;
     const owner = this.owner;
     const gateway = this.context.gateway;
     const { client, hello } = gateway.snapshot;
@@ -295,20 +298,20 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
             html`<button
               class="activity-feed__note-action"
               ?disabled=${Boolean(entry.pending)}
-              @click=${this.load}
+              @click=${() => this.load(entry)}
             >
               ${entry.pending ? t("common.loading") : t("activity.images.older")}
             </button>`,
           ]
         : [];
-    const showNote = Boolean(entry.error || entry.omitted) || (!hasImages && Boolean(entry.cursor));
-    const note = html`${entry.omitted ? html`<span>${t("activity.images.incomplete")}</span>` : nothing}${
+    const showNote = Boolean(entry.error) || (!hasImages && Boolean(entry.cursor));
+    const note = html`${
       entry.error
         ? html`<span role="status">${t("activity.images.failed")}</span
             ><button
               class="activity-feed__note-action"
               ?disabled=${Boolean(entry.pending)}
-              @click=${this.load}
+              @click=${() => this.load(entry)}
             >
               ${t("common.retry")}
             </button>`
@@ -356,21 +359,24 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
                           this.lightbox = item;
                           this.requestUpdate();
                         },
-                        resolveArtifactDownload: async (params) => {
-                          const result = await client.request<ArtifactsDownloadResult>(
-                            "artifacts.download",
+                        resolveArtifactDownload: (params, signal) =>
+                          resolveArtifactDownloadSource(
                             {
-                              ...params,
-                              agentId,
+                              get client() {
+                                return gateway.snapshot.client;
+                              },
+                              get connected() {
+                                return (
+                                  gateway.snapshot.client === client &&
+                                  gateway.snapshot.hello === hello &&
+                                  gateway.snapshot.phase === "connected"
+                                );
+                              },
+                              resourceBasePath: this.context.resourceBasePath,
                             },
-                          );
-                          return gateway.snapshot.client === client &&
-                            gateway.snapshot.hello === hello &&
-                            gateway.snapshot.phase === "connected" &&
-                            result.url
-                            ? { url: result.url, expiresAt: result.expiresAt }
-                            : null;
-                        },
+                            { ...params, agentId },
+                            signal,
+                          ),
                       },
                       older,
                     )
