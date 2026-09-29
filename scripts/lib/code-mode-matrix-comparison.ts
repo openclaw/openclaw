@@ -261,6 +261,10 @@ function price(row: ModeResult): number | null {
   return row.accounting?.costComplete ? (row.accounting.costUsd ?? null) : null;
 }
 
+function measuredRatio(direct: number | null, code: number | null): number | null {
+  return direct !== null && direct > 0 && code !== null ? code / direct : null;
+}
+
 function percentile(sorted: readonly number[], quantile: number): number | null {
   if (sorted.length === 0) {
     return null;
@@ -322,7 +326,7 @@ function pairMeasurement(pair: ModePair, measure: (row: ModeResult) => number | 
   const direct = measure(pair.direct);
   const code = measure(pair.code);
   return completedTask(pair.direct) && completedTask(pair.code) && direct !== null && code !== null
-    ? { direct, code, delta: code - direct, ratio: direct > 0 ? code / direct : null }
+    ? { direct, code, delta: code - direct, ratio: measuredRatio(direct, code) }
     : null;
 }
 
@@ -335,14 +339,11 @@ function summarizeModeGroup(rows: readonly ModeResult[], pairs: readonly ModePai
   );
   const usageComplete = unmatched === 0 && direct.usageMissing === 0 && code.usageMissing === 0;
   const costComplete = usageComplete && direct.costMissing === 0 && code.costMissing === 0;
-  const tokenDeltas = successfulPairs.flatMap((pair) => {
-    const observation = pairMeasurement(pair, tokens);
-    return observation ? [observation.delta] : [];
-  });
-  const costDeltas = successfulPairs.flatMap((pair) => {
-    const observation = pairMeasurement(pair, price);
-    return observation ? [observation.delta] : [];
-  });
+  const pairedDeltas = (measure: (row: ModeResult) => number | null) =>
+    successfulPairs.flatMap((pair) => {
+      const observation = pairMeasurement(pair, measure);
+      return observation ? [observation.delta] : [];
+    });
   const latenciesComplete = successfulPairs.every(
     (pair) =>
       pair.direct.gateway?.taskElapsedMs !== undefined &&
@@ -361,8 +362,8 @@ function summarizeModeGroup(rows: readonly ModeResult[], pairs: readonly ModePai
     code,
     pairedSuccessDifference: distribution(successDeltas),
     pairedSuccessfulDeltas: {
-      totalTokens: usageComplete ? distribution(tokenDeltas) : null,
-      costUsd: costComplete ? distribution(costDeltas) : null,
+      totalTokens: usageComplete ? distribution(pairedDeltas(tokens)) : null,
+      costUsd: costComplete ? distribution(pairedDeltas(price)) : null,
       taskElapsedMs:
         unmatched === 0 && latenciesComplete
           ? distribution(
@@ -373,20 +374,12 @@ function summarizeModeGroup(rows: readonly ModeResult[], pairs: readonly ModePai
           : null,
     },
     operationalRatios: {
-      totalTokensPerCompletedTask:
-        usageComplete &&
-        direct.tokensPerCompletedTask !== null &&
-        direct.tokensPerCompletedTask > 0 &&
-        code.tokensPerCompletedTask !== null
-          ? code.tokensPerCompletedTask / direct.tokensPerCompletedTask
-          : null,
-      costPerCompletedTask:
-        costComplete &&
-        direct.costPerCompletedTask !== null &&
-        direct.costPerCompletedTask > 0 &&
-        code.costPerCompletedTask !== null
-          ? code.costPerCompletedTask / direct.costPerCompletedTask
-          : null,
+      totalTokensPerCompletedTask: usageComplete
+        ? measuredRatio(direct.tokensPerCompletedTask, code.tokensPerCompletedTask)
+        : null,
+      costPerCompletedTask: costComplete
+        ? measuredRatio(direct.costPerCompletedTask, code.costPerCompletedTask)
+        : null,
     },
   };
 }

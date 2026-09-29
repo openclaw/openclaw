@@ -22,9 +22,13 @@ function peer(connId: string) {
     bufferedAmount: 0,
     close: vi.fn(),
     terminate: vi.fn(),
-    send: (wire: string, done?: () => void) => {
-      frames.push(JSON.parse(wire));
-      done?.();
+    send: (
+      wire: string | Buffer,
+      options?: { binary: false } | (() => void),
+      done?: () => void,
+    ) => {
+      frames.push(JSON.parse(String(wire)));
+      (typeof options === "function" ? options : done)?.();
     },
   });
   const client: GatewayWsClient = {

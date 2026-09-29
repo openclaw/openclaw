@@ -63,34 +63,28 @@ export function cronStreamScheduleKey(schedule: CronStreamSchedule): string {
 
 /** Clamp explicitly supplied stream batching fields during create/update normalization. */
 export function normalizeCronStreamBatching(schedule: Record<string, unknown>): void {
-  if (schedule.batchMs !== undefined) {
-    if (typeof schedule.batchMs !== "number" || !Number.isSafeInteger(schedule.batchMs)) {
-      throw new Error("stream schedule batchMs must be an integer");
-    }
-    schedule.batchMs = clampInteger(
-      schedule.batchMs,
-      DEFAULT_CRON_STREAM_BATCH_MS,
-      MIN_CRON_STREAM_BATCH_MS,
-      MAX_CRON_STREAM_BATCH_MS,
-    );
-  }
-  if (schedule.maxBatchBytes !== undefined) {
-    if (
-      typeof schedule.maxBatchBytes !== "number" ||
-      !Number.isSafeInteger(schedule.maxBatchBytes)
-    ) {
-      throw new Error("stream schedule maxBatchBytes must be an integer");
-    }
-    schedule.maxBatchBytes = clampInteger(
-      schedule.maxBatchBytes,
+  for (const [field, fallback, min, max] of [
+    ["batchMs", DEFAULT_CRON_STREAM_BATCH_MS, MIN_CRON_STREAM_BATCH_MS, MAX_CRON_STREAM_BATCH_MS],
+    [
+      "maxBatchBytes",
       DEFAULT_CRON_STREAM_MAX_BATCH_BYTES,
       MIN_CRON_STREAM_MAX_BATCH_BYTES,
       MAX_CRON_STREAM_MAX_BATCH_BYTES,
-    );
+    ],
+  ] as const) {
+    const value = schedule[field];
+    if (value === undefined) {
+      continue;
+    }
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+      throw new Error(`stream schedule ${field} must be an integer`);
+    }
+    schedule[field] = clampInteger(value, fallback, min, max);
   }
 }
 
-function renderTruncatedCronStreamBatch(text: string, maxBytes: number): string {
+/** Render known-truncated source text without exposing the marker to match filters. */
+export function markCronStreamBatchTruncated(text: string, maxBytes: number): string {
   const markerBytes = Buffer.byteLength(CRON_STREAM_TRUNCATED_MARKER, "utf8");
   const contentBudget = Math.max(0, maxBytes - markerBytes);
   let low = 0;
@@ -107,16 +101,11 @@ function renderTruncatedCronStreamBatch(text: string, maxBytes: number): string 
   return `${truncateUtf16Safe(text, low)}${CRON_STREAM_TRUNCATED_MARKER}`;
 }
 
-/** Render known-truncated source text without exposing the marker to match filters. */
-export function markCronStreamBatchTruncated(text: string, maxBytes: number): string {
-  return renderTruncatedCronStreamBatch(text, maxBytes);
-}
-
 /** Keep a UTF-8 batch inside its byte budget and reserve room for the marker. */
 export function truncateCronStreamBatch(text: string, maxBytes: number): string {
   return Buffer.byteLength(text, "utf8") <= maxBytes
     ? text
-    : renderTruncatedCronStreamBatch(text, maxBytes);
+    : markCronStreamBatchTruncated(text, maxBytes);
 }
 
 /** Append event text through the same payload seam used by trigger messages. */

@@ -731,6 +731,32 @@
       }
     },
     {
+      "name": "@openclaw/slack-huddles",
+      "description": "OpenClaw Slack huddle browser meeting participant plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "slack-huddles",
+          "label": "Slack huddles"
+        },
+        "contracts": {
+          "tools": [
+            "slack_huddles"
+          ],
+          "transcriptSourceProviders": [
+            "slack-huddle"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/slack-huddles",
+          "npmSpec": "@openclaw/slack-huddles",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.8"
+        }
+      }
+    },
+    {
       "name": "@openclaw/tavily-plugin",
       "description": "OpenClaw Tavily plugin",
       "source": "official",

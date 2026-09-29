@@ -233,6 +233,8 @@ export async function executeCliProcess(params: {
         consumeStdout,
         onOutstandingWorkChange: backendActivity?.setOutstandingWork,
         activeToolCount: params.events.activeParsedToolCount,
+        compactionActive: params.events.hasActiveCompaction,
+        onCompactionActiveChange: params.events.onCompactionActiveChange,
         getActiveLoopbackAskUserDeadline: params.toolTracking.getActiveLoopbackAskUserDeadline,
         onActiveLoopbackAskUserDeadlineChange:
           params.toolTracking.onActiveLoopbackAskUserDeadlineChange,
@@ -450,6 +452,7 @@ export async function executeCliProcess(params: {
               observedActivity,
               activeToolCount: params.events.activeParsedToolCount(),
               backgroundTaskCount: 0,
+              compactionActive: params.events.hasActiveCompaction(),
             },
             hasOutputText: Boolean(stdoutDiagnostic || stderrDiagnostic),
             useResume: params.useResume,
