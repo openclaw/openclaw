@@ -613,20 +613,10 @@ async function writeRootBoundJsonFile(params: {
   expectedRaw: string | null;
   rootSnapshot: ConfigFileSnapshot;
   assertConfigPathForWrite: () => void;
-  assertConfigMutationAuthority?: () => void;
   preCommitRuntimePreflight?: () => Promise<unknown>;
   skipOutputLogs?: boolean;
 }): Promise<void> {
   params.assertConfigPathForWrite();
-  params.assertConfigMutationAuthority?.();
-  if (params.assertConfigMutationAuthority) {
-    // oxlint-disable-next-line no-warning-comments -- required deferred-capability marker
-    // TODO(approval authority): Allow delegated included-file writes when FsSafeRoot
-    // can enforce live approval authority at its final publication boundary.
-    throw new Error(
-      "OpenClaw change cancelled: delegated writes to included config files are unavailable until rooted publication can enforce live approval authority.",
-    );
-  }
   const targetBeforeBackup = await resolveExpectedRootBoundIncludeFile({
     configPath: params.configPath,
     includePath: params.includePath,
@@ -725,6 +715,15 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     allowedRoots,
     expectedAbsolutePath: expectedIncludeTarget,
   });
+  params.writeOptions?.assertConfigMutationAuthority?.();
+  if (params.writeOptions?.assertConfigMutationAuthority) {
+    // oxlint-disable-next-line no-warning-comments -- required deferred-capability marker
+    // TODO(approval authority): Allow delegated included-file writes when FsSafeRoot
+    // can enforce live approval authority at its final publication boundary.
+    throw new Error(
+      "OpenClaw change cancelled: delegated writes to included config files are unavailable until rooted publication can enforce live approval authority.",
+    );
+  }
   const previousIncludeRaw = await readRootBoundFileRawIfExists(includeTarget);
   const previousIncludeHash = hashConfigIncludeRaw(previousIncludeRaw);
   const expectedIncludeHash = params.writeOptions?.includeFileHashesForWrite?.[includePath];
@@ -854,7 +853,6 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     expectedRaw: includeRawAtCommit,
     rootSnapshot: params.snapshot,
     assertConfigPathForWrite,
-    assertConfigMutationAuthority: params.writeOptions?.assertConfigMutationAuthority,
     skipOutputLogs: params.writeOptions?.skipOutputLogs,
     preCommitRuntimePreflight:
       runtimeEnvBaseline || callerPreCommit

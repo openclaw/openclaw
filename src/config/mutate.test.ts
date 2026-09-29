@@ -1836,24 +1836,34 @@ describe("config mutate helpers", () => {
       sourceConfig: { plugins: { entries: {} } },
     });
     const preCommitRuntimePreflight = vi.fn(async () => {});
+    const snapshotPreflight = vi.fn(async () => ({ runtimeConfig: snapshot.config }));
 
-    await expect(
-      replaceConfigFile({
-        baseHash: snapshot.hash,
-        snapshot,
-        writeOptions: {
-          expectedConfigPath: snapshot.path,
-          assertConfigPathForWrite: allowConfigPathWrite,
-          assertConfigMutationAuthority: () => {},
-          includeFileTargetsForWrite: {
-            [pluginsPath]: await resolveIncludeTarget(pluginsPath),
+    try {
+      setRuntimeConfigSnapshotRefreshHandler({
+        preflight: snapshotPreflight,
+        refresh: () => true,
+      });
+      await expect(
+        replaceConfigFile({
+          baseHash: snapshot.hash,
+          snapshot,
+          writeOptions: {
+            expectedConfigPath: snapshot.path,
+            assertConfigPathForWrite: allowConfigPathWrite,
+            assertConfigMutationAuthority: () => {},
+            includeFileTargetsForWrite: {
+              [pluginsPath]: await resolveIncludeTarget(pluginsPath),
+            },
+            preCommitRuntimePreflight,
           },
-          preCommitRuntimePreflight,
-        },
-        nextConfig: { plugins: { entries: { demo: { enabled: true } } } },
-      }),
-    ).rejects.toThrow("delegated writes to included config files are unavailable");
+          nextConfig: { plugins: { entries: { demo: { enabled: true } } } },
+        }),
+      ).rejects.toThrow("delegated writes to included config files are unavailable");
+    } finally {
+      setRuntimeConfigSnapshotRefreshHandler(null);
+    }
 
+    expect(snapshotPreflight).not.toHaveBeenCalled();
     expect(preCommitRuntimePreflight).not.toHaveBeenCalled();
     expect(backupMocks.maintainConfigBackups).not.toHaveBeenCalled();
     await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
@@ -1861,6 +1871,48 @@ describe("config mutate helpers", () => {
     await expect(fs.readFile(`${pluginsPath}.bak.1`, "utf-8")).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+
+  it("rejects delegated include writes before managed runtime preflight", async () => {
+    const home = await suiteRootTracker.make("delegated-include-managed-rejected");
+    const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
+    const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
+    await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
+    const snapshot = createSnapshot({
+      hash: "hash-delegated-include-managed-rejected",
+      path: configPath,
+      parsed: { plugins: { $include: "./config/plugins.json5" } },
+      sourceConfig: { plugins: { entries: {} } },
+    });
+    const managedPreflight = vi.fn(async (sourceConfig: OpenClawConfig) => ({
+      runtimeConfig: sourceConfig,
+      compareConfig: sourceConfig,
+    }));
+    const releaseOwner = registerManagedRuntimeConfigWriteOwner(configPath, managedPreflight);
+
+    try {
+      await expect(
+        replaceConfigFile({
+          baseHash: snapshot.hash,
+          snapshot,
+          writeOptions: {
+            expectedConfigPath: snapshot.path,
+            assertConfigPathForWrite: allowConfigPathWrite,
+            assertConfigMutationAuthority: () => {},
+            includeFileTargetsForWrite: {
+              [pluginsPath]: await resolveIncludeTarget(pluginsPath),
+            },
+          },
+          nextConfig: { plugins: { entries: { demo: { enabled: true } } } },
+        }),
+      ).rejects.toThrow("delegated writes to included config files are unavailable");
+    } finally {
+      releaseOwner();
+    }
+
+    expect(managedPreflight).not.toHaveBeenCalled();
+    expect(backupMocks.maintainConfigBackups).not.toHaveBeenCalled();
+    await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
   });
 
   it("does not write an include after the active config path changes during preflight", async () => {
