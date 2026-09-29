@@ -1,6 +1,5 @@
 import { consume } from "@lit/context";
 import { nothing } from "lit";
-import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationGatewaySnapshot } from "../../app/context.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -26,7 +25,6 @@ import {
   createSkillWorkshopState,
   loadSkillWorkshopProposals,
   resolveSkillWorkshopAgentId,
-  type SkillWorkshopRouteData,
   type SkillWorkshopState,
 } from "./proposals.ts";
 import {
@@ -47,20 +45,16 @@ registerSkillWorkshopEnglish();
 class SkillWorkshopPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: SkillWorkshopPageContext;
-  @property({ attribute: false }) data?: SkillWorkshopRouteData;
 
   private state?: SkillWorkshopState;
   private operationEpoch = 0;
-  private hasBoundContext = false;
   private contextSource?: SkillWorkshopPageContext;
   private gatewaySource?: SkillWorkshopPageContext["gateway"];
   private gatewayClient: SkillWorkshopPageContext["gateway"]["snapshot"]["client"] = null;
   private gatewayHello: SkillWorkshopPageContext["gateway"]["snapshot"]["hello"] = null;
   private gatewayConnected = false;
-  private hasBoundAgentSelection = false;
   private agentSelectionSource?: SkillWorkshopPageContext["agentSelection"];
   private selectedAgentId?: string | null;
-  private hasBoundSessions = false;
   private sessionsSource?: SkillWorkshopPageContext["sessions"];
   private selfLearningBusy = false;
   private selfLearningError: string | null = null;
@@ -82,8 +76,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     .effect(
       () => this.context,
       (context) => {
-        const sourceChanged = this.hasBoundContext && this.contextSource !== context;
-        this.hasBoundContext = true;
+        const sourceChanged = this.contextSource !== undefined && this.contextSource !== context;
         this.contextSource = context;
         if (sourceChanged) {
           const gateway = context.gateway;
@@ -137,8 +130,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       () => this.context?.agentSelection,
       (agentSelection) => {
         let resetForSourceBind =
-          this.hasBoundAgentSelection && this.agentSelectionSource !== agentSelection;
-        this.hasBoundAgentSelection = true;
+          this.agentSelectionSource !== undefined && this.agentSelectionSource !== agentSelection;
         this.agentSelectionSource = agentSelection;
         let initialNotification = true;
         const handleChange = () => {
@@ -166,8 +158,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     .effect(
       () => this.context?.sessions,
       (sessions) => {
-        const sourceChanged = this.hasBoundSessions && this.sessionsSource !== sessions;
-        this.hasBoundSessions = true;
+        const sourceChanged = this.sessionsSource !== undefined && this.sessionsSource !== sessions;
         this.sessionsSource = sessions;
         if (sourceChanged) {
           this.resetSourceState();
@@ -269,15 +260,12 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
 
   override willUpdate() {
     if (!this.state && this.context) {
-      this.state = createSkillWorkshopState(this.data);
+      this.state = createSkillWorkshopState();
       this.state.skillWorkshopMode = loadSkillWorkshopMode();
     }
   }
 
   override updated() {
-    if (this.state && this.context) {
-      this.revisionRecovery.sync(this.context, this.state);
-    }
     // Only kick a load when none is in flight and the last attempt did not
     // fail: loadProposals early-returns resolve immediately and their finally
     // schedules another update, so re-kicking here would spin forever when a
@@ -290,6 +278,11 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       !state.skillWorkshopError;
     if (this.gatewayConnected && canLoad) {
       this.loadProposals(false);
+    }
+    // Establish the proposal scope before restoring a revision notice: recovery
+    // must neither block the first list load nor lose its draft to the scope reset.
+    if (this.state && this.context) {
+      this.revisionRecovery.sync(this.context, this.state);
     }
     this.ensureWorkshopAgentIdentity();
     const runtimeConfig = this.context?.runtimeConfig;

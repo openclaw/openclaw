@@ -47,7 +47,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.round
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
 
@@ -67,7 +66,7 @@ internal fun FoldAwareDialog(
   val dismiss by rememberUpdatedState(onDismissRequest)
   val outsideEnabled by rememberUpdatedState(dismissOnClickOutside)
 
-  Dialog(
+  AppDialog(
     onDismissRequest = onDismissRequest,
     properties =
       DialogProperties(

@@ -9,10 +9,7 @@ import {
   throwIMessageRemoteUnsupported,
 } from "./actions-transport.js";
 import { authorizeIMessageResourceReference } from "./message-resource.js";
-import {
-  resolveIMessageMessageId as resolveIMessageMessageIdImpl,
-  type IMessageChatContext,
-} from "./monitor-reply-cache.js";
+import { resolveIMessageMessageId } from "./monitor-reply-cache.js";
 import { sanitizeIMessageFinalOutboundText } from "./monitor/sanitize-outbound.js";
 import { withIMessageRemoteFile } from "./remote-file.js";
 
@@ -107,20 +104,8 @@ async function withTempFile<T>(
 }
 
 export const imessageActionsRuntime = {
-  resolveIMessageMessageId: resolveIMessageMessageIdImpl,
-
-  authorizeMessageReference(params: {
-    accountId: string;
-    chatContext: IMessageChatContext;
-    cliPath: string;
-    dbPath?: string;
-    hasExclusiveLocalDatabase: boolean;
-    remoteHost?: string;
-    messageId: string;
-    conversationReadOrigin?: string;
-  }): void {
-    authorizeIMessageResourceReference(params);
-  },
+  resolveIMessageMessageId,
+  authorizeMessageReference: authorizeIMessageResourceReference,
 
   resolveChatGuidForTarget: resolveIMessageActionChatGuid,
 
@@ -486,5 +471,3 @@ export const imessageActionsRuntime = {
     );
   },
 };
-
-export type IMessageActionsRuntime = typeof imessageActionsRuntime;

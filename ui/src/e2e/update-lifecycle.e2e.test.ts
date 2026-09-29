@@ -106,7 +106,10 @@ suite.define(() => {
           const updating = page.getByRole("button", { name: "Updating…", exact: true });
           await updating.waitFor();
           expect(await updating.isEnabled()).toBe(false);
-          await page.getByText("Installing the update on the Gateway", { exact: false }).waitFor();
+          await page
+            .locator("openclaw-modal-dialog .update-run-view__details")
+            .getByText("Installing the update on the Gateway.", { exact: true })
+            .waitFor();
           expect(await gateway.getRequests("update.run")).toHaveLength(1);
           await page.screenshot({ path: path.join(artifactDir, "2-installing.png") });
 

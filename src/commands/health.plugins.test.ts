@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { formatHealthChannelLines } from "./health-format.js";
 
 const testConfig: OpenClawConfig = { session: { store: "/tmp/x" } };
 const tempDirs = createTempDirTracker();
@@ -145,6 +146,14 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
         error: "healthy override has an unrelated import error",
       },
     ]);
+    expect(formatHealthChannelLines(snap)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^Plugin discord: failed - .*unrelated import error/u),
+        expect.stringMatching(
+          /^Plugin discord: unavailable - unreadable-package-json: .*permission denied/u,
+        ),
+      ]),
+    );
   });
 
   it("projects the recorded channel load failure instead of stale successful probes", async () => {
@@ -250,8 +259,9 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
         {
           pluginId: "service-plugin",
           pluginName: "Service Plugin",
+          id: "broken",
           service: {
-            id: "broken",
+            id: " broken ",
             start: brokenStart,
           },
           source: "test",
@@ -260,6 +270,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
         {
           pluginId: "service-plugin",
           pluginName: "Service Plugin",
+          id: "healthy-sibling",
           service: { id: "healthy-sibling", start: siblingStart },
           source: "test",
           origin: "workspace" as const,

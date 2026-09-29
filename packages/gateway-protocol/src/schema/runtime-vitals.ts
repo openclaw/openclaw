@@ -17,6 +17,16 @@ export const GatewayEventLoopHealthSchema = closedObject({
   delayMaxMs: Type.Number({ minimum: 0 }),
   utilization: Type.Number({ minimum: 0 }),
   cpuCoreRatio: Type.Number({ minimum: 0 }),
+  cpuBreakdown: Type.Optional(
+    closedObject({
+      mainThreadCoreRatio: Type.Optional(Type.Number({ minimum: 0 })),
+      workerCoreRatio: Type.Optional(Type.Number({ minimum: 0 })),
+      /** Estimated process residual after main and tracked worker counters. */
+      otherThreadsCoreRatio: Type.Optional(Type.Number({ minimum: 0 })),
+      hostUtilization: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+      hostCpuCount: Type.Optional(Type.Integer({ minimum: 1 })),
+    }),
+  ),
 });
 
 export const GatewayProcessMemorySchema = closedObject({

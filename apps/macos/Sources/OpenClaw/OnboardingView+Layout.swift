@@ -2,23 +2,16 @@ import AppKit
 import SwiftUI
 
 extension OnboardingView {
-    /// The inference-first flow hands off to the dashboard as soon as AI connects.
-    var usesCompactHero: Bool {
-        false
-    }
-
     var body: some View {
         GeometryReader { windowGeometry in
-            let contentHeight = self.contentHeight(for: windowGeometry.size.height)
+            let contentHeight = Self.contentHeight(for: windowGeometry.size.height)
             VStack(spacing: 0) {
-                // Chat-heavy pages shrink the mascot so the content gets the room.
                 GlowingOpenClawIcon(
-                    size: self.heroSize,
+                    size: 130,
                     mood: self.mascotMood,
                     accessory: self.mascotAccessory)
-                    .offset(y: self.usesCompactHero ? 4 : 10)
-                    .frame(height: self.heroFrameHeight)
-                    .animation(.spring(response: 0.45, dampingFraction: 0.85), value: self.usesCompactHero)
+                    .offset(y: 10)
+                    .frame(height: 145)
 
                 GeometryReader { _ in
                     HStack(spacing: 0) {
@@ -35,7 +28,6 @@ extension OnboardingView {
                     .clipped()
                 }
                 .frame(height: contentHeight)
-                .animation(.spring(response: 0.45, dampingFraction: 0.85), value: self.usesCompactHero)
 
                 Spacer(minLength: 0)
                 self.navigationBar
@@ -69,7 +61,6 @@ extension OnboardingView {
         }
         .task {
             await self.refreshCLIStatus()
-            self.preferredGatewayID = GatewayDiscoveryPreferences.preferredStableID()
         }
         .task {
             await self.configuredGatewayProbe.consumeReconnects {
@@ -123,11 +114,10 @@ extension OnboardingView {
         self.returnToInferenceSetupIfNeeded()
         if let updatePageMonitoring {
             updatePageMonitoring(self.activePageIndex)
-            self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent)
-            return
+        } else {
+            // A mode swap can keep the same page cursor, so its onChange hook may not restart AI setup.
+            updateMonitoring(for: self.activePageIndex)
         }
-        // A mode swap can keep the same page cursor, so its onChange hook may not restart AI setup.
-        updateMonitoring(for: self.activePageIndex)
         self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent)
     }
 
@@ -186,7 +176,7 @@ extension OnboardingView {
             }
 
             switch outcome {
-            case let .configured(modelRef, _):
+            case let .configured(modelRef, modelTarget, _):
                 switch pendingState {
                 case .activating, .activationExpired, .completed:
                     // A live setup/verification already owns this marker. A
@@ -195,7 +185,8 @@ extension OnboardingView {
                     guard !self.aiSetup.connected else { return }
                     // Reopening a receipt authorizes observation, never another automatic test.
                     let recoveryIntent = intent == .inspectOnly ? intent : .resumePending
-                    await self.resumePendingSystemAgent(modelRef: modelRef, intent: recoveryIntent).value
+                    await self.resumePendingSystemAgent(
+                        modelRef: modelRef, modelTarget: modelTarget, intent: recoveryIntent).value
                     return
                 case .verified:
                     // Inference was observed, but the dropped activation can
@@ -346,17 +337,16 @@ extension OnboardingView {
             input: remoteGatewayProbeInput)
         return HStack(spacing: 20) {
             ZStack(alignment: .leading) {
-                Button(action: {}, label: {
-                    Label("Back", systemImage: "chevron.left").labelStyle(.iconOnly)
-                })
-                .buttonStyle(.plain)
-                .opacity(0)
-                .disabled(true)
+                Color.clear
+                    .frame(width: 32, height: 32)
+                    .accessibilityHidden(true)
 
                 if self.currentPage > 0 {
                     Button(action: self.handleBack, label: {
                         Label("Back", systemImage: "chevron.left")
                             .labelStyle(.iconOnly)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
                     })
                     .buttonStyle(.plain)
                     .foregroundColor(.secondary)
@@ -369,7 +359,7 @@ extension OnboardingView {
 
             Spacer()
 
-            HStack(spacing: 8) {
+            HStack(spacing: 0) {
                 ForEach(0..<self.pageCount, id: \.self) { index in
                     let isInstallLocked = (self.installingCLI || self.aiSetup.isBusy) &&
                         index != self.currentPage
@@ -392,8 +382,13 @@ extension OnboardingView {
                         Circle()
                             .fill(index == self.currentPage ? Color.accentColor : Color.gray.opacity(0.3))
                             .frame(width: 8, height: 8)
+                            .frame(width: 28, height: 28)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(self.navigationTitle(for: self.pageOrder[index]))
+                    .accessibilityAddTraits(index == self.currentPage ? .isSelected : [])
+                    .help(self.navigationTitle(for: self.pageOrder[index]))
                     .disabled(isLocked)
                     .opacity(isLocked ? 0.3 : 1)
                 }
@@ -413,6 +408,17 @@ extension OnboardingView {
         .padding(.horizontal, 28)
         .padding(.bottom, 13)
         .frame(minHeight: 60, alignment: .bottom)
+    }
+
+    private func navigationTitle(for pageIndex: Int) -> LocalizedStringKey {
+        switch pageIndex {
+        case self.connectionPageIndex: "Where should your assistant live?"
+        case self.cliPageIndex: "Getting things ready"
+        case self.aiPageIndex: self.aiSetup.configuredGatewayAuthIssue == nil
+            ? "Connect your AI" : "Authenticate with your Gateway"
+        case self.readyPageIndex: "You’re all set!"
+        default: "Welcome to OpenClaw"
+        }
     }
 
     func onboardingPage(@ViewBuilder _ content: @escaping () -> some View) -> some View {
@@ -448,32 +454,12 @@ extension OnboardingView {
                 .shadow(color: .black.opacity(0.06), radius: 8, y: 3))
     }
 
-    func featureRow(title: String, subtitle: String, systemImage: String) -> some View {
-        self.featureRowContent(title: title, subtitle: subtitle, systemImage: systemImage)
-    }
-
-    func featureActionRow(
+    func featureRow(
         title: String,
         subtitle: String,
         systemImage: String,
-        buttonTitle: String,
-        action: @escaping () -> Void) -> some View
-    {
-        self.featureRowContent(
-            title: title,
-            subtitle: subtitle,
-            systemImage: systemImage,
-            action: AnyView(
-                Button(buttonTitle, action: action)
-                    .buttonStyle(.link)
-                    .padding(.top, 2)))
-    }
-
-    private func featureRowContent(
-        title: String,
-        subtitle: String,
-        systemImage: String,
-        action: AnyView? = nil) -> some View
+        buttonTitle: String? = nil,
+        action: (() -> Void)? = nil) -> some View
     {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: systemImage)
@@ -485,8 +471,10 @@ extension OnboardingView {
                 Text(subtitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                if let action {
-                    action
+                if let buttonTitle, let action {
+                    Button(buttonTitle, action: action)
+                        .buttonStyle(.link)
+                        .padding(.top, 2)
                 }
             }
             Spacer(minLength: 0)

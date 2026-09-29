@@ -1,7 +1,6 @@
 /** Doctor analysis helpers for config schema cleanup and ambiguous model fallback shapes. */
 import path from "node:path";
 import { resolvePrimaryStringValue } from "@openclaw/normalization-core/string-coerce";
-import type { ZodIssue } from "zod";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
   listAgentEntries,
@@ -18,10 +17,34 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { OpenClawSchema } from "../config/zod-schema.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveCliModelEntry } from "../media-understanding/resolve.js";
 import { isRecord } from "../utils.js";
 import { sanitizeDoctorNote } from "./doctor/emit-notes.js";
 
 const configLog = createSubsystemLogger("config");
+
+export function noteMediaCliModelWarnings(cfg: OpenClawConfig): void {
+  const models = cfg.tools?.media?.models;
+  if (!Array.isArray(models)) {
+    return;
+  }
+  const warnings: string[] = [];
+  models.forEach((entry, index) => {
+    if (!entry || (entry.type ?? (entry.command ? "cli" : "provider")) !== "cli") {
+      return;
+    }
+    const resolved = resolveCliModelEntry(entry);
+    if (!resolved.ok) {
+      const field = resolved.error.reason === "cli-missing-command" ? "command" : "args";
+      warnings.push(
+        `- tools.media.models[${index}].${field}: Invalid CLI media model. ${resolved.error.message} Doctor cannot choose a command or attachment arguments; edit this entry.`,
+      );
+    }
+  });
+  if (warnings.length > 0) {
+    note(warnings.join("\n"), "Doctor warnings");
+  }
+}
 
 export function noteDoctorConfigPreflightIssues(
   snapshot: ConfigFileSnapshot,
@@ -49,11 +72,6 @@ export function noteDoctorConfigPreflightIssues(
     }
   }
 }
-
-type UnrecognizedKeysIssue = ZodIssue & {
-  code: "unrecognized_keys";
-  keys: PropertyKey[];
-};
 
 function collectInvalidHookTransformsDirWarnings(
   cfg: OpenClawConfig,
@@ -87,10 +105,6 @@ function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): strin
     })
     .filter(({ unsupportedKeys }) => unsupportedKeys.length > 0);
 
-  if (unsupportedKeysByEntry.length === 0) {
-    return [];
-  }
-
   return unsupportedKeysByEntry.map(
     ({ hookKey, unsupportedKeys }) =>
       `- hooks.internal.entries.${hookKey}: unsupported loader key${unsupportedKeys.length === 1 ? "" : "s"} ${unsupportedKeys.join(", ")} will not load hook modules. Use bootstrap-extra-files for session bootstrap content, or create a managed/workspace hook directory with HOOK.md + handler.js. Doctor cannot rewrite this automatically because per-hook entry keys are open-ended hook configuration.`,
@@ -98,13 +112,13 @@ function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): strin
 }
 
 export function noteDoctorHookConfigWarnings(cfg: OpenClawConfig, configPath: string): void {
-  const hookTransformsDirWarnings = collectInvalidHookTransformsDirWarnings(cfg, configPath);
-  if (hookTransformsDirWarnings.length > 0) {
-    note(sanitizeDoctorNote(hookTransformsDirWarnings.join("\n")), "Doctor warnings");
-  }
-  const unsupportedInternalHookEntryWarnings = collectUnsupportedInternalHookEntryWarnings(cfg);
-  if (unsupportedInternalHookEntryWarnings.length > 0) {
-    note(sanitizeDoctorNote(unsupportedInternalHookEntryWarnings.join("\n")), "Doctor warnings");
+  for (const warnings of [
+    collectInvalidHookTransformsDirWarnings(cfg, configPath),
+    collectUnsupportedInternalHookEntryWarnings(cfg),
+  ]) {
+    if (warnings.length > 0) {
+      note(sanitizeDoctorNote(warnings.join("\n")), "Doctor warnings");
+    }
   }
 }
 
@@ -121,19 +135,8 @@ export function noteMissingDefaultAgentOwner(cfg: OpenClawConfig): void {
   }
 }
 
-function normalizeIssuePath(pathValue: PropertyKey[]): Array<string | number> {
-  return pathValue.filter((part): part is string | number => typeof part !== "symbol");
-}
-
-function isUnrecognizedKeysIssue(issue: ZodIssue): issue is UnrecognizedKeysIssue {
-  return issue.code === "unrecognized_keys";
-}
-
 /** Formats a parsed config issue path into a user-facing dotted path. */
 export function formatConfigKeyPath(parts: Array<string | number>): string {
-  if (parts.length === 0) {
-    return "<root>";
-  }
   let out = "";
   for (const part of parts) {
     if (typeof part === "number") {
@@ -159,14 +162,10 @@ export function resolveConfigPathTarget(root: unknown, pathLocal: Array<string |
       current = current[part];
       continue;
     }
-    if (!current || typeof current !== "object" || Array.isArray(current)) {
+    if (!isRecord(current) || !(part in current)) {
       return null;
     }
-    const record = current as Record<string, unknown>;
-    if (!(part in record)) {
-      return null;
-    }
-    current = record[part];
+    current = current[part];
   }
   return current;
 }
@@ -202,21 +201,20 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
   const next = structuredClone(config);
   const removed: string[] = [];
   for (const issue of parsed.error.issues) {
-    if (!isUnrecognizedKeysIssue(issue)) {
+    if (issue.code !== "unrecognized_keys") {
       continue;
     }
-    const issuePath = normalizeIssuePath(issue.path);
+    const issuePath = issue.path.filter((part) => typeof part !== "symbol");
     const target = resolveConfigPathTarget(next, issuePath);
-    if (!target || typeof target !== "object" || Array.isArray(target)) {
+    if (!isRecord(target)) {
       continue;
     }
-    const record = target as Record<string, unknown>;
     const parentKey =
       issuePath.length === 1 && typeof issuePath[0] === "string" ? issuePath[0] : undefined;
     const protectedSet =
       issuePath.length === 0 ? undefined : parentKey ? STRIP_PROTECTED_KEYS[parentKey] : undefined;
     for (const key of issue.keys) {
-      if (typeof key !== "string" || !(key in record)) {
+      if (!(key in target)) {
         continue;
       }
       // $include is authored parser syntax at every object depth, not a schema field.
@@ -227,7 +225,7 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
       if (protectedSet?.has(key)) {
         continue;
       }
-      delete record[key];
+      delete target[key];
       removed.push(formatConfigKeyPath([...issuePath, key]));
     }
   }
@@ -283,12 +281,11 @@ function isImplicitFallbackClobber(model: unknown): boolean {
   if (typeof model === "string") {
     return primary !== undefined;
   }
-  if (model !== null && typeof model === "object" && !Array.isArray(model)) {
-    const obj = model as Record<string, unknown>;
+  if (isRecord(model)) {
     // Object with primary but no fallbacks key — intent is ambiguous; warn.
     // Object with fallbacks: [] — explicit no-fallbacks; no warn.
     return (
-      Object.hasOwn(obj, "primary") && !Object.hasOwn(obj, "fallbacks") && primary !== undefined
+      Object.hasOwn(model, "primary") && !Object.hasOwn(model, "fallbacks") && primary !== undefined
     );
   }
   return false;

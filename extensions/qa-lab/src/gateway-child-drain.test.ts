@@ -32,11 +32,13 @@ afterEach(() => {
 
 function fixture(kind: "gateway" | "cli" = "gateway") {
   const child = new ChildProcess();
-  Object.defineProperty(child, "pid", { value: 42, configurable: true });
   const stdout = new PassThrough();
   const stderr = new PassThrough();
-  child.stdout = stdout;
-  child.stderr = stderr;
+  Object.defineProperties(child, {
+    pid: { value: 42, configurable: true },
+    stdout: { value: stdout, configurable: true },
+    stderr: { value: stderr, configurable: true },
+  });
   const log = new PassThrough();
   const output: Buffer[] = [];
   log.on("data", (chunk: Buffer) => output.push(chunk));

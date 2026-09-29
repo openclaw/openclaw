@@ -64,12 +64,16 @@ export type ControlUiBootstrapConfig = {
   environment?: ControlUiEnvironment;
   /** Whether this Gateway's served UI may show the Discord community invitation. */
   communityInvite?: boolean;
+  /** Fresh-draft model, runtime and reasoning preference policy; never a selection restriction. */
+  newSessionModelDefaults?: "last-used" | "configured";
   /**
    * Whether the operator terminal surface is enabled (`gateway.terminal.enabled`).
    * The Control UI hides the terminal entirely when false so a disabled kill
    * switch removes the surface rather than showing a button that errors on open.
    */
   terminalEnabled?: boolean;
+  /** Whether clients may upload files and images (`gateway.uploads.enabled`). */
+  uploadsEnabled?: boolean;
   /** Whether the Labs-gated CLI agents model-picker group is enabled. */
   cliAgentsEnabled?: boolean;
   /** Only explicit no-auth Gateways permit native asset loading without scoped cookies. */

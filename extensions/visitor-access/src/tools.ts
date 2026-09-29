@@ -1,6 +1,13 @@
 import { Type } from "typebox";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "../api.js";
+import { VisitorAccessError } from "./errors.js";
 import { visitorRuntimeStore } from "./runtime.js";
+import {
+  visitorInviteDetailsSchema,
+  visitorListDetailsSchema,
+  visitorRevokeDetailsSchema,
+  visitorToolErrorSchema,
+} from "./tool-results.js";
 import type { VisitorAccessService } from "./visitors.js";
 
 const identityFields = {
@@ -9,21 +16,29 @@ const identityFields = {
   ),
   email: Type.Optional(
     Type.String({
-      description: "Verified email on the visitor's GitHub account.",
+      description: "Email the visitor uses with Team's existing sign-in.",
       minLength: 1,
       maxLength: 254,
     }),
   ),
 };
 
-export function createVisitorTools(context: OpenClawPluginToolContext): AnyAgentTool[] {
+export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAgentTool[] {
   let runtime = visitorRuntimeStore.tryGetRuntime();
+  const assertCurrent = () => {
+    context.assertInvocationCurrent();
+    if (context.senderIsOwner !== true) {
+      throw new VisitorAccessError(
+        "Only administrators and designated owners can manage visitors.",
+      );
+    }
+  };
   const definitions = [
     {
       name: "visitor_invite",
       label: "Invite visitor",
       description:
-        "Grant or renew visitor access to team.openclaw.ai. Provide email or GitHub login; private GitHub emails require explicit email. Grants expire after the configured duration (14 days by default); forever must be explicit.",
+        "Grant or renew visitor access to team.openclaw.ai. Requires administrator or designated-owner authority. Provide the Team sign-in email or a GitHub login with a matching public email. Checks restricted guest access and preserves existing assigned roles. Grants expire after the configured duration (14 days by default); forever must be explicit.",
       parameters: Type.Object(
         {
           ...identityFields,
@@ -40,8 +55,9 @@ export function createVisitorTools(context: OpenClawPluginToolContext): AnyAgent
         },
         { additionalProperties: false },
       ),
+      outputSchema: Type.Union([visitorInviteDetailsSchema, visitorToolErrorSchema]),
       run: (service: VisitorAccessService, raw: unknown) =>
-        service.invite(raw, context.sessionKey ?? context.agentId),
+        service.invite(raw, { assertCurrent, invitedVia: context.sessionKey ?? context.agentId }),
     },
     {
       name: "visitor_revoke",
@@ -49,22 +65,25 @@ export function createVisitorTools(context: OpenClawPluginToolContext): AnyAgent
       description:
         "Remove visitor access by email or GitHub login. GitHub login removes all recorded grants for that login. Explicit email can also remove an unmanaged policy entry. Already absent grants are a no-op.",
       parameters: Type.Object(identityFields, { additionalProperties: false }),
-      run: (service: VisitorAccessService, raw: unknown) => service.revoke(raw),
+      outputSchema: Type.Union([visitorRevokeDetailsSchema, visitorToolErrorSchema]),
+      run: (service: VisitorAccessService, raw: unknown) => service.revoke(raw, assertCurrent),
     },
     {
       name: "visitor_list",
       label: "List visitors",
       description:
-        "List recorded visitor grants, invitation and expiry dates, and drift from the Access policy. Unmanaged policy emails are reported and retained; missing policy emails are never automatically restored.",
+        "List recorded visitor grants, current Gateway access, invitation and expiry dates, and drift from the Access policy. Grant expiry does not describe independent staff access. Unmanaged policy emails are reported and retained; missing policy emails are never automatically restored.",
       parameters: Type.Object({}, { additionalProperties: false }),
-      run: (service: VisitorAccessService) => service.list(),
+      outputSchema: Type.Union([visitorListDetailsSchema, visitorToolErrorSchema]),
+      run: (service: VisitorAccessService) => service.list(assertCurrent),
     },
   ];
-  return definitions.map(({ name, label, description, parameters, run }) => ({
+  return definitions.map(({ name, label, description, parameters, outputSchema, run }) => ({
     name,
     label,
     description,
     parameters,
+    outputSchema,
     async execute(_id, raw) {
       // Bind once; a retained tool cannot inherit a replacement service's lifetime.
       runtime ??= visitorRuntimeStore.tryGetRuntime();
@@ -81,7 +100,9 @@ export function createVisitorTools(context: OpenClawPluginToolContext): AnyAgent
         };
       }
       try {
-        return { content: [{ type: "text", text: await run(runtime.service, raw) }], details: {} };
+        assertCurrent();
+        const { text, details } = await run(runtime.service, raw);
+        return { content: [{ type: "text", text }], details };
       } catch (error) {
         return {
           content: [{ type: "text", text: runtime.errorText(error) }],

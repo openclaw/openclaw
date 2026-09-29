@@ -60,6 +60,49 @@ describe("prepared completion import boundary", () => {
 });
 
 describe("completeWithPreparedSimpleCompletionModel", () => {
+  it.each([
+    { reasoning: true, expected: "high" },
+    { reasoning: false, expected: "off" },
+  ])("lowers isolated Ultra with reasoning=$reasoning", async ({ reasoning, expected }) => {
+    await completeWithPreparedSimpleCompletionModel({
+      model: { ...baseModel, provider: "custom", id: "synthetic-model", reasoning },
+      auth: { apiKey: "test-key", source: "test", mode: "api-key" },
+      context,
+      options: { reasoning: "ultra" },
+    });
+    expect(completionRequests()[0]?.options.reasoning).toBe(expected);
+  });
+
+  it("omits provider effort for Ultra when native effort serialization is disabled", async () => {
+    await completeWithPreparedSimpleCompletionModel({
+      model: { ...baseModel, compat: { supportsReasoningEffort: false } },
+      auth: { apiKey: "test-key", source: "test", mode: "api-key" },
+      context,
+      options: { reasoning: "ultra" },
+    });
+    expect(completionRequests()[0]?.options).not.toHaveProperty("reasoning");
+  });
+
+  it("passes only selected auth facts to transport preparation", async () => {
+    await completeWithPreparedSimpleCompletionModel({
+      model: baseModel,
+      auth: {
+        apiKey: "test-access-token",
+        source: "profile:test",
+        profileId: "test:profile",
+        mode: "oauth",
+        authFlow: "test-subscription",
+      },
+      context,
+    });
+
+    expect(mocks.prepareModel.mock.calls[0]?.[0]).toMatchObject({
+      auth: { mode: "oauth", authFlow: "test-subscription" },
+    });
+    expect(mocks.prepareModel.mock.calls[0]?.[0]).not.toHaveProperty("auth.apiKey");
+    expect(completionRequests()[0]?.options.apiKey).toBe("test-access-token");
+  });
+
   it("stops before transport preparation when its owner retires during host initialization", async () => {
     const retired = new Error("Completion owner retired.");
     let current = true;
@@ -201,6 +244,7 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       apiRegistry: expect.anything(),
       model,
       cfg,
+      auth: { mode: "api-key", authFlow: undefined },
     });
     expect(completionRequests()).toEqual([
       { model: preparedModel, context, options: { apiKey: "ollama-local" } },
@@ -208,37 +252,35 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
   });
 
   it.each([
-    ["gpt-5.4", "max", "xhigh"],
-    ["gpt-5.4", "ultra", "xhigh"],
-    ["gpt-5.6-terra", "max", "max"],
-    ["gpt-5.6-terra", "ultra", "max"],
-    ["gpt-5.4", "off", undefined],
-  ] as const)("maps %s reasoning %s to %s", async (id, reasoning, expected) => {
-    const model: Model =
-      id === "gpt-5.4"
-        ? baseModel
-        : {
-            ...baseModel,
-            id,
-            name: id,
-            contextWindow: 372_000,
-            maxTokens: 128_000,
-            thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-          };
-    await completeWithPreparedSimpleCompletionModel({
-      model,
-      auth: { apiKey: "sk-test", source: "env:OPENAI_API_KEY", mode: "api-key" },
-      context,
-      options: { reasoning },
-    });
-    expect(completionRequests()).toEqual([
-      {
+    ["openai", "gpt-5.4", "max", "max"],
+    ["openai", "gpt-5.4", "off", "off"],
+    ["kimi", "k3", "max", "max"],
+    ["kimi", "k3", "off", "off"],
+    ["anthropic", "claude-opus-4-7", "max", "max"],
+    ["anthropic", "claude-opus-4-7", "off", "off"],
+    ["google", "gemini-3-pro-preview", "off", "off"],
+    ["openai", "gpt-5.4", "ultra", "xhigh"],
+    ["openai", "gpt-5.4", "adaptive", "medium"],
+    ["openai", "gpt-5.4", undefined, undefined],
+  ] as const)(
+    "preserves %s/%s reasoning %s for its transport",
+    async (provider, id, reasoning, expected) => {
+      const model: Model = { ...baseModel, provider, id, name: id };
+      await completeWithPreparedSimpleCompletionModel({
         model,
+        auth: { apiKey: "sk-test", source: "env:OPENAI_API_KEY", mode: "api-key" },
         context,
-        options: { ...(expected ? { reasoning: expected } : {}), apiKey: "sk-test" },
-      },
-    ]);
-  });
+        options: { reasoning },
+      });
+      expect(completionRequests()).toEqual([
+        {
+          model,
+          context,
+          options: { ...(expected ? { reasoning: expected } : {}), apiKey: "sk-test" },
+        },
+      ]);
+    },
+  );
 
   it.each([undefined, "default", "priority"] as const)(
     "passes service tier %s to simple completions",

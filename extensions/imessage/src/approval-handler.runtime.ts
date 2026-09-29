@@ -1,4 +1,3 @@
-// Imessage plugin module implements approval handler behavior.
 import { setTimeout as delay } from "node:timers/promises";
 import {
   buildChannelApprovalExpiredText,
@@ -38,6 +37,7 @@ import {
   type IMessageApprovalConversationKey,
 } from "./approval-reactions.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
+import { normalizeIMessageMessageId } from "./message-guid.js";
 import { normalizeIMessageMessagingTarget } from "./normalize.js";
 import { getCachedIMessagePrivateApiStatus } from "./probe.js";
 import { sendMessageIMessage } from "./send.js";
@@ -263,11 +263,7 @@ async function deliverIMessageApprovalPoll(params: {
       suppressComment: true,
       options: { ...cliOptions, chatGuid },
     });
-    const reportedGuid = sent.messageId.trim();
-    const pollGuid =
-      reportedGuid && reportedGuid !== "ok" && reportedGuid !== "unknown"
-        ? reportedGuid
-        : undefined;
+    const pollGuid = normalizeIMessageMessageId(sent.messageId);
     const optionDecisions = mapSentPollOptionsToDecisions({
       requested: options,
       sent: sent.pollOptions,

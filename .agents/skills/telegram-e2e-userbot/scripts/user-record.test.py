@@ -3,6 +3,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -23,6 +24,52 @@ class FakeClient:
 
 
 class CallbackScenarioTest(unittest.TestCase):
+    def test_scenario_sends_to_the_selected_forum_topic(self):
+        clock = [0]
+        calls = []
+        class Recorder:
+            started_at = 0
+            chat_id = -10042
+            def _append(self, *_args, **_kwargs):
+                pass
+        class Driver:
+            def send_text(self, chat_id, text, reply_to=None, thread_id=0, forum_topic_id=None):
+                calls.append((chat_id, text, forum_topic_id))
+                clock[0] = 2
+                return {"id": 42}
+        with patch.object(record.time, "time", side_effect=lambda: clock[0]):
+            record.run_scenario(Recorder(), Driver(), {}, [{"type": "send", "atMs": 0, "text": "topic proof", "forumTopicId": 17}], 1)
+        self.assertEqual(calls, [(-10042, "topic proof", 17)])
+
+    def test_scenario_photo_send_and_reply_to_previous(self):
+        clock = [0]
+        calls = []
+        class Recorder:
+            started_at = 0
+            chat_id = 4242
+            def _append(self, *_args, **_kwargs):
+                pass
+        class Driver:
+            def send_photos(self, chat_id, paths, caption="", reply_to=None, thread_id=0, forum_topic_id=None):
+                calls.append(("photo", chat_id, tuple(paths), caption, reply_to, forum_topic_id))
+                clock[0] = 1
+                return [{"id": 7}]
+            def send_text(self, chat_id, text, reply_to=None, thread_id=0, forum_topic_id=None):
+                calls.append(("text", chat_id, text, reply_to, forum_topic_id))
+                clock[0] = 6
+                return {"id": 8}
+        actions = [
+            {"type": "send", "atMs": 0, "text": "", "photo": "/tmp/fixture.png"},
+            {"type": "send", "atMs": 0, "text": "/btw check this", "replyToPrevious": True},
+        ]
+        with patch.object(record.time, "time", side_effect=lambda: clock[0]):
+            sent = record.run_scenario(Recorder(), Driver(), {}, actions, 5)
+        self.assertEqual(calls, [
+            ("photo", 4242, ("/tmp/fixture.png",), "", None, None),
+            ("text", 4242, "/btw check this", 7, None),
+        ])
+        self.assertEqual(sent, [7, 8])
+
     def test_records_partial_rich_revisions_raw_without_fetching_full_content(self):
         client = FakeClient()
         rich = {

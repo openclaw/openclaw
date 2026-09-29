@@ -38,10 +38,16 @@ afterEach(async () => {
 });
 
 function createGateway(
-  params: { agentIds?: string[]; failCronReconciliation?: boolean; sessionStore?: string } = {},
+  params: {
+    agentIds?: string[];
+    failCronReconciliation?: boolean;
+    sessionStore?: string;
+    cronEnabled?: boolean;
+  } = {},
 ) {
   const agentIds = params.agentIds ?? ["main"];
   const config = {
+    cron: { enabled: params.cronEnabled ?? true },
     agents: {
       list: agentIds.map((id, index) => ({
         id,
@@ -60,6 +66,7 @@ function createGateway(
   const services: OpenClawPluginService[] = [];
   const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const cron = {
+    isEnabled: vi.fn(async () => params.cronEnabled ?? true),
     list: vi.fn(async () => {
       if (params.failCronReconciliation) {
         throw new Error("cron startup failed");
@@ -402,5 +409,21 @@ describe("dreaming gateway restart cleanup", () => {
     expect(gateway.logger.error).toHaveBeenCalledWith(
       expect.stringContaining("dreaming startup reconciliation failed"),
     );
+  });
+
+  it("cleans historical artifacts while automatic scheduling is disabled", async () => {
+    const now = Date.now();
+    const interrupted = await seedSession({
+      suffix: "dreaming-narrative-light-interrupted",
+      updatedAt: now - ORPHAN_AGE_MS - 1,
+      transcriptAt: now - ORPHAN_AGE_MS - 1,
+    });
+    const gateway = createGateway({ cronEnabled: false });
+
+    await gateway.start();
+
+    expect(hasSession(interrupted)).toBe(false);
+    expect(gateway.cron.add).not.toHaveBeenCalled();
+    expect(gateway.logger.error).not.toHaveBeenCalled();
   });
 });

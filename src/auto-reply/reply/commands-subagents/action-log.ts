@@ -16,7 +16,7 @@ import {
 export async function handleSubagentsLogAction(
   ctx: SubagentsCommandContext,
 ): Promise<CommandHandlerResult> {
-  const { runs, restTokens } = ctx;
+  const { readContext, restTokens } = ctx;
   const target = restTokens[0];
   if (!target) {
     return commandReply("📜 Usage: /subagents log <id|#> [limit]");
@@ -31,7 +31,7 @@ export async function handleSubagentsLogAction(
   const parsedLimit = parseStrictNonNegativeInteger(limitToken);
   const limit = parsedLimit === undefined ? 20 : Math.min(200, Math.max(1, parsedLimit));
 
-  const targetResolution = resolveSubagentEntryForToken(runs, target);
+  const targetResolution = resolveSubagentEntryForToken(readContext.list.view, target);
   if ("reply" in targetResolution) {
     return targetResolution.reply;
   }

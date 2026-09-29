@@ -81,7 +81,7 @@ export function registerLoginCommand(params: {
     const result = await botHarness.bot.api.sendMessage(100, text, {});
     return { messageId: String(result.message_id), chatId: "100" };
   });
-  const nativeCommandCallbackDispatcher = withPluginRuntimeRegistryScope(
+  const { nativeCommandCallbackDispatcher } = withPluginRuntimeRegistryScope(
     createEmptyPluginRegistry(),
     () =>
       registerTelegramNativeCommands({
@@ -235,7 +235,9 @@ export async function exerciseDeferredModelAccess(choice: "all" | "keep" | "canc
           createPrivateCommandContext({ match: "ux-catalog-fixture/device", userId: 200 }),
         );
         await vi.waitFor(() => expect(deliverReplies).toHaveBeenCalledOnce());
-        await expect(deliverReplies.mock.results[0]?.value).resolves.toEqual({ delivered: true });
+        await expect(deliverReplies.mock.results[0]?.value).resolves.toMatchObject({
+          delivered: true,
+        });
         const buttons = deliveredButtons(vi.mocked(first.bot.api).sendMessage.mock.calls);
         expect(buttons.map((button) => button.text)).toEqual([
           "Show all Fixture models",

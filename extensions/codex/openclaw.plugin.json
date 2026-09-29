@@ -25,6 +25,7 @@
     "configRepair": true,
     "stateMigrations": [
       { "id": "codex-app-server-sidecars-to-plugin-state" },
+      { "id": "codex-native-task-assignments" },
       {
         "id": "codex-app-server-orphaned-session-bindings",
         "doctorOnly": true,
@@ -106,6 +107,44 @@
       ]
     }
   },
+  "configGroups": [
+    {
+      "id": "dynamic-tools",
+      "title": "Dynamic tools",
+      "order": 10,
+      "properties": ["codexDynamicToolsLoading", "codexDynamicToolsExclude"]
+    },
+    {
+      "id": "native-sessions",
+      "title": "Native sessions",
+      "order": 20,
+      "properties": ["sessionCatalog", "supervision"]
+    },
+    {
+      "id": "model-discovery",
+      "title": "Model discovery",
+      "order": 30,
+      "properties": ["discovery"]
+    },
+    {
+      "id": "computer-use",
+      "title": "Computer use",
+      "order": 40,
+      "properties": ["computerUse"]
+    },
+    {
+      "id": "native-plugins",
+      "title": "Native plugins",
+      "order": 50,
+      "properties": ["codexPlugins"]
+    },
+    {
+      "id": "app-server-connection",
+      "title": "App Server connection",
+      "order": 60,
+      "properties": ["appServer"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -152,7 +191,7 @@
           "timeoutMs": {
             "type": "number",
             "minimum": 1,
-            "default": 2500
+            "default": 10000
           }
         }
       },
@@ -370,6 +409,7 @@
             "enum": ["user", "auto_review", "guardian_subagent"]
           },
           "serviceTier": { "type": ["string", "null"] },
+          "enableUltrafast": { "type": "boolean", "default": false },
           "cyberFailover": {
             "type": "object",
             "additionalProperties": false,
@@ -483,7 +523,7 @@
     },
     "discovery.timeoutMs": {
       "label": "Discovery Timeout",
-      "help": "Maximum time to wait for Codex app-server model discovery before falling back to the bundled model list.",
+      "help": "Maximum time to wait for Codex app-server model discovery. The default allows Codex to finish its remote catalog refresh or native fallback; a timeout leaves native models unavailable until discovery succeeds.",
       "advanced": true
     },
     "computerUse": {
@@ -705,6 +745,11 @@
     "appServer.serviceTier": {
       "label": "Service Tier",
       "help": "Optional Codex app-server service tier. Use priority, flex, or null. Legacy fast is accepted as priority.",
+      "advanced": true
+    },
+    "appServer.enableUltrafast": {
+      "label": "Enable Ultrafast (for supported models)",
+      "help": "Use Ultrafast when the selected model advertises access; otherwise keep the current tier. Shared Fast off remains off.",
       "advanced": true
     },
     "appServer.networkProxy": {

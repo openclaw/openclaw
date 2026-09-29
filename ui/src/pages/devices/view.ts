@@ -1,4 +1,3 @@
-// Devices page renders its screen content.
 import { html, nothing } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -49,7 +48,11 @@ function resolveBindingsState(props: DevicesProps) {
     ...props,
     ...resolveAgentBindings(props.configForm),
     ready: Boolean(props.configForm),
-    disabled: !props.canAdmin || props.configSaving || props.configFormMode === "raw",
+    disabled:
+      !props.canAdmin ||
+      props.configLoading ||
+      props.configSaving ||
+      props.configFormMode === "raw",
     nodes: resolveNodeTargets(props.nodes, ["system.run"]),
     inventory: parseNodeList({ nodes: props.nodes }),
   };
@@ -169,7 +172,7 @@ function renderBindingSelect(agent: BindingAgent | null, state: BindingState) {
       class="settings-select"
       aria-label=${t(isDefault ? "devices.binding.node" : "devices.binding.binding")}
       .value=${live(selected)}
-      ?disabled=${state.disabled || state.nodes.length === 0}
+      ?disabled=${state.disabled || (state.nodes.length === 0 && selected === sentinel)}
       @change=${onChange}
     >
       <option value=${sentinel} ?selected=${selected === sentinel}>
@@ -198,7 +201,7 @@ function resolveAgentBindings(config: Record<string, unknown> | null) {
     isDefault: true,
     binding: null,
   };
-  if (!config || typeof config !== "object") {
+  if (!config) {
     return { defaultBinding: null, agents: [fallbackAgent] };
   }
   const tools = (config.tools ?? {}) as Record<string, unknown>;

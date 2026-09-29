@@ -68,7 +68,12 @@ const SessionsPatchMutationProperties = {
   execAsk: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   permissionMode: Type.Optional(Type.Union([SessionPermissionModeSchema, Type.Null()])),
+  /** Null restores configured containment; required session isolation cannot be relaxed. */
+  sandboxMode: Type.Optional(Type.Union([Type.Literal("off"), Type.Null()])),
+  nativeRuntimeConsent: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  /** Explicit runtime for the selected model; null follows configured routing. */
+  agentRuntime: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   completionOwnerSessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   inheritedToolPolicyVersion: Type.Optional(Type.Union([Type.Literal(1), Type.Null()])),
   inheritedToolAllow: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
@@ -87,6 +92,8 @@ export const SessionsPatchParamsSchema = closedObject({
   expectedSessionId: Type.Optional(NonEmptyString),
   expectedLifecycleRevision: Type.Optional(NonEmptyString),
   expectedPermissionMode: Type.Optional(Type.Union([SessionPermissionModeSchema, Type.Null()])),
+  expectedSandboxMode: Type.Optional(Type.Union([Type.Literal("off"), Type.Null()])),
+  expectedNativeRuntimeConsent: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   expectedToolOverrides: Type.Optional(
     Type.Union([SessionToolOverridesSchema, Type.Null()], {
       description:
@@ -107,6 +114,9 @@ export const SessionsPatchManyTargetSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   expectedSessionId: Type.Optional(NonEmptyString),
   expectedLifecycleRevision: Type.Optional(NonEmptyString),
+  expectedSandboxMode: Type.Optional(Type.Union([Type.Literal("off"), Type.Null()])),
+  expectedPermissionMode: Type.Optional(Type.Union([SessionPermissionModeSchema, Type.Null()])),
+  expectedNativeRuntimeConsent: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
 });
 
 export const SessionsPatchManyParamsSchema = closedObject({

@@ -94,6 +94,7 @@ describe("installed plugin index install-record persistence", () => {
           const { StatementSync } = requireNodeSqlite();
           const iterate = vi.spyOn(StatementSync.prototype, "iterate");
           const get = vi.spyOn(StatementSync.prototype, "get");
+          const all = vi.spyOn(StatementSync.prototype, "all");
           const readRecords = () =>
             expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toEqual(records);
           const readIndex = () => {
@@ -112,13 +113,13 @@ describe("installed plugin index install-record persistence", () => {
           }
 
           expect(
-            [iterate, get].flatMap((spy) =>
+            [iterate, get, all].flatMap((spy) =>
               spy.mock.calls.filter((params, index) => {
                 const statement = spy.mock.contexts[index];
                 return (
                   statement instanceof StatementSync &&
                   params.includes("plugins.installedIndex") &&
-                  /SELECT\s+"?value_json"?\s+FROM\s+"?config_machine_state"?\s+WHERE\s+"?state_key"?\s*=/i.test(
+                  /SELECT\b[\s\S]*?\bFROM\s+"?config_machine_state"?\s+WHERE\s+"?state_key"?\s*(?:=|IN\s*\()/i.test(
                     statement.sourceSQL,
                   )
                 );

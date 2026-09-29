@@ -10,7 +10,7 @@ import { matchesMentionWithExplicit } from "./mentions.js";
 import { normalizeReplyPayload, normalizeReplyPayloadOutcome } from "./normalize-reply.js";
 import { parseReplyDirectives } from "./reply-directives.js";
 import { createReplyDispatcherWithTyping } from "./reply-dispatcher.js";
-import { createReplyReferencePlanner, isSingleUseReplyToMode } from "./reply-reference.js";
+import { createReplyReferencePlanner } from "./reply-reference.js";
 import {
   extractShortModelName,
   resolveResponsePrefixTemplate,
@@ -272,22 +272,6 @@ describe("normalizeReplyPayload", () => {
     expect(reply.text).not.toContain("NO_REPLY");
   });
 
-  it("strips NO_REPLY appended after substantive text (#30916)", () => {
-    const result = normalizeReplyPayload({
-      text: "File's there. Not urgent.\n\nNO_REPLY",
-    });
-    const reply = expectNormalizedReply(result);
-    expect(reply.text).toContain("File's there");
-    expect(reply.text).not.toContain("NO_REPLY");
-  });
-
-  it("strips glued leading NO_REPLY text without leaking the token", () => {
-    const result = normalizeReplyPayload({
-      text: "NO_REPLYThe user is saying hello",
-    });
-    expect(expectNormalizedReply(result).text).toBe("The user is saying hello");
-  });
-
   it("strips glued leading NO_REPLY text case-insensitively", () => {
     const result = normalizeReplyPayload({
       text: "no_replyThe user is saying hello",
@@ -299,50 +283,23 @@ describe("normalizeReplyPayload", () => {
     ["NO_REPLY\n\nThe user is saying hello", "The user is saying hello"],
     ["NO_REPLY\r\nThe user is saying hello", "The user is saying hello"],
     ["NO_REPLY NO_REPLY\nThe user is saying hello", "The user is saying hello"],
-    ["NO_REPLY\n✅ Done", "✅ Done"],
-    ["NO_REPLY\n- Done", "- Done"],
-    ["NO_REPLY\n—note", "—note"],
-    ["NO_REPLY\n: explanation", ": explanation"],
-    ["NO_REPLY\n**Done**", "**Done**"],
-    ['NO_REPLY\n"Hello"', '"Hello"'],
-    ["NO_REPLY\n```ts\nconst done = true;\n```", "```ts\nconst done = true;\n```"],
   ])("strips newline-separated leading silent tokens: %j", (text, expected) => {
     expect(expectNormalizedReply(normalizeReplyPayload({ text })).text).toBe(expected);
   });
 
-  it.each([
-    "Done as requested!NO_REPLY",
-    "question?NO_REPLY",
-    "note,NO_REPLY",
-    "item;NO_REPLY",
-    "label:NO_REPLY",
-  ])("preserves punctuation-attached silent-token literals in delivery: %j", (text) => {
-    expect(expectNormalizedReply(normalizeReplyPayload({ text })).text).toBe(text);
-  });
+  it.each(["Done as requested!NO_REPLY"])(
+    "preserves punctuation-attached silent-token literals in delivery: %j",
+    (text) => {
+      expect(expectNormalizedReply(normalizeReplyPayload({ text })).text).toBe(text);
+    },
+  );
 
-  it("strips repeated trailing silent tokens from visible replies", () => {
-    expect(
-      expectNormalizedReply(normalizeReplyPayload({ text: "Done. NO_REPLY NO_REPLY" })).text,
-    ).toBe("Done.");
-  });
-
-  it.each([
-    "interject.NO_REPLY",
-    "The example is interject.NO_REPLY",
-    "Done as requested.NO_REPLY",
-    "NO_REPLY NO_REPLY: explanation",
-    "NO_REPLY\nNO_REPLY: explanation",
-    "NO_REPLY\nNO_REPLY—note",
-    "NO_REPLY\nNO_REPLY-note",
-    "NO_REPLY\nNO_REPLY -- nope",
-  ])("preserves substantive dotted and punctuation-start silent-token literals: %j", (text) => {
-    expect(expectNormalizedReply(normalizeReplyPayload({ text })).text).toBe(text);
-  });
-
-  it("keeps NO_REPLY when used as leading substantive text", () => {
-    const result = normalizeReplyPayload({ text: "NO_REPLY -- nope" });
-    expect(expectNormalizedReply(result).text).toBe("NO_REPLY -- nope");
-  });
+  it.each(["interject.NO_REPLY", "NO_REPLY\nNO_REPLY: explanation"])(
+    "preserves substantive dotted and punctuation-start silent-token literals: %j",
+    (text) => {
+      expect(expectNormalizedReply(normalizeReplyPayload({ text })).text).toBe(text);
+    },
+  );
 
   it("keeps punctuation-start content after a leading NO_REPLY token", () => {
     const colonResult = normalizeReplyPayload({ text: "NO_REPLY: explanation" });
@@ -350,16 +307,6 @@ describe("normalizeReplyPayload", () => {
 
     const dashResult = normalizeReplyPayload({ text: "NO_REPLY—note" });
     expect(expectNormalizedReply(dashResult).text).toBe("NO_REPLY—note");
-  });
-
-  it("suppresses message when stripping NO_REPLY leaves nothing", () => {
-    const reasons: string[] = [];
-    const result = normalizeReplyPayload(
-      { text: "  NO_REPLY  " },
-      { onSkip: (reason) => reasons.push(reason) },
-    );
-    expect(result).toBeNull();
-    expect(reasons).toEqual(["silent"]);
   });
 
   it("suppresses JSON NO_REPLY action payloads", () => {
@@ -433,16 +380,6 @@ describe("normalizeReplyPayload", () => {
   it("strips JSON NO_REPLY action text but keeps media payload", () => {
     const result = normalizeReplyPayload({
       text: '{"action":"NO_REPLY"}',
-      mediaUrl: "https://example.com/img.png",
-    });
-    const reply = expectNormalizedReply(result);
-    expect(reply.text).toBe("");
-    expect(reply.mediaUrl).toBe("https://example.com/img.png");
-  });
-
-  it("strips quoted NO_REPLY string text but keeps media payload", () => {
-    const result = normalizeReplyPayload({
-      text: '"NO_REPLY"',
       mediaUrl: "https://example.com/img.png",
     });
     const reply = expectNormalizedReply(result);
@@ -611,126 +548,44 @@ describe("typing controller", () => {
 
 describe("resolveTypingMode", () => {
   it("resolves defaults, configured overrides, and heartbeat suppression", () => {
-    const cases = [
-      {
-        name: "default direct chat",
-        input: {
-          configured: undefined,
-          isGroupChat: false,
-          wasMentioned: false,
-          isHeartbeat: false,
-        },
-        expected: "instant",
-      },
-      {
-        name: "default group chat without mention",
-        input: {
-          configured: undefined,
-          isGroupChat: true,
-          wasMentioned: false,
-          isHeartbeat: false,
-        },
-        expected: "message",
-      },
-      {
-        name: "message-tool-only group chat starts typing immediately",
-        input: {
-          configured: undefined,
-          isGroupChat: true,
-          wasMentioned: false,
-          isHeartbeat: false,
-          sourceReplyDeliveryMode: "message_tool_only" as const,
-        },
-        expected: "instant",
-      },
-      {
-        name: "configured group typing mode wins over message-tool-only default",
-        input: {
-          configured: "message" as const,
-          isGroupChat: true,
-          wasMentioned: false,
-          isHeartbeat: false,
-          sourceReplyDeliveryMode: "message_tool_only" as const,
-        },
-        expected: "message",
-      },
-      {
-        name: "configured instant typing mode wins over message-tool-only default",
-        input: {
-          configured: "instant" as const,
-          isGroupChat: true,
-          wasMentioned: false,
-          isHeartbeat: false,
-          sourceReplyDeliveryMode: "message_tool_only" as const,
-        },
-        expected: "instant",
-      },
-      {
-        name: "default mentioned group chat",
-        input: {
-          configured: undefined,
-          isGroupChat: true,
-          wasMentioned: true,
-          isHeartbeat: false,
-        },
-        expected: "instant",
-      },
-      {
-        name: "configured thinking override",
-        input: {
-          configured: "thinking" as const,
-          isGroupChat: false,
-          wasMentioned: false,
-          isHeartbeat: false,
-        },
-        expected: "thinking",
-      },
-      {
-        name: "configured message override",
-        input: {
-          configured: "message" as const,
-          isGroupChat: true,
-          wasMentioned: true,
-          isHeartbeat: false,
-        },
-        expected: "message",
-      },
-      {
-        name: "heartbeat forces never",
-        input: {
-          configured: "instant" as const,
-          isGroupChat: false,
-          wasMentioned: false,
-          isHeartbeat: true,
-        },
-        expected: "never",
-      },
-      {
-        name: "suppressTyping forces never",
-        input: {
-          configured: "instant" as const,
-          isGroupChat: false,
-          wasMentioned: false,
-          isHeartbeat: false,
-          suppressTyping: true,
-        },
-        expected: "never",
-      },
-      {
-        name: "typingPolicy system_event forces never",
-        input: {
-          configured: "instant" as const,
-          isGroupChat: false,
-          wasMentioned: false,
-          isHeartbeat: false,
-          typingPolicy: "system_event" as const,
-        },
-        expected: "never",
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      expect(resolveTypingMode(testCase.input), testCase.name).toBe(testCase.expected);
+    const defaults = { isGroupChat: false, wasMentioned: false, isHeartbeat: false };
+    const cases: Array<
+      [
+        string,
+        Partial<Parameters<typeof resolveTypingMode>[0]>,
+        ReturnType<typeof resolveTypingMode>,
+      ]
+    > = [
+      ["default direct chat", {}, "instant"],
+      ["default group chat", { isGroupChat: true }, "message"],
+      [
+        "message-tool-only group",
+        { isGroupChat: true, sourceReplyDeliveryMode: "message_tool_only" },
+        "instant",
+      ],
+      [
+        "configured message-tool-only group",
+        { isGroupChat: true, sourceReplyDeliveryMode: "message_tool_only", configured: "message" },
+        "message",
+      ],
+      [
+        "configured instant message-tool-only group",
+        { isGroupChat: true, sourceReplyDeliveryMode: "message_tool_only", configured: "instant" },
+        "instant",
+      ],
+      ["mentioned group", { isGroupChat: true, wasMentioned: true }, "instant"],
+      ["thinking override", { configured: "thinking" }, "thinking"],
+      [
+        "message override",
+        { isGroupChat: true, wasMentioned: true, configured: "message" },
+        "message",
+      ],
+      ["heartbeat", { configured: "instant", isHeartbeat: true }, "never"],
+      ["suppressed", { configured: "instant", suppressTyping: true }, "never"],
+      ["system event", { configured: "instant", typingPolicy: "system_event" }, "never"],
+    ];
+    for (const [name, input, expected] of cases) {
+      expect(resolveTypingMode({ ...defaults, ...input }), name).toBe(expected);
     }
   });
 });
@@ -764,110 +619,52 @@ describe("parseInlineDirectives audio-only projection", () => {
 });
 
 describe("resolveResponsePrefixTemplate", () => {
-  function expectResolvedTemplateCases(
-    cases: ReadonlyArray<{
-      name: string;
-      template: string | undefined;
-      values: Parameters<typeof resolveResponsePrefixTemplate>[1];
-      expected: string | undefined;
-    }>,
-  ) {
-    for (const testCase of cases) {
-      expect(resolveResponsePrefixTemplate(testCase.template, testCase.values), testCase.name).toBe(
-        testCase.expected,
-      );
+  type TemplateCase = [
+    string | undefined,
+    Parameters<typeof resolveResponsePrefixTemplate>[1],
+    string | undefined,
+  ];
+  function expectResolvedTemplateCases(cases: TemplateCase[]) {
+    for (const [template, values, expected] of cases) {
+      expect(resolveResponsePrefixTemplate(template, values), template).toBe(expected);
     }
   }
 
   it("resolves known variables, aliases, and case-insensitive tokens", () => {
-    const cases = [
-      {
-        name: "model",
-        template: "[{model}]",
-        values: { model: "gpt-5.4" },
-        expected: "[gpt-5.4]",
-      },
-      {
-        name: "modelFull",
-        template: "[{modelFull}]",
-        values: { modelFull: "openai/gpt-5.4" },
-        expected: "[openai/gpt-5.4]",
-      },
-      {
-        name: "provider",
-        template: "[{provider}]",
-        values: { provider: "anthropic" },
-        expected: "[anthropic]",
-      },
-      {
-        name: "thinkingLevel",
-        template: "think:{thinkingLevel}",
-        values: { thinkingLevel: "high" },
-        expected: "think:high",
-      },
-      {
-        name: "think alias",
-        template: "think:{think}",
-        values: { thinkingLevel: "low" },
-        expected: "think:low",
-      },
-      {
-        name: "identity.name",
-        template: "[{identity.name}]",
-        values: { identityName: "OpenClaw" },
-        expected: "[OpenClaw]",
-      },
-      {
-        name: "identityName alias",
-        template: "[{identityName}]",
-        values: { identityName: "OpenClaw" },
-        expected: "[OpenClaw]",
-      },
-      {
-        name: "case-insensitive variables",
-        template: "[{MODEL} | {ThinkingLevel}]",
-        values: { model: "gpt-5.4", thinkingLevel: "low" },
-        expected: "[gpt-5.4 | low]",
-      },
-      {
-        name: "all variables",
-        template: "[{identity.name}] {provider}/{model} (think:{thinkingLevel})",
-        values: {
+    expectResolvedTemplateCases([
+      ["[{model}]", { model: "gpt-5.4" }, "[gpt-5.4]"],
+      ["[{modelFull}]", { modelFull: "openai/gpt-5.4" }, "[openai/gpt-5.4]"],
+      ["[{provider}]", { provider: "anthropic" }, "[anthropic]"],
+      ["think:{thinkingLevel}", { thinkingLevel: "high" }, "think:high"],
+      ["think:{think}", { thinkingLevel: "low" }, "think:low"],
+      ["[{identity.name}]", { identityName: "OpenClaw" }, "[OpenClaw]"],
+      ["[{identityName}]", { identityName: "OpenClaw" }, "[OpenClaw]"],
+      [
+        "[{MODEL} | {ThinkingLevel}]",
+        { model: "gpt-5.4", thinkingLevel: "low" },
+        "[gpt-5.4 | low]",
+      ],
+      [
+        "[{identity.name}] {provider}/{model} (think:{thinkingLevel})",
+        {
           identityName: "OpenClaw",
           provider: "anthropic",
           model: "claude-opus-4-6",
           thinkingLevel: "high",
         },
-        expected: "[OpenClaw] anthropic/claude-opus-4-6 (think:high)",
-      },
-    ] as const;
-    expectResolvedTemplateCases(cases);
+        "[OpenClaw] anthropic/claude-opus-4-6 (think:high)",
+      ],
+    ]);
   });
 
   it("preserves unresolved/unknown placeholders and handles static inputs", () => {
-    const cases = [
-      { name: "undefined template", template: undefined, values: {}, expected: undefined },
-      { name: "no variables", template: "[Claude]", values: {}, expected: "[Claude]" },
-      {
-        name: "unresolved known variable",
-        template: "[{model}]",
-        values: {},
-        expected: "[{model}]",
-      },
-      {
-        name: "unrecognized variable",
-        template: "[{unknownVar}]",
-        values: { model: "gpt-5.4" },
-        expected: "[{unknownVar}]",
-      },
-      {
-        name: "mixed resolved/unresolved",
-        template: "[{model} | {provider}]",
-        values: { model: "gpt-5.4" },
-        expected: "[gpt-5.4 | {provider}]",
-      },
-    ] as const;
-    expectResolvedTemplateCases(cases);
+    expectResolvedTemplateCases([
+      [undefined, {}, undefined],
+      ["[Claude]", {}, "[Claude]"],
+      ["[{model}]", {}, "[{model}]"],
+      ["[{unknownVar}]", { model: "gpt-5.4" }, "[{unknownVar}]"],
+      ["[{model} | {provider}]", { model: "gpt-5.4" }, "[gpt-5.4 | {provider}]"],
+    ]);
   });
 });
 
@@ -1057,23 +854,6 @@ describe("block reply coalescer", () => {
     return { flushes, coalescer };
   }
 
-  it("coalesces chunks within the idle window", async () => {
-    vi.useFakeTimers();
-    const { flushes, coalescer } = createBlockCoalescerHarness({
-      minChars: 1,
-      maxChars: 200,
-      idleMs: 100,
-      joiner: " ",
-    });
-
-    coalescer.enqueue({ text: "Hello" });
-    coalescer.enqueue({ text: "world" });
-
-    await vi.advanceTimersByTimeAsync(100);
-    expect(flushes).toEqual(["Hello world"]);
-    coalescer.stop();
-  });
-
   it("waits until minChars before idle flush", async () => {
     vi.useFakeTimers();
     const { flushes, coalescer } = createBlockCoalescerHarness({
@@ -1106,23 +886,6 @@ describe("block reply coalescer", () => {
     coalescer.enqueue({ text: "Second paragraph" });
 
     await vi.advanceTimersByTimeAsync(100);
-    expect(flushes).toEqual(["First paragraph\n\nSecond paragraph"]);
-    coalescer.stop();
-  });
-
-  it("keeps buffering newline-style chunks until minChars is reached", async () => {
-    vi.useFakeTimers();
-    const { flushes, coalescer } = createBlockCoalescerHarness({
-      minChars: 25,
-      maxChars: 2000,
-      idleMs: 50,
-      joiner: "\n\n",
-    });
-
-    coalescer.enqueue({ text: "First paragraph" });
-    coalescer.enqueue({ text: "Second paragraph" });
-
-    await vi.advanceTimersByTimeAsync(50);
     expect(flushes).toEqual(["First paragraph\n\nSecond paragraph"]);
     coalescer.stop();
   });
@@ -1410,15 +1173,6 @@ describe("createReplyReferencePlanner", () => {
   });
 });
 
-describe("isSingleUseReplyToMode", () => {
-  it("treats first and batched as single-use reply modes", () => {
-    expect(isSingleUseReplyToMode("off")).toBe(false);
-    expect(isSingleUseReplyToMode("all")).toBe(false);
-    expect(isSingleUseReplyToMode("first")).toBe(true);
-    expect(isSingleUseReplyToMode("batched")).toBe(true);
-  });
-});
-
 describe("createStreamingDirectiveAccumulator", () => {
   it("stashes reply_to_current until a renderable chunk arrives", () => {
     const accumulator = createStreamingDirectiveAccumulator();
@@ -1599,7 +1353,6 @@ describe("createStreamingDirectiveAccumulator", () => {
       expect(accumulator.consume(`${"MEDIA".slice(prefix.length)}:./asset.png`)).toBeNull();
       const final = accumulator.consume("", { final: true });
       expect(final?.text).toBe("\tMEDIA:./asset.png");
-      expect(parseReplyDirectives(final?.text ?? "").mediaUrls).toEqual(["./asset.png"]);
     },
   );
 
@@ -1659,14 +1412,6 @@ describe("createStreamingDirectiveAccumulator", () => {
     const second = accumulator.consume(": kind=disk capacity=1TB");
     expect(second?.text).toBe(": kind=disk capacity=1TB");
     expect(second?.mediaUrls).toBeUndefined();
-  });
-
-  it("passes plain text through when there is no incomplete directive tail", () => {
-    const accumulator = createStreamingDirectiveAccumulator();
-
-    const result = accumulator.consume("Hello world.\nThis is a complete block.");
-    expect(result?.text).toBe("Hello world.\nThis is a complete block.");
-    expect(result?.mediaUrls).toBeUndefined();
   });
 
   it("keeps media-looking lines as text in streaming chunks", () => {

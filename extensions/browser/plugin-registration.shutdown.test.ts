@@ -6,12 +6,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBrowserPlugin } from "./plugin-registration.js";
 
 const runtimeMocks = vi.hoisted(() => ({
+  hasBrowserNodeHostWork: vi.fn(() => false),
   handleGatewayExtensionUpgrade: vi.fn(async () => true),
   handleBrowserScreencastUpgrade: vi.fn(async () => true),
   stopBrowserControlService: vi.fn(async () => undefined),
 }));
 
 vi.mock("./register.runtime.js", () => ({
+  hasBrowserNodeHostWork: runtimeMocks.hasBrowserNodeHostWork,
   stopBrowserControlService: runtimeMocks.stopBrowserControlService,
 }));
 
@@ -25,6 +27,7 @@ vi.mock("./src/browser/screencast/upgrade.js", () => ({
 
 vi.mock("./src/browser/session-tab-store.js", () => ({
   initializeBrowserSessionTabStore: vi.fn(),
+  drainBrowserSessionTabStore: vi.fn(async () => undefined),
 }));
 
 vi.mock("./src/browser/system-profile-import-state.js", () => ({

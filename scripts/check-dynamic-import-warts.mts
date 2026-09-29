@@ -3,7 +3,8 @@
 // Advises on ineffective or suspicious dynamic import patterns.
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { collectTypeScriptFilesFromRoots, runAsScript, toLine } from "./lib/ts-guard-utils.mts";
 
@@ -17,12 +18,12 @@ function isTypeOnlyImportDeclaration(node: ts.ImportDeclaration) {
   const clause = node.importClause;
   return Boolean(
     clause &&
-    (ts.isTypeOnlyImportDeclaration(clause) ||
+    (clause.phaseModifier === ts.SyntaxKind.TypeKeyword ||
       (!clause.name &&
         clause.namedBindings &&
         ts.isNamedImports(clause.namedBindings) &&
         clause.namedBindings.elements.length > 0 &&
-        clause.namedBindings.elements.every(ts.isTypeOnlyImportOrExportDeclaration))),
+        clause.namedBindings.elements.every((element) => element.isTypeOnly))),
   );
 }
 
@@ -34,7 +35,7 @@ function isTypeOnlyExportDeclaration(node: ts.ExportDeclaration) {
       clause &&
       ts.isNamedExports(clause) &&
       clause.elements.length > 0 &&
-      clause.elements.every(ts.isTypeOnlyImportOrExportDeclaration),
+      clause.elements.every((element) => element.isTypeOnly),
     )
   );
 }
@@ -48,7 +49,7 @@ function isExecuteDeclaration(node: ts.Node) {
   ) {
     return false;
   }
-  const name = ts.getNameOfDeclaration(node);
+  const name = node.name;
   return Boolean(
     name && (ts.isIdentifier(name) || ts.isStringLiteral(name)) && name.text === "execute",
   );
@@ -71,11 +72,11 @@ function isIgnoredTestHelperPath(filePath: string) {
   );
 }
 
-/**
- * Finds dynamic import advisories in a single source file.
- */
-export function findDynamicImportAdvisories(content: string, fileName = "source.ts") {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+export function findDynamicImportAdvisories(
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
+) {
   const staticRuntimeImports: ImportLines = new Map();
   const dynamicImports: ImportLines = new Map();
   const directExecuteImports: DynamicImportAdvisory[] = [];
@@ -113,11 +114,15 @@ export function findDynamicImportAdvisories(content: string, fileName = "source.
       node.arguments.length > 0
     ) {
       const argument = node.arguments[0];
-      const specifier = argument && ts.isStringLiteralLike(argument) ? argument.text : null;
+      const specifier = argument && ts.isStringLiteralLikeNode(argument) ? argument.text : null;
       if (specifier) {
         const line = toLine(sourceFile, node);
         addLine(dynamicImports, specifier, line);
-        if (ts.findAncestor(node, isExecuteDeclaration)) {
+        let ancestor: ts.Node | undefined = node;
+        while (ancestor && !isExecuteDeclaration(ancestor)) {
+          ancestor = ancestor.parent;
+        }
+        if (ancestor) {
           directExecuteImports.push({
             line,
             reason: `direct dynamic import of "${specifier}" inside execute path; move it behind a cached loader`,
@@ -126,7 +131,7 @@ export function findDynamicImportAdvisories(content: string, fileName = "source.
       }
     }
 
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
 
   visit(sourceFile);
@@ -150,12 +155,9 @@ export function findDynamicImportAdvisories(content: string, fileName = "source.
   return advisories;
 }
 
-/**
- * Collects dynamic import advisories across configured source roots.
- */
-async function collectDynamicImportAdvisories(options: { roots?: string[] } = {}) {
-  const roots = options.roots ?? defaultRoots;
-  const files = await collectTypeScriptFilesFromRoots(roots, {
+async function collectDynamicImportAdvisories() {
+  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
+  const files = await collectTypeScriptFilesFromRoots(defaultRoots, {
     extraTestSuffixes: [".suite.ts"],
   });
   const advisories: Array<DynamicImportAdvisory & { path: string }> = [];
@@ -167,7 +169,11 @@ async function collectDynamicImportAdvisories(options: { roots?: string[] } = {}
     if (isIgnoredTestHelperContent(content)) {
       continue;
     }
-    for (const advisory of findDynamicImportAdvisories(content, filePath)) {
+    for (const advisory of findDynamicImportAdvisories(
+      content,
+      filePath,
+      parser.parseSourceFile(filePath, content),
+    )) {
       advisories.push({
         path: path.relative(repoRoot, filePath),
         ...advisory,
@@ -177,9 +183,6 @@ async function collectDynamicImportAdvisories(options: { roots?: string[] } = {}
   return advisories;
 }
 
-/**
- * Runs the dynamic import advisory check.
- */
 export async function main(argv = process.argv.slice(2)) {
   const fail = argv.includes("--fail");
   const json = argv.includes("--json");
@@ -198,7 +201,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   if (fail && advisories.length > 0) {
-    process.exit(1);
+    process.exitCode = 1;
   }
 }
 

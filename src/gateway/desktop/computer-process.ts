@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -177,16 +176,13 @@ export function startComputerHostProcess(params: {
       return;
     }
     try {
-      const node = resolveExecutablePath("node", { env: params.env });
-      if (!node) {
-        throw new Error("Gateway computer control requires Node.js in PATH");
-      }
       const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.computerHost);
       assertActive();
       run = await supervisor.spawn({
         scopeKey,
         mode: "child",
-        argv: [node, ...resolveRuntimeWorkerArgv(worker, node)],
+        // The desktop PATH never selects the runtime: Bun hosts run the worker on Bun.
+        argv: [process.execPath, ...resolveRuntimeWorkerArgv(worker)],
         env: params.env,
         exactEnv: true,
         stdinMode: "pipe-open",

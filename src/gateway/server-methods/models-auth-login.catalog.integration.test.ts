@@ -9,6 +9,7 @@ import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.j
 import { registerPreparedModelRuntimePublicationListener } from "../../agents/prepared-model-runtime.publication-events.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { observeCatalogWorkerTasks } from "./models-auth-catalog.test-support.js";
 
 it.for([0, 7_000])(
   "models.authLogin publishes account rows to passive models.list (endpoint delay %i ms)",
@@ -27,6 +28,7 @@ it.for([0, 7_000])(
       },
     });
     const provider = "login-discovery-fixture";
+    const catalogWork = observeCatalogWorkerTasks();
     const trace: Array<{ path: string; time: number; method: string; authenticated: boolean }> = [];
     let responseDelay = catalogDelay;
     let holdNextCatalogResponse = false;
@@ -151,6 +153,7 @@ it.for([0, 7_000])(
           };
         };
         expect((await list()).ids).not.toContain("account-exclusive");
+        const beforeLoginWork = catalogWork.read();
         await client.request("models.authLogin", {
           sessionId: "fixture-login",
           agentId: "main",
@@ -212,7 +215,18 @@ it.for([0, 7_000])(
         }
         observations.push(await observePassiveReads("final"));
         const automaticTrace = trace.map((row) => ({ ...row, time: row.time - loginCompleted }));
+        console.log("LOGIN_POOL_PROOF", {
+          beforeLoginWork,
+          after: catalogWork.read(),
+          automaticTrace,
+        });
         expect(automaticTrace.filter((row) => row.path === "/models")).toHaveLength(1);
+        expect(catalogWork.read()).toMatchObject({
+          maxWorkers: 1,
+          workersCreated: 1,
+          pendingTasks: 0,
+          completedTasks: beforeLoginWork.completedTasks + 1,
+        });
         responseDelay = 0;
         const manualRefresh = await list(true);
         if (catalogDelay === 7_000) {
@@ -277,6 +291,7 @@ it.for([0, 7_000])(
         await server.close();
       }
     } finally {
+      catalogWork.close();
       endpoint.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         endpoint.close((error) => (error ? reject(error) : resolve()));

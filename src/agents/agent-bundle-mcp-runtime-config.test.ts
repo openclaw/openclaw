@@ -34,6 +34,34 @@ afterEach(() => {
 });
 
 describe("session MCP config projection", () => {
+  it("filters denied servers without renaming colliding survivors across config reloads", () => {
+    const cfg = {
+      mcp: { servers: { "alpha?": { command: "first" }, "alpha!": { command: "second" } } },
+    };
+    const params = { workspaceDir: "/policy-workspace", toolDenylist: ["alpha-__*"] };
+    const filtered = loadSessionMcpConfig({ ...params, cfg });
+    expect(Object.keys(filtered.loaded.mcpServers)).toEqual(["alpha!"]);
+    expect([...filtered.safeServerNamesByServer]).toEqual([
+      ["alpha?", "alpha-"],
+      ["alpha!", "alpha--2"],
+    ]);
+
+    const reloaded = loadSessionMcpConfig({
+      ...params,
+      cfg: {
+        mcp: {
+          servers: { ...cfg.mcp.servers, "alpha@": { command: "third" } },
+        },
+      },
+    });
+    expect(Object.keys(reloaded.loaded.mcpServers)).toEqual(["alpha!", "alpha@"]);
+    expect([...reloaded.safeServerNamesByServer]).toEqual([
+      ["alpha?", "alpha-"],
+      ["alpha!", "alpha--2"],
+      ["alpha@", "alpha--3"],
+    ]);
+  });
+
   it("keeps Agent Plugins launch ownership out of fingerprints and filtered partitions", () => {
     const cfg = {
       mcp: { servers: { alpha: { command: "alpha" }, beta: { command: "beta" } } },

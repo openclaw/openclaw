@@ -184,12 +184,14 @@ export function createGatewayByteStream(
   onReadError: () => void,
 ) {
   let stream: ReturnType<FileHandle["createReadStream"]> | undefined;
+  const controller = new AbortController();
   let closed = false;
   const close = async () => {
     if (closed) {
       return;
     }
     closed = true;
+    controller.abort();
     if (stream) {
       stream.destroy();
       return;
@@ -204,9 +206,11 @@ export function createGatewayByteStream(
 
   return {
     close,
-    async pipe(plan: ByteResponsePlan, method: string | undefined) {
+    signal: controller.signal,
+    async pipe(plan: ByteResponsePlan, method: string | undefined, beforeSend?: () => void) {
       if (method === "HEAD" || !("contentLength" in plan) || plan.contentLength === 0) {
         await close();
+        beforeSend?.();
         res.end();
         return;
       }
@@ -214,6 +218,7 @@ export function createGatewayByteStream(
         await close();
         return;
       }
+      beforeSend?.();
       stream = handle.createReadStream({
         start: plan.kind === "partial" ? plan.range.start : 0,
         end: plan.kind === "partial" ? plan.range.end : plan.contentLength - 1,

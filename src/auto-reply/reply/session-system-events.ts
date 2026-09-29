@@ -11,20 +11,24 @@ import {
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
 import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
-// Records system-level session events for restarts, forks, and resets.
-import { selectAgentSystemEvents } from "../../infra/system-event-ownership.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
   type SystemEvent,
 } from "../../infra/system-events.js";
+import { SESSION_CREATED_NOTICE_CONTEXT_PREFIX } from "../../sessions/session-state-event-kinds.js";
 import { acknowledgeSessionStateNotices } from "../../sessions/session-state-events.js";
 import { decodeSessionStateNoticeContextKey } from "../../sessions/session-state-notices.js";
 
-function compactSystemEvent(line: string): string | null {
-  const trimmed = line.trim();
+function compactSystemEvent(event: SystemEvent): string | null {
+  const trimmed = event.text.trim();
   if (!trimmed) {
     return null;
+  }
+  // Creation metadata may mention heartbeat work; it is not a retired wake prompt.
+  if (event.contextKey?.startsWith(SESSION_CREATED_NOTICE_CONTEXT_PREFIX)) {
+    return trimmed;
   }
   const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (lower.includes("reason periodic")) {
@@ -91,16 +95,15 @@ export async function drainFormattedSystemEvents(params: {
   isNewSession: boolean;
   events?: readonly SystemEvent[];
 }): Promise<string | undefined> {
-  const summaryLines: string[] = [];
   const systemLines: string[] = [];
+  const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
   // Exec completions have a dedicated heartbeat prompt; leave those entries queued
   // so the heartbeat path can consume and deliver them.
   const queued = consumeSelectedSystemEventEntries(
-    params.sessionKey,
-    selectAgentSystemEvents(
-      params.events ?? peekSystemEventEntries(params.sessionKey),
-      params.agentId,
-    ).filter((event) => !isExecCompletionEvent(event.text)),
+    queueKey,
+    (params.events ?? peekSystemEventEntries(queueKey)).filter(
+      (event) => !isExecCompletionEvent(event.text),
+    ),
   );
   const sessionStateTargets = queued
     .map((event) =>
@@ -111,37 +114,25 @@ export async function drainFormattedSystemEvents(params: {
     acknowledgeSessionStateNotices(params.sessionKey, sessionStateTargets);
   }
   for (const event of queued) {
-    const compacted = compactSystemEvent(event.text);
+    const compacted = compactSystemEvent(event);
     if (!compacted) {
       continue;
     }
     const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
-    let index = 0;
     // Inbound text is deliberately not rewritten to neutralize look-alike `System:` lines.
     // Role separation plus external-content wrapping is the boundary.
     // This is an explicit product decision.
-    for (const subline of compacted.split("\n")) {
+    for (const [index, subline] of compacted.split("\n").entries()) {
       systemLines.push(`System: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
-      index += 1;
     }
   }
-  if (params.isMainSession && params.isNewSession) {
-    const summary = await buildChannelSummary(params.cfg);
-    if (summary.length > 0) {
-      for (const line of summary) {
-        for (const subline of line.split("\n")) {
-          summaryLines.push(`System: ${subline}`);
-        }
-      }
-    }
-  }
-  if (summaryLines.length === 0 && systemLines.length === 0) {
-    return undefined;
-  }
-
   // Each sub-line gets its own prefix so continuation lines can't be mistaken
   // for regular user content.
-  return summaryLines.length > 0
-    ? [...summaryLines, ...systemLines].join("\n")
-    : systemLines.join("\n");
+  const summaryLines =
+    params.isMainSession && params.isNewSession
+      ? (await buildChannelSummary(params.cfg)).flatMap((line) =>
+          line.split("\n").map((subline) => `System: ${subline}`),
+        )
+      : [];
+  return [...summaryLines, ...systemLines].join("\n") || undefined;
 }

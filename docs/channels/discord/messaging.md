@@ -49,7 +49,7 @@ How inbound and outbound Discord messages are routed, formatted, acknowledged, a
     - `all`: attaches it to every outbound message
     - `batched`: attaches it only when the inbound event was a debounced batch of multiple messages — useful when you want native replies mainly for ambiguous bursty chats, not every single-message turn
 
-    Message IDs are surfaced in context/history so agents can target specific messages.
+    Message IDs are surfaced in context/history so agents can target specific messages. Replies to bot messages, including automation alerts, retain the referenced text as untrusted context when context visibility allows it. The bot's own inbound events are still ignored, and referenced self-authored media is not downloaded again.
     Chunked persona delivery receipts retain the reply target selected for each chunk.
 
   </Accordion>

@@ -356,6 +356,9 @@ describe("plugin update unchanged Docker E2E", () => {
       'node "$entry" update --channel beta --tag "${OPENCLAW_CURRENT_PACKAGE_TGZ',
     );
     expect(script).toContain(
+      'OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL:-https://registry.npmjs.org/}"',
+    );
+    expect(script).toContain(
       "openclaw update failed or timed out after ${update_timeout_seconds}s",
     );
     expect(script.match(/openclaw_e2e_print_log \/tmp\/openclaw-update-corrupt-/g)).toHaveLength(5);

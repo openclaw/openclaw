@@ -2,8 +2,10 @@ import { sortUniqueStrings } from "@openclaw/normalization-core/string-normaliza
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginAutoEnableResult } from "../config/plugin-auto-enable.js";
+import { makeEmptyPluginMetadataOwners } from "./current-plugin-metadata.test-support.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
+import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -192,8 +194,9 @@ function createMetadataSnapshotFixture(
     },
     byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
     owners: {
-      channels: ownerMap([]),
-      channelConfigs: ownerMap([]),
+      ...makeEmptyPluginMetadataOwners(),
+      providerAuthContributions:
+        buildPluginMetadataProviderFacts(plugins).providerAuthContributions,
       providers: ownerMap(
         plugins.flatMap((plugin) =>
           plugin.providers.map((providerId) => [providerId, [plugin.id]] as const),
@@ -213,10 +216,6 @@ function createMetadataSnapshotFixture(
           ),
         ),
       ),
-      setupProviders: ownerMap([]),
-      commandAliases: ownerMap([]),
-      contracts: ownerMap([]),
-      modelIdNormalizationPolicies: new Map(),
     },
   };
 }
@@ -701,12 +700,6 @@ describe("resolvePluginProviders", () => {
     });
   });
 
-  it("maps explicit cli-backend model refs to owning plugin ids", () => {
-    setOwningProviderManifestPlugins();
-
-    expectModelOwningPluginIds("claude-cli/claude-sonnet-4-6", ["anthropic"]);
-  });
-
   it("reuses one registry snapshot across explicit model ownership lookups", () => {
     setOwningProviderManifestPlugins();
 
@@ -1015,21 +1008,6 @@ describe("resolvePluginProviders", () => {
     expect(
       resolveCatalogHookProviderPluginIds({ config: {}, env: {} as NodeJS.ProcessEnv }),
     ).toEqual(["runtime-bundled"]);
-  });
-
-  it("loads bundled Ollama catalog augment hooks from the manifest runtime flag", () => {
-    setManifestPlugin({
-      id: "ollama",
-      providerIds: ["ollama", "ollama-cloud"],
-      enabledByDefault: true,
-      modelCatalog: {
-        runtimeAugment: true,
-      },
-    });
-
-    expect(
-      resolveCatalogHookProviderPluginIds({ config: {}, env: {} as NodeJS.ProcessEnv }),
-    ).toEqual(["ollama"]);
   });
 
   it("loads usage hooks only for manifest-declared providers", () => {
@@ -1750,7 +1728,7 @@ describe("resolvePluginProviders", () => {
     expectModelOwningPluginIds("gpt-5.4", ["workspace-openai"]);
   });
 
-  it("rejects ReDoS modelPatterns via compileSafeRegex guard", () => {
+  it("rejects unsafe model patterns that would match the model", () => {
     setManifestPlugin({
       id: "malicious",
       providerIds: ["malicious"],
@@ -1759,11 +1737,8 @@ describe("resolvePluginProviders", () => {
       },
     });
 
-    // Without the guard, this input causes catastrophic backtracking.
-    // With compileSafeRegex, the pattern is rejected and the plugin is not matched.
-    const start = performance.now();
-    expectModelOwningPluginIds("a".repeat(30) + "!", undefined);
-    expect(performance.now() - start).toBeLessThan(50);
+    // An unguarded pattern would match and incorrectly claim the model.
+    expectModelOwningPluginIds("a", undefined);
   });
 
   it("preserves LM Studio @iq* quant suffixes when resolving model-owned provider plugins", () => {

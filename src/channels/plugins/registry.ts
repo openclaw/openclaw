@@ -1,7 +1,6 @@
 /** Active channel plugin registry with bundled fallback. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { normalizeAnyChannelId } from "../registry.js";
 import { getBundledChannelPlugin } from "./bundled.js";
 import {
   getLoadedChannelPluginById,
@@ -10,6 +9,8 @@ import {
 } from "./registry-loaded.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
+
+export { normalizeAnyChannelId as normalizeChannelId } from "../registry.js";
 
 export const listChannelPlugins = (): ChannelPlugin[] => listLoadedChannelPlugins();
 
@@ -23,7 +24,10 @@ export function getLoadedChannelPlugin(id: ChannelId): ChannelPlugin | undefined
 /**
  * Resolves the active channel implementation together with host-owned provenance.
  */
-export function resolveChannelPluginRegistration(id: ChannelId):
+export function resolveChannelPluginRegistration(
+  id: ChannelId,
+  options: { loadedOnly?: boolean } = {},
+):
   | {
       plugin: ChannelPlugin;
       origin?: string;
@@ -58,6 +62,9 @@ export function resolveChannelPluginRegistration(id: ChannelId):
         : {}),
     };
   }
+  if (options.loadedOnly) {
+    return undefined;
+  }
   const plugin = getBundledChannelPlugin(resolvedId);
   return plugin ? { plugin, origin: "bundled" } : undefined;
 }
@@ -67,11 +74,4 @@ export function resolveChannelPluginRegistration(id: ChannelId):
  */
 export function getChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
   return resolveChannelPluginRegistration(id)?.plugin;
-}
-
-/**
- * Normalizes user-facing channel aliases to canonical channel ids.
- */
-export function normalizeChannelId(raw?: string | null): ChannelId | null {
-  return normalizeAnyChannelId(raw);
 }

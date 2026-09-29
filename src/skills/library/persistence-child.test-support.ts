@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import {
   PERSISTENCE_SESSION_ID,
   PERSISTENCE_SESSION_KEY,
@@ -46,71 +45,7 @@ async function hold() {
   });
 }
 
-type OlderReaderRuntime = Pick<
-  typeof import("../../state/openclaw-state-db.js"),
-  | "openOpenClawStateDatabase"
-  | "openExistingOpenClawStateDatabaseReadOnly"
-  | "closeOpenClawStateDatabase"
-> &
-  Pick<
-    typeof import("../../state/openclaw-agent-db.js"),
-    "openOpenClawAgentDatabase" | "closeOpenClawAgentDatabases"
-  > &
-  Pick<
-    typeof import("../../state/user-preferences.js"),
-    "getUserPreferences" | "setUserPreferences"
-  > &
-  Pick<
-    typeof import("../../config/sessions/session-accessor.sqlite-entry.js"),
-    "loadSessionEntry" | "upsertSessionEntryCore"
-  > & { OPENCLAW_STATE_SCHEMA_VERSION: number; OPENCLAW_AGENT_SCHEMA_VERSION: number };
-
-async function runOlderReader(
-  entrypoint: string,
-  profileId: string,
-  root: string,
-): Promise<PersistenceReply> {
-  // This branch imports only the supplied baseline executable. Type-only imports above
-  // describe its exports and cannot load the candidate's schema/parser/store.
-  await phase("baseline-import");
-  const old = (await import(pathToFileURL(entrypoint).href)) as OlderReaderRuntime;
-  assert.equal(old.OPENCLAW_STATE_SCHEMA_VERSION, 15);
-  assert.equal(old.OPENCLAW_AGENT_SCHEMA_VERSION, 19);
-  await phase("imports-complete");
-  await beginOperation();
-  const options = { env: process.env, path: path.join(root, "state", "openclaw.sqlite") };
-  const scope = { env: process.env, agentId: "main", sessionKey: PERSISTENCE_SESSION_KEY };
-  try {
-    const readOnly = await old.openExistingOpenClawStateDatabaseReadOnly(options);
-    assert.ok(readOnly);
-    readOnly.walMaintenance.close();
-    const state = old.openOpenClawStateDatabase(options);
-    assert.equal(
-      old.setUserPreferences(profileId, { "library.persistence.legacy": true }, options).ok,
-      true,
-    );
-    assert.deepEqual(old.getUserPreferences(profileId, ["library.persistence.legacy"], options), {
-      "library.persistence.legacy": true,
-    });
-    assert.ok(old.loadSessionEntry(scope));
-    const updated = await old.upsertSessionEntryCore(scope, { label: "Edited by baseline reader" });
-    assert.equal(updated?.label, "Edited by baseline reader");
-    const agent = old.openOpenClawAgentDatabase({ agentId: "main", env: process.env });
-    return {
-      kind: "older-reader",
-      stateVersion: Number(state.db.prepare("PRAGMA user_version").get()?.user_version),
-      agentVersion: Number(agent.db.prepare("PRAGMA user_version").get()?.user_version),
-    };
-  } finally {
-    old.closeOpenClawAgentDatabases();
-    old.closeOpenClawStateDatabase();
-  }
-}
-
-async function runCandidate(
-  command: Exclude<PersistenceCommand, { action: "older-reader" }>,
-  root: string,
-): Promise<PersistenceReply> {
+async function runCandidate(command: PersistenceCommand, root: string): Promise<PersistenceReply> {
   await phase("bundle-import");
   const bundle = await import("./bundle.js");
   if (command.action === "stage-hold") {
@@ -307,10 +242,7 @@ process.once("message", (command: PersistenceCommand) => {
       await phase("command-received");
       const root = process.env.OPENCLAW_STATE_DIR;
       assert.ok(root);
-      const reply =
-        command.action === "older-reader"
-          ? await runOlderReader(command.entrypoint, command.profileId, root)
-          : await runCandidate(command, root);
+      const reply = await runCandidate(command, root);
       await send(reply);
     } catch (error) {
       process.exitCode = 1;

@@ -493,4 +493,62 @@ describe("foreground reply delivery order", () => {
       { kind: "final", text: "first chat final" },
     ]);
   });
+
+  it("delivers same-session /status while an earlier foreground turn still holds the fence", async () => {
+    const deliveries: Delivery[] = [];
+    const olderStarted = createDeferred();
+    const releaseOlderFinal = createDeferred();
+
+    hoisted.dispatchReplyFromConfigMock.mockImplementation(
+      async (params: DispatchReplyFromConfigParams) => {
+        if (params.ctx.MessageSid === "old-message") {
+          olderStarted.resolve();
+          await releaseOlderFinal.promise;
+          params.dispatcher.sendFinalReply({ text: "old final" });
+          return queuedFinalResult();
+        }
+        if (params.ctx.MessageSid === "status-message") {
+          params.dispatcher.sendFinalReply({ text: "🧠 Model: mock | ⚙️ Status: ok" });
+          return queuedFinalResult();
+        }
+        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
+      },
+    );
+
+    const olderDispatch = dispatchWithDeliveries(
+      buildForegroundCtx({ MessageSid: "old-message" }),
+      deliveries,
+    );
+    await olderStarted.promise;
+
+    const statusDispatch = dispatchWithDeliveries(
+      buildForegroundCtx({
+        MessageSid: "status-message",
+        CommandAuthorized: true,
+        CommandSource: "text",
+        CommandTurn: {
+          kind: "text-slash",
+          source: "text",
+          authorized: true,
+          commandName: "status",
+          body: "/status",
+        },
+        Body: "/status",
+        RawBody: "/status",
+        CommandBody: "/status",
+        BodyForAgent: "/status",
+      }),
+      deliveries,
+    );
+
+    await expect(statusDispatch).resolves.toEqual(settledFinalResult());
+    expect(deliveries).toEqual([{ kind: "final", text: "🧠 Model: mock | ⚙️ Status: ok" }]);
+
+    releaseOlderFinal.resolve();
+    await expect(olderDispatch).resolves.toEqual(settledFinalResult());
+    expect(deliveries).toEqual([
+      { kind: "final", text: "🧠 Model: mock | ⚙️ Status: ok" },
+      { kind: "final", text: "old final" },
+    ]);
+  });
 });

@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import type { SessionCatalogHost } from "../../../packages/gateway-protocol/src/index.js";
-import { areDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  createQueuedDiagnosticPhaseEmitter,
+} from "../../infra/diagnostic-events.js";
 import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
@@ -12,6 +15,56 @@ import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import type { SessionCatalogListTiming } from "./session-catalog-list-admission.js";
 
 const catalogLog = createSubsystemLogger("gateway/session-catalog");
+
+type CatalogWaitPhase = "projection_initial" | "provider" | "coalesced" | "projection_final";
+type CatalogSyncPhase = "planning" | "delivery";
+
+export function startSessionCatalogRequestDiagnostics() {
+  const emit = createQueuedDiagnosticPhaseEmitter();
+  if (!emit) {
+    return undefined;
+  }
+  const start = (phase: CatalogWaitPhase | CatalogSyncPhase, measureCpu: boolean) => {
+    const startedAt = Date.now();
+    const started = performance.now();
+    let cpu: NodeJS.CpuUsage | undefined;
+    if (measureCpu) {
+      try {
+        cpu = process.threadCpuUsage();
+      } catch {
+        // An unavailable CPU counter does not suppress elapsed measurements.
+      }
+    }
+    return () => {
+      const endedAt = Date.now();
+      const durationMs = performance.now() - started;
+      let threadCpuMs: number | undefined;
+      if (cpu) {
+        try {
+          const used = process.threadCpuUsage(cpu);
+          threadCpuMs = (used.user + used.system) / 1_000;
+        } catch {
+          // Leave this CPU observation absent rather than publishing a false zero.
+        }
+      }
+      try {
+        emit({
+          name: `sessions.catalog.list.${phase}`,
+          startedAt,
+          endedAt,
+          durationMs,
+          ...(threadCpuMs === undefined ? {} : { details: { threadCpuMs } }),
+        });
+      } catch {
+        // Telemetry cannot replace a result or its original failure.
+      }
+    };
+  };
+  return {
+    startWait: (phase: CatalogWaitPhase) => start(phase, false),
+    startSync: (phase: CatalogSyncPhase) => start(phase, true),
+  };
+}
 
 function countReturnedHosts(hosts: SessionCatalogHost[]) {
   const counts = {
@@ -77,6 +130,13 @@ export function startSessionCatalogListDiagnostics(
             ...(providerStartedAt === undefined || timing.settledAt === undefined
               ? {}
               : { providerElapsedMs: Math.round(timing.settledAt - providerStartedAt) }),
+            ...(timing.stepCount === undefined ? {} : { stepCount: timing.stepCount }),
+            ...(timing.admittedStepMs === undefined
+              ? {}
+              : { admittedStepMs: Math.round(timing.admittedStepMs) }),
+            ...(timing.continuationWaitMs === undefined
+              ? {}
+              : { continuationWaitMs: Math.round(timing.continuationWaitMs) }),
             ...(timing.settledAt === undefined
               ? {}
               : { completionDelayMs: Math.round(finishedAt - timing.settledAt) }),

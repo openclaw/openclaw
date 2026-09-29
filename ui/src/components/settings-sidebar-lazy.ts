@@ -4,7 +4,7 @@ import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts"
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
 
-export type SettingsSidebarModule = typeof import("./settings-sidebar.ts");
+type SettingsSidebarModule = typeof import("./settings-sidebar.ts");
 type SettingsSidebarProps = Parameters<SettingsSidebarModule["renderSettingsSidebar"]>[0];
 
 type LazySettingsSidebarHost = {
@@ -66,7 +66,7 @@ export function renderLazySettingsSidebar(
   </aside>`;
 }
 
-// Mirrors renderSettingsSidebar: search field, then the same navigation groups
+// Mirrors renderSettingsSidebar: agent selector, search, then the same navigation groups
 // (label + icon/label rows) the loaded sidebar will draw, so nothing shifts once
 // the module lands.
 function renderSettingsSidebarSkeleton(props: SettingsSidebarProps) {
@@ -74,10 +74,13 @@ function renderSettingsSidebarSkeleton(props: SettingsSidebarProps) {
     Boolean(props.canAdmin),
     props.nativeDeviceSettings ?? null,
   );
-  return html`<div class="settings-sidebar__search" aria-hidden="true">
+  return html`<div class="settings-sidebar__agent" aria-hidden="true">
+      <span class="skeleton settings-sidebar__loading-agent"></span>
+    </div>
+    <div class="settings-sidebar__search" aria-hidden="true">
       <span class="skeleton settings-sidebar__loading-search"></span>
     </div>
-    <nav
+    <div
       class="settings-sidebar__nav settings-loading-skeleton settings-sidebar__loading"
       role="status"
       aria-busy="true"
@@ -98,5 +101,5 @@ function renderSettingsSidebarSkeleton(props: SettingsSidebarProps) {
           )}
         </div>`,
       )}
-    </nav>`;
+    </div>`;
 }

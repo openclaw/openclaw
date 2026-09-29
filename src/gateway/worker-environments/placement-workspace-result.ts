@@ -1,9 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import {
-  ensureRepositoryWorkspacePendingResultSchema,
-  hasRepositoryWorkspacePendingResultSchema,
-} from "../../state/openclaw-state-db-schema-additive.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { ensureRepositoryWorkspacePendingResultSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   isCurrentPlacementTurnClaim,
@@ -14,7 +12,9 @@ import {
 } from "./placement-record.js";
 import { fromRow, getRequired } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { publishPlacementWorkspaceResultState } from "./placement-turn-authority.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
+import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 
 type WorkspaceResultDatabase = Pick<
   StateDatabase,
@@ -23,19 +23,39 @@ type WorkspaceResultDatabase = Pick<
 
 const query = (db: DatabaseSync) => getNodeSqliteKysely<WorkspaceResultDatabase>(db);
 
-export type WorkerWorkspacePendingResult = {
-  sessionId: string;
-  environmentId: string;
-  ownerEpoch: number;
-  placementGeneration: number;
-  claimId: string;
-  runId: string;
-  gatewayInstanceId: string;
-  recoveryRequestedAtMs: number | null;
-  workspaceAcceptedAtMs: number | null;
-  stagedResultRef: string | null;
-  repositoryWorkspaceId?: string;
-};
+function pendingResultFromRow(
+  row: StateDatabase["worker_workspace_pending_results"],
+): WorkerWorkspacePendingResult {
+  return {
+    sessionId: row.session_id,
+    environmentId: row.environment_id,
+    ownerEpoch: row.owner_epoch,
+    placementGeneration: row.placement_generation,
+    claimId: row.claim_id,
+    runId: row.run_id,
+    gatewayInstanceId: row.gateway_instance_id,
+    recoveryRequestedAtMs: row.recovery_requested_at_ms,
+    workspaceAcceptedAtMs: row.workspace_accepted_at_ms,
+    stagedResultRef: row.staged_result_ref,
+    ...(row.repository_workspace_id ? { repositoryWorkspaceId: row.repository_workspace_id } : {}),
+  };
+}
+
+export function findPendingWorkerWorkspaceResult(
+  placements: {
+    listPendingWorkspaceResults(sessionId?: string): WorkerWorkspacePendingResult[];
+  },
+  claim: WorkerSessionTurnClaim,
+): WorkerWorkspacePendingResult | undefined {
+  return placements
+    .listPendingWorkspaceResults(claim.sessionId)
+    .find(
+      (pending) =>
+        pending.sessionId === claim.sessionId &&
+        pending.claimId === claim.claimId &&
+        pending.runId === claim.runId,
+    );
+}
 
 function matchesWorkspaceResultGeneration(
   placement: WorkerSessionPlacementRecord,
@@ -76,9 +96,9 @@ export function isCurrentWorkerWorkspacePendingResultOwner(
   return matchesWorkspaceResultGeneration(placement, pending.placementGeneration);
 }
 
-function matchesWorkspaceResultClaim(
+export function matchesWorkspaceResultClaim(
   placement: WorkerSessionPlacementRecord,
-  row: StateDatabase["worker_workspace_pending_results"],
+  pending: WorkerWorkspacePendingResult,
   claim: WorkerSessionTurnClaim,
 ): boolean {
   const recoveryOwner =
@@ -86,12 +106,12 @@ function matchesWorkspaceResultClaim(
       ? placementTurnOwner(placement)
       : undefined;
   return (
-    row.session_id === claim.sessionId &&
-    row.environment_id === placement.environmentId &&
-    row.owner_epoch === placement.activeOwnerEpoch &&
-    row.placement_generation === claim.placementGeneration &&
-    row.claim_id === claim.claimId &&
-    row.run_id === claim.runId &&
+    pending.sessionId === claim.sessionId &&
+    pending.environmentId === placement.environmentId &&
+    pending.ownerEpoch === placement.activeOwnerEpoch &&
+    pending.placementGeneration === claim.placementGeneration &&
+    pending.claimId === claim.claimId &&
+    pending.runId === claim.runId &&
     (isCurrentPlacementTurnClaim(placement, claim) ||
       // Restart revokes local authority; only the exact durable result may finish.
       (matchesWorkspaceResultGeneration(placement, claim.placementGeneration) &&
@@ -115,7 +135,7 @@ export function hasCurrentWorkspaceResultClaim(
       .selectAll()
       .where("session_id", "=", claim.sessionId),
   ).rows[0];
-  return Boolean(row && matchesWorkspaceResultClaim(placement, row, claim));
+  return Boolean(row && matchesWorkspaceResultClaim(placement, pendingResultFromRow(row), claim));
 }
 
 export function clearWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: string): void {
@@ -123,14 +143,19 @@ export function clearWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: s
     db,
     query(db).deleteFrom("worker_workspace_pending_results").where("session_id", "=", sessionId),
   );
+  publishPlacementWorkspaceResultState(db, sessionId);
 }
 
-export function readWorkerWorkspaceReconcilingSessionIds(
+export function readWorkerWorkspaceReconciliationFacts(
   db: DatabaseSync,
   sessionIds: readonly string[],
-): ReadonlySet<string> {
+): {
+  placements: ReadonlyMap<string, WorkerSessionPlacementRecord>;
+  reconcilingSessionIds: ReadonlySet<string>;
+  pendingResults: ReadonlyMap<string, WorkerWorkspacePendingResult>;
+} {
   const placements = new Map<string, WorkerSessionPlacementRecord>();
-  const pendingResults: StateDatabase["worker_workspace_pending_results"][] = [];
+  const pendingResults = new Map<string, WorkerWorkspacePendingResult>();
   for (let offset = 0; offset < sessionIds.length; offset += 250) {
     const chunk = sessionIds.slice(offset, offset + 250);
     for (const row of executeSqliteQuerySync(
@@ -150,31 +175,24 @@ export function readWorkerWorkspaceReconcilingSessionIds(
         .selectAll()
         .where("session_id", "in", chunk),
     ).rows) {
-      pendingResults.push(row);
+      pendingResults.set(row.session_id, pendingResultFromRow(row));
     }
   }
-  return new Set(
-    pendingResults.flatMap((row) => {
-      const placement = placements.get(row.session_id);
-      const pending: WorkerWorkspacePendingResult = {
-        sessionId: row.session_id,
-        environmentId: row.environment_id,
-        ownerEpoch: row.owner_epoch,
-        placementGeneration: row.placement_generation,
-        claimId: row.claim_id,
-        runId: row.run_id,
-        gatewayInstanceId: row.gateway_instance_id,
-        recoveryRequestedAtMs: row.recovery_requested_at_ms,
-        workspaceAcceptedAtMs: row.workspace_accepted_at_ms,
-        stagedResultRef: row.staged_result_ref,
-      };
+  const reconcilingSessionIds = new Set(
+    [...pendingResults.values()].flatMap((pending) => {
+      const placement = placements.get(pending.sessionId);
       const isPostTerminal =
-        placement?.turnClaim?.owner === "worker" || row.staged_result_ref !== null;
+        placement?.turnClaim?.owner === "worker" || pending.stagedResultRef !== null;
       return isPostTerminal && isCurrentWorkerWorkspacePendingResultOwner(placement, pending)
-        ? [row.session_id]
+        ? [pending.sessionId]
         : [];
     }),
   );
+  return {
+    placements,
+    reconcilingSessionIds,
+    pendingResults,
+  };
 }
 
 export function hasWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: string): boolean {
@@ -237,6 +255,8 @@ export function insertWorkerWorkspacePendingResult(
       .onConflict((conflict) => conflict.column("session_id").doNothing()),
   );
   if (result.numAffectedRows === 1n) {
+    publishPlacementWorkspaceResultState(db, placement.sessionId);
+    sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
     return;
   }
   const existing = executeSqliteQuerySync(
@@ -298,9 +318,11 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
         .selectAll()
         .where("session_id", "=", claim.sessionId),
     ).rows[0];
-    if (!row || !matchesWorkspaceResultClaim(placement, row, claim)) {
+    if (!row || !matchesWorkspaceResultClaim(placement, pendingResultFromRow(row), claim)) {
       throw new Error(`Cannot update stale worker workspace result for ${claim.sessionId}`);
     }
+    publishPlacementWorkspaceResultState(db, placement.sessionId);
+    sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
     return row;
   };
   return {
@@ -314,48 +336,13 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
 
     listPendingWorkspaceResults(sessionId?: string): WorkerWorkspacePendingResult[] {
       const db = read();
-      let pendingResults = query(db)
-        .selectFrom("worker_workspace_pending_results")
-        .select([
-          "session_id",
-          "environment_id",
-          "owner_epoch",
-          "placement_generation",
-          "claim_id",
-          "run_id",
-          "gateway_instance_id",
-          "recovery_requested_at_ms",
-          "workspace_accepted_at_ms",
-          "staged_result_ref",
-        ]);
+      let pendingResults = query(db).selectFrom("worker_workspace_pending_results").selectAll();
       if (sessionId !== undefined) {
         pendingResults = pendingResults.where("session_id", "=", sessionId);
       }
-      return executeSqliteQuerySync(
-        db,
-        pendingResults
-          .$if(hasRepositoryWorkspacePendingResultSchema(db), (builder) =>
-            builder.select("repository_workspace_id"),
-          )
-          .orderBy("session_id"),
-      ).rows.map((row) => {
-        const result: WorkerWorkspacePendingResult = {
-          sessionId: row.session_id,
-          environmentId: row.environment_id,
-          ownerEpoch: row.owner_epoch,
-          placementGeneration: row.placement_generation,
-          claimId: row.claim_id,
-          runId: row.run_id,
-          gatewayInstanceId: row.gateway_instance_id,
-          recoveryRequestedAtMs: row.recovery_requested_at_ms,
-          workspaceAcceptedAtMs: row.workspace_accepted_at_ms,
-          stagedResultRef: row.staged_result_ref,
-        };
-        if (row.repository_workspace_id) {
-          result.repositoryWorkspaceId = row.repository_workspace_id;
-        }
-        return result;
-      });
+      return executeSqliteQuerySync(db, pendingResults.orderBy("session_id")).rows.map(
+        pendingResultFromRow,
+      );
     },
 
     markWorkspaceResultPending(claim: WorkerSessionTurnClaim): void {
@@ -475,6 +462,8 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Worker workspace result changed for ${pending.sessionId}`);
         }
+        publishPlacementWorkspaceResultState(db, pending.sessionId);
+        sessionChanges.emit({ all: true, scope: "worker-placements" }, db);
       });
     },
   };

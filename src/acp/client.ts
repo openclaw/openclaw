@@ -80,15 +80,8 @@ async function terminateAcpServer(child: ChildProcess): Promise<void> {
   await waitForChildExit(child, ACP_SERVER_FORCE_KILL_TIMEOUT_MS);
 }
 
-function toArgs(value: string[] | string | undefined): string[] {
-  if (!value) {
-    return [];
-  }
-  return Array.isArray(value) ? value : [value];
-}
-
 function buildServerArgs(opts: AcpClientOptions): string[] {
-  const args = ["acp", ...toArgs(opts.serverArgs)];
+  const args = ["acp", ...(opts.serverArgs ?? [])];
   if (opts.serverVerbose && !args.includes("--verbose") && !args.includes("-v")) {
     args.push("--verbose");
   }
@@ -156,7 +149,7 @@ async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHa
   const defaultServerArgs = entryPath ? [entryPath, ...serverArgs] : serverArgs;
   const serverCommand = opts.serverCommand ?? defaultServerCommand;
   const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : defaultServerArgs;
-  const { getActiveSkillEnvKeys } = await import("../skills/runtime/env-overrides.runtime.js");
+  const { getActiveSkillEnvKeysCore } = await import("../skills/runtime/env-overrides.js");
   const stripProviderAuthEnvVars = shouldStripProviderAuthEnvVarsForAcpServer({
     serverCommand,
     serverArgs: effectiveArgs,
@@ -165,7 +158,7 @@ async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHa
   });
   const stripKeys = buildAcpClientStripKeys({
     stripProviderAuthEnvVars,
-    activeSkillEnvKeys: getActiveSkillEnvKeys(),
+    activeSkillEnvKeys: getActiveSkillEnvKeysCore(),
   });
   const spawnEnv = resolveAcpClientSpawnEnv(process.env, { stripKeys });
   const spawnInvocation = resolveAcpClientSpawnInvocation(
@@ -252,8 +245,23 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
   console.log(`Session: ${sessionId}`);
   console.log('Type a prompt, or "exit" to quit.\n');
 
-  let quitting = false; // Only explicit quit makes the client-owned signal stop successful.
+  let quitting = false; // Only client-owned shutdown makes a signal stop successful.
+  const quit = async () => {
+    if (quitting || hasChildExited(agent)) {
+      return;
+    }
+    quitting = true;
+    await terminateAcpServer(agent);
+    rl.close();
+    process.exit(0);
+  };
+  rl.once("close", () => {
+    void quit();
+  });
   const prompt = () => {
+    if (quitting) {
+      return;
+    }
     rl.question("> ", (input) => {
       void (async () => {
         const text = input.trim();
@@ -262,10 +270,8 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
           return;
         }
         if (text === "exit" || text === "quit") {
-          quitting = true;
-          await terminateAcpServer(agent);
-          rl.close();
-          process.exit(0);
+          await quit();
+          return;
         }
 
         try {

@@ -77,24 +77,23 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.154.0`. A live `model/list`
-probe against the official `0.153.4` app-server, using an isolated,
-unauthenticated Codex home and `includeHidden: true`, returned this public
-subset of catalog metadata:
+The current bundled harness is `@openai/codex` `0.158.0`. A live `model/list`
+probe against that app-server, authenticated with a ChatGPT account, returned
+this public subset of catalog metadata on September 28, 2026:
 
-| Model id        | Input modalities | Reasoning efforts                    |
-| --------------- | ---------------- | ------------------------------------ |
-| `gpt-5.4`       | text, image      | low, medium, high, xhigh             |
-| `gpt-5.4-mini`  | text, image      | low, medium, high, xhigh             |
-| `gpt-5.5`       | text, image      | low, medium, high, xhigh             |
-| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        |
-| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, max, ultra |
-| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, max, ultra |
+| Model id        | Input modalities | Reasoning efforts                    | Default effort |
+| --------------- | ---------------- | ------------------------------------ | -------------- |
+| `gpt-6-astra`   | text, image      | low, medium, high, xhigh, max, ultra | low            |
+| `gpt-6-sol`     | text, image      | low, medium, high, xhigh, max, ultra | medium         |
+| `gpt-6-luna`    | text, image      | low, medium, high, xhigh, max        | medium         |
+| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        | medium         |
+| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, max, ultra | medium         |
+| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, max, ultra | medium         |
 
-The probe marked `gpt-5.4` and `gpt-5.4-mini` as hidden. This snapshot does not
-prove account entitlement. Available model IDs, input modalities, and reasoning
-efforts remain account-scoped. Run `/codex models` after starting or upgrading
-the gateway to inspect the actual public picker for your account.
+This snapshot does not establish access for other accounts or attribute catalog
+changes to the app-server version. Available model IDs, input modalities, and
+reasoning efforts remain account-scoped. Run `/codex models` after starting or
+upgrading the gateway to inspect the actual public picker for your account.
 
 OpenClaw reasoning controls preserve supported native levels, including `ultra`.
 Codex owns Ultra's proactive delegation and model-specific inference effort;
@@ -105,6 +104,11 @@ specialized flows without being normal model-picker choices.
 
 Tune discovery under `plugins.entries.codex.config.discovery`:
 
+The default budget is 10 seconds. It allows Codex's five-second remote catalog
+refresh to finish or return its native cached/bundled catalog, with time left for
+transport and the account read. Setting a shorter budget can cancel that native
+fallback and leave native models unavailable until discovery succeeds.
+
 ```json5
 {
   plugins: {
@@ -114,7 +118,7 @@ Tune discovery under `plugins.entries.codex.config.discovery`:
         config: {
           discovery: {
             enabled: true,
-            timeoutMs: 2500,
+            timeoutMs: 10000,
           },
         },
       },

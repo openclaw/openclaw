@@ -5,7 +5,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
-vi.mock("./onboard-interactive-runner.js", () => ({
+vi.mock("./onboard-interactive-runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./onboard-interactive-runner.js")>()),
   hasInteractiveOnboardingTty: () => true,
   runInteractiveOnboarding: async (run: () => Promise<void>) => await run(),
 }));

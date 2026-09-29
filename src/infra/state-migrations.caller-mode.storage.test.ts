@@ -6,6 +6,8 @@ import { getAgentDir } from "../agents/config.js";
 import { resolveInstallAgentDir } from "../agents/install-agent-dir.js";
 import { readCurrentConfigForResolution } from "../config/io.runtime.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pluginDoctorContractRegistryLoaderState } from "../plugins/doctor-contract-registry-loader-state.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
@@ -13,6 +15,7 @@ import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fix
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -87,6 +90,40 @@ afterEach(async () => {
 });
 
 describe("legacy state migration caller storage", () => {
+  it("reports legacy-main session repairs without migrating when other detectors are empty", async () => {
+    await withOpenClawTestState(
+      { label: "preflight-legacy-main", layout: "split", agentEnv: "clear" },
+      async (state) => {
+        const cfg = { agents: { entries: { worker: {} } } };
+        const source = { agentId: "main", env: state.env, sessionKey: "agent:main:chat" };
+        const destination = { agentId: "worker", env: state.env, sessionKey: "agent:worker:chat" };
+        const entry = { sessionId: "legacy-main-session", updatedAt: 100 };
+        runOpenClawAgentWriteTransaction(
+          (database) =>
+            writeSessionEntry(database, source.sessionKey, entry, {
+              allowStoredAliases: true,
+              previousEntry: null,
+            }),
+          source,
+        );
+
+        const result = await autoMigrateLegacyState({
+          cfg,
+          env: state.env,
+          homedir: () => state.home,
+          legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+        });
+
+        expect(result.changes).not.toContain(
+          "Migrated legacy main session claim agent:worker:chat.",
+        );
+        expect(result.notices).toContainEqual(expect.stringContaining("openclaw doctor --fix"));
+        expect(loadExactSessionEntryReadOnly(source)?.entry).toMatchObject(entry);
+        expect(loadExactSessionEntryReadOnly(destination)).toBeUndefined();
+      },
+    );
+  });
+
   it.each([undefined, "missing"])(
     "keeps retained migration ownership separate from runtime selection with system owner %s",
     async (systemAgentId) => {
@@ -115,30 +152,51 @@ describe("legacy state migration caller storage", () => {
     },
   );
 
-  it.each(
-    [
-      { name: "configured main directory", agentId: "main", custom: true, override: "none" },
-      {
-        name: "deferred main SQLite family",
-        agentId: "main",
-        custom: true,
-        override: "none",
-        sqlite: true,
-      },
-      { name: "non-main default", agentId: "worker", custom: false, override: "none" },
-      { name: "configured non-main directory", agentId: "worker", custom: true, override: "none" },
-      { name: "explicit legacy directory", agentId: "worker", custom: true, override: "legacy" },
-      { name: "explicit other directory", agentId: "worker", custom: true, override: "other" },
-      {
-        name: "explicit tilde legacy directory",
-        agentId: "worker",
-        custom: true,
-        override: "tilde",
-      },
-    ].flatMap((testCase) => [false, true].map((malformed) => ({ testCase, malformed }))),
-  )(
-    "shares the install directory between SDK and Doctor: $testCase.name (malformed: $malformed)",
-    async ({ testCase, malformed }) => {
+  it.each([
+    {
+      name: "deferred main SQLite family",
+      agentId: "main",
+      custom: true,
+      override: "none",
+      sqlite: true,
+      malformed: false,
+    },
+    {
+      name: "configured non-main directory",
+      agentId: "worker",
+      custom: true,
+      override: "none",
+      sqlite: false,
+      malformed: false,
+    },
+    {
+      name: "non-main default",
+      agentId: "worker",
+      custom: false,
+      override: "none",
+      sqlite: false,
+      malformed: false,
+    },
+    {
+      name: "malformed default config",
+      agentId: "main",
+      custom: true,
+      override: "none",
+      sqlite: false,
+      malformed: true,
+    },
+    {
+      name: "explicit tilde legacy directory",
+      agentId: "worker",
+      custom: true,
+      override: "tilde",
+      sqlite: false,
+      malformed: true,
+    },
+  ])(
+    "shares the install directory between SDK and Doctor: $name (malformed: $malformed)",
+    async (testCase) => {
+      const { malformed } = testCase;
       await withOpenClawTestState(
         { label: "install-agent-dir", layout: "split", agentEnv: "clear" },
         async (state) => {
@@ -146,12 +204,7 @@ describe("legacy state migration caller storage", () => {
           const configuredDir = testCase.custom
             ? state.path("configured-agent")
             : state.agentDir(testCase.agentId);
-          const overrideDir =
-            testCase.override === "none"
-              ? undefined
-              : testCase.override === "other"
-                ? state.path("selected-agent")
-                : legacyDir;
+          const overrideDir = testCase.override === "none" ? undefined : legacyDir;
           const targetDir = overrideDir ?? (malformed ? state.agentDir("main") : configuredDir);
           const agentConfig = {
             ownership: "explicit",

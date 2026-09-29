@@ -1,12 +1,24 @@
 // Shared daemon install runtime/path helpers for service plan generation.
 import fs from "node:fs";
 import path from "node:path";
-import { resolvePreferredBunPath, resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import {
-  emitNodeRuntimeWarning,
-  type DaemonInstallWarnFn,
-} from "./daemon-install-runtime-warning.js";
+  resolveBunRuntimeInfo,
+  resolvePinnedDaemonRuntimePath,
+  resolvePreferredBunPath,
+  resolvePreferredNodePath,
+} from "../daemon/runtime-paths.js";
+import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
+
+export type GatewayInstallPlan = {
+  runtime: GatewayDaemonRuntime;
+  programArguments: string[];
+  workingDirectory?: string;
+  environment: Record<string, string | undefined>;
+  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
+};
 
 /** Detect source-checkout dev mode from the current CLI entrypoint. */
 function resolveGatewayDevMode(argv: string[] = process.argv): boolean {
@@ -19,41 +31,67 @@ function resolveGatewayDevMode(argv: string[] = process.argv): boolean {
   );
 }
 
+/** Use the running Bun only when implicit Node discovery found no supported runtime. */
+export async function resolveRunningBunFallback(params: {
+  env: Record<string, string | undefined>;
+  /** Null carries an already completed discovery with no supported Node. */
+  nodePath?: string | null;
+}): Promise<string | undefined> {
+  if (!process.versions.bun) {
+    return undefined;
+  }
+  const nodePath =
+    params.nodePath === undefined
+      ? await resolvePreferredNodePath({ env: params.env, runtime: "node" })
+      : params.nodePath;
+  if (
+    nodePath ||
+    (await resolveBunRuntimeInfo(process.execPath, undefined, params.env)).status !== "supported"
+  ) {
+    return undefined;
+  }
+  return process.execPath;
+}
+
 /** Resolve dev-mode and executable inputs for daemon service install planning. */
 export async function resolveDaemonInstallRuntimeInputs(params: {
   env: Record<string, string | undefined>;
   runtime: GatewayDaemonRuntime;
+  runtimeExplicit?: boolean;
   devMode?: boolean;
   runtimePath?: string;
+  pinnedRuntimePath?: string;
   wrapperPath?: string;
-}): Promise<{ devMode: boolean; runtimePath?: string }> {
+  warn?: DaemonInstallWarnFn;
+}): Promise<{ devMode: boolean; runtime: GatewayDaemonRuntime; runtimePath?: string }> {
   const devMode = params.devMode ?? resolveGatewayDevMode();
   if (params.wrapperPath?.trim()) {
-    return { devMode, runtimePath: params.runtimePath };
+    return { devMode, runtime: params.runtime, runtimePath: params.runtimePath };
   }
+  const pinnedRuntimePath =
+    params.pinnedRuntimePath === undefined
+      ? undefined
+      : await resolvePinnedDaemonRuntimePath(params.pinnedRuntimePath, params.runtime, params.env);
   const runtimePath =
+    pinnedRuntimePath ??
     params.runtimePath ??
     (params.runtime === "bun"
       ? await resolvePreferredBunPath({ env: params.env, runtime: params.runtime })
       : await resolvePreferredNodePath({ env: params.env, runtime: params.runtime }));
-  return { devMode, runtimePath };
-}
-
-/** Emit runtime warnings for daemon install command arguments. */
-export async function emitDaemonInstallRuntimeWarning(params: {
-  env: Record<string, string | undefined>;
-  runtime: GatewayDaemonRuntime;
-  programArguments: string[];
-  warn?: DaemonInstallWarnFn;
-  title: string;
-}): Promise<void> {
-  await emitNodeRuntimeWarning({
-    env: params.env,
-    runtime: params.runtime,
-    nodeProgram: params.programArguments[0],
-    warn: params.warn,
-    title: params.title,
-  });
+  if (
+    params.runtime === "node" &&
+    !params.runtimeExplicit &&
+    params.pinnedRuntimePath === undefined &&
+    params.runtimePath === undefined &&
+    runtimePath === undefined
+  ) {
+    const bunPath = await resolveRunningBunFallback({ env: params.env, nodePath: null });
+    if (bunPath) {
+      params.warn?.("No supported Node runtime was found; using the running Bun for the service.");
+      return { devMode, runtime: "bun", runtimePath: bunPath };
+    }
+  }
+  return { devMode, runtime: params.runtime, runtimePath };
 }
 
 /** Return the runtime binary directory that should be added to daemon PATH. */
@@ -138,7 +176,14 @@ function resolveDaemonOpenClawBinDir(
     }
     const candidateRealpath = safeRealpathSync(candidate, realpathSync);
     if (argvRealpath && candidateRealpath && candidateRealpath !== argvRealpath) {
-      continue;
+      // Update invokes dist/index.js; the same installation's shim targets openclaw.mjs.
+      const activeRoot = resolveOpenClawPackageRootSync({ argv1: argvRealpath });
+      if (
+        !activeRoot ||
+        resolveOpenClawPackageRootSync({ argv1: candidateRealpath }) !== activeRoot
+      ) {
+        continue;
+      }
     }
     addUniquePathDir(dirs, segment);
   }

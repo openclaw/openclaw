@@ -91,9 +91,9 @@ function emptyUsageResponses() {
         byAgent: [],
         byChannel: [],
         daily: [],
+        costDaily: [],
       },
     },
-    "usage.cost": { updatedAt, days: 1, daily: [], totals: emptyTotals },
   };
 }
 
@@ -172,31 +172,23 @@ suite.define(() => {
                           },
                         },
                       ],
-                      aggregates: { ...empty["sessions.usage"].aggregates, messages },
+                      aggregates: {
+                        ...empty["sessions.usage"].aggregates,
+                        messages,
+                        costDaily: [{ date, ...usageTotals }],
+                      },
                     },
                   },
                   { match: {}, response: empty["sessions.usage"] },
-                ],
-              },
-              "usage.cost": {
-                cases: [
-                  {
-                    match,
-                    response: {
-                      updatedAt,
-                      days: 1,
-                      daily: [{ date, ...usageTotals }],
-                      totals: usageTotals,
-                    },
-                  },
-                  { match: {}, response: empty["usage.cost"] },
                 ],
               },
               "usage.status": { updatedAt, providers: [] },
             },
           });
           await page.goto(`${suite.server.baseUrl}usage`);
-          await page.locator(".usage-select").selectOption(timeZone);
+          await page
+            .getByRole("combobox", { name: "Time zone", exact: true })
+            .selectOption(timeZone);
           const dateInputs = await page.locator(".usage-date-input").all();
           expect(dateInputs).toHaveLength(2);
           for (const input of dateInputs) {
@@ -209,7 +201,7 @@ suite.define(() => {
           const hours = page.locator(".usage-error-list--hours");
           const cells = page.locator(".usage-hour-cell");
           const refresh = page
-            .locator(".usage-controls")
+            .locator("openclaw-usage-page")
             .getByRole("button", { name: "Refresh", exact: true });
           for (const [stage, now] of [
             ["control", "2026-03-07T17:00:00Z"],
@@ -495,6 +487,7 @@ suite.define(() => {
                 byProvider: [],
                 byAgent: [{ agentId: "main", totals }],
                 byChannel: [],
+                costDaily: [{ ...totals, date: selectedDay }],
                 daily: [
                   {
                     date: selectedDay,
@@ -508,12 +501,6 @@ suite.define(() => {
               },
               cacheStatus: { status: "refreshing", cachedFiles: 1, pendingFiles: 1, staleFiles: 0 },
             },
-            "usage.cost": {
-              updatedAt,
-              days: 1,
-              daily: [{ ...totals, date: selectedDay }],
-              totals,
-            },
             "usage.status": { updatedAt, providers: [] },
           },
         });
@@ -523,7 +510,7 @@ suite.define(() => {
         const cachedRow = page.locator(".session-bar-row").filter({ hasText: "Cached session" });
         await expect.poll(() => pendingRow.count(), { timeout: 10_000 }).toBe(1);
 
-        await page.locator(".usage-select").selectOption("utc");
+        await page.getByRole("combobox", { name: "Time zone", exact: true }).selectOption("utc");
         await expect
           .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
           .toMatchObject({ mode: "utc" });
@@ -577,11 +564,14 @@ suite.define(() => {
       async ({ page }) => {
         await installMockGateway(page, {
           methodResponses: {
-            "sessions.usage": { ...empty["sessions.usage"], sessions, totals },
-            "usage.cost": {
-              ...empty["usage.cost"],
-              daily: [dailyEntry(0, totals.totalCost, totals.totalTokens)],
+            "sessions.usage": {
+              ...empty["sessions.usage"],
+              sessions,
               totals,
+              aggregates: {
+                ...empty["sessions.usage"].aggregates,
+                costDaily: [dailyEntry(0, totals.totalCost, totals.totalTokens)],
+              },
             },
             "usage.status": { updatedAt, providers: [] },
           },
@@ -741,6 +731,7 @@ suite.define(() => {
                 ],
                 byAgent: [{ agentId: "main", totals }],
                 byChannel: [],
+                costDaily: daily,
                 daily: daily.map((entry) => ({
                   date: entry.date,
                   tokens: entry.totalTokens,
@@ -750,12 +741,6 @@ suite.define(() => {
                   errors: 0,
                 })),
               },
-            },
-            "usage.cost": {
-              updatedAt: Date.now(),
-              days: 90,
-              daily,
-              totals,
             },
             "usage.status": {
               updatedAt: Date.now(),
@@ -887,13 +872,13 @@ suite.define(() => {
           .filter({ hasText: "All agents" })
           .click();
         await expect
-          .poll(async () => (await gateway.getRequests("usage.cost")).at(-1)?.params)
+          .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
           .toMatchObject({ agentScope: "all" });
-        const costRequestsBeforeRangeChange = (await gateway.getRequests("usage.cost")).length;
+        const requestsBeforeRangeChange = (await gateway.getRequests("sessions.usage")).length;
         await page.getByRole("button", { name: "90d", exact: true }).click();
         await expect
-          .poll(async () => (await gateway.getRequests("usage.cost")).length)
-          .toBeGreaterThan(costRequestsBeforeRangeChange);
+          .poll(async () => (await gateway.getRequests("sessions.usage")).length)
+          .toBeGreaterThan(requestsBeforeRangeChange);
         await page.getByRole("button", { name: "Cost", exact: true }).click();
 
         const windowCards = page.locator(".cost-window-card");

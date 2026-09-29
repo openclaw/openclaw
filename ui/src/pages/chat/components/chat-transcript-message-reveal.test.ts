@@ -15,16 +15,19 @@ describe("chat transcript controller", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it.each(["none", "idle at end", "wheel", "new reveal"] as const)(
+  it.each(["none", "idle at end", "wheel", "touch", "disconnect", "new reveal"] as const)(
     "keeps only the current deferred message reveal after %s",
     async (interruption) => {
       const update = createDeferred<boolean>();
-      const transcript = new ChatTranscriptController({
-        addController: vi.fn(),
-        removeController: vi.fn(),
-        requestUpdate: vi.fn(),
-        updateComplete: update.promise,
-      });
+      const transcript = new ChatTranscriptController(
+        {
+          addController: vi.fn(),
+          removeController: vi.fn(),
+          requestUpdate: vi.fn(),
+          updateComplete: update.promise,
+        },
+        () => `message-reveal-${interruption}`,
+      );
       const rows: TestContentRow[] = ["first", "second"].map((id) => ({
         kind: "content",
         key: id,
@@ -70,6 +73,10 @@ describe("chat transcript controller", () => {
           vi.advanceTimersByTime(150);
         } else if (interruption === "new reveal") {
           expect(transcript.revealMessage("second")).toBe(true);
+        } else if (interruption === "touch") {
+          container.dispatchEvent(new TouchEvent("touchstart"));
+        } else if (interruption === "disconnect") {
+          transcript.hostDisconnected();
         }
         update.resolve(true);
         await update.promise;

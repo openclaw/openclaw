@@ -3,6 +3,7 @@ import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import { requestSkillWorkshopRevisionAdmission } from "../pages/skill-workshop/revision-admission.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { createChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
 import {
   createSkillWorkshopRevisionAdmissions,
@@ -33,6 +34,7 @@ function revisionContext(params: {
   } as unknown as ApplicationGatewaySnapshot;
   return {
     gateway: { snapshot },
+    chatSubmissions: createChatSubmissions(),
     sessions: {
       state: {
         agentId: params.agentId,
@@ -212,7 +214,7 @@ describe("Skill Workshop revision admission owner", () => {
       if (admissionAttempts === 1) {
         throw new Error("owner replaced");
       }
-      return { status: "started" };
+      return { status: "started", runId: "revision-accepted" };
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const context = revisionContext({
@@ -263,5 +265,60 @@ describe("Skill Workshop revision admission owner", () => {
     });
     expect(secondParams).toMatchObject({ expectedRevisionHash: revisionHash });
     expect(secondParams.idempotencyKey).toBe(firstParams.idempotencyKey);
+    expect(context.chatSubmissions.readInitial("agent:research:second", client)).toMatchObject({
+      pendingRunId: "revision-accepted",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "revise the second" }],
+        __openclaw: { idempotencyKey: "revision-accepted:user" },
+      },
+    });
   });
+
+  it.each(["current", "client", "hello", "disconnected"])(
+    "publishes an admitted revision only to its authenticated owner (%s)",
+    async (change) => {
+      const response = deferred<{ status: "started"; runId: string }>();
+      const request = vi.fn(() => response.promise);
+      const client = { request } as unknown as GatewayBrowserClient;
+      const sessionKey = "agent:main:workshop";
+      const context = revisionContext({
+        agentId: "main",
+        client,
+        sessionId: "session-main-workshop",
+        sessionKey,
+      });
+      const owner = createSkillWorkshopRevisionAdmissions();
+      const run = owner.start(
+        { ...input("Retain these revision instructions."), proposalOriginSessionKey: sessionKey },
+        (entry, materialize) =>
+          requestSkillWorkshopRevisionAdmission({ context, entry, materialize }),
+      );
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      expect(context.chatSubmissions.readInitial(sessionKey, client)).toBeNull();
+      const snapshot = context.gateway.snapshot;
+      if (change !== "current") {
+        Object.assign(context.gateway, {
+          snapshot: {
+            ...snapshot,
+            ...(change === "client" ? { client: new Proxy(client, {}) } : {}),
+            ...(change === "hello" ? { hello: { ...snapshot.hello } } : {}),
+            ...(change === "disconnected" ? { phase: "reconnecting" } : {}),
+          },
+        });
+      }
+      response.resolve({ status: "started", runId: "canonical-revision-run" });
+      await expect(run.completion).resolves.toMatchObject({ status: "admitted", sessionKey });
+      expect(owner.get(run.entry.id)).toBeNull();
+      const retained = context.chatSubmissions.readInitial(sessionKey, client);
+      if (change === "current") {
+        expect(retained).toMatchObject({
+          pendingRunId: "canonical-revision-run",
+          message: { content: [{ type: "text", text: "Retain these revision instructions." }] },
+        });
+      } else {
+        expect(retained).toBeNull();
+      }
+    },
+  );
 });

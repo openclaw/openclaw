@@ -1,20 +1,23 @@
 /* @vitest-environment jsdom */
 
-import { render, type TemplateResult } from "lit";
+import { render, type LitElement, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
+import { createApplicationRouter } from "../app-routes.ts";
 import "../components/app-sidebar.ts";
+import { settleLitElements } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
 import { loadSettings } from "./settings.ts";
 import "./app-host.ts";
+import type { UpdateProgress } from "./update-confirmation.ts";
 
 type PairingShell = HTMLElement & {
   runtime?: ApplicationRuntime;
   render: () => TemplateResult;
-  refreshControlUi: () => Promise<boolean>;
   routeState: {
     routeId?: string;
     location?: { pathname: string; search: string; hash: string };
@@ -26,11 +29,20 @@ type PairingShell = HTMLElement & {
   settingsSidebarLoadFailed: boolean;
   loadSettingsSidebarRenderer: () => void;
   retrySettingsSidebarRenderer: () => void;
+  outboxStoreRuntime: OutboxStoreRuntime | null;
+  openNewSession: (agentId: string) => void;
 };
 
-type PairingSidebar = HTMLElement & {
+type PairingSidebar = LitElement & {
+  render: () => TemplateResult;
   canPairDevice: boolean;
   onPairMobile?: () => void;
+  onRetryConnect?: () => void;
+  onOpenNewSession?: (agentId: string) => void;
+  onUpdateSidebarEntries?: (entries: string[]) => void;
+  watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
+  outboxAttentionCountForSession: (sessionKey: string) => number;
+  hasSessionDraft: (sessionKey: string) => boolean;
 };
 
 type PairingAuth = { role: string; scopes?: string[] };
@@ -105,7 +117,19 @@ function createPairingShell(params: {
     theme: { mode: "system", settings: loadSettings() },
   } as unknown as ApplicationContext;
   const shell = document.createElement("openclaw-app-shell") as PairingShell;
-  shell.runtime = { context, router: {} } as ApplicationRuntime;
+  const router = createApplicationRouter();
+  shell.runtime = {
+    context,
+    router,
+    documentMode: null,
+    warmBoot: false,
+    focusLocation: null,
+    pendingGatewayConnection: null,
+    confirmPendingGatewayConnection: () => undefined,
+    cancelPendingGatewayConnection: () => undefined,
+    start: async () => undefined,
+    stop: () => router.stop(),
+  };
   shell.routeState = {
     routeId: "chat",
     location: { pathname: "/chat", search: "", hash: "" },
@@ -113,6 +137,7 @@ function createPairingShell(params: {
   const container = document.createElement("div");
   onTestFinished(() => {
     render(null, container);
+    router.stop();
   });
 
   const renderSidebar = () => {
@@ -143,6 +168,7 @@ function createPairingShell(params: {
 
   return {
     shell,
+    context,
     snapshot,
     overlaySnapshot,
     openDevicePairSetup,
@@ -162,6 +188,143 @@ afterEach(async () => {
 });
 
 describe("application shell pairing access", () => {
+  it.each([false, true])(
+    "does not rerender navigation chrome for unrelated shell updates (outbox runtime: %s)",
+    async (withOutboxes) => {
+      vi.useFakeTimers();
+      const { shell, renderSidebar, container, overlaySnapshot } = createPairingShell({
+        auth: { role: "operator", scopes: ["operator.admin"] },
+      });
+      if (withOutboxes) {
+        shell.outboxStoreRuntime = {
+          read: () => ({
+            total: 1,
+            attentionCountForSession: () => 1,
+            hasSessionDraft: () => true,
+          }),
+          subscribe: () => () => undefined,
+          invalidate: () => undefined,
+        };
+      }
+      const sidebar = renderSidebar();
+      const topbar = container.querySelector<LitElement & { render: () => TemplateResult }>(
+        "openclaw-app-topbar",
+      )!;
+      document.body.append(sidebar, topbar);
+      await settleLitElements([sidebar, topbar]);
+      await vi.dynamicImportSettled();
+      await settleLitElements([sidebar, topbar]);
+      expect(sidebar.isUpdatePending).toBe(false);
+      const sidebarText = sidebar.textContent;
+      const topbarText = topbar.textContent;
+      const renderSidebarChild = vi.spyOn(sidebar, "render");
+      const renderTopbarChild = vi.spyOn(topbar, "render");
+
+      overlaySnapshot.approvalBusy = true;
+      render(shell.render(), container);
+      await settleLitElements([sidebar, topbar]);
+
+      expect(renderSidebarChild).not.toHaveBeenCalled();
+      expect(renderTopbarChild).not.toHaveBeenCalled();
+      expect(sidebar.textContent).toBe(sidebarText);
+      expect(topbar.textContent).toBe(topbarText);
+      expect(sidebar.outboxAttentionCountForSession("agent:main:main")).toBe(withOutboxes ? 1 : 0);
+      expect(sidebar.hasSessionDraft("agent:main:main")).toBe(withOutboxes);
+    },
+  );
+
+  it("keeps resident navigation actions bound to current context and permission", () => {
+    const { shell, renderSidebar, openDevicePairSetup } = createPairingShell({
+      auth: { role: "operator", scopes: ["operator.admin"] },
+    });
+    const sidebar = renderSidebar();
+    const {
+      onPairMobile,
+      onRetryConnect,
+      onOpenNewSession,
+      onUpdateSidebarEntries,
+      watchUpdateProgress,
+    } = sidebar;
+    const replacement = createPairingShell({
+      auth: { role: "operator", scopes: ["operator.admin"] },
+    });
+    replacement.snapshot.hello = {
+      ...replacement.snapshot.hello,
+      features: { methods: ["sessions.create"], events: [] },
+    } as ApplicationGatewaySnapshot["hello"];
+    const connect = vi.fn();
+    const update = vi.fn();
+    const stopGateway = vi.fn();
+    const stopOverlays = vi.fn();
+    replacement.context.gateway.connect = connect;
+    replacement.context.gateway.subscribe = vi.fn(() => stopGateway);
+    replacement.context.navigation.update = update;
+    replacement.context.overlays.subscribe = vi.fn(() => stopOverlays);
+    shell.runtime = { ...shell.runtime!, context: replacement.context };
+    const openNewSession = vi.spyOn(shell, "openNewSession").mockImplementation(() => undefined);
+
+    onPairMobile?.();
+    onRetryConnect?.();
+    onUpdateSidebarEntries?.(["chat", "activity"]);
+    onOpenNewSession?.("main");
+    const progress = vi.fn();
+    const stopProgress = watchUpdateProgress?.(progress);
+
+    expect(openDevicePairSetup).not.toHaveBeenCalled();
+    expect(replacement.openDevicePairSetup).toHaveBeenCalledOnce();
+    expect(connect).toHaveBeenCalledOnce();
+    expect(update).toHaveBeenCalledWith({ sidebarEntries: ["chat", "activity"] });
+    expect(openNewSession).toHaveBeenCalledExactlyOnceWith("main", undefined);
+    expect(progress).toHaveBeenCalledWith(expect.objectContaining({ connected: true }));
+    stopProgress?.();
+    expect(stopGateway).toHaveBeenCalledOnce();
+    expect(stopOverlays).toHaveBeenCalledOnce();
+    replacement.snapshot.hello = {
+      ...replacement.snapshot.hello,
+      auth: { role: "operator", scopes: ["operator.read"] },
+    } as ApplicationGatewaySnapshot["hello"];
+    onOpenNewSession?.("main");
+    expect(openNewSession).toHaveBeenCalledOnce();
+  });
+
+  it("invalidates the resident sidebar when the stored outbox changes", async () => {
+    vi.useFakeTimers();
+    let publish: (() => void) | undefined;
+    const shell = document.createElement("openclaw-app-shell") as LitElement & {
+      outboxStoreRuntime: OutboxStoreRuntime;
+      navigationSidebar: PairingSidebar;
+    };
+    shell.outboxStoreRuntime = {
+      read: () => ({
+        total: 0,
+        attentionCountForSession: () => 0,
+        hasSessionDraft: () => false,
+      }),
+      subscribe: (listener) => {
+        publish = listener;
+        return () => {
+          publish = undefined;
+        };
+      },
+      invalidate: () => undefined,
+    };
+    document.body.append(shell, shell.navigationSidebar);
+    try {
+      await settleLitElements([shell, shell.navigationSidebar]);
+      expect(shell.isUpdatePending).toBe(false);
+      expect(shell.navigationSidebar.isUpdatePending).toBe(false);
+
+      publish?.();
+
+      expect(shell.isUpdatePending).toBe(true);
+      expect(shell.navigationSidebar.isUpdatePending).toBe(true);
+    } finally {
+      shell.remove();
+      shell.navigationSidebar.remove();
+    }
+    expect(publish).toBeUndefined();
+  });
+
   it.each([
     {
       name: "pairing-only",
@@ -309,27 +472,6 @@ describe("application shell pairing access", () => {
     );
     retry?.click();
     expect(retryRenderer).toHaveBeenCalledOnce();
-  });
-
-  it("preserves the settings refresh result for stale-client recovery", () => {
-    const { shell, container } = createPairingShell({ auth: { role: "operator" } });
-    const refreshResult = new Promise<boolean>(() => {
-      // Keep the probe pending so the callback must preserve its lifecycle.
-    });
-    const refreshControlUi = vi.fn(() => refreshResult);
-    const settingsSidebarRenderer = vi.fn((_props: { onRefresh: () => Promise<boolean> }) => null);
-    shell.routeState = {
-      routeId: "profile",
-      location: { pathname: "/settings/profile", search: "", hash: "" },
-    };
-    shell.refreshControlUi = refreshControlUi;
-    shell.settingsSidebarRenderer = settingsSidebarRenderer;
-
-    render(shell.render(), container);
-
-    const onRefresh = settingsSidebarRenderer.mock.calls[0]?.[0].onRefresh;
-    expect(onRefresh?.()).toBe(refreshResult);
-    expect(refreshControlUi).toHaveBeenCalledOnce();
   });
 
   it("shows a visible accessible error when a mobile setup code cannot be copied", async () => {

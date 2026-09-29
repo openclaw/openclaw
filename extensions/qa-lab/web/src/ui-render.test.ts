@@ -73,7 +73,7 @@ function evidenceState(overrides: Partial<UiState> = {}): UiState {
     selectedCaptureEventKey: null,
     selectedCaptureSessionIds: [],
     selectedConversationKey: null,
-    selectedEvidenceEntryId: null,
+    selectedEvidenceEntryKey: null,
     selectedScenarioId: null,
     selectedThreadId: null,
     sidebarCollapsed: false,
@@ -109,6 +109,38 @@ function rawRequestCaptureState(params: { payload: string; contentType: string }
     selectedCaptureEventKey: "1:flow-1:1:request",
   });
 }
+
+describe("QA Lab sidebar rendering", () => {
+  it.each([
+    ["chat", false, false],
+    ["chat", true, true],
+    ["results", false, false],
+    ["results", true, true],
+    ["evidence", false, true],
+    ["evidence", true, true],
+    ["report", false, false],
+    ["report", true, true],
+    ["events", false, false],
+    ["events", true, true],
+    ["capture", false, false],
+    ["capture", true, true],
+  ] as const)(
+    "renders %s with sidebarCollapsed=%s and inert=%s",
+    (activeTab, sidebarCollapsed, inert) => {
+      const state = evidenceState({ activeTab, sidebarCollapsed, sidebarPanel: "config" });
+      const html = renderQaLabUi(state);
+      const sidebar = html.match(/<aside class="sidebar(?:\s[^"]*)?"[^>]*>/gu);
+
+      expect(sidebar).toHaveLength(1);
+      expect(/\sinert(?:\s|=|>)/u.test(sidebar![0]!)).toBe(inert);
+      expect(html).toContain('<select id="provider-mode">');
+      expect(html).toContain('data-sidebar-panel="config"');
+      expect(html).toContain('data-action="toggle-sidebar"');
+      expect(state.sidebarCollapsed).toBe(sidebarCollapsed);
+      expect(state.sidebarPanel).toBe("config");
+    },
+  );
+});
 
 describe("QA Lab UI evidence render", () => {
   it("keeps same-id conversations isolated by account and kind", () => {
@@ -435,6 +467,45 @@ describe("QA Lab UI evidence render", () => {
     ]);
   });
 
+  it.each([
+    ["most-events", ["a.test", "z.test", "m.test"]],
+    ["most-errors", ["a.test", "z.test", "m.test"]],
+    ["severity", ["z.test", "m.test", "a.test"]],
+    ["alphabetical", ["a.test", "m.test", "z.test"]],
+  ] as const)("orders capture lanes by %s with the same displayed severity", (sort, hosts) => {
+    const html = renderQaLabUi(
+      evidenceState({
+        activeTab: "capture",
+        captureViewMode: "timeline",
+        captureTimelineLaneSort: sort,
+        selectedCaptureEventKey: "1:selected:1000:request",
+        captureEvents: [
+          { host: "z.test", flowId: "selected", ts: 1000, status: 500 },
+          { host: "a.test", flowId: "other", ts: 2000, errorText: "connection failed" },
+          { host: "m.test", flowId: "selected", ts: 3000 },
+          { host: "a.test", flowId: "other", ts: 4000 },
+        ].map((event, index) =>
+          Object.assign(event, {
+            id: index + 1,
+            kind: "request",
+            direction: "outbound",
+            protocol: "https",
+          }),
+        ),
+      }),
+    );
+
+    expect(
+      [...html.matchAll(/data-capture-lane-toggle="([^"]+)"/g)].map((match) => match[1]),
+    ).toEqual(hosts);
+    if (sort === "severity") {
+      expect(html).toContain("severity 77.2");
+      expect(html).toContain("severity 41.2");
+      expect(html).toContain("severity 33.4");
+      expect(html).toContain("1 errors (100%) · focused flow 100% · active now · 1 events");
+    }
+  });
+
   it("maps blocked and skipped evidence statuses to styled tones", () => {
     const html = renderQaLabUi(
       evidenceState({
@@ -446,6 +517,8 @@ describe("QA Lab UI evidence render", () => {
               coverage: [{ id: "qa.blocked", role: "primary" }],
               failureReason: "Environment unavailable",
               id: "qa-lab.blocked",
+              key: "0",
+              effective: true,
               kind: "script-test",
               sourcePath: "scripts/blocked.ts",
               status: "blocked",
@@ -456,6 +529,8 @@ describe("QA Lab UI evidence render", () => {
               coverage: [{ id: "qa.skipped", role: "primary" }],
               failureReason: null,
               id: "qa-lab.skipped",
+              key: "1",
+              effective: true,
               kind: "vitest-test",
               sourcePath: "extensions/qa-lab/src/skipped.test.ts",
               status: "skipped",
@@ -469,7 +544,7 @@ describe("QA Lab UI evidence render", () => {
           profile: null,
           schemaVersion: 2,
         },
-        selectedEvidenceEntryId: "qa-lab.blocked",
+        selectedEvidenceEntryKey: "0",
       }),
     );
 
@@ -524,6 +599,8 @@ describe("QA Lab UI evidence render", () => {
               coverage: [],
               failureReason: null,
               id: "ux-matrix.web-ui.first-run",
+              key: "0",
+              effective: true,
               kind: "ux-matrix-cell",
               sourcePath: "scripts/ux-matrix/dashboard.ts",
               status: "pass",
@@ -560,6 +637,7 @@ describe("QA Lab UI evidence render", () => {
                   status: "pass",
                   surface: "web-ui",
                   testId: "ux-matrix.web-ui.first-run",
+                  entryKey: "0",
                   title: "UX Matrix: web-ui / first-run",
                 },
                 {
@@ -577,6 +655,7 @@ describe("QA Lab UI evidence render", () => {
                   status: "proof-gap",
                   surface: "cli",
                   testId: null,
+                  entryKey: null,
                   title: null,
                 },
               ],
@@ -593,11 +672,11 @@ describe("QA Lab UI evidence render", () => {
           profile: null,
           schemaVersion: 2,
         },
-        selectedEvidenceEntryId: "ux-matrix.web-ui.first-run",
+        selectedEvidenceEntryKey: "0",
       }),
     );
 
-    expect(html).toContain('data-evidence-entry-id="ux-matrix.web-ui.first-run"');
+    expect(html).toContain('data-evidence-entry-key="0"');
     expect(html).toContain("evidence-matrix-cell-proof-gap");
     expect(html).toContain("not executed in this run");
     expect(html).not.toContain("Coverage:");
@@ -606,7 +685,7 @@ describe("QA Lab UI evidence render", () => {
     expect(html).toContain("Open video artifact");
     expect(html).not.toContain('src="/api/evidence/artifact?artifactPath=recording.gif"');
     expect(html).not.toContain("<video controls");
-    expect(html).not.toContain('data-evidence-entry-id="null"');
+    expect(html).not.toContain('data-evidence-entry-key="null"');
   });
 
   it("redacts secret-like capture payload fields in raw previews", () => {

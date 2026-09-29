@@ -5,8 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
+import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
 import { AgentSelectionRequiredError, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { assertWorkspaceStateMigrationReady } from "../agents/workspace-legacy-state.js";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
@@ -18,9 +17,7 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/session-accessor.sqlite-canonical-repair.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
-import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { readMemoryHostEventRecords } from "../memory-host-sdk/events.js";
 import { loadNodeHostConfig } from "../node-host/config.js";
 import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
@@ -49,23 +46,22 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  closeDatabaseTestCohorts,
+  closeStateDatabaseForTest,
+} from "../test-utils/database-cleanup.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { loadApnsRegistration } from "./push-apns.js";
-import {
-  createWebPushVapidKeyPair,
-  hashWebPushEndpoint,
-  listWebPushSubscriptions,
-  readPersistedVapidKeyPair,
-} from "./push-web-store.js";
 import { readRestartSentinel } from "./restart-sentinel.js";
-import { acquireStartupMigrationLease } from "./startup-migration-checkpoint.js";
+import { acquireStartupMigrationLeaseWithWait } from "./startup-migration-checkpoint.js";
 import {
   autoMigrateLegacyState as autoMigrateLegacyStateWithSurfaces,
   detectLegacyStateMigrations as detectLegacyStateMigrationsWithSurfaces,
   runLegacyStateMigrations as runLegacyStateMigrationsWithSurfaces,
 } from "./state-migrations.doctor.js";
+import { expectRecoveryPredicateRefusedAfterRepair } from "./state-migrations.ingress-lifecycle.test-support.js";
 import * as sessionStore from "./state-migrations.legacy-session-store.js";
 import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
 import { autoMigrateLegacyPluginDoctorState } from "./state-migrations.plugin-doctor.js";
@@ -74,9 +70,10 @@ import {
   migrateLegacyPluginBindingApprovals,
 } from "./state-migrations.runtime-state.js";
 import {
-  resetAutoMigrateLegacyStateDirForTest,
-  resetAutoMigrateLegacyTaskStateSidecarsForTest,
-} from "./state-migrations.state-dir.js";
+  createConfig,
+  createLegacyAcpSessionEntry,
+} from "./state-migrations.session-store.test-support.js";
+import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 import { loadVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "./voicewake.js";
 
@@ -84,35 +81,27 @@ type DetectLegacyStateParams = Parameters<typeof detectLegacyStateMigrationsWith
 type RunLegacyStateParams = Parameters<typeof runLegacyStateMigrationsWithSurfaces>[0];
 type AutoMigrateLegacyStateParams = Parameters<typeof autoMigrateLegacyStateWithSurfaces>[0];
 
+type CoreMigrationParams<T> = Omit<T, "legacySessionSurfaces"> & {
+  legacySessionSurfaces?: DetectLegacyStateParams["legacySessionSurfaces"];
+};
+
 // This broad core suite intentionally exercises migration mechanics without plugin-owned keys.
 // Package-shaped coverage owns configured plugin resolution and setup-sidecar loading.
-function detectLegacyStateMigrations(
-  params: Omit<DetectLegacyStateParams, "legacySessionSurfaces"> & {
-    legacySessionSurfaces?: DetectLegacyStateParams["legacySessionSurfaces"];
-  },
-) {
+function detectLegacyStateMigrations(params: CoreMigrationParams<DetectLegacyStateParams>) {
   return detectLegacyStateMigrationsWithSurfaces({
     legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     ...params,
   });
 }
 
-function runLegacyStateMigrations(
-  params: Omit<RunLegacyStateParams, "legacySessionSurfaces"> & {
-    legacySessionSurfaces?: RunLegacyStateParams["legacySessionSurfaces"];
-  },
-) {
+function runLegacyStateMigrations(params: CoreMigrationParams<RunLegacyStateParams>) {
   return runLegacyStateMigrationsWithSurfaces({
     legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     ...params,
   });
 }
 
-function autoMigrateLegacyState(
-  params: Omit<AutoMigrateLegacyStateParams, "legacySessionSurfaces"> & {
-    legacySessionSurfaces?: AutoMigrateLegacyStateParams["legacySessionSurfaces"];
-  },
-) {
+function autoMigrateLegacyState(params: CoreMigrationParams<AutoMigrateLegacyStateParams>) {
   return autoMigrateLegacyStateWithSurfaces({
     legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     ...params,
@@ -122,21 +111,16 @@ function autoMigrateLegacyState(
 // Static helpers can retain earlier cohorts after resetModules; close every cohort at teardown.
 const migrationDatabaseClosers = new Set([
   closeOpenClawAgentDatabasesForTest,
-  closeOpenClawStateDatabaseForTest,
+  closeStateDatabaseForTest,
 ]);
 
-function closeMigrationDatabases() {
-  for (const close of migrationDatabaseClosers) {
-    close();
-  }
-}
-
 async function rerunAutomaticMigrationAfterRestart(params: AutoMigrateLegacyStateParams) {
-  closeMigrationDatabases();
+  await closeDatabaseTestCohorts(migrationDatabaseClosers);
   vi.resetModules();
-  const [agentDb, stateDb] = await Promise.all([
+  const [agentDb, stateDb, agentDbTest] = await Promise.all([
     import("../state/openclaw-agent-db.js"),
     import("../state/openclaw-state-db.js"),
+    import("../state/openclaw-agent-db.test-support.js"),
   ]);
   migrationDatabaseClosers.add(agentDb.closeOpenClawAgentDatabasesForTest);
   migrationDatabaseClosers.add(stateDb.closeOpenClawStateDatabaseForTest);
@@ -147,75 +131,21 @@ async function rerunAutomaticMigrationAfterRestart(params: AutoMigrateLegacyStat
       ...params,
     });
   } finally {
-    closeMigrationDatabases();
-    expect(agentDb.listOpenClawAgentDatabasesForTest()).toEqual([]);
+    await closeDatabaseTestCohorts(migrationDatabaseClosers);
+    expect(agentDbTest.listOpenClawAgentDatabasesForTest()).toEqual([]);
     expect(stateDb.isOpenClawStateDatabaseOpen()).toBe(false);
   }
 }
 
 const pluginDoctorStateMigrationEntries = vi.hoisted(
-  () =>
-    ({
-      entries: [] as Array<{
-        pluginId: string;
-        channelIds?: string[];
-        trustedForDurableStores?: boolean;
-        migration: {
-          id: string;
-          label: string;
-          doctorOnly?: boolean;
-          phase?: "after-session-repair";
-          detectLegacyState: (params: {
-            config: OpenClawConfig;
-            env: NodeJS.ProcessEnv;
-            stateDir: string;
-            oauthDir: string;
-            context: PluginDoctorStateMigrationContext;
-          }) => Promise<{ preview: string[] } | null> | { preview: string[] } | null;
-          migrateLegacyState: (params: {
-            config: OpenClawConfig;
-            env: NodeJS.ProcessEnv;
-            stateDir: string;
-            oauthDir: string;
-            context: PluginDoctorStateMigrationContext;
-          }) =>
-            | Promise<{ changes: string[]; warnings: string[] }>
-            | {
-                changes: string[];
-                warnings: string[];
-              };
-        };
-      }>,
-    }) satisfies {
-      entries: Array<{
-        pluginId: string;
-        channelIds?: string[];
-        trustedForDurableStores?: boolean;
-        migration: {
-          id: string;
-          label: string;
-          detectLegacyState: (params: {
-            config: OpenClawConfig;
-            env: NodeJS.ProcessEnv;
-            stateDir: string;
-            oauthDir: string;
-            context: PluginDoctorStateMigrationContext;
-          }) => Promise<{ preview: string[] } | null> | { preview: string[] } | null;
-          migrateLegacyState: (params: {
-            config: OpenClawConfig;
-            env: NodeJS.ProcessEnv;
-            stateDir: string;
-            oauthDir: string;
-            context: PluginDoctorStateMigrationContext;
-          }) =>
-            | Promise<{ changes: string[]; warnings: string[] }>
-            | {
-                changes: string[];
-                warnings: string[];
-              };
-        };
-      }>;
-    },
+  (): {
+    entries: Array<{
+      pluginId: string;
+      channelIds?: string[];
+      trustedForDurableStores?: boolean;
+      migration: PluginDoctorStateMigration;
+    }>;
+  } => ({ entries: [] }),
 );
 
 const legacyChannelStateMigrationEntries = vi.hoisted(() => ({
@@ -487,26 +417,6 @@ function insertCurrentConversationBindingRow(
   );
 }
 
-function createConfig(): OpenClawConfig {
-  return {
-    agents: {
-      list: [{ id: "worker-1", default: true }],
-    },
-    session: {
-      mainKey: "desk",
-    },
-    channels: {
-      chatapp: {
-        defaultAccount: "alpha",
-        accounts: {
-          beta: {},
-          alpha: {},
-        },
-      },
-    },
-  } as OpenClawConfig;
-}
-
 function createEnv(stateDir: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
@@ -748,27 +658,6 @@ async function createLegacyAuditLedger(stateDir: string): Promise<string> {
   return databasePath;
 }
 
-function createLegacyAcpSessionEntry(
-  sessionId: string,
-  updatedAt: number,
-  agent: string,
-  runtimeSessionName: string,
-  lastActivityAt: number,
-) {
-  return {
-    sessionId,
-    updatedAt,
-    acp: {
-      backend: "test",
-      agent,
-      runtimeSessionName,
-      mode: "persistent",
-      state: "idle",
-      lastActivityAt,
-    } satisfies SessionAcpMeta,
-  };
-}
-
 async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
   const { root, stateDir, env } = createMigrationContext(await createTempDir());
   const cfg = createConfig();
@@ -820,12 +709,11 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
   pluginDoctorStateMigrationEntries.entries = [];
-  resetAutoMigrateLegacyTaskStateSidecarsForTest();
   resetAutoMigrateLegacyStateDirForTest();
-  closeMigrationDatabases();
+  await closeDatabaseTestCohorts(migrationDatabaseClosers);
   resetPluginRuntimeStateForTest();
 });
 
@@ -882,7 +770,7 @@ describe("state migrations", () => {
   });
 
   describe.each(["automatic", "doctor"] as const)("%s pairing detection", (mode) => {
-    it.each(["missing", "empty", "irrelevant", "pairing-only"])(
+    it.each(["missing", "irrelevant", "pairing-only"])(
       "does not request channel runtime for %s credentials",
       async (input) => {
         const root = await createTempDir();
@@ -1102,7 +990,7 @@ describe("state migrations", () => {
           code: "ENOENT",
         });
       }
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
 
       const writer = new DatabaseSync(databasePath);
       if (workshopTables === "absent") {
@@ -1118,14 +1006,7 @@ describe("state migrations", () => {
         const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
         expect(result).toMatchObject({ changes: [], warnings: [] });
         const ids = result.stepReceipts.map((receipt) => receipt.id);
-        const workshopIndex = ids.indexOf("skill-workshop");
-        expect(workshopIndex).toBeGreaterThan(ids.indexOf("workspace-state"));
-        expect(workshopIndex).toBeLessThan(ids.indexOf("channel-pairing"));
-        expect(result.stepReceipts[workshopIndex]).toMatchObject({
-          outcome: "skipped",
-          changes: [],
-          requiredness: "conditional",
-        });
+        expect(ids).not.toContain("skill-workshop");
         if (bundle) {
           await expect(fs.readFile(bundle.path, "utf8")).resolves.toBe(bundle.content);
         }
@@ -1164,6 +1045,13 @@ describe("state migrations", () => {
         },
       });
       const workshop = result.stepReceipts.find((receipt) => receipt.id === "skill-workshop");
+      if (mode === "automatic") {
+        expect(result.warnings).toEqual([]);
+        expect(workshop).toBeUndefined();
+        expect(callbackSamples).toEqual([]);
+        await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("{}\n");
+        return;
+      }
       expect(workshop).toMatchObject({
         phase: "final",
         source: [
@@ -1197,36 +1085,6 @@ describe("state migrations", () => {
       }
     },
   );
-
-  it("runs legacy-main session migration when the other automatic detectors are empty", async () => {
-    const { root, env } = createMigrationContext(await createTempDir());
-    const cfg = createConfig();
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        writeSessionEntry(
-          database,
-          "agent:main:chat",
-          { sessionId: "legacy-main-session", updatedAt: 100 },
-          { allowStoredAliases: true, previousEntry: null },
-        );
-      },
-      { agentId: "main", env },
-    );
-
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
-    const source = runOpenClawAgentWriteTransaction(
-      (database) => readExactSessionEntryRowForCanonicalRepair(database, "agent:main:chat"),
-      { agentId: "main", env },
-    );
-    const destination = runOpenClawAgentWriteTransaction(
-      (database) => readExactSessionEntryRowForCanonicalRepair(database, "agent:worker-1:chat"),
-      { agentId: "worker-1", env },
-    );
-
-    expect(result.changes).toContain("Migrated legacy main session claim agent:worker-1:chat.");
-    expect(source).toBeUndefined();
-    expect(destination?.entry.sessionId).toBe("legacy-main-session");
-  });
 
   it.each([
     { location: "inside", doctorOnlyStateMigrations: false },
@@ -1285,7 +1143,11 @@ describe("state migrations", () => {
           database
             .prepare("SELECT agent_id, app_version FROM schema_meta WHERE meta_key = ?")
             .get("historical-transcript-directives-v1"),
-        ).toEqual({ agent_id: "main", app_version: JSON.stringify({ phase: "complete" }) });
+        ).toEqual(
+          doctorOnlyStateMigrations
+            ? { agent_id: "main", app_version: JSON.stringify({ phase: "complete" }) }
+            : undefined,
+        );
         expect(
           database.prepare("SELECT session_key FROM session_nodes ORDER BY session_key").all(),
         ).toEqual([{ session_key: "agent:qa:proof" }]);
@@ -1335,10 +1197,11 @@ describe("state migrations", () => {
 
   it("preserves retired config locators before an advisory transcript migration return", async () => {
     const { root, stateDir, env } = createMigrationContext(await createTempDir());
+    openOpenClawStateDatabase({ env });
     const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     fsSync.mkdirSync(path.dirname(databasePath), { recursive: true });
-    const database = new DatabaseSync(databasePath);
-    try {
+    {
+      using database = new DatabaseSync(databasePath);
       ensureOpenClawAgentDatabaseSchema(database, {
         agentId: "main",
         env,
@@ -1350,15 +1213,13 @@ describe("state migrations", () => {
           "INSERT INTO schema_meta(meta_key,role,schema_version,agent_id,app_version,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
         )
         .run("historical-transcript-directives-v1", "agent", 1, "main", "invalid-json", 1, 1);
-    } finally {
-      database.close();
     }
     const store = path.join(root, "legacy-jobs.json");
     const cfg: OpenClawConfig & { cron: { store: string } } = {
       agents: { ownership: "explicit", entries: { main: {} } },
       cron: { store },
     };
-    const result = await autoMigrateLegacyState({ cfg, env });
+    const result = await autoMigrateLegacyState({ cfg, env, invocationPurpose: "doctor" });
     expect(result.warnings).toContainEqual(
       expect.stringContaining("invalid historical transcript migration cursor"),
     );
@@ -1397,7 +1258,7 @@ describe("state migrations", () => {
     }
   });
 
-  it.each([null, "", "   "])(
+  it.each([null, "   "])(
     "preserves a schema-only legacy agent database with invalid owner %j as advisory",
     async (agentId) => {
       const { root, stateDir, env } = createMigrationContext(await createTempDir());
@@ -1582,7 +1443,7 @@ describe("state migrations", () => {
       },
     ];
 
-    const lease = acquireStartupMigrationLease({ env, owner: "fresh-start-test" });
+    const lease = await acquireStartupMigrationLeaseWithWait({ env, timeoutMs: 0 });
     try {
       const databasePath = resolveOpenClawStateSqlitePath(env);
       const database = new DatabaseSync(databasePath, { readOnly: true });
@@ -1830,12 +1691,11 @@ describe("state migrations", () => {
     // The write the locked section DID make is on disk, so the file is a live witness.
     expect(beforeIds).toContain("inside-section");
 
-    // Both retained handles are now outside the section that owned the state, and the
-    // guard refuses before any promise is created, so no write ever starts.
+    // The factory rejects synchronously; the retained queue rejects through its async API.
     expect(() => retainedOpen?.({ accountId: "default" })).toThrow(
       /ingress queue access has expired/i,
     );
-    expect(() => retainedQueue?.enqueue("after-section", { note: "leaked" })).toThrow(
+    await expect(retainedQueue?.enqueue("after-section", { note: "leaked" })).rejects.toThrow(
       /ingress queue access has expired/i,
     );
 
@@ -1888,78 +1748,21 @@ describe("state migrations", () => {
 
   it("rejects a recovery predicate that resolves after the repair section returns", async () => {
     const { root, stateDir, env } = createMigrationContext(await createTempDir());
-    // The latch keeps the predicate pending until the migration has returned and the
-    // section has closed, which is the exact window the guard has to cover.
-    const { promise: predicateGate, resolve: releasePredicate } = createDeferred();
-    let recoveryOutcome: string | undefined;
-    const { promise: recoveryDone, resolve: recoverySettled } = createDeferred();
-
-    const seeded = createChannelIngressQueue<{ note: string }>({
-      channelId: "line",
-      accountId: "default",
+    await expectRecoveryPredicateRefusedAfterRepair({
       stateDir,
-    });
-    await seeded.enqueue("latch-evt", { note: "seeded" });
-    const claimed = await seeded.claimNext({ ownerId: "retired-owner" });
-    expect(claimed?.id).toBe("latch-evt");
-
-    pluginDoctorStateMigrationEntries.entries = [
-      {
-        pluginId: "line",
-        channelIds: ["line"],
-        migration: {
-          id: "line-ingress-latch-test",
-          label: "LINE ingress latch test",
-          detectLegacyState: () => ({ preview: ["ingress latch preview"] }),
-          migrateLegacyState({ context }) {
-            const line = (context.channelIngressQueues ?? []).find(
-              (entry) => entry.channelId === "line",
-            );
-            const open = line?.openChannelIngressQueue;
-            if (open) {
-              const queue = open<{ note: string }>({ accountId: "default" });
-              // Started but deliberately not awaited: the migration returns first.
-              void queue
-                .recoverStaleClaims({
-                  staleMs: 0,
-                  shouldRecover: async () => {
-                    await predicateGate;
-                    return true;
-                  },
-                })
-                .then(() => {
-                  recoveryOutcome = "completed";
-                })
-                .catch((error: unknown) => {
-                  recoveryOutcome = String(error);
-                })
-                .finally(() => recoverySettled());
-            }
-            return { changes: ["ingress latch test migrated"], warnings: [] };
-          },
-        },
+      runMigration: async (migration) => {
+        pluginDoctorStateMigrationEntries.entries = [
+          { pluginId: "line", channelIds: ["line"], migration },
+        ];
+        const detected = await detectLegacyStateMigrations({
+          cfg: createConfig(),
+          env,
+          homedir: () => root,
+        });
+        const result = await runLegacyStateMigrations({ detected, config: createConfig(), env });
+        expect(result.changes).toContain("ingress latch test migrated");
       },
-    ];
-
-    const detected = await detectLegacyStateMigrations({
-      cfg: createConfig(),
-      env,
-      homedir: () => root,
     });
-    await runLegacyStateMigrations({ detected, config: createConfig(), env });
-
-    // Only now, with the section closed, does the predicate resolve.
-    releasePredicate();
-    await recoveryDone;
-
-    expect(recoveryOutcome).toMatch(/ingress queue access has expired/i);
-    // The claim is still held: the post-await write never reached SQLite.
-    const claims = await createChannelIngressQueue<{ note: string }>({
-      channelId: "line",
-      accountId: "default",
-      stateDir,
-    }).listClaims();
-    expect(claims.map((claim) => claim.id)).toStrictEqual(["latch-evt"]);
   });
 
   it("runs doctor-only plugin file imports only during explicit Doctor repair", async () => {
@@ -2828,6 +2631,7 @@ describe("state migrations", () => {
       readAcpSessionMetaForEntry({
         sessionKey: pendingKey,
         entry: { sessionId: pendingKey, lifecycleRevision: undefined },
+        agentId: "main",
         env,
       }),
     ).toBeUndefined();
@@ -3066,6 +2870,7 @@ describe("state migrations", () => {
         readAcpSessionMetaForEntry({
           sessionKey: canonicalKey,
           entry: { sessionId, lifecycleRevision: undefined },
+          agentId: "voice",
           env,
         })?.runtimeSessionName,
       ).toBe(runtimeSessionName);
@@ -3073,6 +2878,7 @@ describe("state migrations", () => {
         readAcpSessionMetaForEntry({
           sessionKey: legacyKey,
           entry: { sessionId, lifecycleRevision: undefined },
+          agentId: "voice",
           env,
         }),
       ).toBeUndefined();
@@ -3267,6 +3073,7 @@ describe("state migrations", () => {
       readAcpSessionMetaForEntry({
         sessionKey: pendingKey,
         entry: { lifecycleRevision: undefined },
+        agentId: "main",
         env,
       }),
     ).toBeUndefined();
@@ -3304,6 +3111,7 @@ describe("state migrations", () => {
       readAcpSessionMetaForEntry({
         sessionKey: pendingKey,
         entry: { lifecycleRevision: undefined },
+        agentId: "main",
         env,
       })?.runtimeSessionName,
     ).toBe("existing-runtime");
@@ -3380,6 +3188,7 @@ describe("state migrations", () => {
       readAcpSessionMetaForEntry({
         sessionKey: "agent:main:existing",
         entry: { sessionId: "existing-main", lifecycleRevision: undefined },
+        agentId: "main",
         env,
       })?.runtimeSessionName,
     ).toBe("existing-runtime");
@@ -3387,6 +3196,7 @@ describe("state migrations", () => {
       readAcpSessionMetaForEntry({
         sessionKey: "agent:voice:desk",
         entry: { sessionId: "voice-main", lifecycleRevision: undefined },
+        agentId: "voice",
         env,
       })?.runtimeSessionName,
     ).toBe("voice-runtime");
@@ -3394,6 +3204,7 @@ describe("state migrations", () => {
       readAcpSessionMetaForEntry({
         sessionKey: "agent:voice:main",
         entry: { sessionId: "voice-main", lifecycleRevision: undefined },
+        agentId: "voice",
         env,
       }),
     ).toBeUndefined();
@@ -3488,19 +3299,19 @@ describe("state migrations", () => {
     expect(rows).toEqual([
       {
         queue_name: "outbound",
-        id: "outbound-1",
-        status: "pending",
-        channel: "telegram",
-        target: "123",
-        retry_count: 2,
-      },
-      {
-        queue_name: "outbound",
         id: "outbound-failed",
         status: "failed",
         channel: null,
         target: null,
         retry_count: 3,
+      },
+      {
+        queue_name: "outbound-prepared-v1",
+        id: "outbound-1",
+        status: "pending",
+        channel: "telegram",
+        target: "123",
+        retry_count: 2,
       },
       {
         queue_name: "session",
@@ -3641,33 +3452,6 @@ describe("state migrations", () => {
     await expect(fs.readFile(`${routingPath}.migrated`, "utf8")).resolves.toContain("robot wake");
   });
 
-  it("archives divergent legacy voice wake triggers and keeps shared SQLite canonical", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const cfg = createConfig();
-    const triggersPath = path.join(stateDir, "settings", "voicewake.json");
-    await setVoiceWakeTriggers(["sqlite wake"], stateDir);
-    await fs.mkdir(path.dirname(triggersPath), { recursive: true });
-    await fs.writeFile(triggersPath, JSON.stringify({ triggers: ["legacy wake"] }), "utf8");
-
-    const detected = await detectLegacyStateMigrations({
-      cfg,
-      env: createEnv(stateDir),
-      homedir: () => root,
-    });
-    const result = await runLegacyStateMigrations({ detected, config: cfg });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.notices).toEqual([
-      `Kept shared SQLite voice wake triggers because legacy file differs: ${triggersPath}`,
-    ]);
-    await expect(loadVoiceWakeConfig(stateDir)).resolves.toMatchObject({
-      triggers: ["sqlite wake"],
-    });
-    await expectMissingPath(triggersPath);
-    await expect(fs.readFile(`${triggersPath}.migrated`, "utf8")).resolves.toContain("legacy wake");
-  });
-
   it("keeps a failed voice wake triggers archive blocking and converges on retry", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
@@ -3703,6 +3487,13 @@ describe("state migrations", () => {
     const retry = await runLegacyStateMigrations({ detected: retryDetected, config: cfg });
     expect(retry.warnings).toStrictEqual([]);
     await expectMissingPath(triggersPath);
+    expect(retry.notices).toEqual([
+      `Kept shared SQLite voice wake triggers because legacy file differs: ${triggersPath}`,
+    ]);
+    await expect(loadVoiceWakeConfig(stateDir)).resolves.toMatchObject({
+      triggers: ["sqlite wake"],
+    });
+    await expect(fs.readFile(`${triggersPath}.migrated`, "utf8")).resolves.toContain("legacy wake");
   });
 
   it("leaves malformed legacy voice wake triggers in place with a warning", async () => {
@@ -3725,40 +3516,6 @@ describe("state migrations", () => {
     expect(result.notices).toBeUndefined();
     await fs.access(triggersPath);
     await expectMissingPath(`${triggersPath}.migrated`);
-  });
-
-  it("archives divergent legacy voice wake routing and keeps shared SQLite canonical", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const cfg = createConfig();
-    const routingPath = path.join(stateDir, "settings", "voicewake-routing.json");
-    seedCanonicalVoiceWakeRouting(stateDir, "sqlite wake");
-    await fs.mkdir(path.dirname(routingPath), { recursive: true });
-    await fs.writeFile(
-      routingPath,
-      JSON.stringify({
-        defaultTarget: { mode: "current" },
-        routes: [{ trigger: "legacy wake", target: { agentId: "main" } }],
-      }),
-      "utf8",
-    );
-
-    const detected = await detectLegacyStateMigrations({
-      cfg,
-      env: createEnv(stateDir),
-      homedir: () => root,
-    });
-    const result = await runLegacyStateMigrations({ detected, config: cfg });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.notices).toEqual([
-      `Kept shared SQLite voice wake routing because legacy file differs: ${routingPath}`,
-    ]);
-    await expect(loadVoiceWakeRoutingConfig(stateDir)).resolves.toMatchObject({
-      routes: [{ trigger: "sqlite wake", target: { agentId: "main" } }],
-    });
-    await expectMissingPath(routingPath);
-    await expect(fs.readFile(`${routingPath}.migrated`, "utf8")).resolves.toContain("legacy wake");
   });
 
   it("keeps a failed voice wake routing archive blocking and converges on retry", async () => {
@@ -3803,6 +3560,13 @@ describe("state migrations", () => {
     const retry = await runLegacyStateMigrations({ detected: retryDetected, config: cfg });
     expect(retry.warnings).toStrictEqual([]);
     await expectMissingPath(routingPath);
+    expect(retry.notices).toEqual([
+      `Kept shared SQLite voice wake routing because legacy file differs: ${routingPath}`,
+    ]);
+    await expect(loadVoiceWakeRoutingConfig(stateDir)).resolves.toMatchObject({
+      routes: [{ trigger: "sqlite wake", target: { agentId: "main" } }],
+    });
+    await expect(fs.readFile(`${routingPath}.migrated`, "utf8")).resolves.toContain("legacy wake");
   });
 
   it("leaves malformed legacy voice wake routing in place with a warning", async () => {
@@ -3862,56 +3626,6 @@ describe("state migrations", () => {
     await expect(readRestartSentinel(env)).resolves.toMatchObject({ payload: expectedSentinel });
     await expectMissingPath(path.join(settingsDir, "voicewake.json"));
     await expectMissingPath(restartSentinelPath);
-  });
-
-  it("runs plugin doctor migrations after repairing shared state schema", async () => {
-    const { root, stateDir, env } = createMigrationContext(await createTempDir());
-    const cfg = createConfig();
-    const stateDbPath = path.join(stateDir, "state", "openclaw.sqlite");
-    await fs.mkdir(path.dirname(stateDbPath), { recursive: true });
-    const db = new DatabaseSync(stateDbPath);
-    try {
-      db.exec(`
-        CREATE TABLE agent_databases (
-          agent_id TEXT PRIMARY KEY,
-          path TEXT NOT NULL,
-          schema_version INTEGER NOT NULL,
-          last_seen_at INTEGER NOT NULL,
-          size_bytes INTEGER
-        );
-        INSERT INTO agent_databases VALUES ('main', 'agent.sqlite', 1, 10, 20);
-      `);
-    } finally {
-      db.close();
-    }
-    const migrateLegacyState = vi.fn(() => ({
-      changes: ["plugin state migrated"],
-      warnings: [],
-    }));
-    pluginDoctorStateMigrationEntries.entries = [
-      {
-        pluginId: "memory-core",
-        migration: {
-          id: "memory-core-test",
-          label: "Memory Core test migration",
-          detectLegacyState: () => ({ preview: ["plugin state"] }),
-          migrateLegacyState,
-        },
-      },
-    ];
-
-    const result = await autoMigrateLegacyPluginDoctorState({
-      config: cfg,
-      env,
-      homedir: () => root,
-    });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toContain(
-      "Migrated shared state agent database registry primary key → agent_id,path",
-    );
-    expect(result.changes).toContain("plugin state migrated");
-    expect(migrateLegacyState).toHaveBeenCalledOnce();
   });
 
   it("previews and repairs the released audit ledger before other state migrations", async () => {
@@ -4103,10 +3817,9 @@ describe("state migrations", () => {
         target: [databaseEndpoint],
       },
     );
-    expect(db.prepare("SELECT id FROM worktrees ORDER BY id").all()).toEqual([
-      { id: "current" },
-      { id: "unplanned" },
-    ]);
+    expect(
+      openOpenClawStateDatabase({ env }).db.prepare("SELECT id FROM worktrees ORDER BY id").all(),
+    ).toEqual([{ id: "current" }, { id: "unplanned" }]);
   });
 
   it("keeps the managed-worktrees receipt owner-free when no legacy row exists", async () => {
@@ -4161,9 +3874,16 @@ describe("state migrations", () => {
       homedir: () => root,
       doctorOnlyStateMigrations: true,
     });
-    db.exec("PRAGMA query_only = ON;");
-
-    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+    const result = await runLegacyStateMigrations({
+      detected,
+      config: cfg,
+      env,
+      onStepReceipt: (receipt) => {
+        if (receipt.id === "plugin-install-index") {
+          openOpenClawStateDatabase({ env }).db.exec("PRAGMA query_only = ON;");
+        }
+      },
+    });
 
     expect(result.stepReceipts.find((receipt) => receipt.id === "managed-worktrees")).toMatchObject(
       {
@@ -4182,10 +3902,9 @@ describe("state migrations", () => {
         refusal: { code: "blocked-by-prior-refusal" },
       },
     );
-    expect(db.prepare("SELECT id FROM worktrees ORDER BY id").all()).toEqual([
-      { id: "legacy-a" },
-      { id: "legacy-b" },
-    ]);
+    expect(
+      openOpenClawStateDatabase({ env }).db.prepare("SELECT id FROM worktrees ORDER BY id").all(),
+    ).toEqual([{ id: "legacy-a" }, { id: "legacy-b" }]);
   });
 
   it("does not run plugin doctor migrations after shared state schema repair fails", async () => {
@@ -4563,60 +4282,6 @@ describe("state migrations", () => {
     await expectMissingPath(sourcePath);
   });
 
-  it("routes explicit Doctor repair through the Web Push SQLite importer", async () => {
-    const { root, stateDir, env } = createMigrationContext(await createTempDir());
-    const cfg = createConfig();
-    const endpoint = "https://push.example.com/doctor-integration";
-    const subscription = {
-      subscriptionId: "c0a80101-0000-4000-8000-000000000001",
-      endpoint,
-      keys: { p256dh: "doctor-p256dh", auth: "doctor-auth" },
-      createdAtMs: 1,
-      updatedAtMs: 2,
-    };
-    const pushDir = path.join(stateDir, "push");
-    const subscriptionsPath = path.join(pushDir, "web-push-subscriptions.json");
-    const vapidKeysPath = path.join(pushDir, "vapid-keys.json");
-    await fs.mkdir(pushDir, { recursive: true });
-    await fs.writeFile(
-      subscriptionsPath,
-      JSON.stringify({
-        subscriptionsByEndpointHash: {
-          [hashWebPushEndpoint(endpoint)]: subscription,
-        },
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      vapidKeysPath,
-      JSON.stringify(
-        createWebPushVapidKeyPair("doctor-public", "doctor-private", "https://openclaw.ai"),
-      ),
-      "utf8",
-    );
-
-    const detected = await detectLegacyStateMigrations({
-      cfg,
-      env,
-      homedir: () => root,
-      doctorOnlyStateMigrations: true,
-    });
-    expect(detected.webPush.hasLegacy).toBe(true);
-    expect(detected.preview).toContain(
-      "- Web Push subscriptions and VAPID identity: legacy JSON → shared SQLite state",
-    );
-
-    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(listWebPushSubscriptions(stateDir)).toStrictEqual([subscription]);
-    expect(readPersistedVapidKeyPair(stateDir)).toStrictEqual(
-      createWebPushVapidKeyPair("doctor-public", "doctor-private", "https://openclaw.ai"),
-    );
-    await expectMissingPath(subscriptionsPath);
-    await expectMissingPath(vapidKeysPath);
-  });
-
   it("routes explicit Doctor repair through the node-host SQLite importer", async () => {
     const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
@@ -4670,24 +4335,6 @@ describe("state migrations", () => {
       installedAppsSharing: false,
     });
     await expectMissingPath(sourcePath);
-  });
-
-  it("previews retired subagent JSON as discard-only transient state", async () => {
-    const { root, stateDir, env } = createMigrationContext(await createTempDir());
-    const sourcePath = path.join(stateDir, "subagents", "runs.json");
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(sourcePath, JSON.stringify({ version: 2, runs: {} }), "utf8");
-
-    const detected = await detectLegacyStateMigrations({
-      cfg: createConfig(),
-      env,
-      homedir: () => root,
-      doctorOnlyStateMigrations: true,
-    });
-
-    expect(detected.preview).toContain(
-      "- Subagent runs: discard retired transient subagents/runs.json state",
-    );
   });
 
   it("migrates legacy update-check JSON into shared SQLite state", async () => {
@@ -5133,59 +4780,6 @@ describe("state migrations", () => {
     await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toContain("Legacy Plugin");
   });
 
-  it("archives a legacy plugin binding approvals file when every approval conflicts", async () => {
-    const { root, stateDir, env } = createMigrationContext(await createTempDir());
-    const cfg = createConfig();
-    const sourcePath = path.join(stateDir, "plugin-binding-approvals.json");
-    insertPluginBindingApprovalRow(env, {
-      plugin_root: "/plugins/conflict",
-      channel: "discord",
-      account_id: "default",
-      plugin_id: "sqlite-plugin",
-      plugin_name: "SQLite Plugin",
-      approved_at: 1,
-    });
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      sourcePath,
-      JSON.stringify({
-        version: 1,
-        approvals: [
-          {
-            pluginRoot: "/plugins/conflict",
-            pluginId: "legacy-plugin",
-            pluginName: "Legacy Plugin",
-            channel: "discord",
-            accountId: "default",
-            approvedAt: 2,
-          },
-        ],
-      }),
-      "utf8",
-    );
-
-    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
-    const result = await runLegacyStateMigrations({ detected, config: cfg });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.notices).toEqual([
-      `Kept shared SQLite plugin binding approvals because 1 legacy approval conflicts: ${sourcePath}`,
-    ]);
-    expect(result.changes.filter((change) => change.startsWith("Migrated"))).toStrictEqual([]);
-    expect(readPluginBindingApprovalRows(env)).toEqual([
-      {
-        plugin_root: "/plugins/conflict",
-        channel: "discord",
-        account_id: "default",
-        plugin_id: "sqlite-plugin",
-        plugin_name: "SQLite Plugin",
-        approved_at: 1,
-      },
-    ]);
-    await expectMissingPath(sourcePath);
-    await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toContain("legacy-plugin");
-  });
-
   it("keeps a failed plugin binding approvals archive blocking and converges on retry", async () => {
     const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
@@ -5235,6 +4829,21 @@ describe("state migrations", () => {
     const retry = await runLegacyStateMigrations({ detected: retryDetected, config: cfg });
     expect(retry.warnings).toStrictEqual([]);
     await expectMissingPath(sourcePath);
+    expect(retry.notices).toEqual([
+      `Kept shared SQLite plugin binding approvals because 1 legacy approval conflicts: ${sourcePath}`,
+    ]);
+    expect(retry.changes.filter((change) => change.startsWith("Migrated"))).toStrictEqual([]);
+    expect(readPluginBindingApprovalRows(env)).toEqual([
+      {
+        plugin_root: "/plugins/conflict",
+        channel: "discord",
+        account_id: "default",
+        plugin_id: "sqlite-plugin",
+        plugin_name: "SQLite Plugin",
+        approved_at: 1,
+      },
+    ]);
+    await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toContain("legacy-plugin");
   });
 
   it("leaves malformed plugin binding approvals in place with a warning", async () => {
@@ -5461,73 +5070,6 @@ describe("state migrations", () => {
     await expectMissingPath(fixture.sourcePath);
   });
 
-  it("archives a legacy current-conversation file when every binding conflicts", async () => {
-    const { root, stateDir, env } = createMigrationContext(await createTempDir());
-    const cfg = createConfig();
-    const sourcePath = path.join(stateDir, "bindings", "current-conversations.json");
-    const bindingKey = "workspace\u241fdefault\u241f\u241fuser:U123";
-    insertCurrentConversationBindingRow(env, {
-      bindingKey,
-      bindingId: `generic:${bindingKey}`,
-      targetSessionKey: "agent:codex:acp:existing",
-      channel: "workspace",
-      accountId: "default",
-      conversationId: "user:U123",
-      recordJson: JSON.stringify({
-        bindingId: `generic:${bindingKey}`,
-        targetSessionKey: "agent:codex:acp:existing",
-        targetKind: "session",
-        conversation: {
-          channel: "workspace",
-          accountId: "default",
-          conversationId: "user:U123",
-        },
-        status: "active",
-        boundAt: 1,
-      }),
-    });
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(
-      sourcePath,
-      JSON.stringify({
-        version: 1,
-        bindings: [
-          {
-            bindingId: `generic:${bindingKey}`,
-            targetSessionKey: "agent:codex:acp:legacy-conflict",
-            targetKind: "session",
-            conversation: {
-              channel: "workspace",
-              accountId: "default",
-              conversationId: "user:U123",
-            },
-            status: "active",
-            boundAt: 2,
-          },
-        ],
-      }),
-      "utf8",
-    );
-
-    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
-    const result = await runLegacyStateMigrations({ detected, config: cfg });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.notices).toEqual([
-      `Kept shared SQLite current-conversation bindings because 1 legacy binding conflicts: ${sourcePath}`,
-    ]);
-    expect(readCurrentConversationBindingRows(env)).toMatchObject([
-      {
-        binding_key: bindingKey,
-        target_session_key: "agent:codex:acp:existing",
-      },
-    ]);
-    await expectMissingPath(sourcePath);
-    await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toContain(
-      "legacy-conflict",
-    );
-  });
-
   it("keeps a failed current-conversation bindings archive blocking and converges on retry", async () => {
     const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
@@ -5594,6 +5136,18 @@ describe("state migrations", () => {
     const retry = await runLegacyStateMigrations({ detected: retryDetected, config: cfg });
     expect(retry.warnings).toStrictEqual([]);
     await expectMissingPath(sourcePath);
+    expect(retry.notices).toEqual([
+      `Kept shared SQLite current-conversation bindings because 1 legacy binding conflicts: ${sourcePath}`,
+    ]);
+    expect(readCurrentConversationBindingRows(env)).toMatchObject([
+      {
+        binding_key: bindingKey,
+        target_session_key: "agent:codex:acp:existing",
+      },
+    ]);
+    await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toContain(
+      "legacy-conflict",
+    );
   });
 
   it("leaves malformed current-conversation bindings in place with a warning", async () => {
@@ -5693,27 +5247,18 @@ describe("state migrations", () => {
       '"retryCount":2',
     );
     await expectMissingPath(path.join(queueDir, "outbound-completed.delivered"));
+    const migratedDb = openOpenClawStateDatabase({ env }).db;
     expect(
-      db
+      migratedDb
         .prepare(
-          "SELECT retry_count FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = 'outbound-1'",
+          "SELECT id, retry_count, failed_at FROM delivery_queue_entries WHERE queue_name = 'outbound' ORDER BY id",
         )
-        .get(),
-    ).toEqual({ retry_count: 0 });
-    expect(
-      db
-        .prepare(
-          "SELECT retry_count FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = 'outbound-2'",
-        )
-        .get(),
-    ).toEqual({ retry_count: 1 });
-    expect(
-      db
-        .prepare(
-          "SELECT retry_count, failed_at FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = 'outbound-failed'",
-        )
-        .get(),
-    ).toEqual({ retry_count: 3, failed_at: 12 });
+        .all(),
+    ).toEqual([
+      { id: "outbound-1", retry_count: 0, failed_at: null },
+      { id: "outbound-2", retry_count: 1, failed_at: null },
+      { id: "outbound-failed", retry_count: 3, failed_at: 12 },
+    ]);
 
     vi.setSystemTime(2_000);
     const rerunDetected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });

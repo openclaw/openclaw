@@ -5,7 +5,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPathInside } from "../../infra/path-guards.js";
 import { execContainer, type SandboxContainerEngine } from "./container-engine.js";
 import { isSandboxHostPathAbsolute, normalizeSandboxHostPath } from "./host-paths.js";
-import { normalizeMountContainerPath, type ManagedWorkspaceMount } from "./workspace-mounts.js";
+import {
+  normalizeMountContainerPath,
+  sandboxMountOptionsReadOnly,
+  type ManagedWorkspaceMount,
+} from "./workspace-mounts.js";
 
 export type InspectedSandboxMount = {
   type: string;
@@ -54,15 +58,15 @@ export function parseInspectedSandboxMounts(
   // Docker --tmpfs is stored separately and hides any bind at the same target.
   // Include it so neither source translation nor retained-container checks see
   // the obscured host files instead of the Gateway's effective filesystem.
-  for (const destination of Object.keys(tmpfs ?? {})) {
-    if (!path.posix.isAbsolute(destination)) {
+  for (const [destination, options] of Object.entries(tmpfs ?? {})) {
+    if (!path.posix.isAbsolute(destination) || typeof options !== "string") {
       throw new Error("Container inspect returned an invalid tmpfs destination.");
     }
     mounts.push({
       type: "tmpfs",
       source: "",
       destination: normalizeMountContainerPath(destination),
-      writable: false,
+      writable: !sandboxMountOptionsReadOnly(options),
     });
   }
   return [...new Map(mounts.map((mount) => [mount.destination, mount])).values()];

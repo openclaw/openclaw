@@ -4,13 +4,18 @@
  * explicit operator allow/deny lists.
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
 import {
+  attachToolAllowlistIntersection,
   expandToolGroups,
   normalizeToolList,
   normalizeToolPolicyName,
+  readToolAllowlistIntersection,
 } from "./tool-policy-shared.js";
 export {
   attachToolAllowlistIntersection,
@@ -63,23 +68,36 @@ const SHIPPED_CORE_POLICY_RENAMES = new Map<string, string>([
   ["update_plan", "progress_card"],
 ]);
 
-/** Maps retired shipped policy names to their current core tool ids. */
+/** Expands shipped policy names into their current tool families. */
 export function expandShippedCoreToolPolicyNames(list: string[] | undefined): string[] | undefined {
   if (!list) {
     return undefined;
   }
-  return uniqueStrings(
-    list.map((entry) => {
-      const normalized = normalizeToolPolicyName(entry);
-      return SHIPPED_CORE_POLICY_RENAMES.get(normalized) ?? normalized;
-    }),
-  );
+  const expandNames = (entries: string[]) =>
+    uniqueStrings(
+      entries.flatMap((entry) => {
+        const normalized = normalizeToolPolicyName(entry);
+        return [
+          SHIPPED_CORE_POLICY_RENAMES.get(normalized) ?? normalized,
+          ...(SHIPPED_PLUGIN_POLICY_FAMILY_CORE_TOOLS.get(normalized) ?? []),
+        ];
+      }),
+    );
+  const expanded = expandNames(list);
+  const restrictions = readToolAllowlistIntersection(list);
+  return restrictions
+    ? attachToolAllowlistIntersection(expanded, restrictions.map(expandNames))
+    : expanded;
 }
 
 /** Returns true when an allow policy is narrower than all/default plugin tools. */
 export function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolean {
   if (!Array.isArray(policy?.allow)) {
     return false;
+  }
+  const restrictions = readToolAllowlistIntersection(policy.allow);
+  if (restrictions) {
+    return restrictions.some((allow) => allow.length === 0 || hasRestrictiveAllowPolicy({ allow }));
   }
   const normalizedAllow = policy.allow.map((entry) => normalizeToolPolicyName(entry));
   // A wildcard remains allow-all when additive entries are present. Treating
@@ -102,11 +120,12 @@ export function toolPolicyRestrictsTools(policy?: ToolPolicyLike): boolean {
   ) {
     return true;
   }
-  return (
-    Array.isArray(policy.allow) &&
-    policy.allow.length > 0 &&
-    !expandToolGroups(policy.allow).some((entry) => normalizeToolPolicyName(entry) === "*")
-  );
+  const restrictions = policy.allow && readToolAllowlistIntersection(policy.allow);
+  return restrictions
+    ? restrictions.some((allow) => allow.length === 0 || toolPolicyRestrictsTools({ allow }))
+    : Array.isArray(policy.allow) &&
+        policy.allow.length > 0 &&
+        !expandToolGroups(policy.allow).some((entry) => normalizeToolPolicyName(entry) === "*");
 }
 
 /** Replaces an allowlist with the normalized names of an effective tool array. */
@@ -133,7 +152,7 @@ export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefi
     if (!policy?.allow) {
       continue;
     }
-    for (const value of policy.allow) {
+    for (const value of readToolAllowlistIntersection(policy.allow)?.flat() ?? policy.allow) {
       if (typeof value !== "string") {
         continue;
       }
@@ -156,22 +175,7 @@ export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefi
 
 /** Collects explicit deny entries from layered policies. */
 export function collectExplicitDenylist(policies: Array<ToolPolicyLike | undefined>): string[] {
-  const entries: string[] = [];
-  for (const policy of policies) {
-    if (!policy?.deny) {
-      continue;
-    }
-    for (const value of policy.deny) {
-      if (typeof value !== "string") {
-        continue;
-      }
-      const trimmed = value.trim();
-      if (trimmed) {
-        entries.push(trimmed);
-      }
-    }
-  }
-  return entries;
+  return policies.flatMap((policy) => normalizeTrimmedStringList(policy?.deny));
 }
 
 /** Builds plugin tool groups from tool metadata. */
@@ -211,21 +215,8 @@ function expandPluginGroups(
   const expanded: string[] = [];
   for (const entry of renamed) {
     const normalized = normalizeToolPolicyName(entry);
-    if (normalized === "group:plugins") {
-      if (groups.all.length > 0) {
-        expanded.push(...groups.all);
-      } else {
-        expanded.push(normalized);
-      }
-      continue;
-    }
-    const tools = groups.byPlugin.get(normalized) ?? [];
-    const promotedCoreTools = SHIPPED_PLUGIN_POLICY_FAMILY_CORE_TOOLS.get(normalized) ?? [];
-    if (tools.length > 0 || promotedCoreTools.length > 0) {
-      expanded.push(...tools, ...promotedCoreTools);
-      continue;
-    }
-    expanded.push(normalized);
+    const tools = normalized === "group:plugins" ? groups.all : groups.byPlugin.get(normalized);
+    expanded.push(...(tools?.length ? tools : [normalized]));
   }
   return uniqueStrings(expanded);
 }
@@ -238,8 +229,16 @@ export function expandPolicyWithPluginGroups(
   if (!policy) {
     return undefined;
   }
+  const allow = expandPluginGroups(policy.allow, groups);
+  const restrictions = policy.allow && readToolAllowlistIntersection(policy.allow);
   return {
-    allow: expandPluginGroups(policy.allow, groups),
+    allow:
+      allow && restrictions
+        ? attachToolAllowlistIntersection(
+            allow,
+            restrictions.map((restriction) => expandPluginGroups(restriction, groups) ?? []),
+          )
+        : allow,
     deny: expandPluginGroups(policy.deny, groups),
   };
 }

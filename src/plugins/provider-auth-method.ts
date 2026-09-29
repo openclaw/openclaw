@@ -18,11 +18,11 @@ export async function runProviderPluginAuthMethodUnpersisted(
   const openBrowser =
     params.openUrl ??
     (async (url: string) => {
-      if (params.isRemote === true) {
-        await params.prompter.openUrl?.(url);
-        return;
+      if (params.prompter.openUrl) {
+        await params.prompter.openUrl(url);
+      } else if (params.isRemote !== true) {
+        await openUrl(url);
       }
-      await openUrl(url);
     });
   const authorize = params.browserAuthorization;
   const assertCurrent = () => {
@@ -32,6 +32,7 @@ export async function runProviderPluginAuthMethodUnpersisted(
   assertCurrent();
   const result = await params.method.run({
     config: params.config,
+    existingProfiles: params.existingProfiles,
     credentialOnly: params.credentialOnly,
     assertCurrent,
     env: params.env,

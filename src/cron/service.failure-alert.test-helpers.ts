@@ -36,6 +36,7 @@ export function setupFailureAlertSuite() {
 
   async function withFailureAlertCron(
     params: {
+      scheduler: CronServiceParams["scheduler"];
       failureAlert?: FailureAlertConfig;
       runResult?: IsolatedAgentRunResult;
       useFallback?: boolean;
@@ -59,6 +60,8 @@ export function setupFailureAlertSuite() {
     };
     const runIsolatedAgentJob = vi.fn<RunIsolatedAgentJob>(async () => runResult);
     const cron = new CronService({
+      scheduler: params.scheduler,
+      nowMs: () => Date.now(),
       storePath: store.storePath,
       cronEnabled: true,
       ...(params.failureAlert === undefined

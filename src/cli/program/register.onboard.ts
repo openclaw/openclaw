@@ -1,8 +1,6 @@
 // Commander registration for onboard setup flags and lazy onboard runtime execution.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Option, type Command } from "commander";
-import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
-import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import type {
@@ -21,10 +19,10 @@ import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent, listExplicitOptionFlagsExcept } from "../command-options.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
+import { formatDocsHelp } from "../help-format.js";
 
 function resolveInstallDaemonFlag(command: Command): boolean | undefined {
-  // Commander doesn't support option conflicts natively; keep original behavior.
-  // If --skip-daemon is explicitly passed, it wins.
+  // Explicit --skip-daemon wins over either install-daemon flag.
   if (command.getOptionValueSource("skipDaemon") === "cli") {
     return false;
   }
@@ -76,12 +74,6 @@ function resolveRecommendationAgentOption(command: Command): string | undefined 
   );
 }
 
-type OnboardAuthFlag = {
-  readonly cliOption: string;
-  readonly description: string;
-  readonly optionKey: string;
-};
-
 function extractCliFlags(cliOption: string): string[] {
   return cliOption
     .split(/[ ,|]+/)
@@ -92,10 +84,10 @@ function extractCliFlags(cliOption: string): string[] {
     });
 }
 
-function resolveOnboardAuthFlags(): OnboardAuthFlag[] {
+function resolveOnboardAuthFlags() {
   // Provider manifests can add auth flags; keep duplicate CLI aliases out of Commander.
   const seenCliFlags = new Set<string>();
-  const flags: OnboardAuthFlag[] = [];
+  const flags: ReturnType<typeof resolveProviderOnboardAuthFlags> = [];
   for (const flag of resolveProviderOnboardAuthFlags()) {
     const cliFlags = extractCliFlags(flag.cliOption);
     if (cliFlags.some((cliFlag) => seenCliFlags.has(cliFlag))) {
@@ -290,11 +282,7 @@ export function registerOnboardCommand(program: Command): void {
   const command = program
     .command("onboard")
     .description("Guided setup for auth, models, Gateway, workspace, channels, and skills")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/onboard", "docs.openclaw.ai/cli/onboard")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/onboard"))
     .option(
       "--workspace <dir>",
       "Workspace proposal for guided setup; persisted by classic/non-interactive setup",
@@ -339,7 +327,7 @@ export function registerOnboardCommand(program: Command): void {
         const { onboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
         const agent = resolveRecommendationAgentOption(recommendationsCommand);
-        onboardRecommendationsCommand(
+        await onboardRecommendationsCommand(
           { json, ...(agent !== undefined ? { agent } : {}) },
           defaultRuntime,
         );
@@ -363,7 +351,7 @@ export function registerOnboardCommand(program: Command): void {
         const { acknowledgeOnboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
         const agent = resolveRecommendationAgentOption(acknowledgeCommand);
-        acknowledgeOnboardRecommendationsCommand(
+        await acknowledgeOnboardRecommendationsCommand(
           { retry: opts.retry, ...(agent !== undefined ? { agent } : {}) },
           defaultRuntime,
         );
@@ -386,7 +374,10 @@ export function registerOnboardCommand(program: Command): void {
         const { refreshOnboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
         const agent = resolveRecommendationAgentOption(refreshCommand);
-        refreshOnboardRecommendationsCommand(agent !== undefined ? { agent } : {}, defaultRuntime);
+        await refreshOnboardRecommendationsCommand(
+          agent !== undefined ? { agent } : {},
+          defaultRuntime,
+        );
       });
     });
 

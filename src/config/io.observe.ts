@@ -1,5 +1,10 @@
 import type fs from "node:fs";
-import { appendConfigAuditRecord, appendConfigAuditRecordSync } from "./io.audit.js";
+import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
+import {
+  appendConfigAuditRecord,
+  appendConfigAuditRecordSync,
+  createConfigObserveAuditRecord,
+} from "./io.audit.js";
 import {
   captureConfigHealthStateStore,
   supersedeConfigHealthObservations,
@@ -13,13 +18,12 @@ import type {
 } from "./io.health-state.types.js";
 import {
   createConfigHealthFingerprint,
-  createConfigObserveAuditRecord,
   readConfigFingerprintForPath,
   readConfigFingerprintForPathSync,
   readConfigHealthEntry,
 } from "./io.observe-state.js";
 import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
-import type { NormalizedConfigIoDeps } from "./io.types.js";
+import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
 function sameFingerprint(
@@ -91,66 +95,78 @@ function resolveHealthyObservationChanges(params: {
 export async function observeConfigSnapshot(
   deps: NormalizedConfigIoDeps,
   snapshot: ConfigFileSnapshot,
+  assertCurrent?: () => void,
 ): Promise<void> {
   if (!snapshot.exists || typeof snapshot.raw !== "string") {
     return;
   }
-  using health = captureConfigHealthStateStore(deps, snapshot.path);
-  const stat = await deps.fs.promises.stat(snapshot.path).catch(() => null);
-  if (!health.isCurrent()) {
-    return;
-  }
-  const current = createObservedFingerprint(snapshot, stat);
-  const healthSnapshot = await health.read();
-  if (!healthSnapshot) {
-    return;
-  }
-  const healthState = healthSnapshot.state;
-  const backupPath = `${snapshot.path}.bak`;
-  const initialEntry = readConfigHealthEntry(healthState, snapshot.path);
-  const backupBaseline =
-    initialEntry.lastKnownGood ??
-    (await readConfigFingerprintForPath(deps, backupPath)) ??
-    undefined;
-  if (!health.isCurrent()) {
-    return;
-  }
-  const { entry, baseline, suspicious } = resolveObservation({
-    snapshot,
-    current,
-    healthState,
-    backupBaseline,
-  });
-  if (suspicious.length === 0) {
-    const changes = resolveHealthyObservationChanges({ snapshot, current, entry });
-    if (changes) {
-      await health.update(changes, healthSnapshot);
+  assertCurrent?.();
+  try {
+    using health = captureConfigHealthStateStore(deps, snapshot.path, assertCurrent);
+    const stat = await deps.fs.promises.stat(snapshot.path).catch(() => null);
+    if (!health.isCurrent()) {
+      return;
     }
-    return;
-  }
-  const signature = `${current.hash}:${suspicious.join(",")}`;
-  if (entry.lastObservedSuspiciousSignature === signature) {
-    return;
-  }
-  const backup =
-    (baseline?.hash ? baseline : null) ?? (await readConfigFingerprintForPath(deps, backupPath));
-  if (!health.isCurrent()) {
-    return;
-  }
-  deps.logger.warn(`Config observe anomaly: ${snapshot.path} (${suspicious.join(", ")})`);
-  await appendConfigAuditRecord({
-    env: deps.env,
-    homedir: deps.homedir,
-    record: createConfigObserveAuditRecord({
-      configPath: snapshot.path,
-      valid: snapshot.valid,
+    const current = createObservedFingerprint(snapshot, stat);
+    const healthSnapshot = await health.read();
+    if (!healthSnapshot) {
+      return;
+    }
+    const healthState = healthSnapshot.state;
+    const backupPath = `${snapshot.path}.bak`;
+    const initialEntry = readConfigHealthEntry(healthState, snapshot.path);
+    const backupBaseline =
+      initialEntry.lastKnownGood ??
+      (await readConfigFingerprintForPath(deps, backupPath)) ??
+      undefined;
+    if (!health.isCurrent()) {
+      return;
+    }
+    const { entry, baseline, suspicious } = resolveObservation({
+      snapshot,
       current,
-      suspicious,
-      lastKnownGood: entry.lastKnownGood,
-      backup,
-    }),
-  });
-  await health.update({ lastObservedSuspiciousSignature: signature }, healthSnapshot);
+      healthState,
+      backupBaseline,
+    });
+    if (suspicious.length === 0) {
+      const changes = resolveHealthyObservationChanges({ snapshot, current, entry });
+      if (changes) {
+        await health.update(changes, healthSnapshot);
+      }
+      return;
+    }
+    const signature = `${current.hash}:${suspicious.join(",")}`;
+    if (entry.lastObservedSuspiciousSignature === signature) {
+      return;
+    }
+    const backup =
+      (baseline?.hash ? baseline : null) ?? (await readConfigFingerprintForPath(deps, backupPath));
+    if (!health.isCurrent()) {
+      return;
+    }
+    deps.logger.warn(`Config observe anomaly: ${snapshot.path} (${suspicious.join(", ")})`);
+    await appendConfigAuditRecord(
+      {
+        env: deps.env,
+        homedir: deps.homedir,
+        record: createConfigObserveAuditRecord({
+          configPath: snapshot.path,
+          valid: snapshot.valid,
+          current,
+          suspicious,
+          lastKnownGood: entry.lastKnownGood,
+          backup,
+        }),
+      },
+      assertCurrent,
+    );
+    await health.update({ lastObservedSuspiciousSignature: signature }, healthSnapshot);
+  } catch (error) {
+    if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
+      return;
+    }
+    throw error;
+  }
 }
 
 export function observeConfigSnapshotSync(

@@ -129,28 +129,5 @@ export function resolveMediaGeometryOverrides<TResolution extends string>(params
     resolution = undefined;
   }
 
-  if (!normalization.size && size && params.size && params.size !== size) {
-    normalization.size = { requested: params.size, applied: size };
-  }
-  if (
-    !normalization.aspectRatio &&
-    aspectRatio &&
-    ((!params.aspectRatio && params.size) || params.aspectRatio !== aspectRatio)
-  ) {
-    normalization.aspectRatio = {
-      applied: aspectRatio,
-      ...(params.aspectRatio ? { requested: params.aspectRatio } : {}),
-      ...(!params.aspectRatio && params.size ? { derivedFrom: "size" } : {}),
-    };
-  }
-  if (
-    !normalization.resolution &&
-    resolution &&
-    params.resolution &&
-    params.resolution !== resolution
-  ) {
-    normalization.resolution = { requested: params.resolution, applied: resolution };
-  }
-
   return { size, aspectRatio, resolution, ignoredOverrides, normalization };
 }

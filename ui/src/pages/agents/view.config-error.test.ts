@@ -9,11 +9,12 @@ it("surfaces agent config save errors in the active panel", () => {
     renderAgents(
       createAgentViewTestProps({
         config: {
-          form: { agents: { entries: { beta: {} } } },
-          loading: false,
-          saving: false,
-          dirty: true,
-          error: "mock validation failure",
+          configForm: { agents: { entries: { beta: {} } } },
+          configSnapshot: null,
+          configLoading: false,
+          configSaving: false,
+          configFormDirty: true,
+          lastError: "mock validation failure",
         },
       }),
     ),

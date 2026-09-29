@@ -13,7 +13,7 @@ const CODEX_HOME_DIRNAME = ".codex";
 export const CODEX_AUTH_JSON_FILENAME = "auth.json";
 export const CODEX_APP_SERVER_API_KEY_ENV_VARS = ["CODEX_API_KEY", "OPENAI_API_KEY"];
 
-function resolveCodexAppServerEnvApiKeyCacheKey(params: {
+export function resolveCodexAppServerFallbackApiKeyCacheKey(params: {
   startOptions: Pick<CodexAppServerStartOptions, "transport" | "env" | "clearEnv">;
   baseEnv?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
@@ -28,7 +28,7 @@ function resolveCodexAppServerEnvApiKeyCacheKey(params: {
   );
   const apiKey = readFirstNonEmptyEnvEntry(env, CODEX_APP_SERVER_API_KEY_ENV_VARS);
   if (!apiKey) {
-    return undefined;
+    return resolveCodexCliAuthFileApiKeyCacheKey(params.baseEnv ?? process.env);
   }
   const hash = createHash("sha256");
   hash.update("openclaw:codex:app-server-env-api-key:v1");
@@ -37,20 +37,6 @@ function resolveCodexAppServerEnvApiKeyCacheKey(params: {
   hash.update("\0");
   hash.update(apiKey.value);
   return `${apiKey.key}:sha256:${hash.digest("hex")}`;
-}
-
-export function resolveCodexAppServerFallbackApiKeyCacheKey(params: {
-  startOptions: Pick<CodexAppServerStartOptions, "transport" | "env" | "clearEnv">;
-  baseEnv?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
-}): string | undefined {
-  if (params.startOptions.transport !== "stdio") {
-    return undefined;
-  }
-  return (
-    resolveCodexAppServerEnvApiKeyCacheKey(params) ??
-    resolveCodexCliAuthFileApiKeyCacheKey(params.baseEnv ?? process.env)
-  );
 }
 
 /** Secret-free cache identity for an API key already resolved by the runtime plan. */

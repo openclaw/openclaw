@@ -28,6 +28,34 @@ import {
 describe("settings preference persistence", () => {
   installSettingsStorageLifecycle();
 
+  it("preserves an older browser-panel preference through external opt-in, reload, and opt-out", () => {
+    setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
+    const gatewayUrl = "wss://gateway.example";
+    const storageKey = "openclaw.control.settings.v1:" + gatewayUrl;
+    // Pre-change browser settings have no external-link field.
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        gatewayUrl,
+        openLinksInControlUiBrowser: true,
+        navWidth: 312,
+      }),
+    );
+    expect(loadSettings().openLinksExternally).not.toBe(true);
+    for (const enabled of [true, false]) {
+      patchSettings({ openLinksExternally: enabled });
+      const reloaded = loadUiPreferences(gatewayUrl);
+      expect(reloaded.openLinksExternally === true).toBe(enabled);
+      expect(reloaded.openLinksInControlUiBrowser).toBe(true);
+      expect(reloaded.navWidth).toBe(312);
+      expect(JSON.parse(localStorage.getItem(storageKey)!)).toMatchObject({
+        openLinksInControlUiBrowser: true,
+        navWidth: 312,
+      });
+    }
+    expect(loadUiPreferences("wss://other.example").openLinksExternally).not.toBe(true);
+  });
+
   it.each([false, true])(
     "keeps the live connection URL when a same-scope spelling was persisted (private storage: %s)",
     (privateStorage) => {
@@ -221,7 +249,10 @@ describe("settings preference persistence", () => {
     expect(loadSettings().chatFollowUpMode).toBeUndefined();
   });
 
-  it("defaults task progress auto-collapse off and persists only the opt-in", () => {
+  it.each([
+    { key: "chatShowTaskProgress", defaultValue: true },
+    { key: "chatCollapseTaskProgress", defaultValue: false },
+  ] as const)("persists only the non-default $key preference", ({ key, defaultValue }) => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -230,22 +261,18 @@ describe("settings preference persistence", () => {
 
     const gwUrl = expectedGatewayUrl("");
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
-    expect(loadSettings().chatCollapseTaskProgress).toBe(false);
+    expect(loadSettings()[key]).toBe(defaultValue);
 
-    saveSettings({ ...loadSettings(), chatCollapseTaskProgress: true });
-    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").chatCollapseTaskProgress).toBe(true);
-    expect(loadSettings().chatCollapseTaskProgress).toBe(true);
+    saveSettings({ ...loadSettings(), [key]: !defaultValue });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")[key]).toBe(!defaultValue);
+    expect(loadSettings()[key]).toBe(!defaultValue);
 
-    saveSettings({ ...loadSettings(), chatCollapseTaskProgress: false });
-    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
-      "chatCollapseTaskProgress",
-    );
+    saveSettings({ ...loadSettings(), [key]: defaultValue });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(key);
+    expect(loadSettings()[key]).toBe(defaultValue);
 
-    localStorage.setItem(
-      scopedKey,
-      JSON.stringify({ gatewayUrl: gwUrl, chatCollapseTaskProgress: "yes" }),
-    );
-    expect(loadSettings().chatCollapseTaskProgress).toBe(false);
+    localStorage.setItem(scopedKey, JSON.stringify({ gatewayUrl: gwUrl, [key]: "yes" }));
+    expect(loadSettings()[key]).toBe(defaultValue);
   });
 
   it("persists only the non-default catalog open target", () => {

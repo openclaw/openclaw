@@ -70,29 +70,18 @@ func extractSegments(body, relPath string) ([]Segment, error) {
 		return nil, err
 	}
 
-	filtered := make([]Segment, 0, len(segments))
-	for _, seg := range segments {
-		textValue := string(source[seg.Start:seg.Stop])
-		trimmed := strings.TrimSpace(textValue)
-		if trimmed == "" {
-			continue
-		}
-		textHash := hashText(textValue)
-		segmentID := segmentID(relPath, textHash)
-		filtered = append(filtered, Segment{
-			Start:     seg.Start,
-			Stop:      seg.Stop,
-			Text:      textValue,
-			TextHash:  textHash,
-			SegmentID: segmentID,
-		})
+	for index := range segments {
+		seg := &segments[index]
+		seg.Text = string(source[seg.Start:seg.Stop])
+		seg.TextHash = hashText(seg.Text)
+		seg.SegmentID = segmentID(relPath, seg.TextHash)
 	}
 
-	sort.Slice(filtered, func(i, j int) bool {
-		return filtered[i].Start < filtered[j].Start
+	sort.Slice(segments, func(i, j int) bool {
+		return segments[i].Start < segments[j].Start
 	})
 
-	return filtered, nil
+	return segments, nil
 }
 
 func extractMarkdownHeadingLevels(body string) []int {
@@ -219,10 +208,7 @@ func unwrapUnexpectedInlineCodeSpans(source, translated string) string {
 		if rangeOverlapsAny(span, fenced) {
 			continue
 		}
-		runLength := 0
-		for span[0]+runLength < span[1] && translated[span[0]+runLength] == '`' {
-			runLength++
-		}
+		runLength := backtickRunLength(translated, span[0], span[1])
 		if runLength == 0 || span[1]-runLength < span[0]+runLength {
 			continue
 		}
@@ -237,46 +223,29 @@ func extractMarkdownFencedLiteralValues(body string) ([]string, []string, []stri
 	allSquareTokens := []string{}
 	state := markdownLiteralFenceState{}
 	lines := []string{}
-	flush := func() {
+	flush := func(info string) {
 		for _, line := range lines {
-			if state.info != "mermaid" {
+			if info != "mermaid" {
 				allSquareTokens = append(allSquareTokens, extractSquareBracketValues(line)...)
-			}
-		}
-		for _, line := range lines {
-			linePlaceholders := extractAngleBracketValues(line)
-			placeholders = append(placeholders, linePlaceholders...)
-			if state.info != "mermaid" {
 				directiveTokens = append(directiveTokens, extractDoubleBracketValues(line)...)
 			}
+			placeholders = append(placeholders, extractAngleBracketValues(line)...)
 		}
 		lines = lines[:0]
 	}
 
 	for _, line := range strings.Split(body, "\n") {
-		if state.delimiter == "" {
-			if opening, ok := parseMarkdownLiteralFenceOpening(line); ok {
-				state = opening
+		previous := state
+		if !state.consumeLine(line) {
+			if previous.delimiter != "" {
+				flush(previous.info)
 			}
-			continue
-		}
-		if !continuesMarkdownLiteralFenceContainer(line, state) {
-			flush()
-			state = markdownLiteralFenceState{}
-			if opening, ok := parseMarkdownLiteralFenceOpening(line); ok {
-				state = opening
-			}
-			continue
-		}
-		if isMarkdownLiteralFenceClosing(line, state) {
-			flush()
-			state = markdownLiteralFenceState{}
 			continue
 		}
 		lines = append(lines, strings.TrimSpace(stripMarkdownQuotePrefix(line, state.quoteDepth)))
 	}
 	if state.delimiter != "" {
-		flush()
+		flush(state.info)
 	}
 	closingNames := map[string]struct{}{}
 	for _, token := range allSquareTokens {
@@ -296,22 +265,7 @@ func extractMarkdownFencedLiteralValues(body string) ([]string, []string, []stri
 func markdownLiteralFencesBalanced(body string) bool {
 	state := markdownLiteralFenceState{}
 	for _, line := range strings.Split(body, "\n") {
-		if state.delimiter == "" {
-			if opening, ok := parseMarkdownLiteralFenceOpening(line); ok {
-				state = opening
-			}
-			continue
-		}
-		if !continuesMarkdownLiteralFenceContainer(line, state) {
-			state = markdownLiteralFenceState{}
-			if opening, ok := parseMarkdownLiteralFenceOpening(line); ok {
-				state = opening
-			}
-			continue
-		}
-		if isMarkdownLiteralFenceClosing(line, state) {
-			state = markdownLiteralFenceState{}
-		}
+		state.consumeLine(line)
 	}
 	return state.delimiter == ""
 }
@@ -321,6 +275,19 @@ type markdownLiteralFenceState struct {
 	quoteDepth      int
 	info            string
 	containerIndent int
+}
+
+// consumeLine reports literal content, excluding opening and closing fence lines.
+func (state *markdownLiteralFenceState) consumeLine(line string) bool {
+	if state.delimiter != "" && continuesMarkdownLiteralFenceContainer(line, *state) {
+		if !isMarkdownLiteralFenceClosing(line, *state) {
+			return true
+		}
+		*state = markdownLiteralFenceState{}
+		return false
+	}
+	*state, _ = parseMarkdownLiteralFenceOpening(line)
+	return false
 }
 
 func parseMarkdownLiteralFenceOpening(line string) (markdownLiteralFenceState, bool) {
@@ -540,7 +507,7 @@ func isTranslatableBracketLabelContext(line string, start, end int, candidate st
 }
 
 func isASCIIIdentifierByte(value byte) bool {
-	return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') || (value >= '0' && value <= '9') || value == '_'
+	return isASCIIAlphaNumeric(value) || value == '_'
 }
 
 func extractDoubleBracketValues(line string) []string {
@@ -662,10 +629,7 @@ func extractFallbackBacktickValues(body string) []string {
 		if rangeOverlapsAny(span, fenced) {
 			continue
 		}
-		runLength := 0
-		for span[0]+runLength < span[1] && body[span[0]+runLength] == '`' {
-			runLength++
-		}
+		runLength := backtickRunLength(body, span[0], span[1])
 		if runLength == 0 || span[1]-runLength < span[0]+runLength {
 			continue
 		}
@@ -753,10 +717,7 @@ func normalizeDocComponentsForMarkdownParse(body string) string {
 }
 
 func isLikelyFencedBacktickRange(body string, span [2]int) bool {
-	runLength := 0
-	for span[0]+runLength < span[1] && body[span[0]+runLength] == '`' {
-		runLength++
-	}
+	runLength := backtickRunLength(body, span[0], span[1])
 	if runLength < 3 {
 		return false
 	}
@@ -1067,20 +1028,12 @@ func stripDocComponentTagsForHeadingParse(body string) string {
 
 func blockParent(n ast.Node) ast.Node {
 	for node := n.Parent(); node != nil; node = node.Parent() {
-		if isTranslatableBlock(node) {
+		switch node.(type) {
+		case *ast.Paragraph, *ast.Heading, *ast.ListItem:
 			return node
 		}
 	}
 	return nil
-}
-
-func isTranslatableBlock(n ast.Node) bool {
-	switch n.(type) {
-	case *ast.Paragraph, *ast.Heading, *ast.ListItem:
-		return true
-	default:
-		return false
-	}
 }
 
 func applyTranslations(body string, segments []Segment) string {

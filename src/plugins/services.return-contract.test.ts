@@ -117,6 +117,7 @@ it.each(["native", "plain service", "managed service"] as const)(
       pluginId: id,
       origin: "workspace",
       source: "test",
+      id: (surface === "managed service" ? instance.wrap(service) : service).id.trim(),
       service: surface === "managed service" ? instance.wrap(service) : service,
     });
     const handle =

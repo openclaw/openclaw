@@ -15,6 +15,8 @@ import {
   waitForControlUiRoute,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { requestRaw, resolveConfigMutation } from "./model-providers.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -136,12 +138,12 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           .poll(() =>
             settings.locator('[data-provider-id="broken"] .model-providers__head').textContent(),
           )
-          .toContain("Failed");
+          .toContain("Models unavailable");
         expect(
           await settings
             .locator('[data-provider-id="healthy"] .model-providers__head')
             .textContent(),
-        ).not.toContain("Failed");
+        ).not.toContain("Models unavailable");
         expect(await trigger.getAttribute("aria-expanded")).toBe("true");
         await expect
           .poll(() => picker.locator('[role="option"][data-value="healthy/retired"]').count())
@@ -167,12 +169,14 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           expect(await utility.textContent()).toContain("Auto · Healthy current");
           await capture("returned");
           await gateway.setMethodResponse("config.get", snapshot(savedConfig, "saved"));
+          await gateway.deferNext("config.patch");
           await current.click();
           await gateway.waitForRequest("config.patch");
-          await expect
-            .poll(() => defaults.getByRole("status").textContent())
-            .toContain("Defaults saved.");
+          await expect.poll(() => trigger.isEnabled()).toBe(false);
+          await gateway.resolveDeferred("config.patch");
+          await expect.poll(() => trigger.isEnabled()).toBe(true);
           expect(await trigger.textContent()).toContain("Healthy current");
+          expect(await defaults.getByText("Defaults saved.", { exact: true }).count()).toBe(0);
         }
         const recovered: ModelCatalogResult = {
           models: [
@@ -202,7 +206,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           await settings
             .locator('[data-provider-id="broken"] .model-providers__head')
             .textContent(),
-        ).not.toContain("Failed");
+        ).not.toContain("Models unavailable");
         expect(await utility.textContent()).toContain("Auto · Healthy recovered");
       } finally {
         await capture("settled");
@@ -268,40 +272,31 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       const trigger = picker.locator(".picker-select__trigger");
       await trigger.click();
       await picker.locator('[role="option"][data-value="fixture/chosen"]').click();
-      await gateway.waitForRequest("config.patch");
-      await gateway.setMethodResponse("config.get", snapshot(saved, "saved-settings"));
-      await gateway.setMethodResponse("models.list", {
+      expect(requestRaw(await gateway.waitForRequest("config.patch"))).toMatchObject({
+        agents: { defaults: { model: "fixture/chosen" } },
+      });
+      const currentCatalog: ModelCatalogResult = {
         models: [
           ...models,
           { id: "added", name: "Added model", provider: "fixture", available: true },
         ],
         defaultModels: { automaticUtilityModel: "fixture/chosen" },
-      });
-      await gateway.resolveDeferred("config.patch", {
-        ok: true,
-        config: saved,
-        hash: "saved-settings",
-      });
-      await expect
-        .poll(() => defaults.getByRole("status").textContent())
-        .toContain("Defaults saved.");
+      };
+      await gateway.setMethodResponse("models.list", currentCatalog);
+      await resolveConfigMutation(gateway, saved, "saved-settings");
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await expect.poll(() => trigger.isEnabled()).toBe(true);
-      await gateway.resolveDeferred("models.authStatus");
-      await waitForControlUiRoute(page, { routeId: "model-providers" });
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
-      expect(await trigger.textContent()).toContain("Chosen model");
-      expect(await defaults.locator("#model-providers-utility-model").textContent()).toContain(
-        "Auto · Chosen model",
-      );
+      expect(await pickerValue(picker)).toBe("fixture/chosen");
       await trigger.click();
       await expect
         .poll(() => picker.locator('[role="option"][data-value="fixture/added"]').isVisible())
         .toBe(true);
+      await gateway.resolveDeferred("models.authStatus");
+      await waitForControlUiRoute(page, { routeId: "model-providers" });
+      expect(await pickerValue(picker)).toBe("fixture/chosen");
+      expect(await picker.locator('[role="option"][data-value="fixture/added"]').isVisible()).toBe(
+        true,
+      );
     } finally {
       await context.close();
     }
@@ -368,40 +363,31 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       const trigger = picker.locator(".picker-select__trigger");
       await trigger.click();
       await picker.locator('[role="option"][data-value="fixture/chosen"]').click();
-      await gateway.waitForRequest("config.patch");
-      await gateway.setMethodResponse("config.get", snapshot(saved, "saved-settings"));
-      await gateway.setMethodResponse("models.list", {
+      expect(requestRaw(await gateway.waitForRequest("config.patch"))).toMatchObject({
+        agents: { defaults: { model: "fixture/chosen" } },
+      });
+      const currentCatalog: ModelCatalogResult = {
         models: [
           models[1]!,
           { id: "added", name: "Added model", provider: "fixture", available: true },
         ],
         defaultModels: { automaticUtilityModel: "fixture/chosen" },
-      });
-      await gateway.resolveDeferred("config.patch", {
-        ok: true,
-        config: saved,
-        hash: "saved-settings",
-      });
-      await expect
-        .poll(() => defaults.getByRole("status").textContent())
-        .toContain("Defaults saved.");
+      };
+      await gateway.setMethodResponse("models.list", currentCatalog);
+      await resolveConfigMutation(gateway, saved, "saved-settings");
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await expect.poll(() => trigger.isEnabled()).toBe(true);
-      await gateway.resolveDeferred("models.authStatus");
-      await waitForControlUiRoute(page, { routeId: "model-providers" });
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
-      expect(await trigger.textContent()).toContain("Chosen model");
-      expect(await defaults.locator("#model-providers-utility-model").textContent()).toContain(
-        "Auto · Chosen model",
-      );
+      expect(await pickerValue(picker)).toBe("fixture/chosen");
       await trigger.click();
       await expect
         .poll(() => picker.locator('[role="option"][data-value="fixture/added"]').isVisible())
         .toBe(true);
+      await gateway.resolveDeferred("models.authStatus");
+      await waitForControlUiRoute(page, { routeId: "model-providers" });
+      expect(await pickerValue(picker)).toBe("fixture/chosen");
+      expect(await picker.locator('[role="option"][data-value="fixture/added"]').isVisible()).toBe(
+        true,
+      );
       expect(await picker.locator('[role="option"][data-value="fixture/initial"]').count()).toBe(0);
       const reads = (await gateway.getRequests("models.list")).length;
       await gateway.deferNext("models.list");
@@ -414,9 +400,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       expect(await picker.locator('[role="option"][data-value="fixture/added"]').isVisible()).toBe(
         true,
       );
-      expect(await defaults.locator("#model-providers-utility-model").textContent()).toContain(
-        "Auto · Chosen model",
-      );
+      expect(await pickerValue(picker)).toBe("fixture/chosen");
       expect(await page.locator(".model-providers__catalog-progress").count()).toBe(0);
       if (recordVisuals) {
         await writeFile(
@@ -435,7 +419,6 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
     const page = await context.newPage();
     const previous = { agents: { defaults: { model: "fixture/previous" } } };
     const current = { agents: { defaults: { model: "fixture/current" } } };
-    const saved = { agents: { defaults: { model: "fixture/chosen" } } };
     const previousModel = {
       id: "previous",
       name: "Previous connection model",
@@ -444,7 +427,6 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
     };
     const currentModels = [
       { id: "current", name: "Current connection model", provider: "fixture", available: true },
-      { id: "chosen", name: "Chosen model", provider: "fixture", available: true },
     ];
     const snapshot = (config: typeof previous, hash: string) => ({
       config,
@@ -468,7 +450,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       const defaults = page.locator(".model-providers__defaults");
       const picker = defaults.locator("openclaw-select-picker").first();
       const trigger = picker.locator(".picker-select__trigger");
-      await expect.poll(() => trigger.textContent()).toContain("Previous connection model");
+      await expect.poll(() => pickerValue(picker)).toBe("fixture/previous");
       await expect.poll(() => trigger.isEnabled()).toBe(true);
 
       const configReads = (await gateway.getRequests("config.get")).length;
@@ -515,8 +497,12 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [defaults]),
         );
       }
-      await expect.poll(() => trigger.isEnabled()).toBe(false);
-      expect(await trigger.textContent()).not.toContain("Previous connection model");
+      await trigger.click();
+      const currentOption = picker.locator('[role="option"][data-value="fixture/current"]');
+      expect(await currentOption.getAttribute("aria-disabled")).toBe("true");
+      await currentOption.click({ force: true });
+      await trigger.click();
+      expect(await pickerValue(picker)).toBe("");
       expect(await defaults.locator("#model-providers-utility-model").textContent()).toContain(
         "Auto · Current connection model",
       );
@@ -524,37 +510,11 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       await gateway.setMethodResponse("config.get", snapshot(current, "current-settings"));
       await page.locator(".model-providers__refresh-button").click();
       await expect.poll(() => trigger.isEnabled()).toBe(true);
-      await expect.poll(() => trigger.textContent()).toContain("Current connection model");
+      await expect.poll(() => pickerValue(picker)).toBe("fixture/current");
       await trigger.click();
       expect(await picker.locator('[role="option"][data-value="fixture/previous"]').count()).toBe(
         0,
       );
-      await gateway.deferNext("config.patch");
-      await gateway.deferNext("config.get");
-      await picker.locator('[role="option"][data-value="fixture/chosen"]').click();
-      await gateway.waitForRequest("config.patch");
-      const savedConfigReads = (await gateway.getRequests("config.get")).length;
-      await gateway.resolveDeferred("config.patch", {
-        ok: true,
-        config: saved,
-        hash: "saved-settings",
-      });
-      await gateway.waitForRequest("config.get", { after: savedConfigReads });
-      await gateway.rejectDeferred("config.get", { message: "Saved config could not refresh." });
-      await expect
-        .poll(() =>
-          defaults.getByRole("status").filter({ hasText: "Defaults saved." }).textContent(),
-        )
-        .toContain("Defaults saved.");
-      await expect.poll(() => defaults.textContent()).toContain("Saved config could not refresh.");
-      await expect.poll(() => trigger.isEnabled()).toBe(true);
-      expect(await trigger.textContent()).toContain("Chosen model");
-      if (recordVisuals) {
-        await writeFile(
-          path.join(artifactDir, "config-save-warning-editable.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [defaults]),
-        );
-      }
     } finally {
       await context.close();
     }
@@ -588,7 +548,12 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       const defaults = page.locator(".model-providers__defaults");
       const picker = defaults.locator("openclaw-select-picker").first();
       const trigger = picker.locator(".picker-select__trigger");
-      await expect.poll(() => trigger.isEnabled()).toBe(false);
+      await trigger.click();
+      const currentOption = picker.locator('[role="option"][data-value="fixture/current"]');
+      expect(await currentOption.getAttribute("aria-disabled")).toBe("true");
+      await currentOption.click({ force: true });
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      await trigger.click();
       const configReads = (await gateway.getRequests("config.get")).length;
       await page.locator(".model-providers__refresh-button").click();
       await gateway.waitForRequest("config.get", { after: configReads });
@@ -784,6 +749,9 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           await waitForControlUiRoute(page, { routeId: "appearance" });
           await gateway.deferNext("models.authStatus");
           previousAuthLoads = (await gateway.getRequests("models.authStatus")).length;
+          if (moduleState === "cached") {
+            await gateway.emitGatewayEvent("chat.metadata.changed", {});
+          }
           await page.evaluate(async () => {
             const app = document.querySelector<
               HTMLElement & { runtime: { router: ApplicationRouter } }

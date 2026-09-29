@@ -21,6 +21,8 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { reportLimitViolations } from "./lib/check-limits.mts";
+import { parsePositiveNumber } from "./lib/numeric-options.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const tmpDir = process.env.TMPDIR || process.env.TEMP || process.env.TMP || os.tmpdir();
@@ -51,15 +53,7 @@ function readPositiveNumberEnv(name, fallback, env = process.env) {
   if (raw === undefined || raw === "") {
     return fallback;
   }
-  const text = raw.trim();
-  if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/u.test(text)) {
-    throw new Error(`${name} must be a positive number`);
-  }
-  const value = Number(text);
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`${name} must be a positive number`);
-  }
-  return value;
+  return parsePositiveNumber(raw, name);
 }
 function readNonEmptyEnv(name) {
   const value = process.env[name];
@@ -86,15 +80,10 @@ function parseArgs(argv) {
     if (arg === undefined) {
       break;
     }
-    if (arg === "--json") {
-      const value = readRequiredPathOption(argv, index, "--json");
-      options.jsonPath = path.resolve(value);
-      index += 1;
-      continue;
-    }
-    if (arg === "--summary") {
-      const value = readRequiredPathOption(argv, index, "--summary");
-      options.summaryPath = path.resolve(value);
+    if (arg === "--json" || arg === "--summary") {
+      options[arg === "--json" ? "jsonPath" : "summaryPath"] = path.resolve(
+        readRequiredPathOption(argv, index, arg),
+      );
       index += 1;
       continue;
     }
@@ -328,9 +317,6 @@ function formatMb(value) {
 function formatCaseCommand(testCase) {
   return `node ${testCase.args.join(" ")}`;
 }
-function nodeImportSpecifierForPath(filePath) {
-  return pathToFileURL(filePath).href;
-}
 function buildBenchEnv(homeDir = tmpHome) {
   if (!homeDir) {
     throw new Error("temporary home is not initialized");
@@ -354,13 +340,9 @@ function buildBenchEnv(homeDir = tmpHome) {
   if (process.env.CI) {
     env.CI = process.env.CI;
   }
-  if (process.env.NODE_DISABLE_COMPILE_CACHE) {
-    env.NODE_DISABLE_COMPILE_CACHE = process.env.NODE_DISABLE_COMPILE_CACHE;
-  } else {
-    // Keep the regression check focused on app/runtime startup, not Node's
-    // one-shot compile cache overhead, which varies across runner builds.
-    env.NODE_DISABLE_COMPILE_CACHE = "1";
-  }
+  // Keep the regression check focused on app/runtime startup, not Node's
+  // one-shot compile cache overhead, which varies across runner builds.
+  env.NODE_DISABLE_COMPILE_CACHE = process.env.NODE_DISABLE_COMPILE_CACHE || "1";
   // Keep the benchmark on a single process so RSS reflects the actual command
   // path rather than the warning-suppression respawn wrapper.
   env.OPENCLAW_NO_RESPAWN = "1";
@@ -437,26 +419,22 @@ function formatRssSamples(samplesMb) {
   return samplesMb.map((value) => value.toFixed(1)).join(", ");
 }
 function runCase(testCase, params = {}) {
-  let report = runCaseSample(testCase, 0, params);
-  if (report.status !== "pass" || report.maxRssMb == null) {
-    return report;
-  }
-  const samples = [report.maxRssMb];
+  let report;
+  const samples = [];
   // Shared CI runners occasionally produce a single allocator/RSS spike. Independent
   // homes plus a median keep that outlier from masking regressions; two high samples fail.
-  for (let sampleIndex = 1; sampleIndex < STARTUP_MEMORY_SAMPLE_COUNT; sampleIndex += 1) {
-    const sample = runCaseSample(testCase, sampleIndex, params);
-    if (sample.status !== "pass" || sample.maxRssMb == null) {
-      return sample;
+  for (let sampleIndex = 0; sampleIndex < STARTUP_MEMORY_SAMPLE_COUNT; sampleIndex += 1) {
+    report = runCaseSample(testCase, sampleIndex, params);
+    if (report.status !== "pass" || report.maxRssMb == null) {
+      return report;
     }
-    samples.push(sample.maxRssMb);
-    report = sample;
+    samples.push(report.maxRssMb);
   }
   const maxRssMb = median(samples);
   const result = { ...report, maxRssMb, rssSamplesMb: samples };
   if (maxRssMb > result.effectiveLimitMb) {
     const error = `${testCase.label} median max RSS ${maxRssMb.toFixed(1)} MB exceeded effective ceiling ${result.effectiveLimitMb} MB (base limit ${result.limitMb} MB; RSS tolerance ${result.rssToleranceMb} MB; samples: ${formatRssSamples(samples)} MB)`;
-    return failResult(result, testCase, error);
+    return { ...failResult(result, testCase, error), limitViolation: true };
   }
   console.log(
     `[startup-memory] ${testCase.label}: ${maxRssMb.toFixed(1)} MB median max RSS ` +
@@ -538,7 +516,7 @@ function runStartupMemoryCheck(argv = process.argv.slice(2), params = {}) {
         `const launcherPath = ${JSON.stringify(launcherPath)};`,
         "// The launcher and entry expect argv[1] to be the launcher path itself.",
         "process.argv[1] = launcherPath;",
-        `await import(${JSON.stringify(nodeImportSpecifierForPath(launcherPath))});`,
+        `await import(${JSON.stringify(pathToFileURL(launcherPath).href)});`,
         "",
       ].join("\n"),
       "utf8",
@@ -548,7 +526,18 @@ function runStartupMemoryCheck(argv = process.argv.slice(2), params = {}) {
     }
     writeReport(reservation.reports, results);
     published = true;
-    const failure = results.find((result) => result.status !== "pass");
+    const limitsFailed = reportLimitViolations(
+      results
+        .filter((result) => result.limitViolation)
+        .map((result) => ({
+          file: "scripts/check-cli-startup-memory.mjs",
+          title: "CLI startup memory budget",
+          message: result.error,
+        })),
+    );
+    const failure = results.find(
+      (result) => result.status !== "pass" && (!result.limitViolation || limitsFailed),
+    );
     if (failure?.failureMessage) {
       throw new Error(failure.failureMessage);
     }

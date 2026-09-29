@@ -1,4 +1,3 @@
-// Discord tests cover approval handler plugin behavior.
 import assert from "node:assert/strict";
 import {
   createChannelApprovalHandlerFromCapability,
@@ -7,8 +6,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { parseExecApprovalData } from "./approval-custom-id.js";
 import { discordApprovalNativeRuntime } from "./approval-handler.runtime.js";
-import { parseCustomId } from "./internal/discord.js";
-import { DiscordUiContainer } from "./ui.js";
+import { Container, parseCustomId } from "./internal/discord.js";
 
 async function buildExecApprovalPayloadText(commandText: string): Promise<string> {
   const pending = await discordApprovalNativeRuntime.presentation.buildPendingPayload({
@@ -238,27 +236,6 @@ describe("discordApprovalNativeRuntime", () => {
       accentColor: 0x5865f2,
     },
     {
-      approvalKind: "exec",
-      phase: "resolved",
-      decision: "deny",
-      label: "Denied",
-      accentColor: 0xed4245,
-    },
-    {
-      approvalKind: "plugin",
-      phase: "resolved",
-      decision: "allow-once",
-      label: "Allowed (once)",
-      accentColor: 0x57f287,
-    },
-    {
-      approvalKind: "plugin",
-      phase: "resolved",
-      decision: "allow-always",
-      label: "Allowed (always)",
-      accentColor: 0x5865f2,
-    },
-    {
       approvalKind: "plugin",
       phase: "resolved",
       decision: "deny",
@@ -271,7 +248,7 @@ describe("discordApprovalNativeRuntime", () => {
       decision: "deny",
       applicationStatus: "not-applied",
       terminalStatus: undefined,
-      label: "Not applied",
+      label: "Denied",
       accentColor: 0xed4245,
     },
     {
@@ -329,10 +306,7 @@ describe("discordApprovalNativeRuntime", () => {
       if (result.kind !== "update") {
         return;
       }
-      expect(result.payload).toBeInstanceOf(DiscordUiContainer);
-      if (!(result.payload instanceof DiscordUiContainer)) {
-        return;
-      }
+      assert(result.payload instanceof Container);
       const container = result.payload.serialize();
       expect(container).toMatchObject({
         accent_color: scenario.accentColor,

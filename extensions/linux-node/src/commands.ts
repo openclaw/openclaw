@@ -5,13 +5,13 @@ import type {
   OpenClawPluginNodeHostCommandAvailabilityContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { asFiniteNumber as readFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { clamp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   assertToolResult,
-  clamp,
   isCapabilityEnabledForHost,
   parseParams,
-  readFiniteNumber,
   type RunCommand,
 } from "./command-utils.js";
 import type { ResolvedLinuxNodePluginConfig } from "./config.js";
@@ -218,6 +218,7 @@ export function createLinuxNodeCommands(
   return [
     {
       command: "system.notify",
+      hasActiveWork: () => false,
       isAvailable: isAvailable("notify", "notify-send"),
       handle: async (paramsJSON) => {
         const notifySend = resolveTool(
@@ -247,6 +248,7 @@ export function createLinuxNodeCommands(
     },
     {
       command: "camera.list",
+      hasActiveWork: () => false,
       cap: "camera",
       isAvailable: isAvailable("camera", "ffmpeg"),
       handle: async () => {
@@ -256,6 +258,7 @@ export function createLinuxNodeCommands(
     },
     {
       command: "camera.snap",
+      hasActiveWork: () => false,
       cap: "camera",
       dangerous: true,
       isAvailable: isAvailable("camera", "ffmpeg"),
@@ -316,6 +319,7 @@ export function createLinuxNodeCommands(
     },
     {
       command: "camera.clip",
+      hasActiveWork: () => false,
       cap: "camera",
       dangerous: true,
       isAvailable: isAvailable("camera", "ffmpeg"),

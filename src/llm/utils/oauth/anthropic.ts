@@ -11,8 +11,6 @@ import { startOAuthLoopbackCallbackServer } from "../../../infra/oauth-loopback-
 import {
   generateOAuthState,
   generatePKCE,
-  oauthErrorHtml,
-  oauthSuccessHtml,
   parseOAuthAuthorizationInput,
   resolveOAuthTokenExpiresAt,
 } from "../../../plugin-sdk/provider-oauth-runtime.js";
@@ -141,16 +139,6 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
     expectedState,
     timeoutMs: CALLBACK_TIMEOUT_MS,
     bindHostname: resolveCallbackHost(),
-    renderSuccess: () => ({
-      body: oauthSuccessHtml(
-        "Authorization received; return to the terminal while OpenClaw finishes.",
-      ),
-      contentType: "text/html; charset=utf-8",
-    }),
-    renderError: (message) => ({
-      body: oauthErrorHtml(message),
-      contentType: "text/html; charset=utf-8",
-    }),
   });
   return {
     cancelWait: () => void callback.close(),
@@ -261,6 +249,14 @@ async function loginAnthropic(options: {
 
   let code: string | undefined;
   let state: string | undefined;
+  const applyAuthorizationInput = (input: string) => {
+    const parsed = parseOAuthAuthorizationInput(input);
+    if (parsed.state && parsed.state !== expectedState) {
+      throw new Error("OAuth state mismatch");
+    }
+    code = parsed.code;
+    state = parsed.state ?? expectedState;
+  };
 
   try {
     throwIfOAuthLoginAborted(options.signal);
@@ -310,12 +306,7 @@ async function loginAnthropic(options: {
         code = result.code;
         state = result.state;
       } else if (manualInput) {
-        const parsed = parseOAuthAuthorizationInput(manualInput);
-        if (parsed.state && parsed.state !== expectedState) {
-          throw new Error("OAuth state mismatch");
-        }
-        code = parsed.code;
-        state = parsed.state ?? expectedState;
+        applyAuthorizationInput(manualInput);
       }
 
       if (!code) {
@@ -324,12 +315,7 @@ async function loginAnthropic(options: {
           throw toErrorObject(manualError, "Non-Error thrown");
         }
         if (manualInput) {
-          const parsed = parseOAuthAuthorizationInput(manualInput);
-          if (parsed.state && parsed.state !== expectedState) {
-            throw new Error("OAuth state mismatch");
-          }
-          code = parsed.code;
-          state = parsed.state ?? expectedState;
+          applyAuthorizationInput(manualInput);
         }
       }
     } else {
@@ -353,12 +339,7 @@ async function loginAnthropic(options: {
         options.signal,
         server.cancelWait,
       );
-      const parsed = parseOAuthAuthorizationInput(input);
-      if (parsed.state && parsed.state !== expectedState) {
-        throw new Error("OAuth state mismatch");
-      }
-      code = parsed.code;
-      state = parsed.state ?? expectedState;
+      applyAuthorizationInput(input);
     }
 
     if (!code) {

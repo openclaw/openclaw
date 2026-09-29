@@ -5,6 +5,9 @@ import { startPluginServices, type PluginServicesHandle } from "./services.js";
 
 const gc = globalThis.gc;
 assert.ok(gc, "The retention child requires --expose-gc");
+// A released async frame can take several full collections before its WeakRefs clear.
+// The broken owner remains reachable after 100, so this only allows GC convergence.
+const GC_PASSES = 32;
 const scenario = process.argv[2];
 const counts = { starts: 0, stops: 0 };
 type Reference = { label: string; value: WeakRef<object> };
@@ -20,6 +23,7 @@ function createRegistry() {
     pluginId: "retention-probe",
     origin: "workspace",
     source: "retention-probe",
+    id: "retention-probe",
     service: {
       id: "retention-probe",
       start() {
@@ -74,7 +78,7 @@ const { handle, references } =
   scenario === "generations" ? await createGenerations() : await createPublishedHandle();
 const control = createUnownedControl();
 try {
-  for (let pass = 0; pass < 8; pass += 1) {
+  for (let pass = 0; pass < GC_PASSES; pass += 1) {
     await setImmediate();
     gc();
   }

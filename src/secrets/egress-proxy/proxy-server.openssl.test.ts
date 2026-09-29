@@ -123,7 +123,7 @@ describe.runIf(openssl)("secret egress proxy OpenSSL compatibility", () => {
       response.end("strict-proxy-ok");
     });
     const originPort = await listen(origin);
-    const env = proxy.registerRun({ instanceId: "instance-1", runId: "run-1" });
+    const { env } = proxy.registerProcess();
     const proxyUrl = new URL(env.HTTPS_PROXY!);
 
     const result = await runStrictProxyRequest({

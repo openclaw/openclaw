@@ -34,7 +34,7 @@ export async function probeCodexNativeAuth(params: {
     // Isolated homes and external servers cannot borrow the operator's local login.
     if (
       options.start.transport !== "stdio" ||
-      pluginConfig.appServer?.homeScope === "agent" ||
+      options.start.homeScope !== "user" ||
       isCodexAppServerProxyLaunch(options.start.args)
     ) {
       return undefined;
@@ -42,9 +42,6 @@ export async function probeCodexNativeAuth(params: {
     const start = await resolveManagedCodexAppServerStartOptions(options.start, {
       pluginRoot: params.pluginRoot,
     });
-    if (start.transport !== "stdio") {
-      return undefined;
-    }
     const env = resolveCodexAppServerSpawnEnv(start, params.env ?? process.env);
     const invocation = materializeWindowsSpawnProgram(
       resolveWindowsSpawnProgram({

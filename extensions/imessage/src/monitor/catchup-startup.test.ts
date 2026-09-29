@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
+import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveIMessageAccount } from "../accounts.js";
 import { imessagePlugin } from "../channel.js";
@@ -16,7 +20,10 @@ import {
 } from "../state-contract.js";
 import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
 
-const createClient = vi.hoisted(() => vi.fn<typeof createIMessageRpcClient>());
+const { createClient, probe } = vi.hoisted(() => ({
+  createClient: vi.fn<typeof createIMessageRpcClient>(),
+  probe: vi.fn(async () => ({ ok: true })),
+}));
 
 vi.mock("../client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../client.js")>()),
@@ -25,25 +32,152 @@ vi.mock("../client.js", async (importOriginal) => ({
 
 vi.mock("../probe.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../probe.js")>()),
-  probeIMessage: vi.fn(async () => ({ ok: true })),
+  probeIMessage: probe,
 }));
 
-describe("registered iMessage account startup catchup", () => {
+describe("registered iMessage account startup", () => {
   let stateDir: string;
+  let dbPath: string;
 
   beforeEach(() => {
     installIMessageStateRuntimeForTest();
     stateDir = getIMessageRuntime().state.resolveStateDir();
+    dbPath = path.join(stateDir, "synthetic-chat.db");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     createClient.mockReset();
+    probe.mockClear();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
-    vi.unstubAllEnvs();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
+
+  function seedChatDb() {
+    const database = new DatabaseSync(dbPath);
+    try {
+      database.exec(
+        "CREATE TABLE message (text TEXT); INSERT INTO message(rowid, text) VALUES (5000, 'watermark');",
+      );
+    } finally {
+      database.close();
+    }
+  }
+
+  function startAccount() {
+    const cfg: OpenClawConfig = {
+      channels: {
+        imessage: { cliPath: path.join(stateDir, "synthetic-imsg"), dbPath, dmPolicy: "disabled" },
+      },
+    };
+    const account = resolveIMessageAccount({ cfg, accountId: "default" });
+    const client = new IMessageRpcClient({ cliPath: account.config.cliPath, dbPath });
+    const request = vi.spyOn(client, "request").mockImplementation(async (method) => {
+      if (method === "watch.subscribe") {
+        return { subscription: 1 };
+      }
+      throw new Error(`unexpected bridge method ${method}`);
+    });
+    vi.spyOn(client, "waitForClose").mockResolvedValue(undefined);
+    createClient.mockResolvedValue(client);
+    const starting = imessagePlugin.gateway!.startAccount!({
+      cfg,
+      accountId: account.accountId,
+      account,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      abortSignal: new AbortController().signal,
+      getStatus: () => ({ accountId: account.accountId }),
+      setStatus: vi.fn(),
+    });
+    return { request, starting };
+  }
+
+  it("reads the startup watermark off the caller thread before subscribing", async () => {
+    seedChatDb();
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    const watermarkQueries = () =>
+      prepare.mock.calls.filter(([sql]) =>
+        /\bMAX\s*\([\s\S]*\bROWID\b[\s\S]*\bFROM\s+"?message"?\b/iu.test(sql),
+      );
+    const calibration = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      expect(calibration.prepare("SELECT MAX(ROWID) AS maxRowid FROM message").get()).toMatchObject(
+        { maxRowid: 5000 },
+      );
+    } finally {
+      calibration.close();
+    }
+    expect(watermarkQueries()).toHaveLength(1);
+    prepare.mockClear();
+
+    const { request, starting } = startAccount();
+    await starting;
+
+    expect(request).toHaveBeenCalledWith(
+      "watch.subscribe",
+      expect.objectContaining({ since_rowid: 5000 }),
+      expect.any(Object),
+    );
+    expect(watermarkQueries()).toHaveLength(0);
+  });
+
+  it("joins startup watermark cleanup before probing or subscribing", async () => {
+    seedChatDb();
+    const closing = createDeferred<void>();
+    const releaseClose = createDeferred<void>();
+    const open = sqliteRuntime.openSqliteWorkerStore;
+    vi.spyOn(sqliteRuntime, "openSqliteWorkerStore").mockImplementation(async (options) => {
+      const store = await open(options);
+      if (store && options.databasePath === dbPath) {
+        const close = store.close.bind(store);
+        store.close = async () => {
+          closing.resolve();
+          await releaseClose.promise;
+          await close();
+        };
+      }
+      return store;
+    });
+    const { request, starting } = startAccount();
+    try {
+      await Promise.race([closing.promise, starting]);
+      expect(probe).not.toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      releaseClose.resolve();
+      await starting;
+    }
+    expect(request).toHaveBeenCalledWith(
+      "watch.subscribe",
+      expect.objectContaining({ since_rowid: 5000 }),
+      expect.any(Object),
+    );
+  });
+
+  it.each(["missing", "invalid"])(
+    "keeps startup diagnostics and watch fallback when the Messages database is %s",
+    async (kind) => {
+      if (kind === "invalid") {
+        fs.writeFileSync(dbPath, "synthetic invalid SQLite database");
+      }
+      const diagnostic = vi.spyOn(runtimeEnv, "logVerbose");
+      const { request, starting } = startAccount();
+      await starting;
+
+      expect(request).toHaveBeenCalledWith(
+        "watch.subscribe",
+        { attachments: false, include_reactions: true },
+        expect.any(Object),
+      );
+      expect(diagnostic).toHaveBeenCalledWith(
+        expect.stringContaining(`imessage: startup rowid watermark unavailable for db=${dbPath}:`),
+      );
+      expect(fs.existsSync(dbPath)).toBe(kind === "invalid");
+    },
+  );
 
   it.each([
     { name: "recovers the oldest rows from a 100-message chat", total: 100, twoChats: false },

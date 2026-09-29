@@ -133,7 +133,7 @@ command handling is enabled for the surface.
 </ParamField>
 
 <ParamField path="commands.restart" type="boolean" default="true">
-  Enables `/restart`, `/update`, and external `SIGUSR1` restart requests.
+  Enables `/restart`, `/update`, and external `SIGUSR2` restart requests.
 </ParamField>
 
 <ParamField path="commands.ownerAllowFrom" type="string[]">
@@ -215,6 +215,9 @@ plugins, and installed skills.
     | `/export-session [path]` | Owner-only. Export the current session to HTML inside the workspace. Alias: `/export` |
     | `/export-trajectory [path]` | Export a JSONL trajectory bundle for the current session. Alias: `/trajectory` |
 
+    `/session idle` and `/session max-age` wait for the channel's binding update
+    before confirming success. A failed update does not produce a success reply.
+
     Explicit `/export-session` paths replace existing files inside the
     workspace. Omit the path to generate a collision-safe filename.
 
@@ -295,12 +298,11 @@ plugins, and installed skills.
     | `/commands` | Show the generated command catalog |
     | `/tools [compact\|verbose]` | Show what the current agent can use right now |
     | `/status` | Show execution/runtime status, Gateway and system uptime, plugin health, plus provider usage/quota |
-    | `/status plugins` | Show detailed plugin health: load errors, quarantines, channel plugin failures, dependency issues, compatibility notices. Requires `commands.plugins: true` |
+    | `/status plugins` | Show detailed plugin health: load errors, quarantines, channel plugin failures, dependency issues, compatibility notices, and informational diagnostics in a separate bounded section. Requires `commands.plugins: true` |
     | `/goal [status\|start\|edit\|pause\|resume\|complete\|block\|clear] ...` | Manage the current session's durable [goal](/tools/goal) |
     | `/dashboard [request]` | Create or update the current session's dashboard using the Control UI dashboard workflow |
     | `/diagnostics [note]` | Owner-only support-report flow. Asks for exec approval every time |
     | `/openclaw <request>` | Run the OpenClaw setup and repair helper from an owner DM |
-    | `/tasks` | List active/recent background tasks for the current session |
     | `/context [list\|detail\|map\|json]` | Explain how context is assembled |
     | `/whoami` | Show your sender id. Alias: `/id` |
     | `/usage off\|tokens\|full\|reset\|cost` | Control the per-response usage footer (`reset`/`inherit`/`clear`/`default` clears the session override to re-inherit the configured default) or print a local cost summary |
@@ -320,7 +322,7 @@ user skill directly.
     | `/loop status` | Owner-only. List loops bound to this conversation |
     | `/loop stop [name]` | Owner-only. Stop matching loops bound to this conversation |
     | `/allowlist [list\|add\|remove] ...` | Manage allowlist entries. Text-only |
-    | `/approve <id> <decision>` | Resolve exec or plugin approval prompts |
+    | `/approve <id> <decision>` | Resolve exec, plugin, or OpenClaw change approval prompts |
     | `/btw <question>` | Ask a side question without changing session context. Alias: `/side`. See [BTW](/tools/btw) |
   </Accordion>
 
@@ -603,7 +605,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - **Text commands:** run in the normal chat session (DMs share `main`, groups have their own session).
     - **Native Discord commands:** `agent:<agentId>:discord:slash:<userId>`
     - **Native Slack commands:** `agent:<agentId>:slack:slash:<userId>` (prefix configurable via `channels.slack.slashCommand.sessionPrefix`)
-    - **Native Telegram commands:** `telegram:slash:<userId>` (targets the chat session via `CommandTargetSessionKey`)
+    - **Native Telegram commands:** run in the chat session like text commands.
     - **`/login`** requires a private chat or Control UI session. It shows provider buttons without starting sign-in. API keys and local setup use the Control UI handoff. `/login codex` still selects OpenAI device pairing. Retry messages name the exact connection command.
     - **`/login openrouter`** sends a browser sign-in action through the Gateway's managed HTTPS address. Approve access in your browser, then return to chat for the saved result. See [OpenRouter](/providers/openrouter#getting-started) for address requirements. Use `/login cancel` to cancel a pending sign-in.
     - After login, model restrictions can prompt **Show all provider models** or **Keep current restrictions**. Credentials stay saved either way, and the question does not block another sign-in. An expired question or changed restrictions opens a fresh choice without signing in again. `/login cancel` can cancel the pending question without removing saved credentials.

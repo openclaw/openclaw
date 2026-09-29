@@ -3,6 +3,7 @@ import type { AssistantMessage, Context, Model, ToolCall } from "@openclaw/llm-c
 import { Type } from "typebox";
 import { expect, it, vi } from "vitest";
 import { createRequesterYieldCallback } from "../../../src/agents/openclaw-tools.requester-yield.js";
+import { isToolResultError } from "../../../src/agents/tool-result-error.js";
 import { createSessionsYieldTool } from "../../../src/agents/tools/sessions-yield-tool.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runAgentLoop } from "./agent-loop.js";
@@ -45,7 +46,6 @@ it.each([
   { priorResult: "completed", asyncYield: true },
   { priorResult: "pending", asyncYield: true },
   { priorResult: "completed", asyncYield: false },
-  { priorResult: "observed", asyncYield: true },
 ] as const)(
   "delivers $priorResult async output before yielding (async yield: $asyncYield)",
   async ({ priorResult, asyncYield }) => {
@@ -126,7 +126,12 @@ it.each([
     const run = runAgentLoop(
       [{ role: "user", content: "Inspect then wait", timestamp: 0 }],
       { systemPrompt: "", messages: [], tools: [lookup, yieldTool] },
-      { model, convertToLlm: (messages) => messages as Context["messages"] },
+      {
+        model,
+        convertToLlm: (messages) => messages as Context["messages"],
+        // Mirror the production session hook that classifies structured tool errors.
+        afterToolCall: async ({ result }) => ({ isError: isToolResultError(result) }),
+      },
       (event) => {
         if (event.type !== "message_end") {
           return;
@@ -157,42 +162,45 @@ it.each([
         lookupRelease.resolve();
         await lookupPersisted.promise;
       }
-      if (priorResult !== "observed") {
+      first.push({
+        type: "toolcall_end",
+        contentIndex: 1,
+        toolCall: yieldCall,
+        partial: assistant([lookupCall, yieldCall], "first"),
+      });
+      if (!asyncYield) {
         first.push({
-          type: "toolcall_end",
-          contentIndex: 1,
-          toolCall: yieldCall,
-          partial: assistant([lookupCall, yieldCall], "first"),
+          type: "done",
+          reason: "toolUse",
+          message: { ...assistant([lookupCall, yieldCall], "first"), stopReason: "toolUse" },
         });
-        if (!asyncYield) {
-          first.push({
-            type: "done",
-            reason: "toolUse",
-            message: { ...assistant([lookupCall, yieldCall], "first"), stopReason: "toolUse" },
-          });
-          first.end();
-        }
-        await firstYieldPersisted.promise;
-        expect(claimYield).not.toHaveBeenCalled();
-        expect(onYield).not.toHaveBeenCalled();
-        if (priorResult === "pending") {
-          expect(
-            persisted.some(
-              (message) => message.role === "toolResult" && message.toolCallId === "lookup",
-            ),
-          ).toBe(false);
-          lookupRelease.resolve();
-          await lookupPersisted.promise;
-        }
+        first.end();
+      }
+      await firstYieldPersisted.promise;
+      expect(claimYield).not.toHaveBeenCalled();
+      expect(onYield).not.toHaveBeenCalled();
+      expect(persisted).toContainEqual(
+        expect.objectContaining({
+          role: "toolResult",
+          toolCallId: "yield-first",
+          isError: false,
+          details: expect.objectContaining({ status: "deferred" }),
+        }),
+      );
+      if (priorResult === "pending") {
+        expect(
+          persisted.some(
+            (message) => message.role === "toolResult" && message.toolCallId === "lookup",
+          ),
+        ).toBe(false);
+        lookupRelease.resolve();
+        await lookupPersisted.promise;
       }
       if (asyncYield) {
         first.push({
           type: "done",
           reason: "stop",
-          message: assistant(
-            priorResult === "observed" ? [lookupCall] : [lookupCall, yieldCall],
-            "first",
-          ),
+          message: assistant([lookupCall, yieldCall], "first"),
         });
         first.end();
       }

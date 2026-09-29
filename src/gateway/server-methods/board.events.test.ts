@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
-import { selectAgentSystemEvents } from "../../infra/system-event-ownership.js";
 import {
   peekSystemEventEntries,
   peekSystemEvents,
@@ -68,10 +67,8 @@ describe("board gateway notices", () => {
       expect(first.mock.calls[0]?.[1]).toEqual({ ok: true, appended: true });
       expect(duplicate.mock.calls[0]?.[1]).toEqual({ ok: true, appended: false });
     }
-    const events = peekSystemEventEntries("global");
-    expect(events).toHaveLength(2);
     for (const agentId of ["main", "work"]) {
-      expect(selectAgentSystemEvents(events, agentId).map((event) => event.text)).toEqual([
+      expect(peekSystemEventEntries(`agent:${agentId}:global`).map((event) => event.text)).toEqual([
         '[dashboard] {"count":1} on widget counter',
       ]);
     }

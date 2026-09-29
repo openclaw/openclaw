@@ -75,6 +75,8 @@ describe("loadThemeFromPath", () => {
 
   it("preserves RGB channels in truecolor output", () => {
     const theme = loadColor("#5f87af", "truecolor");
+    expect(theme.getFgAnsi("accent")).toBe("\x1b[38;2;95;135;175m");
+    expect(theme.getBgAnsi("selectedBg")).toBe("\x1b[48;2;95;135;175m");
     expect(theme.fg("accent", "text")).toBe("\x1b[38;2;95;135;175mtext\x1b[39m");
     expect(theme.bg("selectedBg", "text")).toBe("\x1b[48;2;95;135;175mtext\x1b[49m");
   });
@@ -84,12 +86,36 @@ describe("loadThemeFromPath", () => {
     (mode) => {
       for (const index of [0, 123, 255]) {
         const theme = loadColor(index, mode);
+        expect(theme.getFgAnsi("accent")).toBe(`\x1b[38;5;${index}m`);
+        expect(theme.getBgAnsi("selectedBg")).toBe(`\x1b[48;5;${index}m`);
         expect(theme.fg("accent", "text")).toBe(`\x1b[38;5;${index}mtext\x1b[39m`);
         expect(theme.bg("selectedBg", "text")).toBe(`\x1b[48;5;${index}mtext\x1b[49m`);
       }
       const reset = loadColor("", mode);
+      expect(reset.getFgAnsi("accent")).toBe("\x1b[39m");
+      expect(reset.getBgAnsi("selectedBg")).toBe("\x1b[49m");
       expect(reset.fg("accent", "text")).toBe("\x1b[39mtext\x1b[39m");
       expect(reset.bg("selectedBg", "text")).toBe("\x1b[49mtext\x1b[49m");
     },
   );
+
+  it.each([
+    ["fg", /^Unknown theme color: missing$/],
+    ["getFgAnsi", /^Unknown theme color: missing$/],
+    ["bg", /^Unknown theme background color: missing$/],
+    ["getBgAnsi", /^Unknown theme background color: missing$/],
+  ] as const)("rejects unknown colors through %s", (method, message) => {
+    const theme = loadColor(123, "256color");
+    expect(() => Reflect.apply(theme[method], theme, ["missing", "text"])).toThrow(message);
+  });
+
+  it("keeps formatting independent of supplied raw ANSI getter overrides", () => {
+    const theme = loadColor(123, "256color");
+    theme.getFgAnsi = () => "\x1b[31m";
+    theme.getBgAnsi = () => "\x1b[41m";
+    expect(theme.getFgAnsi("accent")).toBe("\x1b[31m");
+    expect(theme.getBgAnsi("selectedBg")).toBe("\x1b[41m");
+    expect(theme.fg("accent", "text")).toBe("\x1b[38;5;123mtext\x1b[39m");
+    expect(theme.bg("selectedBg", "text")).toBe("\x1b[48;5;123mtext\x1b[49m");
+  });
 });

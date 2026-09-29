@@ -7,6 +7,7 @@ import { extractTtsDirectiveFacts } from "./directive-facts.js";
 import { compareSpeechProviderOrder } from "./provider-registry-core.js";
 import { listSpeechProviders } from "./provider-registry.js";
 import type {
+  SpeechDirectiveTokenParseResult,
   SpeechModelOverridePolicy,
   SpeechProviderConfig,
   SpeechProviderOverrides,
@@ -35,13 +36,6 @@ type TtsDirectiveTextStreamCleaner = {
 function resolveDirectiveProviders(options?: ParseTtsDirectiveOptions): SpeechProviderPlugin[] {
   const providers = options?.providers ?? listSpeechProviders(options?.cfg);
   return providers.toSorted(compareSpeechProviderOrder);
-}
-
-function resolveDirectiveProviderConfig(
-  provider: SpeechProviderPlugin,
-  options?: ParseTtsDirectiveOptions,
-): SpeechProviderConfig | undefined {
-  return options?.providerConfigs?.[provider.id];
 }
 
 function prioritizeProvider(
@@ -80,7 +74,6 @@ function parseGenericSpeakerDirective(params: {
   key: string;
   value: string;
   policy: SpeechModelOverridePolicy;
-  currentOverrides?: SpeechProviderOverrides;
 }): SpeechProviderOverrides | undefined {
   if (!params.policy.allowVoice) {
     return undefined;
@@ -89,7 +82,6 @@ function parseGenericSpeakerDirective(params: {
     case "speakervoice":
     case "speaker_voice":
       return {
-        ...params.currentOverrides,
         speakerVoice: params.value,
         voice: params.value,
         voiceName: params.value,
@@ -97,7 +89,6 @@ function parseGenericSpeakerDirective(params: {
     case "speakervoiceid":
     case "speaker_voice_id":
       return {
-        ...params.currentOverrides,
         speakerVoiceId: params.value,
         voiceId: params.value,
       };
@@ -106,12 +97,8 @@ function parseGenericSpeakerDirective(params: {
   }
 }
 
-function normalizeTtsTagBody(body: string): string {
-  return body.trim().replace(/\s+/g, "").toLowerCase();
-}
-
 function classifyTtsTag(body: string): "hidden-open" | "hidden-close" | "tts" | "other" {
-  const normalized = normalizeTtsTagBody(body);
+  const normalized = body.trim().replace(/\s+/g, "").toLowerCase();
   if (normalized === "tts:text") {
     return "hidden-open";
   }
@@ -144,9 +131,13 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
       while (index < input.length) {
         const tagStart = input.indexOf("[[", index);
         if (tagStart === -1) {
+          // A chunk can end on a single "["; hold it so the next chunk can
+          // complete "[[" instead of leaking markup or swallowing the rest.
+          const tail = input.endsWith("[") ? input.length - 1 : input.length;
           if (!insideHiddenTextBlock) {
-            output += input.slice(index);
+            output += input.slice(index, tail);
           }
+          pending = input.slice(tail);
           break;
         }
 
@@ -178,9 +169,10 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
       return output;
     },
     flush(): string {
-      const tail = pending;
+      const tail = insideHiddenTextBlock ? "" : pending;
       pending = "";
-      return insideHiddenTextBlock ? "" : tail;
+      insideHiddenTextBlock = false;
+      return tail;
     },
     hasBufferedDirectiveText(): boolean {
       return pending.length > 0 || insideHiddenTextBlock;
@@ -244,27 +236,17 @@ export function resolveTtsDirectiveFacts(
           key,
           value,
           policy,
-          currentOverrides: overrides.providerOverrides?.[provider.id],
         });
-        if (genericSpeakerOverrides) {
-          overrides.providerOverrides = {
-            ...overrides.providerOverrides,
-            [provider.id]: {
-              ...overrides.providerOverrides?.[provider.id],
-              ...genericSpeakerOverrides,
-            },
-          };
-          handled = true;
-          break;
-        }
-        const parsed = provider.parseDirectiveToken?.({
-          key,
-          value,
-          policy,
-          selectedProvider: declaredProviderId ? provider.id : undefined,
-          providerConfig: resolveDirectiveProviderConfig(provider, options),
-          currentOverrides: overrides.providerOverrides?.[provider.id],
-        });
+        const parsed: SpeechDirectiveTokenParseResult | undefined = genericSpeakerOverrides
+          ? { handled: true, overrides: genericSpeakerOverrides }
+          : provider.parseDirectiveToken?.({
+              key,
+              value,
+              policy,
+              selectedProvider: declaredProviderId ? provider.id : undefined,
+              providerConfig: options?.providerConfigs?.[provider.id],
+              currentOverrides: overrides.providerOverrides?.[provider.id],
+            });
         if (!parsed?.handled) {
           continue;
         }

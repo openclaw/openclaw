@@ -45,17 +45,18 @@ export class VisitorPolicyClient {
     this.policiesUrl = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(config.accountId)}/access/apps/${encodeURIComponent(config.appId)}/policies`;
   }
 
-  async read(): Promise<{ id: string; emails: string[] } | undefined> {
-    const policy = await this.readPolicy();
+  async read(assertCurrent?: () => void): Promise<{ id: string; emails: string[] } | undefined> {
+    const policy = await this.readPolicy(assertCurrent);
     return policy ? { id: policy.id, emails: this.policyEmails(policy) } : undefined;
   }
 
   async update(
     change: (emails: readonly string[]) => string[] | Promise<string[]>,
+    assertCurrent?: () => void,
   ): Promise<string[]> {
     // Every mutation starts from Cloudflare, preserving dashboard edits made since
     // the previous tool call. The service serializes its own mutations separately.
-    const policy = await this.readPolicy();
+    const policy = await this.readPolicy(assertCurrent);
     const current = policy ? this.policyEmails(policy) : [];
     if (this.signal?.aborted) {
       throw new VisitorAccessError("Visitor access is stopping; retry after the gateway starts.");
@@ -65,7 +66,12 @@ export class VisitorPolicyClient {
       return emails;
     }
     if (policy && emails.length === 0) {
-      await this.request(`${this.policiesUrl}/${encodeURIComponent(policy.id)}`, "DELETE");
+      await this.request(
+        `${this.policiesUrl}/${encodeURIComponent(policy.id)}`,
+        "DELETE",
+        undefined,
+        assertCurrent,
+      );
       return emails;
     }
 
@@ -79,7 +85,7 @@ export class VisitorPolicyClient {
     payload.decision = "allow";
     payload.include = emails.map((email) => ({ email: { email } }));
     const url = policy ? `${this.policiesUrl}/${encodeURIComponent(policy.id)}` : this.policiesUrl;
-    await this.request(url, policy ? "PUT" : "POST", payload);
+    await this.request(url, policy ? "PUT" : "POST", payload, assertCurrent);
     return emails;
   }
 
@@ -87,10 +93,15 @@ export class VisitorPolicyClient {
     return [...new Set(policy.include.map((rule) => rule.email.email.toLowerCase()))];
   }
 
-  private async readPolicy(): Promise<ManagedPolicy | undefined> {
+  private async readPolicy(assertCurrent?: () => void): Promise<ManagedPolicy | undefined> {
     let reference: z.infer<typeof policyReferenceSchema> | undefined;
     for (let page = 1; page <= 100; page += 1) {
-      const response = await this.request(`${this.policiesUrl}?page=${page}&per_page=100`, "GET");
+      const response = await this.request(
+        `${this.policiesUrl}?page=${page}&per_page=100`,
+        "GET",
+        undefined,
+        assertCurrent,
+      );
       const policies = z.array(policyReferenceSchema).max(100).safeParse(response.result);
       if (!policies.success) {
         throw new VisitorAccessError(
@@ -121,6 +132,8 @@ export class VisitorPolicyClient {
         const detail = await this.request(
           `${this.policiesUrl}/${encodeURIComponent(reference.id)}`,
           "GET",
+          undefined,
+          assertCurrent,
         );
         const parsed = managedPolicySchema.safeParse(detail.result);
         if (
@@ -140,8 +153,14 @@ export class VisitorPolicyClient {
     );
   }
 
-  private async request(url: string, method: "GET" | "POST" | "PUT" | "DELETE", body?: unknown) {
+  private async request(
+    url: string,
+    method: "GET" | "POST" | "PUT" | "DELETE",
+    body?: unknown,
+    assertCurrent?: () => void,
+  ) {
     let response: Response;
+    assertCurrent?.();
     try {
       response = await this.fetcher(url, {
         method,

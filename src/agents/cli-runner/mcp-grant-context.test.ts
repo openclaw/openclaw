@@ -54,6 +54,22 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     expect(buildGrant({ modelHasVision: true }).modelHasVision).toBe(true);
   });
 
+  it("snapshots only the resolved logical model into the loopback grant", () => {
+    const requesterModel = {
+      provider: "selected-provider",
+      model: "selected-provider/literal-model",
+      nativeModelId: "native-model[1m]",
+    };
+    const grant = buildGrant({ requesterModel });
+    requesterModel.model = "later-model";
+
+    expect(grant.requesterModel).toEqual({
+      provider: "selected-provider",
+      model: "selected-provider/literal-model",
+    });
+    expect(buildGrant()).not.toHaveProperty("requesterModel");
+  });
+
   it("binds screen commands to the requesting browser in the server-owned grant", () => {
     const gatewayUiCommandTarget = { connId: "requester-tab", profileId: "requester" };
     expect(buildGrant({ gatewayUiCommandTarget }).gatewayUiCommandTarget).toEqual(

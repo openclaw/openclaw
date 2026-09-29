@@ -152,13 +152,14 @@ export async function applyMessageSendingHook(params: {
   payload: ReplyPayload;
   payloadSummary: NormalizedOutboundPayload;
 }> {
+  const unchanged = () => ({
+    cancelled: false,
+    contentRewritten: false,
+    payload: params.payload,
+    payloadSummary: params.payloadSummary,
+  });
   if (!params.enabled) {
-    return {
-      cancelled: false,
-      contentRewritten: false,
-      payload: params.payload,
-      payloadSummary: params.payloadSummary,
-    };
+    return unchanged();
   }
   try {
     const group = getGroupThreadDispatchContext();
@@ -193,56 +194,35 @@ export async function applyMessageSendingHook(params: {
       };
     }
     if (sendingResult?.content == null) {
-      return {
-        cancelled: false,
-        contentRewritten: false,
-        payload: params.payload,
-        payloadSummary: params.payloadSummary,
-      };
+      return unchanged();
     }
-    if (params.payloadSummary.hookContent && !params.payloadSummary.text) {
-      const spokenText = sendingResult.content;
-      return {
-        cancelled: false,
-        contentRewritten: true,
-        payload: {
-          ...params.payload,
-          spokenText,
-        },
-        payloadSummary: {
-          ...params.payloadSummary,
-          hookContent: spokenText,
-        },
-      };
-    }
-    const payload = {
+    const spokenOnly = params.payloadSummary.hookContent && !params.payloadSummary.text;
+    const payload = copyReplyPayloadMetadata(params.payload, {
       ...params.payload,
-      text: sendingResult.content,
-    };
+      [spokenOnly ? "spokenText" : "text"]: sendingResult.content,
+    });
     return {
       cancelled: false,
       contentRewritten: true,
       payload,
       payloadSummary: {
         ...params.payloadSummary,
-        text: sendingResult.content,
+        [spokenOnly ? "hookContent" : "text"]: sendingResult.content,
       },
     };
   } catch {
     // Don't block delivery on hook failure.
-    return {
-      cancelled: false,
-      contentRewritten: false,
-      payload: params.payload,
-      payloadSummary: params.payloadSummary,
-    };
+    return unchanged();
   }
 }
 
-export async function applyReplyPayloadSendingHook(params: {
-  hook: QueuedReplyPayloadSendingHook | undefined;
-  payload: ReplyPayload;
-}): Promise<{
+export async function applyReplyPayloadSendingHook(
+  params: {
+    hook: QueuedReplyPayloadSendingHook | undefined;
+    payload: ReplyPayload;
+  },
+  hookRunner = getGlobalHookRunner(),
+): Promise<{
   cancelled: boolean;
   payload: ReplyPayload;
   changed: boolean;
@@ -250,14 +230,17 @@ export async function applyReplyPayloadSendingHook(params: {
   if (!params.hook) {
     return { cancelled: false, payload: params.payload, changed: false };
   }
-  const nextPayload = await runReplyPayloadSendingHook({
-    payload: params.payload,
-    kind: params.hook.kind,
-    ...(params.hook.channel ? { channel: params.hook.channel } : {}),
-    ...(params.hook.sessionKey ? { sessionKey: params.hook.sessionKey } : {}),
-    ...(params.hook.runId ? { runId: params.hook.runId } : {}),
-    context: params.hook.context,
-  });
+  const nextPayload = await runReplyPayloadSendingHook(
+    {
+      payload: params.payload,
+      kind: params.hook.kind,
+      ...(params.hook.channel ? { channel: params.hook.channel } : {}),
+      ...(params.hook.sessionKey ? { sessionKey: params.hook.sessionKey } : {}),
+      ...(params.hook.runId ? { runId: params.hook.runId } : {}),
+      context: params.hook.context,
+    },
+    hookRunner,
+  );
   if (!nextPayload) {
     return { cancelled: true, payload: params.payload, changed: false };
   }

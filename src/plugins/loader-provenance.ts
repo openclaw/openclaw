@@ -3,7 +3,6 @@ import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
-import { resolvePluginInstallOwnerLookup } from "./candidate-install-owner.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
@@ -199,6 +198,7 @@ export function warnWhenAllowlistIsOpen(params: {
 export function warnAboutUntrackedLoadedPlugins(params: {
   registry: PluginRegistry;
   provenance: PluginProvenanceIndex;
+  installOwnerByPluginId: ReadonlyMap<string, string>;
   allowlist: string[];
   emitWarning: boolean;
   logger: PluginLogger;
@@ -212,7 +212,7 @@ export function warnAboutUntrackedLoadedPlugins(params: {
     if (allowSet.has(plugin.id)) {
       continue;
     }
-    const installOwner = resolvePluginInstallOwnerLookup(params)?.get(plugin.id);
+    const installOwner = params.installOwnerByPluginId.get(plugin.id);
     if (
       installOwner &&
       isTrackedByProvenance({
@@ -225,6 +225,13 @@ export function warnAboutUntrackedLoadedPlugins(params: {
       continue;
     }
     const message = `OpenClaw can't verify where this plugin came from. Review it with '${formatPluginInspectCommand(plugin.id)}'. Adding it to plugins.allow lets it load, but does not make it trusted. If it's an official plugin, reinstall it from its official npm package or its official ClawHub listing to enable trusted features.`;
+    if (
+      params.registry.diagnostics.some(
+        (entry) => entry.pluginId === plugin.id && entry.message === message,
+      )
+    ) {
+      continue;
+    }
     params.registry.diagnostics.push({
       level: "warn",
       pluginId: plugin.id,

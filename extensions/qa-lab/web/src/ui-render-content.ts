@@ -38,15 +38,9 @@ function renderMessageAttachments(message: QaBusMessage): string {
           <figcaption>${esc(label)}</figcaption>
         </figure>`;
       }
-      if (attachment.kind === "video" && sourceUrl) {
-        return `<figure class="msg-attachment msg-attachment-video">
-          <video controls preload="metadata" src="${esc(sourceUrl)}"></video>
-          <figcaption>${esc(label)}</figcaption>
-        </figure>`;
-      }
-      if (attachment.kind === "audio" && sourceUrl) {
-        return `<figure class="msg-attachment msg-attachment-audio">
-          <audio controls preload="metadata" src="${esc(sourceUrl)}"></audio>
+      if ((attachment.kind === "video" || attachment.kind === "audio") && sourceUrl) {
+        return `<figure class="msg-attachment msg-attachment-${attachment.kind}">
+          <${attachment.kind} controls preload="metadata" src="${esc(sourceUrl)}"></${attachment.kind}>
           <figcaption>${esc(label)}</figcaption>
         </figure>`;
       }
@@ -66,10 +60,6 @@ function renderMessageAttachments(message: QaBusMessage): string {
 function deriveSelectedConversation(state: UiState): string | null {
   const first = state.snapshot?.conversations[0];
   return state.selectedConversationKey ?? (first ? conversationSelectionKey(first) : null);
-}
-
-function deriveSelectedThread(state: UiState): string | null {
-  return state.selectedThreadId ?? null;
 }
 
 function filteredMessages(state: UiState) {
@@ -129,7 +119,7 @@ export function renderChatView(state: UiState): string {
       threadConversationSelectionKey(thread) === state.selectedConversationKey,
   );
   const selectedConv = deriveSelectedConversation(state);
-  const selectedThread = deriveSelectedThread(state);
+  const selectedThread = state.selectedThreadId;
   const activeConversation = findConversationBySelectionKey(conversations, selectedConv);
   const messages = filteredMessages({
     ...state,
@@ -142,42 +132,31 @@ export function renderChatView(state: UiState): string {
       <!-- Channel / DM sidebar -->
       <aside class="chat-sidebar">
         <div class="chat-sidebar-scroll">
-          <div class="chat-sidebar-section">
-            <div class="chat-sidebar-heading">Channels</div>
+          ${[
+            { heading: "Channels", empty: "No channels", icon: "#", items: channels },
+            { heading: "Direct Messages", empty: "No DMs", icon: "\u25CF", items: dms },
+          ]
+            .map(
+              ({ heading, empty, icon, items }) => `<div class="chat-sidebar-section">
+            <div class="chat-sidebar-heading">${heading}</div>
             <div class="chat-sidebar-list">
               ${
-                channels.length === 0
-                  ? '<div class="chat-sidebar-item" style="color:var(--text-tertiary);font-size:12px;cursor:default">No channels</div>'
-                  : channels
+                items.length === 0
+                  ? `<div class="chat-sidebar-item" style="color:var(--text-tertiary);font-size:12px;cursor:default">${empty}</div>`
+                  : items
                       .map(
                         (c) => `
                           <button class="chat-sidebar-item${conversationSelectionKey(c) === selectedConv ? " active" : ""}" data-conversation-key="${esc(conversationSelectionKey(c))}">
-                            <span class="chat-sidebar-icon">#</span>
+                            <span class="chat-sidebar-icon">${icon}</span>
                             <span class="chat-sidebar-label">${esc(formatConversationLabel(c, conversations))}</span>
                           </button>`,
                       )
                       .join("")
               }
             </div>
-          </div>
-          <div class="chat-sidebar-section">
-            <div class="chat-sidebar-heading">Direct Messages</div>
-            <div class="chat-sidebar-list">
-              ${
-                dms.length === 0
-                  ? '<div class="chat-sidebar-item" style="color:var(--text-tertiary);font-size:12px;cursor:default">No DMs</div>'
-                  : dms
-                      .map(
-                        (c) => `
-                          <button class="chat-sidebar-item${conversationSelectionKey(c) === selectedConv ? " active" : ""}" data-conversation-key="${esc(conversationSelectionKey(c))}">
-                            <span class="chat-sidebar-icon">\u25CF</span>
-                            <span class="chat-sidebar-label">${esc(formatConversationLabel(c, conversations))}</span>
-                          </button>`,
-                      )
-                      .join("")
-              }
-            </div>
-          </div>
+          </div>`,
+            )
+            .join("\n          ")}
           ${
             threads.length > 0
               ? `<div class="chat-sidebar-section">

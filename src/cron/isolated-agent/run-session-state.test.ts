@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -30,7 +31,7 @@ import {
   CronSessionLifecycleClaimError,
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
-  markCronSessionPreRun,
+  setCronSessionRuntimeModel,
   resolveCronLifecycleRevisionIdentity,
   syncCronSessionLiveSelection,
   type CronSessionRowWriter,
@@ -71,7 +72,7 @@ function makeGuardedPersistSessionEntry(persistedStore: Record<string, SessionEn
   });
 }
 
-describe("markCronSessionPreRun", () => {
+describe("setCronSessionRuntimeModel", () => {
   it("clears model-derived state when the selected model changes", () => {
     const entry = makeSessionEntry({
       modelProvider: "openai",
@@ -81,7 +82,7 @@ describe("markCronSessionPreRun", () => {
       contextBudgetStatus: {} as NonNullable<SessionEntry["contextBudgetStatus"]>,
     });
 
-    markCronSessionPreRun({ entry, provider: "openai", model: "gpt-5.4" });
+    setCronSessionRuntimeModel({ entry, provider: "openai", model: "gpt-5.4" });
 
     expect(entry.modelProvider).toBe("openai");
     expect(entry.model).toBe("gpt-5.4");
@@ -100,7 +101,7 @@ describe("markCronSessionPreRun", () => {
       contextBudgetStatus,
     });
 
-    markCronSessionPreRun({ entry, provider: "openai", model: "gpt-5.4" });
+    setCronSessionRuntimeModel({ entry, provider: "openai", model: "gpt-5.4" });
 
     expect(entry.contextTokens).toBe(272_000);
     expect(entry.contextTokensSource).toBe("runtime");
@@ -656,7 +657,22 @@ describe("createPersistCronSessionEntry", () => {
       persistSessionEntry: vi.fn(async () => {}),
     });
 
-    await persist();
+    const target = resolveSqliteTargetFromSessionStorePath(storePath);
+    if (!target.path) {
+      throw new Error("expected SQLite database path");
+    }
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
+    const reads = trackSqliteStatementExecutions(database.db, ["aggregate"], (query) =>
+      query.includes('"transcript_events"') && /(?:count|sum)\s*\(/iu.test(query)
+        ? "aggregate"
+        : null,
+    );
+    try {
+      await persist();
+      expect(reads.counts.aggregate).toBe(0);
+    } finally {
+      reads.restore();
+    }
 
     expect(cronSession.store["agent:main:cron:completed"]).toEqual({
       sessionId: "run-session-id",

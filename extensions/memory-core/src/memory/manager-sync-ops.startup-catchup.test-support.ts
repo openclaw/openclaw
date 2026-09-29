@@ -18,7 +18,7 @@ import {
   resolveConfiguredScopeHash,
   type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
-import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
 
 type MemoryIndexEntry = {
   path: string;
@@ -95,7 +95,7 @@ export function emitSessionTranscriptUpdate(update: MemorySessionTranscriptUpdat
   transcriptUpdateListener?.(update);
 }
 
-export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
+export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   protected readonly createProvider = (): never => {
     throw new Error("Startup catch-up harness does not acquire embedding providers");
   };
@@ -149,6 +149,8 @@ export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   readonly syncCalls: SyncParams[] = [];
   readonly indexedPaths: string[] = [];
   readonly indexedContents: string[] = [];
+  readonly deletedSources: Array<{ path: string; source: MemorySource; expectedHash?: string }> =
+    [];
   corpusListCalls = 0;
   private afterNextCorpusList: (() => Promise<void>) | null = null;
   private corpusListWork: Promise<void> = Promise.resolve();
@@ -337,8 +339,8 @@ export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     return 1;
   }
 
-  protected override listSessionCorpusEntries(options?: { includeContentRevision?: boolean }) {
-    const work = super.listSessionCorpusEntries(options).then(async (entries) => {
+  protected override listSessionCorpusEntries() {
+    const work = super.listSessionCorpusEntries().then(async (entries) => {
       this.corpusListCalls += 1;
       const callback = this.afterNextCorpusList;
       this.afterNextCorpusList = null;
@@ -365,5 +367,18 @@ export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   ): Promise<void> {
     this.indexedPaths.push(entry.path);
     this.indexedContents.push(options.content ?? "");
+  }
+
+  protected override async deleteIndexedFile(
+    pathname: string,
+    source: MemorySource,
+    expectedHash?: string,
+  ): Promise<void> {
+    // This in-memory harness tests corpus selection. File-owned publication,
+    // workspace locking and conditional deletion have separate integration tests.
+    this.deletedSources.push({ path: pathname, source, expectedHash });
+    this.db
+      .prepare("DELETE FROM memory_index_sources WHERE path = ? AND source = ? AND hash = ?")
+      .run(pathname, source, expectedHash ?? null);
   }
 }

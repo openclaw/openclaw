@@ -39,7 +39,7 @@ async function mount(client: GatewayBrowserClient) {
   const subscribe = () => () => undefined;
   const context = {
     gateway: source.gateway,
-    agentSelection: { state: { selectedId: "main" }, subscribe },
+    settingsAgentSelection: { state: { selectedId: "main" }, subscribe },
     runtimeConfig: { state: { configSnapshot: {}, configSchema: {} }, subscribe },
     theme: { serverSelection: null, subscribe },
     overlays: { snapshot: {}, subscribe },
@@ -65,6 +65,38 @@ async function mount(client: GatewayBrowserClient) {
 }
 
 describe("ConfigPage session observer models", () => {
+  it("pauses hidden status reads and resumes one ten-second poll when visible", async () => {
+    let visibility: DocumentVisibilityState = "hidden";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    const request = vi.fn((method: string) =>
+      Promise.resolve(method === "models.list" ? { models: [] } : {}),
+    );
+    const { page } = await mount({ request } as unknown as GatewayBrowserClient);
+    const statusReads = () => request.mock.calls.filter(([method]) => method === "system.info");
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(statusReads()).toHaveLength(0);
+
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    globalThis.dispatchEvent(new Event("focus"));
+    await settleLitElement(page);
+    expect(statusReads()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(statusReads()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(statusReads()).toHaveLength(2);
+
+    visibility = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(statusReads()).toHaveLength(2);
+    page.remove();
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(statusReads()).toHaveLength(2);
+  });
+
   it.each(["client", "source"] as const)(
     "fences a pending catalog after Gateway %s replacement",
     async (replacement) => {
@@ -130,7 +162,7 @@ describe("ConfigPage session observer models", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { page, state, context } = await mount(client);
-    const selection = context.agentSelection.state as { selectedId: string | null };
+    const selection = context.settingsAgentSelection.state as { selectedId: string | null };
     selection.selectedId = "writer";
     page.requestUpdate();
     await settleLitElement(page);

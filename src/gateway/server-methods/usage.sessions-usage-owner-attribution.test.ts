@@ -71,7 +71,7 @@ async function queryUsage(options: {
   return await withTempDir("usage-owner-", async (stateDir) =>
     withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const store = Object.fromEntries(options.rows.map(({ key, entry }) => [key, entry]));
-      const loadSessionEntry = (key: string) => store[key];
+      const readSourceEntry = (key: string) => store[key];
       const fixtureStore = {
         durableTargets: [],
         storePath: "(multiple)",
@@ -81,7 +81,9 @@ async function queryUsage(options: {
             key,
             {
               agentId,
-              modelSource: { entry, loadSessionEntry },
+              entry,
+              readSourceEntry,
+              resolveSourceKey: (sourceKey: string) => sourceKey,
               storeTarget: {
                 agentId,
                 storePath: path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),

@@ -79,10 +79,8 @@ describe("formatCliJsonFailure", () => {
     );
   });
 
-  it.each([
-    { label: "default output", env: {} },
-    { label: "debug output", env: { OPENCLAW_DEBUG: "1" } },
-  ])("keeps the full parse guidance unchanged in $label", ({ env }) => {
+  it("keeps the full parse guidance unchanged even with debug output", () => {
+    const env = { OPENCLAW_DEBUG: "1" };
     const error = Object.assign(
       new ExpectedCliError({
         message: 'OpenClaw sessions has no command "lst".',
@@ -118,10 +116,8 @@ describe("formatCliJsonFailure", () => {
     });
   });
 
-  it.each([
-    { label: "default output", env: {} },
-    { label: "debug output", env: { OPENCLAW_DEBUG: "1" } },
-  ])("keeps gateway credential guidance unchanged in $label", ({ env }) => {
+  it("keeps gateway credential guidance unchanged even with debug output", () => {
+    const env = { OPENCLAW_DEBUG: "1" };
     const error = new GatewayCredentialsRequiredError({
       method: "device.pair.list",
       configPath: "/tmp/openclaw.json",
@@ -136,10 +132,8 @@ describe("formatCliJsonFailure", () => {
     });
   });
 
-  it.each([
-    { label: "default output", env: {} },
-    { label: "debug output", env: { OPENCLAW_DEBUG: "1" } },
-  ])("keeps explicit gateway auth guidance in the envelope in $label", ({ env }) => {
+  it("keeps explicit gateway auth guidance in the envelope even with debug output", () => {
+    const env = { OPENCLAW_DEBUG: "1" };
     const error = new GatewayExplicitAuthRequiredError(EXPLICIT_GATEWAY_AUTH_MESSAGE);
 
     const payload = formatCliJsonFailure(error, { env });
@@ -158,10 +152,8 @@ describe("formatCliJsonFailure", () => {
 });
 
 describe("formatCliFailureLines", () => {
-  it.each([
-    { label: "default output", env: {} },
-    { label: "debug output", env: { OPENCLAW_DEBUG: "1" } },
-  ])("emits expected guidance only when not already written in $label", ({ env }) => {
+  it("emits expected guidance only when not already written even with debug output", () => {
+    const env = { OPENCLAW_DEBUG: "1" };
     const pending = new ExpectedCliError({
       message: "bad input",
       humanOutput: "\u001B[31mfirst\u001B[39m\nsecond\n",

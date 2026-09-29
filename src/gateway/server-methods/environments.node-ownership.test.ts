@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
 import type {
@@ -8,14 +7,11 @@ import type {
   WorkerEnvironmentServiceRecord,
 } from "../worker-environments/service-contract.js";
 import { environmentsHandlers } from "./environments.js";
+import { pairedNodeDevice } from "./environments.test-support.js";
 
-vi.mock("../../infra/device-pairing.js", () => ({
+vi.mock("../../infra/device-pairing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing.js")>()),
   listDevicePairing: vi.fn(),
-  resolveNodePairingState: vi.fn(),
-}));
-
-vi.mock("../../infra/device-pairing-node.js", () => ({
-  listNodePairing: vi.fn(),
 }));
 
 vi.mock("../node-registry-private.js", () => ({
@@ -52,6 +48,7 @@ function workerRecord(
     ownerEpoch: 1,
     createdAtMs: 1_000,
     idleSinceAtMs: null,
+    destroyRequestedAtMs: null,
     attachedSessionIds: [],
     desktopAvailable: false,
     desktopApps: [],
@@ -100,8 +97,16 @@ beforeEach(() => {
     workerSlotsByNodeId: new Map(),
     workerBundleByNodeId: new Map(),
   });
-  vi.mocked(listDevicePairing).mockResolvedValue({ paired: [] } as never);
-  vi.mocked(listNodePairing).mockResolvedValue({ paired: [] } as never);
+  vi.mocked(listDevicePairing).mockResolvedValue({
+    pending: [],
+    paired: [
+      pairedNodeDevice(
+        "node-live",
+        { displayName: "Live Node", commands: ["system.run"] },
+        { platform: "linux" },
+      ),
+    ],
+  });
 });
 
 afterEach(() => vi.restoreAllMocks());

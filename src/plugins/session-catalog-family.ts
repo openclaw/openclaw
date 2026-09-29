@@ -241,20 +241,6 @@ function projectPageCapabilities(
   };
 }
 
-function projectAdoptedSessions(
-  page: SessionCatalogPage,
-  adopted: ReadonlyMap<string, string>,
-  localHostId: string,
-): SessionCatalogPage {
-  return {
-    ...page,
-    sessions: page.sessions.map((session) => {
-      const sessionKey = adopted.get(sessionCatalogAdoptedSourceKey(localHostId, session.threadId));
-      return sessionKey ? { ...session, sessionKey } : session;
-    }),
-  };
-}
-
 async function listNodeHost(
   options: SessionCatalogFamilyOptions,
   query: SessionCatalogListProviderParams,
@@ -277,6 +263,7 @@ async function listNodeHost(
     };
   }
   try {
+    query.signal?.throwIfAborted();
     const cursor = query.cursors?.[hostId];
     if (cursor !== undefined && !isExactCursor(cursor)) {
       throw new Error("cursor is invalid");
@@ -291,7 +278,9 @@ async function listNodeHost(
       },
       timeoutMs: options.node.timeoutMs,
       scopes: ["operator.write"],
+      signal: query.signal,
     });
+    query.signal?.throwIfAborted();
     const page = parseNodeSessionPage(unwrapNodePayload(raw), options, isExactCursor);
     return {
       ...common,
@@ -302,6 +291,7 @@ async function listNodeHost(
       ),
     };
   } catch {
+    query.signal?.throwIfAborted();
     return {
       ...common,
       sessions: [],
@@ -315,48 +305,54 @@ async function listHosts(
   query: SessionCatalogListProviderParams,
   isExactCursor: (value: unknown) => value is string,
 ): Promise<SessionCatalogHost[]> {
+  query.signal?.throwIfAborted();
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
   const hosts: SessionCatalogHost[] = [];
   if (
     (!requested || requested.has(options.local.hostId)) &&
     (await options.local.available(query))
   ) {
+    let host: SessionCatalogHost;
+    const common = {
+      hostId: options.local.hostId,
+      label: options.local.label,
+      kind: "gateway" as const,
+      connected: true,
+    };
     try {
+      query.signal?.throwIfAborted();
       const capabilities = await options.capabilities.local();
+      query.signal?.throwIfAborted();
       const adopted = query.sessionEntries
         ? await options.continuation.listAdopted(query.agentId, query.sessionEntries)
         : new Map<string, string>();
-      const page = projectAdoptedSessions(
-        projectPageCapabilities(
-          await options.local.list(query),
-          capabilities,
-          options.capabilities.project,
-        ),
-        adopted,
-        options.local.hostId,
-      );
-      const host: SessionCatalogHost = {
-        hostId: options.local.hostId,
-        label: options.local.label,
-        kind: "gateway",
-        connected: true,
+      query.signal?.throwIfAborted();
+      const localPage = await options.local.list(query);
+      query.signal?.throwIfAborted();
+      const page = projectPageCapabilities(localPage, capabilities, options.capabilities.project);
+      page.sessions = page.sessions.map((session) => {
+        const sessionKey = adopted.get(
+          sessionCatalogAdoptedSourceKey(options.local.hostId, session.threadId),
+        );
+        return sessionKey ? { ...session, sessionKey } : session;
+      });
+      query.signal?.throwIfAborted();
+      host = {
+        ...common,
         ...page,
       };
-      hosts.push(host);
-      query.onHost?.(host);
     } catch {
-      const host: SessionCatalogHost = {
-        hostId: options.local.hostId,
-        label: options.local.label,
-        kind: "gateway",
-        connected: true,
+      query.signal?.throwIfAborted();
+      host = {
+        ...common,
         sessions: [],
         error: { code: "LOCAL_READ_FAILED", message: options.messages.localReadFailed },
       };
-      hosts.push(host);
-      query.onHost?.(host);
     }
+    hosts.push(host);
+    query.onHost?.(host);
   }
+  query.signal?.throwIfAborted();
   // Use the captured host selection after local discovery and progress callbacks.
   if (requested && !Array.from(requested).some((hostId) => hostId.startsWith("node:"))) {
     return hosts;
@@ -365,8 +361,10 @@ async function listHosts(
   try {
     nodes = (await (query.listNodes?.() ?? options.runtime.nodes.list())).nodes;
   } catch {
+    query.signal?.throwIfAborted();
     return hosts;
   }
+  query.signal?.throwIfAborted();
   const eligible = nodes
     .filter(
       (node) =>
@@ -377,11 +375,20 @@ async function listHosts(
     .slice(0, options.node.maxHosts - hosts.length);
   const pending = eligible.map((node) =>
     listNodeHost(options, query, node, isExactCursor).then((host) => {
+      query.signal?.throwIfAborted();
       query.onHost?.(host);
       return host;
     }),
   );
-  return [...hosts, ...(await Promise.all(pending))];
+  let nodeHosts: SessionCatalogHost[];
+  try {
+    nodeHosts = await Promise.all(pending);
+  } finally {
+    // Retirement or a failed publication must not release still-running node work.
+    await Promise.allSettled(pending);
+  }
+  query.signal?.throwIfAborted();
+  return [...hosts, ...nodeHosts];
 }
 
 async function readTranscript(
@@ -564,6 +571,8 @@ export type SessionCatalogNodeHostBindingsOptions = {
   list: (params: unknown) => Promise<SessionCatalogPage>;
   read: (params: unknown) => Promise<SessionsCatalogReadResult>;
   requireSession: (threadId: string) => Promise<SessionCatalogSession>;
+  /** Explicitly account for work that can outlive any of the catalog handlers. */
+  hasActiveWork?: () => boolean;
   terminalIoRequiredMessage: string;
   terminalUnavailableMessage: string;
   invalidThreadIdMessage: string;
@@ -581,6 +590,7 @@ export function createSessionCatalogNodeHostBindings(
     cap: options.capability,
     dangerous: false,
     duplex: true,
+    hasActiveWork: options.hasActiveWork,
     isAvailable: options.terminalAvailable,
     handle: async (paramsJSON, io) => {
       if (!io) {
@@ -621,6 +631,7 @@ export function createSessionCatalogNodeHostBindings(
         command: options.listCommand,
         cap: options.capability,
         dangerous: false,
+        hasActiveWork: options.hasActiveWork,
         isAvailable: options.listAvailable,
         handle: async (paramsJSON) =>
           JSON.stringify(await options.list(options.parseParams(paramsJSON))),
@@ -629,6 +640,7 @@ export function createSessionCatalogNodeHostBindings(
         command: options.readCommand,
         cap: options.capability,
         dangerous: false,
+        hasActiveWork: options.hasActiveWork,
         isAvailable: options.listAvailable,
         handle: async (paramsJSON) =>
           JSON.stringify(await options.read(options.parseParams(paramsJSON))),

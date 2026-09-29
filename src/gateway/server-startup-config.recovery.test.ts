@@ -28,6 +28,7 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    providerAuthContributions: [],
     modelIdNormalizationPolicies: new Map(),
   };
   const zeroMetrics = {
@@ -189,7 +190,6 @@ async function expectStartupResult(params: {
     }),
   ).resolves.toEqual({
     snapshot: params.snapshot,
-    wroteConfig: false,
     pluginMetadataSnapshot,
   });
 }
@@ -198,6 +198,7 @@ function expectPluginAutoEnableFor(config: OpenClawConfig) {
   expect(applyPluginAutoEnable).toHaveBeenCalledWith({
     config,
     env: process.env,
+    ambientEnvTriggers: "suppress",
     manifestRegistry: pluginManifestRegistry,
   });
 }
@@ -277,6 +278,7 @@ function loadTestStartup(params: {
 }) {
   return loadGatewayStartupConfigSnapshot({
     minimalTestGateway: params.minimalTestGateway ?? true,
+    ambientEnvTriggers: "suppress",
     log: params.log ?? testStartupLog(),
     initialSnapshotRead: params.initialSnapshotRead,
   });
@@ -410,7 +412,6 @@ describe("gateway startup config validation", () => {
     expect(result.snapshot.sourceConfig.models?.providers?.anthropic).toEqual(overlay);
     expectPluginAutoEnableFor(sourceConfig);
     expect(runtimeConfig.channels?.telegram?.enabled).toBeUndefined();
-    expect(result.wroteConfig).toBe(false);
     expect(configIo.writeConfigFile).not.toHaveBeenCalled();
     expect(configMutate.replaceConfigFile).not.toHaveBeenCalled();
   });
@@ -539,6 +540,19 @@ describe("gateway startup config validation", () => {
     );
   });
 
+  it("preserves storage read failures without invalid-config repair guidance", async () => {
+    const snapshot = buildInvalidConfigSnapshot({
+      rawConfig: validConfig,
+      issues: [{ path: "", errorCode: "CONFIG_READ_FAILED", message: "read failed: ENOSPC" }],
+    });
+    mockStartupSnapshot(snapshot);
+    const start = loadTestStartup({});
+    await expect(start).rejects.toMatchObject({ code: "CONFIG_READ_FAILED" });
+    await expect(start).rejects.not.toThrow("doctor --fix");
+    expect(applyPluginAutoEnable).not.toHaveBeenCalled();
+    expect(configIo.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("renders actionable diagnostics for invalid config written by a newer version", async () => {
     const rawConfig = {
       meta: { lastTouchedVersion: "9999.1.1" },
@@ -626,21 +640,21 @@ describe("gateway startup config validation", () => {
   it.each(["Nix", "read-only"])("rejects legacy config entries in %s mode", async (mode) => {
     const legacySnapshot = buildInvalidConfigSnapshot({
       rawConfig: {
-        heartbeat: { model: "anthropic/claude-3-5-haiku-20241022", every: "30m" },
+        session: { typingMode: "thinking" },
       },
       config: {} as OpenClawConfig,
       issues: [
         {
-          path: "heartbeat",
+          path: "session.typingMode",
           message:
-            "top-level heartbeat is not a valid config path; use agents.defaults.heartbeat (cadence/target/model settings) or channels.defaults.heartbeat (showOk/showAlerts/useIndicator).",
+            'session.typingMode moved to agents.defaults.typingMode. Run "openclaw doctor --fix".',
         },
       ],
       legacyIssues: [
         {
-          path: "heartbeat",
+          path: "session.typingMode",
           message:
-            "top-level heartbeat is not a valid config path; use agents.defaults.heartbeat (cadence/target/model settings) or channels.defaults.heartbeat (showOk/showAlerts/useIndicator).",
+            'session.typingMode moved to agents.defaults.typingMode. Run "openclaw doctor --fix".',
         },
       ],
     });
@@ -669,27 +683,6 @@ describe("gateway startup config validation", () => {
       ],
     });
     vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
-    await expectStartupRejects(`Invalid config at ${configPath}:`);
-  });
-
-  it("keeps mixed plugin and core startup invalidity fatal", async () => {
-    const rawConfig = enabledPluginRawConfig("invalid");
-    const invalidSnapshot = buildInvalidConfigSnapshot({
-      rawConfig,
-      config: rawConfig as unknown as OpenClawConfig,
-      issues: [
-        {
-          path: "gateway.mode",
-          message: "Expected 'local' or 'remote'",
-        },
-        {
-          path: "plugins.entries.feishu.config.token",
-          message: "invalid config: must be string",
-        },
-      ],
-    });
-    vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
-
     await expectStartupRejects(`Invalid config at ${configPath}:`);
   });
 

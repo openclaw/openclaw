@@ -1,4 +1,3 @@
-// Matrix helper module supports config schema behavior.
 import {
   AllowFromListSchema,
   BlockStreamingCoalesceSchema,
@@ -57,6 +56,7 @@ const botLoopProtectionSchema = z
   .optional();
 
 export const matrixRoomSchema = buildGroupEntrySchema({
+  requireMentionInBotThreads: z.boolean().optional(),
   account: z.string().optional(),
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
   botLoopProtection: botLoopProtectionSchema,
@@ -133,13 +133,18 @@ export const MatrixConfigSchema = z.object({
   configWrites: z.boolean().optional(),
   joinIntro: z.boolean().optional(),
   defaultAccount: z.string().optional(),
-  // Accounts stay schema-open, but retired scalar streaming must fail loudly
-  // instead of silently resolving to "off"; doctor migrates the old spelling.
+  // Accounts stay schema-open for most fields, but credential leaves must use
+  // SecretInput so Control UI redaction keeps source/provider and only masks id.
   accounts: z
     .record(
       z.string(),
       z
-        .object({ joinIntro: z.boolean().optional() })
+        .object({
+          joinIntro: z.boolean().optional(),
+          requireMentionInBotThreads: z.boolean().optional(),
+          accessToken: buildSecretInputSchema().optional(),
+          password: buildSecretInputSchema().optional(),
+        })
         .passthrough()
         .refine(hasCanonicalMatrixAccountStreaming, {
           message:
@@ -164,6 +169,7 @@ export const MatrixConfigSchema = z.object({
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
   botLoopProtection: botLoopProtectionSchema,
   groupPolicy: GroupPolicySchema.optional(),
+  requireMentionInBotThreads: z.boolean().optional(),
   mentionPatterns: MentionPatternsPolicySchema.optional(),
   contextVisibility: ContextVisibilityModeSchema.optional(),
   streaming: matrixStreamingSchema.optional(),

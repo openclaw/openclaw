@@ -1,8 +1,6 @@
-// File Transfer plugin module implements dir list tool behavior.
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
-import { appendFileTransferAudit } from "../shared/audit.js";
 import { readClampedInt } from "../shared/params.js";
 import {
   DIR_LIST_DEFAULT_MAX_ENTRIES,
@@ -21,7 +19,11 @@ function directoryListingText(
   truncated: boolean,
 ): string {
   const offset = parseStrictNonNegativeInteger(pageToken) ?? 0;
-  const visible: Array<{ name: unknown; isDir: unknown; size: unknown }> = [];
+  const header = JSON.stringify({ path: canonicalPath, returnedCount: entries.length }).slice(
+    0,
+    -1,
+  );
+  const visible: string[] = [];
   const render = () => {
     const limited = visible.length < entries.length;
     const continuation = limited
@@ -29,14 +31,8 @@ function directoryListingText(
         ? String(offset + visible.length)
         : undefined
       : nextPageToken;
-    const listing = JSON.stringify({
-      path: canonicalPath,
-      returnedCount: entries.length,
-      displayedCount: visible.length,
-      entries: visible,
-      truncated: limited || truncated,
-      nextPageToken: continuation,
-    });
+    const tail = JSON.stringify({ truncated: limited || truncated, nextPageToken: continuation });
+    const listing = `${header},"displayedCount":${visible.length},"entries":[${visible.join(",")}],${tail.slice(1)}`;
     const note =
       limited && visible.length === 0
         ? "No entries displayed: the next complete entry or directory metadata exceeds the text budget or contains reserved markers. Pagination cannot advance; use available node-local directory capabilities."
@@ -55,7 +51,7 @@ function directoryListingText(
   // Keep normal continuation guidance the same size on the last page so a
   // longer intermediate footer cannot prevent a complete page from fitting.
   for (const { name, isDir, size } of entries) {
-    visible.push({ name, isDir, size });
+    visible.push(JSON.stringify({ name, isDir, size }));
     const candidate = render();
     if (!candidate) {
       break;
@@ -91,7 +87,7 @@ export function createDirListTool(): AnyAgentTool {
           ? params.pageToken.trim()
           : undefined;
 
-      const { nodeId, nodeDisplayName, payload, startedAt } = await invokeNodeToolPayload({
+      const { audit, payload } = await invokeNodeToolPayload({
         node,
         params,
         command: "dir.list",
@@ -112,14 +108,9 @@ export function createDirListTool(): AnyAgentTool {
       const nextPageToken =
         typeof payload.nextPageToken === "string" ? payload.nextPageToken : undefined;
 
-      await appendFileTransferAudit({
-        op: "dir.list",
-        nodeId,
-        nodeDisplayName,
-        requestedPath: dirPath,
+      await audit({
         canonicalPath,
         decision: "allowed",
-        durationMs: Date.now() - startedAt,
       });
 
       return {

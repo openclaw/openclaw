@@ -31,9 +31,14 @@ import {
 } from "../pages/chat/chat-history-events.ts";
 import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
 import type { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
+import {
+  consumePluginHelpAutoOpen,
+  dismissPluginHelpAutoOpen,
+  subscribePluginHelp,
+} from "../pages/custodian/plugin-help-state.ts";
 import { renderAssistantPanelLoading } from "./assistant-panel-loading.ts";
 import { DockLayoutController } from "./dock-layout-controller.ts";
-import { assistantPanelLayout, type DockPanelSide } from "./dock-panel-layout.ts";
+import { assistantPanelLayout } from "./dock-panel-layout.ts";
 import { icons } from "./icons.ts";
 import { renderLazyElementState } from "./lazy-view-error.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
@@ -49,12 +54,11 @@ const ASSISTANT_CONTENT_ELEMENT = {
 };
 
 type AssistantDestination = "home" | "custodian";
-type AssistantDock = Exclude<DockPanelSide, "left">;
 
 export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   @property({ attribute: false })
-  context: ApplicationContext<RouteId> | undefined;
+  context: ApplicationContext | undefined;
   @property({ type: Boolean }) custodianAvailable = false;
   @property({ type: Boolean }) homeAvailable = false;
   @property({ type: Boolean }) custodianSuppressed = false;
@@ -85,6 +89,10 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   constructor() {
     super();
     void new SubscriptionsController(this)
+      .watch(
+        () => this.context,
+        (context, notify) => subscribePluginHelp(context, notify),
+      )
       .watch(
         () => this.store,
         (store, notify) => store.subscribe(notify),
@@ -170,6 +178,15 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     }
     if (wasOpen && !this.dockLayout.open) {
       this.claimInput("page");
+    }
+    if (
+      this.context &&
+      this.custodianAvailable &&
+      !this.custodianSuppressed &&
+      window.innerWidth > 1100 &&
+      consumePluginHelpAutoOpen(this.context)
+    ) {
+      this.openDestination("custodian");
     }
     this.startHomeAfterPrimaryChat();
     this.contentLoader.requestWhileActive(
@@ -332,11 +349,10 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     }
   }
 
-  private setDock(dock: AssistantDock): void {
-    this.dockLayout.setDock(dock);
-  }
-
   private setOpen(open: boolean): void {
+    if (!open && this.destination === "custodian" && this.context) {
+      dismissPluginHelpAutoOpen(this.context);
+    }
     if (open && this.destination === "home") {
       this.homeStarted = true;
     }
@@ -407,7 +423,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
               .size=${16}
             ></openclaw-mascot>
             ${(["home", "custodian"] as const).map((destination) =>
-              (destination === "home" ? this.homeAvailable : this.custodianAvailable)
+              this.availableFor(destination)
                 ? html`<button
                     type="button"
                     class="assistant-panel-tab"
@@ -438,7 +454,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
               aria-label=${
                 dock === "bottom" ? t("assistantPanel.dockRight") : t("assistantPanel.dockBottom")
               }
-              @click=${() => this.setDock(dock === "bottom" ? "right" : "bottom")}
+              @click=${() => this.dockLayout.setDock(dock === "bottom" ? "right" : "bottom")}
             >
               ${dock === "bottom" ? icons.panelRightOpen : icons.panelBottomOpen}
             </button>

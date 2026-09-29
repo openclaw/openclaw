@@ -1,18 +1,163 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { collectPackageDistImports } from "../../scripts/lib/package-dist-imports.mjs";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  collectPackageDistImportErrors,
+  collectPackageDistImports,
+} from "../../scripts/lib/package-dist-imports.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const CHECK_SCRIPT = "scripts/check-package-dist-imports.mjs";
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
-  cleanupTempDirs(tempDirs);
+describe("collectPackageDistImportErrors", () => {
+  it.each([undefined, "commonjs"])(
+    "resolves CommonJS files and directory entries with package type %s",
+    (type) => {
+      const sources: Record<string, string> = {
+        "package.json": JSON.stringify({ type }),
+        "index.js": [
+          "./exact",
+          "./lib/global",
+          "./data",
+          "./native",
+          "./directory",
+          "./main-file",
+          "./main-directory",
+          "./main-missing",
+        ]
+          .map((specifier) => `require(${JSON.stringify(specifier)});`)
+          .join("\n"),
+        exact: "module.exports = true;",
+        "lib/global.js": "module.exports = true;",
+        "data.json": '{"value":true}',
+        "native.node": "",
+        "directory/index.js": "module.exports = true;",
+        "main-file/package.json": '{"main":"./entry"}',
+        "main-file/entry.js": "module.exports = true;",
+        "main-directory/package.json": '{"main":"./runtime"}',
+        "main-directory/runtime/index.js": "module.exports = true;",
+        "main-missing/package.json": '{"main":"./missing"}',
+        "main-missing/index.js": "module.exports = true;",
+      };
+      const check = () =>
+        collectPackageDistImportErrors({
+          files: Object.keys(sources),
+          readText: (file) => sources[file]!,
+        });
+
+      expect(check()).toEqual([]);
+      delete sources["lib/global.js"];
+      expect(check()).toEqual(["index.js imports missing lib/global"]);
+      sources["index.js"] = 'import("./data"); require("./data?rev=1");';
+      expect(check()).toEqual([
+        "index.js imports missing data",
+        "index.js imports missing data?rev=1",
+      ]);
+    },
+  );
+
+  it("honors explicit CommonJS extensions and nested package boundaries", () => {
+    const sources: Record<string, string> = {
+      "package.json": '{"type":"module"}',
+      "index.cjs": 'function sloppy(value, value) {}\nrequire("./leaf");',
+      "leaf.js": "export {};",
+      "nested/package.json": "{}",
+      "nested/index.js": 'function sloppy(value, value) {}\nrequire("./leaf");',
+      "nested/leaf.js": "module.exports = true;",
+    };
+    expect(
+      collectPackageDistImportErrors({
+        files: Object.keys(sources),
+        readText: (file) => sources[file]!,
+      }),
+    ).toEqual([]);
+  });
+
+  it.each([
+    { type: "module", entry: "index.js" },
+    { type: "commonjs", entry: "index.mjs" },
+  ])("keeps ESM paths exact in $entry with package type $type", ({ type, entry }) => {
+    const sources: Record<string, string> = {
+      "package.json": JSON.stringify({ type }),
+      [entry]: 'import "./leaf"; export * from "./leaf"; import("./leaf");',
+      "leaf.js": "",
+    };
+    expect(
+      collectPackageDistImportErrors({
+        files: Object.keys(sources),
+        readText: (file) => sources[file]!,
+      }),
+    ).toEqual(Array.from({ length: 3 }, () => `${entry} imports missing leaf`));
+  });
 });
 
 describe("collectPackageDistImports", () => {
+  it.each(["mjs", "cjs"])(
+    "keeps binding searches bounded while rejecting a redeclaration in a large %s artifact",
+    (extension) => {
+      const bindings = 2048;
+      const source =
+        Array.from(
+          { length: bindings },
+          (_, index) => `const package_binding_${index} = ${index};`,
+        ).join("\n") + "\nlet package_binding_0;";
+      let searchedSlots = 0;
+      const indexOf = Array.prototype.indexOf;
+      const observed = vi.spyOn(Array.prototype, "indexOf").mockImplementation(function (
+        this: unknown[],
+        value: unknown,
+        fromIndex?: number,
+      ) {
+        if (typeof value === "string" && value.startsWith("package_binding_")) {
+          searchedSlots += this.length;
+        }
+        return indexOf.call(this, value, fromIndex);
+      });
+      try {
+        expect(() =>
+          collectPackageDistImports({
+            files: [`dist/index.${extension}`],
+            readText: () => source,
+          }),
+        ).toThrow("Identifier 'package_binding_0' has already been declared");
+      } finally {
+        observed.mockRestore();
+      }
+      expect(searchedSlots).toBeLessThanOrEqual(bindings * 8);
+    },
+  );
+
+  it("preserves sloppy CommonJS bindings and its explicit strict directive", () => {
+    const source = [
+      "function value(arg, arg) {}",
+      "var value; var value;",
+      "try {} catch (value) { var value; }",
+      'return require("./leaf.cjs");',
+    ].join("\n");
+    expect(
+      collectPackageDistImports({ files: ["dist/index.cjs"], readText: () => source }),
+    ).toEqual([{ importerPath: "dist/index.cjs", importedPath: "dist/leaf.cjs", kind: "require" }]);
+    expect(() =>
+      collectPackageDistImports({
+        files: ["dist/index.cjs"],
+        readText: () => `"use strict";\n${source}`,
+      }),
+    ).toThrow("Argument name clash");
+  });
+
+  it("leaves installed dependency modules to their own package scope", () => {
+    expect(
+      collectPackageDistImports({
+        files: ["node_modules/vendor/index.js", "dist/node_modules/vendor/index.mjs"],
+        readText: () => {
+          throw new Error("Dependency source belongs to a separate package scope");
+        },
+      }),
+    ).toEqual([]);
+  });
+
   it("collects runtime imports around JSDoc without including documentation references", () => {
     const imports = collectPackageDistImports({
       files: ["dist/index.js"],
@@ -26,12 +171,14 @@ describe("collectPackageDistImports", () => {
           'function load() { return import("./dynamic.js"); }',
           'require("./common.cjs");',
           'new URL("./worker.mjs", import.meta.url);',
+          "export { later }; const later = 1;",
         ].join("\n"),
     });
     expect(imports).toEqual(
       ["value.js", "exports.js", "dynamic.js", "common.cjs", "worker.mjs"].map((name) => ({
         importerPath: "dist/index.js",
         importedPath: `dist/${name}`,
+        kind: name === "common.cjs" ? "require" : undefined,
       })),
     );
   });
@@ -53,9 +200,10 @@ describe("collectPackageDistImports", () => {
       });
       const expectedNativeEdges = importerPath === "dist/managed-handoff-runtime.mjs" ? 4 : 5;
       expect(imports).toEqual([
-        ...Array.from({ length: expectedNativeEdges }, () => ({
+        ...Array.from({ length: expectedNativeEdges }, (_, index) => ({
           importerPath,
           importedPath: "dist/node_modules/koffi/indirect.cjs",
+          kind: index === expectedNativeEdges - 1 ? "require" : undefined,
         })),
         { importerPath, importedPath: "dist/node_modules/koffi/other.cjs" },
       ]);
@@ -78,12 +226,36 @@ describe("collectPackageDistImports", () => {
       ["dist/data.json", "outside.cjs", "dist/worker.mjs"].map((importedPath) => ({
         importerPath: "dist/index.mjs",
         importedPath,
+        kind: importedPath === "outside.cjs" ? "require" : undefined,
       })),
     );
   });
 });
 
 describe("check-package-dist-imports", () => {
+  it("checks large bundles in a bounded heap and still rejects missing trailing imports", () => {
+    const root = tempDirs.make("openclaw-package-dist-imports-large-");
+    mkdirSync(join(root, "dist"));
+    writeFileSync(join(root, "dist", "leaf.mjs"), "export {};\n");
+    const source = 'import "./leaf.mjs";\n' + "void 0;\n".repeat(400_000);
+
+    for (const target of ["leaf.mjs", "missing.mjs"]) {
+      writeFileSync(join(root, "dist", "index.mjs"), `${source}export * from "./${target}";\n`);
+      const result = spawnSync(process.execPath, ["--max-old-space-size=48", CHECK_SCRIPT, root], {
+        encoding: "utf8",
+      });
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.signal, result.stderr).toBeNull();
+      if (target === "leaf.mjs") {
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package dist import closure passed.");
+      } else {
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stderr).toContain("dist/index.mjs imports missing dist/missing.mjs");
+      }
+    }
+  });
+
   it("prints help before reading package state", () => {
     const result = spawnSync("node", [CHECK_SCRIPT, "--help"], { encoding: "utf8" });
 
@@ -119,7 +291,7 @@ describe("check-package-dist-imports", () => {
   ])(
     "enforces one dist root with leading $leading and tail $tail",
     ({ leading, tail, accepted }) => {
-      const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");
+      const root = tempDirs.make("openclaw-package-dist-imports-");
       mkdirSync(join(root, "dist"), { recursive: true });
       writeFileSync(join(root, "dist", "index.js"), "export {};\n", "utf8");
 
@@ -139,7 +311,7 @@ describe("check-package-dist-imports", () => {
   );
 
   it("rejects missing chunks across ESM import, re-export, and CommonJS forms", () => {
-    const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");
+    const root = tempDirs.make("openclaw-package-dist-imports-");
     mkdirSync(join(root, "dist"), { recursive: true });
     const sources = {
       "named-import.js": 'import { value } from "./missing.js";\n',
@@ -147,6 +319,7 @@ describe("check-package-dist-imports", () => {
       "named-export.js": 'export { value } from "./missing.js";\n',
       "multiline-export.js": 'export {\n  value,\n} from "./missing.js";\n',
       "index.cjs": 'module.exports = require("./chunk.cjs");\n',
+      "return.cjs": 'var await = require("./chunk.cjs"); return await;\n',
     };
     for (const [file, source] of Object.entries(sources)) {
       writeFileSync(join(root, "dist", file), source, "utf8");
@@ -162,7 +335,7 @@ describe("check-package-dist-imports", () => {
   });
 
   it("ignores import-like text inside multiline template literals", () => {
-    const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");
+    const root = tempDirs.make("openclaw-package-dist-imports-");
     mkdirSync(join(root, "dist"), { recursive: true });
     writeFileSync(
       join(root, "dist", "index.js"),
@@ -177,7 +350,7 @@ describe("check-package-dist-imports", () => {
   });
 
   it("ignores import.meta.url probes outside packaged dist", () => {
-    const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");
+    const root = tempDirs.make("openclaw-package-dist-imports-");
     mkdirSync(join(root, "dist"), { recursive: true });
     const probes = [
       "../../openclaw.mjs",

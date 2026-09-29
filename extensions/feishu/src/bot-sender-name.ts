@@ -1,4 +1,3 @@
-// Feishu plugin module implements bot sender name behavior.
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,
@@ -18,10 +17,6 @@ type SenderNameResult = {
   name?: string;
   permissionError?: FeishuPermissionError;
 };
-
-type FeishuContactUserGetResponse = Awaited<
-  ReturnType<ReturnType<typeof createFeishuClient>["contact"]["user"]["get"]>
->;
 
 type FeishuLogger = (...args: unknown[]) => void;
 
@@ -135,7 +130,7 @@ export async function resolveFeishuSenderName(params: {
   try {
     const client = createFeishuClient(account);
     const userIdType = resolveSenderLookupIdType(normalizedSenderId);
-    const res: FeishuContactUserGetResponse = await client.contact.user.get({
+    const res = await client.contact.user.get({
       path: { user_id: normalizedSenderId },
       params: { user_id_type: userIdType },
     });

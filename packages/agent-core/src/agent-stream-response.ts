@@ -1,4 +1,9 @@
-import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
+import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
+import {
+  createEmptyTransportUsage,
+  replaceCompactionReplayOwnerContent,
+} from "@openclaw/ai/transports";
+import { PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE } from "@openclaw/llm-core";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -154,7 +159,11 @@ export async function streamAgentResponse(
     ? AbortSignal.any([signal, executionAbort.signal])
     : executionAbort.signal;
   const abortFailedResponse = (message?: AssistantMessage) => {
-    if (message?.stopReason === "error" || message?.stopReason === "aborted") {
+    if (
+      message &&
+      (message.stopReason === "error" || message.stopReason === "aborted") &&
+      !isResponsesOutputLimitToolCallError(message)
+    ) {
       executionAbort.abort(new Error(message.errorMessage ?? "Model response interrupted"));
     }
   };
@@ -326,14 +335,7 @@ export async function streamAgentResponse(
                       ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
                       stopReason: "toolUse",
                       // Usage belongs to the terminal fragment, once per provider response.
-                      usage: {
-                        input: 0,
-                        output: 0,
-                        cacheRead: 0,
-                        cacheWrite: 0,
-                        totalTokens: 0,
-                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-                      },
+                      usage: createEmptyTransportUsage(),
                     }),
                   );
                   streamedTurnId ??= prefix.turnId;
@@ -360,15 +362,25 @@ export async function streamAgentResponse(
         return await finalizeAssistantMessage();
 
         async function finalizeAssistantMessage(terminal?: AssistantMessage) {
-          // Fence queued side effects before result hooks or transcript persistence can yield.
+          // Output-limit recovery drains admitted tools; other failures fence queued starts.
           abortFailedResponse(terminal);
           const result = await response.result();
           abortFailedResponse(result);
+          const outputLimit = isResponsesOutputLimitToolCallError(result);
+          if (outputLimit) {
+            // Record one provider terminal, with its original usage, after tool outcomes settle.
+            await executions;
+          }
           const finalMessage = prepareAssistantMessage(
             ensureToolTurnIdentity(
               removeNonExecutableToolCalls({
                 ...remainingFragment(result),
                 ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
+                ...(outputLimit && signal?.aborted
+                  ? { stopReason: "aborted" }
+                  : outputLimit && batches.length > 0 && batches.every((batch) => batch.terminate)
+                    ? { errorCode: PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE }
+                    : {}),
               }),
             ),
           );

@@ -1,6 +1,6 @@
 // Controller for the Memory destination page. The URL owns the active tab;
-// this element owns the shared agent selection, Overview status, and global
-// configuration controllers used by Settings.
+// this element projects Settings agent selection into Overview status and
+// consumes the global configuration controllers used by Settings.
 import { consume } from "@lit/context";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type PropertyValues, type TemplateResult } from "lit";
@@ -13,11 +13,9 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
-import type { AgentSelectOption } from "../../components/agent-select.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -34,7 +32,7 @@ import {
   resolveDreamingConfigPathSupport,
   type DreamingConfigPathSupport,
 } from "../agents/memory/dreaming.ts";
-import "./memory-dreaming-page.ts";
+import "../agents/memory/memory-panel.ts";
 import "./memory-memories.ts";
 import { dreamingConfigPath, resolveDreamingTimezoneDefault } from "./memory-defaults.ts";
 import { renderDreamingSettings, renderDreamingUnsupported } from "./memory-dreaming.ts";
@@ -42,7 +40,7 @@ import { renderMemoryOverview, type MemoryOverviewStatus } from "./memory-overvi
 import {
   canonicalMemoryRouteLocation,
   memoryTabForRoute,
-  memorySchemaKeysForTab,
+  memoryVisibleSchemaKeys,
   resolveMemoryEngineSelection,
   selectedEngineId,
   type MemoryEngineSelection,
@@ -128,14 +126,14 @@ class MemorySettingsPage extends OpenClawLightDomElement {
 
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
-      () => this.context?.agentSelection,
+      () => this.context?.settingsAgentSelection,
       () => {
         this.syncRouteAgent();
         return undefined;
       },
     )
     .watch(
-      () => this.context?.agentSelection,
+      () => this.context?.settingsAgentSelection,
       (selection, notify) => selection.subscribe(notify),
       (selection) => this.selectAgent(selection.state.selectedId),
     )
@@ -172,11 +170,16 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     this.syncCanonicalLocation();
   }
 
-  private syncRouteAgent(previousRoute?: ConfigRouteData | null) {
+  private syncRouteAgent() {
     const routeAgentId = new URLSearchParams(this.routeData?.search).get("agent")?.trim();
-    const previousRouteAgentId = new URLSearchParams(previousRoute?.search).get("agent")?.trim();
-    if (routeAgentId && routeAgentId !== previousRouteAgentId) {
-      this.context.agentSelection.set(normalizeAgentId(routeAgentId));
+    const intent = this.routeData?.agentSelectionIntent;
+    const selection = this.context.settingsAgentSelection;
+    if (
+      routeAgentId &&
+      intent?.owner === selection &&
+      intent.revision === selection.intentRevision
+    ) {
+      selection.set(normalizeAgentId(routeAgentId));
     }
   }
 
@@ -189,7 +192,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         this.overviewRequest = null;
         this.probingEmbeddings = false;
       }
-      this.syncRouteAgent(previousRoute);
+      this.syncRouteAgent();
       if (previous !== current) {
         void this.loadOverviewStatus();
       }
@@ -313,31 +316,13 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     this.catalog = catalog;
   }
 
-  private resolveAgentId(): string | null {
-    const agentsList = this.context.agents.state.agentsList;
-    const selectable = listSelectableAgents(agentsList?.agents ?? []);
-    if (this.selectedAgentId && selectable.some((agent) => agent.id === this.selectedAgentId)) {
-      return this.selectedAgentId;
-    }
-    return agentsList?.defaultId ?? selectable[0]?.id ?? null;
-  }
-
-  private agentOptions(): AgentSelectOption[] {
-    return listSelectableAgents(this.context.agents.state.agentsList?.agents ?? []).map(
-      (agent) => ({
-        value: agent.id,
-        label: normalizeAgentLabel(agent),
-        agent,
-      }),
-    );
-  }
-
   private selectAgent(agentId: string | null) {
     if (this.selectedAgentId === agentId) {
       return;
     }
     this.selectedAgentId = agentId;
     this.overviewRequest = null;
+    this.overviewStatus = { kind: "idle" };
     this.probingEmbeddings = false;
     void this.loadOverviewStatus();
   }
@@ -354,7 +339,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     }
     const connection = this.connection;
     const client = connection?.connected ? connection.client : null;
-    const agentId = this.resolveAgentId();
+    const agentId = this.selectedAgentId;
     if (!connection || !client) {
       this.overviewStatus = {
         kind: "error",
@@ -569,18 +554,9 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     }
   }
 
-  private configObjectFromController(): Record<string, unknown> | null {
-    return currentConfigObject(this.context.runtimeConfig.state);
-  }
-
   private dreamingPluginId(): string {
-    return resolveConfiguredDreaming(this.configObjectFromController()).pluginId;
-  }
-
-  private dreamingConfig(): Record<string, unknown> | null {
-    const plugins = asConfigRecord(this.configObjectFromController()?.plugins);
-    const entry = asConfigRecord(asConfigRecord(plugins?.entries)?.[this.dreamingPluginId()]);
-    return asConfigRecord(asConfigRecord(entry?.config)?.dreaming);
+    return resolveConfiguredDreaming(currentConfigObject(this.context.runtimeConfig.state))
+      .pluginId;
   }
 
   private syncSupport(runtimeConfig: ApplicationContext["runtimeConfig"]) {
@@ -622,7 +598,10 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   }
 
   private renderDreamingControls() {
-    const pluginId = this.dreamingPluginId();
+    const config = currentConfigObject(this.context.runtimeConfig.state);
+    const { pluginId } = resolveConfiguredDreaming(config);
+    const plugins = asConfigRecord(config?.plugins);
+    const entry = asConfigRecord(asConfigRecord(plugins?.entries)?.[pluginId]);
     return html`
       <p class="settings-page__intro">
         ${t("memoryPage.dreaming.intro", { plugin: pluginId })}
@@ -632,8 +611,8 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         this.support === "unsupported"
           ? renderDreamingUnsupported(pluginId)
           : renderDreamingSettings({
-              dreaming: this.dreamingConfig(),
-              timezoneDefault: resolveDreamingTimezoneDefault(this.configObjectFromController()),
+              dreaming: asConfigRecord(asConfigRecord(entry?.config)?.dreaming),
+              timezoneDefault: resolveDreamingTimezoneDefault(config),
               disabled: this.mutationDisabled,
               onPatch: (path, value) => this.patchDreaming(path, value),
             })
@@ -652,14 +631,15 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     const engineMutationDisabled =
       this.mutationDisabled || (this.catalog.kind === "ready" && !this.catalog.mutationAllowed);
     const activeTab = this.activeTab();
-    const agentId = this.resolveAgentId();
+    const agentId = this.selectedAgentId;
     const agentError = agentId ? null : this.context.agents.state.agentsError;
+    const engineState = this.engineState(engineSelection);
     return renderMemory({
       activeTab,
       onTabChange: (tab) => this.navigateTab(tab),
       engineOptions: buildMemoryEngineOptions(this.catalog, engineSelection),
       engineSelection,
-      engineState: this.engineState(engineSelection),
+      engineState,
       engineBusy: this.engineBusy || engineMutationDisabled,
       engineOutcome: this.engineOutcome,
       onEngineChange: (nextEngineId) => void this.changeEngine(nextEngineId, engineSelection),
@@ -678,13 +658,10 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       pluginsHref: this.pluginsHref,
       memoryImportHref: this.memoryImportHref,
       canImportMemory: readGatewayOperatorAccess(this.context.gateway.snapshot).canAdmin,
-      agentId,
-      agents: this.agentOptions(),
-      onAgentChange: (next) => this.context.agentSelection.set(next),
       overview: renderMemoryOverview({
         agentId,
         engineSelection,
-        engineDisabled: this.engineState(engineSelection) === "disabled",
+        engineDisabled: engineState === "disabled",
         status: agentError ? { kind: "error", message: agentError } : this.overviewStatus,
         probingEmbeddings: this.probingEmbeddings,
         onRefresh: () =>
@@ -705,9 +682,10 @@ class MemorySettingsPage extends OpenClawLightDomElement {
           .agentId=${agentId}
         ></openclaw-memory-memories>
       `,
-      dreams: html` <openclaw-memory-dreaming .agentId=${agentId}></openclaw-memory-dreaming> `,
-      editor:
-        activeTab === "settings" ? this.buildEditor(memorySchemaKeysForTab("settings")) : html``,
+      dreams: agentId
+        ? html`<openclaw-agent-memory-panel .agentId=${agentId}></openclaw-agent-memory-panel>`
+        : html``,
+      editor: activeTab === "settings" ? this.buildEditor(memoryVisibleSchemaKeys()) : html``,
       dreamingSettings: activeTab === "settings" ? this.renderDreamingControls() : html``,
     });
   }

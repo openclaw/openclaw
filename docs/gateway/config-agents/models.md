@@ -63,6 +63,24 @@ title: "Configuration — agent models"
   - String form sets only the primary model.
   - Object form sets primary plus ordered failover models.
 - `utilityModel`: optional `provider/model` ref or alias for short internal tasks. It currently powers generated Control UI session titles, Telegram DM topic titles, Discord auto-thread titles, rolling [Activity recaps](/web/control-ui/settings#activity-tab), and [progress-draft narration](/concepts/progress-drafts#status-headline). When unset, OpenClaw derives the primary provider's declared small-model default when one exists (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`); title tasks otherwise use the agent's primary model, and narration stays off. If a distinct utility model cannot prepare or complete a generated title, OpenClaw retries that title once with the primary model. For dashboard titles, automatic utility derivation and the regular fallback use the effective session provider and auth profile; an explicit utility model keeps its configured provider/auth. Set `utilityModel: ""` to skip the alternate utility route; dashboard title generation still proceeds directly to the regular session model. `agents.entries.*.utilityModel` overrides the default, and an operation-specific model override wins over both. Utility tasks make separate model calls and send task-specific content to the selected model provider. Dashboard title generation sends at most the first 1,000 characters of the first non-command message; narration sends the inbound request plus compact redacted tool summaries. Activity recaps send the previous recap and bounded excerpts of new transcript messages. Recaps stay on the utility route, retain cached text when it is unavailable, and stop generating when utility routing is disabled. Choose a provider that matches your cost and data-handling requirements.
+  During fresh setup, an explicit nonempty `utilityModel` can power the OpenClaw
+  setup assistant before a regular primary model is configured. Selecting the
+  utility role leaves regular agent chat unconfigured. Automatic provider-derived utility
+  models are not used to bootstrap setup. Once a primary model is configured, the
+  system assistant uses it, while short utility tasks retain their utility route.
+  Older configs retain their previous implicit primary, even when it matches the
+  utility model or alias. Doctor and normal config writes preserve that route as
+  an explicit primary before recording the utility-separation migration. Setup
+  uses the config from before provider preparation, so a newly added utility
+  provider cannot become the preserved primary. After migration, implicit fallback
+  to a configured provider skips the explicit utility model;
+  an explicit primary or fallback selection remains authoritative.
+  Dynamic catalog IDs and ambiguous auth-profile suffixes keep their legacy
+  routing until you choose an explicit primary; migration does not freeze those values.
+  If utility setup encounters an unconverted legacy primary, it asks you to run
+  `openclaw doctor --fix` or choose an explicit primary before authenticating the
+  utility provider. Existing model routing stays available during that repair.
+
 - `imageModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `view_image` tool path as its vision-model config when the active model cannot accept images. Native-vision models receive loaded image bytes directly instead.
   - Also used as fallback routing when the selected/default model cannot accept image input.
@@ -106,6 +124,7 @@ title: "Configuration — agent models"
   - For store-capable direct OpenAI Responses models, server-side compaction is enabled automatically and the same effective threshold delays local preflight compaction. Use `params.responsesServerCompaction: false` to stop injecting `context_management`, or `params.responsesCompactThreshold` to override the default of 70% of the resolved context window (80,000 when unavailable). ChatGPT OAuth, custom proxies, and routes with `compat.supportsStore: false` do not enable this path. See [OpenAI server-side compaction](/providers/openai/advanced#advanced-configuration).
 - `params`: global default provider parameters applied to all models. Set at `agents.defaults.params` (e.g. `{ cacheRetention: "long" }`).
 - `params` merge precedence (config): `agents.defaults.params` (global base), then `agents.defaults.models["provider/model"].params` (shared per-model), then `agents.entries.*.models["provider/model"].params` (agent-specific per-model), then `agents.entries.*.params` (agent-wide). Later layers override by key. See [Prompt Caching](/reference/prompt-caching) for details.
+- Model `params.thinking` sets that model's thinking default; an agent-specific model entry overrides the shared entry. Per-message and session choices, followed by the agent's `thinkingDefault`, take precedence over either model setting. See [thinking resolution order](/tools/thinking#resolution-order).
 - `models.providers.openrouter.params.provider`: OpenRouter-wide default provider-routing policy. OpenClaw forwards this to OpenRouter's request `provider` object; per-model `agents.defaults.models["openrouter/<model>"].params.provider` and agent params override by key. See [OpenRouter provider routing](/providers/openrouter#advanced-configuration).
 - `params.extra_body`/`params.extraBody`: advanced pass-through JSON merged into `api: "openai-completions"` request bodies for OpenAI-compatible proxies. If it collides with generated request keys, the extra body wins; non-native completions routes still strip OpenAI-only `store` afterward.
 - `params.chat_template_kwargs`: vLLM/OpenAI-compatible chat-template arguments merged into top-level `api: "openai-completions"` request bodies. For `vllm/nemotron-3-*` with thinking off, the bundled vLLM plugin automatically sends `enable_thinking: false` and `force_nonempty_content: true`; explicit `chat_template_kwargs` override generated defaults, and `extra_body.chat_template_kwargs` still has final precedence. Configured vLLM Qwen and Nemotron thinking models expose binary `/think` choices (`off`, `on`) instead of the multi-level effort ladder.

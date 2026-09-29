@@ -3,7 +3,7 @@ import fsSync, { type BigIntStats, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeAgentId } from "./config-utils.js";
-import { isFileMissingError } from "./fs-utils.js";
+import { isFileMissingError, normalizeComparablePath } from "./fs-utils.js";
 import {
   isDreamingNarrativeSessionStoreKey,
   extractAgentIdFromSessionsDir,
@@ -13,7 +13,8 @@ import {
   isCronRunSessionKey,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
-  listSessionEntries,
+  listSessionEntriesCore,
+  listSessionEntriesReadOnly,
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
   parseUsageCountedSessionIdFromFileName,
@@ -95,11 +96,6 @@ type SessionEntrySummary = {
 
 function isDreamingNarrativeSessionKeyLike(value: unknown): boolean {
   return typeof value === "string" && isDreamingNarrativeSessionStoreKey(value);
-}
-
-function normalizeComparablePath(pathname: string): string {
-  const resolved = path.resolve(pathname);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 function normalizeRealComparablePath(pathname: string): string {
@@ -393,11 +389,13 @@ function projectSessionTranscriptCorpusEntries(
   const includeContentRevision = options.includeContentRevision !== false;
   const activeEntriesBySessionId = new Map<string, SessionTranscriptCorpusEntry>();
   const entryOwnersBySessionId = new Map<string, string>();
-  const sessionEntries = listSessionEntries({
+  const listEntries =
+    options.readOnly === true ? listSessionEntriesReadOnly : listSessionEntriesCore;
+  const sessionEntries = listEntries({
     agentId: normalizedAgentId,
     env,
     hydrateSkillPromptRefs: false,
-    readOnly: options.readOnly === true,
+    projection: "list",
     storePath,
   });
   const retainedInstances = options.includeRetainedSqlite
@@ -405,6 +403,7 @@ function projectSessionTranscriptCorpusEntries(
         agentId: normalizedAgentId,
         env,
         hydrateSkillPromptRefs: false,
+        projection: "list",
         readConsistency: "latest",
         storePath,
       })
@@ -421,19 +420,23 @@ function projectSessionTranscriptCorpusEntries(
     ...retainedInstances.map(({ entry, sessionKey }) => ({ entry, sessionKey })),
     ...sessionEntries,
   ]);
-  for (const summary of sessionEntries) {
+  const resolveSessionOwnership = (key: string) => {
     const sessionKey = isSharedFixedStore
-      ? summary.sessionKey
+      ? key
       : canonicalizeMainSessionAlias({
           cfg,
           agentId: normalizedAgentId,
-          sessionKey: summary.sessionKey,
+          sessionKey: key,
         });
     const ownerAgentId = resolveSessionAgentId({
       config: cfg,
       sessionKey,
       ...(isSharedFixedStore ? {} : { fallbackAgentId: normalizedAgentId }),
     });
+    return { sessionKey, ownerAgentId };
+  };
+  for (const summary of sessionEntries) {
+    const { ownerAgentId } = resolveSessionOwnership(summary.sessionKey);
     const entry = toSessionStoreCorpusEntry(
       ownerAgentId,
       storePath,
@@ -457,18 +460,7 @@ function projectSessionTranscriptCorpusEntries(
       if (activeEntriesBySessionId.has(instance.sessionId)) {
         continue;
       }
-      const sessionKey = isSharedFixedStore
-        ? instance.sessionKey
-        : canonicalizeMainSessionAlias({
-            cfg,
-            agentId: normalizedAgentId,
-            sessionKey: instance.sessionKey,
-          });
-      const ownerAgentId = resolveSessionAgentId({
-        config: cfg,
-        sessionKey,
-        ...(isSharedFixedStore ? {} : { fallbackAgentId: normalizedAgentId }),
-      });
+      const { sessionKey, ownerAgentId } = resolveSessionOwnership(instance.sessionKey);
       if (ownerAgentId !== normalizedAgentId) {
         continue;
       }

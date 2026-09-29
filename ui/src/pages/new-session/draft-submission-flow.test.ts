@@ -1,8 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRouter } from "@openclaw/uirouter";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
+import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import * as terminalStart from "../../lib/sessions/catalog-terminal.ts";
+import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
+import * as toast from "../../lib/toast.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import {
   getChatAttachmentDataUrl,
@@ -20,7 +26,6 @@ import {
 } from "./draft-submission-flow.test-support.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
-import * as terminalStart from "./terminal-start.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -31,7 +36,166 @@ afterEach(() => {
   localStorage.clear();
 });
 
+const REMOTE_PROJECT = {
+  identity: "openclaw/openclaw",
+  cloneUrl: "https://github.com/openclaw/openclaw.git",
+};
+
+async function readyChatRoute() {
+  queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
+}
+
 describe("DraftSubmissionFlow", () => {
+  it.each(["available", "unavailable before create", "unavailable after create"] as const)(
+    "preserves the runtime through Auto placement when recovery storage is %s",
+    async (storage) => {
+      const { context, flow, place } = createDraftFixture({
+        methods: ["sessions.create", "sessions.dispatch"],
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+      });
+      place.applyPendingPlacement({ agentId: "main", profileId: "", autoDevice: true });
+      place.modelControl.selected = "openai/gpt-5.6-sol";
+      place.modelControl.agentRuntime = "codex";
+      vi.spyOn(flow, "canSubmit").mockReturnValue(true);
+      context.placementStartup.start = vi.fn();
+      const failStorage = () => {
+        vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+          throw new DOMException("storage disabled", "SecurityError");
+        });
+      };
+      vi.mocked(context.sessions.createResult).mockImplementation(async (params) => {
+        if (storage === "unavailable after create") {
+          failStorage();
+        }
+        return {
+          key: expectDefined(params?.key, "Auto placement create key"),
+          initialRun: { status: "idle" },
+        };
+      });
+      vi.mocked(context.navigateAndWait).mockImplementation(readyChatRoute);
+      flow.setMessage("Keep my model and runtime");
+      if (storage === "unavailable before create") {
+        failStorage();
+      }
+
+      await flow.submit();
+
+      if (storage !== "unavailable before create") {
+        expect(context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            agentId: "main",
+            message: "",
+            worktree: true,
+            model: "openai/gpt-5.6-sol",
+            agentRuntime: "codex",
+          }),
+          { reconciliation: "background" },
+        );
+        if (storage === "available") {
+          expect(context.placementStartup.start).toHaveBeenCalledOnce();
+        } else {
+          expect(context.placementStartup.start).not.toHaveBeenCalled();
+          expect(flow.error).toBe(
+            "The session was created, but startup needs attention: placement recovery storage is unavailable",
+          );
+          expect(flow.message).toBe("Keep my model and runtime");
+        }
+      } else {
+        expect(context.sessions.createResult).not.toHaveBeenCalled();
+        expect(context.placementStartup.start).not.toHaveBeenCalled();
+        expect(flow.error).toBe("Couldn't prepare session recovery. Your draft has been kept.");
+        expect(flow.message).toBe("Keep my model and runtime");
+      }
+      flow.disconnect();
+    },
+  );
+
+  it("preserves a restored file draft and reports disabled uploads without creating a session", async () => {
+    const { context, flow } = createDraftFixture();
+    context.config.current.uploadsEnabled = false;
+    const attachment = registerTextPayload("retained-upload");
+    flow.setMessage("Keep this prompt");
+    flow.attachmentDraft.restore([attachment]);
+    await flow.submit();
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    expect(flow.message).toBe("Keep this prompt");
+    expect(flow.attachmentDraft.attachments).toEqual([attachment]);
+    expect(flow.error).toContain("uploads are disabled");
+    flow.disconnect();
+  });
+
+  it("retains an oversized attachment draft before creating a session", async () => {
+    const takePreparedTitle = vi.fn(() => "Review files");
+    const { context, flow } = createDraftFixture({ takePreparedTitle });
+    const hello = expectDefined(context.gateway.snapshot.hello, "connected hello");
+    hello.policy = {
+      maxPayload: 256 * 1024 + 2,
+      attachments: { maxBytes: 10, maxImageBytes: 10 },
+    };
+    const attachments = ["first.txt", "second.txt"].map((fileName) => ({
+      id: fileName,
+      fileName,
+      mimeType: "text/plain",
+      dataUrl: "data:text/plain;base64,aQ==",
+    }));
+    const mentions = [{ profileId: "profile-alex", start: 0, end: 5 }];
+    flow.setMessage("@Alex review these", mentions);
+    flow.attachmentDraft.replace(attachments);
+    const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
+
+    await flow.submit();
+
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    expect(context.navigateAndWait).not.toHaveBeenCalled();
+    expect(flow.message).toBe("@Alex review these");
+    expect(flow.mentions).toEqual(mentions);
+    expect(flow.attachmentDraft.attachments).toEqual(attachments);
+    expect(flow.submitting).toBe(false);
+    expect(takePreparedTitle).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledExactlyOnceWith({
+      message: "Too large to send: second.txt",
+    });
+  });
+
+  it.each(["navigation", "reconnect"])("retires only the captured draft after %s", async (mode) => {
+    const { context, flow } = createDraftFixture();
+    const accepted = createDeferred<SessionCreateOutcome>();
+    vi.mocked(context.sessions.createResult).mockReturnValueOnce(accepted.promise);
+    const clear = vi.spyOn(flow.draftPersistence, "clearSubmittedDraft");
+    flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
+    flow.draftPersistence.selectRoute("original-route");
+    flow.setMessage("  @Alex submitted prompt  ", [{ profileId: "alex", start: 2, end: 7 }]);
+    stubObjectUrls("blob:submitted-file");
+    const attachment = registerTextPayload("submitted-file");
+    flow.attachmentDraft.replace([attachment]);
+    const pending = flow.submit();
+    await vi.waitFor(() => expect(context.sessions.createResult).toHaveBeenCalledOnce());
+    flow.invalidate("gateway-changed");
+    if (mode === "navigation") {
+      flow.disconnect();
+      flow.resetDraft();
+      flow.draftPersistence.selectRoute("replacement-route");
+      flow.setMessage("a newer prompt");
+    }
+    accepted.resolve({
+      key: "agent:main:created",
+      initialRun: { status: "started", runId: "created-run" },
+    });
+    await pending;
+    expect(flow.message).toBe(mode === "navigation" ? "a newer prompt" : "");
+    expect(flow.submitting).toBe(false);
+    expect(flow.pendingMessage).toBeNull();
+    expect(clear).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        scope: expect.objectContaining({ scopeKey: "original-route" }),
+        writeIds: expect.any(Set),
+      }),
+      expect.any(Function),
+    );
+    expect(context.navigateAndWait).not.toHaveBeenCalled();
+    flow.disconnect();
+  });
+
   it.each(["navigation", "reconnect"] as const)(
     "consumes an accepted draft before asynchronous cleanup and %s",
     async (next) => {
@@ -45,12 +209,14 @@ describe("DraftSubmissionFlow", () => {
         throw new Error("Chat route failed to load");
       });
       let finishCleanup!: () => void;
-      const cleanup = vi.spyOn(flow.draftPersistence, "clearSubmittedDraft").mockImplementation(
-        () =>
-          new Promise<void>((resolve) => {
+      const cleanup = vi
+        .spyOn(flow.draftPersistence, "clearSubmittedDraft")
+        .mockImplementation((_submitted, consume) => {
+          consume?.();
+          return new Promise<void>((resolve) => {
             finishCleanup = resolve;
-          }),
-      );
+          });
+        });
       flow.setMessage("@Alex keep the accepted prompt", [
         { profileId: "profile-alex", start: 0, end: 5 },
       ]);
@@ -80,11 +246,11 @@ describe("DraftSubmissionFlow", () => {
         sessionKey,
         context.gateway.snapshot.client,
       );
-      expect(retained?.message.content).toContainEqual({
+      expect(retained?.message?.content).toContainEqual({
         type: "text",
         text: "@Alex keep the accepted prompt",
       });
-      expect(retained?.message["__openclaw"]).toMatchObject({
+      expect(retained?.message?.["__openclaw"]).toMatchObject({
         humanMentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
       });
       if (next === "reconnect") {
@@ -97,9 +263,7 @@ describe("DraftSubmissionFlow", () => {
           key: "agent:main:dashboard:next-draft",
           initialRun: { status: "started", runId: "next-draft-run" },
         });
-        vi.mocked(context.navigateAndWait).mockImplementation(async () => {
-          queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
-        });
+        vi.mocked(context.navigateAndWait).mockImplementation(readyChatRoute);
         await flow.submit();
         expect(
           vi.mocked(context.sessions.createResult).mock.calls.map(([params]) => params?.message),
@@ -123,7 +287,7 @@ describe("DraftSubmissionFlow", () => {
       },
     });
     Object.assign(context, { basePath: "/openclaw", replace: vi.fn() });
-    vi.spyOn(terminalStart, "startNewSessionInTerminal").mockResolvedValue({
+    vi.spyOn(terminalStart, "startCatalogSessionInTerminal").mockResolvedValue({
       sessionId: "terminal-created",
       cwd: "/workspace",
       shell: "codex",
@@ -157,14 +321,8 @@ describe("DraftSubmissionFlow", () => {
       key: expectDefined(params?.key, "remote session create key"),
       initialRun: { status: "idle" },
     }));
-    vi.mocked(context.navigateAndWait).mockImplementation(async () => {
-      queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
-    });
-    place.selectRemoteProject({
-      identity: "openclaw/openclaw",
-      cloneUrl: "https://github.com/openclaw/openclaw.git",
-      projectId: "old-local-clone",
-    });
+    vi.mocked(context.navigateAndWait).mockImplementation(readyChatRoute);
+    place.selectRemoteProject({ ...REMOTE_PROJECT, projectId: "old-local-clone" });
     place.setBaseRef("release/next");
     place.selectCloudProfile("cloud");
     flow.setMessage("Run only on the cloud worker");
@@ -254,10 +412,10 @@ describe("DraftSubmissionFlow", () => {
       "agent:main:dashboard:background",
       context.gateway.snapshot.client,
     );
-    expect(retained?.message["__openclaw"]).toMatchObject({
+    expect(retained?.message?.["__openclaw"]).toMatchObject({
       humanMentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
     });
-    expect(retained?.message.content).toContainEqual({
+    expect(retained?.message?.content).toContainEqual({
       type: "attachment",
       attachment: {
         url: `data:text/plain;base64,${btoa("background-note")}`,
@@ -278,17 +436,12 @@ describe("DraftSubmissionFlow", () => {
       methods: ["sessions.create", "sessions.dispatch"],
       scopes: ["operator.admin", "operator.read", "operator.write"],
     });
-    let finishOriginal!: (value: { key: string; initialRun: { status: "idle" } }) => void;
-    const original = new Promise<{ key: string; initialRun: { status: "idle" } }>((resolve) => {
-      finishOriginal = resolve;
-    });
+    const original = createDeferred<SessionCreateOutcome>();
     const result = { key: "agent:main:direct-resumed", initialRun: { status: "idle" as const } };
     vi.mocked(context.sessions.createResult)
-      .mockImplementationOnce(() => original)
+      .mockReturnValueOnce(original.promise)
       .mockResolvedValueOnce(result);
-    vi.mocked(context.navigateAndWait).mockImplementation(async () => {
-      queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
-    });
+    vi.mocked(context.navigateAndWait).mockImplementation(readyChatRoute);
     flow.setMessage("@Alex keep the original direct request", [
       { profileId: "profile-original", start: 0, end: 5 },
     ]);
@@ -322,20 +475,15 @@ describe("DraftSubmissionFlow", () => {
     await vi.waitFor(() => expect(context.sessions.createResult).toHaveBeenCalledTimes(2));
     expect(vi.mocked(context.sessions.createResult).mock.calls[1]?.[0]).toEqual(originalParams);
     expect(flow.pendingPlacement.sessionKey).toBe("");
-    finishOriginal(result);
+    original.resolve(result);
     await initialSubmission;
     await vi.waitFor(() => expect(flow.submitting).toBe(false));
   });
 
   it("unlocks visibly when a frozen retry loses sessions.create access", async () => {
     const { context, flow } = createDraftFixture();
-    let finishOriginal!: (value: { key: string; initialRun: { status: "idle" } }) => void;
-    vi.mocked(context.sessions.createResult).mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finishOriginal = resolve;
-        }),
-    );
+    const original = createDeferred<SessionCreateOutcome>();
+    vi.mocked(context.sessions.createResult).mockReturnValueOnce(original.promise);
     flow.setMessage("do not replay without authority");
     const initialSubmission = flow.submit();
     await vi.waitFor(() => expect(context.sessions.createResult).toHaveBeenCalledOnce());
@@ -349,7 +497,7 @@ describe("DraftSubmissionFlow", () => {
     expect(flow.error).toBeTruthy();
     expect(flow.submitting).toBe(false);
     expect(context.sessions.createResult).toHaveBeenCalledOnce();
-    finishOriginal({ key: "agent:main:old", initialRun: { status: "idle" } });
+    original.resolve({ key: "agent:main:old", initialRun: { status: "idle" } });
     await initialSubmission;
   });
 
@@ -358,13 +506,8 @@ describe("DraftSubmissionFlow", () => {
     let now = 1_000;
     clock.mockImplementation(() => now);
     const { context, flow } = createDraftFixture();
-    let finishOriginal!: (value: { key: string; initialRun: { status: "idle" } }) => void;
-    vi.mocked(context.sessions.createResult).mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finishOriginal = resolve;
-        }),
-    );
+    const original = createDeferred<SessionCreateOutcome>();
+    vi.mocked(context.sessions.createResult).mockReturnValueOnce(original.promise);
     flow.setMessage("the original outcome is unknown");
     const initialSubmission = flow.submit();
     await vi.waitFor(() => expect(context.sessions.createResult).toHaveBeenCalledOnce());
@@ -377,7 +520,7 @@ describe("DraftSubmissionFlow", () => {
     expect(flow.submitting).toBe(false);
     expect(flow.canSubmit()).toBe(false);
     expect(context.sessions.createResult).toHaveBeenCalledOnce();
-    finishOriginal({ key: "agent:main:old", initialRun: { status: "idle" } });
+    original.resolve({ key: "agent:main:old", initialRun: { status: "idle" } });
     await initialSubmission;
     clock.mockRestore();
   });
@@ -474,10 +617,7 @@ describe("DraftSubmissionFlow", () => {
     { methods: ["sessions.create"], allowed: true, worktree: true },
   ])("checks remote-project access with worktree=$worktree", ({ methods, allowed, worktree }) => {
     const { flow, place } = createDraftFixture({ methods });
-    place.selectRemoteProject({
-      identity: "openclaw/openclaw",
-      cloneUrl: "https://github.com/openclaw/openclaw.git",
-    });
+    place.selectRemoteProject({ ...REMOTE_PROJECT });
     if (worktree) {
       place.selectWorktree(true);
       flow.setMessage("start in a worktree");
@@ -490,25 +630,17 @@ describe("DraftSubmissionFlow", () => {
     { scenario: "an empty session", message: "", worktree: false },
     { scenario: "an empty worktree session", message: "", worktree: true },
   ])("materializes a remote project before $scenario", async ({ message, worktree }) => {
-    let materializeProject!: (project: { id: string }) => void;
-    const materializedProject = new Promise<{ id: string }>((resolve) => {
-      materializeProject = resolve;
-    });
+    const materializedProject = createDeferred<{ id: string }>();
     const { context, flow, place, request } = createDraftFixture({
       methods: ["projects.add", "sessions.create"],
-      request: async (method) => (method === "projects.add" ? materializedProject : {}),
+      request: async (method) => (method === "projects.add" ? materializedProject.promise : {}),
     });
     vi.mocked(context.sessions.createResult).mockResolvedValue({
       key: "agent:main:empty-remote-project",
       initialRun: { status: "idle" },
     });
-    vi.mocked(context.navigateAndWait).mockImplementation(async () => {
-      queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
-    });
-    place.selectRemoteProject({
-      identity: "openclaw/openclaw",
-      cloneUrl: "https://github.com/openclaw/openclaw.git",
-    });
+    vi.mocked(context.navigateAndWait).mockImplementation(readyChatRoute);
+    place.selectRemoteProject({ ...REMOTE_PROJECT });
     if (worktree) {
       place.selectWorktree(true);
     }
@@ -525,7 +657,7 @@ describe("DraftSubmissionFlow", () => {
       ),
     );
     expect(context.sessions.createResult).not.toHaveBeenCalled();
-    materializeProject({ id: "openclaw" });
+    materializedProject.resolve({ id: "openclaw" });
     await submitted;
 
     const createParams = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
@@ -546,10 +678,7 @@ describe("DraftSubmissionFlow", () => {
         throw new Error("clone failed");
       },
     });
-    place.selectRemoteProject({
-      identity: "openclaw/openclaw",
-      cloneUrl: "https://github.com/openclaw/openclaw.git",
-    });
+    place.selectRemoteProject({ ...REMOTE_PROJECT });
     vi.spyOn(flow, "canSubmit").mockReturnValue(true);
 
     await flow.submit();
@@ -566,20 +695,10 @@ describe("DraftSubmissionFlow", () => {
     { scenario: "an attachment-only worktree", message: "", worktree: true },
   ])("admits a remote project once with $scenario", async ({ message, worktree }) => {
     const { context, flow, place, request } = createDraftFixture();
-    let admitSession!: (value: { key: string; initialRun: { status: "idle" } }) => void;
-    vi.mocked(context.sessions.createResult).mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          admitSession = resolve;
-        }),
-    );
-    vi.mocked(context.navigateAndWait).mockImplementation(async () => {
-      queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
-    });
-    place.selectRemoteProject({
-      identity: "openclaw/openclaw",
-      cloneUrl: "https://github.com/openclaw/openclaw.git",
-    });
+    const admission = createDeferred<SessionCreateOutcome>();
+    vi.mocked(context.sessions.createResult).mockReturnValueOnce(admission.promise);
+    vi.mocked(context.navigateAndWait).mockImplementation(readyChatRoute);
+    place.selectRemoteProject({ ...REMOTE_PROJECT });
     if (worktree) {
       place.selectWorktree(true);
     }
@@ -610,7 +729,7 @@ describe("DraftSubmissionFlow", () => {
       worktree || undefined,
     );
 
-    admitSession({ key: "agent:main:remote-project", initialRun: { status: "idle" } });
+    admission.resolve({ key: "agent:main:remote-project", initialRun: { status: "idle" } });
     await Promise.all([submitted, duplicate]);
 
     expect(context.sessions.createResult).toHaveBeenCalledOnce();
@@ -698,9 +817,14 @@ describe("DraftSubmissionFlow", () => {
         return {};
       }),
     };
+    const router = createRouter<RouteId, ApplicationContext>({
+      routes: [{ id: "chat", path: "/chat", component: () => ({}) }],
+    });
     const context = {
       basePath: "",
+      router,
       gateway: {
+        subscribe: () => () => undefined,
         subscribeEvents: () => () => undefined,
         connection: { gatewayUrl: "ws://gateway.example" },
         snapshot: {
@@ -739,6 +863,7 @@ describe("DraftSubmissionFlow", () => {
       config: { current: {} },
       navigateAndWait,
     } as unknown as ApplicationContext;
+    await router.navigate("chat", context);
     const host = new TestReactiveControllerHost();
     const gateway = new DraftGatewayState(
       host,
@@ -800,7 +925,7 @@ describe("DraftSubmissionFlow", () => {
       {
         requestUpdate: vi.fn(),
         onError: (error) => flow?.setError(error),
-        onClearError: (error) => flow?.clearErrorIf(error),
+        onClearError: (error) => flow?.clearError(error),
       },
     );
     const flow = new DraftSubmissionFlow(
@@ -844,9 +969,13 @@ describe("DraftSubmissionFlow", () => {
       },
     ]);
 
+    if (background) {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    }
     const submission = flow.submit(undefined, background);
     if (background) {
-      await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+      await submission;
+      expect(start).toHaveBeenCalledOnce();
       expect(navigateAndWait).not.toHaveBeenCalled();
     } else {
       await vi.waitFor(() => expect(navigateAndWait).toHaveBeenCalledOnce());
@@ -862,13 +991,7 @@ describe("DraftSubmissionFlow", () => {
     await submission;
     if (background) {
       context.gateway.snapshot.phase = "connected";
-      await vi.waitFor(
-        () =>
-          expect(
-            client.request.mock.calls.filter(([method]) => method === "agent.wait"),
-          ).toHaveLength(4),
-        { timeout: 4_000 },
-      );
+      await vi.advanceTimersByTimeAsync(3_000);
     }
 
     expect(start).toHaveBeenCalledOnce();
@@ -879,6 +1002,11 @@ describe("DraftSubmissionFlow", () => {
       phase: "dispatching",
     });
     expect(flow.pendingPlacement.capture()).toBeNull();
+    expect(flow.completedSubmission?.key).toBe(start.mock.calls[0]?.[0].recovery.sessionKey);
+    expect(flow.pendingMessage?.content).toContainEqual({
+      type: "text",
+      text: "@Alex keep this cloud task",
+    });
     expect(flow.message).toBe("");
     expect(flow.mentions).toEqual([]);
     expect(flow.attachmentDraft.attachments).toHaveLength(0);

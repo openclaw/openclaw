@@ -14,10 +14,10 @@ function filterDeliveryPreviewsByJobId(previews: unknown, jobId: string): unknow
   return Object.hasOwn(previews, jobId) ? { [jobId]: previews[jobId] } : {};
 }
 
-function filterCronListResultToJobId(result: unknown, jobId: string) {
-  if (!isRecord(result) || !Array.isArray(result.jobs)) {
-    throw new Error("cron.list returned an invalid inventory page");
-  }
+function filterCronListResultToJobId(
+  result: ReturnType<typeof readCanonicalCronListPage> & { deliveryPreviews?: unknown },
+  jobId: string,
+) {
   const jobs = result.jobs.filter((job) => isRecord(job) && job.id === jobId);
   const filteredResult: Record<string, unknown> = {
     ...result,
@@ -33,10 +33,6 @@ function filterCronListResultToJobId(result: unknown, jobId: string) {
   };
   delete filteredResult.snapshotRevision;
   return filteredResult;
-}
-
-function cronListPageHasJob(result: { jobs: unknown[] }, jobId: string): boolean {
-  return result.jobs.some((job) => isRecord(job) && job.id === jobId);
 }
 
 export async function listCronSelfJob(params: {
@@ -67,7 +63,10 @@ export async function listCronSelfJob(params: {
       snapshotRevision ??= page.snapshotRevision;
       total ??= page.total;
       const nextOffset = resolveCronListPageNextOffset(page, offset);
-      if (cronListPageHasJob(page, params.jobId) || nextOffset === null) {
+      if (
+        page.jobs.some((job) => isRecord(job) && job.id === params.jobId) ||
+        nextOffset === null
+      ) {
         return filterCronListResultToJobId(page, params.jobId);
       }
       offset = nextOffset;
@@ -77,9 +76,6 @@ export async function listCronSelfJob(params: {
       throw new Error(
         "cron.list pagination exceeded maximum pages while reading current automation",
       );
-    }
-    if (restart === CRON_SELF_LIST_MAX_SNAPSHOT_RESTARTS) {
-      throw new Error("cron.list inventory changed repeatedly while reading current automation");
     }
   }
 

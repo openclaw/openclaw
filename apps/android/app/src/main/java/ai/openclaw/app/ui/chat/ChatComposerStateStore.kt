@@ -84,7 +84,7 @@ internal class ChatComposerStateStore(
 
   fun tryBeginTrackedSend(owner: ChatComposerOwner): String? =
     synchronized(lock) {
-      if (hasSendGateLocked(owner)) return@synchronized null
+      if (owner in sendStatesState.value) return@synchronized null
       UUID.randomUUID().toString().also { id ->
         sendStatesState.value =
           sendStatesState.value + (owner to ChatComposerSendState(activeOperationIds = setOf(id)))
@@ -103,9 +103,17 @@ internal class ChatComposerStateStore(
 
   fun hasPendingImport(owner: ChatComposerOwner): Boolean = synchronized(lock) { attachmentStore.hasPendingImport(owner) }
 
+  /** Only unsettled work blocks leaving; completed send receipts await their UI without holding navigation. */
+  fun hasPendingGatewaySwitchWork(owner: ChatComposerOwner): Boolean =
+    synchronized(lock) {
+      sendStatesState.value[owner]?.activeOperationIds?.isNotEmpty() == true ||
+        attachmentStore.hasPendingImport(owner) ||
+        mediaOwners.containsValue(owner)
+    }
+
   fun beginSend(owner: ChatComposerOwner): ChatComposerSendStart =
     synchronized(lock) {
-      if (hasSendGateLocked(owner) || hasPendingImport(owner)) {
+      if (owner in sendStatesState.value || hasPendingImport(owner)) {
         return@synchronized ChatComposerSendStart(ChatComposerSendStartResult.Unavailable)
       }
       val inputSnapshot = textDrafts[owner]
@@ -213,9 +221,7 @@ internal class ChatComposerStateStore(
   ): Int? =
     synchronized(lock) {
       if (mediaOwners.remove(mediaAuthorizationId) != owner) return@synchronized null
-      attachmentStore.add(owner, candidates).also { omitted ->
-        recordAttachmentOmissionLocked(owner, omitted, ChatComposerAttachmentNotice.Attachment)
-      }
+      addAttachments(owner, candidates)
     }
 
   fun removeAttachments(
@@ -255,11 +261,6 @@ internal class ChatComposerStateStore(
   fun cancelMediaImport(importId: Long) = synchronized(lock) { attachmentStore.cancelImport(importId) }
 
   fun clearAttachmentOmission(owner: ChatComposerOwner) = synchronized(lock) { attachmentNoticesState.value = attachmentNoticesState.value - owner }
-
-  fun reportImageOmission(
-    owner: ChatComposerOwner,
-    omitted: Int,
-  ) = synchronized(lock) { recordAttachmentOmissionLocked(owner, omitted, ChatComposerAttachmentNotice.Image) }
 
   fun reportAttachmentOmission(
     owner: ChatComposerOwner,
@@ -342,8 +343,6 @@ internal class ChatComposerStateStore(
       attachmentNoticesState.value = attachmentNoticesState.value.filterKeys { !matches(it) }
     }
   }
-
-  private fun hasSendGateLocked(owner: ChatComposerOwner): Boolean = owner in sendStatesState.value
 
   private fun finishActiveSendLocked(
     owners: Set<ChatComposerOwner>,

@@ -64,24 +64,11 @@ describe("AcpSessionManager resetSessionRuntimeOptions", () => {
     expect(fixture.runtimeState.close).not.toHaveBeenCalled();
   });
 
-  it("closes an unhealthy retained handle without replacing it during reset", async () => {
+  it("keeps overrides and the retained handle available when reset close fails", async () => {
     const fixture = setupReset();
     await fixture.manager.getSessionStatus(fixture.target);
     fixture.runtimeState.getStatus.mockRejectedValue(new Error("backend status unavailable"));
     fixture.runtimeState.ensureSession.mockRejectedValue(new Error("backend cannot be started"));
-
-    await expect(fixture.manager.resetSessionRuntimeOptions(fixture.target)).resolves.toEqual({});
-
-    expect(fixture.runtimeState.ensureSession).toHaveBeenCalledOnce();
-    expect(fixture.runtimeState.close).toHaveBeenCalledOnce();
-    expectMockCallFields(fixture.runtimeState.close, { reason: "reset-runtime-options" });
-    expect(fixture.meta.runtimeOptions).toBeUndefined();
-    expect(fixture.manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
-  });
-
-  it("keeps overrides and the retained handle available when reset close fails", async () => {
-    const fixture = setupReset();
-    await fixture.manager.getSessionStatus(fixture.target);
     fixture.runtimeState.close.mockRejectedValueOnce(new Error("backend close failed"));
 
     await expect(fixture.manager.resetSessionRuntimeOptions(fixture.target)).rejects.toMatchObject({
@@ -94,6 +81,8 @@ describe("AcpSessionManager resetSessionRuntimeOptions", () => {
     await expect(fixture.manager.resetSessionRuntimeOptions(fixture.target)).resolves.toEqual({});
     expect(fixture.runtimeState.ensureSession).toHaveBeenCalledOnce();
     expect(fixture.runtimeState.close).toHaveBeenCalledTimes(2);
+    expectMockCallFields(fixture.runtimeState.close, { reason: "reset-runtime-options" });
     expect(fixture.meta.runtimeOptions).toBeUndefined();
+    expect(fixture.manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
   });
 });

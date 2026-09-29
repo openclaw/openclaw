@@ -1,4 +1,3 @@
-import { timingSafeEqual } from "node:crypto";
 import { Resolver } from "node:dns/promises";
 import { authenticate, type AuthenticateResult } from "mailauth";
 import type { AddressObject, ParsedMail } from "mailparser";
@@ -6,6 +5,7 @@ import {
   meetsIdentifierAuthentication,
   type IdentifierAuthentication,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import type { ImapAccountConfig } from "./config.js";
 
 const AUTH_FRESHNESS_MS = 48 * 60 * 60 * 1_000;
@@ -77,12 +77,7 @@ function constantTokenMatch(address: string, expected: string): boolean {
   if (plus < 0) {
     return false;
   }
-  const actualBytes = Buffer.from(local.slice(plus + 1));
-  const expectedBytes = Buffer.from(expected);
-  return (
-    actualBytes.byteLength === expectedBytes.byteLength &&
-    timingSafeEqual(actualBytes, expectedBytes)
-  );
+  return safeEqualSecret(local.slice(plus + 1), expected);
 }
 
 function matchingSenderToken(

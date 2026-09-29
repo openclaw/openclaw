@@ -4,8 +4,10 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import { mergeForcedEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
-import type { EmbeddedRunTrigger, RunEmbeddedAgentParams } from "./params.js";
+import type { RunEmbeddedAgentParams } from "./params.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptToolRunFacts = Pick<
   RunEmbeddedAgentParams,
@@ -46,6 +48,7 @@ type AttemptToolRunFacts = Pick<
  */
 export function buildEmbeddedAttemptToolRunContext(
   params: AttemptToolRunFacts & {
+    model?: Pick<EmbeddedRunAttemptParams["model"], "provider" | "id">;
     thinkLevel?: ThinkLevel;
     trigger?: EmbeddedRunTrigger;
     jobId?: string;
@@ -99,6 +102,10 @@ export function buildEmbeddedAttemptToolRunContext(
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     requesterThinkingLevel: params.thinkLevel,
+    // modelId may still be a configured alias; children need the prepared identity.
+    requesterModel: params.model
+      ? { provider: params.model.provider, model: params.model.id }
+      : undefined,
     trigger: params.trigger,
     jobId: params.jobId,
     memoryFlushWritePath: params.memoryFlushWritePath,

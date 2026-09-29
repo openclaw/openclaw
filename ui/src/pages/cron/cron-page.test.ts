@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../../api/types.ts";
+import { startCronClone } from "../../lib/cron/index.ts";
 import {
   createContext,
   createGateway,
@@ -18,6 +19,18 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
+
+function scheduledJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
+  return createCronViewJob(id, {
+    name: "Nightly digest",
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "digest" },
+    state: {},
+    ...overrides,
+  });
+}
 
 describe("CronPage header", () => {
   it("uses the shared settings header with concise context and scope actions", async () => {
@@ -46,6 +59,55 @@ describe("CronPage header", () => {
 });
 
 describe("CronPage editor state sync", () => {
+  it("does not treat an accepted edit as completion of a newer clone", async () => {
+    const job = createCronViewJob("earlier-edit", { name: "Garden reminder" });
+    const saved = createDeferred<CronJob>();
+    const fallback = createRequest();
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.list") {
+        return cronListResponse([job]);
+      }
+      if (method === "cron.update") {
+        return saved.promise;
+      }
+      return fallback(method);
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway), { render: true });
+    try {
+      await waitForCronPage(() =>
+        expect(page.querySelector('[data-test-id="cron-row-earlier-edit"]')).not.toBeNull(),
+      );
+      (page.querySelector('[data-test-id="cron-row-earlier-edit"]') as HTMLElement).click();
+      await waitForCronPage(() => expect(page.querySelector("#cron-name")).not.toBeNull());
+      (page.querySelector('[data-test-id="cron-submit"]') as HTMLButtonElement).click();
+      await waitForCronPage(() =>
+        expect(request).toHaveBeenCalledWith("cron.update", expect.anything()),
+      );
+      // Exercise controller intent replacement; the ordinary clone button is busy-disabled.
+      startCronClone(page.cron, job);
+      page.cron.cronCreateOpen = true;
+      page.requestUpdate();
+      await page.updateComplete;
+      expect(page.querySelector<HTMLInputElement>("#cron-name")?.value).toBe(
+        "Garden reminder copy",
+      );
+      const draft = page.cron.cronForm;
+      saved.resolve({ ...job, name: "Earlier edit saved" });
+      await waitForCronPage(() => expect(page.cron.cronBusy).toBe(false));
+      await page.updateComplete;
+      expect(page.cron.cronCreateOpen).toBe(true);
+      expect(page.cron.cronEditingJob).toBeNull();
+      expect(page.cron.cronForm).toBe(draft);
+      expect(page.querySelector<HTMLInputElement>("#cron-name")?.value).toBe(
+        "Garden reminder copy",
+      );
+    } finally {
+      saved.resolve(job);
+      page.remove();
+    }
+  });
+
   it.each([
     { selector: "#cron-name", text: "QA smoke" },
     { selector: "#cron-payload-text", text: "Write a summary" },
@@ -129,19 +191,10 @@ describe("CronPage editor state sync", () => {
   it.each(["visible", "later page", "another agent"])(
     "opens a linked job's history when the job is on %s",
     async (placement) => {
-      const job: CronJob = {
-        id: "linked-job",
+      const job = scheduledJob("linked-job", {
         agentId: placement === "another agent" ? "writer" : "main",
         name: "Linked automation",
-        enabled: true,
-        createdAtMs: 0,
-        updatedAtMs: 0,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        wakeMode: "now",
-        payload: { kind: "agentTurn", message: "digest" },
-        state: {},
-      };
+      });
       const jobs = createDeferred<CronJobsListResult>();
       const request = vi.fn(async (method: string, params?: unknown) => {
         if (method === "cron.list") {
@@ -503,19 +556,10 @@ describe("CronPage editor state sync", () => {
     { scenario: "write-only authentication", scopes: ["operator.write"], canManage: false },
     { scenario: "administrator authentication", scopes: ["operator.admin"], canManage: true },
   ])("gates scheduler mutations for $scenario", async ({ scopes, canManage }) => {
-    const job: CronJob = {
-      id: "access-job",
+    const job = scheduledJob("access-job", {
       name: "Readably scheduled task",
       description: "Inspect this task without changing its permissions",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "digest" },
-      state: {},
-    };
+    });
     const request = vi.fn(async (method: string) => {
       if (method === "cron.list") {
         return cronListResponse([job]);
@@ -841,18 +885,7 @@ describe("CronPage editor state sync", () => {
   });
 
   it("syncs form enabled after header pause and resets runs scope after remove", async () => {
-    const job: CronJob = {
-      id: "job-1",
-      name: "Nightly digest",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "digest" },
-      state: {},
-    };
+    const job = scheduledJob("job-1");
     let serverEnabled = true;
     let removed = false;
     const removeRequested = createDeferred();
@@ -929,18 +962,7 @@ describe("CronPage editor state sync", () => {
   });
 
   it("renders read-only controls and rejects a stale admin action after a scope downgrade", async () => {
-    const job: CronJob = {
-      id: "job-1",
-      name: "Nightly digest",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "digest" },
-      state: {},
-    };
+    const job = scheduledJob("job-1");
     const request = vi.fn(async (method: string) => {
       if (method === "cron.list") {
         return cronListResponse([job]);

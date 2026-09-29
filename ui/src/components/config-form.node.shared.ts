@@ -1,4 +1,3 @@
-// Control UI helpers shared by config form node renderers.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
@@ -11,7 +10,8 @@ import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { formatUnknownText } from "../lib/format.ts";
 import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { formatConfigFormNumber } from "./config-form.numeric.ts";
-import type { ConfigSearchCriteria } from "./config-form.search.ts";
+import { setControlValidity } from "./config-form.scalar-edit.ts";
+import { resolveConfigFieldMeta, type ConfigSearchCriteria } from "./config-form.search.ts";
 import {
   configFieldId,
   hasSensitiveConfigData,
@@ -20,7 +20,7 @@ import {
   redactedPlaceholder,
   type JsonSchema,
 } from "./config-form.shared.ts";
-import { renderSettingsSegmented } from "./settings-ui.ts";
+import { renderSettingsDefaultDescription, renderSettingsSegmented } from "./settings-ui.ts";
 
 const META_KEYS = new Set([
   "title",
@@ -49,6 +49,11 @@ export type ConfigNodeRenderParams = {
   controlIdentity?: unknown;
   structuredDraftOwner?: boolean;
   showLabel?: boolean;
+  /** Description rendered by the surrounding field layout. */
+  descriptionId?: string;
+  /** Compact editors show effective defaults and inline collection controls. */
+  compact?: boolean;
+  commitOnBlur?: boolean;
   /** Section shells own the title while collection rows still own help/default metadata. */
   showHeaderMeta?: boolean;
   searchCriteria?: ConfigSearchCriteria;
@@ -64,6 +69,19 @@ export type ConfigNodeRenderer = (
   params: ConfigNodeRenderParams,
 ) => TemplateResult | typeof nothing;
 
+export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
+  const { label, help } = resolveConfigFieldMeta(params.path, params.schema, params.hints);
+  const showLabel = params.showLabel ?? true;
+  return {
+    label,
+    help,
+    showLabel,
+    helpId:
+      params.descriptionId ??
+      (showLabel && help ? configFieldId(params.path, "description") : undefined),
+  };
+}
+
 type SensitiveRenderState = {
   isSensitive: boolean;
   isMasked: boolean;
@@ -74,8 +92,7 @@ type SensitiveRenderState = {
 };
 
 export function isAnySchema(schema: JsonSchema): boolean {
-  const keys = Object.keys(schema ?? {}).filter((key) => !META_KEYS.has(key));
-  return keys.length === 0;
+  return Object.keys(schema ?? {}).every((key) => META_KEYS.has(key));
 }
 
 export function jsonValue(value: unknown): string {
@@ -93,10 +110,6 @@ export function formatConfigValueText(value: unknown): string {
   return typeof value === "number" ? formatConfigFormNumber(value) : formatUnknownText(value);
 }
 
-export function schemaWithDefault(schema: JsonSchema, value: unknown): JsonSchema {
-  return { ...schema, default: value };
-}
-
 export function isSecretRefObject(value: unknown): value is {
   source: string;
   id: string;
@@ -105,11 +118,10 @@ export function isSecretRefObject(value: unknown): value is {
   if (!isRecord(value)) {
     return false;
   }
-  const candidate = value as Record<string, unknown>;
-  if (typeof candidate.source !== "string" || typeof candidate.id !== "string") {
+  if (typeof value.source !== "string" || typeof value.id !== "string") {
     return false;
   }
-  return candidate.provider === undefined || typeof candidate.provider === "string";
+  return value.provider === undefined || typeof value.provider === "string";
 }
 
 export function getSensitiveRenderState(params: {
@@ -191,40 +203,27 @@ export function wrapSensitiveControl(
   return html`<span class="settings-secret">${control}${toggle}</span>`;
 }
 
-export function renderTags(tags: string[]): TemplateResult | typeof nothing {
-  const visibleTags = tags.filter((tag) => tag !== "advanced");
-  if (visibleTags.length === 0) {
-    return nothing;
-  }
-  return html`
-    <div class="cfg-tags">
-      ${visibleTags.map((tag) => html`<span class="cfg-tag">${tag}</span>`)}
-    </div>
-  `;
-}
-
 export function renderFieldRow(params: {
   label: unknown;
   help?: unknown;
   helpId?: string;
   defaultDescription?: unknown;
-  tags: string[];
   showLabel: boolean;
   control: TemplateResult | typeof nothing;
   stacked?: boolean;
   error?: unknown;
+  errorId?: string;
 }): TemplateResult {
   // Array/map item rows resolve their meta from the parent path (numeric and
   // wildcard segments collapse), so their help is the parent's. Showing it again
   // per item is noise; a row with no label of its own gets no help of its own.
   const help = params.showLabel ? params.help : undefined;
-  const defaultDescription = params.showLabel ? params.defaultDescription : undefined;
+  const defaultDescription =
+    params.showLabel && params.defaultDescription !== nothing
+      ? params.defaultDescription
+      : undefined;
   const hasText =
-    params.showLabel ||
-    Boolean(help) ||
-    Boolean(defaultDescription) ||
-    params.tags.length > 0 ||
-    Boolean(params.error);
+    params.showLabel || Boolean(help) || Boolean(defaultDescription) || Boolean(params.error);
   // Control-only rows (array/map item values) stack so the control gets full width.
   const stacked = params.stacked || !hasText;
   const className = stacked ? "settings-row settings-row--stacked" : "settings-row";
@@ -251,7 +250,6 @@ export function renderFieldRow(params: {
                     ? html`<span class="settings-row__desc">${defaultDescription}</span>`
                     : nothing
                 }
-                ${renderTags(params.tags)}
                 ${
                   params.error
                     ? html`<span class="cfg-field__error" role="alert">${params.error}</span>`
@@ -263,7 +261,19 @@ export function renderFieldRow(params: {
       }
       ${
         params.control !== nothing
-          ? html`<div class="settings-row__control">${params.control}</div>`
+          ? html`<div class="settings-row__control">
+              ${params.control}
+              ${
+                params.errorId
+                  ? html`<span
+                      id=${params.errorId}
+                      class="cfg-field__error settings-control__sr-label"
+                      role="alert"
+                      hidden
+                    ></span>`
+                  : nothing
+              }
+            </div>`
           : nothing
       }
     </div>
@@ -291,9 +301,10 @@ export function renderSchemaDefaultDescription(
   if (schema.default === undefined) {
     return nothing;
   }
-  return html`${t(value === undefined ? "configForm.usingDefault" : "configForm.defaultValue", {
-    value: formatConfigValueText(schema.default),
-  })}`;
+  return (
+    renderSettingsDefaultDescription(formatConfigValueText(schema.default), value !== undefined) ??
+    nothing
+  );
 }
 
 export function renderSegmentedControl(params: {
@@ -301,6 +312,7 @@ export function renderSegmentedControl(params: {
   resolvedValue: unknown;
   disabled: boolean;
   ariaLabel: string;
+  descriptionId?: string;
   onSelect: (value: unknown) => boolean | void;
 }): TemplateResult {
   const selectedIndex = params.options.findIndex((option) =>
@@ -314,6 +326,7 @@ export function renderSegmentedControl(params: {
     })),
     disabled: params.disabled,
     ariaLabel: params.ariaLabel,
+    descriptionId: params.descriptionId,
     onChange: (index) => {
       const option = params.options[Number(index)];
       if (option !== undefined) {
@@ -354,17 +367,8 @@ export function renderJsonTextareaControl(params: {
   const { path, fallback, sensitiveState, disabled, onPatch } = params;
   const errorId = configFieldId(path, "json-error");
   const describedBy = [params.descriptionId, errorId].filter(Boolean).join(" ");
-  const setValidity = (target: HTMLTextAreaElement, message: string) => {
-    const error = target
-      .closest(".cfg-json-editor")
-      ?.querySelector<HTMLElement>(".cfg-field__error");
-    target.setCustomValidity(message);
-    target.setAttribute("aria-invalid", String(Boolean(message)));
-    if (error) {
-      error.hidden = !message;
-      error.textContent = message;
-    }
-  };
+  const setValidity = (target: HTMLTextAreaElement, message: string) =>
+    setControlValidity(target, message, ".cfg-json-editor");
   const updateValidity = (target: HTMLTextAreaElement) => {
     let message = "";
     const raw = target.value.trim();

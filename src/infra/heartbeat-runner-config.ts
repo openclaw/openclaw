@@ -12,85 +12,14 @@ import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
-import {
-  type HeartbeatConfig,
-  resolveHeartbeatConfig,
-  resolveHeartbeatIntervalMs,
-} from "./heartbeat-config.js";
-import type { HeartbeatWakeSource } from "./heartbeat-wake.js";
-
-export {
-  isHeartbeatOwnerUnresolved,
-  resolveHeartbeatAgents,
-  resolveHeartbeatIntervalMs,
-  type HeartbeatConfig,
-} from "./heartbeat-config.js";
-export { resolveHeartbeatSchedulerSeed } from "./heartbeat-schedule.js";
-
-export const heartbeatLog = createSubsystemLogger("gateway/heartbeat");
-
-const DEFAULT_HEARTBEAT_TIMEOUT_SECONDS = 10 * 60;
+import type { HeartbeatConfig } from "./heartbeat-config.js";
 
 export function resolveHeartbeatChannelPlugin(channel: string): ChannelPlugin | undefined {
   const activePlugin = getActivePluginChannelRegistry()?.channels.find(
     (entry) => entry.plugin.id === channel,
   )?.plugin;
   return activePlugin ?? getChannelPlugin(channel as ChannelId);
-}
-
-export function resolveHeartbeatTimeoutOverrideSeconds(
-  cfg: OpenClawConfig,
-  heartbeat?: HeartbeatConfig,
-) {
-  if (typeof heartbeat?.timeoutSeconds === "number") {
-    return heartbeat.timeoutSeconds;
-  }
-  const agentDefaultTimeoutSeconds = cfg.agents?.defaults?.timeoutSeconds;
-  if (
-    typeof agentDefaultTimeoutSeconds === "number" &&
-    Number.isFinite(agentDefaultTimeoutSeconds)
-  ) {
-    // Preserve the unlimited sentinel consumed by resolveAgentTimeoutMs.
-    return agentDefaultTimeoutSeconds === 0
-      ? 0
-      : Math.max(1, Math.floor(agentDefaultTimeoutSeconds));
-  }
-  // The wake dispatcher awaits heartbeat turns serially. Keep unset heartbeat
-  // timeouts tied to the cadence instead of the 48h built-in agent default.
-  const intervalMs = resolveHeartbeatIntervalMs(cfg, undefined, heartbeat);
-  if (!intervalMs) {
-    return DEFAULT_HEARTBEAT_TIMEOUT_SECONDS;
-  }
-  return Math.max(1, Math.min(DEFAULT_HEARTBEAT_TIMEOUT_SECONDS, Math.ceil(intervalMs / 1000)));
-}
-
-function omitExplicitHeartbeatDestination(heartbeat: HeartbeatConfig | undefined) {
-  if (!heartbeat) {
-    return undefined;
-  }
-  const next = { ...heartbeat };
-  delete next.to;
-  delete next.accountId;
-  return next;
-}
-
-export function resolveHeartbeatForWake(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  configuredHeartbeat?: HeartbeatConfig;
-  requestedHeartbeat?: HeartbeatConfig;
-  source?: HeartbeatWakeSource;
-}): HeartbeatConfig | undefined {
-  const configuredHeartbeat =
-    params.configuredHeartbeat ?? resolveHeartbeatConfig(params.cfg, params.agentId);
-  const heartbeat = params.requestedHeartbeat
-    ? { ...configuredHeartbeat, ...params.requestedHeartbeat }
-    : configuredHeartbeat;
-  return params.source === "cron" && params.requestedHeartbeat?.target === "last"
-    ? omitExplicitHeartbeatDestination(heartbeat)
-    : heartbeat;
 }
 
 function resolveHeartbeatPromptRaw(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
@@ -204,4 +133,3 @@ export function resolveHeartbeatTypingIntervalSeconds(cfg: OpenClawConfig) {
   const configured = cfg.agents?.defaults?.typingIntervalSeconds;
   return typeof configured === "number" && configured > 0 ? configured : undefined;
 }
-export { tryResolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";

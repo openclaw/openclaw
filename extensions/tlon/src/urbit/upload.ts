@@ -4,16 +4,30 @@
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { MAX_IMAGE_BYTES, readRemoteMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { TLON_MEDIA_FETCH_TIMEOUTS } from "../media-fetch-timeouts.js";
-import { uploadFile } from "../tlon-api.js";
+import { type ClientConfig, uploadFile } from "../tlon-api.js";
 
 /**
  * Fetch an image from a URL and upload it to Tlon storage.
  * Falls back to the original URL on error, but only after a bounded download when a cap is set.
- *
- * Note: configureClient must be called before using this function.
  */
-export async function uploadImageFromUrl(imageUrl: string, maxBytes?: number): Promise<string> {
+export async function uploadImageFromUrl(
+  imageUrl: string,
+  clientConfig: ClientConfig,
+  maxBytes?: number,
+): Promise<string> {
   let sourceSizeVerified = false;
+  const assertCurrent = clientConfig.assertDirectAdapterHandoff;
+  let authorityRejection: { error: unknown } | undefined;
+  const beforeRequest = assertCurrent
+    ? () => {
+        try {
+          return assertCurrent();
+        } catch (error) {
+          authorityRejection ??= { error };
+          throw error;
+        }
+      }
+    : undefined;
   try {
     // Validate URL is http/https before fetching
     const url = new URL(imageUrl);
@@ -26,6 +40,7 @@ export async function uploadImageFromUrl(imageUrl: string, maxBytes?: number): P
       maxBytes: Math.min(maxBytes ?? MAX_IMAGE_BYTES, MAX_IMAGE_BYTES),
       ...TLON_MEDIA_FETCH_TIMEOUTS,
       ssrfPolicy: undefined,
+      beforeRequest,
       requestInit: { method: "GET" },
     });
     sourceSizeVerified = true;
@@ -38,14 +53,18 @@ export async function uploadImageFromUrl(imageUrl: string, maxBytes?: number): P
     const fileName = urlPath.split("/").pop() || `upload-${Date.now()}.png`;
 
     // Upload to Tlon storage
-    const result = await uploadFile({
-      blob,
-      fileName,
-      contentType,
-    });
+    const result = await uploadFile(
+      { blob, fileName, contentType },
+      { ...clientConfig, assertDirectAdapterHandoff: beforeRequest },
+    );
 
     return result.url;
   } catch (err) {
+    // Media fetching can wrap the assertion error; never turn it into a URL fallback.
+    if (authorityRejection) {
+      throw authorityRejection.error;
+    }
+    assertCurrent?.();
     // Preserve link fallback only when it cannot bypass an operator's byte cap.
     if (maxBytes !== undefined && !sourceSizeVerified) {
       throw err;

@@ -7,6 +7,7 @@ import {
   type CommandOptions,
   type SpawnResult,
 } from "../../process/exec.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 
 export const WORKER_TUNNEL_READY_MARKER = "OPENCLAW_WORKER_TUNNEL_READY";
 
@@ -41,7 +42,7 @@ function workerSshStderrTail(stderr: string): string | undefined {
   return redacted ? sliceUtf16Safe(redacted, -STDERR_LIMIT) : undefined;
 }
 
-/** Production runner that treats the remote post-forward marker as connection readiness. */
+/** Production runner that treats the post-forward marker as connection readiness. */
 export function createWorkerSshRunner(): WorkerSshRunner {
   return {
     run: runCommandWithTimeout,
@@ -61,19 +62,13 @@ export function createWorkerSshRunner(): WorkerSshRunner {
       let exitedSettled = false;
       let readySettled = false;
       let childExited = false;
-      let resolveReady!: () => void;
-      let rejectReady!: (error: Error) => void;
-      let resolveExited!: (exit: WorkerSshProcessExit) => void;
-      const ready = new Promise<void>((resolve, reject) => {
-        resolveReady = resolve;
-        rejectReady = reject;
-      });
+      const readiness = createDeferredCore();
+      const exit = createDeferredCore<WorkerSshProcessExit>();
+      const ready = readiness.promise;
+      const exited = exit.promise;
       // Readiness can reject after its awaiter timed out and moved on (stop()/late close);
       // observe it here so lifecycle settles never become unhandled rejections.
       void ready.catch(() => {});
-      const exited = new Promise<WorkerSshProcessExit>((resolve) => {
-        resolveExited = resolve;
-      });
       let stdout = "";
       let stderr = "";
       const settleReadyError = () => {
@@ -81,16 +76,16 @@ export function createWorkerSshRunner(): WorkerSshRunner {
           return;
         }
         readySettled = true;
-        rejectReady(workerSshProcessError(stderr));
+        readiness.reject(workerSshProcessError(stderr));
       };
-      const settleExited = (exit: WorkerSshProcessExit) => {
+      const settleExited = (result: WorkerSshProcessExit) => {
         if (exitedSettled) {
           return;
         }
         exitedSettled = true;
         releaseOutput();
         const stderrTail = workerSshStderrTail(stderr);
-        resolveExited({ ...exit, ...(stderrTail ? { stderrTail } : {}) });
+        exit.resolve({ ...result, ...(stderrTail ? { stderrTail } : {}) });
       };
       child.stdout.setEncoding("utf8");
       child.stdout.on("error", () => {});
@@ -101,7 +96,7 @@ export function createWorkerSshRunner(): WorkerSshRunner {
         stdout = sliceUtf16Safe(`${stdout}${chunk}`, -STDERR_LIMIT);
         if (stdout.split(/\r?\n/u).includes(WORKER_TUNNEL_READY_MARKER)) {
           readySettled = true;
-          resolveReady();
+          readiness.resolve();
         }
       });
       child.stderr.setEncoding("utf8");

@@ -75,6 +75,10 @@ Three records serve different purposes:
 | Entry origins         | Tracked entry | Session ingestion, backfill, and consolidation | Finding entries derived from a selected session |
 | Curated-write records | Memory file   | The memory write observer                      | Identifying files to review during a purge      |
 
+Curated-write lookups read only the requested physical workspace. Corrupt JSON
+in another workspace's records does not block that lookup; corrupt JSON in a
+live record in the selected workspace still reports a storage error.
+
 [Chunk provenance](/concepts/memory-architecture#provenance-every-memory-knows-where-it-came-from)
 describes the origin class and session kind. Entry origins instead associate
 an entry key with an agent and source session in SQLite. Promotion markers in
@@ -84,6 +88,11 @@ When [dreaming](/concepts/dreaming) merges or supersedes tracked entries,
 reconciliation transfers the parents' origins to the surviving entry. It
 runs in code around the model call, including for participating agents that
 share a workspace; the model does not own the origin rows.
+
+A file replacement can succeed before a later file error is reported. In that
+case, or when publication is uncertain, consolidation keeps the replacement's
+origins so a later `memory forget` can still target it. It does not automatically
+retry an uncertain replacement as an append.
 
 Origins for replaced entries remain while retained rewrite preimages still
 reference their promotion markers. Backup rotation prunes those origins only

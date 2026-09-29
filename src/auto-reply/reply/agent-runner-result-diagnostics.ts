@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveModelFallbackAvailability } from "../../agents/agent-scope.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -7,11 +6,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { buildInlinePluginStatusPayload } from "./agent-runner-core.js";
+import { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 import {
   accumulateSessionUsageFromTranscript,
   buildInlineRawTracePayload,
   derivePromptSegments,
-  type TraceContextManagementView,
 } from "./agent-runner-trace.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -96,15 +95,8 @@ export async function buildReplyDiagnosticsPayload(params: {
         normalizeOptionalString(activeSessionEntry?.traceLevel),
       fallbackEligible:
         runResult.meta?.requestShaping?.fallbackEligible ??
-        resolveModelFallbackAvailability({
-          cfg: cfg ?? {},
-          agentId: followupRun.run.agentId,
-          sessionKey: followupRun.run.sessionKey,
-          hasSessionModelOverride: followupRun.run.hasSessionModelOverride === true,
-          modelOverrideSource: followupRun.run.modelOverrideSource,
-          hasAutoFallbackProvenance: followupRun.run.hasAutoFallbackProvenance === true,
-          modelSelectionLocked: followupRun.run.modelSelectionLocked,
-        }).kind === "active",
+        resolveModelFallbackOptions(followupRun.run, cfg ?? {}).modelFallbackAvailability.kind ===
+          "active",
       blockStreaming:
         runResult.meta?.requestShaping?.blockStreaming ??
         normalizeOptionalString(resolvedBlockStreamingBreak),
@@ -122,31 +114,7 @@ export async function buildReplyDiagnosticsPayload(params: {
               : {}),
           }
         : undefined);
-    const contextManagement = {
-      ...(typeof activeSessionEntry?.compactionCount === "number"
-        ? { sessionCompactions: activeSessionEntry.compactionCount }
-        : {}),
-      ...(typeof runResult.meta?.contextManagement?.lastTurnCompactions === "number"
-        ? { lastTurnCompactions: runResult.meta.contextManagement.lastTurnCompactions }
-        : typeof runResult.meta?.agentMeta?.compactionCount === "number"
-          ? { lastTurnCompactions: runResult.meta.agentMeta.compactionCount }
-          : {}),
-      ...(runResult.meta?.contextManagement &&
-      typeof runResult.meta.contextManagement.preflightCompactionApplied === "boolean"
-        ? {
-            preflightCompactionApplied: runResult.meta.contextManagement.preflightCompactionApplied,
-          }
-        : preflightCompactionApplied
-          ? { preflightCompactionApplied }
-          : {}),
-      ...(runResult.meta?.contextManagement &&
-      typeof runResult.meta.contextManagement.postCompactionContextInjected === "boolean"
-        ? {
-            postCompactionContextInjected:
-              runResult.meta.contextManagement.postCompactionContextInjected,
-          }
-        : {}),
-    } satisfies TraceContextManagementView;
+    const contextManagement = runResult.meta?.contextManagement;
     const sessionUsage = await accumulateSessionUsageFromTranscript({
       agentId: followupRun.run.agentId,
       sessionId: runResult.meta?.agentMeta?.sessionId ?? followupRun.run.sessionId,
@@ -169,7 +137,15 @@ export async function buildReplyDiagnosticsPayload(params: {
       promptSegments,
       toolSummary,
       completion,
-      contextManagement,
+      contextManagement: {
+        sessionCompactions: activeSessionEntry?.compactionCount,
+        lastTurnCompactions:
+          contextManagement?.lastTurnCompactions ?? runResult.meta?.agentMeta?.compactionCount,
+        preflightCompactionApplied:
+          contextManagement?.preflightCompactionApplied ??
+          (preflightCompactionApplied || undefined),
+        postCompactionContextInjected: contextManagement?.postCompactionContextInjected,
+      },
     });
     diagnosticsPayload = diagnosticsPayload
       ? { text: `${diagnosticsPayload.text}\n\n${rawTracePayload.text}` }

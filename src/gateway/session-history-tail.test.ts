@@ -7,7 +7,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import * as chatDisplayProjection from "./chat-display-projection.js";
+import * as chatDisplayProjection from "./chat-display-projection.core.js";
 import {
   readChatHistoryMessageId,
   readChatHistoryMessageSeq,
@@ -50,6 +50,7 @@ it("applies the head byte budget before loading an older malformed row", async (
     ).toBe(1);
 
     const tail = await readIncrementalChatHistoryTail({
+      readers: sessionTranscriptReaders,
       entry: undefined,
       readScope,
       beforeSeq: 99,
@@ -103,6 +104,7 @@ it("keeps a sparse tail below its first snapshot when messages append between pa
       });
     try {
       const tail = await readIncrementalChatHistoryTail({
+        readers: sessionTranscriptReaders,
         entry: undefined,
         readScope,
         effectiveMaxChars: 8_000,
@@ -156,6 +158,7 @@ it("fills sparse pages without repeatedly projecting scanned transcript rows", a
       });
     try {
       const tail = await readIncrementalChatHistoryTail({
+        readers: sessionTranscriptReaders,
         entry: undefined,
         readScope,
         effectiveMaxChars: 8_000,
@@ -208,6 +211,7 @@ it("does not serialize transcript batches when the extended sparse byte guard is
     const stringify = vi.spyOn(JSON, "stringify");
     try {
       const tail = await readIncrementalChatHistoryTail({
+        readers: sessionTranscriptReaders,
         entry: undefined,
         readScope,
         effectiveMaxChars: 8000,
@@ -229,3 +233,84 @@ it("does not serialize transcript batches when the extended sparse byte guard is
     }
   });
 });
+
+it.each(["offset", "sparse"] as const)(
+  "preserves ordered %s history while bounding each wide transcript read",
+  async (kind) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const readScope = {
+        agentId: "main",
+        sessionId: `bounded-wide-${kind}`,
+        sessionKey: `agent:main:bounded-wide-${kind}`,
+        storePath: `${state.sessionsDir()}/sessions.json`,
+      };
+      // Stay below the 4 MiB asynchronous rebuild threshold; this fixture tests reader chunking.
+      const ids = Array.from({ length: 18 }, (_, index) => `row-${index}`);
+      await replaceTranscriptEvents(readScope, [
+        { type: "session", version: 3, id: readScope.sessionId },
+        ...ids.map((id, index) => ({
+          type: "message",
+          id,
+          parentId: ids[index - 1] ?? null,
+          message: {
+            role: kind === "sparse" && index > 0 ? "assistant" : "user",
+            content: kind === "sparse" && index > 0 ? "NO_REPLY" : `Visible ${index}`,
+            providerMetadata: { trace: "x".repeat(index === 12 ? 1024 * 1024 + 1 : 128 * 1024) },
+          },
+        })),
+      ]);
+      await waitForSessionTranscriptProjection(readScope);
+      const pages: Array<{ bytes: number; rows: number }> = [];
+      const recordPage = (
+        page: Awaited<
+          ReturnType<typeof sessionTranscriptReaders.readSessionMessagesPageWithStatsAsync>
+        >,
+      ) => {
+        pages.push({
+          bytes: page.messages.reduce<number>(
+            (bytes, message) => bytes + Buffer.byteLength(JSON.stringify(message)) + 1,
+            0,
+          ),
+          rows: page.messages.length,
+        });
+        return page;
+      };
+      const readers = {
+        ...sessionTranscriptReaders,
+        readRecentSessionMessagesWithStatsAsync: async (
+          ...args: Parameters<
+            typeof sessionTranscriptReaders.readRecentSessionMessagesWithStatsAsync
+          >
+        ) =>
+          recordPage(
+            await sessionTranscriptReaders.readRecentSessionMessagesWithStatsAsync(...args),
+          ),
+        readSessionMessagesPageWithStatsAsync: async (
+          ...args: Parameters<typeof sessionTranscriptReaders.readSessionMessagesPageWithStatsAsync>
+        ) =>
+          recordPage(await sessionTranscriptReaders.readSessionMessagesPageWithStatsAsync(...args)),
+      };
+      const tail = await readIncrementalChatHistoryTail({
+        readers,
+        entry: undefined,
+        readScope,
+        effectiveMaxChars: 8_000,
+        max: kind === "sparse" ? 1 : ids.length,
+        maxBytes: 1024 * 1024,
+        ...(kind === "offset" ? { offset: 1 } : {}),
+        readOnly: true,
+        deferProfileDisplay: true,
+      });
+      const expected = kind === "offset" ? ids.slice(0, -1) : ids;
+      expect(tail.rawMessages.map(readChatHistoryMessageId)).toEqual(expected);
+      expect(tail.rawPageMessages).toBe(expected.length);
+      expect(tail.readPage.totalMessages).toBe(ids.length);
+      expect(tail.projected.map(readChatHistoryMessageId)).toEqual(
+        kind === "sparse" ? [ids[0]] : expected,
+      );
+      expect(pages.length).toBeGreaterThan(1);
+      expect(pages.some((page) => page.bytes > 1024 * 1024)).toBe(true);
+      expect(pages.every((page) => page.bytes <= 1024 * 1024 || page.rows === 1)).toBe(true);
+    });
+  },
+);

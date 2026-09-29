@@ -16,7 +16,7 @@ read_when:
   - Preserve a supplied upstream request parent; they do not introduce a long-lived RPC parent span or change downstream trace propagation
 
 - `openclaw.model.usage`
-  - `openclaw.channel`, `openclaw.provider`, `openclaw.model`
+  - `openclaw.channel`, `openclaw.provider`, `openclaw.model`, optional `openclaw.agent` (the agent that owns the run when known)
   - Optional host-derived `openclaw.plugin` only for trusted plugin runtime completions
   - `openclaw.tokens.*` (input/output/cache_read/cache_write/total)
   - `gen_ai.system` by default, or `gen_ai.provider.name` when the latest GenAI semantic conventions are opted in
@@ -26,10 +26,10 @@ Plugin attribution is span-only. It does not add a plugin dimension to shared
 OpenTelemetry metrics or change Prometheus metric labels.
 
 - `openclaw.run`
-  - `openclaw.outcome`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.errorCategory`
+  - `openclaw.outcome`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.errorCategory`, optional `openclaw.agent`
 - `openclaw.model.call`
   - `gen_ai.system` by default, or `gen_ai.provider.name` when the latest GenAI semantic conventions are opted in
-  - `gen_ai.request.model`, `gen_ai.operation.name`, `openclaw.provider`, `openclaw.model`, `openclaw.api`, `openclaw.transport`, `openclaw.model_call.observation_unit` (`request` or `turn`)
+  - `gen_ai.request.model`, `gen_ai.operation.name`, `openclaw.provider`, `openclaw.model`, `openclaw.api`, `openclaw.transport`, `openclaw.model_call.observation_unit` (`request` or `turn`), optional `openclaw.agent`
   - `openclaw.errorCategory`, `error.type`, and optional `openclaw.failureKind` on errors
   - `openclaw.model_call.request_bytes`, `openclaw.model_call.response_bytes`, `openclaw.model_call.time_to_first_byte_ms`
   - `openclaw.model_call.prompt.input_messages_count`, `openclaw.model_call.prompt.input_messages_chars`, `openclaw.model_call.prompt.system_prompt_chars`, `openclaw.model_call.prompt.tool_definitions_count`, `openclaw.model_call.prompt.tool_definitions_chars`, `openclaw.model_call.prompt.total_chars` (safe component sizes only, no prompt text)
@@ -37,11 +37,12 @@ OpenTelemetry metrics or change Prometheus metric labels.
   - Span event `openclaw.provider.request` with attribute `openclaw.upstreamRequestIdHash` (bounded, hash-based) when the upstream provider result exposes a request id; raw ids are never exported
   - With `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`, request spans use the latest GenAI inference span name `{gen_ai.operation.name} {gen_ai.request.model}`. Turn spans use `invoke_agent` because OpenClaw does not claim a native agent name from the opaque CLI boundary. Both use `CLIENT` span kind instead of `openclaw.model.call`.
 - `openclaw.harness.run`
-  - `openclaw.harness.id`, `openclaw.harness.plugin`, `openclaw.outcome`, `openclaw.provider`, `openclaw.model`, `openclaw.channel`
+  - `openclaw.harness.id`, `openclaw.harness.plugin`, `openclaw.outcome`, `openclaw.provider`, `openclaw.model`, `openclaw.channel`, optional `openclaw.agent`
   - On completion: `openclaw.harness.result_classification`, `openclaw.harness.yield_detected`, `openclaw.harness.items.started`, `openclaw.harness.items.completed`, `openclaw.harness.items.active`
   - On error: `openclaw.harness.phase`, `openclaw.errorCategory`, optional `openclaw.harness.cleanup_failed`
+  - Span event `openclaw.agent.commentary` for completed preambles from supported harnesses, including the built-in runtime, Codex, and Claude CLI. Attributes include `openclaw.commentary.sequence`, `openclaw.commentary.text_length`, and `openclaw.commentary.content_truncated`. The existing `diagnostics.otel.captureContent` setting controls bounded, redacted output-message content.
 - `openclaw.tool.execution`
-  - `gen_ai.tool.name`, `gen_ai.operation.name` (`execute_tool`), `openclaw.toolName`, `openclaw.tool.source`, optional `gen_ai.tool.call.id`, `openclaw.tool.owner`, `openclaw.tool.params.*`
+  - `gen_ai.tool.name`, `gen_ai.operation.name` (`execute_tool`), `openclaw.toolName`, `openclaw.tool.source`, optional `gen_ai.tool.call.id`, `openclaw.tool.owner`, `openclaw.tool.params.*`, optional `openclaw.agent`
   - Optional `openclaw.errorCategory`/`openclaw.errorCode` on errors, `openclaw.deniedReason` and `openclaw.outcome=blocked` when denied by policy or sandbox
 - `openclaw.exec`
   - `openclaw.exec.target`, `openclaw.exec.mode`, `openclaw.outcome`, `openclaw.failureKind`, `openclaw.exec.command_length`, `openclaw.exec.exit_code`, `openclaw.exec.exit_signal`, `openclaw.exec.timed_out`
@@ -50,7 +51,7 @@ OpenTelemetry metrics or change Prometheus metric labels.
 - `openclaw.webhook.error`
   - `openclaw.channel`, `openclaw.webhook`, `openclaw.error`
 - `openclaw.message.processed`
-  - `openclaw.channel`, `openclaw.outcome`, `openclaw.reason`
+  - `openclaw.channel`, `openclaw.outcome`, `openclaw.reason`, optional `openclaw.agent` (the agent that initially ingested the prompt)
 - `openclaw.message.delivery`
   - `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`, `openclaw.errorCategory`, `openclaw.delivery.result_count`
 - `openclaw.session.stuck`
@@ -58,7 +59,7 @@ OpenTelemetry metrics or change Prometheus metric labels.
 - `openclaw.context.assembled`
   - `openclaw.prompt.size`, `openclaw.history.size`, `openclaw.context.tokens`, `openclaw.errorCategory` (no prompt, history, response, or session-key content)
 - `openclaw.tool.loop`
-  - `openclaw.toolName`, `openclaw.loop.level`, `openclaw.loop.action`, `openclaw.loop.detector`, `openclaw.loop.count`, optional `openclaw.loop.paired_tool` (no loop messages, params, or tool output)
+  - `openclaw.toolName`, `openclaw.loop.level`, `openclaw.loop.action`, `openclaw.loop.detector`, `openclaw.loop.count`, optional `openclaw.loop.paired_tool`, optional `openclaw.agent` (no loop messages, params, or tool output)
 - `openclaw.memory.pressure`
   - `openclaw.memory.level`, `openclaw.memory.reason`, `openclaw.memory.rss_bytes`, `openclaw.memory.heap_used_bytes`, `openclaw.memory.heap_total_bytes`, `openclaw.memory.external_bytes`, `openclaw.memory.array_buffers_bytes`, optional `openclaw.memory.threshold_bytes`/`openclaw.memory.rss_growth_bytes`/`openclaw.memory.window_ms`
 
@@ -78,6 +79,13 @@ the diagnostics-otel plugin does not export them as standalone OTLP signals.
 Event kinds and `run.execution_phase.phase` values are additive. TypeScript
 consumers should keep default branches instead of assuming either union is
 permanently exhaustive.
+
+`agent.commentary` records completed preambles, not text deltas. It carries the
+original agent-event sequence and timestamp and attaches to the active harness
+span. Recent duplicate completions are suppressed per attempt. Like other
+queued diagnostics, commentary may be dropped under queue pressure; the session
+transcript remains the durable conversation record. At debug level, the
+`diagnostic` logger also records completion metadata without commentary text.
 
 **Model usage**
 

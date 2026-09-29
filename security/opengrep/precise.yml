@@ -2450,7 +2450,7 @@ rules:
       - typescript
       - javascript
     severity: WARNING
-    message: SSH sandbox upload creates a tar stream from a local directory without a preceding symlink boundary validation helper, so tar may follow escaping symlinks before upload.
+    message: Remote sandbox tar uploads must await assertSafeUploadSymlinks on the uploaded directory before spawning tar, so escaping links are rejected before remote extraction.
     patterns:
       - pattern-inside: |
           async function $FUNC(...){
@@ -2461,13 +2461,13 @@ rules:
       - pattern: |
           $SSH = spawn($CMD, $ARGS, ...)
       - pattern-not-inside: |
-          async function $FUNC(...){
-            ...
-            await $CHECK($LOCAL);
-            ...
-            $TAR = spawn("tar", ["-C", $LOCAL, "-cf", "-", "."], ...)
-            ...
-          }
+          await assertSafeUploadSymlinks($LOCAL);
+          ...
+          $TAR = spawn("tar", ["-C", $LOCAL, "-cf", "-", "."], ...)
+      - pattern-not-inside: |
+          await assertSafeUploadSymlinks($LOCAL, $SIGNAL);
+          ...
+          $TAR = spawn("tar", ["-C", $LOCAL, "-cf", "-", "."], ...)
     metadata:
       category: security
       confidence: medium
@@ -2475,7 +2475,9 @@ rules:
       advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-FV94-QVG8-XQPW
       detector-bucket: precise
       source-run: 2026-04-17T07-37-10Z
+      advisory-id: GHSA-FV94-QVG8-XQPW
       source-rule-id: ssh-sandbox-upload-missing-symlink-boundary-check
+      source-file: security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.yml
   - id: ghsa-g353-mgv3-8pcj.feishu-webhook-mode-missing-encrypt-key
     message: Feishu/Lark webhook-mode configuration sets verificationToken without also configuring encryptKey.
     severity: ERROR

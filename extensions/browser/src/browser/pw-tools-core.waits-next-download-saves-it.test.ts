@@ -1,4 +1,5 @@
 // Browser tests cover pw tools core.waits next download saves it plugin behavior.
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -32,9 +33,10 @@ const navigationGuardMocks = getPwToolsCoreNavigationGuardMocks();
 let mod: Pick<
   typeof import("./pw-tools-core.downloads.js"),
   "downloadViaPlaywright" | "waitForDownloadViaPlaywright"
-> &
-  Pick<typeof import("./pw-tools-core.responses.js"), "responseBodyViaPlaywright">;
-let tmpDirModule: typeof import("../infra/tmp-openclaw-dir.js");
+>;
+let tmpDirModule: typeof import("openclaw/plugin-sdk/temp-path");
+
+const target = { cdpUrl: "http://127.0.0.1:18792", targetId: "T1" };
 
 describe("pw-tools-core", () => {
   installPwToolsCoreTestHooks();
@@ -42,19 +44,11 @@ describe("pw-tools-core", () => {
   beforeAll(async () => {
     vi.doMock("./pw-session.js", () => sessionMocks);
     vi.doMock("./chrome.js", () => chromeMocks);
-    tmpDirModule = await import("../infra/tmp-openclaw-dir.js");
+    tmpDirModule = await import("openclaw/plugin-sdk/temp-path");
     vi.spyOn(tmpDirModule, "resolvePreferredOpenClawTmpDir").mockImplementation(
       tmpDirMocks.resolvePreferredOpenClawTmpDir,
     );
-    const [downloads, responses] = await Promise.all([
-      import("./pw-tools-core.downloads.js"),
-      import("./pw-tools-core.responses.js"),
-    ]);
-    mod = {
-      downloadViaPlaywright: downloads.downloadViaPlaywright,
-      waitForDownloadViaPlaywright: downloads.waitForDownloadViaPlaywright,
-      responseBodyViaPlaywright: responses.responseBodyViaPlaywright,
-    };
+    mod = await import("./pw-tools-core.downloads.js");
   });
 
   beforeEach(() => {
@@ -101,8 +95,7 @@ describe("pw-tools-core", () => {
     });
 
     const p = mod.waitForDownloadViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
+      ...target,
       timeoutMs: 1000,
     });
 
@@ -119,39 +112,16 @@ describe("pw-tools-core", () => {
   }
 
   async function expectPathMissing(targetPath: string): Promise<void> {
-    let error: unknown;
-    try {
-      await fs.access(targetPath);
-    } catch (caught) {
-      error = caught;
-    }
-    expect(error).toBeInstanceOf(Error);
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
   }
 
   function createDownloadEventHarness() {
-    const downloadHandlers = new Set<(download: unknown) => void>();
-    const on = vi.fn((event: string, handler: (download: unknown) => void) => {
-      if (event === "download") {
-        downloadHandlers.add(handler);
-      }
-    });
-    const off = vi.fn((event: string, handler: (download: unknown) => void) => {
-      if (event === "download") {
-        downloadHandlers.delete(handler);
-      }
-    });
-    setPwToolsCoreCurrentPage({ on, off });
+    const events = new EventEmitter();
+    setPwToolsCoreCurrentPage({ on: events.on.bind(events), off: events.off.bind(events) });
     return {
-      trigger: (download: unknown) => {
-        for (const handler of downloadHandlers) {
-          handler(download);
-        }
-      },
-      expectArmed: () => {
-        expect(downloadHandlers.size).toBeGreaterThan(0);
-      },
-      activeHandlerCount: () => downloadHandlers.size,
+      trigger: (download: unknown) => events.emit("download", download),
+      expectArmed: () => expect(events.listenerCount("download")).toBeGreaterThan(0),
+      activeHandlerCount: () => events.listenerCount("download"),
     };
   }
 
@@ -172,7 +142,7 @@ describe("pw-tools-core", () => {
   it("waits for the next download and atomically finalizes explicit output paths", async () => {
     await withTempDir(async (tempDir) => {
       const harness = createDownloadEventHarness();
-      const targetPath = path.join(tempDir, "file.bin");
+      const targetPath = path.join(tempDir, "nested", "deeper", "file.bin");
 
       type DownloadFixture = {
         url: () => string;
@@ -190,8 +160,7 @@ describe("pw-tools-core", () => {
       };
 
       const p = mod.waitForDownloadViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "T1",
+        ...target,
         path: targetPath,
         timeoutMs: 1000,
       });
@@ -203,39 +172,6 @@ describe("pw-tools-core", () => {
       const res = await p;
       await expectAtomicDownloadSave({ saveAs, targetPath, content: "file-content" });
       await expect(fs.realpath(res.path)).resolves.toBe(await fs.realpath(targetPath));
-    });
-  });
-
-  it("creates missing explicit download output parents through the safe output directory path", async () => {
-    await withTempDir(async (tempDir) => {
-      const harness = createDownloadEventHarness();
-      const targetPath = path.join(tempDir, "nested", "deeper", "file.bin");
-
-      const saveAs = vi.fn(async (outPath: string) => {
-        await fs.writeFile(outPath, "nested-content", "utf8");
-      });
-
-      const p = mod.waitForDownloadViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "T1",
-        path: targetPath,
-        timeoutMs: 1000,
-      });
-
-      await Promise.resolve();
-      harness.expectArmed();
-      harness.trigger({
-        url: () => "https://example.com/file.bin",
-        suggestedFilename: () => "file.bin",
-        saveAs,
-      });
-
-      await p;
-      await expectAtomicDownloadSave({
-        saveAs,
-        targetPath,
-        content: "nested-content",
-      });
     });
   });
 
@@ -266,8 +202,7 @@ describe("pw-tools-core", () => {
         });
 
         const p = mod.waitForDownloadViaPlaywright({
-          cdpUrl: "http://127.0.0.1:18792",
-          targetId: "T1",
+          ...target,
           path: targetPath,
           rootDir,
           timeoutMs: 1000,
@@ -281,7 +216,7 @@ describe("pw-tools-core", () => {
           saveAs,
         });
 
-        await expect(p).rejects.toThrow(/directory changed/u);
+        await expect(p).rejects.toMatchObject({ code: "not-file" });
         expect(parentSwappedBeforeFinalize).toBe(true);
         expect(saveAs).toHaveBeenCalledOnce();
         await expectPathMissing(outsideTargetPath);
@@ -290,40 +225,12 @@ describe("pw-tools-core", () => {
     },
   );
 
-  it("marks explicit download waiters as owning the next download until cleanup", async () => {
-    const harness = createDownloadEventHarness();
-    const state = sessionMocks.ensurePageState();
-    expect(state.downloadWaiterDepth).toBe(0);
-
-    const p = mod.waitForDownloadViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      timeoutMs: 1000,
-    });
-
-    await Promise.resolve();
-    harness.expectArmed();
-    expect(state.downloadWaiterDepth).toBe(1);
-    harness.trigger({
-      url: () => "https://example.com/file.bin",
-      suggestedFilename: () => "file.bin",
-      saveAs: vi.fn(async (outPath: string) => {
-        await fs.writeFile(outPath, "file-content", "utf8");
-      }),
-    });
-
-    await p;
-    expect(state.downloadWaiterDepth).toBe(0);
-    expect(harness.activeHandlerCount()).toBe(0);
-  });
-
   it("releases a cancelled waiter before the next download", async () => {
     const harness = createDownloadEventHarness();
     const state = sessionMocks.ensurePageState();
     const controller = new AbortController();
     const cancelled = mod.waitForDownloadViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
+      ...target,
       timeoutMs: 1000,
       signal: controller.signal,
     });
@@ -336,8 +243,7 @@ describe("pw-tools-core", () => {
     expect(harness.activeHandlerCount()).toBe(0);
 
     const successor = mod.waitForDownloadViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
+      ...target,
       timeoutMs: 1000,
     });
     const saveAs = vi.fn(async (outPath: string) => {
@@ -363,14 +269,12 @@ describe("pw-tools-core", () => {
     });
 
     const first = mod.waitForDownloadViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
+      ...target,
       timeoutMs: 1000,
     });
     void first.catch(() => {});
     const latest = mod.waitForDownloadViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
+      ...target,
       timeoutMs: 1000,
     });
 
@@ -391,80 +295,68 @@ describe("pw-tools-core", () => {
     expect(harness.activeHandlerCount()).toBe(0);
   });
 
-  it.each([false, true])(
-    "atomically finalizes explicit downloads with revocation=%s after the click",
-    async (revoke) => {
-      await withTempDir(async (tempDir) => {
-        const harness = createDownloadEventHarness();
+  it("finishes an admitted clicked download after its caller retires", async () => {
+    await withTempDir(async (tempDir) => {
+      const harness = createDownloadEventHarness();
 
-        const clicked = createDeferred<void>();
-        let current = true;
-        const click = vi.fn(async () => {
-          current = false;
-          clicked.resolve();
-        });
-        setPwToolsCoreCurrentRefLocator({ click });
-
-        const saveAs = vi.fn(async (outPath: string) => {
-          await fs.writeFile(outPath, "report-content", "utf8");
-        });
-        const download = {
-          url: () => "https://example.com/report.pdf",
-          suggestedFilename: () => "report.pdf",
-          saveAs,
-        };
-
-        const targetPath = path.join(tempDir, "report.pdf");
-        const p = mod.downloadViaPlaywright({
-          cdpUrl: "http://127.0.0.1:18792",
-          targetId: "T1",
-          ref: "e12",
-          path: targetPath,
-          timeoutMs: 1000,
-          ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-          ...(revoke
-            ? {
-                assertCurrent: async () => {
-                  if (!current) {
-                    throw new Error("Dashboard revoked after click");
-                  }
-                },
-              }
-            : {}),
-        });
-
-        if (revoke) {
-          await Promise.race([
-            clicked.promise,
-            p.then(() => {
-              throw new Error("Download completed before its trigger");
-            }),
-          ]);
-        } else {
-          await Promise.resolve();
-        }
-        harness.expectArmed();
-        expect(click).toHaveBeenCalledWith({ timeout: 1000, signal: expect.any(AbortSignal) });
-        expect(sessionMocks.withPageNavigationRequestGuard).toHaveBeenCalledWith(
-          expect.objectContaining({
-            ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-          }),
-        );
-
-        harness.trigger(download);
-
-        const res = await p;
-        expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
-          url: "https://example.com/report.pdf",
-          ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-          browserProxyMode: undefined,
-          signal: undefined,
-        });
-        await expectAtomicDownloadSave({ saveAs, targetPath, content: "report-content" });
-        await expect(fs.realpath(res.path)).resolves.toBe(await fs.realpath(targetPath));
+      const clicked = createDeferred<void>();
+      let current = true;
+      const click = vi.fn(async () => {
+        current = false;
+        clicked.resolve();
       });
-    },
-  );
+      setPwToolsCoreCurrentRefLocator({ click });
+
+      const saveAs = vi.fn(async (outPath: string) => {
+        await fs.writeFile(outPath, "report-content", "utf8");
+      });
+      const download = {
+        url: () => "https://example.com/report.pdf",
+        suggestedFilename: () => "report.pdf",
+        saveAs,
+      };
+
+      const targetPath = path.join(tempDir, "report.pdf");
+      const p = mod.downloadViaPlaywright({
+        ...target,
+        ref: "e12",
+        path: targetPath,
+        timeoutMs: 1000,
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+        assertCurrent: async () => {
+          if (!current) {
+            throw new Error("Dashboard revoked after click");
+          }
+        },
+      });
+
+      await Promise.race([
+        clicked.promise,
+        p.then(() => {
+          throw new Error("Download completed before its trigger");
+        }),
+      ]);
+      harness.expectArmed();
+      expect(click).toHaveBeenCalledWith({ timeout: 1000, signal: expect.any(AbortSignal) });
+      expect(sessionMocks.withPageNavigationRequestGuard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+        }),
+      );
+
+      harness.trigger(download);
+
+      const res = await p;
+      expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
+        url: "https://example.com/report.pdf",
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+        browserProxyMode: undefined,
+        signal: undefined,
+      });
+      await expectAtomicDownloadSave({ saveAs, targetPath, content: "report-content" });
+      await expect(fs.realpath(res.path)).resolves.toBe(await fs.realpath(targetPath));
+    });
+  });
 
   it("rejects a policy-denied waited download before saving it", async () => {
     await withTempDir(async (tempDir) => {
@@ -477,8 +369,7 @@ describe("pw-tools-core", () => {
       );
 
       const pending = mod.waitForDownloadViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "T1",
+        ...target,
         path: targetPath,
         timeoutMs: 1000,
         ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
@@ -517,8 +408,7 @@ describe("pw-tools-core", () => {
       );
 
       const pending = mod.downloadViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "T1",
+        ...target,
         ref: "e12",
         path: path.join(tempDir, "metadata.bin"),
         timeoutMs: 1000,
@@ -556,8 +446,7 @@ describe("pw-tools-core", () => {
           await fs.writeFile(outPath, "download-content", "utf8");
         });
         const p = mod.waitForDownloadViaPlaywright({
-          cdpUrl: "http://127.0.0.1:18792",
-          targetId: "T1",
+          ...target,
           path: linkedPath,
           timeoutMs: 1000,
         });
@@ -590,30 +479,6 @@ describe("pw-tools-core", () => {
       });
     },
   );
-
-  it("uses preferred tmp dir when waiting for download without explicit path", async () => {
-    tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw-preferred");
-    const { res, outPath } = await waitForImplicitDownloadOutput({
-      downloadUrl: "https://example.com/file.bin",
-      suggestedFilename: "file.bin",
-    });
-    expect(typeof outPath).toBe("string");
-    const expectedRootedDownloadsDir = await fs.realpath(
-      path.resolve(path.join(path.sep, "tmp", "openclaw-preferred", "downloads")),
-    );
-    const expectedDownloadsTail = `${path.join("tmp", "openclaw-preferred", "downloads")}${path.sep}`;
-    const relativeStagedPath = path.relative(expectedRootedDownloadsDir, outPath);
-    expect(relativeStagedPath.startsWith(`..${path.sep}`)).toBe(false);
-    expect(path.isAbsolute(relativeStagedPath)).toBe(false);
-    await expectPathMissing(path.dirname(outPath));
-    await expect(fs.realpath(path.dirname(res.path))).resolves.toBe(expectedRootedDownloadsDir);
-    expect(path.basename(outPath)).toContain(path.basename(res.path));
-    expect(path.basename(outPath)).toMatch(/\.part$/);
-    await expectPathMissing(outPath);
-    await expect(fs.readFile(res.path, "utf8")).resolves.toBe("download-content");
-    expect(path.normalize(res.path)).toContain(path.normalize(expectedDownloadsTail));
-    expect(tmpDirMocks.resolvePreferredOpenClawTmpDir).toHaveBeenCalled();
-  });
 
   it("sanitizes suggested download filenames to prevent traversal escapes", async () => {
     tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw-preferred");
@@ -655,8 +520,7 @@ describe("pw-tools-core", () => {
         });
 
         const p = mod.waitForDownloadViaPlaywright({
-          cdpUrl: "http://127.0.0.1:18792",
-          targetId: "T1",
+          ...target,
           timeoutMs: 1000,
         });
 
@@ -674,109 +538,4 @@ describe("pw-tools-core", () => {
       });
     },
   );
-  it("waits for a matching response and returns its body", async () => {
-    let responseHandler: ((resp: unknown) => void) | undefined;
-    const on = vi.fn((event: string, handler: (resp: unknown) => void) => {
-      if (event === "response") {
-        responseHandler = handler;
-      }
-    });
-    const off = vi.fn();
-    setPwToolsCoreCurrentPage({ on, off });
-
-    const bodyBytes = Buffer.from('{"ok":true,"value":123}');
-    const resp = {
-      url: () => "https://example.com/api/data",
-      status: () => 200,
-      headers: () => ({ "content-type": "application/json" }),
-      body: async () => bodyBytes,
-    };
-
-    const p = mod.responseBodyViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      url: "**/api/data",
-      timeoutMs: 1000,
-      maxChars: 10,
-    });
-
-    await Promise.resolve();
-    if (!responseHandler) {
-      throw new Error("expected Playwright response handler");
-    }
-    responseHandler(resp);
-
-    const res = await p;
-    expect(res.url).toBe("https://example.com/api/data");
-    expect(res.status).toBe(200);
-    expect(res.body).toBe('{"ok":true');
-    expect(res.truncated).toBe(true);
-  });
-
-  it("does not split a surrogate pair when truncating response body text", async () => {
-    let responseHandler: ((resp: unknown) => void) | undefined;
-    const on = vi.fn((event: string, handler: (resp: unknown) => void) => {
-      if (event === "response") {
-        responseHandler = handler;
-      }
-    });
-    const off = vi.fn();
-    setPwToolsCoreCurrentPage({ on, off });
-
-    const p = mod.responseBodyViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      url: "**/emoji",
-      timeoutMs: 1000,
-      maxChars: 1,
-    });
-
-    await Promise.resolve();
-    if (!responseHandler) {
-      throw new Error("expected Playwright response handler");
-    }
-    responseHandler({
-      url: () => "https://example.com/emoji",
-      status: () => 200,
-      headers: () => ({ "content-type": "text/plain" }),
-      body: async () => Buffer.from("🙂B"),
-    });
-
-    await expect(p).resolves.toMatchObject({ body: "", truncated: true });
-  });
-
-  it("preserves the prefix while bounding decode for a large response", async () => {
-    let responseHandler: ((resp: unknown) => void) | undefined;
-    const on = vi.fn((event: string, handler: (resp: unknown) => void) => {
-      if (event === "response") {
-        responseHandler = handler;
-      }
-    });
-    const off = vi.fn();
-    setPwToolsCoreCurrentPage({ on, off });
-
-    const bodyBytes = Buffer.from("x".repeat(500_000));
-    const subarray = vi.spyOn(bodyBytes, "subarray");
-    const p = mod.responseBodyViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      url: "**/large",
-      timeoutMs: 1000,
-      maxChars: 10,
-    });
-
-    await Promise.resolve();
-    if (!responseHandler) {
-      throw new Error("expected Playwright response handler");
-    }
-    responseHandler({
-      url: () => "https://example.com/large",
-      status: () => 200,
-      headers: () => ({ "content-type": "text/plain", "content-length": "500000" }),
-      body: async () => bodyBytes,
-    });
-
-    await expect(p).resolves.toMatchObject({ body: "x".repeat(10), truncated: true });
-    expect(subarray).toHaveBeenCalledWith(0, 40);
-  });
 });

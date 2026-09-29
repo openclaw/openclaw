@@ -7,6 +7,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createChatRunState,
@@ -33,6 +34,7 @@ vi.mock("../audit/audit-recorder.js", () => ({
 function createParams(signal: AbortSignal): Parameters<typeof startGatewayEventSubscriptions>[0] {
   const chatRunState = createChatRunState();
   return {
+    scheduler: createTestGatewayScheduler(),
     signal,
     log: createSubsystemLogger("test/subscriptions-shutdown"),
     broadcast: vi.fn(),
@@ -46,7 +48,6 @@ function createParams(signal: AbortSignal): Parameters<typeof startGatewayEventS
     sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
     chatAbortControllers: new Map(),
     restartRecoveryCandidates: new Map(),
-    terminalSessions: { closeTaskSessions: vi.fn() },
     refreshConnectedUserProfiles: vi.fn(),
   };
 }
@@ -100,7 +101,8 @@ it.each(["before startup", "before inherited connection drain"] as const)(
       }
       unsubs = startGatewayEventSubscriptions(createParams(connectionWork.signal));
       if (phase === "before startup") {
-        expect(unsubs.sessionActivitySummaries.ensure(target).state).toBe("stale");
+        expect(unsubs.sessionActivitySummaries.ensure(target).state).toBe("unavailable");
+        expect(prepared).not.toHaveBeenCalled();
         expect(complete).not.toHaveBeenCalled();
         return;
       }
@@ -124,7 +126,6 @@ it.each(["before startup", "before inherited connection drain"] as const)(
       unsubs?.heartbeatUnsub();
       unsubs?.transcriptUnsub();
       unsubs?.lifecycleUnsub();
-      await unsubs?.taskUnsub();
       unsubs = undefined;
       await draining;
       prepared.mockRestore();

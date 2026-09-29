@@ -10,7 +10,10 @@ import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
 } from "openclaw/plugin-sdk/param-readers";
-import { truncateSanitizedExternalContent } from "openclaw/plugin-sdk/security-runtime";
+import {
+  formatErrorMessage,
+  truncateSanitizedExternalContent,
+} from "openclaw/plugin-sdk/security-runtime";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
@@ -26,16 +29,6 @@ import {
 import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./browser/constants.js";
 import { finalizeRoleSnapshot, findRoleSnapshotLineRef } from "./browser/pw-role-snapshot.js";
 import { neutralizeMediaDirectives } from "./browser/vision.js";
-import { formatErrorMessage } from "./infra/errors.js";
-
-type BrowserExternalJsonKind =
-  | "snapshot"
-  | "console"
-  | "requests"
-  | "errors"
-  | "tabs"
-  | "act"
-  | "download";
 
 const BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS = {
   snapshot: "\n[truncated — retry with a smaller maxChars or limit]",
@@ -45,7 +38,9 @@ const BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS = {
   tabs: "\n[truncated — retry with action=snapshot and a specific targetId]",
   act: "\n[truncated — inspect the affected targetId with action=snapshot]",
   download: "\n[truncated — retry with a specific targetId and download ref]",
-} satisfies Record<BrowserExternalJsonKind, string>;
+};
+
+type BrowserExternalJsonKind = keyof typeof BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS;
 
 function truncateBrowserToolText(value: string, marker: string, maxChars: number) {
   const bounded = truncateSanitizedExternalContent(value, maxChars);
@@ -190,15 +185,6 @@ function isAriaRefsUnsupportedError(err: unknown): boolean {
   return msg.includes("refs=aria") && msg.includes("not support");
 }
 
-function withRoleRefsFallback<T extends { refs?: "aria" | "role" }>(
-  snapshotQuery: T,
-): T & { refs: "role" } {
-  return {
-    ...snapshotQuery,
-    refs: "role",
-  };
-}
-
 /** Execute and format browser snapshots for agent consumption. */
 export async function executeSnapshotAction(params: {
   input: Record<string, unknown>;
@@ -206,7 +192,7 @@ export async function executeSnapshotAction(params: {
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
-  onTabActivity?: (targetId: string | undefined) => void;
+  onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
   const snapshotDefaults = getRuntimeConfig().browser?.snapshotDefaults;
@@ -214,11 +200,9 @@ export async function executeSnapshotAction(params: {
     input.snapshotFormat === "ai" ? "ai" : input.snapshotFormat === "aria" ? "aria" : undefined;
   const formatExplicit = format !== undefined;
   const mode: "efficient" | undefined =
-    input.mode === "efficient"
+    input.mode === "efficient" || (!formatExplicit && snapshotDefaults?.mode === "efficient")
       ? "efficient"
-      : !formatExplicit && format !== "aria" && snapshotDefaults?.mode === "efficient"
-        ? "efficient"
-        : undefined;
+      : undefined;
   const labels = typeof input.labels === "boolean" ? input.labels : undefined;
   const urls = typeof input.urls === "boolean" ? input.urls : undefined;
   const refs: "aria" | "role" | undefined =
@@ -239,16 +223,11 @@ export async function executeSnapshotAction(params: {
   });
   const selector = normalizeOptionalString(input.selector);
   const frame = normalizeOptionalString(input.frame);
-  const resolvedMaxChars =
-    format === "ai"
-      ? hasMaxChars
-        ? maxChars
-        : mode === "efficient"
-          ? undefined
-          : DEFAULT_AI_SNAPSHOT_MAX_CHARS
-      : hasMaxChars
-        ? maxChars
-        : undefined;
+  const resolvedMaxChars = hasMaxChars
+    ? maxChars
+    : format === "ai" && mode !== "efficient"
+      ? DEFAULT_AI_SNAPSHOT_MAX_CHARS
+      : undefined;
   // AI snapshots have a compact default cap; ARIA snapshots keep full structure
   // unless maxChars is explicit, because agents often need complete node refs.
   const snapshotTimeoutMs =
@@ -273,19 +252,11 @@ export async function executeSnapshotAction(params: {
   };
   let refsFallback: "role" | undefined;
   const readSnapshot = async (query: typeof snapshotQuery) =>
-    proxyRequest
-      ? ((await proxyRequest({
-          method: "GET",
-          path: "/snapshot",
-          profile,
-          query,
-          timeoutMs: snapshotTimeoutMs,
-        })) as Awaited<ReturnType<typeof browserSnapshot>>)
-      : await browserSnapshot(baseUrl, {
-          ...query,
-          profile,
-          signal: params.signal,
-        });
+    await browserSnapshot(proxyRequest ?? baseUrl, {
+      ...query,
+      profile,
+      signal: params.signal,
+    });
   let snapshot: Awaited<ReturnType<typeof browserSnapshot>>;
   try {
     snapshot = await readSnapshot(snapshotQuery);
@@ -294,9 +265,49 @@ export async function executeSnapshotAction(params: {
       throw err;
     }
     refsFallback = "role";
-    snapshot = await readSnapshot(withRoleRefsFallback(snapshotQuery));
+    snapshot = await readSnapshot({ ...snapshotQuery, refs: "role" });
   }
-  params.onTabActivity?.(readStringValue(snapshot.targetId) ?? targetId);
+  await params.onTabActivity?.(readStringValue(snapshot.targetId) ?? targetId);
+  const identity = { format: snapshot.format, targetId: snapshot.targetId, url: snapshot.url };
+  const dialogState = {
+    ...(snapshot.blockedByDialog ? { blockedByDialog: true } : {}),
+    ...(snapshot.browserState !== undefined ? { browserState: snapshot.browserState } : {}),
+  };
+  const aiMetadata =
+    snapshot.format === "ai"
+      ? {
+          labels: snapshot.labels,
+          labelsCount: snapshot.labelsCount,
+          labelsSkipped: snapshot.labelsSkipped,
+          annotations: snapshot.annotations,
+          imagePath: snapshot.imagePath,
+          imageType: snapshot.imageType,
+          refsFallback,
+        }
+      : {};
+  const externalContent = {
+    untrusted: true,
+    source: "browser",
+    kind: "snapshot",
+    format: snapshot.format,
+    wrapped: true,
+  };
+  const finishSnapshot = async (
+    text: string,
+    details: Record<string, unknown>,
+  ): Promise<AgentToolResult<unknown>> => {
+    if (labels && snapshot.format === "ai" && snapshot.imagePath) {
+      return await imageResultFromFile({
+        label: "browser:snapshot",
+        path: snapshot.imagePath,
+        extraText: text,
+        // Keep model-only screenshots out of automatic channel delivery.
+        details: { ...details, media: { outbound: false } },
+        imageSanitization: resolveRuntimeImageSanitization(),
+      });
+    }
+    return { content: [{ type: "text", text }], details };
+  };
   const query = normalizeOptionalString(input.query);
   if (query && !snapshot.blockedByDialog) {
     const tokens = query.toLowerCase().split(/\s+/);
@@ -335,76 +346,34 @@ export async function executeSnapshotAction(params: {
     const newElements = filtered.snapshot
       .split("\n")
       .filter((line) => line.endsWith(" [new]") && findRoleSnapshotLineRef(line)).length;
-    const result = {
-      content: [{ type: "text", text: wrapped.text }],
-      details: {
-        ok: snapshot.ok,
-        format: snapshot.format,
-        targetId: snapshot.targetId,
-        url: snapshot.url,
-        matchCount,
-        stats: filtered.stats,
-        refs: filtered.stats.refs,
-        ...(snapshot.format === "ai" && snapshot.newElements !== undefined ? { newElements } : {}),
-        truncated: snapshot.truncated || wrapped.truncated || undefined,
-        ...(snapshot.browserState !== undefined ? { browserState: snapshot.browserState } : {}),
-        ...(snapshot.format === "ai"
-          ? {
-              labels: snapshot.labels,
-              labelsCount: snapshot.labelsCount,
-              labelsSkipped: snapshot.labelsSkipped,
-              annotations: snapshot.annotations,
-              imagePath: snapshot.imagePath,
-              imageType: snapshot.imageType,
-              refsFallback,
-            }
-          : {}),
-        externalContent: {
-          untrusted: true,
-          source: "browser",
-          kind: "snapshot",
-          format: snapshot.format,
-          wrapped: true,
-        },
-      },
-    } satisfies AgentToolResult<unknown>;
-    if (labels && snapshot.format === "ai" && snapshot.imagePath) {
-      return await imageResultFromFile({
-        label: "browser:snapshot",
-        path: snapshot.imagePath,
-        extraText: result.content
-          .filter((item) => item.type === "text")
-          .map((item) => item.text)
-          .join("\n"),
-        details: { ...result.details, media: { outbound: false } },
-        imageSanitization: resolveRuntimeImageSanitization(),
-      });
-    }
-    return result;
+    return await finishSnapshot(wrapped.text, {
+      ok: snapshot.ok,
+      ...identity,
+      matchCount,
+      stats: filtered.stats,
+      refs: filtered.stats.refs,
+      ...(snapshot.format === "ai" && snapshot.newElements !== undefined ? { newElements } : {}),
+      truncated: snapshot.truncated || wrapped.truncated || undefined,
+      ...dialogState,
+      ...aiMetadata,
+      externalContent,
+    });
   }
   if (snapshot.format === "ai") {
-    const dialogStateFields = {
-      ...(snapshot.blockedByDialog ? { blockedByDialog: true } : {}),
-      ...(snapshot.browserState !== undefined ? { browserState: snapshot.browserState } : {}),
-    };
     if (snapshot.blockedByDialog) {
       const wrapped = wrapBrowserExternalJson({
         kind: "snapshot",
         payload: {
-          format: snapshot.format,
-          targetId: snapshot.targetId,
-          url: snapshot.url,
-          ...dialogStateFields,
+          ...identity,
+          ...dialogState,
         },
       });
       return {
         content: [{ type: "text" as const, text: wrapped.wrappedText }],
         details: {
           ...wrapped.safeDetails,
-          format: snapshot.format,
-          targetId: snapshot.targetId,
-          url: snapshot.url,
-          ...dialogStateFields,
+          ...identity,
+          ...dialogState,
         },
       };
     }
@@ -413,45 +382,17 @@ export async function executeSnapshotAction(params: {
       marker: BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS.snapshot,
       includeWarning: true,
     });
-    const safeDetails = {
+    return await finishSnapshot(boundedSnapshot.text, {
       ok: true,
-      format: snapshot.format,
-      targetId: snapshot.targetId,
-      url: snapshot.url,
+      ...identity,
       truncated: snapshot.truncated || boundedSnapshot.truncated ? true : undefined,
       newElements: snapshot.newElements,
       stats: snapshot.stats,
       refs: snapshot.refs ? Object.keys(snapshot.refs).length : undefined,
-      labels: snapshot.labels,
-      labelsCount: snapshot.labelsCount,
-      labelsSkipped: snapshot.labelsSkipped,
-      annotations: snapshot.annotations,
-      imagePath: snapshot.imagePath,
-      imageType: snapshot.imageType,
-      refsFallback,
-      ...dialogStateFields,
-      externalContent: {
-        untrusted: true,
-        source: "browser",
-        kind: "snapshot",
-        format: "ai",
-        wrapped: true,
-      },
-    };
-    if (labels && snapshot.imagePath) {
-      return await imageResultFromFile({
-        label: "browser:snapshot",
-        path: snapshot.imagePath,
-        extraText: boundedSnapshot.text,
-        // Keep model-only screenshots out of automatic channel delivery.
-        details: { ...safeDetails, media: { outbound: false } },
-        imageSanitization: resolveRuntimeImageSanitization(),
-      });
-    }
-    return {
-      content: [{ type: "text" as const, text: boundedSnapshot.text }],
-      details: safeDetails,
-    };
+      ...aiMetadata,
+      ...dialogState,
+      externalContent,
+    });
   }
   {
     const wrapped = wrapBrowserExternalJson({
@@ -462,38 +403,13 @@ export async function executeSnapshotAction(params: {
       content: [{ type: "text" as const, text: wrapped.wrappedText }],
       details: {
         ...wrapped.safeDetails,
-        format: "aria",
-        targetId: snapshot.targetId,
-        url: snapshot.url,
+        ...identity,
         nodeCount: snapshot.nodes.length,
-        ...(snapshot.blockedByDialog ? { blockedByDialog: true } : {}),
-        ...(snapshot.browserState !== undefined ? { browserState: snapshot.browserState } : {}),
-        externalContent: {
-          untrusted: true,
-          source: "browser",
-          kind: "snapshot",
-          format: "aria",
-          wrapped: true,
-        },
+        ...dialogState,
+        externalContent,
       },
     };
   }
-}
-
-function withPageStateUnavailableHint(
-  result: AgentToolResult<unknown>,
-  reason: string,
-): AgentToolResult<unknown> {
-  return {
-    ...result,
-    content: [
-      ...result.content,
-      {
-        type: "text",
-        text: `[page snapshot unavailable: ${reason}. Use action=snapshot to read the page.]`,
-      },
-    ],
-  };
 }
 
 /**
@@ -529,13 +445,20 @@ export async function appendNavigatedPageState(params: {
     if (err instanceof Error && err.name === "AbortError") {
       throw err;
     }
-    return withPageStateUnavailableHint(
-      params.result,
-      wrapExternalContent(neutralizeMediaDirectives(formatErrorMessage(err)), {
-        source: "browser",
-        includeWarning: false,
-      }),
-    );
+    const reason = wrapExternalContent(neutralizeMediaDirectives(formatErrorMessage(err)), {
+      source: "browser",
+      includeWarning: false,
+    });
+    return {
+      ...params.result,
+      content: [
+        ...params.result.content,
+        {
+          type: "text",
+          text: `[page snapshot unavailable: ${reason}. Use action=snapshot to read the page.]`,
+        },
+      ],
+    };
   }
   const baseDetails =
     params.result.details && typeof params.result.details === "object"

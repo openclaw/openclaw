@@ -34,18 +34,30 @@ vi.mock("node:worker_threads", async (importOriginal) => {
   return {
     ...actual,
     Worker: class extends actual.Worker {
-      constructor(...[filename, options]: ConstructorParameters<typeof actual.Worker>) {
-        const data: unknown = options?.workerData;
+      override postMessage(...[message, transfers]: Parameters<Worker["postMessage"]>) {
         // Inject only at structured cloning; parent facts and the real worker stay intact.
-        super(
-          filename,
-          workerBoundary.fingerprint && isRecord(data) && data.kind === "catalog"
-            ? {
-                ...options,
-                workerData: { ...data, generationFingerprint: workerBoundary.fingerprint },
-              }
-            : options,
-        );
+        if (
+          workerBoundary.fingerprint &&
+          isRecord(message) &&
+          isRecord(message.input) &&
+          isRecord(message.input.value) &&
+          typeof message.input.value.generationFingerprint === "string"
+        ) {
+          return super.postMessage(
+            {
+              ...message,
+              input: {
+                ...message.input,
+                value: {
+                  ...message.input.value,
+                  generationFingerprint: workerBoundary.fingerprint,
+                },
+              },
+            },
+            transfers,
+          );
+        }
+        return super.postMessage(message, transfers);
       }
     },
   };
@@ -92,9 +104,11 @@ async function createMismatchFixture() {
     env,
   };
   let current = true;
+  const retirement = new AbortController();
   const isCurrent = () => current;
   retireAfterTest(() => {
     current = false;
+    retirement.abort();
   });
   const build = (
     await startSerializedSnapshotBuildBatch(
@@ -103,6 +117,7 @@ async function createMismatchFixture() {
           input,
           catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
           isGenerationCurrent: isCurrent,
+          retirementSignal: retirement.signal,
           isBuildCurrent: isCurrent,
         },
       ],
@@ -114,6 +129,7 @@ async function createMismatchFixture() {
     ).pending
   )[0]!;
   const workerParams = {
+    retirementSignal: retirement.signal,
     agentFacts: {
       input: { agentId: "main", agentDir, workspaceDir, config, env },
       env,

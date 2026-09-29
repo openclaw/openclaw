@@ -1,19 +1,39 @@
 import type { ToolStreamHost } from "./tool-stream-contract.ts";
 
-export function syncToolStreamMessages(host: ToolStreamHost) {
+type ToolStreamState = Pick<
+  ToolStreamHost,
+  | "toolStreamById"
+  | "toolStreamOrder"
+  | "chatToolMessages"
+  | "chatStreamSegments"
+  | "activityEventSeqById"
+  | "knownAgentRunIds"
+  | "waitingApprovalStatuses"
+> & { toolStreamSyncTimer?: number | null };
+
+export function canResetToolStream(host: Partial<ToolStreamState>): host is ToolStreamState {
+  return (
+    host.toolStreamById instanceof Map &&
+    Array.isArray(host.toolStreamOrder) &&
+    Array.isArray(host.chatToolMessages) &&
+    Array.isArray(host.chatStreamSegments)
+  );
+}
+
+export function syncToolStreamMessages(host: ToolStreamState) {
   host.chatToolMessages = host.toolStreamOrder
     .map((id) => host.toolStreamById.get(id)?.message)
     .filter((msg): msg is Record<string, unknown> => Boolean(msg));
 }
 
-export function cancelToolStreamSync(host: ToolStreamHost) {
+export function cancelToolStreamSync(host: Pick<ToolStreamState, "toolStreamSyncTimer">) {
   if (host.toolStreamSyncTimer != null) {
     clearTimeout(host.toolStreamSyncTimer);
     host.toolStreamSyncTimer = null;
   }
 }
 
-export function resetToolStream(host: ToolStreamHost) {
+export function resetToolStream(host: ToolStreamState) {
   cancelToolStreamSync(host);
   host.toolStreamById.clear();
   host.toolStreamOrder = [];
@@ -26,7 +46,7 @@ export function resetToolStream(host: ToolStreamHost) {
   // until snapshot reconciliation observes the approval leaving the queue.
 }
 
-export function resetToolStreamRun(host: ToolStreamHost, runId: string) {
+export function resetToolStreamRun(host: ToolStreamState, runId: string) {
   cancelToolStreamSync(host);
   const removedIdentities = new Set<string>();
   for (const identity of host.toolStreamOrder) {
@@ -41,7 +61,10 @@ export function resetToolStreamRun(host: ToolStreamHost, runId: string) {
   }
   const activityPrefix = `tool:[${JSON.stringify(runId)},`;
   for (const sequenceIdentity of host.activityEventSeqById?.keys() ?? []) {
-    if (sequenceIdentity.startsWith(activityPrefix)) {
+    if (
+      sequenceIdentity.startsWith(activityPrefix) ||
+      sequenceIdentity.startsWith(`item:${runId}:`)
+    ) {
       host.activityEventSeqById?.delete(sequenceIdentity);
     }
   }

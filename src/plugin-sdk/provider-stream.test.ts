@@ -6,17 +6,10 @@ import { describe, expect, it } from "vitest";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { VERSION } from "../version.js";
 import {
-  composeProviderStreamWrappers as composeProviderStreamWrappersShared,
-  createMoonshotThinkingWrapper as createMoonshotThinkingWrapperShared,
-  createPlainTextToolCallCompatWrapper as createPlainTextToolCallCompatWrapperShared,
-  createToolStreamWrapper as createToolStreamWrapperShared,
-} from "./provider-stream-shared.js";
-import {
   buildProviderStreamFamilyHooks,
   composeProviderStreamWrappers,
   createMoonshotThinkingWrapper,
   createPlainTextToolCallCompatWrapper,
-  createToolStreamWrapper,
   GOOGLE_THINKING_STREAM_HOOKS,
   KILOCODE_THINKING_STREAM_HOOKS,
   MINIMAX_FAST_MODE_STREAM_HOOKS,
@@ -241,16 +234,6 @@ describe("createMoonshotThinkingWrapper", () => {
 });
 
 describe("composeProviderStreamWrappers", () => {
-  it("re-exports the shared wrapper composer", () => {
-    expect(composeProviderStreamWrappers).toBe(composeProviderStreamWrappersShared);
-  });
-
-  it("re-exports shared helper wrappers", () => {
-    expect(createMoonshotThinkingWrapper).toBe(createMoonshotThinkingWrapperShared);
-    expect(createPlainTextToolCallCompatWrapper).toBe(createPlainTextToolCallCompatWrapperShared);
-    expect(createToolStreamWrapper).toBe(createToolStreamWrapperShared);
-  });
-
   it("applies wrappers left to right", () => {
     const order: string[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -581,16 +564,22 @@ describe("buildProviderStreamFamilyHooks", () => {
       "high",
     );
 
+    const openRouterNoEffortModel = {
+      ...streamTestModel,
+      provider: "openrouter",
+      id: "example/no-effort-selector",
+      compat: { supportsReasoningEffort: false },
+    };
     void requireStreamFn(
       requireWrapStreamFn(openRouterHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
         thinkingLevel: "high",
-        modelId: "x-ai/grok-3",
+        modelId: openRouterNoEffortModel.id,
       } as never),
-    )({ provider: "openrouter", id: "x-ai/grok-3" } as never, {} as never, {});
-    const openRouterGrokPayload = requirePayload(capturedPayload);
-    expectDefaultThinkingBudget(openRouterGrokPayload);
-    expect(openRouterGrokPayload).not.toHaveProperty("reasoning");
+    )(openRouterNoEffortModel, {} as never, {});
+    const openRouterNoEffortPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(openRouterNoEffortPayload);
+    expect(openRouterNoEffortPayload).not.toHaveProperty("reasoning");
 
     const toolStreamHooks = TOOL_STREAM_DEFAULT_ON_HOOKS;
     const toolStreamDefault = requireStreamFn(

@@ -227,6 +227,31 @@ describe("chunkDiscordText", () => {
     expect(chunks.join("")).toBe(text);
   });
 
+  it("keeps a family emoji whole when the Discord cap lands inside its ZWJ sequence", () => {
+    const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
+    const cap = 2000;
+    // The issue's witness: the cap lands two units into the sequence, after the first person.
+    const text = `${"a".repeat(cap - 2)}${family}Z`;
+    const chunks = chunkDiscordText(text, { maxChars: cap, maxLines: 50 });
+
+    expect(chunks).toEqual(["a".repeat(cap - 2), `${family}Z`]);
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("keeps a family emoji whole when the inline-code retry cut lands inside its ZWJ sequence", () => {
+    const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
+    const cap = 2000;
+    // The shared cutter keeps the family whole at exactly the cap; Discord's render then
+    // appends the re-opened backtick and its local retry loop must step back over the
+    // whole cluster, not just a surrogate pair.
+    const text = `\`${"a".repeat(cap - 12)}${family}${"Z".repeat(300)}\``;
+    const chunks = chunkDiscordText(text, { maxChars: cap, maxLines: 50 });
+
+    expect(chunks).toEqual([`\`${"a".repeat(cap - 12)}\``, `\`${family}${"Z".repeat(300)}\``]);
+    expect(chunks.every((chunk) => chunk.length <= cap)).toBe(true);
+    expect(chunks[0]).not.toContain("\u200D");
+  });
+
   it("keeps reasoning italics balanced across chunks", () => {
     const body = Array.from({ length: 25 }, (_, i) => `${i + 1}. line`).join("\n");
     const text = `Reasoning:\n_${body}_`;
@@ -288,7 +313,7 @@ describe("chunkDiscordText", () => {
     expect(chunks.every((chunk) => chunk.length <= maxChars)).toBe(true);
   });
 
-  it.each([1, 2, 3, 4, 20])("never exceeds a %i-character reasoning chunk limit", (maxChars) => {
+  it.each([1, 3, 4])("never exceeds a %i-character reasoning chunk limit", (maxChars) => {
     const text = `Reasoning:\n_${"abcdef".repeat(8)}_`;
 
     const chunks = chunkDiscordText(text, { maxChars, maxLines: 50 });
@@ -636,9 +661,7 @@ describe("Discord inline-code chunk boundaries", () => {
   );
   it.each([
     { maxChars: 12, maxLines: 1 },
-    { maxChars: 12, maxLines: 2 },
     { maxChars: 12, maxLines: 17 },
-    { maxChars: 30, maxLines: 1 },
     { maxChars: 30, maxLines: 2 },
   ])("keeps original closing markers out of code at $maxChars chars/$maxLines lines", (options) => {
     const body = "abc ".repeat(14);

@@ -10,9 +10,9 @@ import * as cliBackends from "../plugins/cli-backends.runtime.js";
 import * as processSupervisor from "../process/supervisor/index.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { SpawnInput } from "../process/supervisor/types.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { agentExecCommand } from "./agent-exec.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -76,7 +76,7 @@ describe("agent exec command composition", () => {
         OPENCLAW_SERVICE_MARKER: "openclaw",
       },
       async () => {
-        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         // POSIX relay cancellation loses cleanup identity. Keep that failed owner
         // local so shared-worker teardown cannot inherit its expected uncertainty.
         const supervisor = createProcessSupervisor();
@@ -119,6 +119,8 @@ describe("agent exec command composition", () => {
           await vi.advanceTimersByTimeAsync(remainingMs - 1);
           expect(settled).not.toHaveBeenCalled();
           await vi.advanceTimersByTimeAsync(1);
+          // Let the deferred construction deadline decide before awaiting startup settlement.
+          await vi.advanceTimersToNextTimerAsync();
           const managed = await processRun;
           await expect(managed.wait()).resolves.toMatchObject({ reason: "overall-timeout" });
           expect(managed.activity.resultSettled).toBe(true);

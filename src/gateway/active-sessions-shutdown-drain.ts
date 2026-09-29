@@ -1,6 +1,7 @@
 import { buildSessionEndHookPayload } from "../auto-reply/reply/session-hooks.js";
 import { logVerbose } from "../globals.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { settlesWithin } from "../shared/settle-within.js";
 import {
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
@@ -51,23 +52,11 @@ export async function drainActiveSessionsForShutdown(params: {
       }
     }),
   );
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<"timeout">((resolve) => {
-    timer = setTimeout(() => resolve("timeout"), totalTimeoutMs);
-    timer.unref?.();
-  });
-  try {
-    const result = await Promise.race([drain.then(() => "ok" as const), timeout]);
-    if (result === "timeout") {
-      logVerbose(
-        `shutdown session-end drain timed out after ${totalTimeoutMs}ms with ${tracked.length - settledEmissions} session_end handler(s) still pending`,
-      );
-      return { emittedSessionIds, timedOut: true };
-    }
-    return { emittedSessionIds, timedOut: false };
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
+  const timedOut = !(await settlesWithin(drain, totalTimeoutMs));
+  if (timedOut) {
+    logVerbose(
+      `shutdown session-end drain timed out after ${totalTimeoutMs}ms with ${tracked.length - settledEmissions} session_end handler(s) still pending`,
+    );
   }
+  return { emittedSessionIds, timedOut };
 }

@@ -29,18 +29,7 @@ export function resolveConfiguredFallbackReasoning(params: {
   compat?: unknown;
   reasoning?: boolean;
 }): boolean {
-  return resolveConfiguredModelReasoning(params) ?? false;
-}
-
-function resolveConfiguredModelReasoning(params: {
-  provider: string;
-  compat?: unknown;
-  reasoning?: boolean;
-}): boolean | undefined {
-  if (params.reasoning !== undefined) {
-    return params.reasoning;
-  }
-  return isVllmQwenThinkingCompat(params) ? true : undefined;
+  return params.reasoning ?? isVllmQwenThinkingCompat(params);
 }
 
 export function resolveMergedConfiguredModelReasoning(params: {
@@ -56,13 +45,11 @@ export function resolveMergedConfiguredModelReasoning(params: {
   if (isVllmQwenThinkingCompat({ provider: params.provider, compat: params.configuredCompat })) {
     return true;
   }
-  return (
-    resolveConfiguredModelReasoning({
-      provider: params.provider,
-      compat: params.resolvedCompat,
-      reasoning: params.discoveredReasoning,
-    }) ?? false
-  );
+  return resolveConfiguredFallbackReasoning({
+    provider: params.provider,
+    compat: params.resolvedCompat,
+    reasoning: params.discoveredReasoning,
+  });
 }
 
 function isVllmQwenThinkingCompat(params: { provider: string; compat?: unknown }): boolean {

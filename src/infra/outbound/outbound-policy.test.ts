@@ -147,7 +147,7 @@ describe("outbound policy helpers", () => {
   });
 
   it.each([
-    { name: "default cross-provider denial", provider: "webchat", expected: /target provider/ },
+    { name: "default cross-provider access", provider: "webchat", expected: "allow" as const },
     {
       name: "explicit cross-provider denial",
       provider: "webchat",
@@ -200,7 +200,7 @@ describe("outbound policy helpers", () => {
       to: "forum:@ops",
       currentChannelId: "C12345678",
       currentChannelProvider: "workspace",
-      expected: /target provider "forum" while bound to "workspace"/,
+      expected: "allow" as const,
     },
     {
       cfg: {
@@ -269,10 +269,13 @@ describe("outbound policy helpers", () => {
     "topic-create",
     "topic-edit",
   ] satisfies ChannelMessageActionName[])(
-    "blocks cross-provider %s actions by default",
+    "blocks cross-provider %s actions when explicitly disabled",
     (action) => {
       expectCrossContextPolicyResult({
-        cfg: workspaceConfig,
+        cfg: {
+          ...workspaceConfig,
+          tools: { message: { crossContext: { allowAcrossProviders: false } } },
+        },
         channel: "forum",
         action,
         to: "forum:@ops",
@@ -291,15 +294,10 @@ describe("outbound policy helpers", () => {
     "topic-create",
     "topic-edit",
   ] satisfies ChannelMessageActionName[])(
-    "allows cross-provider %s actions when explicitly enabled",
+    "allows cross-provider %s actions by default",
     (action) => {
       expectCrossContextPolicyResult({
-        cfg: {
-          ...workspaceConfig,
-          tools: {
-            message: { crossContext: { allowAcrossProviders: true } },
-          },
-        } as OpenClawConfig,
+        cfg: workspaceConfig,
         channel: "forum",
         action,
         to: "forum:@ops",

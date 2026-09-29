@@ -9,8 +9,10 @@ import {
   diagnosticHttpStatusCode,
 } from "../infra/diagnostic-error-metadata.js";
 import {
+  emitTrustedDiagnosticEvent,
   emitTrustedSkillUsedDiagnosticEvent,
   emitTrustedSecurityEvent,
+  type DiagnosticEventInput,
   type DiagnosticEventPrivateData,
   type DiagnosticToolParamsSummary,
   type DiagnosticToolSource,
@@ -20,6 +22,10 @@ import {
   cloneDiagnosticContentValue,
   type DiagnosticModelContentCapturePolicy,
 } from "../infra/diagnostic-llm-content.js";
+import {
+  createDiagnosticToolExecutionLiveness,
+  markToolExecutionLivenessDiagnosticEvent,
+} from "../infra/diagnostic-tool-execution-liveness.js";
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
@@ -58,6 +64,24 @@ import type { AnyAgentTool } from "./tools/common.js";
 import { canonicalizePath } from "./utils/paths.js";
 
 export const beforeToolCallLog = createSubsystemLogger("agents/tools");
+
+export function startToolExecutionLiveness(
+  event: Omit<Extract<DiagnosticEventInput, { type: "tool.execution.started" }>, "type">,
+  emitDiagnostics: boolean,
+  signal?: AbortSignal,
+) {
+  const liveness = createDiagnosticToolExecutionLiveness(signal);
+  if (emitDiagnostics) {
+    emitTrustedDiagnosticEvent(
+      markToolExecutionLivenessDiagnosticEvent(
+        { type: "tool.execution.started", ...event },
+        liveness.view,
+      ),
+    );
+  }
+  return liveness;
+}
+
 const log = beforeToolCallLog;
 const MAX_PENDING_TERMINAL_PRESENTATIONS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
@@ -158,10 +182,6 @@ export function finalizeToolTerminalPresentation(params: {
     presentationOnly: true,
   });
 }
-
-/**
- * Error used when before_tool_call intentionally vetoes a tool call.
- */
 
 export const loadBeforeToolCallRuntime = createLazyRuntimeSurface(
   () => import("./agent-tools.before-tool-call.runtime.js"),
@@ -503,9 +523,6 @@ export function emitToolBlockedSecurityEvent(params: {
   });
 }
 
-// Once-per-plugin-per-process deprecation signal; the field is ignored at
-// runtime because unresolved approvals always fail closed on timeout.
-
 export function buildToolContentPrivateData(
   policy: DiagnosticModelContentCapturePolicy,
   args: { input: unknown; output?: unknown; includeOutput: boolean },
@@ -673,5 +690,3 @@ export async function recordLoopOutcome(args: {
     args.ctx.onToolOutcome?.(recordedOutcome);
   }
 }
-
-/** Run the full before_tool_call policy chain for a pending tool call. */

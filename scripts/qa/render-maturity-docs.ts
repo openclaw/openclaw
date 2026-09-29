@@ -2,7 +2,10 @@
 // Renders public maturity scorecard docs from the root taxonomy and score aggregate.
 import fs from "node:fs";
 import path from "node:path";
+import { format } from "oxfmt";
 import {
+  getEffectiveQaEvidenceEntries,
+  projectQaEvidenceScenarioOutcomes,
   validateQaEvidenceSummaryJson,
   type QaEvidenceScorecardJson,
   type QaEvidenceStatus,
@@ -30,6 +33,10 @@ import {
 } from "../../extensions/qa-lab/src/scorecard-taxonomy.js";
 import { parseDocsDocument, resolveDocsFragment } from "../lib/docs-markdown.mjs";
 import { collectMirroredDocsRoutes } from "../lib/docs-published-routes.mts";
+import {
+  collectChannelMaturityInventory,
+  MATURITY_CHANNEL_COHORT_SURFACE_IDS,
+} from "./maturity-inventory.mts";
 
 const DEFAULT_TAXONOMY_PATH = "taxonomy.yaml";
 const DEFAULT_SCORES_PATH = "qa/maturity-scores.yaml";
@@ -53,6 +60,7 @@ type EvidenceSummary = {
   generatedAt: string;
   profile: string;
   entryCount: number;
+  unresolvedCount: number;
   statuses: StatusCounts;
   blockingResults: string[];
   scorecard?: QaEvidenceScorecardJson;
@@ -214,12 +222,28 @@ const legacySurfaceAnchors: Readonly<Record<string, readonly string[]>> = {
   "app-sdk": ["openclaw-app-sdk"],
   automation: ["automation-cron-hooks-tasks-polling"],
   containers: ["docker-and-podman-hosting"],
+  "community-channels": ["mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat"],
   "control-ui": ["gateway-web-app"],
   "imessage-bluebubbles": ["imessage-and-bluebubbles"],
   "session-memory": ["session-memory-and-context-engine"],
   "small-linux": ["raspberry-pi-and-small-linux-devices"],
   "windows-app": ["native-windows-companion-app"],
+  "regional-channels": ["feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels"],
 };
+
+function renderCatalogMembers(surfaceId: string): string[] {
+  if (!MATURITY_CHANNEL_COHORT_SURFACE_IDS.has(surfaceId)) {
+    return [];
+  }
+  const members = collectChannelMaturityInventory().membersBySurface.get(surfaceId) ?? [];
+  if (members.length === 0) {
+    return [];
+  }
+  return [
+    `**Current catalog members:** ${members.map((member) => `[${markdownEscape(member.label)}](${member.docsPath})`).join(", ")}`,
+    "",
+  ];
+}
 
 function normalizeRoutePath(route: string): string {
   return route.replace(/^\/+/, "").replace(/\/+$/, "");
@@ -823,6 +847,10 @@ function resultCountsText(statuses: StatusCounts): string {
   return parts.join(", ");
 }
 
+function unresolvedInstancesText(count: number): string {
+  return `${count} unresolved scheduled ${count === 1 ? "instance" : "instances"}`;
+}
+
 function readinessStatusText(status: string): string {
   if (status === "fulfilled") {
     return "Ready";
@@ -850,14 +878,22 @@ function readEvidenceSummaries(
   const identity = qaMaturityTaxonomyIdentity(taxonomy);
   return collectQaEvidenceFiles(evidenceDir).map((filePath) => {
     const payload = validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(filePath, "utf8")));
+    const entries = getEffectiveQaEvidenceEntries(payload);
+    // Rows retain diagnostics; the canonical root projection also exposes scheduled gaps.
+    const unresolved = projectQaEvidenceScenarioOutcomes(payload).filter(
+      (item) => item.status === null,
+    );
     return {
       sourcePath: filePath,
       path: path.relative(process.cwd(), filePath),
       generatedAt: payload.generatedAt,
       profile: payload.profile ?? "",
-      entryCount: payload.entries.length,
-      statuses: countStatuses(payload.entries),
-      blockingResults: blockingResultLabels(payload.entries),
+      entryCount: entries.length,
+      unresolvedCount: unresolved.length,
+      statuses: countStatuses(entries),
+      blockingResults: blockingResultLabels(entries).concat(
+        unresolved.map((item) => `${item.scenarioId} (unresolved)`),
+      ),
       scorecard: payload.scorecard,
       taxonomyStatus: !payload.profilePlan?.taxonomyIdentity
         ? "unknown"
@@ -876,11 +912,12 @@ function rejectBlockingEvidence(evidenceSummaries: EvidenceSummary[]): void {
   }
   throw new Error(
     [
-      "maturity docs require passing QA evidence; failing or blocked QA entries cannot be rendered into the scorecard.",
+      "maturity docs require passing QA evidence; failing or blocked QA entries and unresolved scheduled instances cannot be rendered into the scorecard.",
       ...blocked.map((item) => {
         const counts = [
           item.statuses.fail > 0 ? `${item.statuses.fail} failed` : undefined,
           item.statuses.blocked > 0 ? `${item.statuses.blocked} blocked` : undefined,
+          item.unresolvedCount > 0 ? unresolvedInstancesText(item.unresolvedCount) : undefined,
         ]
           .filter(Boolean)
           .join(", ");
@@ -1075,6 +1112,9 @@ function renderEvidenceSection(
       `    <span>${markdownEscape(item.generatedAt)}</span>`,
       `    <span>${item.taxonomyStatus === "current" ? "Current taxonomy evidence" : `Historical evidence: taxonomy identity ${item.taxonomyStatus}`}</span>`,
       `    <span>${item.entryCount} checks - ${markdownEscape(resultCountsText(item.statuses))}</span>`,
+      ...(item.unresolvedCount > 0
+        ? [`    <span>${unresolvedInstancesText(item.unresolvedCount)}</span>`]
+        : []),
       `    <span>${markdownEscape(countText(scorecard?.categories))} areas - ${markdownEscape(countText(scorecard?.features))} features - ${markdownEscape(countText(scorecard?.coverageIds))} coverage IDs</span>`,
       "  </div>",
     );
@@ -1347,6 +1387,7 @@ function renderTaxonomy({
         "",
         `    ${markdownEscape(surface.rationale ?? "")}`,
         "",
+        ...indentMarkdown(renderCatalogMembers(surface.id), 4),
         ...indentMarkdown(
           [
             `<div className="maturity-surface-rollup"><span>Coverage ${scoreLabel(coverage.surfaces.get(surface.id))}</span><span>Quality ${scoreLabel(scoreSurface?.scores?.quality)}</span><span>Completeness ${scoreLabel(scoreSurface?.scores?.completeness)}</span><span>${maturityLtsBadge(scoreSurface?.lts)}</span></div>`,
@@ -1439,7 +1480,7 @@ function checkEvidenceIndependentInputs({
   }
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const taxonomyPath = path.normalize(args.taxonomy);
   const scoresPath = path.normalize(args.scores);
@@ -1512,7 +1553,11 @@ function main(): void {
   const changed: string[] = [];
   for (const [fileName, content] of outputs) {
     const outputPath = path.join(outputDir, fileName);
-    if (writeOrCheck(outputPath, content, args.check)) {
+    const formatted = await format(outputPath, content, { proseWrap: "preserve" });
+    if (formatted.errors.length > 0) {
+      throw new Error(`Maturity Markdown formatting failed: ${JSON.stringify(formatted.errors)}`);
+    }
+    if (writeOrCheck(outputPath, formatted.code, args.check)) {
       changed.push(outputPath);
     }
   }
@@ -1533,7 +1578,7 @@ function main(): void {
 }
 
 try {
-  main();
+  await main();
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exit(1);

@@ -1,4 +1,7 @@
-import type { SqliteWorkerBackend, SqliteWorkerCommand } from "openclaw/plugin-sdk/sqlite-runtime";
+import type {
+  SqliteWorkerBackend,
+  SqliteWorkerCommand,
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import type {
   WorkboardSqliteOperations,
   WorkboardSqliteWorkerOperations,

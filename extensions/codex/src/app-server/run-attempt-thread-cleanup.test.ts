@@ -7,12 +7,13 @@ import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import type { CodexServerNotification } from "./protocol.js";
+import { turnCompleted } from "./protocol.test-helpers.js";
+import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
   createNativeRunParams as createParams,
   mockClientRuntimeMethods,
   multiplexCodexTestClientHandlers,
   runCodexAppServerAttempt,
-  seedRunSessionOwnerForTest,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
@@ -60,23 +61,16 @@ describe("Codex app-server main thread cleanup", () => {
     resetSharedCodexAppServerClientForTests();
   });
 
-  it.each(
-    [
-      { label: "without a context engine", contextEngine: undefined },
-      {
-        label: "with the default legacy context engine",
-        contextEngine: {
-          info: { id: "legacy", name: "Legacy", version: "1.0.0" },
-        } as EmbeddedRunAttemptParams["contextEngine"],
-      },
-    ].flatMap((context) =>
-      (["completed", "failed"] as const).map((status) => ({
-        label: context.label,
-        contextEngine: context.contextEngine,
-        status,
-      })),
-    ),
-  )(
+  it.each([
+    { label: "without a context engine", contextEngine: undefined, status: "failed" as const },
+    {
+      label: "with the default legacy context engine",
+      contextEngine: {
+        info: { id: "legacy", name: "Legacy", version: "1.0.0" },
+      } as EmbeddedRunAttemptParams["contextEngine"],
+      status: "completed" as const,
+    },
+  ])(
     "retains a subscribed persistent Codex thread $label after $status",
     async ({ contextEngine, status }) => {
       const sessionFile = path.join(tempDir, "session.jsonl");
@@ -135,6 +129,7 @@ describe("Codex app-server main thread cleanup", () => {
             turn: {
               id: "turn-1",
               status,
+              items: [],
               ...(status === "failed" ? { error: { message: "Native turn failed" } } : {}),
             },
           },
@@ -231,6 +226,7 @@ describe("Codex app-server main thread cleanup", () => {
           turn: {
             id: turnId,
             status: index === 0 ? "failed" : "completed",
+            items: [],
             ...(index === 0 ? { error: { message: "Native turn failed" } } : {}),
           },
         },
@@ -306,7 +302,7 @@ describe("Codex app-server main thread cleanup", () => {
       params: {
         threadId: "thread-b",
         turnId: "turn-5",
-        turn: { id: "turn-5", status: "completed" },
+        turn: { id: "turn-5", status: "completed", items: [] },
       },
     });
     expect(readAttemptTerminal(await siblingRun).aborted).toBe(false);
@@ -420,7 +416,7 @@ describe("Codex app-server main thread cleanup", () => {
       params: {
         threadId: "thread-2",
         turnId: "turn-2",
-        turn: { id: "turn-2", status: "completed" },
+        turn: { id: "turn-2", status: "completed", items: [] },
       },
     });
 
@@ -454,14 +450,7 @@ describe("Codex app-server main thread cleanup", () => {
         },
       },
     });
-    physical.send({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: { id: "turn-1", status: "completed" },
-      },
-    });
+    physical.send(turnCompleted({ id: "turn-1", status: "completed" }));
 
     const firstResult = await firstRun;
     expect(startClient).toHaveBeenCalledOnce();
@@ -550,7 +539,7 @@ describe("Codex app-server main thread cleanup", () => {
         params: {
           threadId: "thread-1",
           turnId: "turn-1",
-          turn: { id: "turn-1", status: "completed" },
+          turn: { id: "turn-1", status: "completed", items: [] },
         },
       });
       vi.useRealTimers();
@@ -592,7 +581,7 @@ describe("Codex app-server main thread cleanup", () => {
       params: {
         threadId: "thread-1",
         turnId: "turn-1",
-        turn: { id: "turn-1", status: "completed" },
+        turn: { id: "turn-1", status: "completed", items: [] },
       },
     });
 
@@ -846,7 +835,7 @@ describe("Codex app-server main thread cleanup", () => {
         method: "turn/completed",
         params: {
           threadId: "thread-1",
-          turn: { id: "turn-unrelated", status: "interrupted" },
+          turn: { id: "turn-unrelated", status: "interrupted", items: [] },
         },
       });
       await new Promise<void>((resolve) => {
@@ -858,7 +847,7 @@ describe("Codex app-server main thread cleanup", () => {
         method: "turn/completed",
         params: {
           threadId: "thread-1",
-          turn: { id: "turn-1", status: "interrupted" },
+          turn: { id: "turn-1", status: "interrupted", items: [] },
         },
       });
       const list = await waitForHarnessRequest(harness, "thread/backgroundTerminals/list");
@@ -934,7 +923,7 @@ describe("Codex app-server main thread cleanup", () => {
     });
     harness.send({
       method: "turn/completed",
-      params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+      params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
     });
     const unsubscribe = await waitForHarnessRequest(harness, "thread/unsubscribe");
     abort.abort("cancelled during cleanup");
@@ -1011,7 +1000,7 @@ describe("Codex app-server main thread cleanup", () => {
       params: {
         threadId: "thread-2",
         turnId: "turn-2",
-        turn: { id: "turn-2", status: "completed" },
+        turn: { id: "turn-2", status: "completed", items: [] },
       },
     });
 

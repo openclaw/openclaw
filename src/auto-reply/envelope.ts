@@ -45,13 +45,6 @@ export type EnvelopeFormatOptions = {
   userTimezone?: string;
 };
 
-type NormalizedEnvelopeOptions = {
-  timezone: string;
-  includeTimestamp: boolean;
-  includeElapsed: boolean;
-  userTimezone?: string;
-};
-
 type ResolvedEnvelopeTimezone =
   | { mode: "utc" }
   | { mode: "local" }
@@ -80,19 +73,8 @@ export function resolveEnvelopeFormatOptions(cfg?: OpenClawConfig): EnvelopeForm
   };
 }
 
-function normalizeEnvelopeOptions(options?: EnvelopeFormatOptions): NormalizedEnvelopeOptions {
-  const includeTimestamp = options?.includeTimestamp !== false;
-  const includeElapsed = options?.includeElapsed !== false;
-  return {
-    timezone: normalizeOptionalString(options?.timezone) || "local",
-    includeTimestamp,
-    includeElapsed,
-    userTimezone: options?.userTimezone,
-  };
-}
-
-function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEnvelopeTimezone {
-  const trimmed = options.timezone?.trim();
+function resolveEnvelopeTimezone(options?: EnvelopeFormatOptions): ResolvedEnvelopeTimezone {
+  const trimmed = normalizeOptionalString(options?.timezone);
   if (!trimmed) {
     return { mode: "local" };
   }
@@ -104,11 +86,18 @@ function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEn
     return { mode: "local" };
   }
   if (lowered === "user") {
-    return { mode: "iana", timeZone: resolveUserTimezone(options.userTimezone) };
+    return { mode: "iana", timeZone: resolveUserTimezone(options?.userTimezone) };
   }
   const explicit = resolveTimezone(trimmed);
   return explicit ? { mode: "iana", timeZone: explicit } : { mode: "utc" };
 }
+
+let utcWeekdayFormatter:
+  | {
+      dateTimeFormatConstructor: typeof Intl.DateTimeFormat;
+      formatter: Intl.DateTimeFormat;
+    }
+  | undefined;
 
 /** Formats an envelope timestamp using local, UTC, user, or explicit IANA timezone rules. */
 export function formatAgentEnvelopeTimestamp(
@@ -118,15 +107,14 @@ export function formatAgentEnvelopeTimestamp(
   if (ts === undefined) {
     return undefined;
   }
-  const resolved = normalizeEnvelopeOptions(options);
-  if (!resolved.includeTimestamp) {
+  if (options?.includeTimestamp === false) {
     return undefined;
   }
   const date = ts instanceof Date ? ts : new Date(ts);
   if (Number.isNaN(date.getTime())) {
     return undefined;
   }
-  const zone = resolveEnvelopeTimezone(resolved);
+  const zone = resolveEnvelopeTimezone(options);
   // Include the weekday so models do not need to derive it from the date.
   if (zone.mode !== "utc") {
     return formatZonedTimestamp(date, {
@@ -137,9 +125,16 @@ export function formatAgentEnvelopeTimestamp(
   }
   const formatted = formatUtcTimestamp(date, { displaySeconds: true });
   try {
-    const weekday = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" }).format(
-      date,
-    );
+    const DateTimeFormat = Intl.DateTimeFormat;
+    const cached = utcWeekdayFormatter;
+    const formatter =
+      cached?.dateTimeFormatConstructor === DateTimeFormat
+        ? cached.formatter
+        : new DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" });
+    const weekday = formatter.format(date);
+    if (formatter !== cached?.formatter) {
+      utcWeekdayFormatter = { dateTimeFormatConstructor: DateTimeFormat, formatter };
+    }
     return `${weekday} ${formatted}`;
   } catch {
     return formatted;
@@ -160,9 +155,8 @@ function resolveDirectEnvelopeBodyLabel(from: string | undefined): string {
 export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   const channel = sanitizeEnvelopeHeaderPart(normalizeOptionalString(params.channel) || "Channel");
   const parts: string[] = [channel];
-  const resolved = normalizeEnvelopeOptions(params.envelope);
   let elapsed: string | undefined;
-  if (resolved.includeElapsed && params.timestamp && params.previousTimestamp) {
+  if (params.envelope?.includeElapsed !== false && params.timestamp && params.previousTimestamp) {
     const currentMs =
       params.timestamp instanceof Date ? params.timestamp.getTime() : params.timestamp;
     const previousMs =
@@ -190,7 +184,7 @@ export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   if (ip) {
     parts.push(sanitizeEnvelopeHeaderPart(ip));
   }
-  const ts = formatAgentEnvelopeTimestamp(params.timestamp, resolved);
+  const ts = formatAgentEnvelopeTimestamp(params.timestamp, params.envelope);
   if (ts) {
     parts.push(ts);
   }

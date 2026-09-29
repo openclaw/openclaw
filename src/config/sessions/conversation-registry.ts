@@ -197,6 +197,7 @@ function selectConversationRows(
     limit?: number;
     primarySession?: { sessionId: string; sessionKey: string };
     currentBindingOnly?: boolean;
+    currentSession?: { sessionKey: string; sessionId: string };
   } = {},
 ): ConversationRecord[] {
   const resolved = resolveSqliteReadScope({
@@ -248,6 +249,11 @@ function selectConversationRows(
         normalizeConversationRef(options.conversationRef),
       );
     }
+    if (options.currentSession) {
+      query = query
+        .where("sn.session_key", "=", options.currentSession.sessionKey)
+        .where("s.session_id", "=", options.currentSession.sessionId);
+    }
     if (options.primarySession) {
       // The window's primary pointer, not address recency, owns this route.
       // Require its current node so reset/deleted sessions cannot lend old facts.
@@ -283,17 +289,19 @@ function selectConversationRows(
     ).rows;
     const unique = new Map<string, MappedConversationRow>();
     for (const row of rows) {
+      const existing = unique.get(row.conversation_id);
+      if (existing?.associationIsCurrent) {
+        continue;
+      }
       const mapped = mapConversationRow(row);
       if (!mapped) {
         continue;
       }
-      const existing = unique.get(mapped.record.conversationRef);
       if (!existing) {
         unique.set(mapped.record.conversationRef, mapped);
         continue;
       }
       if (
-        !existing.associationIsCurrent &&
         mapped.associationIsCurrent &&
         mapped.record.sessionId &&
         mapped.record.sessionKey &&
@@ -375,10 +383,12 @@ export function resolveConversation(
 export function resolveCurrentConversationSession(
   scope: ConversationRegistryScope,
   conversationRef: string,
+  currentSession?: { sessionKey: string; sessionId: string },
 ): { sessionKey: string; sessionId: string } | undefined {
   const [conversation] = selectConversationRows(scope, {
     conversationRef: normalizeConversationRef(conversationRef),
     currentBindingOnly: true,
+    currentSession,
     limit: 1,
   });
   return conversation?.sessionKey && conversation.sessionId

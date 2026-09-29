@@ -2,6 +2,7 @@
 // whose producer-owned source may disappear before retry.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileStore } from "@openclaw/fs-safe/store";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
 import { hasNonEmptyString as isNonEmptyMediaSource } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -11,10 +12,17 @@ import {
   type OutboundMediaAccess,
 } from "../../media/load-options.js";
 import { loadWebMedia } from "../../media/web-media.js";
-import type { DeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
-import { fileStore } from "../file-store.js";
+import {
+  captureDeliveryQueueStateContext,
+  type DeliveryQueueStateContext,
+} from "../delivery-queue-sqlite.js";
 import { generateSecureUuid } from "../secure-random.js";
-import { ARTIFACT_NAME_RE, spoolRelativePath } from "./delivery-queue-media-paths.js";
+import {
+  ARTIFACT_NAME_RE,
+  collectEntrySpoolPaths,
+  payloadMediaSources,
+  spoolRelativePath,
+} from "./delivery-queue-media-paths.js";
 import {
   cancelDeliveryQueueMediaRetention,
   createDeliveryQueueMediaRetention,
@@ -37,19 +45,6 @@ function openSpoolStore(stateDir: string | undefined, maxBytes?: number) {
 function resolveArtifactExtension(source: string): string {
   const extension = path.extname(source.split("?")[0] ?? "");
   return ARTIFACT_EXT_RE.test(extension) ? extension.toLowerCase() : "";
-}
-
-function payloadMediaSources(payload: ReplyPayload): string[] {
-  const sources: string[] = [];
-  if (isNonEmptyMediaSource(payload.mediaUrl)) {
-    sources.push(payload.mediaUrl);
-  }
-  for (const mediaUrl of payload.mediaUrls ?? []) {
-    if (isNonEmptyMediaSource(mediaUrl)) {
-      sources.push(mediaUrl);
-    }
-  }
-  return sources;
 }
 
 /** Remote and data sources carry their own bytes; only local paths need queue custody. */
@@ -80,6 +75,7 @@ export async function stageQueuePayloadMedia(
     mediaAccess?: OutboundMediaAccess;
     maxBytes: number;
     stateDir?: string;
+    artifactFormat?: "session-generation-v1" | "command-owner-v1";
   },
   context?: DeliveryQueueStateContext,
 ): Promise<StageQueueMediaResult> {
@@ -89,12 +85,23 @@ export async function stageQueuePayloadMedia(
   }
 
   const spoolRoot = path.resolve(resolveDeliveryQueueMediaDir(stateDir));
+  // Older queue readers skip these artifacts instead of collecting media whose
+  // authority-bound queue namespace they cannot inventory.
+  const artifactPrefix =
+    params.artifactFormat === "command-owner-v1"
+      ? "c1-"
+      : params.artifactFormat === "session-generation-v1"
+        ? "g1-"
+        : "";
   const artifactsBySource = new Map<string, string>();
   for (const source of params.payloads.flatMap(payloadMediaSources)) {
     if (isSpoolableSource(source) && !artifactsBySource.has(source)) {
       artifactsBySource.set(
         source,
-        path.join(spoolRoot, `${generateSecureUuid()}${resolveArtifactExtension(source)}`),
+        path.join(
+          spoolRoot,
+          `${artifactPrefix}${generateSecureUuid()}${resolveArtifactExtension(source)}`,
+        ),
       );
     }
   }
@@ -103,11 +110,10 @@ export async function stageQueuePayloadMedia(
   // or expires it; enqueue then consumes it atomically or fails closed.
   const mediaStageId =
     artifacts.length > 0
-      ? createDeliveryQueueMediaRetention(
+      ? await createDeliveryQueueMediaRetention(
           artifacts,
           "outbound-media-stage",
           stateDir,
-          undefined,
           context,
         )
       : undefined;
@@ -173,7 +179,7 @@ export async function stageQueuePayloadMedia(
       stagedPayloads.push(staged);
     }
   } catch (err) {
-    cancelDeliveryQueueMediaRetention(mediaStageId, stateDir, context);
+    await cancelDeliveryQueueMediaRetention(mediaStageId, stateDir, context);
     await releaseSpoolArtifacts(artifacts, stateDir);
     throw err;
   }
@@ -203,22 +209,6 @@ export async function releaseSpoolArtifacts(
   for (const artifact of artifacts) {
     await removeArtifact(artifact, stateDir);
   }
-}
-
-/** Absolute spool paths a queue entry still needs in order to replay. */
-export function collectEntrySpoolPaths(
-  payloads: readonly ReplyPayload[],
-  stateDir?: string,
-): string[] {
-  const paths: string[] = [];
-  for (const payload of payloads) {
-    for (const source of payloadMediaSources(payload)) {
-      if (path.isAbsolute(source) && spoolRelativePath(source, stateDir)) {
-        paths.push(path.resolve(source));
-      }
-    }
-  }
-  return paths;
 }
 
 /**
@@ -268,22 +258,26 @@ async function pruneDeliveryQueueMedia(params: {
 }
 
 /** Reclaims queue media using the complete pending inventory as the retain set. */
-export async function pruneOrphanedDeliveryQueueMedia(params?: {
-  stateDir?: string;
-  nowMs?: number;
-}): Promise<void> {
+export async function pruneOrphanedDeliveryQueueMedia(
+  params?: { stateDir?: string; nowMs?: number },
+  context?: DeliveryQueueStateContext,
+): Promise<void> {
+  const captured = context ?? captureDeliveryQueueStateContext(params?.stateDir);
+  const stateDir = captured.stateDir;
   const nowMs = params?.nowMs ?? Date.now();
-  const snapshot = loadDeliveryQueueMediaRetentionSnapshot({
-    expireBeforeMs: nowMs - ORPHAN_GRACE_MS,
-    stateDir: params?.stateDir,
-  });
+  const snapshot = await loadDeliveryQueueMediaRetentionSnapshot(
+    { expireBeforeMs: nowMs - ORPHAN_GRACE_MS },
+    captured,
+  );
   await pruneDeliveryQueueMedia({
     retainPaths: new Set(
       snapshot.stagedArtifacts.concat(
-        snapshot.payloads.flatMap((payloads) => collectEntrySpoolPaths(payloads, params?.stateDir)),
+        snapshot.payloads.flatMap((payloads) => collectEntrySpoolPaths(payloads, stateDir)),
       ),
     ),
-    stateDir: params?.stateDir,
+    stateDir,
     nowMs,
   });
 }
+
+export { collectEntrySpoolPaths } from "./delivery-queue-media-paths.js";

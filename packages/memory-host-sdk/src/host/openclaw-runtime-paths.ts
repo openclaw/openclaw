@@ -4,6 +4,10 @@ import { resolveDefaultAgentWorkspaceDir as resolveCoreDefaultAgentWorkspaceDir 
 import { resolveStateDirFromHome } from "../../../../src/config/state-dir.js";
 import { resolveRequiredHomeDir, resolveUserPath } from "../../../../src/infra/home-dir.js";
 export { tryResolveLegacyDataOwner } from "../../../../src/agents/agent-roster.js";
+export {
+  resolveCanonicalRootMemoryFile,
+  shouldSkipRootMemoryAuxiliaryPath,
+} from "../../../../src/memory/root-memory-files.js";
 export { resolveUserPath };
 
 /** Keep effective-home expansion at the memory-host boundary, before state selection. */

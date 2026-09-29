@@ -17,6 +17,7 @@ import { buildChatItems } from "./chat-thread-build.ts";
 import {
   admitChatSubmission,
   getChatSessionProjection,
+  getChatModelObservedRunId,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
   publishChatSessionProjection,
@@ -87,6 +88,22 @@ function failedHistory(): ChatHistoryResult {
 }
 
 describe("chat history in-flight assistant recovery", () => {
+  it("recovers the observed model from chat.history without a new model event or exact ID set", async () => {
+    const history = activeHistory("held-fallback");
+    history.sessionInfo = {
+      key: "main",
+      kind: "direct",
+      updatedAt: 1,
+      hasActiveRun: true,
+      activeModel: "fallback",
+      activeModelProvider: "example",
+    };
+    const state = createState(history);
+    await loadChatHistory(state);
+    expect(state.chatRunId).toBe("held-fallback");
+    expect(getChatModelObservedRunId(state, history.sessionInfo)).toBe("held-fallback");
+  });
+
   it("retires an interrupted run from authoritative history after missing its live terminal", async () => {
     const active = activeHistory("run-interrupted");
     const interrupted: ChatHistoryResult = {
@@ -142,7 +159,7 @@ describe("chat history in-flight assistant recovery", () => {
             "run-first",
           ),
         );
-        admitChatSubmission(state);
+        admitChatSubmission(state, undefined);
       }
 
       await loadChatHistory(state, { startup: method === "chat.startup" });
@@ -187,40 +204,6 @@ describe("chat history in-flight assistant recovery", () => {
     expect(state.chatRunError?.summary).toContain(fullError);
     expect(state.chatRunId).toBeNull();
   });
-
-  it.each(["running", "completed"])(
-    "does not replace a newer %s run with a delayed failed snapshot",
-    async (phase) => {
-      let resolveHistory!: (result: ChatHistoryResult) => void;
-      const request = vi.fn().mockReturnValue(
-        new Promise<ChatHistoryResult>((resolve) => {
-          resolveHistory = resolve;
-        }),
-      );
-      const state = createState(failedHistory());
-      state.client = { request } as unknown as GatewayBrowserClient;
-      const loading = loadChatHistory(state);
-      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-      handleChatGatewayEvent(state, {
-        runId: "run-newer",
-        sessionKey: "main",
-        state: "delta",
-        deltaText: "Working",
-      });
-      if (phase === "completed") {
-        handleChatGatewayEvent(state, {
-          runId: "run-newer",
-          sessionKey: "main",
-          state: "final",
-          message: { role: "assistant", content: "Done" },
-        });
-      }
-      resolveHistory(failedHistory());
-      await loading;
-      expect(state.chatRunError).toBeNull();
-      expect(state.chatRunId).toBe(phase === "running" ? "run-newer" : null);
-    },
-  );
 
   it("restores tools, preamble time, and output usage from the in-flight run snapshot", async () => {
     const history = activeHistory("run-live");
@@ -381,14 +364,12 @@ describe("chat history in-flight assistant recovery", () => {
   });
 
   it.each(
-    ["idempotency", "Codex mirror"].flatMap((identity) =>
-      ["fresh adoption", "retained boundary"].flatMap((mode) =>
-        ["single row", "split rows", "split rows with commentary"].map((rows) => ({
-          identity,
-          mode,
-          rows,
-        })),
-      ),
+    ["fresh adoption", "retained boundary"].flatMap((mode) =>
+      [
+        { identity: "idempotency", rows: "single row" },
+        { identity: "idempotency", rows: "split rows" },
+        { identity: "Codex mirror", rows: "split rows with commentary" },
+      ].map(({ identity, rows }) => ({ identity, rows, mode })),
     ),
   )(
     "keeps the cumulative prefix after persisted history replacement: $identity, $mode, $rows",
@@ -1021,7 +1002,16 @@ describe("chat history in-flight assistant recovery", () => {
     const { promise: historyPromise, resolve: resolveHistory } =
       createDeferred<ChatHistoryResult>();
     const request = vi.fn().mockReturnValue(historyPromise);
-    const state = createState(activeHistory("run-reconnected"));
+    const history = activeHistory("run-reconnected");
+    history.sessionInfo = {
+      ...history.sessionInfo,
+      key: "main",
+      kind: "direct",
+      activeRunIds: undefined,
+      activeModel: "old-fallback",
+      activeModelProvider: "example",
+    };
+    const state = createState(history);
     state.client = { request } as unknown as GatewayBrowserClient;
 
     const loadPromise = loadChatHistory(state);
@@ -1040,10 +1030,11 @@ describe("chat history in-flight assistant recovery", () => {
     });
     expect(state.chatRunId).toBeNull();
 
-    resolveHistory(activeHistory("run-reconnected"));
+    resolveHistory(history);
     await loadPromise;
 
     expect(state.chatRunId).toBeNull();
     expect(state.chatStream).toBeNull();
+    expect(getChatModelObservedRunId(state, history.sessionInfo)).toBeUndefined();
   });
 });

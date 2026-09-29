@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   assertAuthProfileMigrationReady,
@@ -40,14 +38,13 @@ function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCreden
   };
 }
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
 async function withOAuthTempRoot(
   prefix: string,
   run: (tempRoot: string) => Promise<void>,
 ): Promise<void> {
-  const tempRoot = tempDirs.make(prefix);
-  await withEnvAsync({ OPENCLAW_STATE_DIR: tempRoot }, async () => await run(tempRoot));
+  await withOpenClawTestState({ layout: "state-only", prefix }, async (state) =>
+    run(state.stateDir),
+  );
 }
 
 async function expectSerializedProviderMismatch(params: {

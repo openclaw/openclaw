@@ -1,16 +1,25 @@
-/**
- * Best-effort cleanup helpers for Codex app-server startup attempts and turns.
- */
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  AgentHarnessPreflightError,
+  embeddedAgentLog,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { isCodexAppServerStartupError } from "./attempt-timeouts.js";
 import { unsubscribeCodexAppServerLiveThread } from "./client-runtime.js";
-import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
-import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
+import {
+  CodexAppServerRpcError,
+  isCodexAppServerBrokenPipeError,
+  isCodexAppServerOverloadError,
+  isCodexAppServerRequestTimeoutError,
+  type CodexAppServerClient,
+} from "./client.js";
+import {
+  isCodexAppServerStartSelectionChangedError,
+  retireSharedCodexAppServerClientIfCurrent,
+} from "./shared-client.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
-/** Timeout for best-effort app-server turn interruption during cleanup. */
 export const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
-/** Timeout for best-effort thread unsubscribe during cleanup. */
 export const CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS = 5_000;
 const CODEX_NO_ACTIVE_TURN_ERROR_CODE = -32_600;
 const CODEX_NO_ACTIVE_TURN_ERROR_MESSAGE = "no active turn to interrupt";
@@ -32,13 +41,6 @@ export class CodexAppServerUnsafeSubscriptionError extends Error {
   }
 }
 
-export function isCodexAppServerUnsafeSubscriptionError(
-  error: unknown,
-): error is CodexAppServerUnsafeSubscriptionError {
-  return error instanceof CodexAppServerUnsafeSubscriptionError;
-}
-
-/** Asserts Codex resumed the exact thread this attempt subscribed to. */
 export function assertCodexThreadResumeSubscription(
   requestedThreadId: string,
   returnedThreadId: string,
@@ -211,7 +213,6 @@ export async function terminateCodexBackgroundTerminals(
   }
 }
 
-/** Unsubscribes from a thread while swallowing cleanup-only failures. */
 export async function unsubscribeCodexThreadBestEffort(
   client: CodexAppServerClient,
   params: {
@@ -236,4 +237,26 @@ export async function unsubscribeCodexThreadBestEffort(
     });
     return false;
   }
+}
+
+export function shouldRetireCodexStartupClient(
+  error: unknown,
+  spawnedBy: EmbeddedRunAttemptParams["spawnedBy"],
+  signal: AbortSignal,
+): boolean {
+  if (
+    signal.aborted ||
+    isCodexAppServerStartupError(error) ||
+    isCodexAppServerRequestTimeoutError(error)
+  ) {
+    return true;
+  }
+  // Model-independent preflights preserve healthy conversations. A handoff with
+  // an uncertain native write owns its retirement at the resume boundary.
+  return (
+    !isCodexAppServerStartSelectionChangedError(error) &&
+    !isCodexAppServerOverloadError(error) &&
+    !(error instanceof AgentHarnessPreflightError && error.scope === undefined) &&
+    (isCodexAppServerBrokenPipeError(error) || !spawnedBy)
+  );
 }

@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import { ensureSecretEgressProxyCa, generateLocalProxyLeaf } from "./ca.js";
+import { ensureDebugProxyCa, ensureSecretEgressProxyCa, generateLocalProxyLeaf } from "./ca.js";
 
 const openssl = resolveSystemBin("openssl");
 const run = promisify(execFile);
@@ -92,6 +92,12 @@ describe.runIf(openssl)("local proxy certificate OpenSSL compatibility", () => {
     ]);
     const issuer = await run(openssl!, ["x509", "-in", ca.certPath, "-noout", "-text"]);
     expect(issuer.stdout).not.toContain("Subject Key Identifier");
+
+    const retainedCert = await fs.readFile(ca.certPath);
+    const retainedKey = await fs.readFile(ca.keyPath);
+    await expect(ensureDebugProxyCa(certDir)).resolves.toEqual(ca);
+    expect(await fs.readFile(ca.certPath)).toEqual(retainedCert);
+    expect(await fs.readFile(ca.keyPath)).toEqual(retainedKey);
 
     const leaf = await generateLocalProxyLeaf({ certDir, ca, hostname: "api.example.com" });
     const leafPath = path.join(certDir, "legacy-leaf.pem");

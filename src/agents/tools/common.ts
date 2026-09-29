@@ -1,8 +1,3 @@
-/**
- * Shared built-in tool contracts and helpers.
- *
- * Defines erased tool types, parameter readers, JSON results, progress blocks, and media sanitization.
- */
 import { detectMime } from "@openclaw/media-core/mime";
 import {
   asPositiveSafeInteger,
@@ -36,6 +31,8 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   catalogMode?: "direct-only";
   /** Gateway client capabilities required before this tool can be assembled. */
   requiredClientCaps?: string[];
+  /** Tool-owned execution and transport wait budget, before any harness completion grace. */
+  getExecutionTimeoutMs?: (args: unknown) => number | undefined;
   prepareBeforeToolCallParams?: (
     params: unknown,
     ctx: { toolCallId?: string; hookContext?: unknown; signal?: AbortSignal },
@@ -53,22 +50,8 @@ type ErasedAgentToolExecute = {
   ): Promise<AgentToolResult<unknown>>;
 };
 
-export type AnyAgentTool = Omit<AgentTool, "execute"> &
-  ErasedAgentToolExecute & {
-    displaySummary?: string;
-    /** Keep this tool model-visible; hidden catalog bridges cannot preserve its result contract. */
-    catalogMode?: "direct-only";
-    /** Gateway client capabilities required before this tool can be assembled. */
-    requiredClientCaps?: string[];
-    prepareBeforeToolCallParams?: AgentToolWithMeta<
-      TSchema,
-      unknown
-    >["prepareBeforeToolCallParams"];
-    finalizeBeforeToolCallParams?: AgentToolWithMeta<
-      TSchema,
-      unknown
-    >["finalizeBeforeToolCallParams"];
-  };
+export type AnyAgentTool = Omit<AgentToolWithMeta<TSchema, unknown>, "execute"> &
+  ErasedAgentToolExecute;
 
 export function asToolParamsRecord(params: unknown): Record<string, unknown> {
   return asNonArrayRecord(params);
@@ -121,14 +104,8 @@ export function readToolStringParam(
 ) {
   const { required = false, trim = true, label = key, allowEmpty = false } = options;
   const raw = readSnakeCaseParamRaw(params, key);
-  if (typeof raw !== "string") {
-    if (required) {
-      throw new ToolInputError(`${label} required`);
-    }
-    return undefined;
-  }
-  const value = trim ? raw.trim() : raw;
-  if (!value && !allowEmpty) {
+  const value = typeof raw === "string" ? (trim ? raw.trim() : raw) : undefined;
+  if (value === undefined || (!value && !allowEmpty)) {
     if (required) {
       throw new ToolInputError(`${label} required`);
     }
@@ -137,12 +114,7 @@ export function readToolStringParam(
   return value;
 }
 
-/**
- * Normalize tool model override input.
- * - empty/whitespace => undefined
- * - "default" (case-insensitive) => undefined (sentinel: reset/fallback)
- * - otherwise returns trimmed explicit model string
- */
+/** "default" resets a model override to its configured fallback. */
 export function normalizeToolModelOverride(value: string | undefined): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -232,18 +204,10 @@ export function readPositiveIntegerParam(
     max?: number;
   } = {},
 ): number | undefined {
-  const value = readNumberParam(params, key, {
-    positiveInteger: true,
-    strict: true,
-  });
-  if (value === undefined) {
-    const raw = readSnakeCaseParamRaw(params, key);
-    if (raw != null && !isBlankParamValue(raw)) {
-      throw new ToolInputError(options.message ?? `${key} must be a positive integer`);
-    }
-  }
-  if (value !== undefined && options.max !== undefined && value > options.max) {
-    throw new ToolInputError(options.message ?? `${key} must be a positive integer`);
+  const message = options.message ?? `${key} must be a positive integer`;
+  const value = readNonNegativeIntegerParam(params, key, { ...options, message });
+  if (value === 0) {
+    throw new ToolInputError(message);
   }
   return value;
 }
@@ -293,17 +257,13 @@ export function readFiniteNumberParam(
     }
     return undefined;
   }
-  if (options.min !== undefined) {
-    const below = options.minExclusive ? value <= options.min : value < options.min;
-    if (below) {
-      throw new ToolInputError(options.message ?? `${key} must be a finite number`);
-    }
-  }
-  if (options.max !== undefined) {
-    const above = options.maxExclusive ? value >= options.max : value > options.max;
-    if (above) {
-      throw new ToolInputError(options.message ?? `${key} must be a finite number`);
-    }
+  if (
+    (options.min !== undefined &&
+      (options.minExclusive ? value <= options.min : value < options.min)) ||
+    (options.max !== undefined &&
+      (options.maxExclusive ? value >= options.max : value > options.max))
+  ) {
+    throw new ToolInputError(options.message ?? `${key} must be a finite number`);
   }
   return value;
 }
@@ -389,19 +349,6 @@ export function payloadTextResult<TDetails>(payload: TDetails): AgentToolResult<
 
 type PublicToolProgress = Pick<AgentToolProgress, "text" | "id">;
 
-function toolProgressResult(progress: PublicToolProgress): AgentToolResult<undefined> {
-  return {
-    content: [],
-    details: undefined,
-    progress: {
-      text: progress.text,
-      visibility: "channel",
-      privacy: "public",
-      ...(progress.id ? { id: progress.id } : {}),
-    },
-  };
-}
-
 // Tool progress is a UI side channel. The model-facing tool result remains in
 // `content`; progress text must already be safe to show in channel previews.
 function emitToolProgress(
@@ -413,7 +360,16 @@ function emitToolProgress(
     return;
   }
   try {
-    onUpdate(toolProgressResult({ ...progress, text }));
+    onUpdate({
+      content: [],
+      details: undefined,
+      progress: {
+        text,
+        visibility: "channel",
+        privacy: "public",
+        ...(progress.id ? { id: progress.id } : {}),
+      },
+    });
   } catch {
     // Progress is best-effort UI state; tool execution must not depend on subscribers.
   }
@@ -447,21 +403,21 @@ export function scheduleToolProgress(
   return clear;
 }
 
-async function imageResult(params: {
+export async function imageResultFromFile(params: {
   label: string;
   path: string;
-  base64: string;
-  mimeType: string;
   extraText?: string;
   details?: Record<string, unknown>;
   imageSanitization?: ImageSanitizationLimits;
 }): Promise<AgentToolResult<unknown>> {
+  const buf = (await readLocalFileSafely({ filePath: params.path })).buffer;
+  const mimeType = (await detectMime({ buffer: buf.slice(0, 256) })) ?? "image/png";
   const content: AgentToolResult<unknown>["content"] = [
     ...(params.extraText ? [{ type: "text" as const, text: params.extraText }] : []),
     {
       type: "image",
-      data: params.base64,
-      mimeType: params.mimeType,
+      data: buf.toString("base64"),
+      mimeType,
     },
   ];
   const detailsMedia =
@@ -485,26 +441,6 @@ async function imageResult(params: {
   return await sanitizeToolResultImages(result, params.label, params.imageSanitization);
 }
 
-export async function imageResultFromFile(params: {
-  label: string;
-  path: string;
-  extraText?: string;
-  details?: Record<string, unknown>;
-  imageSanitization?: ImageSanitizationLimits;
-}): Promise<AgentToolResult<unknown>> {
-  const buf = (await readLocalFileSafely({ filePath: params.path })).buffer;
-  const mimeType = (await detectMime({ buffer: buf.slice(0, 256) })) ?? "image/png";
-  return await imageResult({
-    label: params.label,
-    path: params.path,
-    base64: buf.toString("base64"),
-    mimeType,
-    extraText: params.extraText,
-    details: params.details,
-    imageSanitization: params.imageSanitization,
-  });
-}
-
 type AvailableTag = {
   id?: string;
   name: string;
@@ -519,9 +455,6 @@ type AvailableTag = {
  * Entries that lack a string `name` are silently dropped.
  */
 export function parseAvailableTags(raw: unknown): AvailableTag[] | undefined {
-  if (raw === undefined || raw === null) {
-    return undefined;
-  }
   if (!Array.isArray(raw)) {
     return undefined;
   }
@@ -533,7 +466,7 @@ export function parseAvailableTags(raw: unknown): AvailableTag[] | undefined {
     .map((t) =>
       Object.assign(
         {},
-        t.id !== undefined && typeof t.id === `string` ? { id: t.id } : {},
+        typeof t.id === "string" ? { id: t.id } : {},
         { name: t.name as string },
         typeof t.moderated === `boolean` ? { moderated: t.moderated } : {},
         t.emoji_id === null || typeof t.emoji_id === `string` ? { emoji_id: t.emoji_id } : {},

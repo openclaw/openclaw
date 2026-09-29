@@ -7,7 +7,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isSqliteSchemaVersionError } from "../../../infra/sqlite-user-version.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../../state/openclaw-state-db-contract.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { collectLegacyCronStoreHealthFindings, maybeRepairLegacyCronStore } from "./index.js";
 import {
@@ -30,6 +33,7 @@ let fixtureDatabase: DatabaseSync | undefined;
 afterEach(async () => {
   fixtureDatabase?.close();
   fixtureDatabase = undefined;
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   if (tempRoot) {
@@ -186,6 +190,7 @@ describe("future shared-state schema safety", () => {
     const fixture = await createFixture({ futureSchema: false });
     const state = await loadLegacyCronRepairState({ cfg: fixture.cfg });
     expect(state).not.toBeNull();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await writeFutureSchema(fixture.databasePath);
 

@@ -1,3 +1,7 @@
+import {
+  inferToolMetaFromArgs,
+  projectAgentToolActivity,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { onInternalDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
@@ -31,7 +35,6 @@ import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { toTranscriptToolResult } from "./run-attempt-tools.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import {
-  inferCodexDynamicToolMeta,
   isCodexCommandBearingToolCall,
   resolveCodexToolProgressDetailMode,
   sanitizeCodexToolArguments,
@@ -112,6 +115,7 @@ export function createCodexAttemptServerRequestController(
     request: CodexAppServerServerRequest,
     scope: CodexThreadRouteScope,
     requestSignal: AbortSignal = new AbortController().signal,
+    setExecutionTimeoutMs?: (timeoutMs: number) => void,
   ) => {
     const signal = AbortSignal.any([runAbortController.signal, requestSignal]);
     const turnId = turnIdRef.current;
@@ -147,19 +151,13 @@ export function createCodexAttemptServerRequestController(
         if (approvalResult.kind === "handled") {
           return approvalResult.response;
         }
-        return await userInputBridgeRef.current?.handleElicitationRequest({
-          id: request.id,
-          params: request.params,
-        });
+        return await userInputBridgeRef.current?.handleElicitationRequest(request, signal);
       }
       if (request.method === "item/tool/requestUserInput") {
         if (scope.turnId === turnId) {
           markCurrentTurnRequestProgress();
         }
-        return await userInputBridgeRef.current?.handleRequest({
-          id: request.id,
-          params: request.params,
-        });
+        return await userInputBridgeRef.current?.handleRequest(request, signal);
       }
       if (request.method !== "item/tool/call") {
         if (isCodexAppServerApprovalRequest(request.method)) {
@@ -212,14 +210,21 @@ export function createCodexAttemptServerRequestController(
         tool: call.tool,
         toolCallId: call.callId,
       });
-      const toolMeta = inferCodexDynamicToolMeta(
-        call,
-        resolveCodexToolProgressDetailMode(params.toolProgressDetail),
-      );
+      const toolMeta = inferToolMetaFromArgs(call.tool, call.arguments, {
+        detailMode: resolveCodexToolProgressDetailMode(params.toolProgressDetail),
+      });
       const toolArgs = sanitizeCodexToolArguments(call.arguments);
       const commandBearing = isCodexCommandBearingToolCall(call.tool, toolArgs);
-      const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool, toolArgs);
+      const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool);
       if (shouldEmitDynamicToolProgress) {
+        const activity = projectAgentToolActivity({
+          toolCallId: call.callId,
+          name: call.tool,
+          phase: "start",
+          args: toolArgs,
+          meta: toolMeta,
+        });
+        void emitCodexAppServerEvent(params, { stream: "item", data: activity });
         void emitCodexAppServerEvent(params, {
           stream: "tool",
           data: {
@@ -233,19 +238,28 @@ export function createCodexAttemptServerRequestController(
           },
         });
       }
-      const dynamicToolTimeoutMs = resolveDynamicToolCallTimeoutMs({ call, config: params.config });
+      const dynamicToolTimeoutMs = resolveDynamicToolCallTimeoutMs({
+        call,
+        config: params.config,
+        toolBridge,
+      });
+      setExecutionTimeoutMs?.(dynamicToolTimeoutMs);
       const toolStartedAt = Date.now();
+      const diagnosticContext = {
+        call,
+        agentId: sessionAgentId,
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      };
       let terminalDiagnosticObserved = false;
       const unsubscribeToolDiagnosticObserver = onInternalDiagnosticEvent(
         (event) => {
           if (
             isDynamicToolTerminalDiagnosticEvent(event) &&
             isMatchingDynamicToolTerminalDiagnostic({
+              ...diagnosticContext,
               event,
-              call,
-              runId: params.runId,
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
             })
           ) {
             terminalDiagnosticObserved = true;
@@ -258,13 +272,7 @@ export function createCodexAttemptServerRequestController(
           // Publish the execution claim before persistence yields, so a replay
           // cannot become another owner of this call's progress or result.
           await projector?.transcriptCheckpoint.flush();
-          emitDynamicToolStartedDiagnostic({
-            call,
-            agentId: sessionAgentId,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-          });
+          emitDynamicToolStartedDiagnostic(diagnosticContext);
           const response = await handleDynamicToolCallWithTimeout({
             call,
             toolBridge,
@@ -327,6 +335,14 @@ export function createCodexAttemptServerRequestController(
         }
         if (shouldEmitDynamicToolProgress) {
           const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
+          const activity = projectAgentToolActivity({
+            toolCallId: call.callId,
+            name: call.tool,
+            phase: "result",
+            args: response.executedArguments ?? call.arguments,
+            result: toTranscriptToolResult(progressResponse),
+            isError: !protocolResponse.success,
+          });
           void emitCodexAppServerEvent(params, {
             stream: "tool",
             data: {
@@ -340,23 +356,15 @@ export function createCodexAttemptServerRequestController(
               result: toTranscriptToolResult(progressResponse),
             },
           });
+          void emitCodexAppServerEvent(params, { stream: "item", data: activity });
         }
         if (
           !terminalDiagnosticObserved &&
-          !hasPendingDynamicToolTerminalDiagnostic({
-            call,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-          })
+          !hasPendingDynamicToolTerminalDiagnostic(diagnosticContext)
         ) {
           emitDynamicToolTerminalDiagnostic({
+            ...diagnosticContext,
             response,
-            call,
-            agentId: sessionAgentId,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
             durationMs: toolDurationMs,
           });
         }
@@ -380,19 +388,10 @@ export function createCodexAttemptServerRequestController(
         pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
         if (
           !terminalDiagnosticObserved &&
-          !hasPendingDynamicToolTerminalDiagnostic({
-            call,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-          })
+          !hasPendingDynamicToolTerminalDiagnostic(diagnosticContext)
         ) {
           emitDynamicToolErrorDiagnostic({
-            call,
-            agentId: sessionAgentId,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
+            ...diagnosticContext,
             durationMs: Math.max(0, Date.now() - toolStartedAt),
           });
         }

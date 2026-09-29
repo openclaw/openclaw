@@ -84,7 +84,7 @@ export function buildSubagentSpawnEnvelope(params: {
     "## What You DON'T Do",
     "- No unrelated conversation or external message unless explicitly tasked to message a specific recipient/channel.",
     "- No automations/persistent state.",
-    "- Do not use outbound messaging to report results.",
+    "- Return results through the accepted completion path, without separate progress or acknowledgment messages. Never substitute exec, CLI, or direct RPC for missing messaging tools; ask the parent to relay needed coordination in your result.",
     "",
   ];
 

@@ -61,11 +61,15 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
   let unitPath: string;
   const realNow = Date.now;
   let offset = 0;
+  let monotonicNow = 0;
 
   beforeEach(async () => {
     offset = 0;
+    monotonicNow = 0;
     vi.mocked(execFileUtf8).mockReset().mockImplementation(systemdManagerVersionProbe);
     vi.spyOn(Date, "now").mockImplementation(() => realNow() + offset);
+    // Filesystem scheduling must not consume this clock-contract fixture's budget.
+    vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
     assertNoSystemOwnership.mockReset().mockResolvedValue(undefined);
     reloadUserManager.mockReset().mockResolvedValue(undefined);
     busctl.mockReset();
@@ -92,6 +96,7 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
     async (stepMs) => {
       busctl.mockImplementation(async (serviceEnv) => {
         offset = stepMs;
+        monotonicNow += 100;
         return unitNotFound(serviceEnv.OPENCLAW_SYSTEMD_UNIT ?? "openclaw-owned");
       });
 
@@ -104,6 +109,7 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
         busctl.mock.calls.map((call) => call[2]),
         BUDGET_MS / 3 - 100,
       );
+      expect(busctl.mock.calls.map((call) => call[2])).toEqual([1_666, 1_633]);
     },
   );
 
@@ -116,6 +122,7 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
       };
       busctl.mockImplementation(async (_serviceEnv, args) => {
         offset = stepMs;
+        monotonicNow += 100;
         const stdout = args.includes("LoadUnit")
           ? JSON.stringify({
               type: "o",
@@ -136,6 +143,7 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
         busctl.mock.calls.map((call) => call[2]),
         BUDGET_MS / 3 - 100,
       );
+      expect(busctl.mock.calls.map((call) => call[2])).toEqual([1_666, 2_450, 4_800]);
     },
   );
 
@@ -163,6 +171,7 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
       );
       assertNoSystemOwnership.mockImplementation(async () => {
         offset = stepMs;
+        monotonicNow += 100;
       });
 
       await expect(refreshLegacySystemdServiceMetadata(env, BUDGET_MS)).resolves.toBe(true);
@@ -174,6 +183,7 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
       ];
       expect(assertNoSystemOwnership).toHaveBeenCalledTimes(3);
       expectBudgetShares(timeouts, BUDGET_MS - 1_000);
+      expect(timeouts).toEqual([5_000, 4_900, 4_800, 4_700]);
     },
   );
 });

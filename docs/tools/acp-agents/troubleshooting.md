@@ -43,3 +43,20 @@ the next native tool call, restart the Codex app-server or OpenClaw Gateway
 instead of repeating `/new`. See
 [Codex harness troubleshooting](/plugins/codex-harness/troubleshooting).
 </Note>
+
+Known provider failures include recovery guidance even when the harness returns
+no assistant reply. Unrecognized failures keep a generic message; raw provider
+diagnostics stay in the logs. If a warning says tool actions may have already
+run, check their results before retrying.
+
+## Oversized harness messages
+
+The acpx backend limits each incoming ACP message from a harness to 64 MiB of
+raw bytes by default. If a run fails with `ACP_MESSAGE_TOO_LARGE` or
+`ACP message exceeded ACPX_MAX_ACP_MESSAGE_BYTES`, reduce the harness output or
+set `ACPX_MAX_ACP_MESSAGE_BYTES` in the Gateway process environment to a larger
+byte count. Setting it to `0` permits unlimited incoming message sizes.
+
+Restart the Gateway after changing the environment so new harness connections
+use the limit. For direct acpx CLI sessions, close the existing warm owner and
+start a new session; warm owners keep their startup setting.

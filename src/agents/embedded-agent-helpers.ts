@@ -35,7 +35,6 @@ export {
 } from "../shared/assistant-error-format.js";
 export {
   classifyFailoverReason,
-  isAuthErrorMessage,
   isCloudCodeAssistFormatError,
   isContextOverflowError,
   isFailoverErrorMessage,

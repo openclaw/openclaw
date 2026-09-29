@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:https";
 import type { Socket } from "node:net";
 import path from "node:path";
@@ -10,11 +11,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { fetchConfiguredLocalOriginWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
-import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { resolveControlUiHandoffTarget, waitForControlUiDocument } from "./control-ui-handoff.js";
+import { withLoopbackTestServer } from "./loopback-server.test-support.js";
 
 const documentUrl = "http://127.0.0.1:18789/dashboard/";
 const tempDirs = createTrackedTempDirs();
@@ -142,16 +143,9 @@ describe("waitForControlUiDocument", () => {
         response.writeHead(200, { "content-type": "text/html" });
         response.end();
       });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      try {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("expected a test HTTPS port");
-        }
+      await withLoopbackTestServer(server, async (port) => {
         const options = {
-          url: `https://127.0.0.1:${address.port}/dashboard/`,
+          url: `https://127.0.0.1:${port}/dashboard/`,
           tlsConfig: { enabled: true, certPath, keyPath, caPath },
         };
         await expect(waitForControlUiDocument(options)).resolves.toMatchObject({ ready: true });
@@ -160,12 +154,7 @@ describe("waitForControlUiDocument", () => {
         server.setSecureContext({ cert: TEST_TLS_CERT_PEM, key: TEST_TLS_KEY_PEM });
         await expect(waitForControlUiDocument(options)).resolves.toMatchObject({ ready: false });
         expect(requests).toBe(1);
-      } finally {
-        server.closeAllConnections();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
-      }
+      });
     },
   );
 
@@ -174,6 +163,7 @@ describe("waitForControlUiDocument", () => {
     const certPath = path.join(root, "cert.pem");
     await fs.writeFile(certPath, TEST_TLS_CERT_PEM);
     const read = vi.spyOn(fs, "readFile");
+    const open = vi.spyOn(fs, "open");
     const fetch = vi.fn(async () => htmlHead());
 
     const result = await waitForControlUiDocument({
@@ -188,7 +178,7 @@ describe("waitForControlUiDocument", () => {
     });
 
     expect(result.ready).toBe(true);
-    expect(read.mock.calls.map(([file]) => file)).toEqual([certPath]);
+    expect([...read.mock.calls, ...open.mock.calls].map(([file]) => file)).toEqual([certPath]);
     expect(fetch).toHaveBeenCalledOnce();
     await expect(fs.readdir(root)).resolves.toEqual(["cert.pem"]);
   });
@@ -350,62 +340,60 @@ describe("waitForControlUiDocument", () => {
       const diagnosticSocket = createDeferredCore<Socket>();
       const diagnosticClosed = createDeferredCore();
       await withEnvAsync({ no_proxy: "127.0.0.1" }, async () => {
-        await withServer(
-          (request, response) => {
-            methods.push(request.method ?? "");
-            response.writeHead(503, { "content-type": "text/plain", connection: "close" });
-            if (request.method === "HEAD") {
-              response.end();
-              return;
-            }
-            diagnosticSocket.resolve(request.socket);
-            request.socket.once("close", () => diagnosticClosed.resolve());
-            response.write("Asset build failed");
-            if (body === "complete") {
-              response.end();
-            }
-          },
-          async (baseUrl) => {
-            const result = await waitForControlUiDocument({
-              url: `${baseUrl}/dashboard/`,
-              deps: {
-                fetch: async (request) => {
-                  const guarded = await fetchConfiguredLocalOriginWithSsrFGuard(request);
-                  const method = String(request.init?.method);
-                  responses.push({ method, status: guarded.response.status });
-                  if (method === "GET" && body === "broken") {
-                    // Fault the real body only after guarded fetch has delivered its headers.
-                    (await diagnosticSocket.promise).destroy();
-                  }
-                  return {
-                    ...guarded,
-                    release: async () => {
-                      await guarded.release();
-                      releases.push(method);
-                    },
-                  };
-                },
+        const server = createHttpServer((request, response) => {
+          methods.push(request.method ?? "");
+          response.writeHead(503, { "content-type": "text/plain", connection: "close" });
+          if (request.method === "HEAD") {
+            response.end();
+            return;
+          }
+          diagnosticSocket.resolve(request.socket);
+          request.socket.once("close", () => diagnosticClosed.resolve());
+          response.write("Asset build failed");
+          if (body === "complete") {
+            response.end();
+          }
+        });
+        await withLoopbackTestServer(server, async (port) => {
+          const result = await waitForControlUiDocument({
+            url: `http://127.0.0.1:${port}/dashboard/`,
+            deps: {
+              fetch: async (request) => {
+                const guarded = await fetchConfiguredLocalOriginWithSsrFGuard(request);
+                const method = String(request.init?.method);
+                responses.push({ method, status: guarded.response.status });
+                if (method === "GET" && body === "broken") {
+                  // Fault the real body only after guarded fetch has delivered its headers.
+                  (await diagnosticSocket.promise).destroy();
+                }
+                return {
+                  ...guarded,
+                  release: async () => {
+                    await guarded.release();
+                    releases.push(method);
+                  },
+                };
               },
-            });
-            await diagnosticClosed.promise;
+            },
+          });
+          await diagnosticClosed.promise;
 
-            expect(result).toEqual({
-              ready: false,
-              reason:
-                body === "complete"
-                  ? "Asset build failed"
-                  : "Control UI dashboard is unavailable (HTTP 503).",
-              status: 503,
-            });
-            expect(methods).toEqual(["HEAD", "GET"]);
-            expect(responses).toEqual([
-              { method: "HEAD", status: 503 },
-              { method: "GET", status: 503 },
-            ]);
-            // Observe release and socket closure before withServer tears the fixture down.
-            expect(releases).toEqual(["GET", "HEAD"]);
-          },
-        );
+          expect(result).toEqual({
+            ready: false,
+            reason:
+              body === "complete"
+                ? "Asset build failed"
+                : "Control UI dashboard is unavailable (HTTP 503).",
+            status: 503,
+          });
+          expect(methods).toEqual(["HEAD", "GET"]);
+          expect(responses).toEqual([
+            { method: "HEAD", status: 503 },
+            { method: "GET", status: 503 },
+          ]);
+          // Observe release and socket closure before the server fixture teardown.
+          expect(releases).toEqual(["GET", "HEAD"]);
+        });
       });
     },
   );

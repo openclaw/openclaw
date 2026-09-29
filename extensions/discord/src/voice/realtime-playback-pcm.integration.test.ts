@@ -46,6 +46,7 @@ it.each([10, 20, 100])(
 
 it("resumes continuous output after the provider clears unplayed PCM", async () => {
   const fixture = createRealtimePlaybackFixture(undefined, { outputAudioMode: "continuous" });
+  const heard = createDeferred<void>();
   try {
     fixture.callbacks.onAudio(pcmTone(500));
     fixture.callbacks.onMark?.("discarded", () => fixture.acknowledgeMark("discarded"));
@@ -53,9 +54,13 @@ it("resumes continuous output after the provider clears unplayed PCM", async () 
     expect(fixture.player.state.status).toBe(fixture.voiceSdk.AudioPlayerStatus.Idle);
 
     fixture.callbacks.onAudio(pcmTone(500));
-    fixture.callbacks.onMark?.("heard", () => fixture.acknowledgeMark("heard"));
+    fixture.callbacks.onMark?.("heard", () => {
+      fixture.acknowledgeMark("heard");
+      heard.resolve();
+    });
     expect(fixture.player.state.status).not.toBe(fixture.voiceSdk.AudioPlayerStatus.Idle);
-    await vi.waitFor(() => expect(fixture.acknowledgeMark.mock.calls).toEqual([["heard"]]));
+    await vi.waitFor(() => heard.promise, { timeout: 1_000 });
+    expect(fixture.acknowledgeMark.mock.calls).toEqual([["heard"]]);
     expect(fixture.onTerminalError).not.toHaveBeenCalled();
   } finally {
     fixture.close();
@@ -70,7 +75,7 @@ it("plays continuous audio arriving during the player's starvation retirement", 
       resources.add(state.resource);
     }
   });
-  const stop = fixture.voiceSdk.AudioPlayer.prototype.stop.bind(fixture.player);
+  const stop = fixture.stopPlayer;
   let resumed = false;
   fixture.stop.mockImplementation((force) => {
     const stopped = stop(force);

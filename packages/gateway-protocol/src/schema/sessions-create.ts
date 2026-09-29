@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
@@ -36,6 +36,7 @@ export const SessionsCreateParamsSchema = closedObject({
   ),
   category: Type.Optional(SessionLabelString),
   model: Type.Optional(NonEmptyString),
+  agentRuntime: Type.Optional(NonEmptyString),
   contextWindow: Type.Optional(NonEmptyString),
   thinkingLevel: Type.Optional(NonEmptyString),
   fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
@@ -123,3 +124,5 @@ export const SessionsCreateParamsSchema = closedObject({
     }),
   ),
 });
+
+export type SessionsCreateParams = Static<typeof SessionsCreateParamsSchema>;

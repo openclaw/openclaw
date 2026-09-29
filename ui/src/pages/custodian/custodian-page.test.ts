@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import * as uuid from "../../lib/uuid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
@@ -141,16 +142,22 @@ describe("custodian page", () => {
     const { context } = createContext(request);
     const { page } = await mountPage(context);
 
-    await waitForFast(() =>
-      expect(page.querySelectorAll('.custodian__wizard-step input[type="radio"]')).toHaveLength(5),
-    );
+    const trigger = await waitForFast(() => {
+      const button = page.querySelector<HTMLButtonElement>(
+        ".custodian__wizard-step .picker-select__trigger",
+      );
+      expect(button).not.toBeNull();
+      return button!;
+    });
     expect(page.querySelector("openclaw-option-card")).toBeNull();
     expect(page.querySelector(".agent-chat__composer-shell")).toBeNull();
-    page
-      .querySelectorAll<HTMLInputElement>('.custodian__wizard-step input[type="radio"]')[4]!
+    trigger.click();
+    await waitForFast(() =>
+      expect(page.querySelectorAll('.custodian__wizard-step [role="option"]')).toHaveLength(5),
+    );
+    [...page.querySelectorAll<HTMLElement>('.custodian__wizard-step [role="option"]')]
+      .find((option) => option.textContent?.includes("Twitch"))!
       .click();
-    await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__wizard-step .btn.primary")!.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await waitForFast(() =>
@@ -1055,10 +1062,16 @@ describe("custodian page", () => {
       action: "open-agent",
     });
     const { context } = createContext(request);
+    const closePanel = vi.fn();
+    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, closePanel, { once: true });
     await mountPage(context);
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
 
-    expect(context.navigate).toHaveBeenCalledWith("chat");
+    expect(context.navigate).toHaveBeenCalledWith("chat", {
+      pathname: "/chat/main",
+      search: "?__openclawComposerFocus=1",
+    });
+    expect(closePanel).toHaveBeenCalledWith(expect.objectContaining({ detail: { open: false } }));
   });
 
   it("exits setup through normal chat navigation", async () => {

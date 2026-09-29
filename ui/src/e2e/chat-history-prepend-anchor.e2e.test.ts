@@ -152,7 +152,17 @@ suite.define(() => {
               }),
             );
           }
-          await thread.dispatchEvent("touchstart");
+          await thread.evaluate((element) => {
+            const contact = new Touch({ identifier: 1, target: element });
+            element.dispatchEvent(
+              new TouchEvent("touchstart", {
+                touches: [contact],
+                targetTouches: [contact],
+                changedTouches: [contact],
+                bubbles: true,
+              }),
+            );
+          });
           if (momentum) {
             await thread.evaluate((element) => {
               (window as AnchorWindow).prependFrames.readerDelta += 20;
@@ -184,17 +194,28 @@ suite.define(() => {
             await thread.evaluate((element) => element.scrollTop),
             "a history prepend must not write the scroll offset during an active touch",
           ).toBe(heldOffset + (momentum ? 20 : 0));
-          await thread.dispatchEvent("touchend");
-          if (momentum) {
-            // Synthetic offset events protect ownership ordering, not native
-            // Safari inertia. Natural reader movement is removed from samples.
-            await thread.evaluate((element) => {
-              (window as AnchorWindow).prependFrames.readerDelta += 20;
-              element.scrollTop += 20;
+          await thread.evaluate((element, withMomentum) => {
+            const move = () => {
+              (window as AnchorWindow).prependFrames.readerDelta += 10;
+              element.scrollTop += 10;
               element.dispatchEvent(new Event("scroll"));
-            });
+            };
+            // Keep the last contact movement, release, and initial momentum in
+            // one browser task; RPC latency must not turn this fling into an idle touch.
+            if (withMomentum) {
+              move();
+            }
+            element.dispatchEvent(
+              new TouchEvent("touchend", {
+                changedTouches: [new Touch({ identifier: 1, target: element })],
+                bubbles: true,
+              }),
+            );
+            if (withMomentum) {
+              move();
+            }
             // Deliberately omit scrollend: the offset observer must release history.
-          }
+          }, momentum);
         }
         await waitForChatScrollIdle(page);
         // State can contain the fetched page while the rendered projection is

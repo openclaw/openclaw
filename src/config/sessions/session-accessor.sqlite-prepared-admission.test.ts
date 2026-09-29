@@ -2,6 +2,8 @@ import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import type { Worker, WorkerOptions } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -15,15 +17,18 @@ import {
 } from "../../plugins/registry-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
+import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
@@ -34,10 +39,12 @@ import {
   replaceTranscriptEventsSync,
 } from "./session-accessor.js";
 import type { SessionEntryLifecycleMutationResult } from "./session-accessor.sqlite-contract.js";
+import { withWorkerSqliteIntegrityCounter } from "./session-accessor.sqlite-integrity-counter.test-support.js";
 import {
   applySessionEntryMaintenance,
   finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort,
 } from "./session-accessor.sqlite-maintenance.js";
+import { holdReclamationAdmission } from "./session-accessor.sqlite-prepared-admission.test-support.js";
 import {
   applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,
@@ -53,7 +60,50 @@ import {
 const hooks = vi.hoisted(() => ({
   fork: undefined as ((child: ChildProcess) => void) | undefined,
   afterMaterialize: undefined as (() => Promise<void>) | undefined,
+  integrityChecks: undefined as SharedArrayBuffer | undefined,
+  integrityRelease: undefined as SharedArrayBuffer | undefined,
+  integrityPath: undefined as string | undefined,
+  worker: undefined as ((worker: Worker, phase: "checking" | "checked") => void) | undefined,
 }));
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      private readonly integrityProbe: typeof hooks.worker;
+
+      constructor(filename: string | URL, options?: WorkerOptions) {
+        super(
+          filename,
+          withWorkerSqliteIntegrityCounter(
+            options,
+            hooks.integrityChecks,
+            hooks.integrityRelease,
+            hooks.integrityPath,
+          ),
+        );
+        this.integrityProbe = hooks.worker;
+      }
+
+      override emit(event: string | symbol, ...args: unknown[]): boolean {
+        const message = args[0];
+        if (
+          this.integrityProbe &&
+          event === "message" &&
+          args.length === 1 &&
+          isRecord(message) &&
+          Object.keys(message).length === 2 &&
+          message.type === "test-integrity-check" &&
+          (message.phase === "checking" || message.phase === "checked")
+        ) {
+          this.integrityProbe(this, message.phase);
+          return true;
+        }
+        return super.emit(event, ...args);
+      }
+    },
+  };
+});
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
@@ -100,6 +150,10 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   hooks.fork = undefined;
   hooks.afterMaterialize = undefined;
+  hooks.integrityChecks = undefined;
+  hooks.integrityRelease = undefined;
+  hooks.integrityPath = undefined;
+  hooks.worker = undefined;
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   resetConfigRuntimeState();
@@ -128,6 +182,18 @@ function fixture() {
 }
 
 type Fixture = ReturnType<typeof fixture>;
+
+function closeForIntegrityAdmission(f: Fixture) {
+  expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
+  invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+  clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
+}
+
+async function closeWorkerForIntegrityAdmission(f: Fixture) {
+  await closeOpenClawAgentDatabaseByPathAsync(f.databasePath);
+  invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+  clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
+}
 
 function observeAdmission(databasePath: string, hold = false) {
   let parentChecks = 0;
@@ -185,7 +251,7 @@ function observeAdmission(databasePath: string, hold = false) {
     const prepare = database.prepare.bind(database);
     database.prepare = (sql) => {
       const statement = prepare(sql);
-      if (sql === "PRAGMA integrity_check;") {
+      if (sql === "PRAGMA integrity_check;" || sql === "PRAGMA integrity_check('sqlite_schema');") {
         const all = statement.all.bind(statement);
         statement.all = () => {
           parentChecks += 1;
@@ -232,7 +298,8 @@ function observeAdmission(databasePath: string, hold = false) {
       expect(parentChecks, "integrity ran on the caller thread").toBe(0);
       expect(admissions).toBe(count);
       expect(settled).toBe(count);
-      expect(children).toHaveLength(count);
+      expect(children.length).toBeGreaterThanOrEqual(count);
+      expect(children.length).toBeLessThanOrEqual(count * 4);
       for (const child of children) {
         expect(child).toEqual({
           closed: true,
@@ -246,6 +313,42 @@ function observeAdmission(databasePath: string, hold = false) {
   };
 }
 
+function observeWorkerAdmission(databasePath: string, hold: boolean) {
+  const parent = observeAdmission(databasePath);
+  const admission = holdReclamationAdmission(databasePath, "maintenance-finalize", "before-writer");
+  releases.push(() => admission.release.resolve());
+  if (!hold) {
+    admission.release.resolve();
+  }
+  const counts = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const release = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  // Observe native integrity without parking the shared foreground command carrier.
+  Atomics.store(new Int32Array(release), 0, 1);
+  hooks.integrityChecks = counts;
+  hooks.integrityRelease = release;
+  hooks.integrityPath = databasePath;
+  const workers: Worker[] = [];
+  let completed = 0;
+  hooks.worker = (worker, phase) => {
+    if (phase === "checking") {
+      workers.push(worker);
+    } else {
+      completed += 1;
+    }
+  };
+  return {
+    release: admission.release,
+    expectPending: (operation: Promise<unknown>) => admission.expectPending(operation),
+    async expectHealthy(count: number) {
+      parent.expectHealthy(0);
+      expect(Atomics.load(new Int32Array(counts), 0)).toBe(count);
+      expect(completed).toBe(count);
+      await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+      expect(workers.every((worker) => worker.threadId === -1)).toBe(true);
+    },
+  };
+}
+
 const cases = (["whole-store", "lifecycle", "replacement"] as const).flatMap((owner) =>
   (["warm", "cold-preparation", "cold-commit"] as const).map((mode) => ({ owner, mode })),
 );
@@ -255,8 +358,7 @@ it.each(cases)(
   async ({ owner, mode }) => {
     const f = fixture();
     if (mode === "cold-preparation") {
-      expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-      invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+      closeForIntegrityAdmission(f);
     }
     const probe = observeAdmission(f.databasePath);
     const entered = createDeferred();
@@ -270,8 +372,11 @@ it.each(cases)(
       entered.resolve();
       await release.promise;
       if (mode === "cold-commit") {
-        expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-        invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+        if (owner !== "whole-store") {
+          await closeWorkerForIntegrityAdmission(f);
+        } else {
+          closeForIntegrityAdmission(f);
+        }
       }
     };
     const operation = own<string | SessionEntryLifecycleMutationResult>(
@@ -318,7 +423,7 @@ it.each(cases)(
               ],
             }),
     );
-    expect(callbacks).toBe(mode === "cold-preparation" ? 0 : 1);
+    expect(callbacks).toBe(owner === "whole-store" && mode !== "cold-preparation" ? 1 : 0);
     const later = own(
       runExclusiveSqliteSessionWrite(
         f.scope,
@@ -341,7 +446,7 @@ it.each(cases)(
     });
     expect(callbacks).toBe(1);
     expect(order).toEqual(["update", "later"]);
-    probe.expectHealthy(mode === "warm" ? 0 : 1);
+    probe.expectHealthy(owner === "replacement" || mode === "warm" ? 0 : 1);
   },
 );
 
@@ -351,17 +456,17 @@ it.each(["persist-false", "unchanged", "empty-replacements", "missing-replacemen
     const f = fixture();
     const probe = observeAdmission(f.databasePath);
     let callbacks = 0;
-    const close = () => {
+    const close = async () => {
       callbacks += 1;
-      expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
+      expect(await closeOpenClawAgentDatabaseByPathAsync(f.databasePath)).toBe(true);
     };
     const operation =
       mode === "persist-false" || mode === "unchanged"
         ? applySessionStoreProjection({
             storePath: f.databasePath,
             skipMaintenance: true,
-            update: (store) => {
-              close();
+            update: async (store) => {
+              await close();
               if (mode === "persist-false") {
                 delete store[f.input.sessionKey];
               }
@@ -374,8 +479,8 @@ it.each(["persist-false", "unchanged", "empty-replacements", "missing-replacemen
               mode === "missing-replacement" ? "agent:main:missing" : f.input.sessionKey,
             ],
             skipMaintenance: true,
-            update: () => {
-              close();
+            update: async () => {
+              await close();
               return {
                 result: "no-op",
                 ...(mode === "missing-replacement"
@@ -400,7 +505,7 @@ it.each(["persist-false", "unchanged", "empty-replacements", "missing-replacemen
 );
 
 it.each(["selection", "stale", "denied"] as const)(
-  "preserves replacement $0 error ordering across a cold commit",
+  "refuses replacement $0 before an unauthorized worker commit",
   async (mode) => {
     const f = fixture();
     const probe = observeAdmission(f.databasePath);
@@ -409,7 +514,9 @@ it.each(["selection", "stale", "denied"] as const)(
       throw denied;
     });
     const update = vi.fn(
-      (entries: Parameters<Parameters<typeof applySessionEntryReplacements>[0]["update"]>[0]) => {
+      async (
+        entries: Parameters<Parameters<typeof applySessionEntryReplacements>[0]["update"]>[0],
+      ) => {
         if (mode === "stale") {
           replaceSessionEntrySync(f.input, {
             sessionId: "original",
@@ -417,8 +524,7 @@ it.each(["selection", "stale", "denied"] as const)(
             updatedAt: Date.now(),
           });
         }
-        expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-        invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+        await closeWorkerForIntegrityAdmission(f);
         return {
           result: undefined,
           replacements: entries.map(({ entry, sessionKey }) => ({
@@ -437,16 +543,14 @@ it.each(["selection", "stale", "denied"] as const)(
         update,
       }),
     );
-    if (mode === "denied") {
-      await expect(work).rejects.toBe(denied);
+    if (mode === "selection") {
+      await expect(work).rejects.toThrow("outside the selected key set");
     } else {
-      await expect(work).rejects.toThrow(
-        mode === "selection" ? "outside the selected key set" : "changed before replacement",
-      );
+      await expect(work).rejects.toBe(denied);
     }
     expect(update).toHaveBeenCalledOnce();
-    expect(guard).toHaveBeenCalledTimes(mode === "denied" ? 1 : 0);
-    probe.expectHealthy(mode === "selection" ? 0 : 1);
+    expect(guard).toHaveBeenCalledTimes(mode === "selection" ? 0 : 1);
+    probe.expectHealthy(0);
     expect(loadSessionEntryReadOnly(f.input)?.label).toBe(mode === "stale" ? "newer" : undefined);
   },
 );
@@ -466,8 +570,7 @@ it("keeps lifecycle commit denial before its stale-row check after admission", a
         label: "newer",
         updatedAt: Date.now(),
       });
-      expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-      invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+      closeForIntegrityAdmission(f);
       return { ...currentEntry!, label: "uncommitted" };
     },
   );
@@ -503,8 +606,7 @@ it("reacquires post-builder references before planning lifecycle transcript dele
   const probe = observeAdmission(f.databasePath);
   const builder = vi.fn(
     ({ currentEntry }: { currentEntry?: import("./types.js").SessionEntry }) => {
-      expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-      invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+      closeForIntegrityAdmission(f);
       return { ...currentEntry!, usageFamilySessionIds: ["original"] };
     },
   );
@@ -525,10 +627,16 @@ it("reacquires post-builder references before planning lifecycle transcript dele
   expect(loadTranscriptEventsSync(transcript.scope)).toEqual(transcript.events);
 });
 
-it("reacquires the split lifecycle commit after real archive materialization", async () => {
+it("reacquires the split lifecycle writer after archive materialization with retained admission", async () => {
   const f = fixture();
   const transcript = seedTranscript(f);
-  const probe = observeAdmission(f.databasePath, true);
+  const probe = observeAdmission(f.databasePath);
+  const admission = holdReclamationAdmission(
+    f.databasePath,
+    "lifecycle-projection-commit",
+    "inside-writer",
+  );
+  releases.push(() => admission.release.resolve());
   let materializations = 0;
   let preparationWriterRan = false;
   hooks.afterMaterialize = async () => {
@@ -540,8 +648,12 @@ it("reacquires the split lifecycle commit after real archive materialization", a
       },
       "session.transcript.batch",
     );
-    expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-    invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+    const cached = getOpenClawAgentDatabaseIfOpen(f.options);
+    if (!cached) {
+      throw new Error("Fixture lost its cached handle before materialization");
+    }
+    closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+    expect(cached.db.isOpen).toBe(false);
   };
   const work = own(
     applySessionEntryLifecycleMutation({
@@ -550,7 +662,7 @@ it("reacquires the split lifecycle commit after real archive materialization", a
       removals: [{ sessionKey: f.input.sessionKey, archiveRemovedTranscript: true }],
     }),
   );
-  await probe.expectPending(work);
+  await admission.expectPending(work);
   let laterRan = false;
   const later = own(
     runExclusiveSqliteSessionWrite(
@@ -565,7 +677,7 @@ it("reacquires the split lifecycle commit after real archive materialization", a
   expect(laterRan).toBe(false);
   expect(preparationWriterRan).toBe(true);
   expect(loadSessionEntryReadOnly(f.input)?.sessionId).toBe("original");
-  probe.release.resolve();
+  admission.release.resolve();
   const result = await work;
   await later;
   expect(materializations).toBe(1);
@@ -578,7 +690,9 @@ it("reacquires the split lifecycle commit after real archive materialization", a
   ).toBe(true);
   expect(loadSessionEntryReadOnly(f.input)).toBeUndefined();
   expect(loadTranscriptEventsSync(transcript.scope)).toEqual([]);
-  probe.expectHealthy(1);
+  // Cache eviction preserves the native admission and its completed integrity proof.
+  probe.expectHealthy(0);
+  expect(admission.count()).toBe(1);
 });
 
 it.each([false, true])(
@@ -603,8 +717,7 @@ it.each([false, true])(
         },
         "session.transcript.batch",
       );
-      expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-      invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+      closeForIntegrityAdmission(f);
     });
     const harness: AgentHarness = {
       id: "prepared-native",
@@ -708,10 +821,10 @@ it.each(
     ([false, true] as const).map((cold) => ({ owner, cold })),
   ),
 )(
-  "keeps $owner maintenance finalization in the writer FIFO (cold: $cold)",
+  "keeps $owner maintenance commits after validation without blocking writers (cold: $cold)",
   async ({ owner, cold }) => {
     const f = maintenanceFixture();
-    const probe = observeAdmission(f.databasePath, cold);
+    const probe = observeWorkerAdmission(f.databasePath, cold);
     let preparationWriterRan = false;
     hooks.afterMaterialize = async () => {
       await runExclusiveSqliteSessionWrite(
@@ -722,8 +835,11 @@ it.each(
         "session.transcript.batch",
       );
       if (cold) {
-        expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-        invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+        if (owner !== "whole-store") {
+          await closeWorkerForIntegrityAdmission(f);
+        } else {
+          closeForIntegrityAdmission(f);
+        }
       }
     };
     const work = own<void | SessionEntryLifecycleMutationResult>(
@@ -760,31 +876,35 @@ it.each(
     );
     if (cold) {
       await probe.expectPending(work);
-      let laterRan = false;
+      expect(loadSessionEntryReadOnly(f.input)?.label).toBe("kept");
       const later = own(
-        runExclusiveSqliteSessionWrite(
-          f.scope,
-          async () => {
-            laterRan = true;
-            expect(loadSessionEntryReadOnly(f.stale)).toBeUndefined();
-          },
-          "session.transcript.batch",
-        ),
+        applySessionEntryReplacements({
+          storePath: f.databasePath,
+          sessionKeys: [f.input.sessionKey],
+          skipMaintenance: true,
+          update: (entries) => ({
+            result: undefined,
+            replacements: entries.map(({ entry, sessionKey }) => ({
+              sessionKey,
+              entry: { ...entry, label: "foreground" },
+            })),
+          }),
+        }),
       );
-      await yieldToEventLoop();
+      // Validation has no writer permit; the finalizer acquires it for its native commit.
+      await later;
       expect(preparationWriterRan).toBe(true);
-      expect(laterRan).toBe(false);
+      expect(loadSessionEntryReadOnly(f.input)?.label).toBe("foreground");
       expect(loadSessionEntryReadOnly(f.stale)?.sessionId).toBe("old");
       probe.release.resolve();
       await work;
-      await later;
     } else {
       await work;
     }
     expect(preparationWriterRan).toBe(true);
-    expect(loadSessionEntryReadOnly(f.input)?.label).toBe("kept");
+    expect(loadSessionEntryReadOnly(f.input)?.label).toBe(cold ? "foreground" : "kept");
     expectMaintenanceArchived(f);
-    probe.expectHealthy(cold ? 1 : 0);
+    await probe.expectHealthy(cold ? 1 : 0);
   },
 );
 
@@ -803,10 +923,9 @@ function maintenancePlan(f: ReturnType<typeof maintenanceFixture>) {
 it("rechecks maintenance lifetime after cold finalizer admission", async () => {
   const f = maintenanceFixture();
   const plan = maintenancePlan(f);
-  const probe = observeAdmission(f.databasePath, true);
+  const probe = observeWorkerAdmission(f.databasePath, true);
   hooks.afterMaterialize = async () => {
-    expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-    invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+    closeForIntegrityAdmission(f);
   };
   let current = true;
   const work = own(
@@ -818,9 +937,10 @@ it("rechecks maintenance lifetime after cold finalizer admission", async () => {
   current = false;
   probe.release.resolve();
   await expect(work).resolves.toMatchObject({ capped: 0, archivedTranscripts: [] });
+  // The transcript postcondition reopens a writable reader and may validate on the caller.
+  await probe.expectHealthy(1);
   expect(loadSessionEntryReadOnly(f.stale)?.sessionId).toBe("old");
   expect(loadTranscriptEventsSync(f.stale)).toEqual(f.events);
-  probe.expectHealthy(1);
 });
 
 it.each([false, true])(
@@ -839,8 +959,7 @@ it.each([false, true])(
         throw new Error("unused test harness");
       },
       withSessionDeletion: async (params, run) => {
-        expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-        invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+        closeForIntegrityAdmission(f);
         params.assertCurrent();
         return await run({ commit, rollback });
       },

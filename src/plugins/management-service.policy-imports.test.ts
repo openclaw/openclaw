@@ -27,6 +27,9 @@ import { resolveControlPlaneRegistryParams } from "./plugin-registry-snapshot.js
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 
+vi.mock("../gateway/call.js", () => {
+  throw new Error("Offline plugin policy changes must not load Gateway RPC");
+});
 vi.mock("./management-install.js", () => {
   throw new Error("Plugin policy changes must not load the installation implementation");
 });
@@ -48,7 +51,7 @@ afterEach(() => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-it("persists CLI plugin policy without loading installation, removal, or runtime diagnostics", async () => {
+it("persists offline CLI plugin policy without loading Gateway RPC or heavy plugin services", async () => {
   const stateDir = makePluginLoaderTempDir();
   const bundledDir = makePluginLoaderTempDir();
   const pluginId = "policy-only";

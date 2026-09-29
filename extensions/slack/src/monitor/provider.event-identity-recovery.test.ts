@@ -1,5 +1,6 @@
 // Slack tests cover provider identity recovery from trusted Bolt event context.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getSlackInstallationTeamId } from "../installation-identity-state.js";
 import {
   disposeSlackTestRuntime,
   getSlackClient,
@@ -25,8 +26,8 @@ function startSlackMonitor(...args: Parameters<typeof startSlackMonitorUntracked
   return monitor;
 }
 
-beforeEach(() => {
-  resetSlackTestState();
+beforeEach(async () => {
+  await resetSlackTestState();
 });
 
 afterEach(async () => {
@@ -36,7 +37,7 @@ afterEach(async () => {
   }
   await Promise.allSettled(monitors.map((monitor) => monitor.run));
   getSlackClient().auth.test.mockReset();
-  resetSlackTestState();
+  await resetSlackTestState();
 });
 
 afterAll(() => {
@@ -45,7 +46,7 @@ afterAll(() => {
 
 describe("auth.test event identity recovery", () => {
   it("learns the app id from the first signed HTTP event and keeps it process-stable", async () => {
-    resetSlackTestState({
+    await resetSlackTestState({
       channels: {
         slack: {
           mode: "http",
@@ -116,7 +117,7 @@ describe("auth.test event identity recovery", () => {
 
   it("keeps the app-token app id when a signed event carries another", async () => {
     const appToken = "xapp-1-A0TOKEN-1-secret";
-    resetSlackTestState({
+    await resetSlackTestState({
       channels: {
         slack: { mode: "socket", appToken, groupPolicy: "open", requireMention: true },
       },
@@ -171,7 +172,7 @@ describe("auth.test event identity recovery", () => {
   });
 
   it("does not adopt Enterprise identity from Bolt event context", async () => {
-    resetSlackTestState({
+    await resetSlackTestState({
       channels: {
         slack: {
           mode: "http",
@@ -220,7 +221,7 @@ describe("auth.test event identity recovery", () => {
   });
 
   it("adopts Bolt identity from the first HTTP event and restores mention detection", async () => {
-    resetSlackTestState({
+    await resetSlackTestState({
       channels: {
         slack: {
           mode: "http",
@@ -277,6 +278,7 @@ describe("auth.test event identity recovery", () => {
       lastError: null,
     });
     expect(getSlackHandlers().has("reaction_added")).toBe(true);
+    expect(getSlackInstallationTeamId("default")).toBe("T12345678");
     await vi.waitFor(() => expect(sendMock).toHaveBeenCalledTimes(1));
 
     await runSlackHandlerWithDispatch(handler, {

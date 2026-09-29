@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type {
-  ResponseCreateParamsStreaming,
   ResponseOutputItem,
   ResponseOutputMessage,
   ResponseReasoningItem,
@@ -32,6 +31,7 @@ import {
 } from "./openai-responses-contracts.js";
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
 import type { ResponsesOutputTracker } from "./openai-responses-stream-slots-internal.js";
+import type { ResponsesStreamOptions } from "./openai-responses-stream-types-internal.js";
 import {
   IncompleteToolCallError,
   parseTerminalToolCallArguments,
@@ -50,19 +50,14 @@ export type ResponsesThinkingBlock = ThinkingContent & {
 type TerminalOutput = AssistantMessage & {
   usage: Usage & { reasoningTokens?: number };
 };
-type TerminalOptions = {
-  serviceTier?: ResponseCreateParamsStreaming["service_tier"];
-  resolveServiceTier?: (
-    responseTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-    requestTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-  ) => ResponseCreateParamsStreaming["service_tier"] | undefined;
-  applyServiceTierPricing?: (
-    usage: Usage,
-    tier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-  ) => void;
-  reasoningReplayMetadata?: OpenAIResponsesReasoningReplayMetadata;
-  resolveResponseModel?: () => string | undefined;
-};
+type TerminalOptions = Pick<
+  ResponsesStreamOptions,
+  | "serviceTier"
+  | "resolveServiceTier"
+  | "applyServiceTierPricing"
+  | "reasoningReplayMetadata"
+  | "resolveResponseModel"
+>;
 
 function splitToolCallId(id: string): [string, string | undefined] {
   const separator = id.indexOf("|");
@@ -87,7 +82,7 @@ export function resolveResponsesToolCallId(
 
 export function resolveCompletedResponsesToolCall(
   item: Extract<ResponseOutputItem, { type: "function_call" }>,
-  streamed?: { name?: string; arguments?: string },
+  streamed?: { name?: string; arguments?: string | Record<string, unknown> },
 ): Pick<ToolCall, "name" | "arguments"> {
   if (item.status && item.status !== "completed") {
     throw new IncompleteToolCallError(
@@ -351,11 +346,26 @@ export function createResponsesTerminalController(params: {
     if (terminalEventType === "response.completed" && typeof response.end_turn === "boolean") {
       output.endTurn = response.end_turn;
     }
+    const incompleteReason = response.incomplete_details?.reason;
     appendAssistantMessageDiagnostic(output, {
       type: "openai_responses_terminal",
       timestamp: Date.now(),
       details: {
         eventType: terminalEventType,
+        // Keep the canonical status interpretation before tool validation replaces
+        // output.stopReason with an error. Conflicting statuses cannot authorize retry.
+        stopReason: terminal.stopReason,
+        ...(terminalEventType === "response.incomplete"
+          ? {
+              incompleteReason:
+                incompleteReason === "max_output_tokens" ||
+                incompleteReason === "max_messages" ||
+                incompleteReason === "content_filter" ||
+                incompleteReason === "steered"
+                  ? incompleteReason
+                  : "unknown",
+            }
+          : {}),
         endTurn:
           typeof response.end_turn === "boolean"
             ? response.end_turn

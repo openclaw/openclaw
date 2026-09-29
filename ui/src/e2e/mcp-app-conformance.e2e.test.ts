@@ -7,7 +7,10 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import type { Frame } from "playwright";
 import { expect, inject, it } from "vitest";
-import { disposeAllSessionMcpRuntimes } from "../../../src/agents/agent-bundle-mcp-manager-api.js";
+import {
+  disposeAllSessionMcpRuntimes,
+  setSessionMcpRuntimeScheduler,
+} from "../../../src/agents/agent-bundle-mcp-manager-api.js";
 import { getOrCreateSessionMcpRuntime } from "../../../src/agents/agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "../../../src/agents/agent-bundle-mcp-materialize.js";
 import { getMcpAppViewLease } from "../../../src/agents/mcp-ui-resource.js";
@@ -15,6 +18,7 @@ import { readConfigFileSnapshotWithPluginMetadata } from "../../../src/config/co
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { startGatewayServer } from "../../../src/gateway/server.js";
 import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
+import { createTestGatewayScheduler } from "../../../src/test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -53,6 +57,7 @@ let proofDir: string;
 let state: OpenClawTestState | undefined;
 let gatewayStartup: ReturnType<typeof startGatewayServer> | undefined;
 let runtimeStartup: ReturnType<typeof getOrCreateSessionMcpRuntime> | undefined;
+let mcpScheduler: ReturnType<typeof createTestGatewayScheduler> | undefined;
 let gatewayPort: number;
 let sandboxPort: number;
 let tempRoot: string;
@@ -187,6 +192,9 @@ const suite = createControlUiE2eSuite({
       await state.writeConfig(cfg);
       signal.throwIfAborted();
       state.applyEnv();
+      mcpScheduler = createTestGatewayScheduler();
+      await setSessionMcpRuntimeScheduler(mcpScheduler);
+      signal.throwIfAborted();
       // Keep rejected acquisitions: no returned handle does not prove cleanup succeeded.
       runtimeStartup = getOrCreateSessionMcpRuntime({
         sessionId: `mcp-app-conformance-${randomUUID()}`,
@@ -243,6 +251,9 @@ const suite = createControlUiE2eSuite({
         await runtimeStartup;
       });
       await settleCleanup("MCP runtimes", () => disposeAllSessionMcpRuntimes());
+      await settleCleanup("MCP scheduler", async () => {
+        await mcpScheduler?.stop();
+      });
       if (appAssetServer) {
         await settleCleanup(
           "asset server",
@@ -320,6 +331,9 @@ suite.define(() => {
         await waitForTextContaining(app.locator("#capabilities"), "serverResources");
         await waitForTextContaining(app.locator("#capabilities"), "updateModelContext");
         await waitForText(app.locator("#ping"), "{}");
+        await app.locator("#list-tools").click();
+        await waitForTextContaining(app.locator("#tools"), "app_companion");
+        await waitForTextContaining(app.locator("#tools"), "model_only", false);
         await waitForText(app.locator("#isolation"), "isolated");
         await waitForText(app.locator("#host-theme"), "dark");
         await waitForTextContaining(
@@ -435,6 +449,9 @@ suite.define(() => {
         await waitForTextContaining(app.locator("#capabilities"), "serverResources");
         await waitForTextContaining(app.locator("#capabilities"), "updateModelContext", false);
         await waitForText(app.locator("#ping"), "{}");
+        await app.locator("#list-tools").click();
+        await waitForTextContaining(app.locator("#tools"), "app_companion");
+        await waitForTextContaining(app.locator("#tools"), "model_only", false);
         await waitForText(app.locator("#isolation"), "isolated");
         await app.locator("#call-app").click();
         await waitForTextContaining(app.locator("#app-tool"), "companion-called");

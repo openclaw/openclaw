@@ -1,8 +1,73 @@
-import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { Command } from "commander";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
+import { registerCompletionCli } from "./completion-cli.js";
 import {
   createDocumentedCompletionProgram,
   runGeneratedBashCompletion,
 } from "./completion-cli.test-support.js";
+import { createProgramContext } from "./program/context.js";
+import { setProgramContext } from "./program/program-context.js";
+import { quoteCliArg } from "./quote-cli-arg.js";
+
+describe.skipIf(process.platform === "win32")("registered completion --shell bash", () => {
+  let script: string;
+
+  beforeAll(async () => {
+    const program = new Command().name("openclaw");
+    setProgramContext(program, createProgramContext());
+    registerCompletionCli(program);
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await withEnvAsync({ OPENCLAW_COMPLETION_SKIP_PLUGIN_COMMANDS: "1" }, () =>
+        program.parseAsync(["completion", "--shell", "bash"], { from: "user" }),
+      );
+      script = stdout.mock.calls.map(([chunk]) => chunk.toString()).join("");
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  describe.each(process.platform === "darwin" ? ["/bin/bash", "bash"] : ["bash"])(
+    "%s callback",
+    (bashPath) => {
+      it.each([
+        [["openclaw", "cron", "show", "--", "--j"], []],
+        [["openclaw", "completion", "--", "--shell", "f"], []],
+        [["openclaw", "--", "g"], ["gateway"]],
+        [["openclaw", "cron", "--", "sh"], ["show"]],
+        [["openclaw", "capability", "--", "emb"], ["embedding"]],
+        [["openclaw", "gateway", "--token", "--", "status", "--j"], ["--json"]],
+        [["openclaw", "gateway", "--token=--", "status", "--j"], ["--json"]],
+        [["openclaw", "completion", "-ys", "--", "--s"], ["--shell"]],
+        [["openclaw", "completion", "-ysbash", "--", "--s"], []],
+        [["openclaw", "message", "send", "-mt", "--", "--j"], []],
+        [["openclaw", "gateway", "stability", "--bundle", "--", "--j"], []],
+        [["openclaw", "gateway", "stability", "--bundle", "latest", "--", "--j"], []],
+        [["openclaw", "gateway", "stability", "--bundle", "--token", "--", "--j"], ["--json"]],
+        [["openclaw", "cron", "show", "'--'", "--j"], []],
+        [["openclaw", "cron", "show", "\\--", "--j"], []],
+      ])("honors option operands and terminators in %j", (words, expected) => {
+        const result = spawnSync(bashPath, ["--noprofile", "--norc"], {
+          encoding: "utf8",
+          input: `${script}
+COMP_WORDS=(${words.map(quoteCliArg).join(" ")})
+COMP_CWORD=${words.length - 1}
+COMP_LINE=${quoteCliArg(words.join(" "))}
+COMP_POINT=\${#COMP_LINE}
+_openclaw_completion openclaw "\${COMP_WORDS[COMP_CWORD]}"
+printf '%s\\n' "\${COMPREPLY[@]}"
+`,
+        });
+        expect(result.error).toBeUndefined();
+        expect(result.stderr).toBe("");
+        expect(result.status).toBe(0);
+        expect(result.stdout.split("\n").filter(Boolean)).toEqual(expected);
+      });
+    },
+  );
+});
 
 describe("completion-cli native Bash words", () => {
   it.skipIf(process.platform !== "darwin")("uses macOS Bash byte offsets in a UTF-8 locale", () => {

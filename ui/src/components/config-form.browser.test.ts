@@ -425,6 +425,44 @@ describe("config form renderer", () => {
     expect(selectedLabels).toEqual(["tailnet", "openai"]);
   });
 
+  it("shows an unset default-on boolean as its placeholder instead of an off toggle", () => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        cron: { type: "object", properties: { enabled: { type: "boolean" } } },
+      },
+    });
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: { "cron.enabled": { label: "Automations Enabled", placeholder: "Default: On" } },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {},
+        onPatch,
+      }),
+      container,
+    );
+
+    expect(container.querySelector("wa-switch.settings-toggle")).toBeNull();
+    const select = expectElement(
+      container.querySelector<HTMLSelectElement>('select[aria-label="Automations Enabled"]'),
+      "automations enabled select",
+    );
+    expect(select.selectedOptions[0]?.textContent?.trim()).toBe("Default: On");
+    expect(onPatch).not.toHaveBeenCalled();
+    select.value = "1";
+    select.dispatchEvent(new Event("change"));
+    expect(onPatch).toHaveBeenLastCalledWith(["cron", "enabled"], false);
+    select.value = "0";
+    select.dispatchEvent(new Event("change"));
+    expect(onPatch).toHaveBeenLastCalledWith(["cron", "enabled"], true);
+    select.value = "__unset__";
+    select.dispatchEvent(new Event("change"));
+    expect(onPatch).toHaveBeenLastCalledWith(["cron", "enabled"], undefined);
+  });
+
   it("renders map fields from additionalProperties", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
@@ -493,7 +531,7 @@ describe("config form renderer", () => {
     expect(label.textContent?.trim()).toBe("Plugin Enabled");
   });
 
-  it("renders tags from uiHints metadata", () => {
+  it("filters by authored metadata tags without rendering field chips", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     const analysis = rootAnalysis;
@@ -505,10 +543,7 @@ describe("config form renderer", () => {
       onPatch,
     });
 
-    const tags = Array.from(container.querySelectorAll(".cfg-tag")).map((node) =>
-      node.textContent?.trim(),
-    );
-    expect(tags).toEqual(["security", "secret"]);
+    expect(container.querySelector(".cfg-tag")).toBeNull();
 
     renderAnalyzedFormFixture(container, analysis, {
       uiHints: {

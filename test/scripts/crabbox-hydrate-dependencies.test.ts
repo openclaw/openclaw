@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -27,6 +28,16 @@ const workflow = parse(readFileSync(".github/workflows/crabbox-hydrate.yml", "ut
 
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function resolveCachedPnpmExecPath() {
+  const version = /^pnpm@([^+]+)/u.exec(packageManager)?.[1];
+  const corepackHome = process.env.COREPACK_HOME;
+  if (!version || !corepackHome) {
+    return undefined;
+  }
+  const candidate = path.join(corepackHome, "v1", "pnpm", version, "bin", "pnpm.mjs");
+  return existsSync(candidate) ? candidate : undefined;
 }
 
 function write(root: string, relative: string, contents: string, mode?: number) {
@@ -143,11 +154,11 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
       if (environment !== null) {
         write(workspace, "pnpm-lock.yaml", `---\n${environment}\n---\n`);
       }
-      const bootstrap = resolvePnpmRunner();
-      const npmExecPath = execFileSync(
-        bootstrap.command,
-        [...bootstrap.args, "--silent", "run", "pnpm-path"],
-        {
+      const nodeExecPath = resolveTestNodeExecPath();
+      const bootstrap = resolvePnpmRunner({ nodeExecPath });
+      const npmExecPath =
+        resolveCachedPnpmExecPath() ??
+        execFileSync(bootstrap.command, [...bootstrap.args, "--silent", "run", "pnpm-path"], {
           cwd: workspace,
           encoding: "utf8",
           timeout: 20_000,
@@ -157,11 +168,10 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
             PNPM_CONFIG_REGISTRY: "http://127.0.0.1:9",
             PNPM_CONFIG_FETCH_RETRIES: "0",
           },
-        },
-      ).trim();
-      const pnpm = resolvePnpmRunner({ npmExecPath });
+        }).trim();
+      const pnpm = resolvePnpmRunner({ nodeExecPath, npmExecPath });
       // The setup action prepends NODE_BIN; keep Node and the pinned pnpm runner together.
-      symlinkSync(process.execPath, path.join(bin, "node"));
+      symlinkSync(nodeExecPath, path.join(bin, "node"));
       write(
         bin,
         "pnpm",

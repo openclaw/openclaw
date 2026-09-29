@@ -1,5 +1,5 @@
-// Slack plugin module polls selected participants and routes away-to-active transitions.
 import { type WebClient, WebAPIRateLimitedError } from "@slack/web-api";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -57,13 +57,6 @@ function resolveMode(
   accountConfig: SlackPresenceEventsConfig | undefined,
 ): SlackPresenceEventsMode {
   return channelConfig?.mode ?? accountConfig?.mode ?? "off";
-}
-
-function resolvePrompt(
-  channelConfig: SlackPresenceEventsConfig | undefined,
-  accountConfig: SlackPresenceEventsConfig | undefined,
-): string | undefined {
-  return channelConfig?.prompt ?? accountConfig?.prompt;
 }
 
 export function hasSlackPresenceEventsEnabled(params: {
@@ -148,7 +141,7 @@ function resolveObservedTarget(params: {
     key: `${teamId ? `team:${teamId}:` : ""}${channelId}${targetSuffix}`,
     ...(teamId ? { teamId } : {}),
     mode,
-    prompt: resolvePrompt(prepared.channelConfig?.presenceEvents, params.accountConfig),
+    prompt: prepared.channelConfig?.presenceEvents?.prompt ?? params.accountConfig?.prompt,
     channelId,
     threadId,
     to: formatSlackTarget({
@@ -202,13 +195,7 @@ export function createSlackPresenceMonitor(params: {
         targets.delete(key);
       }
     }
-    while (targets.size > SLACK_PRESENCE_MAX_TARGETS) {
-      const oldestKey = targets.keys().next().value;
-      if (typeof oldestKey !== "string") {
-        break;
-      }
-      targets.delete(oldestKey);
-    }
+    pruneMapToMaxSize(targets, SLACK_PRESENCE_MAX_TARGETS);
     const eligibleUsers = new Set(
       Array.from(targets.values())
         .filter(isTargetEligible)
@@ -293,7 +280,7 @@ export function createSlackPresenceMonitor(params: {
     pruneTargets(nowMs());
     const target = stopped ? undefined : resolveTarget();
     if (!target) {
-      await params.cooldownStore.deleteIf?.(cooldownKey, (current) => current === now);
+      await params.cooldownStore.deleteIfEqual?.(cooldownKey, now);
       return;
     }
     const queued = enqueue(formatSlackPresenceEvent(target, userId, awayObservation), target, {
@@ -306,7 +293,7 @@ export function createSlackPresenceMonitor(params: {
       },
     });
     if (!queued) {
-      await params.cooldownStore.deleteIf?.(cooldownKey, (current) => current === now);
+      await params.cooldownStore.deleteIfEqual?.(cooldownKey, now);
       return;
     }
     wake({

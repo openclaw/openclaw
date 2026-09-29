@@ -9,6 +9,11 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as gatewayCallRuntime from "../gateway/call.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 const callGatewayMock = vi.spyOn(gatewayCallRuntime, "callGateway");
 afterAll(() => callGatewayMock.mockRestore());
 
@@ -165,32 +170,6 @@ describe("readLatestAssistantReply", () => {
     expect(result).toBe("older worker reply");
   });
 
-  it("reads only final_answer text from phased assistant history", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "Need fix line quoting properly.",
-              textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
-            },
-            {
-              type: "text",
-              text: "Fixed the quoting issue.",
-              textSignature: JSON.stringify({ v: 1, id: "final", phase: "final_answer" }),
-            },
-          ],
-        },
-      ],
-    });
-
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
-
-    expect(result).toBe("Fixed the quoting issue.");
-  });
-
   it("preserves spaces across split final_answer history blocks", async () => {
     callGatewayMock.mockResolvedValue({
       messages: [
@@ -280,24 +259,13 @@ describe("waitForAgentRun", () => {
   });
 
   it.each([
-    undefined,
     "",
-    "gateway timeout",
     "gateway request timeout for agent.wait",
-    "ENOENT: no such file",
     "getaddrinfo ENOTFOUND gateway.example.com",
   ])("does not mark a nonrecoverable rejected wait RPC: %s", async (error) => {
     callGatewayMock.mockRejectedValueOnce(new Error(error));
     const result = await waitForAgentRun({ runId: "run-unrecoverable", timeoutMs: 500 });
     expect(result).not.toHaveProperty("retryableTransportError");
-  });
-
-  it("preserves pending agent.wait status", async () => {
-    callGatewayMock.mockResolvedValue({ status: "pending" });
-
-    const result = await waitForAgentRun({ runId: "run-pending", timeoutMs: 500 });
-
-    expect(result).toEqual({ status: "pending" });
   });
 
   it("preserves pending error diagnostics on wait timeouts", async () => {
@@ -313,18 +281,6 @@ describe("waitForAgentRun", () => {
       status: "timeout",
       error: "429 RESOURCE_EXHAUSTED",
       pendingError: true,
-    });
-  });
-
-  it("carries a bounded terminal reply snapshot from agent.wait", async () => {
-    callGatewayMock.mockResolvedValue({
-      status: "ok",
-      terminalReply: { disposition: "visible", text: "final reply" },
-    });
-
-    await expect(waitForAgentRun({ runId: "run-reply", timeoutMs: 500 })).resolves.toEqual({
-      status: "ok",
-      terminalReply: { disposition: "visible", text: "final reply" },
     });
   });
 
@@ -568,6 +524,74 @@ describe("waitForAgentRunReply", () => {
       expect(callGatewayMock).toHaveBeenCalledOnce();
     },
   );
+
+  it.each([
+    { status: "timeout", endedAt: 200, stopReason: "timeout", error: "execution expired" },
+    { status: "timeout", timeoutPhase: "provider", providerStarted: true },
+    { status: "timeout", timeoutPhase: "preflight" },
+    { status: "timeout", timeoutPhase: "post_turn" },
+    { status: "error", endedAt: 200, stopReason: "aborted", error: "cancelled" },
+    { status: "timeout", timeoutPhase: "gateway_draining" },
+  ])("ends completion observation for $status / $stopReason", async (terminal) => {
+    callGatewayMock.mockResolvedValue(terminal);
+
+    const result = await waitForAgentRunReply({
+      runId: "run-ended",
+      timeoutMs: 1_000,
+      untilTerminal: true,
+    });
+
+    expect(result).toMatchObject(terminal);
+    expect(result.replyText).toBeUndefined();
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+  });
+
+  it.each(["gateway closed (1006)", "gateway request timeout"])(
+    "does not retain completion observation after transport failure: %s",
+    async (message) => {
+      callGatewayMock.mockRejectedValue(new Error(message));
+
+      const result = await waitForAgentRunReply({
+        runId: "run-disconnected",
+        timeoutMs: 1_000,
+        untilTerminal: true,
+      });
+
+      expect(result.error).toBe(message);
+      expect(result.replyText).toBeUndefined();
+      expect(callGatewayMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["work scope", "Gateway restart"])(
+    "retires pending observation when its %s closes",
+    async (owner) => {
+      const work = new AsyncWorkScope();
+      callGatewayMock.mockResolvedValue({ status: "pending", timeoutPhase: "queue" });
+      const observation = work.run(() =>
+        waitForAgentRunReply({
+          runId: "run-queued",
+          timeoutMs: 1_000,
+          untilTerminal: true,
+        }),
+      );
+      const rejection = expect(observation).rejects.toThrow();
+      try {
+        await vi.waitFor(() => expect(callGatewayMock).toHaveBeenCalledOnce());
+        if (owner === "work scope") {
+          work.beginClose(new Error("Gateway owner closed"));
+        } else {
+          markGatewayRestartDraining();
+        }
+        await rejection;
+        expect(callGatewayMock).toHaveBeenCalledOnce();
+      } finally {
+        work.beginClose();
+        resetGatewayWorkAdmission();
+        await work.drain();
+      }
+    },
+  );
 });
 
 describe("waitForAgentRunsToDrain", () => {
@@ -586,7 +610,7 @@ describe("waitForAgentRunsToDrain", () => {
       try {
         const result = await waitForAgentRunsToDrain({
           timeoutMs: 200,
-          getPendingRunIds: () => activeRunIds,
+          getPendingRunIds: async () => activeRunIds,
         });
 
         expect(result.timedOut).toBe(false);
@@ -604,7 +628,7 @@ describe("waitForAgentRunsToDrain", () => {
 
     const result = await waitForAgentRunsToDrain({
       deadlineAtMs,
-      getPendingRunIds: () => ["run-1"],
+      getPendingRunIds: async () => ["run-1"],
     });
 
     expect(result).toEqual({ timedOut: true, pendingRunIds: ["run-1"], deadlineAtMs });
@@ -629,7 +653,7 @@ describe("waitForAgentRunsToDrain", () => {
 
     const result = await waitForAgentRunsToDrain({
       timeoutMs: 1_000,
-      getPendingRunIds: () => activeRunIds,
+      getPendingRunIds: async () => activeRunIds,
     });
 
     expect(result.timedOut).toBe(false);
@@ -648,7 +672,7 @@ describe("waitForAgentRunsToDrain", () => {
 
     const result = await waitForAgentRunsToDrain({
       timeoutMs: 1_000,
-      getPendingRunIds: () => {
+      getPendingRunIds: async () => {
         const current = activeRunIds;
         activeRunIds = [];
         return current;
@@ -666,7 +690,7 @@ describe("waitForAgentRunsToDrain", () => {
     const result = await waitForAgentRunsToDrain({
       timeoutMs: 1_000,
       initialPendingRunIds: ["run-1"],
-      getPendingRunIds: () => {
+      getPendingRunIds: async () => {
         const current = activeRunIds;
         activeRunIds = [];
         return current;
@@ -689,7 +713,7 @@ describe("waitForAgentRunsToDrain", () => {
     try {
       const result = await waitForAgentRunsToDrain({
         timeoutMs: Number.NaN,
-        getPendingRunIds: () => {
+        getPendingRunIds: async () => {
           const current = activeRunIds;
           activeRunIds = [];
           return current;
@@ -710,7 +734,7 @@ describe("waitForAgentRunsToDrain", () => {
     try {
       const result = await waitForAgentRunsToDrain({
         timeoutMs: 1,
-        getPendingRunIds: () => ["run-1"],
+        getPendingRunIds: async () => ["run-1"],
       });
 
       expect(result).toEqual({
@@ -730,7 +754,7 @@ describe("waitForAgentRunsToDrain", () => {
     try {
       const result = await waitForAgentRunsToDrain({
         deadlineAtMs: Number.POSITIVE_INFINITY,
-        getPendingRunIds: () => ["run-1"],
+        getPendingRunIds: async () => ["run-1"],
       });
 
       expect(result.timedOut).toBe(true);

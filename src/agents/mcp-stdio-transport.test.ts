@@ -1,3 +1,4 @@
+import { deepStrictEqual } from "node:assert/strict";
 import { once } from "node:events";
 // MCP framing and disposal preserve the spawn owner's independent cleanup receipt.
 import fs from "node:fs/promises";
@@ -404,6 +405,55 @@ describe("OpenClawStdioClientTransport", () => {
     },
   );
 
+  it.each([true, false])(
+    "joins the owner's original deadline across MCP outer force (confirmed=%s)",
+    async (confirmed) => {
+      const { closeOwnedStdioProcess } = await vi.importActual<
+        typeof import("../process/owned-stdio.js")
+      >("../process/owned-stdio.js");
+      closeMock.mockImplementation(closeOwnedStdioProcess);
+      vi.useFakeTimers();
+      const fixture = createChild();
+      let hardCancellationStarted = false;
+      fixture.child.kill.mockImplementation((signal?: NodeJS.Signals) => {
+        if (signal !== "SIGKILL" || hardCancellationStarted) {
+          return;
+        }
+        hardCancellationStarted = true;
+        setTimeout(() => {
+          fixture.root.resolve({ code: null, signal: "SIGKILL" });
+          if (confirmed) {
+            fixture.extinction.resolve();
+          } else {
+            fixture.extinction.reject(new Error("owner cleanup deadline expired"));
+          }
+        }, 5_000);
+      });
+      const transport = createTransport({ command: "node" });
+      await transport.start();
+      const cleanupScope = createAgentCleanupScope();
+      const finished = vi.fn();
+      const disposal = cleanupScope.run(() =>
+        disposeMcpClient({
+          transport,
+          transportType: "stdio",
+          client: { close: () => transport.close() },
+        }),
+      );
+      void disposal.then(finished);
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(fixture.child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(fixture.child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"], ["SIGKILL"]]);
+      expect(finished).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(4_000);
+      await expect(disposal).resolves.toBe(confirmed ? "closed" : "uncertain");
+      expect(cleanupScope.outcome).toBe(confirmed ? "closed" : "uncertain");
+      expect(closeMock).toHaveBeenCalledOnce();
+      expect(fixture.child.dispose).toHaveBeenCalledOnce();
+    },
+  );
+
   it("cancels pending startup and replays its failed cleanup to later disposal", async () => {
     const failure = new OwnedStdioCleanupError("startup owner lost", {
       cause: new Error("MCP startup aborted"),
@@ -506,7 +556,7 @@ describe("OpenClawStdioClientTransport", () => {
     fixture.root.resolve({ code: 0, signal: null });
     fixture.extinction.resolve();
     await transport.close();
-    expect(Buffer.concat(received)).toEqual(Buffer.alloc(chunk.length * 64, 0xad));
+    deepStrictEqual(Buffer.concat(received), Buffer.alloc(chunk.length * 64, 0xad));
   });
 
   it("keeps default malformed-frame recovery when the caller does not retire", async () => {

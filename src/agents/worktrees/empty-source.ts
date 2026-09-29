@@ -126,7 +126,7 @@ export async function ensureEmptyWorktreeSource(params: {
   return sourceRoot;
 }
 
-export async function resolveEmptyWorktreeSourceRoot(params: {
+async function resolveEmptyWorktreeSourceRoot(params: {
   env: NodeJS.ProcessEnv;
   record: Pick<ManagedWorktreeRecord, "repoRoot" | "ownerKind" | "ownerId">;
 }): Promise<string | undefined> {

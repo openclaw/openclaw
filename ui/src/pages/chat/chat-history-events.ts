@@ -6,3 +6,6 @@ export const CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT = "openclaw-chat-transcript-l
 
 /** Pane membership or conversation presentation changed, including a detached loading pane. */
 export const CHAT_PANE_LIFECYCLE_CHANGED_EVENT = "openclaw-chat-pane-lifecycle-changed";
+
+/** Run activity stays observable while hidden panes defer their Lit render. */
+export const CHAT_RUN_ACTIVITY_CHANGED_EVENT = "openclaw-chat-run-activity-changed";

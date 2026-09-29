@@ -156,8 +156,10 @@ const SCOPED_ACTION_GROUPS: ReadonlyArray<{
   { group: "presence", actions: ["set-presence", "set-profile", "voice-status"] },
 ];
 
-function isSendOnly(actions: readonly string[]): boolean {
-  return actions.length > 0 && actions.every((action) => action === "send");
+function isSendOrBroadcastOnly(actions: readonly string[]): boolean {
+  return (
+    actions.length > 0 && actions.every((action) => action === "send" || action === "broadcast")
+  );
 }
 
 function buildScopedProperties(params: {
@@ -190,7 +192,7 @@ export function buildMessageToolSchemaFromActions(
   };
   // Keep one flat object: provider adapters reject per-action anyOf/oneOf schemas.
   // Groups prune unavailable fields; runtime still validates each action payload.
-  const properties = isSendOnly(actions)
+  const properties = isSendOrBroadcastOnly(actions)
     ? Object.assign(builders.base(schemaOptions), schemaOptions.extraProperties)
     : schemaOptions.scopeToActions && actions.length > 0
       ? buildScopedProperties({ actions, options: schemaOptions, builders })

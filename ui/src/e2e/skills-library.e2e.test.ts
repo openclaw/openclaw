@@ -211,9 +211,10 @@ suite.define(() => {
         slug: own.entry.slug,
         expectedRevision: own.entry.revision,
         content: draft,
-        files: own.files.map((file) =>
-          file.path === "assets/sample.bin" ? { ...file, executable: true } : file,
-        ),
+        files: own.files
+          .filter((file) => file.path === "assets/sample.bin")
+          .map(({ path, content, encoding }) => ({ path, content, encoding, executable: true })),
+        retainFiles: ["references/checklist.md"],
       });
       await gateway.rejectDeferred("skills.library.save", {
         code: "INVALID_REQUEST",
@@ -413,11 +414,14 @@ suite.define(() => {
       await page.getByRole("radio", { name: "Team", exact: true }).click();
       await page.getByRole("button", { name: /release-notes Prepare the team's/u }).click();
       await page.getByText(/Only its owner or an authorized administrator/u).waitFor();
+      // The read-only checks can finish while the reader is still animating in.
+      await expectLibraryDialogOpen(page);
       expect(await page.getByRole("button", { name: "Transfer to team" }).count()).toBe(0);
       expect(await page.getByRole("button", { name: "Share with team" }).count()).toBe(0);
       expect(await page.getByRole("button", { name: "Save skill", exact: true }).count()).toBe(0);
       expect(await page.getByLabel("Executable supporting file").count()).toBe(0);
       await page.getByRole("button", { name: "Close", exact: true }).click();
+      await page.locator("openclaw-modal-dialog").waitFor({ state: "detached" });
       await page.getByRole("button", { name: /support-triage Turn a support report/u }).click();
       await page
         .getByText(`Team · revision ${team.entry.revision.slice(0, 8)}`, { exact: true })

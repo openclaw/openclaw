@@ -7,11 +7,12 @@
 import { isIP } from "node:net";
 import {
   isPrivateNetworkAllowedByPolicy,
+  matchesHostnameAllowlist,
+  normalizeHostname,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
   type SsrFPolicy,
-} from "../infra/net/ssrf.js";
-import { matchesHostnameAllowlist, normalizeHostname } from "../sdk-security-runtime.js";
+} from "openclaw/plugin-sdk/security-runtime";
 
 const NETWORK_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 const SAFE_NON_NETWORK_URLS = new Set(["about:blank"]);

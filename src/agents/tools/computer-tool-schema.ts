@@ -48,7 +48,8 @@ export function createComputerToolSchema(
       ? "get_accessibility_tree"
       : "Accessibility observations";
   return Type.Object({
-    action: stringEnum(actions),
+    // Attached desktops arbitrate control on the Gateway, independently of provider actions.
+    action: stringEnum(actions.includes("screenshot") ? [...actions, "take_control"] : actions),
     ...(targetScope === "paired"
       ? {
           ...gatewayCallOptionSchemaProperties(),
@@ -60,6 +61,12 @@ export function createComputerToolSchema(
             Type.String({
               description:
                 "Paired node id or display name; implies target=node. Omit when selecting the sole connected computer-capable node.",
+            }),
+          ),
+          environmentId: Type.Optional(
+            Type.String({
+              description:
+                "Conversation-attached environment ID returned by the environment tool. Selects its desktop; later calls retain that target. Cannot combine with target, node, or Gateway overrides.",
             }),
           ),
         }

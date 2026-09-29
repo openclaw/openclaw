@@ -103,7 +103,8 @@ suite.define(() => {
       );
       const retainedImageRequestUrls: string[] = [];
       let blockedUnticketedRequestCount = 0;
-      await page.route("**/api/chat/media/outgoing/**", async (route) => {
+      // The service worker owns the network request when it controls the page.
+      await context.route("**/api/chat/media/outgoing/**", async (route) => {
         const requestUrl = new URL(route.request().url());
         if (requestUrl.searchParams.get("mediaTicket") !== "phone-proof") {
           blockedUnticketedRequestCount += 1;

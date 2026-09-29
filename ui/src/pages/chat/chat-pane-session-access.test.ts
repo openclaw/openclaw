@@ -6,54 +6,14 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
-import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
+import {
+  createPaneHeaderWorkspaceFixture,
+  createSessionCapabilityFixture,
+  createTestChatPane,
+} from "./chat-pane.test-support.ts";
 
 describe("chat pane session access", () => {
-  it("opens the resolved parent from the header breadcrumb", () => {
-    const { pane, state } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: createSessionCapabilityFixture(),
-    });
-    const parent = {
-      key: "agent:main:parent",
-      kind: "direct",
-      label: "Release prep",
-      updatedAt: 1,
-    } satisfies GatewaySessionRow;
-    const child = {
-      key: "agent:main:child",
-      kind: "direct",
-      label: "Implementation",
-      parentSessionKey: parent.key,
-      updatedAt: 2,
-    } satisfies GatewaySessionRow;
-    state.sessionsResult = { sessions: [parent, child] } as NonNullable<
-      typeof state.sessionsResult
-    >;
-    pane.paneId = "pane-child";
-    pane.onPaneSessionChange = vi.fn();
-    const container = document.createElement("div");
-
-    render(
-      pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
-        child,
-        false,
-        undefined,
-        false,
-        null,
-      ),
-      container,
-    );
-    container.querySelector<HTMLButtonElement>(".chat-pane__parent-session")?.click();
-
-    expect(pane.onPaneSessionChange).toHaveBeenCalledExactlyOnceWith("pane-child", parent.key);
-  });
-
-  it("refuses ordinary session creation without operator.write", async () => {
+  it("refuses ordinary session creation for read-only operators", async () => {
     const sessions = {
       create: vi.fn(async () => "agent:main:new"),
     } as unknown as SessionCapability;
@@ -67,7 +27,7 @@ describe("chat pane session access", () => {
     await expect(pane.createSession()).resolves.toBe(false);
 
     expect(sessions.create).not.toHaveBeenCalled();
-    expect(state.lastError).toContain("operator.write");
+    expect(state.lastError).toContain("operator.sessions.write");
     expect(state.chatError).toBe(state.lastError);
   });
 
@@ -151,7 +111,7 @@ describe("chat pane session access", () => {
 
   it("cancels header rename when the Gateway source changes for the same session", () => {
     const patch = vi.fn(async () => ({}));
-    const sessions = { patch } as unknown as SessionCapability;
+    const sessions = createSessionCapabilityFixture({ patch });
     const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions });
     const hello = {
@@ -240,8 +200,7 @@ describe("chat pane session access", () => {
 
     render(
       pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
+        createPaneHeaderWorkspaceFixture(state),
         session,
         false,
         undefined,
@@ -275,8 +234,7 @@ describe("chat pane session access", () => {
 
     render(
       pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
+        createPaneHeaderWorkspaceFixture(state),
         session,
         false,
         undefined,

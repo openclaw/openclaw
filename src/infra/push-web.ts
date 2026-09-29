@@ -15,18 +15,16 @@ import {
   insertVapidKeyPairIfAbsent,
   isValidWebPushEndpoint,
   isValidWebPushKey,
-  listBoundWebPushSubscriptions,
-  findBoundWebPushSubscriptionByEndpoint,
   listWebPushSubscriptions,
+  withWebPushSubscriptions,
   readPersistedVapidKeyPair,
   upsertWebPushSubscription,
   setWebPushSubscriptionPreferences,
   DEFAULT_WEB_PUSH_VAPID_SUBJECT,
   type VapidKeyPair,
   type WebPushSubscription,
+  type WebPushMutationGuard,
 } from "./push-web-store.js";
-
-// --- Types ---
 
 type WebPushSendResult = {
   ok: boolean;
@@ -34,8 +32,6 @@ type WebPushSendResult = {
   statusCode?: number;
   error?: string;
 };
-
-// --- Constants ---
 
 const LEGACY_WEB_PUSH_PATHS = ["push/web-push-subscriptions.json", "push/vapid-keys.json"] as const;
 
@@ -48,8 +44,6 @@ type WebPushDeliveryOptions = Pick<
 
 export {
   WebPushSubscriptionBindingError,
-  findBoundWebPushSubscriptionByEndpoint,
-  listBoundWebPushSubscriptions,
   hasBoundWebPushSubscriptions,
   setWebPushSubscriptionPreferences,
 };
@@ -59,6 +53,8 @@ export {
   listTerminalWebPushApprovalDeliveryIds,
   listWebPushApprovalDeliveryTargets,
   prepareWebPushApprovalDeliveries,
+  withBoundWebPushSubscriptions,
+  withBoundWebPushSubscriptionByEndpoint,
 } from "./push-web-store.js";
 
 const loadWebPushRuntime = createLazyRuntimeModule(() =>
@@ -81,15 +77,13 @@ function assertLegacyWebPushMigrationComplete(baseDir?: string): void {
   }
 }
 
-// --- VAPID keys ---
-
 export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> {
   assertLegacyWebPushMigrationComplete(baseDir);
 
   // Env vars take precedence — allows operators to share a stable VAPID
   // identity across multiple gateway instances.
-  const envPublic = resolveVapidPublicKeyFromEnv();
-  const envPrivate = resolveVapidPrivateKeyFromEnv();
+  const envPublic = normalizeOptionalString(process.env.OPENCLAW_VAPID_PUBLIC_KEY);
+  const envPrivate = normalizeOptionalString(process.env.OPENCLAW_VAPID_PRIVATE_KEY);
   if (envPublic && envPrivate) {
     return {
       publicKey: envPublic,
@@ -98,7 +92,7 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
     };
   }
 
-  const existing = readPersistedVapidKeyPair(baseDir);
+  const existing = await readPersistedVapidKeyPair(baseDir);
   if (existing) {
     return { ...existing, subject: resolveVapidSubjectFromEnv() };
   }
@@ -107,7 +101,7 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
   // identity, then every contender returns that committed keypair.
   const webPush = await loadWebPushRuntime();
   const keys = webPush.generateVAPIDKeys();
-  const pair = insertVapidKeyPairIfAbsent({
+  const pair = await insertVapidKeyPairIfAbsent({
     candidate: createWebPushVapidKeyPair(
       keys.publicKey,
       keys.privateKey,
@@ -125,21 +119,12 @@ function resolveVapidSubjectFromEnv(): string {
   );
 }
 
-function resolveVapidPublicKeyFromEnv(): string | undefined {
-  return normalizeOptionalString(process.env.OPENCLAW_VAPID_PUBLIC_KEY);
-}
-
-function resolveVapidPrivateKeyFromEnv(): string | undefined {
-  return normalizeOptionalString(process.env.OPENCLAW_VAPID_PRIVATE_KEY);
-}
-
-// --- Subscription CRUD ---
-
 type RegisterWebPushParams = {
   endpoint: string;
   keys: { p256dh: string; auth: string };
   binding?: { deviceId: string; userProfileId: string | null };
   baseDir?: string;
+  guard?: WebPushMutationGuard;
 };
 
 export async function registerWebPushSubscription(
@@ -160,6 +145,7 @@ export async function registerWebPushSubscription(
     endpoint,
     keys: { p256dh: keys.p256dh, auth: keys.auth },
     binding: params.binding,
+    guard: params.guard,
     candidateSubscriptionId: randomUUID(),
     nowMs: Date.now(),
     stateDir: baseDir,
@@ -171,6 +157,7 @@ export async function clearBoundWebPushSubscription(params: {
   expectedDeviceId: string;
   expectedUserProfileId: string | null;
   baseDir?: string;
+  guard?: WebPushMutationGuard;
 }): Promise<boolean> {
   assertLegacyWebPushMigrationComplete(params.baseDir);
   return deleteBoundWebPushSubscription({
@@ -180,8 +167,6 @@ export async function clearBoundWebPushSubscription(params: {
   });
 }
 
-// --- Sending ---
-
 type WebPushPayload = {
   title: string;
   body?: string;
@@ -189,10 +174,6 @@ type WebPushPayload = {
   tag?: string;
   url?: string;
 };
-
-function applyVapidDetails(webPush: WebPushRuntime, keys: VapidKeyPair): void {
-  webPush.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
-}
 
 async function sendPreparedWebPushNotification(
   webPush: WebPushRuntime,
@@ -280,7 +261,7 @@ async function sendPreparedWebPushNotifications(params: {
   for (const subscription of expiredSubscriptions) {
     try {
       assertLegacyWebPushMigrationComplete(params.baseDir);
-      deleteWebPushSubscriptionIfCurrent({
+      await deleteWebPushSubscriptionIfCurrent({
         endpointHash: hashWebPushEndpoint(subscription.endpoint),
         subscription,
         stateDir: params.baseDir,
@@ -306,7 +287,7 @@ export async function prepareWebPushNotificationSender(
   assertLegacyWebPushMigrationComplete(baseDir);
   const vapidKeys = await resolveVapidKeys(baseDir);
   const webPush = await loadWebPushRuntime();
-  applyVapidDetails(webPush, vapidKeys);
+  webPush.setVapidDetails(vapidKeys.subject, vapidKeys.publicKey, vapidKeys.privateKey);
   return (params) => sendPreparedWebPushNotifications({ ...params, webPush, baseDir });
 }
 
@@ -315,10 +296,19 @@ export async function broadcastWebPush(
   baseDir?: string,
 ): Promise<WebPushSendResult[]> {
   assertLegacyWebPushMigrationComplete(baseDir);
-  const subscriptions = listWebPushSubscriptions(baseDir);
+  const subscriptions = await listWebPushSubscriptions(baseDir);
   if (subscriptions.length === 0) {
     return [];
   }
+  const subscriptionIds = new Set(subscriptions.map((entry) => entry.subscriptionId));
   const send = await prepareWebPushNotificationSender(baseDir);
-  return await send({ subscriptions, payload });
+  return (
+    (await withWebPushSubscriptions(baseDir, (current) => ({
+      start: () =>
+        send({
+          subscriptions: current.filter((entry) => subscriptionIds.has(entry.subscriptionId)),
+          payload,
+        }),
+    }))) ?? []
+  );
 }

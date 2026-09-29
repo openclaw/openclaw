@@ -1,8 +1,6 @@
-/**
- * Accumulates per-call token usage and monetary totals across embedded runs.
- */
-import { hasBillableUsage } from "../usage.js";
+import { hasBillableUsage, hasRecordedUsageCost, USAGE_COST_COMPONENTS } from "../usage.js";
 import type { NormalizedUsage } from "../usage.js";
+import type { EmbeddedAgentMeta } from "./types.js";
 
 export type UsageAccumulator = {
   input: number;
@@ -15,22 +13,11 @@ export type UsageAccumulator = {
   reasoningTokens: number;
   total: number;
   /** Undefined means unobserved; any missing call price makes the complete sum unavailable. */
-  cost: { total: number } | "unavailable" | undefined;
-  /**
-   * Completed assistant round trips across every model attempt of the run.
-   * Kept beside token totals so retried attempts stay counted like their usage.
-   */
+  cost: NormalizedUsage["cost"] | "unavailable";
+  /** Counts every attempt, including retries. */
   assistantTurns: number;
-  /**
-   * Cumulative inner bridge calls across attempts. Present only once an
-   * attempt reported a tool-search/code-mode catalog, so catalog-less runs
-   * omit the field instead of publishing zero sentinels.
-   */
-  bridgeCalls?: {
-    search: number;
-    describe: number;
-    call: number;
-  };
+  /** Omitted until an attempt reports a tool-search/code-mode catalog. */
+  bridgeCalls?: EmbeddedAgentMeta["bridgeCalls"];
 };
 
 export const createUsageAccumulator = (): UsageAccumulator => ({
@@ -68,23 +55,38 @@ export const mergeUsageIntoAccumulator = (
   target.cacheWrite1h += usage.cacheWrite1h ?? 0;
   target.reasoningTokens += usage.reasoningTokens ?? 0;
   target.total += callTotal;
-  target.cost =
-    target.cost !== "unavailable" && usage.cost
-      ? { total: (target.cost?.total ?? 0) + usage.cost.total }
-      : "unavailable";
+  if (target.cost === "unavailable" || !usage.cost) {
+    target.cost = "unavailable";
+    return;
+  }
+  const cost: NonNullable<NormalizedUsage["cost"]> = {
+    total: (target.cost?.total ?? 0) + usage.cost.total,
+  };
+  if (
+    usage.cost.totalOrigin === "provider-billed" &&
+    (!target.cost || target.cost.totalOrigin === "provider-billed")
+  ) {
+    cost.totalOrigin = "provider-billed";
+  }
+  if (
+    cost.total === 0 &&
+    hasRecordedUsageCost(usage.cost) &&
+    (!target.cost || hasRecordedUsageCost(target.cost))
+  ) {
+    for (const key of USAGE_COST_COMPONENTS) {
+      const component = (target.cost?.[key] ?? 0) + (usage.cost[key] ?? 0);
+      if (component !== 0) {
+        cost[key] = component;
+      }
+    }
+  }
+  target.cost = cost;
 };
 
-/**
- * Folds one attempt's run stats into the accumulator. Attempt cleanup clears
- * the per-attempt tool-search catalog, so retries would otherwise discard
- * earlier bridge counts and undercount the documented cumulative run totals.
- */
+/** Retains bridge counts before attempt cleanup clears its tool-search catalog. */
 export const mergeAttemptRunStatsIntoAccumulator = (
   target: UsageAccumulator,
-  attempt: {
-    assistantTurns?: number;
-    bridgeCalls?: { search: number; describe: number; call: number };
-  },
+  attempt: Pick<EmbeddedAgentMeta, "assistantTurns" | "bridgeCalls">,
 ) => {
   target.assistantTurns += attempt.assistantTurns ?? 0;
   if (!attempt.bridgeCalls) {

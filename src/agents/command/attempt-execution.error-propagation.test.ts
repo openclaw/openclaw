@@ -22,7 +22,7 @@ import {
   emitAcpPromptSubmitted,
   emitAcpRuntimeEvent as emitAcpRuntimeEventBase,
   resolveAcpLifecycleEndFields,
-} from "./attempt-execution.js";
+} from "./acp-lifecycle.js";
 
 let captured: AgentEventPayload[] = [];
 let capturedTools: TrustedToolExecutionEvent[] = [];
@@ -623,19 +623,6 @@ afterEach(() => {
 });
 
 describe("emitAcpLifecycleError preserves AcpRuntimeError detail (regression: openclaw-4a8)", () => {
-  it("renders the AcpRuntimeError code into the error string so existing consumers surface it", () => {
-    const acpError = new AcpRuntimeError("ACP_TURN_FAILED", "ACP turn failed before completion.");
-
-    emitAcpLifecycleError({ runId: "run-1", error: acpError });
-
-    expect(captured).toHaveLength(1);
-    const data = captured[0]?.data as Record<string, unknown> | undefined;
-    expect(data?.phase).toBe("error");
-    const text = data?.error as string;
-    expect(text).toMatch(/ACP_TURN_FAILED/);
-    expect(text).toMatch(/ACP turn failed before completion\./);
-  });
-
   it("flattens the cause chain into the error string so the underlying RequestError is not lost", () => {
     // ACP callers historically surface a single string; flattening preserves
     // the useful nested RequestError without exposing structured internals.

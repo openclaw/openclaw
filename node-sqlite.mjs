@@ -56,11 +56,16 @@ function isSqliteCapabilities(value) {
   );
 }
 
-async function probeCurrentSqliteInWorker() {
+async function probeCurrentSqlite() {
   let worker;
   try {
-    if (typeof process.getBuiltinModule?.("node:sqlite")?.DatabaseSync !== "function") {
+    const DatabaseSync = process.getBuiltinModule?.("node:sqlite")?.DatabaseSync;
+    if (typeof DatabaseSync !== "function") {
       return unavailableSqliteCapabilities(new Error("node:sqlite is unavailable"));
+    }
+    // Keep the real capability check when Node's permission policy forbids workers.
+    if (!process.versions.bun && process.permission?.has("worker") === false) {
+      return probeSqlite(DatabaseSync);
     }
     const env = Object.fromEntries(
       Object.entries(process.env).filter(([name]) => !/^(NODE_OPTIONS|BUN_OPTIONS)$/i.test(name)),
@@ -126,7 +131,7 @@ async function probeCurrentSqliteInWorker() {
 
 export function detectCurrentSqliteCapabilities() {
   // Publish the Promise before Worker construction can notify another startup caller.
-  globalThis[capabilityCacheKey] ??= Promise.resolve().then(probeCurrentSqliteInWorker);
+  globalThis[capabilityCacheKey] ??= Promise.resolve().then(probeCurrentSqlite);
   return Promise.resolve(globalThis[capabilityCacheKey]);
 }
 

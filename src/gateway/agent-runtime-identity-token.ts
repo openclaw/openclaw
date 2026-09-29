@@ -1,4 +1,3 @@
-// Purpose-scoped local agent runtime identity token for Gateway clients.
 import { createHmac } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
@@ -15,7 +14,10 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
-import { ensureExecApprovalsSnapshot, loadExecApprovalsAsync } from "../infra/exec-approvals.js";
+import {
+  ensureExecApprovalsSnapshot,
+  loadExecApprovalsReadOnlyAsync,
+} from "../infra/exec-approvals-store.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
@@ -24,11 +26,9 @@ import {
   withAgentRuntimeExecutionLineageRedemption,
 } from "./agent-runtime-execution-lineage.js";
 import type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-spawn-context.js";
+import { hasCronCreatorGrantProvenance } from "./cron-creator-authority-grant.js";
 import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
-import {
-  resolveMessageActionTurnCapability,
-  type AgentRuntimeMessageActionContext,
-} from "./message-action-turn-capability.js";
+import type { AgentRuntimeMessageActionContext } from "./message-action-turn-capability.js";
 import type { GatewayUiCommandTarget } from "./ui-command-target.types.js";
 import type { WorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
 
@@ -99,25 +99,17 @@ const gatewayUiCommandTargetSchema = z.object({
   connId: normalizedRequiredStringSchema,
   profileId: normalizedRequiredStringSchema.optional(),
 });
-const workerTurnClaimSchema = z
-  .object({
-    sessionId: normalizedRequiredStringSchema,
-    claimId: normalizedRequiredStringSchema,
-    runId: normalizedRequiredStringSchema,
-    placementGeneration: safeNonNegativeIntegerSchema,
-    owner: z.object({
-      kind: z.literal("worker"),
-      environmentId: normalizedRequiredStringSchema,
-      ownerEpoch: safeNonNegativeIntegerSchema,
-    }),
-  })
-  .transform((claim): WorkerSessionTurnClaim => ({
-    sessionId: claim.sessionId,
-    claimId: claim.claimId,
-    runId: claim.runId,
-    placementGeneration: claim.placementGeneration,
-    owner: claim.owner,
-  }));
+const workerTurnClaimSchema = z.object({
+  sessionId: normalizedRequiredStringSchema,
+  claimId: normalizedRequiredStringSchema,
+  runId: normalizedRequiredStringSchema,
+  placementGeneration: safeNonNegativeIntegerSchema,
+  owner: z.object({
+    kind: z.literal("worker"),
+    environmentId: normalizedRequiredStringSchema,
+    ownerEpoch: safeNonNegativeIntegerSchema,
+  }),
+});
 const delegatedAuthoritySchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("local"),
@@ -136,27 +128,46 @@ const delegatedAuthoritySchema = z.discriminatedUnion("kind", [
 const stringListSchema = z
   .array(z.string())
   .transform((entries) => entries.map((entry) => entry.trim()).filter(Boolean));
+const spawnModelAutoSelectionSchema = z.object({
+  model: normalizedRequiredStringSchema,
+  hasFallbackOrigin: z.boolean(),
+});
 const sessionSpawnContextSchema = z
   .object({
+    requesterProfileId: normalizedRequiredStringSchema.optional(),
     completionOwnerSessionKey: normalizedRequiredStringSchema.optional(),
+    inheritedPermissionMode: z.enum(["read-only", "guarded", "workspace", "full"]).optional(),
+    resolvedModel: z
+      .object({
+        provider: normalizedRequiredStringSchema,
+        model: normalizedRequiredStringSchema,
+      })
+      .optional(),
     inheritedToolPolicy: z.object({
       version: z.literal(1),
       allow: stringListSchema,
       deny: stringListSchema,
     }),
+    spawnModelAutoSelection: spawnModelAutoSelectionSchema.optional(),
   })
   .transform((context): AgentRuntimeSessionSpawnContext => ({
+    ...(context.requesterProfileId ? { requesterProfileId: context.requesterProfileId } : {}),
     ...(context.completionOwnerSessionKey
       ? { completionOwnerSessionKey: context.completionOwnerSessionKey }
       : {}),
     inheritedToolPolicy: context.inheritedToolPolicy,
+    ...(context.inheritedPermissionMode
+      ? { inheritedPermissionMode: context.inheritedPermissionMode }
+      : {}),
+    ...(context.resolvedModel ? { resolvedModel: context.resolvedModel } : {}),
+    ...(context.spawnModelAutoSelection
+      ? { spawnModelAutoSelection: context.spawnModelAutoSelection }
+      : {}),
   }));
-const cronCreatorAuthorityGrantSchema = z
-  .object({
-    runId: normalizedRequiredStringSchema,
-    token: normalizedRequiredStringSchema,
-  })
-  .transform((grant): CronCreatorAuthorityGrant => grant);
+const cronCreatorAuthorityGrantSchema = z.object({
+  runId: normalizedRequiredStringSchema,
+  token: normalizedRequiredStringSchema,
+});
 const messageActionToolContextSchema = z
   .object({
     currentChannelId: ignoredOptionalStringSchema,
@@ -229,12 +240,7 @@ function decodeDelegatedAuthority(
 ): AgentRuntimeDelegatedAuthority | undefined {
   const { lifecycleGeneration, claimId } = value;
   const { instanceId, runId } = value.operationalRunInstance;
-  if (
-    !lifecycleGeneration ||
-    !claimId ||
-    instanceId !== operationalRunInstance.instanceId ||
-    runId !== operationalRunInstance.runId
-  ) {
+  if (instanceId !== operationalRunInstance.instanceId || runId !== operationalRunInstance.runId) {
     return undefined;
   }
   const owner = {
@@ -251,7 +257,7 @@ function decodeDelegatedAuthority(
 }
 
 async function readSharedAgentRuntimeIdentitySecret(): Promise<string | null> {
-  return (await loadExecApprovalsAsync()).socket?.token?.trim() || null;
+  return (await loadExecApprovalsReadOnlyAsync()).socket?.token?.trim() || null;
 }
 
 async function requireSharedAgentRuntimeIdentitySecret(): Promise<string> {
@@ -340,7 +346,7 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
     }
     const turnSourceTo = normalizeOptionalString(raw.turnSourceTo);
     const turnSourceThreadId = raw.turnSourceThreadId;
-    if (!agentId || !sessionKey || !operationalInstanceId || !operationalRunId) {
+    if (!agentId || !sessionKey) {
       return undefined;
     }
     const operationalRunInstance = Object.freeze({
@@ -372,7 +378,7 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
     const cronToolsAllowCapture = raw.cronToolsAllowCapture;
     const cronExecToolTarget = cronToolsAllowCapture ? raw.cronExecToolTarget : undefined;
     const cronCreatorAuthorityGrant = raw.cronCreatorAuthorityGrant;
-    if (cronCreatorAuthorityGrant && !cronToolsAllowCapture) {
+    if (!hasCronCreatorGrantProvenance(raw, operationalRunId)) {
       return undefined;
     }
     let executionIdentity: ExecutionIdentityAdmissionToken | undefined;
@@ -474,6 +480,9 @@ function prepareAgentRuntimeIdentityTokenPayload(
     throw new Error("worker delegated authority disagrees with the operational run");
   }
   const approvalAuthority = params.approvalAuthority ?? activeAuthority;
+  if (params.workerTurnClaim && approvalAuthority.claimId === activeAuthority.claimId) {
+    throw new Error("worker runtime identity requires its original claim approval authority");
+  }
   if (
     approvalAuthority.operationalRunInstance.instanceId !== operationalInstanceId ||
     approvalAuthority.operationalRunInstance.runId !== operationalRunId ||
@@ -484,11 +493,10 @@ function prepareAgentRuntimeIdentityTokenPayload(
   const delegatedAuthority: AgentRuntimeDelegatedAuthority = params.workerTurnClaim
     ? { kind: "worker", ...approvalAuthority, turnClaim: params.workerTurnClaim }
     : { kind: "local", ...approvalAuthority };
-  if (
-    params.cronCreatorAuthorityGrant &&
-    params.cronToolsAllowCapture !== "final-executable-surface"
-  ) {
-    throw new Error("cron creator authority grants require final tool-surface provenance");
+  if (!hasCronCreatorGrantProvenance(params, operationalRunId)) {
+    throw new Error(
+      "cron creator authority grants require tool-surface or authenticated-requester provenance",
+    );
   }
   if (
     params.messageActionContext?.sourceReplyFinal === true &&
@@ -631,94 +639,22 @@ function resolveAgentRuntimeIdentityPayload(
   if (payload.executionLineageHandoffId && !handoff) {
     return undefined;
   }
+  const executionIdentity = handoff?.executionIdentity ?? payload.executionIdentity;
+  const sessionSpawnContext = handoff?.sessionSpawnContext ?? payload.sessionSpawnContext;
+  const {
+    kind: _kind,
+    executionLineageHandoffId: _handoffId,
+    executionIdentity: _executionIdentity,
+    sessionSpawnContext: _sessionSpawnContext,
+    ...admitted
+  } = payload;
   const identity: AgentRuntimeIdentity = {
+    ...admitted,
     kind: "agentRuntime",
-    agentId: payload.agentId,
-    sessionKey: payload.sessionKey,
-    operationalRunInstance: payload.operationalRunInstance,
-    delegatedAuthority: payload.delegatedAuthority,
-    ...(payload.approvalOwnerPluginId
-      ? { approvalOwnerPluginId: payload.approvalOwnerPluginId }
-      : {}),
-    ...(handoff?.executionIdentity
-      ? { executionIdentity: handoff.executionIdentity }
-      : payload.executionIdentity
-        ? { executionIdentity: payload.executionIdentity }
-        : {}),
-    ...(payload.turnSourceChannel ? { turnSourceChannel: payload.turnSourceChannel } : {}),
-    ...(payload.turnSourceLocal === true ? { turnSourceLocal: true } : {}),
-    ...(payload.turnSourceTo ? { turnSourceTo: payload.turnSourceTo } : {}),
-    ...(payload.turnSourceAccountId ? { turnSourceAccountId: payload.turnSourceAccountId } : {}),
-    ...(payload.turnSourceThreadId !== undefined
-      ? { turnSourceThreadId: payload.turnSourceThreadId }
-      : {}),
-    ...(payload.gatewayUiCommandTarget
-      ? { gatewayUiCommandTarget: payload.gatewayUiCommandTarget }
-      : {}),
-    ...(payload.messageActionContext ? { messageActionContext: payload.messageActionContext } : {}),
-    ...(payload.cronSelfManagementContext
-      ? { cronSelfManagementContext: payload.cronSelfManagementContext }
-      : {}),
-    ...(payload.cronToolsAllowCapture
-      ? { cronToolsAllowCapture: payload.cronToolsAllowCapture }
-      : {}),
-    ...(payload.cronExecToolTarget ? { cronExecToolTarget: payload.cronExecToolTarget } : {}),
-    ...(payload.cronManagementGrant ? { cronManagementGrant: payload.cronManagementGrant } : {}),
-    ...(payload.cronCreatorAuthorityGrant
-      ? { cronCreatorAuthorityGrant: payload.cronCreatorAuthorityGrant }
-      : {}),
-    ...(handoff?.sessionSpawnContext
-      ? { sessionSpawnContext: handoff.sessionSpawnContext }
-      : payload.sessionSpawnContext
-        ? { sessionSpawnContext: payload.sessionSpawnContext }
-        : {}),
+    ...(executionIdentity ? { executionIdentity } : {}),
+    ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
   };
   return handoff
     ? withAgentRuntimeExecutionLineageRedemption(identity, handoff.redemption)
     : identity;
-}
-
-export type AgentRuntimeApprovalAuthorityValidator = (identity: AgentRuntimeIdentity) => boolean;
-
-type WorkerTurnClaimValidator = {
-  validateTurnClaim(claim: WorkerSessionTurnClaim): boolean;
-};
-
-function validateAgentRuntimeDelegatedAuthority(
-  authority: AgentRuntimeDelegatedAuthority,
-  placements?: WorkerTurnClaimValidator,
-): boolean {
-  if (!validateAgentRunDelegatedAuthority(authority)) {
-    return false;
-  }
-  return authority.kind === "local"
-    ? true
-    : placements?.validateTurnClaim?.(authority.turnClaim) === true;
-}
-
-/** Builds the use-time approval gate from the run owner and canonical worker store. */
-export function createAgentRuntimeApprovalAuthorityValidator(
-  placements?: WorkerTurnClaimValidator,
-): AgentRuntimeApprovalAuthorityValidator {
-  return (identity) => {
-    if (!validateAgentRuntimeDelegatedAuthority(identity.delegatedAuthority, placements)) {
-      return false;
-    }
-    const messageActionContext = identity.messageActionContext;
-    if (!messageActionContext) {
-      return true;
-    }
-    if (!messageActionContext.turnCapability) {
-      return false;
-    }
-    return Boolean(
-      resolveMessageActionTurnCapability({
-        token: messageActionContext.turnCapability,
-        agentId: identity.agentId,
-        runId: identity.operationalRunInstance.runId,
-        sessionKey: identity.sessionKey,
-        sessionId: messageActionContext.sessionId,
-      }),
-    );
-  };
 }

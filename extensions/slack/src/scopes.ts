@@ -1,8 +1,7 @@
-// Slack plugin module implements scopes behavior.
 import type { WebClient } from "@slack/web-api";
 import {
   isRecord,
-  normalizeStringEntries,
+  normalizeTrimmedStringList,
   normalizeOptionalString,
   sortUniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -20,27 +19,11 @@ type SlackScopesSource = "auth.scopes" | "apps.permissions.info";
 type SlackScopesMethod = "auth.test" | SlackScopesSource;
 
 function collectScopes(value: unknown, into: string[]) {
-  if (!value) {
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      if (typeof entry === "string" && entry.trim()) {
-        into.push(entry.trim());
-      }
-    }
-    return;
-  }
-  if (typeof value === "string") {
-    const raw = value.trim();
-    if (!raw) {
-      return;
-    }
-    const parts = raw.split(/[,\s]+/).map((part) => part.trim());
-    for (const part of parts) {
-      if (part) {
-        into.push(part);
-      }
+  if (Array.isArray(value) || typeof value === "string") {
+    for (const scope of normalizeTrimmedStringList(
+      typeof value === "string" ? value.split(/[,\s]+/) : value,
+    )) {
+      into.push(scope);
     }
     return;
   }
@@ -52,10 +35,6 @@ function collectScopes(value: unknown, into: string[]) {
       collectScopes(entry, into);
     }
   }
-}
-
-function normalizeScopes(scopes: string[]) {
-  return sortUniqueStrings(normalizeStringEntries(scopes));
 }
 
 function extractScopes(payload: unknown): string[] {
@@ -71,10 +50,10 @@ function extractScopes(payload: unknown): string[] {
   if (isRecord(payload.info)) {
     collectScopes(payload.info.scopes, scopes);
     collectScopes(payload.info.scope, scopes);
-    collectScopes((payload.info as { user_scopes?: unknown }).user_scopes, scopes);
-    collectScopes((payload.info as { bot_scopes?: unknown }).bot_scopes, scopes);
+    collectScopes(payload.info.user_scopes, scopes);
+    collectScopes(payload.info.bot_scopes, scopes);
   }
-  return normalizeScopes(scopes);
+  return sortUniqueStrings(scopes);
 }
 
 async function callSlack(
@@ -106,7 +85,7 @@ export async function fetchSlackScopes(
     if (scopes.length > 0) {
       return { ok: true, scopes, source: method };
     }
-    const error = isRecord(result) ? normalizeOptionalString(result.error) : undefined;
+    const error = normalizeOptionalString(result?.error);
     if (error) {
       errors.push(`${method}: ${error}`);
     }

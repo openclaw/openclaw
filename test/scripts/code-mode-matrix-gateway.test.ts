@@ -11,7 +11,7 @@ import {
 } from "../../scripts/lib/code-mode-matrix-gateway.js";
 import type { NestedToolActivity } from "../../src/sessions/nested-tool-activity.js";
 
-function assistantCall(id: string, code: string, checked = false) {
+function assistantCall(id: string, code: string) {
   return {
     type: "message",
     message: {
@@ -23,7 +23,7 @@ function assistantCall(id: string, code: string, checked = false) {
           type: "toolCall",
           id,
           name: "exec",
-          arguments: { code, ...(checked ? { language: "typescript", typecheck: true } : {}) },
+          arguments: { code },
         },
       ],
     },
@@ -65,6 +65,7 @@ function nestedActivity(
   input: Record<string, unknown> = {},
   result: Record<string, unknown> = {},
   isError = false,
+  content: { type: "text"; text: string }[] = [],
 ): NestedToolActivity {
   return {
     role: "custom",
@@ -82,7 +83,7 @@ function nestedActivity(
       toolCallId: `${parentId}-${name}`,
       toolName: name,
       input,
-      result: { content: [], details: result },
+      result: { content, details: result },
       isError,
       startedAt: 100,
       timestamp: 101,
@@ -193,12 +194,76 @@ describe("Gateway matrix transcript evidence", () => {
       },
     ]);
     expect(trace.activities).toEqual([
-      { name: "matrix_invoice_export", input: {}, result: {}, isError: false, parentId: "read" },
+      {
+        name: "matrix_invoice_export",
+        input: {},
+        result: {},
+        content: [],
+        isError: false,
+        parentId: "read",
+        eventIndex: 3,
+      },
     ]);
     expect(trace.outcomes).toHaveLength(1);
     expect(expectDefined(trace.outcomes[0], "recorded tool outcome").eventIndex).toBe(4);
     expect(trace.models).toEqual(["openai/gpt-5.6-sol"]);
   });
+
+  it.each(
+    (["direct", "tool-search", "code-mode"] as const).flatMap((surface) =>
+      [false, true].map((isError) => ({ surface, isError })),
+    ),
+  )(
+    "counts one underlying shell outcome through $surface with error=$isError",
+    ({ surface, isError }) => {
+      const input = { command: "node ./process-probe.mjs" };
+      const result = {
+        status: isError ? "failed" : "completed",
+        exitCode: isError ? 1 : 0,
+        aggregated: isError ? "synthetic process failure" : "synthetic process complete",
+      };
+      const name = surface === "tool-search" ? "tool_call" : "exec";
+      const invocation = {
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "invoke",
+              name,
+              arguments:
+                surface === "direct"
+                  ? input
+                  : surface === "tool-search"
+                    ? { id: "openclaw:core:exec", input }
+                    : { code: `return await exec(${JSON.stringify(input)});` },
+            },
+          ],
+        },
+      };
+      const trace = collectGatewayMatrixTrace([
+        invocation,
+        ...(surface === "direct" ? [] : [nestedActivity("invoke", "exec", input, result, isError)]),
+        toolOutcome(
+          "invoke",
+          surface === "direct" ? result : { status: "completed", value: result },
+          isError,
+          name,
+        ),
+      ]);
+      expect(trace.activities).toHaveLength(1);
+      expect(trace.activities[0]).toMatchObject({
+        name: "exec",
+        input,
+        result,
+        isError,
+        eventIndex: 1,
+      });
+      expect(trace.activities[0]?.parentId).toBe(surface === "direct" ? undefined : "invoke");
+      expect(trace.calls.map((call) => call.name)).toEqual([name]);
+      expect(trace.outcomes.map((outcome) => outcome.name)).toEqual([name]);
+    },
+  );
 
   it("does not turn missing usage or cost observations into zero-valued measurements", () => {
     const withUsage = {
@@ -478,7 +543,7 @@ function automationEvidence(
   function action(input: Record<string, unknown>, result: Record<string, unknown>) {
     const id = `automation-${events.length}`;
     events.push(
-      assistantCall(id, `return await automations(${JSON.stringify(input)});`, true),
+      assistantCall(id, `return await automations(${JSON.stringify(input)});`),
       nestedActivity(id, "automations", input, result),
       toolOutcome(id, { status: "completed", value: result }),
     );
@@ -728,7 +793,7 @@ describe("terminal automation evidence", () => {
       },
     };
     const extra = collectGatewayMatrixTrace([
-      assistantCall("extra-create", `return await automations(${JSON.stringify(input)});`, true),
+      assistantCall("extra-create", `return await automations(${JSON.stringify(input)});`),
       nestedActivity(
         "extra-create",
         "automations",
@@ -819,7 +884,6 @@ describe("terminal automation evidence", () => {
         assistantCall(
           "after-cleanup",
           `return await automations(${JSON.stringify({ action, jobId: "owned-1" })});`,
-          true,
         ),
         nestedActivity("after-cleanup", "automations", { action, jobId: "owned-1" }, { ok: true }),
         toolOutcome("after-cleanup", { status: "completed", value: { ok: true } }),
@@ -860,6 +924,205 @@ describe("terminal automation evidence", () => {
   );
 });
 
+type SerializationTask = "return-value-effects" | "result-save-invalid-json";
+
+function serializationEvidence(task: SerializationTask, waiting = false) {
+  const fixture = gatewayFixtures.createGatewayMatrixFixture(task, 1);
+  const tool =
+    task === "return-value-effects" ? "matrix_return_effect" : "matrix_serialization_seed";
+  const nonce = fixture.expected.nonce;
+  const output =
+    task === "return-value-effects"
+      ? [{ type: "text", text: fixture.expected.marker }]
+      : ["bigint", "cycle", "throwing-toJSON"].map((kind) => ({
+          type: "json",
+          value: { kind, error: `Cannot serialize ${kind}` },
+        }));
+  const events = [
+    assistantCall("probe", expectDefined(fixture.probeCode, "prescribed probe program")),
+    nestedActivity("probe", tool, task === "return-value-effects" ? { nonce } : {}, { nonce }),
+    toolOutcome(
+      "probe",
+      waiting
+        ? { status: "waiting", runId: "probe-run", output }
+        : { status: "completed", value: fixture.expected, output },
+    ),
+    ...(waiting
+      ? waitEvents("resume", "probe-run", { status: "completed", value: fixture.expected })
+      : []),
+  ];
+  const receipts =
+    task === "return-value-effects"
+      ? [receipt("call", tool, { nonce }), receipt("effect", tool, { nonce })]
+      : [receipt("call", tool)];
+  return {
+    task,
+    expected: fixture.expected,
+    probeCode: fixture.probeCode,
+    final: JSON.stringify(fixture.expected),
+    trace: collectGatewayMatrixTrace(events),
+    receipts,
+  };
+}
+
+describe("serialization probe evidence", () => {
+  it.each(["return-value-effects", "result-save-invalid-json"] as const)(
+    "accepts %s only with its program, observed value, output and fixture receipts",
+    (task) => {
+      for (const waiting of [false, true]) {
+        expect(
+          Object.values(evaluateGatewayMatrixTask(serializationEvidence(task, waiting))).every(
+            Boolean,
+          ),
+        ).toBe(true);
+      }
+    },
+  );
+
+  it.each(["changed-program", "missing-program", "invented-value", "missing-invocation"] as const)(
+    "rejects %s despite a correct final serialization claim",
+    (violation) => {
+      for (const task of ["return-value-effects", "result-save-invalid-json"] as const) {
+        const evidence = serializationEvidence(task);
+        if (violation === "changed-program") {
+          expectDefined(evidence.trace.calls[0], "probe call").args.code =
+            `return ${evidence.final};`;
+        } else if (violation === "missing-program") {
+          evidence.probeCode = undefined;
+        } else if (violation === "invented-value") {
+          expectDefined(evidence.trace.outcomes[0], "probe outcome").details.value = null;
+        } else {
+          evidence.trace.activities = [];
+        }
+        const checks = evaluateGatewayMatrixTask(evidence);
+        expect(checks.answer).toBe(true);
+        expect(Object.values(checks).every(Boolean)).toBe(false);
+      }
+    },
+  );
+
+  it.each([
+    "lost-output",
+    "duplicate-output",
+    "missing-effect",
+    "duplicate-effect",
+    "unrelated-wait-output",
+  ] as const)("rejects return-value %s", (violation) => {
+    const evidence = serializationEvidence("return-value-effects");
+    const outcome = expectDefined(evidence.trace.outcomes[0], "probe outcome");
+    if (violation === "lost-output" || violation === "unrelated-wait-output") {
+      outcome.details.output = [];
+      if (violation === "unrelated-wait-output") {
+        const unrelated = collectGatewayMatrixTrace(
+          waitEvents("unrelated", "another-run", {
+            status: "completed",
+            output: [{ type: "text", text: evidence.expected.marker }],
+          }),
+        );
+        evidence.trace.calls.push(...unrelated.calls);
+        evidence.trace.outcomes.push(...unrelated.outcomes);
+      }
+    } else if (violation === "duplicate-output") {
+      outcome.details.output = Array.from({ length: 2 }, () => ({
+        type: "text",
+        text: evidence.expected.marker,
+      }));
+    } else if (violation === "missing-effect") {
+      evidence.receipts.pop();
+    } else {
+      evidence.receipts.push(
+        receipt("effect", "matrix_return_effect", { nonce: evidence.expected.nonce }),
+      );
+    }
+    const checks = evaluateGatewayMatrixTask(evidence);
+    expect(checks.answer).toBe(true);
+    expect(Object.values(checks).every(Boolean)).toBe(false);
+  });
+
+  it.each(["missing-rejection", "missing-error", "duplicate-seed"] as const)(
+    "rejects serialization %s",
+    (violation) => {
+      const evidence = serializationEvidence("result-save-invalid-json");
+      const outcome = expectDefined(evidence.trace.outcomes[0], "probe outcome");
+      if (violation === "duplicate-seed") {
+        evidence.receipts.push(receipt("call", "matrix_serialization_seed"));
+      } else {
+        outcome.details.output = (
+          violation === "missing-rejection"
+            ? ["bigint", "cycle"]
+            : ["bigint", "cycle", "throwing-toJSON"]
+        ).map((kind) => ({
+          type: "json",
+          value: { kind, error: violation === "missing-error" ? "" : "Serialization refused" },
+        }));
+      }
+      const checks = evaluateGatewayMatrixTask(evidence);
+      expect(checks.answer).toBe(true);
+      expect(Object.values(checks).every(Boolean)).toBe(false);
+    },
+  );
+});
+
+function configReadEvidence() {
+  const fixture = gatewayFixtures.createGatewayMatrixFixture("gateway-config-read", 1);
+  const result = {
+    ok: true,
+    result: {
+      path: "tools.codeMode",
+      config: {
+        enabled: true,
+        timeoutMs: 10_000,
+        maxOutputBytes: 65_536,
+      },
+    },
+  };
+  return {
+    task: "gateway-config-read" as const,
+    expected: fixture.expected,
+    final: JSON.stringify(fixture.expected),
+    receipts: [],
+    trace: collectGatewayMatrixTrace([
+      assistantCall("config", 'return await gateway({action:"config.get",path:"tools.codeMode"});'),
+      nestedActivity("config", "gateway", { action: "config.get", path: "tools.codeMode" }, result),
+      toolOutcome("config", { status: "completed", value: result }),
+    ]),
+  };
+}
+
+describe("Gateway config read evidence", () => {
+  it("requires the actual config settings to reach the guest unchanged", () => {
+    expect(Object.values(evaluateGatewayMatrixTask(configReadEvidence())).every(Boolean)).toBe(
+      true,
+    );
+  });
+
+  it.each(["missing-details", "missing-guest-data", "wrong-settings", "mutating-action"] as const)(
+    "rejects %s despite the correct final enabled claim",
+    (violation) => {
+      const evidence = configReadEvidence();
+      const activity = expectDefined(evidence.trace.activities[0], "config read");
+      if (violation === "missing-details") {
+        activity.result = { ok: true };
+      } else if (violation === "missing-guest-data") {
+        expectDefined(evidence.trace.outcomes[0], "config outcome").details.value = { ok: true };
+      } else if (violation === "wrong-settings") {
+        activity.result = {
+          ok: true,
+          result: {
+            path: "tools.codeMode",
+            config: { enabled: true, timeoutMs: 1, maxOutputBytes: 1 },
+          },
+        };
+      } else {
+        activity.input.action = "update.run";
+      }
+      const checks = evaluateGatewayMatrixTask(evidence);
+      expect(checks.answer).toBe(true);
+      expect(Object.values(checks).every(Boolean)).toBe(false);
+    },
+  );
+});
+
 const PROCESS = { marker: "MATRIX_PROCESS_R1_DONE", status: "completed", exitCode: 0 };
 
 function processEvidence() {
@@ -867,7 +1130,7 @@ function processEvidence() {
   function action(name: string, input: Record<string, unknown>, result: Record<string, unknown>) {
     const id = `process-${events.length}`;
     events.push(
-      assistantCall(id, `return await ${name}(${JSON.stringify(input)});`, true),
+      assistantCall(id, `return await ${name}(${JSON.stringify(input)});`),
       nestedActivity(id, name, input, result),
       toolOutcome(id, { status: "completed", value: result }),
     );
@@ -896,7 +1159,7 @@ function processEvidence() {
 }
 
 describe("process lifecycle evidence", () => {
-  it("accepts exactly one helper launch followed by checked reads of its process", () => {
+  it("accepts exactly one helper launch followed by Code Mode reads of its process", () => {
     const checks = evaluateGatewayMatrixTask({
       task: "process-contracts",
       expected: PROCESS,
@@ -918,7 +1181,7 @@ describe("process lifecycle evidence", () => {
       };
       const failed = violation === "failed-launch";
       const extra = collectGatewayMatrixTrace([
-        assistantCall("extra-launch", `return await exec(${JSON.stringify(input)});`, true),
+        assistantCall("extra-launch", `return await exec(${JSON.stringify(input)});`),
         nestedActivity(
           "extra-launch",
           "exec",
@@ -952,7 +1215,7 @@ describe("process lifecycle evidence", () => {
   ])("rejects extra process operation $action on $sessionId", (input) => {
     const trace = processEvidence();
     const extra = collectGatewayMatrixTrace([
-      assistantCall("extra-process", `return await process(${JSON.stringify(input)});`, true),
+      assistantCall("extra-process", `return await process(${JSON.stringify(input)});`),
       nestedActivity("extra-process", "process", input, { status: "completed" }),
       toolOutcome("extra-process", { status: "completed" }),
     ]);
@@ -971,118 +1234,227 @@ describe("process lifecycle evidence", () => {
   });
 });
 
-describe("checked-cell cache evidence", () => {
-  const expected = {
-    cells: [
-      { ordinal: 1, sum: 11 },
-      { ordinal: 2, sum: 21 },
-      { ordinal: 3, sum: 31 },
-    ],
-  };
-  function cacheEvents(): unknown[] {
-    return expected.cells.flatMap((cell) => {
-      const id = `checked-${cell.ordinal}`;
-      return [
-        assistantCall(
-          id,
-          `const listed=await process({action:"list"}); if(!("sessions" in listed)) throw new Error("Missing sessions"); return {ordinal:${cell.ordinal},sum:1+${cell.ordinal}*10};`,
-          true,
-        ),
-        nestedActivity(id, "process", { action: "list" }, { status: "completed", sessions: [] }),
-        toolOutcome(id, { status: "completed", value: cell }),
-      ];
-    });
-  }
-  function cacheEvidence() {
-    return collectGatewayMatrixTrace(cacheEvents());
-  }
-  it("accepts exactly three checked cells with only process-list reads", () => {
-    const checks = evaluateGatewayMatrixTask({
-      task: "checked-cell-cache",
-      expected,
-      final: JSON.stringify(expected),
-      trace: cacheEvidence(),
-      receipts: [],
-    });
-    expect(Object.values(checks).every(Boolean)).toBe(true);
-  });
-  it.each(["wrong", "missing"] as const)(
-    "rejects a %s cell return even when the final answer is correct",
-    (kind) => {
-      const trace = cacheEvidence();
-      const outcome = expectDefined(trace.outcomes[0], "first checked-cell outcome");
-      if (kind === "wrong") {
-        outcome.details.value = { ordinal: 1, sum: -1 };
-      } else {
-        delete outcome.details.value;
-      }
-      const checks = evaluateGatewayMatrixTask({
-        task: "checked-cell-cache",
-        expected,
-        final: JSON.stringify(expected),
-        trace,
-        receipts: [],
-      });
-      expect(checks.answer).toBe(true);
-      expect(Object.values(checks).every(Boolean)).toBe(false);
-    },
-  );
-  it.each([true, false])(
-    "requires exec→wait completion before starting the next checked cell: sequential=%s",
-    (sequential) => {
-      const events = cacheEvents();
-      events[2] = toolOutcome("checked-1", { status: "waiting", runId: "suspended-first-cell" });
-      const resumed = waitEvents("resume-first", "suspended-first-cell", {
+describe("JavaScript declaration and argument-validation evidence", () => {
+  const expected = { verificationCode: "JAVASCRIPT_R1_OK" };
+  function evidence(extraReadPath?: string) {
+    const trace = collectGatewayMatrixTrace([
+      assistantCall("list", 'return await API.list("tools/");'),
+      toolOutcome("list", {
         status: "completed",
-        value: expectDefined(expected.cells[0], "first expected cell"),
+        value: { files: [{ path: "tools/read.d.ts" }, { path: "tools/write.d.ts" }] },
+      }),
+      assistantCall(
+        "read-types",
+        '// Inspect the real declaration.\nreturn await API.read("tools/read.d.ts");',
+      ),
+      toolOutcome("read-types", {
+        status: "completed",
+        value: {
+          path: "tools/read.d.ts",
+          content: "declare function read(input: {path: string}): Promise<unknown>;",
+        },
+      }),
+      assistantCall("write-types", 'return await API.read("tools/write.d.ts");'),
+      toolOutcome("write-types", {
+        status: "completed",
+        value: {
+          path: "tools/write.d.ts",
+          content:
+            "declare function write(input: {path: string; content: string}): Promise<unknown>;",
+        },
+      }),
+      assistantCall(
+        "invalid",
+        "try { await read({path:42}); } catch(error) { text(String(error)); }",
+      ),
+      nestedActivity(
+        "invalid",
+        "read",
+        { path: 42 },
+        {
+          status: "error",
+          error: 'Invalid arguments for tool "openclaw:core:read": /path: must be string.',
+        },
+        true,
+      ),
+      toolOutcome("invalid", {
+        status: "completed",
+        output: [
+          { type: "text", text: 'Invalid arguments for tool "read": /path: must be string.' },
+        ],
+      }),
+      assistantCall("read", 'return await read({path:"facts.txt"});'),
+      nestedActivity(
+        "read",
+        "read",
+        { path: "facts.txt" },
+        { kind: "text", content: `verification_code=${expected.verificationCode}\n` },
+        false,
+        [{ type: "text", text: `verification_code=${expected.verificationCode}\n` }],
+      ),
+      toolOutcome("read", {
+        status: "completed",
+        value: `verification_code=${expected.verificationCode}`,
+      }),
+      assistantCall(
+        "write",
+        `await write({path:"result.txt",content:${JSON.stringify(expected.verificationCode)}}); return await read({path:"result.txt"});`,
+      ),
+      nestedActivity("write", "write", { path: "result.txt", content: expected.verificationCode }),
+      nestedActivity(
+        "write",
+        "read",
+        { path: "result.txt" },
+        { kind: "text", content: expected.verificationCode },
+        false,
+        [{ type: "text", text: expected.verificationCode }],
+      ),
+      toolOutcome("write", { status: "completed", value: expected.verificationCode }),
+    ]);
+    if (extraReadPath) {
+      const write = expectDefined(
+        trace.calls.find((call) => call.id === "write"),
+        "write call",
+      );
+      write.args.code = `await read(${JSON.stringify({ path: extraReadPath })});\n${String(write.args.code)}`;
+      trace.activities.splice(2, 0, {
+        ...expectDefined(trace.activities[1], "source read"),
+        input: { path: extraReadPath },
+        parentId: "write",
       });
-      events.splice(sequential ? 3 : events.length, 0, ...resumed);
+    }
+    return trace;
+  }
+  it.each([undefined, "facts.txt"])(
+    "accepts complete evidence with extra read %s",
+    (extraReadPath) => {
       const checks = evaluateGatewayMatrixTask({
-        task: "checked-cell-cache",
+        task: "javascript-contracts",
         expected,
         final: JSON.stringify(expected),
-        trace: collectGatewayMatrixTrace(events),
+        trace: evidence(extraReadPath),
         receipts: [],
       });
-      expect(checks.answer).toBe(true);
-      expect(Object.values(checks).every(Boolean)).toBe(sequential);
+      expect(Object.values(checks).every(Boolean)).toBe(true);
     },
   );
-  it("rejects an extra unchecked exec even when three checked cells succeeded", () => {
-    const trace = cacheEvidence();
-    const extra = collectGatewayMatrixTrace([
-      assistantCall("extra", "return 4;"),
-      toolOutcome("extra", { status: "completed", value: 4 }),
-    ]);
-    trace.calls.push(...extra.calls);
-    trace.outcomes.push(...extra.outcomes);
-    const checks = evaluateGatewayMatrixTask({
-      task: "checked-cell-cache",
-      expected,
-      final: JSON.stringify(expected),
-      trace,
-      receipts: [],
-    });
-    expect(checks.threeCheckedCells).toBe(false);
-  });
   it.each([
-    { name: "process", input: { action: "kill", sessionId: "unrelated" } },
-    { name: "read", input: { path: "unrelated.txt" } },
-  ])("rejects an additional $name operation inside a checked cell", ({ name, input }) => {
-    const trace = cacheEvidence();
-    expectDefined(trace.calls[0], "first checked cell").args.code =
-      `await process({action:"list"}); await ${name}(${JSON.stringify(input)}); return {ordinal:1,sum:11};`;
-    const extra = collectGatewayMatrixTrace([nestedActivity("checked-1", name, input, {})]);
-    trace.activities.push(...extra.activities);
+    "missing-types",
+    "late-types",
+    "reordered-discovery",
+    "early-rejected-read",
+    "late-rejection",
+    "missing-error",
+    "fabricated-error",
+    "wrong-rejected-input",
+    "wrong-error-text",
+    "wrong-error-tool",
+    "unexpected-read",
+    "fabricated-types",
+    "dead-discovery",
+    "shadowed-api",
+    "wrong-content",
+    "wrong-source-content",
+    "empty-source-result",
+    "missing-readback",
+    "stale-readback-text",
+    "wrong-readback-details",
+    "retired-options",
+  ] as const)("rejects %s even when the final answer is correct", (violation) => {
+    const trace = evidence(violation === "unexpected-read" ? "other.txt" : undefined);
+    if (violation === "missing-types") {
+      expectDefined(trace.outcomes[0], "declaration result").details.value = {};
+    } else if (violation === "late-types") {
+      expectDefined(trace.outcomes[0], "declaration result").eventIndex = 100;
+    } else if (violation === "reordered-discovery") {
+      const listed = expectDefined(
+        trace.calls.find((call) => call.id === "list"),
+        "list call",
+      );
+      const read = expectDefined(
+        trace.calls.find((call) => call.id === "read-types"),
+        "declaration read",
+      );
+      [listed.eventIndex, read.eventIndex] = [read.eventIndex, listed.eventIndex];
+      const listResult = expectDefined(trace.outcomes[0], "list result");
+      const readResult = expectDefined(trace.outcomes[1], "read declaration result");
+      [listResult.eventIndex, readResult.eventIndex] = [
+        readResult.eventIndex,
+        listResult.eventIndex,
+      ];
+    } else if (violation === "early-rejected-read") {
+      expectDefined(
+        trace.calls.find((call) => call.id === "invalid"),
+        "rejected read",
+      ).eventIndex =
+        expectDefined(
+          trace.calls.find((call) => call.id === "write-types"),
+          "last declaration read",
+        ).eventIndex - 1;
+    } else if (violation === "late-rejection") {
+      trace.activities.push(expectDefined(trace.activities.shift(), "rejected read"));
+    } else if (violation === "missing-error") {
+      expectDefined(
+        trace.outcomes.find((outcome) => outcome.id === "invalid"),
+        "validation result",
+      ).details.output = [];
+    } else if (violation === "fabricated-error") {
+      trace.activities.shift();
+    } else if (violation === "wrong-rejected-input") {
+      expectDefined(trace.activities[0], "rejected read").input.path = "42";
+    } else if (violation === "wrong-error-text") {
+      expectDefined(
+        trace.outcomes.find((outcome) => outcome.id === "invalid"),
+        "validation result",
+      ).details.output = [
+        { type: "text", text: 'Invalid arguments for tool "read": path fabricated error.' },
+      ];
+    } else if (violation === "wrong-error-tool") {
+      expectDefined(
+        trace.outcomes.find((outcome) => outcome.id === "invalid"),
+        "validation result",
+      ).details.output = [
+        { type: "text", text: 'Invalid arguments for tool "write": /path: must be string.' },
+      ];
+    } else if (["fabricated-types", "dead-discovery", "shadowed-api"].includes(violation)) {
+      const call = expectDefined(
+        trace.calls.find((candidate) => candidate.id === "read-types"),
+        "declaration read",
+      );
+      call.args.code =
+        violation === "fabricated-types"
+          ? 'return {content:"declare function read(input: {path: string}): Promise<unknown>;"};'
+          : violation === "dead-discovery"
+            ? 'if (false) await API.read("tools/read.d.ts"); return {content:"declare function read(input: {path: string}): Promise<unknown>;"};'
+            : 'const API = {read: async () => ({content:"declare function read(input: {path: string}): Promise<unknown>;"})}; return await API.read("tools/read.d.ts");';
+    } else if (violation === "wrong-source-content") {
+      expectDefined(trace.activities[1], "source read").result.content = "WRONG_VALUE";
+    } else if (violation === "empty-source-result") {
+      const source = expectDefined(trace.activities[1], "source read");
+      source.result = { kind: "text", content: "" };
+      source.content = [];
+    } else if (violation === "wrong-content") {
+      expectDefined(trace.activities[2], "write").input.content = "wrong";
+    } else if (violation === "missing-readback") {
+      trace.activities.pop();
+    } else if (violation === "stale-readback-text") {
+      expectDefined(trace.activities.at(-1), "readback").content = [
+        { type: "text", text: "STALE_VALUE" },
+      ];
+    } else if (violation === "wrong-readback-details") {
+      expectDefined(trace.activities.at(-1), "readback").result.content = "WRONG_VALUE";
+    } else if (violation === "retired-options") {
+      expectDefined(trace.calls[0], "first cell").args.language = "typescript";
+    }
     const checks = evaluateGatewayMatrixTask({
-      task: "checked-cell-cache",
+      task: "javascript-contracts",
       expected,
       final: JSON.stringify(expected),
       trace,
       receipts: [],
     });
-    expect(checks.threeCheckedCells).toBe(true);
-    expect(checks.onlyProcessListReads).toBe(false);
+    expect(checks.answer).toBe(true);
+    expect(Object.values(checks).every(Boolean)).toBe(false);
   });
 });
 
@@ -1338,7 +1710,7 @@ function comparisonRow() {
     workload: {
       promptSha256: "fixed-prompt",
       fixtureSha256: "fixed-fixture",
-      settings: { thinking: "off", timeoutSeconds: 120 },
+      settings: { executor: "node", thinking: "off", timeoutSeconds: 120 },
     },
     gateway: {
       upstreamCalls: 1,
@@ -1372,7 +1744,7 @@ it("includes the exact process-helper bytes in the fixed workload fingerprint", 
 });
 
 describe("fixed Gateway matrix comparisons", () => {
-  it.each(["prompt", "fixture", "thinking", "timeout"] as const)(
+  it.each(["prompt", "fixture", "thinking", "timeout", "executor"] as const)(
     "rejects a changed %s instead of comparing different workloads",
     (field) => {
       const baseline = comparisonRow();
@@ -1383,8 +1755,10 @@ describe("fixed Gateway matrix comparisons", () => {
         candidate.workload.fixtureSha256 = "changed";
       } else if (field === "thinking") {
         candidate.workload.settings.thinking = "high";
-      } else {
+      } else if (field === "timeout") {
         candidate.workload.settings.timeoutSeconds = 240;
+      } else {
+        candidate.workload.settings.executor = "quickjs";
       }
       expect(() => compareCodeModeMatrixResults([baseline], [candidate])).toThrow(
         "workload changed",

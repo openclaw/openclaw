@@ -90,7 +90,10 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
   return html`
     <div class="bp-toolbar">
       ${
-        !nativeTab && controller.operations.route
+        !nativeTab &&
+        !controller.host.fixedTab &&
+        !controller.host.dashboardTarget?.sessionScoped &&
+        controller.operations.route
           ? html`<span
               class="bp-profile"
               title=${t("browser.profile", { profile: controller.operations.route.profile })}
@@ -137,6 +140,7 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
         type="button"
         title=${t(nativeTab?.loading ? "browser.stop" : "browser.reload")}
         aria-label=${t(nativeTab?.loading ? "browser.stop" : "browser.reload")}
+        aria-busy=${!nativeTab && controller.loading}
         ?disabled=${!controller.activeTargetId}
         @click=${() => controller.reloadPage()}
       >
@@ -151,10 +155,12 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
         placeholder=${t("browser.urlPlaceholder")}
         .value=${controller.urlDraft}
         @focus=${(event: FocusEvent) => {
-          controller.setUrlDraftEditing(true);
+          controller.urlDraftEditing = true;
           (event.target as HTMLInputElement).select();
         }}
-        @blur=${() => controller.setUrlDraftEditing(false)}
+        @blur=${() => {
+          controller.urlDraftEditing = false;
+        }}
         @input=${(event: InputEvent) =>
           controller.setState("urlDraft", (event.target as HTMLInputElement).value)}
         @keydown=${(event: KeyboardEvent) => {
@@ -183,17 +189,21 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
             </button>`
           : nothing
       }
-      <button
-        class="bp-icon"
-        type="button"
-        title=${t(controller.download.pending ? "browser.downloading" : "browser.downloadFile")}
-        aria-label=${t(controller.download.pending ? "browser.downloading" : "browser.downloadFile")}
-        aria-busy=${controller.download.pending}
-        ?disabled=${!controller.download.available}
-        @click=${() => void controller.download.save()}
-      >
-        ${controller.download.pending ? icons.loader : icons.download}
-      </button>
+      ${
+        controller.host.dashboardTarget?.sessionScoped
+          ? nothing
+          : html`<button
+              class="bp-icon"
+              type="button"
+              title=${t(controller.download.pending ? "browser.downloading" : "browser.downloadFile")}
+              aria-label=${t(controller.download.pending ? "browser.downloading" : "browser.downloadFile")}
+              aria-busy=${controller.download.pending}
+              ?disabled=${!controller.download.available}
+              @click=${() => void controller.download.save()}
+            >
+              ${controller.download.pending ? icons.loader : icons.download}
+            </button>`
+      }
       <button
         class="bp-icon ${controller.mode === "annotate" ? "is-active" : ""}"
         type="button"
@@ -233,7 +243,7 @@ function renderAnnotateBar(controller: BrowserPanelController) {
         class="bp-btn"
         type="button"
         ?disabled=${controller.strokes.length === 0}
-        @click=${() => controller.undoStroke()}
+        @click=${() => controller.input.undoStroke()}
       >
         ${t("browser.annotateUndo")}
       </button>
@@ -241,7 +251,7 @@ function renderAnnotateBar(controller: BrowserPanelController) {
         class="bp-btn"
         type="button"
         ?disabled=${controller.strokes.length === 0}
-        @click=${() => controller.clearStrokes()}
+        @click=${() => controller.input.clearStrokes()}
       >
         ${t("browser.annotateClear")}
       </button>
@@ -257,7 +267,7 @@ function renderAnnotateBar(controller: BrowserPanelController) {
         class="bp-btn bp-btn--primary"
         type="button"
         ?disabled=${controller.strokes.length === 0}
-        @click=${() => void controller.sendAnnotation({})}
+        @click=${() => void controller.input.sendAnnotation({})}
       >
         ${t("browser.annotateSend")}
       </button>
@@ -356,18 +366,42 @@ function renderViewportContent(controller: BrowserPanelController) {
       <canvas
         class="bp-overlay ${overlayMode}"
         @click=${(event: MouseEvent) => controller.handleStageClick(event)}
-        @pointerdown=${(event: PointerEvent) => controller.handleOverlayPointerDown(event)}
+        @pointerdown=${(event: PointerEvent) => controller.input.handleOverlayPointerDown(event)}
         @pointermove=${(event: PointerEvent) => controller.handleOverlayPointerMove(event)}
-        @pointerup=${(event: PointerEvent) => controller.handleOverlayPointerUp(event)}
-        @pointercancel=${(event: PointerEvent) => controller.handleOverlayPointerUp(event)}
-        @lostpointercapture=${(event: PointerEvent) => controller.handleOverlayPointerUp(event)}
+        @pointerup=${(event: PointerEvent) => controller.input.handleOverlayPointerUp(event)}
+        @pointercancel=${(event: PointerEvent) => controller.input.handleOverlayPointerUp(event)}
+        @lostpointercapture=${(event: PointerEvent) => controller.input.handleOverlayPointerUp(event)}
       ></canvas>
+      ${
+        controller.mode === "interact"
+          ? html`<textarea
+              class="bp-overlay bp-input"
+              aria-label=${t("browser.inputLabel")}
+              autocomplete="off"
+              autocorrect="off"
+              autocapitalize="off"
+              spellcheck="false"
+              @click=${(event: MouseEvent) => controller.handleStageClick(event)}
+              @contextmenu=${(event: MouseEvent) => controller.handleStageClick(event)}
+              @beforeinput=${(event: InputEvent) => controller.input.handleTextInput(event)}
+              @input=${(event: InputEvent) => controller.input.handleTextInput(event)}
+              @compositionstart=${() => controller.input.handleCompositionStart()}
+              @compositionend=${(event: CompositionEvent) => controller.input.handleCompositionEnd(event)}
+              @pointerdown=${(event: PointerEvent) => controller.input.handleTouchPointerDown(event)}
+              @pointermove=${(event: PointerEvent) => controller.input.handleTouchPointerMove(event)}
+              @pointerup=${(event: PointerEvent) => controller.input.handleTouchPointerEnd(event)}
+              @pointercancel=${(event: PointerEvent) => controller.input.handleTouchPointerEnd(event)}
+              @lostpointercapture=${(event: PointerEvent) => controller.input.handleTouchPointerEnd(event)}
+            ></textarea>`
+          : nothing
+      }
       ${renderInspectTooltip(controller)}
     </div>
   `;
 }
 
 function renderViewport(controller: BrowserPanelController, rendersTabStrip: boolean) {
+  // A native function avoids Chromium's blocked-input diagnostic crash on Lit listeners.
   return html`
     <wa-tab-panel
       id="browser-tab-panel"
@@ -380,16 +414,12 @@ function renderViewport(controller: BrowserPanelController, rendersTabStrip: boo
           : nothing
       }
       tabindex="0"
-      @wheel=${(event: WheelEvent) => controller.handleWheel(event)}
+      .onwheel=${(event: WheelEvent) => controller.handleWheel(event)}
       @keydown=${(event: KeyboardEvent) => controller.handleViewportKeydown(event)}
+      @paste=${(event: ClipboardEvent) => controller.handleViewportPaste(event)}
       aria-busy=${controller.loading ? "true" : "false"}
     >
       ${renderViewportContent(controller)}
-      ${
-        !controller.native.activeTab && controller.loading && controller.view
-          ? renderPanelLoadingSkeleton("browser", t("browser.loading"), false, true)
-          : nothing
-      }
     </wa-tab-panel>
   `;
 }

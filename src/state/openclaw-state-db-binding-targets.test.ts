@@ -3,15 +3,17 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { VERSION } from "../version.js";
+import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   reconcileOpenClawStateSchemaPublication,
   repairOpenClawStateDatabaseSchema,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
+  prepareOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -126,17 +128,20 @@ async function holdGatewayLifecycle(databasePath: string): Promise<{
   child: ChildProcess;
   release: () => Promise<void>;
 }> {
-  const coordinatorUrl = new URL("../infra/state-database-coordinator.ts", import.meta.url).href;
+  const ownerUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.gatewayStateOwner);
   const source = `
-    import { acquireGatewayLifecycleCoordinator } from ${JSON.stringify(coordinatorUrl)};
-    const coordinator = acquireGatewayLifecycleCoordinator({ databasePath: ${JSON.stringify(databasePath)}, busyTimeoutMs: 0 });
+    import { acquireGatewayStateOwner } from ${JSON.stringify(ownerUrl.href)};
+    const owner = acquireGatewayStateOwner({
+      databasePath: ${JSON.stringify(databasePath)},
+      payload: { pid: process.pid, createdAt: new Date().toISOString(), configPath: "/fixture/config.json", role: "gateway" },
+    });
     process.stdout.write("ready\\n");
     process.stdin.resume();
-    process.stdin.once("end", () => coordinator.release());
+    process.stdin.once("end", () => owner.release());
   `;
   const child = spawn(
     process.execPath,
-    ["--import", "tsx", "--input-type=module", "--eval", source],
+    [...resolveRuntimeWorkerArgv(ownerUrl).slice(0, -1), "--input-type=module", "--eval", source],
     { stdio: ["pipe", "pipe", "pipe"] },
   );
   try {
@@ -194,7 +199,7 @@ describe("conversation binding target migration", () => {
     closeOpenClawStateDatabaseForTest();
     const holder = await holdGatewayLifecycle(initial.path);
     try {
-      expect(repairOpenClawStateDatabaseSchemaIfNeeded(options)).toEqual({
+      expect(await prepareOpenClawStateDatabaseSchema(options)).toEqual({
         changes: [],
         warnings: [],
       });
@@ -271,7 +276,10 @@ describe("conversation binding target migration", () => {
         migrated.db
           .prepare("SELECT schema_version, app_version FROM schema_meta WHERE meta_key = 'primary'")
           .get(),
-      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION, app_version: VERSION });
+      ).toEqual({
+        schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+        app_version: migrationPath === "runtime open" ? VERSION : null,
+      });
       expect(
         migrated.db
           .prepare(

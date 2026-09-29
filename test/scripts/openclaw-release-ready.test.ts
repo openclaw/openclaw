@@ -154,6 +154,8 @@ describe("release readiness contract", () => {
 
   it.each([
     ["unsealed input", { prepared_plugins: "{}" }],
+    ["retired soak waiver", { stable_soak_waiver: "2026.9.2 approved" }],
+    ["retired lane waiver", { lane_waiver: "2026.9.2 approved" }],
     ["moving source", { tag: "main" }],
     ["missing source", { tag: "" }],
     ["wrong beta channel", { npm_dist_tag: "latest" }],
@@ -647,6 +649,10 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
     resolve("scripts/release-tooling-identity.mjs"),
     join(fixture.scripts, "release-tooling-identity.mjs"),
   );
+  copyFileSync(
+    resolve("scripts/linux-app-channel.mjs"),
+    join(fixture.scripts, "linux-app-channel.mjs"),
+  );
   const statePath = writeFixtureFile(
     fixture.root,
     "github-state.json",
@@ -659,6 +665,7 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
       isDraft: true,
       isPrerelease: true,
       isLatest: false,
+      releaseId: 101,
       writes: 0,
       lostClawHubDispatchResponse: false,
       preparationProducer: {},
@@ -674,7 +681,17 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
     const args = process.argv.slice(2);
     const state = JSON.parse(readFileSync(process.env.FIXTURE_GITHUB_STATE, 'utf8'));
     appendFileSync(process.env.FIXTURE_TRACE, JSON.stringify({ event: 'gh', args }) + '\\n');
-    const endpoint = String(args[1] ?? '').replace('repos/${REPOSITORY}/', '').split('?')[0];
+    const option = name => {
+      const index = args.indexOf(name);
+      return index < 0 ? undefined : args[index + 1];
+    };
+    const apiEndpoint = args[0] === 'api' ? args.find(arg => arg.startsWith('repos/')) : undefined;
+    const endpoint = String(apiEndpoint ?? '').replace('repos/${REPOSITORY}/', '').split('?')[0];
+    const method = option('--method') ?? 'GET';
+    const release = () => ({
+      id: state.releaseId, tag_name: process.env.FIXTURE_RELEASE_TAG,
+      draft: state.isDraft, prerelease: state.isPrerelease,
+    });
     if (state.frv && !state.unavailableFrv && args[0] === 'run' && args[1] === 'view' && args[2] === '200') {
       console.log(JSON.stringify(state.frv.view));
     } else if (state.frv && !state.unavailableFrv && args[0] === 'api' && Object.hasOwn(state.frv.archives, endpoint)) {
@@ -691,6 +708,35 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
     } else if (args[0] === 'api' && args[1] === 'repos/${REPOSITORY}/git/ref/tags/${TOOLING.ref}') {
       if (state.toolingMissing) process.exit(1);
       console.log(JSON.stringify({ ref: '${TOOLING.fullRef}', object: { type: 'commit', sha: state.toolingSha } }));
+    } else if (args[0] === 'api' && method === 'GET' &&
+      endpoint === 'git/ref/heads/' + process.env.GITHUB_REF_NAME &&
+      process.env.GITHUB_REF_NAME.startsWith('tideclaw/alpha/')) {
+      console.log(JSON.stringify({ ref: process.env.GITHUB_REF,
+        object: { type: 'commit', sha: state.toolingSha } }));
+    } else if (args[0] === 'api' && method === 'GET' &&
+      endpoint === 'git/ref/tags/' + encodeURIComponent(process.env.FIXTURE_RELEASE_TAG)) {
+      console.log(JSON.stringify({ ref: 'refs/tags/' + process.env.FIXTURE_RELEASE_TAG,
+        object: { type: 'commit', sha: state.sourceSha } }));
+    } else if (args[0] === 'api' && method === 'GET' && endpoint === 'releases/latest') {
+      if (!state.isLatest) { console.error('HTTP 404'); process.exit(1); }
+      console.log(JSON.stringify(release()));
+    } else if (args[0] === 'api' && method === 'GET' &&
+      endpoint === 'releases/tags/' + encodeURIComponent(process.env.FIXTURE_RELEASE_TAG)) {
+      if (state.isDraft) { console.error('HTTP 404'); process.exit(1); }
+      console.log(JSON.stringify(release()));
+    } else if (args[0] === 'api' && method === 'GET' &&
+      apiEndpoint === 'repos/${REPOSITORY}/releases/' + state.releaseId + '/assets?per_page=100&page=1') {
+      console.log('[]');
+    } else if (args[0] === 'api' && method === 'GET' && endpoint === 'releases/' + state.releaseId) {
+      console.log(JSON.stringify(release()));
+    } else if (args[0] === 'api' && method === 'PATCH' &&
+      endpoint === 'releases/' + state.releaseId && option('--field') === 'draft=false' &&
+      ['make_latest=true', 'make_latest=false'].includes(option('--raw-field'))) {
+      state.isDraft = false;
+      state.isLatest = option('--raw-field') === 'make_latest=true';
+      state.writes += 1;
+      writeFileSync(process.env.FIXTURE_GITHUB_STATE, JSON.stringify(state));
+      console.log(JSON.stringify(release()));
     } else if (args[0] === 'api' && args[1] === 'repos/${REPOSITORY}/actions/runs/700') {
       if (state.publicationReadbackUnavailable) process.exit(1);
       console.log(JSON.stringify({ id: 700, run_attempt: state.parentRunAttempt,
@@ -704,7 +750,7 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
         path: process.env.FIXTURE_ACTIVATION_OWNER === 'button'
           ? '.github/workflows/openclaw-release-promote.yml' : '.github/workflows/openclaw-release-publish.yml',
         head_sha: '${TOOLING_SHA}',
-        head_branch: '${TOOLING.ref}', status: 'in_progress', conclusion: null,
+        head_branch: process.env.GITHUB_REF_NAME, status: 'in_progress', conclusion: null,
         ...state.currentWriter }));
     } else if (args[0] === 'api' && args[1] === 'repos/${REPOSITORY}/actions/workflows/openclaw-release-publish.yml/dispatches') {
       const receipt = join(process.env.RUNNER_TEMP, 'release-button/dispatch.json');
@@ -750,7 +796,14 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
       state.isLatest = flag('--latest', !state.isPrerelease);
       state.writes += 1;
       writeFileSync(process.env.FIXTURE_GITHUB_STATE, JSON.stringify(state));
-    } else if (args[0] === 'release' && args[1] === 'view') {
+    } else if (args[0] === 'release' && args[1] === 'view' &&
+      args[2] === process.env.FIXTURE_RELEASE_TAG &&
+      option('--json') === 'databaseId,tagName,isDraft,isPrerelease') {
+      console.log(JSON.stringify({ databaseId: state.releaseId,
+        tagName: process.env.FIXTURE_RELEASE_TAG,
+        isDraft: state.isDraft, isPrerelease: state.isPrerelease }));
+    } else if (args[0] === 'release' && args[1] === 'view' &&
+      args[2] === process.env.FIXTURE_RELEASE_TAG && option('--json') === 'isDraft,isPrerelease') {
       console.log(JSON.stringify({ isDraft: state.isDraft, isPrerelease: state.isPrerelease }));
     } else {
       console.error('unexpected fixture GitHub operation: ' + JSON.stringify(args));
@@ -797,6 +850,7 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
           RELEASE_TAG: tag,
           SOURCE_SHA,
           FIXTURE_ACTIVATION_OWNER: owner,
+          FIXTURE_RELEASE_TAG: tag,
           RELEASE_NPM_DIST_TAG: channel,
           RELEASE_REQUEST: JSON.stringify(request ?? publicationRequest(ready)),
         },
@@ -1534,7 +1588,6 @@ describe("publication dispatch retention", () => {
 
 describe("release preparation recovery", () => {
   it.each([
-    ["alpha-core", "v2026.9.2-alpha.1", "alpha", "v2026.9.2-alpha.1", "core-npm"],
     ["extended-core", "v2026.8.33", "extended-stable", "extended-stable/2026.8.33", "core-npm"],
     [
       "extended-docker",
@@ -1687,7 +1740,6 @@ describe("release preparation recovery", () => {
 
   it.each([
     ["raw-sha", "", "v2026.9.2", "latest", "normal", undefined, true],
-    ["raw-sha-alpha", "", "v2026.9.2-alpha.1", "alpha", "alpha", undefined, true],
     ["wrong-tag", "", "v2026.9.2", "latest", "normal", "v2026.9.3", false],
     ["invalid-explicit", "ordinary-branch", "v2026.9.2", "latest", "normal", undefined, false],
     ["canonical", "release/2026.9.2", "v2026.9.2", "latest", "normal", undefined, true],
@@ -1867,21 +1919,6 @@ process.exitCode = 1;
     },
   );
 
-  it("preserves the validated Tideclaw alpha activation path without Linux carry", () => {
-    const fixture = finalizationFixture();
-    const branch = "tideclaw/alpha/2026-09-13-0100Z";
-    fixture.env.GITHUB_REF_NAME = branch;
-    fixture.env.GITHUB_REF = `refs/heads/${branch}`;
-    const result = fixture.run("parent", "v2026.9.2-alpha.1", "alpha");
-    expect(result.status, result.stderr).toBe(0);
-    expect(fixture.state()).toMatchObject({
-      writes: 1,
-      isDraft: false,
-      isPrerelease: true,
-      isLatest: false,
-    });
-  });
-
   it.each([
     ["", undefined],
     ["", "650"],
@@ -2037,7 +2074,9 @@ process.exitCode = 1;
   ] as const)(
     "activates %s %s on %s with explicit release flags",
     (owner, tag, channel, prerelease, latest) => {
-      const fixture = finalizationFixture({ isPrerelease: !prerelease });
+      const fixture = finalizationFixture({
+        isPrerelease: owner === "parent" ? prerelease : !prerelease,
+      });
       const result = fixture.run(owner, tag, channel);
       expect(
         result.status,
@@ -2067,6 +2106,26 @@ process.exitCode = 1;
   );
 
   it.each([
+    ["v2026.9.2-beta.1", "beta", true],
+    ["v2026.9.2", "beta", false],
+    ["v2026.9.2", "latest", false],
+  ] as const)(
+    "refuses parent activation of %s on %s with a mismatched draft classification",
+    (tag, channel, prerelease) => {
+      const fixture = finalizationFixture({ isPrerelease: !prerelease });
+      const result = fixture.run("parent", tag, channel);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Selected core prerelease classification changed");
+      expect(fixture.state()).toMatchObject({
+        writes: 0,
+        isDraft: true,
+        isPrerelease: !prerelease,
+        isLatest: false,
+      });
+    },
+  );
+
+  it.each([
     ["moved tooling tag", { toolingSha: "c".repeat(40) }],
     ["deleted tooling tag", { toolingMissing: true }],
     ["replaced parent attempt", { parentRunAttempt: 2 }],
@@ -2082,22 +2141,23 @@ process.exitCode = 1;
 
 describe("prepared Windows handoff", () => {
   it.each([
-    ["stable", "v2026.9.2", "success", true, true, false, true],
-    ["absent", "v2026.9.2", "success", false, false, false, false],
-    ["incomplete", "v2026.9.2", "success", true, false, false, true],
-    ["beta", "v2026.9.2-beta.1", "success", true, true, false, false],
-    ["alpha", "v2026.9.2-alpha.1", "success", true, true, false, false],
-    ["failed activation", "v2026.9.2", "failure", true, true, false, false],
-    ["skipped activation", "v2026.9.2", "skipped", true, true, false, false],
-    ["dispatch failed", "v2026.9.2", "success", true, true, true, true],
+    ["stable on beta", "v2026.9.2", "beta", "success", true, true, false, true],
+    ["stable on latest", "v2026.9.2", "latest", "success", true, true, false, true],
+    ["absent", "v2026.9.2", "beta", "success", false, false, false, false],
+    ["incomplete", "v2026.9.2", "beta", "success", true, false, false, true],
+    ["beta", "v2026.9.2-beta.1", "beta", "success", true, true, false, false],
+    ["failed activation", "v2026.9.2", "beta", "failure", true, true, false, false],
+    ["skipped activation", "v2026.9.2", "beta", "skipped", true, true, false, false],
+    ["dispatch failed", "v2026.9.2", "beta", "success", true, true, true, true],
   ] as const)(
     "uses the frozen optional selection after activation: %s",
-    (_label, tag, activation, selected, digests, dispatchFailure, scheduled) => {
+    (_label, tag, channel, activation, selected, digests, dispatchFailure, scheduled) => {
       const fixture = finalizationFixture({ windowsDispatchFailure: dispatchFailure });
       const ready = readyRelease();
       ready.inputs = {
         ...ready.inputs,
         tag,
+        npm_dist_tag: channel,
         windows_node_tag: selected ? "v1.2.3" : "",
         windows_node_installer_digests: digests
           ? JSON.stringify({

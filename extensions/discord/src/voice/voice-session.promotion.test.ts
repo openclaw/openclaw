@@ -9,8 +9,7 @@ defineDiscordVoiceTests(
     createConnectionMock,
     joinVoiceChannelMock,
     realtimeSessionMock,
-    resolveRealtimeBootstrapContextInstructionsMock,
-    loggerWarnMock,
+    resolveRealtimeVoiceAgentContextInstructionsMock,
     createAgentProxyManager,
     createManager,
     createClient,
@@ -18,6 +17,8 @@ defineDiscordVoiceTests(
     makeVoiceConfig,
     expectConnectedStatus,
     getSessionEntry,
+    getLastAudioPlayer,
+    lastRealtimeBridgeParams,
     startTranscripts,
     stopTranscripts,
     receiveRecordedSpeech,
@@ -61,7 +62,7 @@ defineDiscordVoiceTests(
       },
     );
 
-    it.each(["bootstrap", "unavailable bootstrap", "connect"])(
+    it.each(["bootstrap", "connect"])(
       "keeps recording while conversation promotion waits for %s",
       async (phase) => {
         const manager = createAgentProxyManager();
@@ -71,15 +72,16 @@ defineDiscordVoiceTests(
         const { promise: ready, resolve: finish } = createDeferred<void>();
         const pending =
           phase !== "connect"
-            ? resolveRealtimeBootstrapContextInstructionsMock
+            ? resolveRealtimeVoiceAgentContextInstructionsMock
             : realtimeSessionMock.connect;
-        pending.mockImplementationOnce(async () => {
-          await ready;
-          if (phase === "unavailable bootstrap") {
-            throw new Error("synthetic optional context unavailable");
-          }
-          return undefined;
-        });
+        if (phase === "bootstrap") {
+          resolveRealtimeVoiceAgentContextInstructionsMock.mockImplementationOnce(async () => {
+            await ready;
+            return "Agent context: shared voice agent context.";
+          });
+        } else {
+          realtimeSessionMock.connect.mockImplementationOnce(() => ready);
+        }
         const joining = manager.join({ guildId: "g1", channelId: "1001" });
         try {
           await vi.waitFor(() => expect(pending).toHaveBeenCalledOnce());
@@ -96,11 +98,6 @@ defineDiscordVoiceTests(
         expect(getSessionEntry(manager)).toBe(entry);
         expectConnectedStatus(manager, "1001");
         expect(realtimeSessionMock.connect).toHaveBeenCalledOnce();
-        if (phase === "unavailable bootstrap") {
-          expect(loggerWarnMock).toHaveBeenCalledWith(
-            "discord voice: realtime bootstrap context unavailable: synthetic optional context unavailable",
-          );
-        }
         expect(await stopTranscripts()).toMatchObject({ ok: true });
         expectConnectedStatus(manager, "1001");
         expect(joinVoiceChannelMock).toHaveBeenCalledOnce();
@@ -125,6 +122,8 @@ defineDiscordVoiceTests(
       expect(await stopTranscripts()).toMatchObject({ ok: true });
       expectConnectedStatus(manager, "1001");
       expect(getSessionEntry(manager).realtimeLifecycle.status).toBe("active");
+      lastRealtimeBridgeParams().audioSink.sendAudio(Buffer.alloc(24_000));
+      expect(getLastAudioPlayer().play).toHaveBeenCalledOnce();
       expect(joinVoiceChannelMock).toHaveBeenCalledOnce();
     });
 

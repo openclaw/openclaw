@@ -9,6 +9,7 @@ import { defaultSlotIdForKey, resolveSlotSelection } from "../../../../../src/pl
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import type { RuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
@@ -18,6 +19,8 @@ import {
   type GatewayMethodOperatorScope,
 } from "../../../lib/gateway-methods.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
+
+registerDreamingEnglish();
 
 const MEMORY_WIKI_PLUGIN_ID = "memory-wiki";
 
@@ -106,6 +109,15 @@ export type WikiOverview = {
   truncated: boolean;
 };
 
+export type WikiPagePreview = {
+  title: string;
+  path: string;
+  content: string;
+  totalLines?: number;
+  truncated?: boolean;
+  updatedAt?: string;
+};
+
 type DreamingResourceKey = "dreamingStatus" | "dreamDiary" | "wikiImportInsights" | "wikiOverview";
 type DreamingResourceRequest = { agentId: string };
 
@@ -183,18 +195,13 @@ type DreamingConfigCapability = Pick<
   "lookupSchemaPath" | "patch" | "state"
 >;
 
-function isMemoryWikiEnabled(state: DreamingState): boolean {
-  return isPluginEnabledInConfigSnapshot(state.configSnapshot, MEMORY_WIKI_PLUGIN_ID, {
-    enabledByDefault: false,
-  });
-}
-
 function canCallMemoryWikiMethod(state: DreamingState, method: string): boolean {
-  const available = isGatewayMethodAdvertised(state, method);
-  if (available !== null) {
-    return available;
-  }
-  return isMemoryWikiEnabled(state);
+  return (
+    isGatewayMethodAdvertised(state, method) ??
+    isPluginEnabledInConfigSnapshot(state.configSnapshot, MEMORY_WIKI_PLUGIN_ID, {
+      enabledByDefault: false,
+    })
+  );
 }
 
 export function canCallDreamingMethod(
@@ -215,13 +222,15 @@ export function canCallDreamingMethod(
   );
 }
 
+type DreamDiaryActionMethod =
+  | "doctor.memory.backfillDreamDiary"
+  | "doctor.memory.resetDreamDiary"
+  | "doctor.memory.resetGroundedShortTerm"
+  | "doctor.memory.repairDreamingArtifacts"
+  | "doctor.memory.dedupeDreamDiary";
+
 function buildDreamDiaryActionSuccessMessage(
-  method:
-    | "doctor.memory.backfillDreamDiary"
-    | "doctor.memory.resetDreamDiary"
-    | "doctor.memory.resetGroundedShortTerm"
-    | "doctor.memory.repairDreamingArtifacts"
-    | "doctor.memory.dedupeDreamDiary",
+  method: DreamDiaryActionMethod,
   payload: DoctorMemoryDreamActionPayload | undefined,
 ): string {
   switch (method) {
@@ -234,19 +243,17 @@ function buildDreamDiaryActionSuccessMessage(
             : 0;
       const kept = typeof payload?.keptEntries === "number" ? payload.keptEntries : undefined;
       if (kept !== undefined) {
-        return removed === 1
-          ? t("dreaming.actions.dedupeRemovedOneAndKept", {
-              removed: String(removed),
-              kept: String(kept),
-            })
-          : t("dreaming.actions.dedupeRemovedManyAndKept", {
-              removed: String(removed),
-              kept: String(kept),
-            });
+        return t(
+          removed === 1
+            ? "dreaming.actions.dedupeRemovedOneAndKept"
+            : "dreaming.actions.dedupeRemovedManyAndKept",
+          { removed: String(removed), kept: String(kept) },
+        );
       }
-      return removed === 1
-        ? t("dreaming.actions.dedupeRemovedOne", { removed: String(removed) })
-        : t("dreaming.actions.dedupeRemovedMany", { removed: String(removed) });
+      return t(
+        removed === 1 ? "dreaming.actions.dedupeRemovedOne" : "dreaming.actions.dedupeRemovedMany",
+        { removed: String(removed) },
+      );
     }
     case "doctor.memory.repairDreamingArtifacts": {
       const actions: string[] = [];
@@ -300,11 +307,11 @@ export function resolveConfiguredDreaming(configValue: Record<string, unknown> |
   overridden: boolean;
   engineOff: boolean;
 } {
-  const slots = asRecord(asRecord(configValue?.plugins)?.slots);
+  const plugins = asRecord(configValue?.plugins);
+  const slots = asRecord(plugins?.slots);
   const slotSelection = resolveSlotSelection("memory", slots?.memory);
   const pluginId =
     slotSelection.kind === "off" ? defaultSlotIdForKey("memory") : slotSelection.pluginId;
-  const plugins = asRecord(configValue?.plugins);
   const entries = asRecord(plugins?.entries);
   const pluginEntry = asRecord(entries?.[pluginId]);
   const config = asRecord(pluginEntry?.config);
@@ -451,12 +458,7 @@ export async function loadWikiOverview(state: DreamingState): Promise<void> {
 
 async function runDreamDiaryAction(
   state: DreamingState,
-  method:
-    | "doctor.memory.backfillDreamDiary"
-    | "doctor.memory.resetDreamDiary"
-    | "doctor.memory.resetGroundedShortTerm"
-    | "doctor.memory.repairDreamingArtifacts"
-    | "doctor.memory.dedupeDreamDiary",
+  method: DreamDiaryActionMethod,
   options?: {
     reloadDiary?: boolean;
   },
@@ -528,72 +530,18 @@ export async function copyDreamingArchivePath(state: DreamingState): Promise<boo
   if (!path) {
     return false;
   }
-  if (await copyToClipboard(path)) {
-    state.dreamDiaryActionMessage = {
-      kind: "success",
-      text: t("dreaming.actions.archivePathCopied"),
-    };
-    return true;
-  }
+  const copied = await copyToClipboard(path);
   state.dreamDiaryActionMessage = {
-    kind: "error",
-    text: t("dreaming.actions.archivePathCopyFailed"),
+    kind: copied ? "success" : "error",
+    text: t(
+      copied ? "dreaming.actions.archivePathCopied" : "dreaming.actions.archivePathCopyFailed",
+    ),
   };
-  return false;
+  return copied;
 }
 
 export async function dedupeDreamDiary(state: DreamingState): Promise<boolean> {
   return runDreamDiaryAction(state, "doctor.memory.dedupeDreamDiary");
-}
-
-async function writeDreamingPatch(
-  state: DreamingState,
-  config: DreamingConfigCapability,
-  patch: Record<string, unknown>,
-  canDispatch: () => boolean,
-): Promise<boolean> {
-  if (
-    state.dreamingModeSaving ||
-    !canDispatch() ||
-    !canCallDreamingMethod(state, "config.patch", "operator.admin")
-  ) {
-    return false;
-  }
-
-  state.dreamingModeSaving = true;
-  state.dreamingStatusError = null;
-  try {
-    const updated = await config.patch({
-      raw: patch,
-      note: "Dreaming settings updated from the Dreaming tab.",
-      canDispatch,
-    });
-    if (!updated) {
-      state.dreamingStatusError =
-        config.state.lastError ?? state.lastError ?? t("dreaming.actions.updateFailed");
-    }
-    return updated;
-  } finally {
-    state.dreamingModeSaving = false;
-  }
-}
-
-function lookupIncludesDreamingProperty(value: unknown): boolean {
-  const lookup = asRecord(value);
-  const children = Array.isArray(lookup?.children) ? lookup.children : [];
-  for (const child of children) {
-    const childRecord = asRecord(child);
-    if (normalizeTrimmedString(childRecord?.key) === "dreaming") {
-      return true;
-    }
-  }
-  return false;
-}
-
-function lookupDisallowsUnknownProperties(value: unknown): boolean {
-  const lookup = asRecord(value);
-  const schema = asRecord(lookup?.schema);
-  return schema?.additionalProperties === false;
 }
 
 export type DreamingConfigPathSupport = "supported" | "unsupported" | "unknown";
@@ -614,29 +562,15 @@ export async function resolveDreamingConfigPathSupport(
     return "unknown";
   }
   try {
-    const lookup = await config.lookupSchemaPath(`plugins.entries.${pluginId}.config`);
-    if (lookupIncludesDreamingProperty(lookup)) {
+    const lookup = asRecord(await config.lookupSchemaPath(`plugins.entries.${pluginId}.config`));
+    const children = Array.isArray(lookup?.children) ? lookup.children : [];
+    if (children.some((child) => normalizeTrimmedString(asRecord(child)?.key) === "dreaming")) {
       return "supported";
     }
-    return lookupDisallowsUnknownProperties(lookup) ? "unsupported" : "supported";
+    return asRecord(lookup?.schema)?.additionalProperties === false ? "unsupported" : "supported";
   } catch {
     return "unknown";
   }
-}
-
-async function ensureDreamingPathSupported(
-  state: DreamingState,
-  config: DreamingConfigCapability,
-  pluginId: string,
-): Promise<boolean> {
-  // "unknown" stays optimistic: the gateway rejects the write if it is wrong.
-  if ((await resolveDreamingConfigPathSupport(config, pluginId)) !== "unsupported") {
-    return true;
-  }
-  const message = t("dreaming.actions.unsupportedPlugin", { pluginId });
-  state.dreamingStatusError = message;
-  state.lastError = message;
-  return false;
 }
 
 export async function updateDreamingEnabled(
@@ -655,35 +589,53 @@ export async function updateDreamingEnabled(
   const { pluginId } = resolveConfiguredDreaming(
     asRecord(config.state.configSnapshot?.config) ?? null,
   );
-  if (!(await ensureDreamingPathSupported(state, config, pluginId))) {
+  // "unknown" stays optimistic: the gateway rejects the write if it is wrong.
+  if ((await resolveDreamingConfigPathSupport(config, pluginId)) === "unsupported") {
+    const message = t("dreaming.actions.unsupportedPlugin", { pluginId });
+    state.dreamingStatusError = message;
+    state.lastError = message;
     return false;
   }
-  if (!canDispatch()) {
+  if (
+    state.dreamingModeSaving ||
+    !canDispatch() ||
+    !canCallDreamingMethod(state, "config.patch", "operator.admin")
+  ) {
     return false;
   }
-  const ok = await writeDreamingPatch(
-    state,
-    config,
-    {
-      plugins: {
-        entries: {
-          [pluginId]: {
-            config: {
-              dreaming: {
-                enabled,
+  state.dreamingModeSaving = true;
+  state.dreamingStatusError = null;
+  let updated: boolean;
+  try {
+    updated = await config.patch({
+      raw: {
+        plugins: {
+          entries: {
+            [pluginId]: {
+              config: {
+                dreaming: {
+                  enabled,
+                },
               },
             },
           },
         },
       },
-    },
-    canDispatch,
-  );
-  if (ok && state.dreamingStatus) {
+      note: "Dreaming settings updated from the Dreaming tab.",
+      canDispatch,
+    });
+    if (!updated) {
+      state.dreamingStatusError =
+        config.state.lastError ?? state.lastError ?? t("dreaming.actions.updateFailed");
+    }
+  } finally {
+    state.dreamingModeSaving = false;
+  }
+  if (updated && state.dreamingStatus) {
     state.dreamingStatus = {
       ...state.dreamingStatus,
       enabled,
     };
   }
-  return ok;
+  return updated;
 }

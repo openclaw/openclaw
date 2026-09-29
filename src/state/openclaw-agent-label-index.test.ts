@@ -5,6 +5,7 @@ import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-en
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
   runOpenClawAgentWriteTransaction,
 } from "./openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
@@ -74,7 +75,9 @@ it.each(["fresh", "missing", "drifted"])(
         detail: expect.stringMatching(/^SEARCH session_nodes USING COVERING INDEX /u),
       }),
     ]);
-    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 20 });
+    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+    });
     const schemaVersion = database.db.prepare("PRAGMA schema_version").get();
     closeOpenClawAgentDatabasesForTest();
     database = openOpenClawAgentDatabase(options);

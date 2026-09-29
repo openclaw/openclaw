@@ -6,16 +6,24 @@ import {
   buildCodexAppInventoryCacheKey,
   serializeCodexAppInventoryError,
 } from "./app-inventory-cache.js";
-import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
 import { CodexAppServerRpcError } from "./client.js";
-import type { v2 } from "./protocol.js";
+import type { CodexAppServerRequestParams, CodexAppServerRequestResult, v2 } from "./protocol.js";
+
+type AppMetadata = CodexAppServerRequestResult<"app/read">["apps"][number];
 
 describe("Codex app inventory cache", () => {
-  it("coalesces installed app and metadata requests into one inventory refresh", async () => {
+  it("coalesces native metadata and installed runtime facts without fabricating app/list fields", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 100 });
-    const apps = [app("app-1"), app("app-2")];
+    const apps = [
+      { ...app("app-1"), iconUrl: "https://example.com/app-icon.png" },
+      { ...app("app-2"), name: "Canonical app name" },
+    ];
+    const installedApps = [
+      { id: "app-1", runtimeName: null, enabled: true, callable: false },
+      { id: "app-2", runtimeName: "runtime-name", enabled: false, callable: false },
+    ];
     const request = vi.fn(async (method, params) =>
-      codexAppInventoryResponse(method, apps, params),
+      codexAppInventoryResponse(method, apps, params, { installedApps }),
     );
 
     const key = buildCodexAppInventoryCacheKey(
@@ -29,10 +37,7 @@ describe("Codex app inventory cache", () => {
 
     const snapshot = await cache.refreshNow({ key, request, nowMs: 0 });
     expect(snapshot.apps).toEqual(apps);
-    expect(snapshot.installedApps).toEqual([
-      { id: "app-1", runtimeName: "app-1", enabled: true, callable: true },
-      { id: "app-2", runtimeName: "app-2", enabled: true, callable: true },
-    ]);
+    expect(snapshot.installedApps).toEqual(installedApps);
     expect(request).toHaveBeenNthCalledWith(1, "app/installed", { forceRefresh: true });
     expect(request).toHaveBeenNthCalledWith(2, "app/read", {
       appIds: ["app-1", "app-2"],
@@ -66,25 +71,26 @@ describe("Codex app inventory cache", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("reads metadata only for targeted installed apps", async () => {
-    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
-    const apps = [app("app-1"), app("google-calendar-app")];
+  it("refreshes and removes legacy runtime rows targeted by their Apps SDK identity", async () => {
+    const manifestId = "asdk_app_0123456789abcdef0123456789abcdef";
+    const runtimeId = "connector_0123456789abcdef0123456789abcdef";
+    const cache = new CodexAppInventoryCache();
+    let apps = [app(runtimeId), app("unrelated")];
     const request = vi.fn(async (method, params) =>
       codexAppInventoryResponse(method, apps, params),
     );
-
-    const snapshot = await cache.refreshNow({
-      key: "runtime",
-      request,
-      targetAppIds: ["google-calendar-app"],
+    await cache.refreshNow({ key: "runtime", request });
+    cache.invalidate("runtime", "connector changed", Date.now(), [runtimeId]);
+    await cache.refreshNow({ key: "runtime", request, targetAppIds: [manifestId] });
+    expect(cache.read({ key: "runtime", request, suppressRefresh: true })).toMatchObject({
+      state: "fresh",
+      snapshot: { apps },
     });
-
-    expect(snapshot.apps).toEqual([app("google-calendar-app")]);
-    expect(request).toHaveBeenNthCalledWith(1, "app/installed", { forceRefresh: true });
-    expect(request).toHaveBeenNthCalledWith(2, "app/read", {
-      appIds: ["google-calendar-app"],
-      includeTools: true,
-    });
+    apps = [app("unrelated")];
+    await cache.refreshNow({ key: "runtime", request, targetAppIds: [manifestId] });
+    const refreshed = cache.read({ key: "runtime", request, suppressRefresh: true }).snapshot;
+    expect(refreshed?.apps).toEqual(apps);
+    expect(refreshed?.installedApps.map((entry) => entry.id)).toEqual(["unrelated"]);
   });
 
   it("upgrades an in-flight targeted refresh before returning the complete account inventory", async () => {
@@ -212,13 +218,19 @@ describe("Codex app inventory cache", () => {
     const snapshot = await cache.refreshNow({ key: "runtime", request });
 
     expect(snapshot.apps).toEqual([app("available-app")]);
+    expect(snapshot.installedApps.map((entry) => entry.id)).toEqual([
+      "available-app",
+      "missing-app",
+    ]);
   });
 
   it("excludes retained runtime rows when global or workspace policy denies app metadata", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 100 });
-    const disabledApp = { ...app("policy-disabled-app"), isEnabled: false };
+    const disabledApp = app("policy-disabled-app");
     const request = vi.fn(async (method, params) =>
-      codexAppInventoryResponse(method, method === "app/read" ? [] : [disabledApp], params),
+      codexAppInventoryResponse(method, [], params, {
+        installedApps: [{ id: disabledApp.id, runtimeName: null, enabled: false, callable: false }],
+      }),
     );
 
     const snapshot = await cache.refreshNow({ key: "runtime", request });
@@ -232,9 +244,13 @@ describe("Codex app inventory cache", () => {
 
   it("keeps authorized disabled app metadata distinct from runtime callability", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 100 });
-    const disabledApp = { ...app("disabled-app"), isEnabled: false };
+    const disabledApp = app("disabled-app");
     const request = vi.fn(async (method, params) =>
-      codexAppInventoryResponse(method, [disabledApp], params),
+      codexAppInventoryResponse(method, [disabledApp], params, {
+        installedApps: [
+          { id: "disabled-app", runtimeName: "disabled-app", enabled: false, callable: false },
+        ],
+      }),
     );
 
     const snapshot = await cache.refreshNow({ key: "runtime", request });
@@ -247,9 +263,17 @@ describe("Codex app inventory cache", () => {
 
   it("excludes installed apps whose account is not authorized to read their metadata", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 100 });
-    const inaccessibleApp = { ...app("inaccessible-app"), isAccessible: false };
     const request = vi.fn(async (method, params) =>
-      codexAppInventoryResponse(method, [inaccessibleApp], params),
+      codexAppInventoryResponse(method, [], params, {
+        installedApps: [
+          {
+            id: "inaccessible-app",
+            runtimeName: "inaccessible-app",
+            enabled: true,
+            callable: false,
+          },
+        ],
+      }),
     );
 
     const snapshot = await cache.refreshNow({ key: "runtime", request });
@@ -509,6 +533,31 @@ describe("Codex app inventory cache", () => {
     expect(freshRead.snapshot?.apps).toEqual([app("fresh-app")]);
   });
 
+  it("does not republish a pre-clear refresh over the new inventory", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+    const staleInstalled = Promise.withResolvers<v2.AppsInstalledResponse>();
+    const apps = [app("fresh-app"), app("stale-app")];
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params),
+    );
+    request.mockImplementationOnce(() => staleInstalled.promise);
+
+    const stale = cache.refreshNow({ key: "runtime", request, nowMs: 0 });
+    cache.clear();
+    await cache.refreshNow({
+      key: "runtime",
+      request,
+      nowMs: 1,
+      targetAppIds: ["fresh-app"],
+    });
+    staleInstalled.resolve(codexAppInventoryResponse("app/installed", [app("stale-app")]));
+    await stale;
+
+    const read = cache.read({ key: "runtime", request, nowMs: 2, suppressRefresh: true });
+    expect(read.state).toBe("fresh");
+    expect(read.snapshot?.apps).toEqual([app("fresh-app")]);
+  });
+
   it("discards a pre-invalidation refresh instead of republishing it as fresh", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
     const key = "runtime";
@@ -645,27 +694,6 @@ describe("Codex app inventory cache", () => {
     expect(read.snapshot?.apps).toEqual([app("calendar-app")]);
   });
 
-  it("renews freshness when a targeted refresh re-covers the whole cached scope", async () => {
-    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
-    const key = "runtime";
-    const apps = [app("calendar-app")];
-    const request = vi.fn(async (method, params) =>
-      codexAppInventoryResponse(method, apps, params),
-    );
-
-    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: ["calendar-app"] });
-    expect(cache.read({ key, request, nowMs: 1_500, suppressRefresh: true }).state).toBe("stale");
-
-    await cache.refreshNow({
-      key,
-      request,
-      nowMs: 1_500,
-      forceRefetch: true,
-      targetAppIds: ["calendar-app"],
-    });
-    expect(cache.read({ key, request, nowMs: 1_600, suppressRefresh: true }).state).toBe("fresh");
-  });
-
   it("retires stacked scoped invalidations across separate covering refreshes", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
     const key = "runtime";
@@ -749,20 +777,48 @@ describe("Codex app inventory cache", () => {
   });
 });
 
-function app(id: string): v2.AppInfo {
+function app(id: string): AppMetadata {
   return {
     id,
     name: id,
     description: null,
-    logoUrl: null,
-    logoUrlDark: null,
+    iconUrl: null,
+    iconUrlDark: null,
     distributionChannel: null,
-    branding: null,
-    appMetadata: null,
-    labels: null,
     installUrl: null,
-    isAccessible: true,
-    isEnabled: true,
     pluginDisplayNames: [],
+    toolSummaries: null,
   };
+}
+
+function codexAppInventoryResponse<Method extends "app/installed" | "app/read">(
+  method: Method,
+  apps: readonly AppMetadata[],
+  params?: CodexAppServerRequestParams<Method>,
+  options?: {
+    installedApps?: readonly v2.InstalledApp[];
+    callableByAppId?: Readonly<Record<string, boolean>>;
+  },
+): CodexAppServerRequestResult<Method> {
+  if (method === "app/installed") {
+    return {
+      apps:
+        options?.installedApps ??
+        apps.map((metadata) => ({
+          id: metadata.id,
+          runtimeName: metadata.name,
+          enabled: true,
+          callable: options?.callableByAppId?.[metadata.id] ?? true,
+        })),
+    } as CodexAppServerRequestResult<Method>;
+  }
+  const requestedIds = (params as CodexAppServerRequestParams<"app/read"> | undefined)?.appIds;
+  const matchingApps = apps.filter(
+    (metadata) => !requestedIds || requestedIds.includes(metadata.id),
+  );
+  return {
+    apps: matchingApps,
+    missingAppIds:
+      requestedIds?.filter((id) => !matchingApps.some((metadata) => metadata.id === id)) ?? [],
+  } as CodexAppServerRequestResult<Method>;
 }

@@ -48,20 +48,20 @@ export function resolveSessionEntryProvenanceRow<T extends SessionProvenanceRow>
       ])
       .where("session_id", "=", params.entry.sessionId),
   );
-  const hasTranscript = Boolean(
-    executeSqliteQueryTakeFirstSync(
-      params.database.db,
-      db
-        .selectFrom("transcript_events")
-        .select("seq")
-        .where("session_id", "=", params.entry.sessionId)
-        .limit(1),
-    ),
-  );
   // Updates cannot prove provenance for a migrated transcript. Known exclusion metadata is monotonic.
   if (
     existingRoot?.session_entry_provenance === 0 &&
-    (params.previousEntry?.sessionId === params.entry.sessionId || hasTranscript)
+    (params.previousEntry?.sessionId === params.entry.sessionId ||
+      Boolean(
+        executeSqliteQueryTakeFirstSync(
+          params.database.db,
+          db
+            .selectFrom("transcript_events")
+            .select("seq")
+            .where("session_id", "=", params.entry.sessionId)
+            .limit(1),
+        ),
+      ))
   ) {
     return {
       ...params.boundSessionRow,

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../config/sessions/session-accessor.sqlite-read.js";
@@ -22,6 +23,148 @@ import {
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { projectSessionMessagePayload } from "./session-transcript-message.js";
 import { readRecentSessionMessagesWithStatsAsync } from "./session-transcript-readers.js";
+
+it("caps commentary captions across an intervening image as one message", () => {
+  const signature = JSON.stringify({ v: 1, id: "progress-caption", phase: "commentary" });
+  const image = { type: "image", url: "/media/proof.png", mimeType: "image/png" };
+  const source = {
+    role: "assistant",
+    content: [
+      { type: "text", text: "A".repeat(20), textSignature: signature },
+      image,
+      { type: "text", text: "B".repeat(20), textSignature: signature },
+    ],
+  };
+  const projected = projectChatDisplayMessages([source], {
+    includeCommentaryFallbacks: true,
+    maxChars: 30,
+  });
+  expect(projected).toContainEqual(
+    expect.objectContaining({
+      content: [
+        { type: "text", text: "A".repeat(20) },
+        image,
+        { type: "text", text: `${"B".repeat(9)}\n...(truncated)...` },
+      ],
+      __openclaw: expect.objectContaining({ truncated: true }),
+    }),
+  );
+  expect(source.content[2]).toMatchObject({ text: "B".repeat(20) });
+});
+
+describe("commentary group visibility", () => {
+  const unkeyed = {
+    type: "text",
+    text: "Hidden thought",
+    textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
+  };
+  const keyed = {
+    type: "text",
+    text: "Visible progress",
+    textSignature: JSON.stringify({ v: 1, id: "progress", phase: "commentary" }),
+  };
+  const final = {
+    type: "text",
+    text: "Final reply",
+    textSignature: JSON.stringify({ v: 1, id: "final", phase: "final_answer" }),
+  };
+  const image = { type: "image", url: "/media/proof.png", mimeType: "image/png" };
+  const tool = { type: "toolCall", id: "read-proof", name: "read", arguments: {} };
+  it.each([
+    {
+      name: "unkeyed plain text",
+      phase: "commentary",
+      content: [{ type: "text", text: "Hidden thought" }],
+      text: [],
+      images: 0,
+      tools: 0,
+    },
+    {
+      name: "provider-keyed text",
+      phase: undefined,
+      content: [keyed],
+      text: ["Visible progress"],
+      images: 0,
+      tools: 0,
+    },
+    {
+      name: "control-only commentary with media and visible siblings",
+      phase: undefined,
+      content: [{ ...keyed, text: "ANNOUNCE_SKIP REPLY_SKIP" }, image, tool, final],
+      text: ["ANNOUNCE_SKIP REPLY_SKIP", "Final reply"],
+      images: 1,
+      tools: 1,
+    },
+    {
+      name: "control-only commentary with transcript media facts",
+      phase: undefined,
+      content: [{ ...keyed, text: "ANNOUNCE_SKIP REPLY_SKIP" }],
+      media: [{ url: "/media/proof.png", contentType: "image/png" }],
+      text: [""],
+      images: 0,
+      tools: 0,
+    },
+    {
+      name: "unkeyed media",
+      phase: "commentary",
+      content: [{ type: "text", text: "Image caption" }, image],
+      text: ["Image caption"],
+      images: 1,
+      tools: 0,
+    },
+    {
+      name: "another commentary group's image",
+      phase: undefined,
+      content: [unkeyed, keyed, image],
+      text: ["Visible progress"],
+      images: 1,
+      tools: 0,
+    },
+    {
+      name: "final-answer media",
+      phase: undefined,
+      content: [unkeyed, final, image],
+      text: ["Final reply"],
+      images: 1,
+      tools: 0,
+    },
+    {
+      name: "inherited phases beside keyed media and a tool",
+      phase: "commentary",
+      content: [
+        { type: "text", text: "Hidden thought" },
+        { type: "text", text: "Visible progress", textSignature: "progress" },
+        image,
+        tool,
+      ],
+      text: ["Visible progress"],
+      images: 1,
+      tools: 1,
+    },
+  ])("keeps visibility scoped to $name", ({ phase, content, text, images, tools, media }) => {
+    const source = {
+      role: "assistant",
+      ...(phase ? { phase } : {}),
+      content,
+      __openclaw: { id: "row-identity", ...(media ? { media } : {}) },
+    };
+    const before = structuredClone(source);
+    const projected = projectChatDisplayMessages([source], { includeCommentaryFallbacks: true });
+    const blocks = projected
+      .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
+      .map(asOptionalRecord);
+    expect(blocks.filter((block) => block?.type === "text").map((block) => block?.text)).toEqual(
+      text,
+    );
+    expect(blocks.filter((block) => block?.type === "image")).toHaveLength(images);
+    expect(blocks.filter((block) => block?.type === "toolCall")).toHaveLength(tools);
+    if (media) {
+      expect(projected).toHaveLength(1);
+      expect(projected[0]).toMatchObject({ __openclaw: { media } });
+    }
+    expect(source).toEqual(before);
+  });
+});
 
 describe("assistant media directive display projection", () => {
   it.each(

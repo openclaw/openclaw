@@ -7,6 +7,7 @@ import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
+  pauseVirtualClock,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -40,7 +41,11 @@ function sessionsResponse() {
 
 async function expectCatalog(pane: Locator, name: string) {
   await expect
-    .poll(() => pane.locator('[data-chat-model-option="example/model"]').textContent())
+    .poll(() =>
+      pane
+        .locator('[data-chat-model-option="example/model"]:not([data-chat-model-runtime])')
+        .textContent(),
+    )
     .toContain(name);
 }
 
@@ -221,38 +226,139 @@ suite.define(() => {
     },
   );
 
-  it("invalidates a shared session once when two split panes receive the same patch", async () => {
-    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-      await seedSharedSessionPanes(page);
-      const gateway = await installMockGateway(page, {
-        sessionKey: sessionKeys[0],
-        models: [model],
-        methodResponses: { "sessions.list": sessionsResponse() },
+  it.each(["patch", "command-metadata"])(
+    "coalesces a burst of %s events without reloading models or auth",
+    async (reason) => {
+      await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+        await seedSharedSessionPanes(page);
+        const runtimeChoice = {
+          agentRuntime: { id: "alternate", source: "model" },
+          available: true,
+        };
+        const metadataModel = { ...model, runtimeChoices: [runtimeChoice] };
+        const gateway = await installMockGateway(page, {
+          sessionKey: sessionKeys[0],
+          models: [model],
+          methodResponses: {
+            "sessions.list": sessionsResponse(),
+            "chat.metadata": { commands: [], models: [metadataModel] },
+            "models.list": {
+              models: [
+                {
+                  ...metadataModel,
+                  manualSelectionAllowed: true,
+                  runtimeChoices: [{ ...runtimeChoice, manualSelectionAllowed: true }],
+                },
+              ],
+            },
+            "sessions.describe": { session: sessionsResponse().sessions[0] },
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKeys[0]));
+        const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
+        await expect.poll(() => panes.count()).toBe(2);
+        await Promise.all([
+          expectCatalog(panes.nth(0), model.name),
+          expectCatalog(panes.nth(1), model.name),
+        ]);
+        await gateway.waitForRequest("models.authStatus");
+        await page.clock.install();
+        await pauseVirtualClock(page);
+        const before = await requestCounts(gateway);
+        const authBefore = (await gateway.getRequests("models.authStatus")).length;
+        // Lineage owns separate key-only describe reads; count this pane's scoped facts.
+        const sessionFacts = () =>
+          gateway.getRequests("sessions.describe", { key: sessionKeys[0], agentId: "main" });
+        const factsBefore = (await sessionFacts()).length;
+        for (let index = 0; index < 5; index++) {
+          await gateway.emitGatewayEvent("sessions.changed", {
+            key: sessionKeys[0],
+            agentId: "main",
+            reason,
+          });
+          await page.clock.runFor(500);
+        }
+        expect.soft(await requestCounts(gateway)).toEqual(before);
+        expect(await sessionFacts()).toHaveLength(factsBefore);
+        await page.clock.runFor(2_500);
+        expect.soft(await requestCounts(gateway)).toEqual({
+          "chat.metadata": before["chat.metadata"] + 1,
+          "models.list": before["models.list"],
+        });
+        expect(await gateway.getRequests("models.authStatus")).toHaveLength(authBefore);
+        expect(await sessionFacts()).toHaveLength(factsBefore + 2);
+        await Promise.all([
+          expectCatalog(panes.nth(0), model.name),
+          expectCatalog(panes.nth(1), model.name),
+        ]);
+
+        await setDocumentVisibility(page, "hidden");
+        const visibleCounts = await requestCounts(gateway);
+        await gateway.emitGatewayEvent("sessions.changed", {
+          key: sessionKeys[0],
+          agentId: "main",
+          reason,
+        });
+        await page.clock.runFor(3_000);
+        expect(await requestCounts(gateway)).toEqual(visibleCounts);
+        expect(await sessionFacts()).toHaveLength(factsBefore + 2);
+        await setDocumentVisibility(page, "visible");
+        await page.clock.runFor(100);
+        expect(await requestCounts(gateway)).toEqual({
+          "chat.metadata": visibleCounts["chat.metadata"] + 1,
+          "models.list": visibleCounts["models.list"],
+        });
+
+        // Metadata still detects unmarked projection changes; explicit selections
+        // carry the owner's hint and must refresh before the debounce elapses.
+        for (const catalogChanged of [false, true]) {
+          const selectedModel = catalogChanged ? { ...model, name: "Selected model" } : freshModel;
+          const accountSelection = {
+            kind: "shared",
+            authProfileId: "fixture:replacement",
+            label: "Replacement account",
+            source: "user",
+          };
+          await gateway.setMethodResponse("chat.metadata", {
+            commands: [],
+            models: [metadataModel],
+            accountSelection,
+          });
+          await gateway.setMethodResponse("models.list", {
+            models: [selectedModel],
+            accountSelection,
+          });
+          const beforeAccount = await requestCounts(gateway);
+          const proof =
+            catalogChanged && reason === "patch" && process.env.OPENCLAW_UI_E2E_RECORD === "1"
+              ? createControlUiE2eArtifactDir("chat-metadata-selection")
+              : undefined;
+          if (proof) {
+            await page.screenshot({ path: path.join(proof, "before.png") });
+          }
+          await gateway.emitGatewayEvent("sessions.changed", {
+            key: sessionKeys[0],
+            agentId: "main",
+            reason,
+            ...(catalogChanged ? { catalogChanged: true } : {}),
+          });
+          await page.clock.runFor(catalogChanged ? 100 : 3_000);
+          await Promise.all([
+            expectCatalog(panes.nth(0), selectedModel.name),
+            expectCatalog(panes.nth(1), selectedModel.name),
+          ]);
+          expect(await requestCounts(gateway)).toEqual({
+            "chat.metadata": beforeAccount["chat.metadata"] + 1,
+            "models.list": beforeAccount["models.list"] + 1,
+          });
+          if (proof) {
+            await page.screenshot({ path: path.join(proof, "after.png") });
+          }
+        }
+        expect(await gateway.getRequests("models.authStatus")).toHaveLength(authBefore);
       });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKeys[0]));
-      const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
-      await expect.poll(() => panes.count()).toBe(2);
-      await Promise.all([
-        expectCatalog(panes.nth(0), model.name),
-        expectCatalog(panes.nth(1), model.name),
-      ]);
-      const before = await requestCounts(gateway);
-      await gateway.setMethodResponse("models.list", { models: [freshModel] });
-      await gateway.emitGatewayEvent("sessions.changed", {
-        key: sessionKeys[0],
-        agentId: "main",
-        reason: "patch",
-      });
-      await Promise.all([
-        expectCatalog(panes.nth(0), freshModel.name),
-        expectCatalog(panes.nth(1), freshModel.name),
-      ]);
-      expect(await requestCounts(gateway)).toEqual({
-        "chat.metadata": before["chat.metadata"] + 1,
-        "models.list": before["models.list"] + 1,
-      });
-    });
-  });
+    },
+  );
 
   it("recovers omitted follower startup commands without duplicating its pending catalog", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {

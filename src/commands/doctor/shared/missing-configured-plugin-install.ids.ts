@@ -17,7 +17,7 @@ import {
 } from "../../../plugins/web-search-install-catalog.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
-import { collectConfiguredRuntimePluginIds } from "./configured-runtime-plugin-installs.js";
+import { collectConfiguredRuntimePluginIds } from "./configured-runtime-plugin-owners.js";
 
 function addConfiguredPluginId(ids: Set<string>, value: unknown): void {
   if (typeof value !== "string") {
@@ -26,12 +26,6 @@ function addConfiguredPluginId(ids: Set<string>, value: unknown): void {
   const pluginId = value.trim();
   if (pluginId) {
     ids.add(pluginId);
-  }
-}
-
-function addConfiguredAgentRuntimePluginIds(ids: Set<string>, cfg: OpenClawConfig): void {
-  for (const runtime of collectConfiguredRuntimePluginIds(cfg)) {
-    addConfiguredPluginId(ids, runtime);
   }
 }
 
@@ -124,7 +118,9 @@ export function collectConfiguredPluginIds(
       ids.add(entry.pluginId);
     }
   }
-  addConfiguredAgentRuntimePluginIds(ids, cfg);
+  for (const pluginId of collectConfiguredRuntimePluginIds(cfg, { env })) {
+    ids.add(pluginId);
+  }
   for (const pluginId of collectConfiguredProviderPluginIds({ cfg, env })) {
     ids.add(pluginId);
   }

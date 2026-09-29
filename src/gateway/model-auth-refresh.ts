@@ -1,5 +1,4 @@
 import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
-import { noteRuntimeAuthProfileStorePersistedMutation } from "../agents/auth-profiles/runtime-snapshots.js";
 import { prepareModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../secrets/runtime.js";
@@ -11,7 +10,6 @@ import { clearModelAuthStatusUsageCache } from "./server-methods/models-auth-sta
 
 export async function refreshModelAuthStateAfterMutation(
   getRuntimeConfig: () => OpenClawConfig,
-  operation: "login" | "logout" | "update",
   agentId: string,
 ): Promise<void> {
   // The first CLI login can move the shared store after this Gateway pinned its owner.
@@ -23,12 +21,6 @@ export async function refreshModelAuthStateAfterMutation(
   if (!scope.ok) {
     throw new Error(modelAuthAgentScopeError(scope).message);
   }
-  // The publication owner coalesces this with in-process credential writes.
-  noteRuntimeAuthProfileStorePersistedMutation(scope.agentDir, {
-    credentialsChanged: true,
-    profileSetChanged: operation !== "update",
-    stateChanged: false,
-    profileIds: [],
-  });
+  // Persistence and secrets activation publish actual auth changes; join that generation.
   await prepareModelRuntimeSnapshot({ config, agentId, agentDir: scope.agentDir });
 }

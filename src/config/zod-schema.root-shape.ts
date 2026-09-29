@@ -44,6 +44,7 @@ export const OpenClawSchemaShape = {
       migrations: z
         .strictObject({
           modelPolicyAllowlist: z.literal(true).optional(),
+          utilityModelSeparation: z.literal(true).optional(),
         })
         .optional(),
     })
@@ -121,6 +122,8 @@ export const OpenClawSchemaShape = {
           z.string().regex(/^[a-z0-9-]+$/, "Profile names must be alphanumeric with hyphens only"),
           z
             .strictObject({
+              /** Browser engine capability preset. Lightpanda is an external, semantic-only CDP service. */
+              engine: z.enum(["chromium", "lightpanda"]).optional(),
               /** CDP port for this profile. Allocated once at creation, persisted permanently. */
               cdpPort: z.number().int().min(1).max(65535).optional(),
               /** CDP/DevTools endpoint URL for this profile (remote CDP or existing-session endpoint attach). */
@@ -166,6 +169,49 @@ export const OpenClawSchemaShape = {
             .refine((value) => value.driver !== "extension" || !value.cdpUrl, {
               message:
                 'Profile cdpUrl is not supported with driver="extension" (the relay owns the endpoint)',
+            })
+            .superRefine((value, ctx) => {
+              if (value.engine !== "lightpanda") {
+                return;
+              }
+              const endpoint = value.cdpUrl ? URL.parse(value.cdpUrl) : null;
+              if (!endpoint || !["ws:", "wss:"].includes(endpoint.protocol)) {
+                ctx.addIssue({
+                  code: "custom",
+                  path: ["cdpUrl"],
+                  message: "Lightpanda requires an explicit ws:// or wss:// CDP endpoint",
+                });
+              }
+              if (value.attachOnly !== true) {
+                ctx.addIssue({
+                  code: "custom",
+                  path: ["attachOnly"],
+                  message: "Lightpanda requires attachOnly: true; OpenClaw does not launch it",
+                });
+              }
+              if (value.driver !== undefined && value.driver !== "openclaw") {
+                ctx.addIssue({
+                  code: "custom",
+                  path: ["driver"],
+                  message: 'Lightpanda requires the default "openclaw" CDP driver',
+                });
+              }
+              for (const key of [
+                "cdpPort",
+                "userDataDir",
+                "mcpCommand",
+                "mcpArgs",
+                "headless",
+                "executablePath",
+              ] as const) {
+                if (value[key] !== undefined) {
+                  ctx.addIssue({
+                    code: "custom",
+                    path: [key],
+                    message: `Lightpanda does not support the profile ${key} setting`,
+                  });
+                }
+              }
             }),
         )
         .optional(),
@@ -189,6 +235,25 @@ export const OpenClawSchemaShape = {
           allowLegacyAuth: z.boolean().optional(),
         })
         .optional(),
+    })
+    .superRefine((value, ctx) => {
+      const endpoints = new Map<string, { name: string; engine?: string }>();
+      for (const [name, profile] of Object.entries(value.profiles ?? {})) {
+        const endpoint = profile.cdpUrl ? URL.parse(profile.cdpUrl) : null;
+        if (!endpoint) {
+          continue;
+        }
+        const key = endpoint.toString().replace(/\/$/, "");
+        const previous = endpoints.get(key);
+        if (previous && (previous.engine === "lightpanda" || profile.engine === "lightpanda")) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["profiles", name, "cdpUrl"],
+            message: `Lightpanda requires a dedicated CDP endpoint; also used by profile "${previous.name}"`,
+          });
+        }
+        endpoints.set(key, { name, engine: profile.engine });
+      }
     })
     .optional(),
   ui: z
@@ -218,7 +283,7 @@ export const OpenClawSchemaShape = {
           themeMode: z
             .union([z.literal("light"), z.literal("dark"), z.literal("system")])
             .optional(),
-          accent: HexColorSchema.startsWith("#").optional(),
+          accent: z.union([z.literal("theme"), HexColorSchema.startsWith("#")]).optional(),
           locale: z.string().max(20).optional(),
           chatShowThinking: z.boolean().optional(),
           chatShowToolCalls: z.boolean().optional(),

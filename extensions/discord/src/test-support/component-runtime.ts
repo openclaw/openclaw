@@ -1,11 +1,8 @@
 // Discord plugin module implements component runtime behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import {
-  parsePluginBindingApprovalCustomId,
-  resolvePinnedMainDmOwnerFromAllowlist,
-} from "openclaw/plugin-sdk/conversation-runtime";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { vi, type Mock } from "vitest";
+import { setDiscordRuntime } from "../runtime.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -94,18 +91,23 @@ async function readChannelIngressStoreAllowFromForDmPolicy(params: {
   return await readAllowFromStoreMock(params.provider, params.accountId);
 }
 
-vi.mock("../monitor/agent-components-helpers.runtime.js", () => {
-  return {
-    readChannelIngressStoreAllowFromForDmPolicy,
-    resolvePinnedMainDmOwnerFromAllowlist,
-    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-  };
-});
+vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-ingress-runtime")>()),
+  readChannelIngressStoreAllowFromForDmPolicy,
+}));
 
-vi.mock("../monitor/agent-components.runtime.js", () => {
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
+  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
+  buildPluginBindingResolvedText: (...args: unknown[]) =>
+    buildPluginBindingResolvedTextMock(...args),
+  resolvePluginConversationBindingApproval: (...args: unknown[]) =>
+    resolvePluginConversationBindingApprovalMock(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
   return {
-    buildPluginBindingResolvedText: (...args: unknown[]) =>
-      buildPluginBindingResolvedTextMock(...args),
+    ...(await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>()),
     createReplyReferencePlanner: vi.fn(
       (params: {
         existingId?: string;
@@ -137,37 +139,26 @@ vi.mock("../monitor/agent-components.runtime.js", () => {
         };
       },
     ),
-    dispatchPluginInteractiveHandler: (...args: unknown[]) =>
-      dispatchPluginInteractiveHandlerMock(...args),
-    dispatchReplyWithBufferedBlockDispatcher: dispatchReplyMock,
     finalizeInboundContext: vi.fn((ctx) => ctx),
-    parsePluginBindingApprovalCustomId,
-    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
     resolveChunkMode: vi.fn(() => "sentences"),
-    resolvePluginConversationBindingApproval: (...args: unknown[]) =>
-      resolvePluginConversationBindingApprovalMock(...args),
     resolveTextChunkLimit: vi.fn(() => 2000),
   };
 });
 
-vi.mock("../interactive-dispatch.js", () => {
-  return {
-    dispatchDiscordPluginInteractiveHandler: (...args: unknown[]) =>
-      dispatchPluginInteractiveHandlerMock(...args),
-  };
-});
+vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>()),
+  enqueueRoutedSystemEvent: (
+    text: unknown,
+    route: { sessionKey: unknown },
+    options: Record<string, unknown>,
+  ) => enqueueSystemEventMock(text, { ...options, sessionKey: route.sessionKey }),
+}));
 
-vi.mock("../monitor/agent-components.deps.runtime.js", () => {
-  return {
-    enqueueRoutedSystemEvent: (
-      text: unknown,
-      route: { sessionKey: unknown },
-      options: Record<string, unknown>,
-    ) => enqueueSystemEventMock(text, { ...options, sessionKey: route.sessionKey }),
-    readSessionUpdatedAt: (...args: unknown[]) => readSessionUpdatedAtMock(...args),
-    resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
-  };
-});
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>()),
+  readSessionUpdatedAt: (...args: unknown[]) => readSessionUpdatedAtMock(...args),
+  resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
+}));
 
 vi.mock("../interactive-dispatch.js", async () => {
   const actual = await vi.importActual<typeof import("../interactive-dispatch.js")>(
@@ -181,6 +172,7 @@ vi.mock("../interactive-dispatch.js", async () => {
 });
 
 export function resetDiscordComponentRuntimeMocks() {
+  setDiscordRuntime(createPluginRuntimeMock());
   dispatchPluginInteractiveHandlerMock.mockReset().mockResolvedValue({
     matched: false,
     handled: false,

@@ -1,13 +1,7 @@
-/**
- * Browser route utility functions.
- *
- * Profile lookup, JSON errors, and route value coercion shared across browser
- * control endpoints.
- */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isLocalManagedProfile } from "../config.js";
 import { BrowserProfileUnavailableError, type BrowserErrorResponse } from "../errors.js";
-import { isManagedOnlyBrowserRequest } from "../request-policy.js";
+import { isManagedOnlyBrowserRequest, resolveRequestedBrowserProfile } from "../request-policy.js";
 import {
   type BrowserRouteContext,
   type ProfileContext,
@@ -16,32 +10,13 @@ import {
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
 
-/**
- * Extract profile name from query string or body and get profile context.
- * Query string takes precedence over body for consistency with GET routes.
- */
 /** Resolve the profile context requested by query/profile parameters. */
 export function getProfileContext(
   req: BrowserRequest,
   ctx: BrowserRouteContext,
 ): ProfileContext | { error: string; status: number } {
-  let profileName: string | undefined;
-
-  // Check query string first (works for GET and POST)
-  if (typeof req.query.profile === "string") {
-    profileName = normalizeOptionalString(req.query.profile);
-  }
-
-  // Fall back to body for POST requests
-  if (!profileName && req.body && typeof req.body === "object") {
-    const body = req.body as Record<string, unknown>;
-    if (typeof body.profile === "string") {
-      profileName = normalizeOptionalString(body.profile);
-    }
-  }
-
   try {
-    const profile = ctx.forProfile(profileName);
+    const profile = ctx.forProfile(resolveRequestedBrowserProfile(req));
     const managedOnly = isManagedOnlyBrowserRequest(req);
     if (managedOnly && !isLocalManagedProfile(profile.profile)) {
       return { error: "This dashboard requires a local managed browser profile", status: 400 };
@@ -95,7 +70,6 @@ export async function runProfileRouteOperation<T>(params: {
   throw new Error("browser profile could not stabilize");
 }
 
-/** Send a simple JSON error response. */
 export function jsonError(res: BrowserResponse, status: number, message: string) {
   res.status(status).json({ error: message });
 }
@@ -104,6 +78,7 @@ export function jsonError(res: BrowserResponse, status: number, message: string)
 export function jsonBrowserError(res: BrowserResponse, error: BrowserErrorResponse) {
   res.status(error.status).json({
     error: error.message,
+    ...(error.code ? { code: error.code } : {}),
     ...("reason" in error ? { reason: error.reason } : {}),
     ...("details" in error ? { details: error.details } : {}),
   });
@@ -149,7 +124,6 @@ export function toBoolean(value: unknown) {
   return undefined;
 }
 
-/** Coerce a route value to a string array when every entry is a string. */
 export function toStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;

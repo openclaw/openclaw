@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
+import type { getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
 import {
   canonicalLobsterLook,
@@ -12,13 +13,7 @@ import { i18n, t } from "../../i18n/index.ts";
 // Page stars must override the shared mini-star rules loaded by lobster-pet-look.
 import "../../styles/lobsterdex.css";
 
-type LobsterdexViewEntry = {
-  firstSeenAt: number | null;
-  name: string | null;
-  shinySeenAt: number | null;
-};
-
-type LobsterdexViewEntries = ReadonlyMap<string, LobsterdexViewEntry>;
+type LobsterdexViewEntries = ReturnType<typeof getLobsterdexEntries>;
 
 export type LobsterdexCopyFeedback = {
   paletteId: LobsterPetPaletteId;
@@ -52,12 +47,15 @@ export function renderLobsterdex(entries: LobsterdexViewEntries, props: Lobsterd
         </div>
         <span class="lobsterdex-page__count">${countLabel}</span>
       </header>
+      <span class="sr-only" role="status">
+        ${props.copyFeedback?.status === "copied" ? t("common.copied") : nothing}
+      </span>
       ${
         props.copyFeedback?.status === "error"
           ? html`<div class="callout danger" role="alert">${t("common.copyFailed")}</div>`
           : nothing
       }
-      <div class="lobsterdex-page__grid" aria-label=${countLabel}>
+      <section class="lobsterdex-page__grid" aria-label=${countLabel}>
         ${LOBSTER_PET_PALETTES.map((palette) => {
           const look = canonicalLobsterLook(palette);
           const entry = entries.get(palette.id);
@@ -130,7 +128,7 @@ export function renderLobsterdex(entries: LobsterdexViewEntries, props: Lobsterd
             </article>
           `;
         })}
-      </div>
+      </section>
     </section>
   `;
 }

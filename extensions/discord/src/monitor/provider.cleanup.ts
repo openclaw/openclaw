@@ -1,4 +1,3 @@
-// Discord provider module implements model/runtime integration.
 import { danger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { MutableDiscordGateway } from "./gateway-handle.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
@@ -10,6 +9,7 @@ type EventEmitterLike = {
 
 export async function cleanupDiscordProviderStartup(params: {
   deactivateMessageHandler?: () => void | Promise<void>;
+  stopMonitorListeners?: () => Promise<void>;
   autoPresenceController?: { stop: () => void } | null;
   setStatus?: DiscordMonitorStatusSink;
   onEarlyGatewayDebug?: ((msg: unknown) => void) | undefined;
@@ -20,23 +20,31 @@ export async function cleanupDiscordProviderStartup(params: {
   threadBindings: ThreadBindingManager;
   runtime: RuntimeEnv;
 }) {
-  await params.deactivateMessageHandler?.();
-  params.autoPresenceController?.stop();
-  params.setStatus?.({ connected: false });
-  if (params.onEarlyGatewayDebug) {
-    params.earlyGatewayEmitter?.removeListener("debug", params.onEarlyGatewayDebug);
-  }
-  if (!params.lifecycleStarted) {
+  try {
+    const listenersStopped = params.stopMonitorListeners?.();
     try {
-      params.lifecycleGateway?.disconnect();
-    } catch (err) {
-      params.runtime.error?.(
-        danger(`discord: failed to disconnect gateway during startup cleanup: ${String(err)}`),
-      );
+      await params.deactivateMessageHandler?.();
+    } finally {
+      await listenersStopped;
     }
-  }
-  params.gatewaySupervisor?.dispose();
-  if (!params.lifecycleStarted) {
-    params.threadBindings.stop();
+    params.autoPresenceController?.stop();
+    params.setStatus?.({ connected: false });
+    if (params.onEarlyGatewayDebug) {
+      params.earlyGatewayEmitter?.removeListener("debug", params.onEarlyGatewayDebug);
+    }
+    if (!params.lifecycleStarted) {
+      try {
+        params.lifecycleGateway?.disconnect();
+      } catch (err) {
+        params.runtime.error?.(
+          danger(`discord: failed to disconnect gateway during startup cleanup: ${String(err)}`),
+        );
+      }
+    }
+    params.gatewaySupervisor?.dispose();
+  } finally {
+    if (!params.lifecycleStarted) {
+      await params.threadBindings.stop();
+    }
   }
 }

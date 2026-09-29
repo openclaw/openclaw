@@ -1,4 +1,4 @@
-// Vitest production spawn boundary config owns one module-mocking suite in a dedicated worker.
+// Real Gateway admission needs the host-only SQLite broker, so this suite uses forked workers.
 import { agentVitestProjectOwners } from "./vitest.agents-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
@@ -13,6 +13,7 @@ export function createAgentsSpawnProductionBoundaryVitestConfig(
     isolate: true,
     name: owner.name,
     passWithNoTests: true,
+    pool: "forks",
     useNonIsolatedRunner: false,
   });
 }

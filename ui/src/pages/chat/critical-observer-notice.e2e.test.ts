@@ -1,639 +1,129 @@
-import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
-import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import {
-  controlUiSessionPath,
-  controlUiSessionUrl,
-  installMockGateway,
-} from "../../test-helpers/control-ui-e2e.ts";
+  activateSelfRemovingControl,
+  waitForPatch,
+} from "../../e2e/session-management.test-support.ts";
+import { controlUiSessionUrl, installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow as sessionRow } from "../../test-helpers/control-ui-session-fixtures.ts";
 
-const suite = createControlUiE2eSuite({
-  name: "Control UI critical observer notice mocked Gateway E2E",
-  unavailableMessage: (executablePath) =>
-    `Playwright Chromium is not installed at ${executablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-});
-
-const artifactDir = path.resolve(
-  process.cwd(),
-  ".artifacts/control-ui-e2e/critical-observer-notice",
-);
+const suite = createControlUiE2eSuite({ name: "Control UI observer notification policy" });
 const selectedSessionKey = "agent:main:main";
-const backgroundSessionKey = "agent:main:other";
-const baseTime = Date.parse("2026-07-25T18:00:00.000Z");
-
-function sessionsListResponse() {
-  return {
-    count: 2,
-    defaults: {
-      contextTokens: null,
-      model: "gpt-5.5",
-      modelProvider: "openai",
-    },
-    path: "",
-    sessions: [
-      {
-        key: selectedSessionKey,
-        kind: "direct",
-        label: "Main session",
-        updatedAt: baseTime,
-      },
-      {
-        key: backgroundSessionKey,
-        kind: "direct",
-        label: "Background investigation",
-        updatedAt: baseTime - 1_000,
-      },
-    ],
-    ts: baseTime,
-  };
-}
-
-function observerDigest(params: {
-  agentId?: string;
-  sessionKey: string;
-  health: "on-track" | "stuck";
-  revision: number;
-  headline: string;
-}) {
-  return {
-    ...params,
-    runId: `observer-run-${params.sessionKey}`,
-    updatedAt: baseTime + params.revision,
-  };
-}
-
-async function waitForToastUpdate(page: Page): Promise<void> {
-  await page.locator("openclaw-toast-host").evaluate(async (element) => {
-    await (element as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
-  });
-}
-
-async function emitObserverAndReadToast(
-  page: Page,
-  payload: ReturnType<typeof observerDigest>,
-  action?: "open" | "dismiss",
-): Promise<{ actionable: boolean | null; message: string; visible: boolean }> {
-  // Toasts auto-dismiss after 6000ms. Keep emit, read, and any action in one browser
-  // step, including the shell's lazy runtime load and the toast host's Lit update.
-  return await page.locator("openclaw-toast-host").evaluate(
-    async (element, params) => {
-      const host = element as HTMLElement & { updateComplete: Promise<unknown> };
-      const app = document.querySelector("openclaw-app-shell") as
-        | (HTMLElement & {
-            criticalNoticeRuntime?: Promise<unknown> | null;
-          })
-        | null;
-      const gateway = (
-        window as Window & {
-          openclawControlUiE2eGateway?: {
-            emit: (event: string, payload?: unknown) => void;
-          };
-        }
-      ).openclawControlUiE2eGateway;
-      if (!app || !gateway) {
-        throw new Error("Critical observer notice owner is unavailable");
-      }
-
-      gateway.emit("session.observer", params.payload);
-      const runtime = app.criticalNoticeRuntime;
-      if (!runtime) {
-        throw new Error("Critical observer notice runtime did not start");
-      }
-      await runtime;
-      await host.updateComplete;
-
-      const toast = host.querySelector<HTMLElement>(".app-toast");
-      const isVisible = (target: HTMLElement | null): target is HTMLElement => {
-        if (!target?.isConnected) {
-          return false;
-        }
-        const style = getComputedStyle(target);
-        const bounds = target.getBoundingClientRect();
-        return (
-          style.display !== "none" &&
-          style.visibility !== "hidden" &&
-          bounds.width > 0 &&
-          bounds.height > 0
-        );
-      };
-      const visible = isVisible(toast);
-      let actionable: boolean | null = null;
-      const result = () => ({
-        actionable,
-        message: toast?.querySelector(".app-toast__message")?.textContent ?? "",
-        visible,
-      });
-      if (params.action) {
-        const selector = params.action === "open" ? ".app-toast__action" : ".app-toast__dismiss";
-        const button = toast?.querySelector<HTMLButtonElement>(selector);
-        if (!button) {
-          throw new Error(`Toast ${params.action} action is unavailable`);
-        }
-        const bounds = button.getBoundingClientRect();
-        const hitTarget = document.elementFromPoint(
-          bounds.left + bounds.width / 2,
-          bounds.top + bounds.height / 2,
-        );
-        actionable =
-          visible &&
-          isVisible(button) &&
-          !button.disabled &&
-          Boolean(hitTarget && (hitTarget === button || button.contains(hitTarget)));
-        if (!actionable) {
-          return result();
-        }
-        button.click();
-        await host.updateComplete;
-      }
-      return result();
-    },
-    { action, payload },
-  );
-}
+const backgroundSessionKey = "agent:main:verification";
+const runId = "verification-run";
+const baseTime = Date.parse("2026-09-18T05:00:00.000Z");
 
 suite.define(() => {
-  it("keeps a critical notice above a shadow-root modal through nested overlay hides", async () => {
+  it("keeps background observer assessments in the sidebar without interrupting chat or replacing Undo", async () => {
     await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
       async ({ page }) => {
-        await installMockGateway(page, {
-          historyMessages: [
-            {
-              content: [{ type: "text", text: "Selected session A is ready." }],
-              role: "assistant",
-              timestamp: baseTime,
-            },
-          ],
-          methodResponses: {
-            "sessions.list": sessionsListResponse(),
+        const main = sessionRow(selectedSessionKey, "Main", baseTime);
+        const background = sessionRow(
+          backgroundSessionKey,
+          "Background verification",
+          baseTime - 1,
+          {
+            hasActiveRun: true,
+            activeRunIds: [runId],
+            status: "running",
           },
-          sessionKey: selectedSessionKey,
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
-        await page.getByText("Selected session A is ready.").waitFor({ state: "visible" });
-
-        await page.evaluate(() => {
-          const owner = document.createElement("div");
-          owner.id = "toast-shadow-owner";
-          const modal = document.createElement("openclaw-modal-dialog");
-          modal.label = "Shadow modal";
-          const content = document.createElement("button");
-          content.textContent = "Modal action";
-          modal.append(content);
-          owner.attachShadow({ mode: "open" }).append(modal);
-          document.body.append(owner);
-        });
-        const modal = page.locator("#toast-shadow-owner").locator("openclaw-modal-dialog");
-        await page.getByRole("dialog", { name: "Shadow modal" }).waitFor({ state: "visible" });
-
-        const headline = "Shadow-root session needs attention";
-        const result = await emitObserverAndReadToast(
-          page,
-          observerDigest({
-            sessionKey: backgroundSessionKey,
-            health: "stuck",
-            headline,
-            revision: 1,
-          }),
         );
-        expect(result.visible).toBe(true);
-        expect(result.message).toContain(headline);
-
-        const host = modal.locator(":scope > openclaw-toast-host");
-        await expect.poll(() => host.count()).toBe(1);
-        await modal.evaluate((element) => {
-          const nestedOverlay = document.createElement("div");
-          element.append(nestedOverlay);
-          nestedOverlay.dispatchEvent(
-            new CustomEvent("wa-after-hide", { bubbles: true, composed: true }),
-          );
-          nestedOverlay.remove();
-        });
-        await expect.poll(() => host.count()).toBe(1);
-        await host.locator(".app-toast__action").click({ trial: true });
-
-        await modal.evaluate((element) => (element as HTMLElement & { hide: () => void }).hide());
-        const appToast = page.locator(".shell > openclaw-toast-host .app-toast");
-        await expect.poll(() => appToast.textContent()).toContain(headline);
-        await appToast.getByRole("button", { name: "Dismiss" }).click();
-      },
-    );
-  });
-
-  it("announces critical background sessions, navigates, and dedupes after dismissal", async () => {
-    await rm(artifactDir, { force: true, recursive: true });
-    await mkdir(artifactDir, { recursive: true });
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
+        const archived = sessionRow("agent:main:completed", "Completed work", baseTime - 2);
         const gateway = await installMockGateway(page, {
           historyMessages: [
             {
-              content: [{ type: "text", text: "Selected session A is ready." }],
               role: "assistant",
-              timestamp: baseTime,
+              content: [{ type: "text", text: "Your current conversation stays uninterrupted." }],
             },
           ],
-          methodResponses: {
-            "sessions.list": sessionsListResponse(),
-          },
+          sessions: [main, background, archived],
+          sessionArchiveFiltering: true,
           sessionKey: selectedSessionKey,
         });
-
-        const response = await page.goto(
-          controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey),
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
+        await page.getByText("Your current conversation stays uninterrupted.").waitFor();
+        const currentUrl = page.url();
+        const row = page.locator(
+          `.sidebar-recent-session[data-session-key="${backgroundSessionKey}"]`,
         );
-        expect(response?.status()).toBe(200);
-        await page.getByText("Selected session A is ready.").waitFor({ state: "visible" });
-        expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(selectedSessionKey));
-
-        const toast = page.locator(".app-toast");
-        await gateway.emitGatewayEvent(
-          "session.observer",
-          observerDigest({
-            sessionKey: backgroundSessionKey,
-            health: "on-track",
-            headline: "Background session is healthy",
-            revision: 1,
-          }),
-        );
-        await waitForToastUpdate(page);
-        expect(await toast.count()).toBe(0);
-
-        await gateway.emitGatewayEvent(
-          "session.observer",
-          observerDigest({
-            sessionKey: selectedSessionKey,
-            health: "stuck",
-            headline: "Selected session needs attention",
-            revision: 1,
-          }),
-        );
-        await waitForToastUpdate(page);
-        expect(await toast.count()).toBe(0);
-
-        const firstHeadline = "Background verification is stuck";
-        const firstToast = await emitObserverAndReadToast(
-          page,
-          observerDigest({
-            sessionKey: backgroundSessionKey,
-            health: "stuck",
-            headline: firstHeadline,
-            revision: 2,
-          }),
-          "open",
-        );
-        expect(firstToast.visible).toBe(true);
-        expect(firstToast.actionable).toBe(true);
-        expect(firstToast.message).toContain(firstHeadline);
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "01-critical-background-session.png"),
+        await row.waitFor({ state: "visible" });
+        await gateway.waitForRequest("sessions.messages.subscribe", {
+          match: { key: backgroundSessionKey },
         });
 
-        await expect
-          .poll(() => new URL(page.url()).pathname)
-          .toBe(controlUiSessionPath(backgroundSessionKey));
-        expect(await toast.count()).toBe(0);
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "02-after-open-thread-navigation.png"),
-        });
-
-        await page.locator("a.nav-item--home").click();
-        await expect
-          .poll(() => new URL(page.url()).pathname)
-          .toBe(controlUiSessionPath(selectedSessionKey));
-
-        await gateway.emitGatewayEvent(
-          "session.observer",
-          observerDigest({
-            sessionKey: backgroundSessionKey,
-            health: "on-track",
-            headline: "Background verification recovered",
-            revision: 3,
-          }),
-        );
-        await waitForToastUpdate(page);
-        expect(await toast.count()).toBe(0);
-
-        const dismissToast = await emitObserverAndReadToast(
-          page,
-          observerDigest({
-            sessionKey: backgroundSessionKey,
-            health: "stuck",
-            headline: "Background verification is stuck again",
-            revision: 4,
-          }),
-          "dismiss",
-        );
-        expect(dismissToast.visible).toBe(true);
-        expect(dismissToast.actionable).toBe(true);
-        expect(await toast.count()).toBe(0);
-
-        await gateway.emitGatewayEvent(
-          "session.observer",
-          observerDigest({
-            sessionKey: backgroundSessionKey,
-            health: "stuck",
-            headline: "Repeated stuck update remains deduped",
-            revision: 5,
-          }),
-        );
-        await waitForToastUpdate(page);
-        expect(await toast.count()).toBe(0);
-      },
-    );
-  });
-
-  it("announces after /clear, dedupes reconnects, and notices a missed reset", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
-        const sessionId = "observer-background-session";
-        const readyText = "The session is ready to clear.";
-        const roster = sessionsListResponse();
-        for (const row of roster.sessions) {
-          if (row.key === backgroundSessionKey) {
-            Object.assign(row, { sessionId });
+        // Record transient notices too, so an auto-dismiss cannot turn an unwanted alert into a pass.
+        const observerNotices = await page.evaluateHandle(() => {
+          const messages: string[] = [];
+          const host = document.querySelector("openclaw-toast-host");
+          if (!host) {
+            throw new Error("Shared toast host is unavailable");
           }
-        }
-        const gateway = await installMockGateway(page, {
-          deferredMethods: ["sessions.reset"],
-          historyMessages: [
-            {
-              content: [{ type: "text", text: readyText }],
-              role: "assistant",
-              timestamp: baseTime,
-            },
-          ],
-          methodResponses: { "sessions.list": roster },
-          sessionKey: selectedSessionKey,
-        });
-        const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
-        const waitForPane = async (sessionKey: string) => {
-          await expect
-            .poll(() => new URL(page.url()).pathname)
-            .toBe(controlUiSessionPath(sessionKey));
-          await expect
-            .poll(() =>
-              pane.evaluate((element, key) => {
-                const state = (
-                  element as HTMLElement & {
-                    state?: { sessionKey: string; connected: boolean; chatLoading: boolean };
-                  }
-                ).state;
-                return state?.sessionKey === key && state.connected && !state.chatLoading;
-              }, sessionKey),
-            )
-            .toBe(true);
-          await pane.evaluate(async (element) => {
-            await (element as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
+          const observer = new MutationObserver(() => {
+            const message = host.querySelector(".app-toast__message")?.textContent;
+            if (message) {
+              messages.push(message);
+            }
           });
-        };
+          observer.observe(host, { childList: true, subtree: true, characterData: true });
+          return messages;
+        });
 
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
-        await waitForPane(selectedSessionKey);
-        await pane.getByText(readyText, { exact: true }).waitFor({ state: "visible" });
-
-        const beforeResetDigest = {
-          ...observerDigest({
+        const emit = async (
+          health: "stuck" | "waiting-on-user" | "on-track",
+          revision: number,
+          headline: string,
+        ) => {
+          await gateway.emitGatewayEvent("session.observer", {
             sessionKey: backgroundSessionKey,
-            health: "stuck",
-            headline: "Background work needs attention before clear",
-            revision: 10,
-          }),
-          sessionId,
-          lifecycleRevision: "before-clear",
+            agentId: "main",
+            sessionId: background.sessionId,
+            runId,
+            health,
+            revision,
+            headline,
+            updatedAt: baseTime + revision,
+          });
+          await expect.poll(() => row.textContent()).toContain(headline);
+          // Include the old lazy notification chunk in the baseline observation.
+          await page.waitForLoadState("networkidle");
         };
-        const beforeReset = await emitObserverAndReadToast(page, beforeResetDigest, "open");
-        expect(beforeReset.visible).toBe(true);
-        expect(beforeReset.actionable).toBe(true);
-        expect(beforeReset.message).toContain(beforeResetDigest.headline);
-        await waitForPane(backgroundSessionKey);
-        await pane.getByText(readyText, { exact: true }).waitFor({ state: "visible" });
 
-        const historyBefore = await gateway.getRequests("chat.history", {
-          sessionKey: backgroundSessionKey,
-        });
-        const textarea = pane.locator(".agent-chat__composer-combobox textarea");
-        await textarea.fill("/clear");
-        await expect
-          .poll(() =>
-            pane.evaluate(
-              (element) =>
-                (element as HTMLElement & { state: { chatMessage: string } }).state.chatMessage,
-            ),
-          )
-          .toBe("/clear");
-        await textarea.press("Escape");
-        await textarea.press("Enter");
-        const reset = await gateway.waitForRequest("sessions.reset");
-        expect(reset.params).toMatchObject({ key: backgroundSessionKey });
-        expect(await gateway.getRequests("sessions.reset")).toHaveLength(1);
-        await gateway.setHistoryMessages([]);
-        await gateway.resolveDeferred("sessions.reset", { ok: true });
-        await gateway.waitForRequest("chat.history", {
-          after: historyBefore.length,
-          match: { sessionKey: backgroundSessionKey },
-        });
-        await pane.getByText(readyText, { exact: true }).waitFor({ state: "hidden" });
-        await waitForPane(backgroundSessionKey);
+        await emit("stuck", 1, "Verification is waiting for a repair");
+        await page.screenshot({ path: path.join(suite.artifactDir, "observer-assessment.png") });
+        expect(await page.locator(".app-toast").count()).toBe(0);
+        await emit("waiting-on-user", 2, "A decision is needed in the background session");
+        expect(await page.locator(".app-toast").count()).toBe(0);
+        expect(await observerNotices.jsonValue()).toEqual([]);
+        expect(page.url()).toBe(currentUrl);
 
-        await page.locator("a.nav-item--home").click();
-        await waitForPane(selectedSessionKey);
-        const afterResetDigest = {
-          ...observerDigest({
-            sessionKey: backgroundSessionKey,
-            health: "stuck",
-            headline: "Background work needs attention after clear",
-            revision: 1,
-          }),
-          sessionId,
-          lifecycleRevision: "after-clear",
-          runId: "observer-run-after-clear",
-        };
-        const afterReset = await emitObserverAndReadToast(page, afterResetDigest, "dismiss");
-        expect(afterReset.visible).toBe(true);
-        expect(afterReset.actionable).toBe(true);
-        expect(afterReset.message).toContain(afterResetDigest.headline);
-
-        const connectBefore = (await gateway.getRequests("connect")).length;
-        await gateway.closeLatest(1012, "observer notice reconnect");
-        await gateway.waitForRequest("connect", { after: connectBefore });
-        await waitForPane(selectedSessionKey);
-        const replay = await emitObserverAndReadToast(page, { ...afterResetDigest });
-        expect(replay.visible).toBe(false);
-        const continued = await emitObserverAndReadToast(page, {
-          ...afterResetDigest,
-          revision: 2,
-          updatedAt: baseTime + 12,
-        });
-        expect(continued.visible).toBe(false);
-
-        // The browser receives no reset notification before this new lifecycle digest.
-        const missedResetDigest = {
-          ...afterResetDigest,
-          lifecycleRevision: "after-missed-clear",
-          runId: "observer-run-after-missed-clear",
-          revision: 3,
-          updatedAt: baseTime + 13,
-        };
-        const missedReset = await emitObserverAndReadToast(page, missedResetDigest, "dismiss");
-        expect(missedReset.visible).toBe(true);
-        expect(missedReset.actionable).toBe(true);
-        expect(await gateway.getRequests("sessions.reset")).toHaveLength(1);
-      },
-    );
-  });
-
-  it.each([
-    {
-      name: "suppresses the configured selected-agent foreground alias",
-      agentId: "work",
-      sessionKey: "agent:work:primary",
-      visible: false,
-    },
-    {
-      name: "suppresses the canonical selected-agent global foreground",
-      agentId: "work",
-      sessionKey: "global",
-      visible: false,
-    },
-    {
-      name: "announces a genuine selected-agent background session",
-      agentId: "work",
-      sessionKey: "agent:work:investigation",
-      visible: true,
-    },
-    {
-      name: "announces a genuine other-agent configured-main session",
-      agentId: "other",
-      sessionKey: "agent:other:primary",
-      visible: true,
-    },
-  ])("mocked-Gateway Chromium configured-global alias: $name", async (testCase) => {
-    const historyMessages = [
-      {
-        content: [{ type: "text", text: "Configured global foreground is ready." }],
-        role: "assistant",
-        timestamp: baseTime,
-      },
-    ];
-    const agentsList = {
-      agents: [
-        { id: "work", identity: { name: "Work" }, name: "Work" },
-        { id: "other", identity: { name: "Other" }, name: "Other" },
-      ],
-      defaultId: "work",
-      mainKey: "primary",
-      scope: "global",
-    };
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          assistantAgentId: "work",
-          defaultAgentId: "work",
-          historyMessages,
-          methodResponses: {
-            "agents.list": agentsList,
-            "chat.startup": {
-              agentsList,
-              messages: historyMessages,
-              metadata: {
-                models: [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
-              },
-              sessionId: "configured-global-observer-session",
-              thinkingLevel: null,
-            },
-            "sessions.list": {
-              count: 3,
-              defaults: {
-                contextTokens: null,
-                model: "gpt-5.5",
-                modelProvider: "openai",
-              },
-              path: "",
-              sessions: [
-                {
-                  key: "global",
-                  kind: "global",
-                  label: "Configured global foreground",
-                  updatedAt: baseTime,
-                },
-                {
-                  key: "agent:work:investigation",
-                  kind: "direct",
-                  label: "Selected-agent background investigation",
-                  updatedAt: baseTime - 1_000,
-                },
-                {
-                  key: "agent:other:primary",
-                  kind: "direct",
-                  label: "Other-agent configured main",
-                  updatedAt: baseTime - 2_000,
-                },
-              ],
-              ts: baseTime,
-            },
-          },
-          sessionKey: "global",
-          sessionScope: "global",
-        });
-
-        const response = await page.goto(
-          controlUiSessionUrl(suite.server.baseUrl, "agent:work:main"),
+        const archiveRow = page.locator(
+          `.sidebar-recent-session[data-session-key="${archived.key}"]`,
         );
-        expect(response?.status()).toBe(200);
-        await page
-          .getByText("Configured global foreground is ready.")
-          .waitFor({ state: "visible" });
-        expect(new URL(page.url()).pathname).toBe("/chat/work");
-        expect(await gateway.getRequests("connect")).toHaveLength(1);
-        expect(await gateway.getRequests("chat.startup")).toEqual([
-          expect.objectContaining({
-            params: expect.objectContaining({ sessionKey: "agent:work:primary", agentId: "work" }),
-          }),
-        ]);
-
-        const headline = `Configured-global observer notice for ${testCase.sessionKey}`;
-        const digest = observerDigest({
-          agentId: testCase.agentId,
-          sessionKey: testCase.sessionKey,
-          health: "stuck",
-          headline,
-          revision: 1,
-        });
-
+        await archiveRow.hover();
+        await archiveRow.click({ button: "right" });
+        await activateSelfRemovingControl(
+          page.getByRole("menuitem", { name: "Archive session", exact: true }),
+        );
+        await waitForPatch(
+          gateway,
+          (params) => params.key === archived.key && params.archived === true,
+        );
         const toast = page.locator(".app-toast");
-        if (testCase.visible) {
-          const toastState = await emitObserverAndReadToast(page, digest);
-          expect(toastState.visible).toBe(true);
-          expect(toastState.message).toContain(headline);
-        } else {
-          await gateway.emitGatewayEvent("session.observer", digest);
-          await waitForToastUpdate(page);
-          expect(await toast.count()).toBe(0);
-        }
+        const undo = toast.getByRole("button", { name: "Undo", exact: true });
+        await undo.waitFor({ state: "visible" });
+        await undo.focus();
+        await emit("stuck", 3, "Background verification still needs a repair");
+        expect(await toast.textContent()).toContain("Session archived");
+        await page.screenshot({ path: path.join(suite.artifactDir, "undo-preserved.png") });
+        await undo.click();
+        await waitForPatch(
+          gateway,
+          (params) => params.key === archived.key && params.archived === false,
+        );
+        await archiveRow.waitFor({ state: "visible" });
+        expect(page.url()).toBe(currentUrl);
       },
     );
   });

@@ -11,6 +11,7 @@ import {
   logRejectedLargePayload,
   parseContentLengthHeader,
 } from "../logging/diagnostic-payload.js";
+import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import type { GatewayAuthResult } from "./auth.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
 import { readJsonBody } from "./hooks.js";
@@ -38,21 +39,31 @@ export function setDefaultSecurityHeaders(
   }
 }
 
+/** Prepare an unsent error response; committed responses can only be closed. */
+export function prepareGatewayHttpErrorResponse(
+  res: ServerResponse,
+  statusMessage: string,
+): boolean {
+  if (res.destroyed || res.writableEnded) {
+    return false;
+  }
+  if (res.headersSent) {
+    // Ending would frame a partial chunked body as a complete successful response.
+    res.destroy();
+    return false;
+  }
+  clearHttpResponseRepresentationHeaders(res);
+  res.removeHeader("Content-Length");
+  res.setHeader("Cache-Control", "no-store");
+  res.statusMessage = statusMessage;
+  return true;
+}
+
 /** Finish a failed request without rewriting committed headers or orphaning its transport. */
 export function finishFailedGatewayHttpResponse(res: ServerResponse): void {
-  if (res.destroyed || res.writableEnded) {
-    return;
-  }
-  if (!res.headersSent) {
-    clearHttpResponseRepresentationHeaders(res);
-    res.setHeader("Cache-Control", "no-store");
-    res.statusMessage = "Internal Server Error";
+  if (prepareGatewayHttpErrorResponse(res, "Internal Server Error")) {
     respondPlainText(res, 500, res.statusMessage);
-    return;
   }
-
-  // Ending would frame a partial chunked body as a complete successful response.
-  res.destroy();
 }
 
 export function sendJson(res: ServerResponse, status: number, body: unknown) {
@@ -67,6 +78,10 @@ export function sendMethodNotAllowed(res: ServerResponse, allow = "POST") {
 }
 
 export function sendUnauthorized(res: ServerResponse) {
+  if (!prepareGatewayHttpErrorResponse(res, "Unauthorized")) {
+    return;
+  }
+  res.removeHeader("Set-Cookie");
   sendJson(res, 401, {
     error: { message: "Unauthorized", type: "unauthorized" },
   });
@@ -125,7 +140,8 @@ export function parseGatewayJsonRequest<T extends z.ZodType>(
   return undefined;
 }
 
-function buildMissingScopeForbiddenBody(
+export function sendMissingScopeForbidden(
+  res: ServerResponse,
   missingScope: string | undefined,
   requiredScopes?: readonly string[],
 ) {
@@ -136,22 +152,14 @@ function buildMissingScopeForbiddenBody(
           requiredScopes: requiredScopes ?? [missingScope],
         })
       : undefined;
-  return {
+  sendJson(res, 403, {
     ok: false,
     error: {
       type: "forbidden",
       message: `missing scope: ${missingScope}`,
       ...(details ? { details } : {}),
     },
-  };
-}
-
-export function sendMissingScopeForbidden(
-  res: ServerResponse,
-  missingScope: string | undefined,
-  requiredScopes?: readonly string[],
-) {
-  sendJson(res, 403, buildMissingScopeForbiddenBody(missingScope, requiredScopes));
+  });
 }
 
 export async function readJsonBodyOrError(
@@ -206,6 +214,19 @@ export function setSseHeaders(res: ServerResponse) {
   res.flushHeaders?.();
 }
 
+/** Deferred delivery retains request admission independently of agent settlement. */
+export function retainGatewayHttpResponseWork(res: ServerResponse): () => void {
+  const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
+  const release = () => {
+    res.off("finish", release);
+    res.off("close", release);
+    releaseRootWork?.();
+  };
+  res.once("finish", release);
+  res.once("close", release);
+  return release;
+}
+
 /** Abort reason used when the HTTP client disconnects before delivery. */
 class ClientDisconnectError extends Error {
   constructor(message = "HTTP client disconnected") {
@@ -243,15 +264,19 @@ export function watchClientDisconnect(
       abortController.abort(new ClientDisconnectError());
     }
   };
-  const stopWatchingResponseErrors = () => {
-    stopWatchingDisconnect();
+  const handleResponseClose = () => {
     res.off("error", handleClose);
-    res.off("close", stopWatchingResponseErrors);
+    if (!res.writableFinished) {
+      handleClose();
+      return;
+    }
+    stopWatchingDisconnect();
   };
   // Completed responses release socket watchers; keep response errors handled
-  // until close so a failed flush cannot become process-fatal.
+  // until close so a failed flush cannot become process-fatal. Some compatible
+  // runtimes publish only the response close when a client disconnects.
   res.on("error", handleClose);
-  res.once("close", stopWatchingResponseErrors);
+  res.once("close", handleResponseClose);
   res.once("finish", stopWatchingDisconnect);
   if (res.destroyed || sockets.some((socket) => socket.destroyed)) {
     handleClose();

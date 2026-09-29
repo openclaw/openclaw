@@ -25,6 +25,8 @@ The pages below are the deep end: the trust model, what the audit checks, and ho
   users or hosts.
 </Note>
 
+Agents with message-tool access can send across conversations and channel providers by default. If your deployment needs messaging confined to the current provider or conversation, configure [cross-provider messaging restrictions](/gateway/security/tool-permissions#cross-provider-messaging).
+
 ## Security pages
 
 Understand the model:

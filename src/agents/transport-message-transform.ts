@@ -9,6 +9,11 @@ import {
   isReasoningOnlyLengthAssistantTurn,
   resolveFailedAssistantReplay,
 } from "@openclaw/ai/internal/shared";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isSyntheticMissingToolResult,
+  SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
+} from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import type { Api, Context, Model } from "../llm/types.js";
 import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 
@@ -69,10 +74,29 @@ export function transformTransportMessages(
       return msg;
     }
     if (msg.role === "toolResult") {
+      // Earlier history repair may already have paired this call. Apply the same
+      // transport placeholder without rewriting persisted diagnostics or real output.
+      const normalizeRepairText =
+        isSyntheticMissingToolResult(msg) &&
+        (msg.content.length !== 1 ||
+          msg.content[0]?.type !== "text" ||
+          msg.content[0].text !== syntheticToolResultText);
+      const result = normalizeRepairText
+        ? {
+            ...msg,
+            content: [{ type: "text" as const, text: syntheticToolResultText }],
+            // Legacy placeholders were identified by prose alone. Preserve their
+            // provenance so pairing can still replace them with a later real result.
+            details: {
+              ...(isRecord(msg.details) ? msg.details : {}),
+              [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true,
+            },
+          }
+        : msg;
       const normalizedId = toolCallIdMap.get(msg.toolCallId);
       return normalizedId && normalizedId !== msg.toolCallId
-        ? { ...msg, toolCallId: normalizedId }
-        : msg;
+        ? { ...result, toolCallId: normalizedId }
+        : result;
     }
     if (msg.role !== "assistant") {
       return msg;

@@ -43,10 +43,8 @@ const ConfigApplyLikeParamProperties = {
   restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
 } as const;
 
-const ConfigApplyLikeParamsSchema = closedObject(ConfigApplyLikeParamProperties);
-
 /** Raw config apply request that may schedule a restart. */
-export const ConfigApplyParamsSchema = ConfigApplyLikeParamsSchema;
+export const ConfigApplyParamsSchema = closedObject(ConfigApplyLikeParamProperties);
 /** Raw config patch request that may schedule a restart. */
 export const ConfigPatchParamsSchema = closedObject({
   ...ConfigApplyLikeParamProperties,
@@ -79,12 +77,15 @@ export const UpdateAvailableSchema = closedObject({
   currentSha: Type.Optional(NonEmptyString),
   upstreamRef: Type.Optional(NonEmptyString),
   upstreamSha: Type.Optional(NonEmptyString),
+  repositoryUrl: Type.Optional(NonEmptyString),
   commitsBehind: Type.Optional(Type.Integer({ minimum: 0 })),
   commits: Type.Optional(Type.Array(UpdateCommitSchema, { maxItems: 5 })),
 });
 
 const GitInstallMetadataProperties = {
   currentSha: Type.Optional(NonEmptyString),
+  upstreamSha: Type.Optional(NonEmptyString),
+  repositoryUrl: Type.Optional(NonEmptyString),
   commitAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   installedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
 } as const;
@@ -271,6 +272,16 @@ const ConfigUiHintSchema = closedObject({
   docsUrl: Type.Optional(Type.String()),
   tags: Type.Optional(Type.Array(Type.String())),
   group: Type.Optional(Type.String()),
+  groups: Type.Optional(
+    Type.Array(
+      closedObject({
+        id: NonEmptyString,
+        title: NonEmptyString,
+        order: Type.Optional(Type.Integer()),
+        properties: Type.Array(NonEmptyString),
+      }),
+    ),
+  ),
   order: Type.Optional(Type.Integer()),
   advanced: Type.Optional(Type.Boolean()),
   sensitive: Type.Optional(Type.Boolean()),

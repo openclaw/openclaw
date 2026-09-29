@@ -75,13 +75,9 @@ export function resolvePluginLoadDiscovery(params: {
         .map(([pluginId]) => pluginId),
     ),
     // Partial snapshots should only warn about plugins intentionally in scope.
-    discoverablePlugins: manifestRegistry.plugins
-      .filter((plugin) => !params.onlyPluginIdSet || params.onlyPluginIdSet.has(plugin.id))
-      .map((plugin) => ({
-        id: plugin.id,
-        source: plugin.source,
-        origin: plugin.origin,
-      })),
+    discoverablePlugins: manifestRegistry.plugins.filter(
+      (plugin) => !params.onlyPluginIdSet || params.onlyPluginIdSet.has(plugin.id),
+    ),
   });
   const provenance = buildProvenanceIndex({
     normalizedLoadPaths: context.normalized.loadPaths,

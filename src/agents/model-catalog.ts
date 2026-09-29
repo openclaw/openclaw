@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
+import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -17,10 +18,11 @@ import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runt
 import { createLazyPromise } from "../shared/lazy-promise.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
-import { normalizeCatalogRouteBaseUrl, overlayCatalogMetadata } from "./model-catalog-metadata.js";
+import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import { assignProviderModelOrder, compareModelCatalogEntries } from "./model-catalog-order.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
 import { createConfiguredProviderCatalogModelIdNormalizer } from "./model-ref-shared.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
@@ -28,11 +30,7 @@ import type { AuthStorageData, ModelRegistry } from "./sessions/index.js";
 
 const log = createSubsystemLogger("model-catalog");
 
-export type {
-  ModelCatalogEntry,
-  ModelCatalogSnapshot,
-  ModelInputType,
-} from "./model-catalog.types.js";
+export type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 export {
   findModelCatalogEntry,
   findModelInCatalog,
@@ -151,17 +149,58 @@ function mergeCatalogRouteVariants(
 function createModelCatalogSnapshot(
   entries: ModelCatalogEntry[],
   routeVariants: ModelCatalogRouteVariantCollector,
+  providerOutcomes?: ModelCatalogSnapshot["providerOutcomes"],
 ): ModelCatalogSnapshot {
   return {
-    entries: sortModelCatalogEntries(entries),
-    routeVariants: sortModelCatalogEntries(routeVariants.entries),
+    entries: sortModelCatalogEntries(applyReadyCatalogModelOrder(entries, providerOutcomes)),
+    routeVariants: sortModelCatalogEntries(
+      applyReadyCatalogModelOrder(routeVariants.entries, providerOutcomes),
+    ),
   };
+}
+
+function applyReadyCatalogModelOrder(
+  entries: ModelCatalogEntry[],
+  outcomes?: ModelCatalogSnapshot["providerOutcomes"],
+): ModelCatalogEntry[] {
+  const keyOf = createModelCatalogIdentityKeyResolver();
+  const orders = new Map<string, Map<string, number>>();
+  for (const outcome of outcomes ?? []) {
+    if (outcome.status !== "ready" || !outcome.modelOrder?.length) {
+      continue;
+    }
+    const provider = normalizeProviderId(outcome.provider);
+    const order = new Map<string, number>();
+    for (const id of outcome.modelOrder) {
+      const key = keyOf({ provider, id });
+      if (!order.has(key)) {
+        order.set(key, order.size);
+      }
+    }
+    orders.set(provider, order);
+  }
+  if (orders.size === 0) {
+    return entries;
+  }
+  return entries.map((entry) => {
+    const order = orders.get(normalizeProviderId(entry.provider));
+    if (!order) {
+      return entry;
+    }
+    const rank = order.get(keyOf(entry));
+    return {
+      ...entry,
+      providerOrder:
+        rank ?? (entry.providerOrder === undefined ? undefined : order.size + entry.providerOrder),
+    };
+  });
 }
 
 function resolveEligibleManifestCatalogPlugins(
   snapshot: PluginMetadataSnapshot,
   config: OpenClawConfig,
 ): PluginMetadataSnapshot["plugins"] {
+  let normalizedConfig: NormalizedPluginsConfig | undefined;
   return snapshot.plugins.filter(
     (plugin) =>
       plugin.modelCatalog &&
@@ -169,6 +208,8 @@ function resolveEligibleManifestCatalogPlugins(
         snapshot,
         plugin,
         config,
+        normalizedConfig:
+          config.plugins && (normalizedConfig ??= normalizePluginsConfig(config.plugins)),
       }),
   );
 }
@@ -199,6 +240,25 @@ export function loadManifestModelCatalog(params: {
           allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
         }));
   return resolvedSnapshot ? loadManifestModelCatalogRows(params.config, resolvedSnapshot) : [];
+}
+
+/** Overlays configured capabilities on a copy of the captured catalog. */
+export function overlayConfiguredModelCatalog(params: {
+  catalog: readonly ModelCatalogEntry[];
+  config: OpenClawConfig;
+  workspaceDir?: string;
+}): ModelCatalogEntry[] {
+  const models = params.config.models?.mode === "replace" ? [] : [...params.catalog];
+  mergeCatalogEntries(
+    models,
+    buildConfiguredModelCatalog({
+      cfg: params.config,
+      catalog: models,
+      workspaceDir: params.workspaceDir,
+    }),
+    { preserveBaseCompat: true },
+  );
+  return models;
 }
 
 function loadManifestModelCatalogRows(
@@ -472,7 +532,7 @@ export async function buildPreparedModelCatalogSnapshot(
     }
     logStage("configured-models-finalized", `entries=${models.length}`);
 
-    const snapshot = createModelCatalogSnapshot(models, routeVariants);
+    const snapshot = createModelCatalogSnapshot(models, routeVariants, params.providerOutcomes);
     logStage("complete", `entries=${snapshot.entries.length}`);
     return params.providerOutcomes
       ? {

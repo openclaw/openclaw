@@ -39,7 +39,6 @@ import {
   parseStreamingJson,
   sanitizeSurrogates,
   transformMessages,
-  type Api,
   type AssistantMessage,
   type AssistantMessageEvent,
   type CacheRetention,
@@ -74,13 +73,19 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   describeToolResultMediaPlaceholder,
+  createEmptyTransportUsage,
   failTransportStream,
   finalizeTerminalToolCallArguments,
   notifyProviderHttpMetadata,
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveBedrockRuntimeAuth } from "./aws-credential-refresh.js";
 import {
   resolveBedrockCachePoint,
   resolveBedrockPromptCachePolicy,
@@ -105,35 +110,20 @@ type PendingBedrockToolCall = {
   contentIndex: number;
 };
 
-function usesClaudeFable5BedrockContract(model: Model<"bedrock-converse-stream">): boolean {
-  return resolveClaudeFable5ModelIdentity(model) !== undefined;
-}
-
-function usesClaudeOpus5BedrockContract(model: Model<"bedrock-converse-stream">): boolean {
-  return resolveClaudeOpus5ModelIdentity(model) !== undefined;
-}
-
-function usesClaudeSonnet5BedrockContract(model: Model<"bedrock-converse-stream">): boolean {
-  return resolveClaudeSonnet5ModelIdentity(model) !== undefined;
-}
-
 function usesClaudeStreamingRefusalBedrockContract(
   model: Model<"bedrock-converse-stream">,
 ): boolean {
   return (
-    usesClaudeFable5BedrockContract(model) ||
+    resolveClaudeFable5ModelIdentity(model) !== undefined ||
     resolveClaudeMythos5ModelIdentity(model) !== undefined ||
-    usesClaudeOpus5BedrockContract(model) ||
-    usesClaudeSonnet5BedrockContract(model)
+    resolveClaudeOpus5ModelIdentity(model) !== undefined ||
+    resolveClaudeSonnet5ModelIdentity(model) !== undefined
   );
 }
 
 function readBedrockStopDetails(fields: DocumentType | undefined): unknown {
-  if (!fields || typeof fields !== "object" || Array.isArray(fields)) {
-    return undefined;
-  }
-  const record = fields as Record<string, unknown>;
-  return record.stop_details ?? record.stopDetails;
+  const record = asOptionalRecord(fields);
+  return record?.stop_details ?? record?.stopDetails;
 }
 
 function normalizeAdaptiveClaudeToolChoice(
@@ -171,17 +161,10 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
     const output: AssistantMessage = {
       role: "assistant",
       content: [],
-      api: "bedrock-converse-stream" as Api,
+      api: "bedrock-converse-stream",
       provider: model.provider,
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createEmptyTransportUsage(),
       stopReason: "stop",
       timestamp: Date.now(),
     };
@@ -190,7 +173,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
     const pendingToolCallEnds: PendingBedrockToolCall[] = [];
     const toolArgumentPreviewSchedules: ToolArgumentPreviewSchedules = new WeakMap();
     const redactedReasoningChunks = new Map<number, Uint8Array[]>();
-    const fable5 = usesClaudeFable5BedrockContract(model);
+    const fable5 = resolveClaudeFable5ModelIdentity(model) !== undefined;
     // Claude classifiers may refuse after partial output. Hold every event until
     // messageStop proves the response is safe to expose.
     const refusalBuffer = usesClaudeStreamingRefusalBedrockContract(model)
@@ -200,16 +183,13 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 
     const config: BedrockRuntimeClientConfig = {
       profile: options.profile,
+      ...resolveBedrockRuntimeAuth(options.bearerToken),
     };
     const configuredRegion = getConfiguredBedrockRegion(options);
     const requestRegion = options.region || getBedrockModelArnRegion(model.id) || configuredRegion;
     const hasConfiguredProfile = hasConfiguredBedrockProfile(options);
     const endpointRegion = getStandardBedrockEndpointRegion(model.baseUrl);
-    const useExplicitEndpoint = shouldUseExplicitBedrockEndpoint(
-      model.baseUrl,
-      requestRegion,
-      hasConfiguredProfile,
-    );
+    const useExplicitEndpoint = !endpointRegion || (!requestRegion && !hasConfiguredProfile);
 
     // Only pin standard AWS Bedrock runtime endpoints when no region/profile is configured.
     // This preserves custom endpoints (VPC/proxy) from #3402 without forcing built-in
@@ -217,10 +197,6 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
     if (useExplicitEndpoint) {
       config.endpoint = model.baseUrl;
     }
-
-    // Resolve bearer token for Bedrock API key auth.
-    const bearerToken = options.bearerToken || process.env.AWS_BEARER_TOKEN_BEDROCK || undefined;
-    const useBearerToken = bearerToken !== undefined && process.env.AWS_BEDROCK_SKIP_AUTH !== "1";
 
     // in Node.js/Bun environment only
     if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
@@ -232,14 +208,6 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         config.region = endpointRegion;
       } else if (!hasConfiguredProfile) {
         config.region = "us-east-1";
-      }
-
-      // Support proxies that don't need authentication
-      if (process.env.AWS_BEDROCK_SKIP_AUTH === "1") {
-        config.credentials = {
-          accessKeyId: "dummy-access-key",
-          secretAccessKey: "dummy-secret-key",
-        };
       }
 
       const proxyAgents = createHttpProxyAgentsForTarget(model.baseUrl);
@@ -261,13 +229,9 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         "us-east-1";
     }
 
-    if (useBearerToken) {
-      config.token = { token: bearerToken };
-      config.authSchemePreference = ["httpBearerAuth"];
-    }
-
     let client: BedrockRuntimeClient | undefined;
     try {
+      options.signal?.throwIfAborted();
       client = new BedrockRuntimeClient(config);
       const cacheRetention = resolveCacheRetention(model, options.cacheRetention);
       const cachePoint = resolveBedrockCachePoint(model, cacheRetention);
@@ -300,6 +264,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         ...(options.requestMetadata !== undefined && { requestMetadata: options.requestMetadata }),
       };
       const nextCommandInput = await options?.onPayload?.(commandInput, model);
+      options.signal?.throwIfAborted();
       if (nextCommandInput !== undefined) {
         commandInput = nextCommandInput as typeof commandInput;
       }
@@ -502,7 +467,7 @@ function resolveSimpleBedrockOptions(
     } satisfies BedrockOptions;
   }
   if (!options?.reasoning) {
-    const reasoning = usesClaudeOpus5BedrockContract(model) ? "high" : undefined;
+    const reasoning = resolveClaudeOpus5ModelIdentity(model) !== undefined ? "high" : undefined;
     return {
       ...base,
       ...(reasoning !== undefined || supportsAdaptiveThinking(model)
@@ -813,10 +778,7 @@ function supportsAdaptiveThinking(model: Model<"bedrock-converse-stream">): bool
   return (
     supportsClaudeAdaptiveThinking(model) ||
     supportsClaudeAdaptiveThinking({ id: profileModelId }) ||
-    isClaudeMythosPreviewModelId(resolveClaudeModelIdentity(model)) ||
-    isClaudeMythosPreviewModelId(profileModelId) ||
-    usesClaudeSonnet5BedrockContract(model) ||
-    resolveClaudeSonnet5ModelIdentity({ id: profileModelId }) !== undefined
+    isClaudeMythosPreviewModelId(resolveClaudeModelIdentity(model))
   );
 }
 
@@ -826,8 +788,7 @@ function requiresMandatoryAdaptiveThinking(model: Model<"bedrock-converse-stream
     requiresClaudeMandatoryAdaptiveThinking(model) ||
     requiresClaudeMandatoryAdaptiveThinking({ id: profileModelId }) ||
     isClaudeMythosPreviewModelId(resolveClaudeModelIdentity(model)) ||
-    isClaudeMythosPreviewModelId(profileModelId) ||
-    usesClaudeSonnet5BedrockContract(model) ||
+    resolveClaudeSonnet5ModelIdentity(model) !== undefined ||
     resolveClaudeSonnet5ModelIdentity({ id: profileModelId }) !== undefined
   );
 }
@@ -936,18 +897,6 @@ function isAnthropicClaudeModel(model: Model<"bedrock-converse-stream">): boolea
   );
 }
 
-/**
- * Check if the model supports thinking signatures in reasoningContent.
- * Only Anthropic Claude models support the signature field.
- * Other models (OpenAI, Qwen, Minimax, Moonshot, etc.) reject it with:
- * "This model doesn't support the reasoningContent.reasoningText.signature field"
- *
- * Checks both model ID and model name to support application inference profiles.
- */
-function supportsThinkingSignature(model: Model<"bedrock-converse-stream">): boolean {
-  return isAnthropicClaudeModel(model);
-}
-
 function buildSystemPrompt(
   systemPrompt: string | undefined,
   cacheRetention: CacheRetention,
@@ -977,8 +926,7 @@ function buildSystemPrompt(
 }
 
 function normalizeToolCallId(id: string): string {
-  const sanitized = id.replace(/[^a-zA-Z0-9_-]/g, "_");
-  return sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
+  return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 }
 
 function createBedrockToolResult(message: ToolResultMessage): ContentBlock.ToolResultMember {
@@ -1077,7 +1025,7 @@ function convertMessages(
               if (c.redacted) {
                 // transformMessages already strips opaque reasoning after a model
                 // switch; this also rejects routes that cannot consume the format.
-                if (!supportsThinkingSignature(model)) {
+                if (!isAnthropicClaudeModel(model)) {
                   continue;
                 }
                 if (!c.thinkingSignature) {
@@ -1097,7 +1045,7 @@ function convertMessages(
               }
               const thinkingSignature = c.thinkingSignature;
               const normalizedThinkingSignature = thinkingSignature?.trim();
-              const supportsSignature = supportsThinkingSignature(model);
+              const supportsSignature = isAnthropicClaudeModel(model);
               const hasNativeThinkingSignature =
                 supportsSignature &&
                 Boolean(normalizedThinkingSignature) &&
@@ -1168,9 +1116,36 @@ function convertMessages(
         // Skip the messages we've already processed
         i = j - 1;
 
+        // GPT-5.6 Sol accepts user images but rejects images nested in tool results.
+        // Keep all tool outputs contiguous before labeled images, without rewriting history.
+        const attachedImages: ContentBlock[] = [];
+        const userContent: ContentBlock[] = model.id.includes("openai.gpt-5.6-sol")
+          ? toolResults.map((block): ContentBlock => {
+              const images: ContentBlock[] = [];
+              const content = (block.toolResult.content ?? []).filter((part) => {
+                if (part.image) {
+                  images.push({ image: part.image });
+                  return false;
+                }
+                return true;
+              });
+              if (images.length === 0) {
+                return block;
+              }
+              const label = `Images from tool result ${block.toolResult.toolUseId}`;
+              attachedImages.push({ text: `${label}:` }, ...images);
+              return {
+                toolResult: {
+                  ...block.toolResult,
+                  content: [...content, { text: `(see attached images labeled "${label}")` }],
+                },
+              };
+            })
+          : toolResults;
+        userContent.push(...attachedImages);
         result.push({
           role: ConversationRole.USER,
-          content: toolResults,
+          content: userContent,
         });
         break;
       }
@@ -1294,19 +1269,6 @@ function getStandardBedrockEndpointRegion(baseUrl: string | undefined): string |
   }
 }
 
-function shouldUseExplicitBedrockEndpoint(
-  baseUrl: string,
-  configuredRegion: string | undefined,
-  hasConfiguredProfile: boolean,
-): boolean {
-  const endpointRegion = getStandardBedrockEndpointRegion(baseUrl);
-  if (!endpointRegion) {
-    return true;
-  }
-
-  return !configuredRegion && !hasConfiguredProfile;
-}
-
 function isGovCloudBedrockTarget(
   model: Model<"bedrock-converse-stream">,
   options: BedrockOptions,
@@ -1340,7 +1302,7 @@ function buildAdditionalModelRequestFields(
   if (
     !reasoning ||
     (!model.reasoning &&
-      !usesClaudeFable5BedrockContract(model) &&
+      resolveClaudeFable5ModelIdentity(model) === undefined &&
       !supportsAdaptiveThinking(model))
   ) {
     return undefined;
@@ -1352,39 +1314,32 @@ function buildAdditionalModelRequestFields(
     const display = isGovCloudBedrockTarget(model, options)
       ? undefined
       : (options.thinkingDisplay ?? "summarized");
-    const result: Record<string, unknown> = supportsAdaptiveThinking(model)
-      ? {
-          thinking: { type: "adaptive", ...(display !== undefined ? { display } : {}) },
-          output_config: { effort: mapThinkingLevelToEffort(model, reasoning) },
-        }
-      : (() => {
-          const defaultBudgets: Record<ThinkingLevel, number> = {
-            minimal: 1024,
-            low: 2048,
-            medium: 8192,
-            high: 16384,
-            xhigh: 16384, // Claude doesn't support xhigh, clamp to high
-            max: 16384,
-          };
-
-          // Custom budgets override defaults (xhigh not in ThinkingBudgets, use high)
-          const level = reasoning === "xhigh" ? "high" : reasoning;
-          const budget = options.thinkingBudgets?.[level] ?? defaultBudgets[reasoning];
-
-          return {
-            thinking: {
-              type: "enabled",
-              budget_tokens: budget,
-              ...(display !== undefined ? { display } : {}),
-            },
-          };
-        })();
-
-    if (!supportsAdaptiveThinking(model) && (options.interleavedThinking ?? true)) {
-      result.anthropic_beta = ["interleaved-thinking-2025-05-14"];
+    if (supportsAdaptiveThinking(model)) {
+      return {
+        thinking: { type: "adaptive", ...(display !== undefined ? { display } : {}) },
+        output_config: { effort: mapThinkingLevelToEffort(model, reasoning) },
+      };
     }
-
-    return result as DocumentType;
+    const defaultBudgets: Record<ThinkingLevel, number> = {
+      minimal: 1024,
+      low: 2048,
+      medium: 8192,
+      high: 16384,
+      xhigh: 16384,
+      max: 16384,
+    };
+    // Manual Claude thinking uses the high budget for xhigh.
+    const level = reasoning === "xhigh" ? "high" : reasoning;
+    return {
+      thinking: {
+        type: "enabled",
+        budget_tokens: options.thinkingBudgets?.[level] ?? defaultBudgets[reasoning],
+        ...(display !== undefined ? { display } : {}),
+      },
+      ...((options.interleavedThinking ?? true)
+        ? { anthropic_beta: ["interleaved-thinking-2025-05-14"] }
+        : {}),
+    };
   }
 
   return undefined;

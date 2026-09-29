@@ -3,7 +3,9 @@ import {
   identityHasStableSessionId,
   resolveSessionIdentityFromMeta,
 } from "@openclaw/acp-core/runtime/session-identity";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { toAcpRuntimeError } from "../runtime/errors.js";
+import { matchesAcpSessionControlBinding } from "../runtime/session-control-owner.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
 import {
@@ -16,10 +18,16 @@ import type {
   AcpCloseSessionResult,
   AcpSessionManagerDeps,
   EnsureManagerRuntimeHandle,
-  ResolveManagerSession,
+  ResolveManagerSessionAsync,
   WriteManagerSessionMeta,
 } from "./manager.types.js";
-import { requireReadySessionMeta, resolveAcpSessionResolutionError } from "./manager.utils.js";
+import {
+  assertCurrentAcpActor,
+  createSupersededActorError,
+  isSupersededActorError,
+  requireReadySessionMeta,
+  resolveAcpSessionResolutionError,
+} from "./manager.utils.js";
 
 /** Closes an ACP session runtime handle and optionally discards persistent state/meta. */
 export async function runManagerCloseSession(params: {
@@ -28,16 +36,25 @@ export async function runManagerCloseSession(params: {
   agentId: string;
   deps: Pick<AcpSessionManagerDeps, "getRuntimeBackend">;
   runtimeHandles: ManagerRuntimeHandleCache;
-  resolveSession: ResolveManagerSession;
+  resolveSession: ResolveManagerSessionAsync;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor: () => boolean;
 }): Promise<AcpCloseSessionResult> {
   const { input, sessionKey, agentId } = params;
-  const resolution = params.resolveSession({
+  const expectedControlBinding = input.expectedControlBinding;
+  const assertCurrent = () => {
+    assertCurrentAcpActor(params.isCurrentActor(), sessionKey);
+    input.assertActive?.();
+  };
+  assertCurrent();
+  const resolution = await params.resolveSession({
     cfg: input.cfg,
     sessionKey,
     agentId,
+    assertCurrent,
   });
+  assertCurrent();
   const resolutionError = resolveAcpSessionResolutionError(resolution);
   if (resolutionError) {
     if (input.requireAcpSession ?? true) {
@@ -48,6 +65,22 @@ export async function runManagerCloseSession(params: {
       metaCleared: false,
     };
   }
+  const assertControlBinding = (entry: SessionEntry | undefined) => {
+    if (expectedControlBinding && !matchesAcpSessionControlBinding(entry, expectedControlBinding)) {
+      throw createSupersededActorError(sessionKey);
+    }
+  };
+  const refreshControlBinding = async () => {
+    const current = await params.resolveSession({
+      cfg: input.cfg,
+      sessionKey,
+      agentId,
+      assertCurrent,
+    });
+    assertCurrent();
+    assertControlBinding(current.kind === "ready" ? current.entry : undefined);
+  };
+  assertControlBinding(resolution.kind === "ready" ? resolution.entry : undefined);
   const meta = requireReadySessionMeta(resolution);
   const currentIdentity = resolveSessionIdentityFromMeta(meta);
   const shouldSkipRuntimeClose =
@@ -58,6 +91,7 @@ export async function runManagerCloseSession(params: {
   let runtimeClosed = false;
   let runtimeNotice: string | undefined;
   if (shouldSkipRuntimeClose) {
+    input.assertActive?.();
     await tryPrepareFreshManagerRuntimeSession({
       deps: params.deps,
       cfg: input.cfg,
@@ -66,21 +100,32 @@ export async function runManagerCloseSession(params: {
       agentId,
       logPrefix: "acp close fast-reset",
     });
+    assertCurrent();
     params.runtimeHandles.clear(params);
   } else {
     try {
       const { runtime: ensuredRuntime, handle } = await params.ensureRuntimeHandle({
+        assertActive: assertCurrent,
+        expectedControlBinding,
         cfg: input.cfg,
         sessionKey,
         agentId,
         meta,
+        isCurrentActor: params.isCurrentActor,
       });
+      assertCurrentAcpActor(params.isCurrentActor(), sessionKey);
+      input.assertActive?.();
+      if (expectedControlBinding) {
+        await refreshControlBinding();
+      }
+      assertCurrent();
       await ensuredRuntime.close({
         handle,
         reason: input.reason,
         discardPersistentState: input.discardPersistentState,
       });
       runtimeClosed = true;
+      assertCurrent();
       params.runtimeHandles.clear(params);
     } catch (error) {
       const acpError = toAcpRuntimeError({
@@ -88,6 +133,10 @@ export async function runManagerCloseSession(params: {
         fallbackCode: "ACP_TURN_FAILED",
         fallbackMessage: "ACP close failed before completion.",
       });
+      if (!params.isCurrentActor() || isSupersededActorError(acpError)) {
+        throw acpError;
+      }
+      input.assertActive?.();
       if (
         !isAcpOwnerRepairRequired(acpError) &&
         input.allowBackendUnavailable &&
@@ -97,7 +146,12 @@ export async function runManagerCloseSession(params: {
           (input.discardPersistentState && acpError.code === "ACP_BACKEND_UNSUPPORTED_CONTROL") ||
           isRecoverableManagerAcpxExitError(acpError.message))
       ) {
+        if (expectedControlBinding) {
+          await refreshControlBinding();
+        }
+        assertCurrent();
         if (input.discardPersistentState) {
+          input.assertActive?.();
           await tryPrepareFreshManagerRuntimeSession({
             deps: params.deps,
             cfg: input.cfg,
@@ -107,9 +161,11 @@ export async function runManagerCloseSession(params: {
             logPrefix: "acp close recovery",
             missingBackendError: acpError,
           });
+          assertCurrent();
         }
         // Treat unavailable backends as terminal for this cached handle so a
         // later operation cannot reuse an unusable runtime.
+        assertCurrentAcpActor(params.isCurrentActor(), sessionKey);
         params.runtimeHandles.clear(params);
         runtimeNotice = acpError.message;
       } else {
@@ -118,24 +174,34 @@ export async function runManagerCloseSession(params: {
     }
   }
 
+  assertCurrent();
   if (input.discardPersistentState && !input.clearMeta) {
     await discardPersistedManagerRuntimeState({
+      assertCommitAllowed: assertCurrent,
+      expectedControlBinding,
       cfg: input.cfg,
       sessionKey,
       agentId,
       writeSessionMeta: params.writeSessionMeta,
+      isCurrentActor: params.isCurrentActor,
     });
   }
 
+  assertCurrentAcpActor(params.isCurrentActor(), sessionKey);
+  assertCurrent();
   const metaCleared = Boolean(input.clearMeta);
   if (metaCleared) {
     await params.writeSessionMeta({
+      assertCommitAllowed: assertCurrent,
+      expectedControlBinding,
       cfg: input.cfg,
       sessionKey,
       agentId,
+      isCurrentActor: params.isCurrentActor,
       mutate: () => null,
       failOnError: true,
     });
+    assertCurrent();
   }
 
   return {

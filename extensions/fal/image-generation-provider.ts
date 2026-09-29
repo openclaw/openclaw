@@ -1,4 +1,3 @@
-// Fal provider module implements model/runtime integration.
 import type {
   GeneratedImageAsset,
   ImageGenerationProvider,
@@ -19,13 +18,7 @@ import {
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import {
-  buildHostnameAllowlistPolicyFromSuffixAllowlist,
-  fetchWithSsrFGuard,
-  mergeSsrFPolicies,
-  type SsrFPolicy,
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -105,16 +98,7 @@ const NANO_BANANA_LEGACY_SUPPORTED_ASPECT_RATIOS = [
   "9:16",
 ] as const;
 const NANO_BANANA_SUPPORTED_ASPECT_RATIOS = [
-  "21:9",
-  "16:9",
-  "3:2",
-  "4:3",
-  "5:4",
-  "1:1",
-  "4:5",
-  "3:4",
-  "2:3",
-  "9:16",
+  ...NANO_BANANA_LEGACY_SUPPORTED_ASPECT_RATIOS,
   "4:1",
   "1:4",
   "8:1",
@@ -140,7 +124,6 @@ const KREA_CREATIVITY_LEVELS = ["raw", "low", "medium", "high"] as const;
 
 const FAL_IMAGE_MALFORMED_RESPONSE = "fal image generation response malformed";
 const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
-const DEFAULT_GENERATED_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 
 type FalImageSize = string | { width: number; height: number };
 type FalEditEndpointSuffix = "edit" | "image-to-image";
@@ -156,20 +139,7 @@ type FalImageModelSchema = {
   appendEditPath: false | FalEditEndpointSuffix;
   supportsCount: boolean;
   supportsOutputFormat: boolean;
-  defaultBody?: Record<string, unknown>;
 };
-type FalNetworkPolicy = {
-  apiPolicy?: SsrFPolicy;
-  trustedDownloadHostSuffix?: string;
-  trustedDownloadPolicy?: SsrFPolicy;
-};
-
-function matchesTrustedHostSuffix(hostname: string, trustedSuffix: string): boolean {
-  const normalizedHost = normalizeLowercaseStringOrEmpty(hostname);
-  const normalizedSuffix = normalizeLowercaseStringOrEmpty(trustedSuffix);
-  return normalizedHost === normalizedSuffix || normalizedHost.endsWith(`.${normalizedSuffix}`);
-}
-
 function parseFalImageGenerationResponse(payload: unknown): {
   images: Record<string, unknown>[];
   prompt?: string;
@@ -192,32 +162,6 @@ function parseFalImageGenerationResponse(payload: unknown): {
     images.push(entry);
   }
   return { images, prompt: normalizeOptionalString(payload.prompt) };
-}
-
-function resolveFalNetworkPolicy(params: {
-  baseUrl: string;
-  allowPrivateNetwork: boolean;
-}): FalNetworkPolicy {
-  let parsedBaseUrl: URL;
-  try {
-    parsedBaseUrl = new URL(params.baseUrl);
-  } catch {
-    return {};
-  }
-
-  const hostSuffix = normalizeLowercaseStringOrEmpty(parsedBaseUrl.hostname);
-  if (!hostSuffix || !params.allowPrivateNetwork) {
-    return {};
-  }
-
-  const hostPolicy = buildHostnameAllowlistPolicyFromSuffixAllowlist([hostSuffix]);
-  const privateNetworkPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(true);
-  const trustedHostPolicy = mergeSsrFPolicies(hostPolicy, privateNetworkPolicy);
-  return {
-    apiPolicy: trustedHostPolicy,
-    trustedDownloadHostSuffix: hostSuffix,
-    trustedDownloadPolicy: trustedHostPolicy,
-  };
 }
 
 function ensureFalModelPath(model: string | undefined, hasInputImages: boolean): string {
@@ -245,16 +189,19 @@ function isFalGptImage25Model(model: string): boolean {
 }
 
 function resolveFalImageModelSchema(model: string): FalImageModelSchema {
+  const editDefaults = {
+    referenceImages: "image_urls",
+    referenceLimitNoun: "reference image",
+    appendEditPath: "edit",
+    supportsCount: true,
+    supportsOutputFormat: true,
+  } as const;
   if (isFalGptImage25Model(model)) {
     return {
+      ...editDefaults,
       geometry: "image_size",
-      referenceImages: "image_urls",
       maxInputImages: GPT_IMAGE_25_EDIT_MAX_INPUT_IMAGES,
       referenceLimitLabel: "fal GPT Image 2.5 edit",
-      referenceLimitNoun: "reference image",
-      appendEditPath: "edit",
-      supportsCount: true,
-      supportsOutputFormat: true,
     };
   }
   if (model.startsWith(FAL_KREA_2_MODEL_PREFIX)) {
@@ -268,37 +215,28 @@ function resolveFalImageModelSchema(model: string): FalImageModelSchema {
       appendEditPath: false,
       supportsCount: false,
       supportsOutputFormat: false,
-      defaultBody: { creativity: "medium" },
     };
   }
   if (model === FAL_NANO_BANANA_MODEL || model.startsWith(`${FAL_NANO_BANANA_MODEL}/`)) {
     return {
+      ...editDefaults,
       geometry: "native_aspect_ratio",
       aspectRatios: NANO_BANANA_LEGACY_SUPPORTED_ASPECT_RATIOS,
       resolutions: [],
-      referenceImages: "image_urls",
       maxInputImages: NANO_BANANA_LEGACY_EDIT_MAX_INPUT_IMAGES,
       referenceLimitLabel: "fal Nano Banana",
-      referenceLimitNoun: "reference image",
-      appendEditPath: "edit",
-      supportsCount: true,
-      supportsOutputFormat: true,
     };
   }
   if (model.startsWith("openai/gpt-image-") || model.startsWith(`${FAL_NANO_BANANA_MODEL}-`)) {
     const isNanoBanana = model.startsWith(`${FAL_NANO_BANANA_MODEL}-`);
     return {
+      ...editDefaults,
       geometry: isNanoBanana ? "native_aspect_ratio" : "image_size",
       ...(isNanoBanana ? { aspectRatios: NANO_BANANA_SUPPORTED_ASPECT_RATIOS } : {}),
-      referenceImages: "image_urls",
       maxInputImages: isNanoBanana
         ? NANO_BANANA_EDIT_MAX_INPUT_IMAGES
         : GPT_IMAGE_EDIT_MAX_INPUT_IMAGES,
       referenceLimitLabel: isNanoBanana ? "fal Nano Banana 2" : "fal GPT Image edit",
-      referenceLimitNoun: "reference image",
-      appendEditPath: "edit",
-      supportsCount: true,
-      supportsOutputFormat: true,
     };
   }
   // Nano Banana 2 Lite (Gemini 3.1 Flash Lite Image) uses /edit and the same
@@ -306,16 +244,12 @@ function resolveFalImageModelSchema(model: string): FalImageModelSchema {
   // has no resolution field, so explicit resolution overrides fail locally.
   if (model.startsWith(FAL_NANO_BANANA_2_LITE_MODEL)) {
     return {
+      ...editDefaults,
       geometry: "native_aspect_ratio",
       aspectRatios: NANO_BANANA_SUPPORTED_ASPECT_RATIOS,
       resolutions: [],
-      referenceImages: "image_urls",
       maxInputImages: NANO_BANANA_EDIT_MAX_INPUT_IMAGES,
       referenceLimitLabel: "fal Nano Banana 2 Lite",
-      referenceLimitNoun: "reference image",
-      appendEditPath: "edit",
-      supportsCount: true,
-      supportsOutputFormat: true,
     };
   }
   // Grok Imagine (xAI) — text-to-image at /xai/grok-imagine-image, standard
@@ -323,17 +257,13 @@ function resolveFalImageModelSchema(model: string): FalImageModelSchema {
   // remain unchanged. Accepts up to 3 reference images via image_urls.
   if (model.startsWith(FAL_GROK_IMAGINE_MODEL)) {
     return {
+      ...editDefaults,
       geometry: "native_aspect_ratio",
       aspectRatios: GROK_IMAGINE_SUPPORTED_ASPECT_RATIOS,
       resolutions: GROK_IMAGINE_SUPPORTED_RESOLUTIONS,
       resolutionCase: "lower",
-      referenceImages: "image_urls",
       maxInputImages: GROK_IMAGINE_EDIT_MAX_INPUT_IMAGES,
       referenceLimitLabel: "fal Grok Imagine",
-      referenceLimitNoun: "reference image",
-      appendEditPath: "edit",
-      supportsCount: true,
-      supportsOutputFormat: true,
     };
   }
   return {
@@ -372,28 +302,13 @@ function mapResolutionToEdge(resolution: "1K" | "2K" | "4K" | undefined): number
   return resolution === "4K" ? 4096 : resolution === "2K" ? 2048 : 1024;
 }
 
-function aspectRatioToEnum(aspectRatio: string | undefined): string | undefined {
-  const normalized = aspectRatio?.trim();
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized === "1:1") {
-    return "square_hd";
-  }
-  if (normalized === "4:3") {
-    return "landscape_4_3";
-  }
-  if (normalized === "3:4") {
-    return "portrait_4_3";
-  }
-  if (normalized === "16:9") {
-    return "landscape_16_9";
-  }
-  if (normalized === "9:16") {
-    return "portrait_16_9";
-  }
-  return undefined;
-}
+const FAL_ASPECT_RATIO_SIZES = new Map([
+  ["1:1", "square_hd"],
+  ["4:3", "landscape_4_3"],
+  ["3:4", "portrait_4_3"],
+  ["16:9", "landscape_16_9"],
+  ["9:16", "portrait_16_9"],
+]);
 
 function parseAspectRatioParts(aspectRatio: string): { widthRatio: number; heightRatio: number } {
   const match = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/u.exec(aspectRatio.trim());
@@ -442,27 +357,17 @@ function resolveFalImageSize(params: {
   }
 
   const normalizedAspectRatio = params.aspectRatio?.trim();
-  if (normalizedAspectRatio && params.hasInputImages) {
-    return (
-      aspectRatioToEnum(normalizedAspectRatio) ??
-      aspectRatioToDimensions(normalizedAspectRatio, 1024)
-    );
-  }
-
   const edge = mapResolutionToEdge(params.resolution);
-  if (normalizedAspectRatio && edge) {
-    return aspectRatioToDimensions(normalizedAspectRatio, edge);
-  }
-  if (edge) {
-    return { width: edge, height: edge };
-  }
   if (normalizedAspectRatio) {
+    if (edge && !params.hasInputImages) {
+      return aspectRatioToDimensions(normalizedAspectRatio, edge);
+    }
     return (
-      aspectRatioToEnum(normalizedAspectRatio) ??
+      FAL_ASPECT_RATIO_SIZES.get(normalizedAspectRatio) ??
       aspectRatioToDimensions(normalizedAspectRatio, 1024)
     );
   }
-  return undefined;
+  return edge ? { width: edge, height: edge } : undefined;
 }
 
 function resolveFalGptImage25AspectRatioSize(aspectRatio: string): FalImageSize {
@@ -559,7 +464,6 @@ function applyFalImageGeometry(params: {
   size?: string;
   aspectRatio?: string;
   resolution?: "1K" | "2K" | "4K";
-  hasInputImages: boolean;
 }) {
   if (params.schema.geometry === "native_aspect_ratio") {
     if (params.resolution && params.schema.referenceImages === "image_style_references") {
@@ -643,29 +547,14 @@ function formatFalReferenceLimitError(
 async function fetchImageBuffer(
   url: string,
   deadline: ProviderOperationDeadline,
-  networkPolicy?: FalNetworkPolicy,
-  maxBytes = DEFAULT_GENERATED_IMAGE_MAX_BYTES,
+  maxBytes: number,
 ): Promise<{ buffer: Buffer; mimeType: string }> {
-  const downloadPolicy = (() => {
-    const trustedSuffix = networkPolicy?.trustedDownloadHostSuffix;
-    const trustedPolicy = networkPolicy?.trustedDownloadPolicy;
-    if (!trustedSuffix || !trustedPolicy) {
-      return undefined;
-    }
-    try {
-      const parsed = new URL(url);
-      return matchesTrustedHostSuffix(parsed.hostname, trustedSuffix) ? trustedPolicy : undefined;
-    } catch {
-      return undefined;
-    }
-  })();
   const { response, release } = await fetchWithSsrFGuard({
     url,
     timeoutMs: resolveProviderOperationTimeoutMs({
       deadline,
       defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
     }),
-    policy: downloadPolicy,
     auditContext: "fal-image-download",
   });
   try {
@@ -830,9 +719,10 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       if (!schema.supportsOutputFormat && req.outputFormat) {
         throw new Error(`fal ${requestedModel} does not support outputFormat overrides`);
       }
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        await resolveFalHttpRequestConfig({ req, capability: "image" });
-      const networkPolicy = resolveFalNetworkPolicy({ baseUrl, allowPrivateNetwork });
+      const { baseUrl, headers, dispatcherPolicy } = await resolveFalHttpRequestConfig({
+        req,
+        capability: "image",
+      });
       const maxImageBytes = resolveGeneratedMediaMaxBytes(req.cfg, "image");
       const requestBody: Record<string, unknown> = {
         prompt: req.prompt,
@@ -840,7 +730,6 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         ...(schema.supportsOutputFormat
           ? { output_format: req.outputFormat ?? DEFAULT_OUTPUT_FORMAT }
           : {}),
-        ...schema.defaultBody,
         ...(isGptImage25 && req.quality ? { quality: req.quality } : {}),
         ...(isGptImage25 && req.background ? { background: req.background } : {}),
       };
@@ -856,7 +745,6 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         size: req.size,
         aspectRatio: req.aspectRatio,
         resolution: req.resolution,
-        hasInputImages,
       });
 
       if (hasInputImages) {
@@ -880,7 +768,6 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
                 deadline,
                 defaultTimeoutMs: deadline.timeoutMs,
               }),
-        policy: networkPolicy.apiPolicy,
         dispatcherPolicy,
         auditContext: "fal-image-generate",
       });
@@ -897,7 +784,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           if (!url) {
             throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
           }
-          const downloaded = await fetchImageBuffer(url, deadline, networkPolicy, maxImageBytes);
+          const downloaded = await fetchImageBuffer(url, deadline, maxImageBytes);
           imageIndex += 1;
           images.push({
             buffer: downloaded.buffer,

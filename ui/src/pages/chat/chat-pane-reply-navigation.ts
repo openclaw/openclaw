@@ -121,6 +121,10 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     };
   }
 
+  protected retireReplyMessages(): void {
+    this.replyMessages.clear();
+  }
+
   protected resetReplyNavigation(): void {
     this.activeReplyNavigation = null;
     this.replyNavigationSessionKey = null;
@@ -147,10 +151,8 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
           return;
         }
         if (!state.chatHistoryPagination.hasMore) {
-          if (this.replyNavigationIsCurrent(navigation, state, sessionKey, sessionId)) {
-            state.lastError = t("chat.messages.originalUnavailable");
-            state.requestUpdate?.();
-          }
+          state.lastError = t("chat.messages.originalUnavailable");
+          state.requestUpdate?.();
           return;
         }
         const loaded = await this.loadOlderMessages();

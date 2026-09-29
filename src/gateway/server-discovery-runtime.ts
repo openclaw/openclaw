@@ -218,7 +218,7 @@ export async function startGatewayDiscovery(params: {
         }
         if (timedOut) {
           params.logDiscovery.warn(
-            `gateway discovery service completed after startup timeout (${entry.service.id}, plugin=${entry.pluginId})`,
+            `gateway discovery service completed after startup timeout (${entry.id}, plugin=${entry.pluginId})`,
           );
         }
       };
@@ -226,7 +226,7 @@ export async function startGatewayDiscovery(params: {
       const started = (async () => (instance ? instance.run(start) : start()))().catch(
         (err: unknown) => {
           params.logDiscovery.warn(
-            `gateway discovery service failed${timedOut ? " after startup timeout" : ""} (${entry.service.id}, plugin=${entry.pluginId}): ${String(err)}`,
+            `gateway discovery service failed${timedOut ? " after startup timeout" : ""} (${entry.id}, plugin=${entry.pluginId}): ${String(err)}`,
           );
         },
       );
@@ -236,7 +236,7 @@ export async function startGatewayDiscovery(params: {
           timer = setTimeout(() => {
             timedOut = true;
             params.logDiscovery.warn(
-              `gateway discovery service timed out after ${advertiseTimeoutMs}ms (${entry.service.id}, plugin=${entry.pluginId}); continuing startup`,
+              `gateway discovery service timed out after ${advertiseTimeoutMs}ms (${entry.id}, plugin=${entry.pluginId}); continuing startup`,
             );
             resolve();
           }, advertiseTimeoutMs);

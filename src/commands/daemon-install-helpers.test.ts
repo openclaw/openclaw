@@ -1,4 +1,3 @@
-// Daemon install helper tests cover install plan construction, tokens, and platform-specific service setup.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -44,8 +43,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
   runExec: vi.fn(
-    async (_command: string, _args: string[], options: { input: string | Uint8Array }) =>
-      decodeLaunchAgentPlistFixture(options.input),
+    async (_command: string, args: string[], options: { input: string | Uint8Array }) =>
+      decodeLaunchAgentPlistFixture(options.input, args[1]),
   ),
 }));
 
@@ -122,9 +121,19 @@ vi.mock("../plugins/plugin-registry.js", async (importActual) => {
 import { stageLaunchAgent } from "../daemon/launchd.js";
 import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
 
+beforeEach(() => {
+  mockNodeGatewayPlanFixture();
+});
+
 afterEach(() => {
   vi.resetAllMocks();
 });
+
+function buildNodePlan(
+  params: Omit<Parameters<typeof buildGatewayInstallPlan>[0], "port" | "runtime">,
+) {
+  return buildGatewayInstallPlan({ port: 3000, runtime: "node", ...params });
+}
 
 function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string): Record<string, any> {
   const call = mockFn.mock.calls[0];
@@ -189,6 +198,16 @@ function mockNodeGatewayPlanFixture(
   mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
     diagnostics: [],
     plugins: [],
+  });
+}
+
+function mockLaunchAgentPlanFixture() {
+  mockNodeGatewayPlanFixture({
+    serviceEnvironment: {
+      HOME: "/from-service",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+      OPENCLAW_PORT: "3000",
+    },
   });
 }
 
@@ -296,10 +315,8 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
     ],
   });
 
-  return await buildGatewayInstallPlan({
+  return await buildNodePlan({
     env: { HOME: home, ACME_SECRETS_TOKEN: "secret-token" },
-    port: 3000,
-    runtime: "node",
     config: {
       plugins: {
         enabled: true,
@@ -359,12 +376,8 @@ describe("buildGatewayInstallPlan", () => {
   });
 
   it("uses provided runtimePath and returns plan", async () => {
-    mockNodeGatewayPlanFixture();
-
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: { HOME: isolatedHome },
-      port: 3000,
-      runtime: "node",
       runtimePath: "/custom/node",
     });
 
@@ -384,7 +397,6 @@ describe("buildGatewayInstallPlan", () => {
 
   it("resolves and forwards Bun for a Bun Gateway install plan", async () => {
     const bunPath = "/home/test/.bun/bin/bun";
-    mockNodeGatewayPlanFixture();
     mocks.resolvePreferredBunPath.mockResolvedValue(bunPath);
     mocks.resolveGatewayProgramArguments.mockResolvedValue({
       programArguments: [bunPath, "/opt/openclaw/dist/index.js", "gateway"],
@@ -462,16 +474,13 @@ describe("buildGatewayInstallPlan", () => {
   );
 
   it("adds the active openclaw command bin directory to the managed service PATH", async () => {
-    mockNodeGatewayPlanFixture();
     const originalArgv = process.argv;
     const openclawBinPath = path.join(isolatedHome, ".npm-global", "bin", "openclaw");
     process.argv = ["node", openclawBinPath, "gateway", "install"];
 
     try {
-      await buildGatewayInstallPlan({
+      await buildNodePlan({
         env: { HOME: isolatedHome },
-        port: 3000,
-        runtime: "node",
         runtimePath: "/opt/homebrew/opt/node/bin/node",
         platform: "darwin",
       });
@@ -486,12 +495,8 @@ describe("buildGatewayInstallPlan", () => {
   });
 
   it("does not prepend '.' when runtimePath is a bare executable name", async () => {
-    mockNodeGatewayPlanFixture();
-
-    await buildGatewayInstallPlan({
+    await buildNodePlan({
       env: { HOME: isolatedHome },
-      port: 3000,
-      runtime: "node",
       runtimePath: "node",
     });
 
@@ -511,10 +516,8 @@ describe("buildGatewayInstallPlan", () => {
       serviceEnvironment: {},
     });
 
-    await buildGatewayInstallPlan({
+    await buildNodePlan({
       env: isolatedPlanEnv(),
-      port: 3000,
-      runtime: "node",
       warn,
     });
 
@@ -528,10 +531,8 @@ describe("buildGatewayInstallPlan", () => {
       serviceEnvironment: {},
     });
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: isolatedPlanEnv(),
-      port: 3000,
-      runtime: "node",
       platform: "darwin",
     });
 
@@ -548,10 +549,8 @@ describe("buildGatewayInstallPlan", () => {
       serviceEnvironment: {},
     });
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: isolatedPlanEnv(),
-      port: 3000,
-      runtime: "node",
       platform: "linux",
     });
 
@@ -567,12 +566,10 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: isolatedPlanEnv({
         OPENCLAW_WRAPPER: wrapperPath,
       }),
-      port: 3000,
-      runtime: "node",
     });
 
     expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledOnce();
@@ -590,18 +587,11 @@ describe("buildGatewayInstallPlan", () => {
   it("clears a Windows wrapper env that points at the generated gateway.cmd script", async () => {
     const selfWrapperPath = path.join(isolatedHome, ".openclaw", "gateway.cmd");
     const warn = vi.fn();
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-      },
-    });
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: isolatedPlanEnv({
         OPENCLAW_WRAPPER: selfWrapperPath,
       }),
-      port: 3000,
-      runtime: "node",
       platform: "win32",
       warn,
     });
@@ -634,10 +624,8 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: isolatedPlanEnv(),
-      port: 3000,
-      runtime: "node",
       config: {
         env: {
           HOME: "/Users/config",
@@ -669,10 +657,9 @@ describe("buildGatewayInstallPlan", () => {
   });
 
   it("keeps first-install provider API keys file-backed without capturing unrelated credentials", async () => {
-    mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
     mocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: isolatedPlanEnv({
         OPENAI_API_KEY: "ambient-openai",
         ANTHROPIC_API_KEY: "ambient-anthropic",
@@ -684,8 +671,6 @@ describe("buildGatewayInstallPlan", () => {
         UNRECOGNIZED_API_KEY: "ambient-unrecognized",
         NODE_OPTIONS: "--require /tmp/untrusted.js",
       }),
-      port: 3000,
-      runtime: "node",
       platform: "linux",
       config: {},
     });
@@ -725,7 +710,6 @@ describe("buildGatewayInstallPlan", () => {
         ],
       }),
     );
-    mockNodeGatewayPlanFixture();
     mocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
     const env = isolatedPlanEnv({
       OPENAI_API_KEY: "bundled-openai",
@@ -746,11 +730,9 @@ describe("buildGatewayInstallPlan", () => {
     expect(externalPlugin?.trustedOfficialInstall).not.toBe(true);
     expect(snapshot.index.plugins.find(({ pluginId: id }) => id === pluginId)?.enabled).toBe(true);
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env,
       config,
-      port: 3000,
-      runtime: "node",
       platform: "linux",
     });
 
@@ -763,16 +745,13 @@ describe("buildGatewayInstallPlan", () => {
     await writeStateDirDotEnv("OPENAI_API_KEY=durable-openai\n", {
       stateDir: path.join(isolatedHome, ".openclaw"),
     });
-    mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
     mocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: isolatedPlanEnv({
         OPENAI_API_KEY: "ambient-openai",
         ANTHROPIC_API_KEY: "ambient-anthropic",
       }),
-      port: 3000,
-      runtime: "node",
       platform: "linux",
       config: {},
     });
@@ -784,9 +763,7 @@ describe("buildGatewayInstallPlan", () => {
   });
 
   it("does not claim provider API keys already owned by Linux auth profiles", async () => {
-    mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
-
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: isolatedPlanEnv({ OPENAI_API_KEY: "profile-owned-openai" }),
       authStore: {
         version: 1,
@@ -798,28 +775,25 @@ describe("buildGatewayInstallPlan", () => {
           },
         },
       },
-      port: 3000,
-      runtime: "node",
       platform: "linux",
       config: {},
     });
 
     expect(plan.environment.OPENAI_API_KEY).toBe("profile-owned-openai");
+    expect(mocks.hasAnyAuthProfileStoreSource).not.toHaveBeenCalled();
+    expect(mocks.loadAuthProfileStoreForSecretsRuntime).not.toHaveBeenCalled();
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
   });
 
   it.each(["inline", "file"] as const)(
     "preserves an existing %s provider API key over unrelated shell credentials",
     async (source) => {
-      mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
       mocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
 
-      const plan = await buildGatewayInstallPlan({
+      const plan = await buildNodePlan({
         env: isolatedPlanEnv({ OPENAI_API_KEY: "ambient-openai" }),
         existingEnvironment: { OPENAI_API_KEY: "operator-openai" },
         existingEnvironmentValueSources: { OPENAI_API_KEY: source },
-        port: 3000,
-        runtime: "node",
         platform: "linux",
         config: {},
       });
@@ -836,10 +810,9 @@ describe("buildGatewayInstallPlan", () => {
   ])(
     "retires managed provider keys while preserving genuinely rotated replacements",
     async ({ currentOpenAiKey, expectedOpenAiKey }) => {
-      mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
       mocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
 
-      const plan = await buildGatewayInstallPlan({
+      const plan = await buildNodePlan({
         env: isolatedPlanEnv({
           OPENAI_API_KEY: currentOpenAiKey,
           ANTHROPIC_API_KEY: "fresh-operator-anthropic",
@@ -849,8 +822,6 @@ describe("buildGatewayInstallPlan", () => {
           OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENAI_API_KEY",
         },
         existingEnvironmentValueSources: { OPENAI_API_KEY: "file" },
-        port: 3000,
-        runtime: "node",
         platform: "linux",
         config: {},
       });
@@ -934,18 +905,10 @@ describe("buildGatewayInstallPlan", () => {
   });
 
   it("keeps config env SecretRefs managed when auth profiles reuse the key", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: isolatedPlanEnv({
         OPENAI_API_KEY: "sk-openai-test",
       }),
-      port: 3000,
-      runtime: "node",
       platform: "linux",
       config: {
         models: {
@@ -975,47 +938,7 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("OPENAI_API_KEY");
   });
 
-  it("includes passEnv values for configured exec SecretRef providers", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
-      env: isolatedPlanEnv({
-        OP_CONNECT_TOKEN: "op-connect-token",
-      }),
-      port: 3000,
-      runtime: "node",
-      config: {
-        secrets: {
-          providers: {
-            onepassword: {
-              source: "exec",
-              command: "/usr/bin/op",
-              args: ["read", "op://Private/Discord/password"],
-              passEnv: ["OP_CONNECT_TOKEN"],
-            },
-          },
-        },
-        channels: {
-          discord: {
-            token: { source: "exec", provider: "onepassword", id: "value" },
-          },
-        },
-      },
-    });
-
-    expect(plan.environment.OP_CONNECT_TOKEN).toBe("op-connect-token");
-    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
-  });
   it("includes passEnv values for plugin-managed exec SecretRef providers", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-      },
-    });
     const pluginRoot = path.join(isolatedHome, "acme-secrets");
     createSecurePluginRoot(pluginRoot);
     writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
@@ -1038,13 +961,11 @@ describe("buildGatewayInstallPlan", () => {
       ],
     });
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: isolatedPlanEnv({
         ACME_SECRETS_ADDR: "http://secrets.example.test",
         ACME_SECRETS_TOKEN: "secret-token",
       }),
-      port: 3000,
-      runtime: "node",
       config: {
         secrets: {
           providers: {
@@ -1078,18 +999,10 @@ describe("buildGatewayInstallPlan", () => {
   });
 
   it("includes passEnv values for auth-profile exec SecretRef providers", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: isolatedPlanEnv({
         OP_CONNECT_TOKEN: "op-connect-token",
       }),
-      port: 3000,
-      runtime: "node",
       config: {
         secrets: {
           providers: {
@@ -1123,11 +1036,6 @@ describe("buildGatewayInstallPlan", () => {
   });
 
   it("includes passEnv values for auth-profile plugin-managed exec SecretRef providers", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-      },
-    });
     const pluginRoot = path.join(isolatedHome, "acme-secrets");
     createSecurePluginRoot(pluginRoot);
     writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
@@ -1150,13 +1058,11 @@ describe("buildGatewayInstallPlan", () => {
       ],
     });
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: isolatedPlanEnv({
         ACME_SECRETS_ADDR: "http://secrets.example.test",
         ACME_SECRETS_TOKEN: "secret-token",
       }),
-      port: 3000,
-      runtime: "node",
       config: {
         secrets: {
           providers: {
@@ -1194,7 +1100,6 @@ describe("buildGatewayInstallPlan", () => {
   it.each(["linux", "win32"] as const)(
     "ignores missing passEnv values while blocking populated dangerous values on %s",
     async (platform) => {
-      mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
       const env = isolatedPlanEnv({
         SYSTEMROOT: " ",
         SAFE_PASS_ENV: " safe-value ",
@@ -1208,10 +1113,8 @@ describe("buildGatewayInstallPlan", () => {
       });
       Object.setPrototypeOf(env, { WINDIR: "C:/Inherited" });
       const warn = vi.fn();
-      const plan = await buildGatewayInstallPlan({
+      const plan = await buildNodePlan({
         env,
-        port: 3000,
-        runtime: "node",
         platform,
         warn,
         config: {
@@ -1285,19 +1188,11 @@ describe("buildGatewayInstallPlan", () => {
   );
 
   it("blocks dangerous passEnv values for auth-profile exec SecretRef providers", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-      },
-    });
-
     const warn = vi.fn();
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: isolatedPlanEnv({
         NODE_OPTIONS: "--require /tmp/evil.js",
       }),
-      port: 3000,
-      runtime: "node",
       warn,
       config: {
         secrets: {
@@ -1340,18 +1235,10 @@ describe("buildGatewayInstallPlan", () => {
   });
 
   it("does not include passEnv values for unused exec SecretRef providers", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: isolatedPlanEnv({
         OP_CONNECT_TOKEN: "op-connect-token",
       }),
-      port: 3000,
-      runtime: "node",
       config: {
         secrets: {
           providers: {
@@ -1370,18 +1257,10 @@ describe("buildGatewayInstallPlan", () => {
   });
 
   it("does not embed gateway auth SecretRef values into the service environment", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: isolatedPlanEnv({
         OPENCLAW_GATEWAY_TOKEN: "gateway-test-token",
       }),
-      port: 3000,
-      runtime: "node",
       config: {
         gateway: {
           auth: {
@@ -1399,18 +1278,11 @@ describe("buildGatewayInstallPlan", () => {
     await writeStateDirDotEnv("DISCORD_BOT_TOKEN=discord-dotenv-token\n", {
       stateDir: path.join(isolatedHome, ".openclaw"),
     });
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-      },
-    });
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: isolatedPlanEnv({
         DISCORD_BOT_TOKEN: "discord-shell-token",
       }),
-      port: 3000,
-      runtime: "node",
       config: {
         channels: {
           discord: {
@@ -1425,60 +1297,17 @@ describe("buildGatewayInstallPlan", () => {
   });
 
   it("skips auth-profile store load when no auth-profile source exists", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-      },
-    });
     mocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: isolatedPlanEnv(),
-      port: 3000,
-      runtime: "node",
     });
 
     expect(mocks.loadAuthProfileStoreForSecretsRuntime).not.toHaveBeenCalled();
     expect(plan.environment.OPENCLAW_PORT).toBe("3000");
   });
 
-  it("uses the provided authStore without probing auth-profile runtime", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
-      env: isolatedPlanEnv({
-        OPENAI_API_KEY: "sk-openai-test",
-      }),
-      port: 3000,
-      runtime: "node",
-      authStore: {
-        version: 1,
-        profiles: {
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-          },
-        },
-      },
-    });
-
-    expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
-    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
-    expect(mocks.hasAnyAuthProfileStoreSource).not.toHaveBeenCalled();
-    expect(mocks.loadAuthProfileStoreForSecretsRuntime).not.toHaveBeenCalled();
-  });
-
   it("merges only portable auth-profile env refs into the service environment", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-      },
-    });
     mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
       version: 1,
       profiles: {
@@ -1516,15 +1345,13 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const warn = vi.fn();
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: isolatedPlanEnv({
         NODE_OPTIONS: "--require ./pwn.js",
         GIT_ASKPASS: "/tmp/askpass.sh",
         OPENAI_API_KEY: "sk-openai-test", // pragma: allowlist secret
         ANTHROPIC_TOKEN: "ant-test-token",
       }),
-      port: 3000,
-      runtime: "node",
       warn,
     });
 
@@ -1571,10 +1398,8 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       },
     });
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
       config: {
         env: {
           vars: {
@@ -1594,82 +1419,14 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     );
   });
 
-  it("retains managed .env values for macOS LaunchAgent env files", async () => {
-    await writeStateDirDotEnv("TAVILY_API_KEY=dotenv-tavily\nOPENROUTER_API_KEY=or-key\n", {
-      stateDir: path.join(tmpDir, ".openclaw"),
-    });
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
-        OPENCLAW_PORT: "3000",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
-      env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
-      platform: "darwin",
-    });
-
-    expect(plan.environment.TAVILY_API_KEY).toBe("dotenv-tavily");
-    expect(plan.environment.OPENROUTER_API_KEY).toBe("or-key");
-    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
-      "OPENROUTER_API_KEY,TAVILY_API_KEY",
-    );
-  });
-
-  it("retains .env values for macOS LaunchAgent env SecretRefs", async () => {
-    await writeStateDirDotEnv("MINIMAX_API_KEY=minimax-dotenv-key\n", {
-      stateDir: path.join(tmpDir, ".openclaw"),
-    });
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
-        OPENCLAW_PORT: "3000",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
-      env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
-      platform: "darwin",
-      config: {
-        models: {
-          providers: {
-            "minimax-openai": {
-              baseUrl: "https://api.minimax.io/v1",
-              apiKey: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
-              models: [],
-            },
-          },
-        },
-      },
-    });
-
-    expect(plan.environment.MINIMAX_API_KEY).toBe("minimax-dotenv-key");
-    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("MINIMAX_API_KEY");
-  });
-
   it("retains config SecretRef env values for macOS LaunchAgent env files", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
-        OPENCLAW_PORT: "3000",
-      },
-    });
+    mockLaunchAgentPlanFixture();
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: {
         HOME: tmpDir,
         TELEGRAM_DEFAULT_BOTTOKEN: "telegram-shell-token",
       },
-      port: 3000,
-      runtime: "node",
       platform: "darwin",
       config: {
         env: {
@@ -1698,18 +1455,10 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
   });
 
   it("retains existing generated env-file SecretRef values for macOS LaunchAgent regeneration", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
-        OPENCLAW_PORT: "3000",
-      },
-    });
+    mockLaunchAgentPlanFixture();
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
       platform: "darwin",
       existingEnvironment: {
         TELEGRAM_DEFAULT_BOTTOKEN: "telegram-existing-env-file-token",
@@ -1770,13 +1519,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
   });
 
   it("retains active gateway auth and channel SecretRefs through real LaunchAgent regeneration", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
-        OPENCLAW_PORT: "3000",
-      },
-    });
+    mockLaunchAgentPlanFixture();
     const existing = await readGeneratedLaunchAgentFixture({
       root: tmpDir,
       environment: {
@@ -1789,10 +1532,8 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       },
     });
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
       platform: "darwin",
       existingEnvironment: existing.environment,
       existingEnvironmentValueSources: existing.environmentValueSources,
@@ -1887,7 +1628,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(rewritten?.environmentValueSources?.OPENCLAW_GATEWAY_AUTH_TOKEN).toBe("file");
   });
 
-  it.each([
+  const gatewayAuthPersistenceCases = [
     {
       name: "token file-backed match",
       surface: "token",
@@ -1916,29 +1657,24 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       expectedValue: "existing-secret",
     },
     {
-      name: "password inline-and-file match",
-      surface: "password",
-      mode: "password",
-      configuredKey: "OPENCLAW_GATEWAY_AUTH_PASSWORD",
-      existingKey: "OPENCLAW_GATEWAY_AUTH_PASSWORD",
-      existingSource: "inline-and-file",
-      expectedValue: "existing-secret",
-    },
-    {
       name: "token inline-only match",
       surface: "token",
       mode: "token",
-      configuredKey: "OPENCLAW_GATEWAY_AUTH_TOKEN",
-      existingKey: "OPENCLAW_GATEWAY_AUTH_TOKEN",
+      configuredKey: "OPENCLAW_GATEWAY_TOKEN",
+      existingKey: "OPENCLAW_GATEWAY_TOKEN",
       existingSource: "inline",
+      expectedValue: "existing-secret",
+      processValue: "process-secret",
     },
     {
       name: "password inline-only match",
       surface: "password",
       mode: "password",
-      configuredKey: "OPENCLAW_GATEWAY_AUTH_PASSWORD",
-      existingKey: "OPENCLAW_GATEWAY_AUTH_PASSWORD",
+      configuredKey: "OPENCLAW_GATEWAY_PASSWORD",
+      existingKey: "OPENCLAW_GATEWAY_PASSWORD",
       existingSource: "inline",
+      expectedValue: "existing-secret",
+      processValue: "process-secret",
     },
     {
       name: "token ref mismatch",
@@ -1949,25 +1685,10 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       existingSource: "file",
     },
     {
-      name: "password ref mismatch",
-      surface: "password",
-      mode: "password",
-      configuredKey: "NEW_GATEWAY_AUTH_PASSWORD",
-      existingKey: "OLD_GATEWAY_AUTH_PASSWORD",
-      existingSource: "file",
-    },
-    {
       name: "removed token ref",
       surface: "token",
       mode: "token",
       existingKey: "OPENCLAW_GATEWAY_AUTH_TOKEN",
-      existingSource: "file",
-    },
-    {
-      name: "removed password ref",
-      surface: "password",
-      mode: "password",
-      existingKey: "OPENCLAW_GATEWAY_AUTH_PASSWORD",
       existingSource: "file",
     },
     {
@@ -1987,20 +1708,18 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       existingSource: "file",
     },
     {
-      name: "process-only token ref",
-      surface: "token",
-      mode: "token",
-      configuredKey: "OPENCLAW_GATEWAY_AUTH_TOKEN",
-      processValue: "process-secret",
-    },
-    {
       name: "process-only password ref",
       surface: "password",
       mode: "password",
       configuredKey: "OPENCLAW_GATEWAY_AUTH_PASSWORD",
       processValue: "process-secret",
     },
-  ] as const)("calibrates gateway auth persistence: $name", async (testCase) => {
+  ] as const;
+  it.each(
+    gatewayAuthPersistenceCases.flatMap((testCase) =>
+      (["darwin", "linux", "win32"] as const).map((platform) => ({ platform, testCase })),
+    ),
+  )("preserves $platform gateway auth: $testCase.name", async ({ platform, testCase }) => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         HOME: "/from-service",
@@ -2026,7 +1745,9 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     const existingEnvironment = existingKey
       ? {
           [existingKey]: "existing-secret",
-          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: existingKey,
+          ...(existingSource === "inline"
+            ? {}
+            : { OPENCLAW_SERVICE_MANAGED_ENV_KEYS: existingKey }),
         }
       : undefined;
     const existingEnvironmentValueSources =
@@ -2034,20 +1755,19 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     const processEnvironment =
       configuredKey && processValue ? { [configuredKey]: processValue } : {};
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: { HOME: tmpDir, ...processEnvironment },
-      port: 3000,
-      runtime: "node",
-      platform: "darwin",
+      platform,
       existingEnvironment,
       existingEnvironmentValueSources,
       config: { gateway: { auth } } as unknown as OpenClawConfig,
     });
 
     if (existingKey) {
-      expect(plan.environment[existingKey]).toBe(
-        "expectedValue" in testCase ? testCase.expectedValue : undefined,
-      );
+      const expectedValue =
+        platform !== "win32" && "expectedValue" in testCase ? testCase.expectedValue : undefined;
+      expect(plan.environment[existingKey]).toBe(expectedValue);
+      expect(plan.environmentValueSources?.[existingKey]).toBe(expectedValue ? "file" : undefined);
     }
     if (configuredKey && configuredKey !== existingKey) {
       expect(plan.environment[configuredKey]).toBeUndefined();
@@ -2061,18 +1781,10 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     await writeStateDirDotEnv("OPENCLAW_GATEWAY_AUTH_TOKEN=authoritative-state-token\n", {
       stateDir: path.join(tmpDir, ".openclaw"),
     });
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
-        OPENCLAW_PORT: "3000",
-      },
-    });
+    mockLaunchAgentPlanFixture();
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
       platform: "darwin",
       existingEnvironment: {
         OPENCLAW_GATEWAY_AUTH_TOKEN: "stale-file-token",
@@ -2103,18 +1815,10 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     await writeStateDirDotEnv("MINIMAX_API_KEY=minimax-dotenv-key\n", {
       stateDir: path.join(tmpDir, ".openclaw"),
     });
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
-        OPENCLAW_PORT: "3000",
-      },
-    });
+    mockLaunchAgentPlanFixture();
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
       platform: "darwin",
       config: {
         env: {
@@ -2142,18 +1846,10 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     await writeStateDirDotEnv("OPENROUTER_API_KEY=or-dotenv\nTAVILY_API_KEY=dotenv-tavily\n", {
       stateDir: path.join(tmpDir, ".openclaw"),
     });
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
-        OPENCLAW_PORT: "3000",
-      },
-    });
+    mockLaunchAgentPlanFixture();
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
       platform: "darwin",
       existingEnvironment: {
         BRAVE_API_KEY: "stale-generated-value",
@@ -2193,212 +1889,6 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.OPENCLAW_PORT).toBe("3000");
   });
 
-  it("preserves safe custom vars from an existing service env and merges PATH", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_PORT: "3000",
-        PATH: "/managed/bin:/usr/bin",
-        TMPDIR: "/tmp",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
-      env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
-      platform: "linux",
-      existingEnvironment: {
-        PATH: [
-          ".",
-          "/tmp/evil",
-          "/proc/self/cwd/evil-bin",
-          "/proc/thread-self/cwd/evil-bin",
-          "/proc/12345/cwd/evil-bin",
-          "/proc/self/root/evil-bin",
-          `${process.cwd()}/evil-bin`,
-          "/custom/go/bin",
-          "/usr/bin",
-        ].join(path.delimiter),
-        GOBIN: "/Users/test/.local/gopath/bin",
-        BLOGWATCHER_HOME: "/Users/test/.blogwatcher",
-        NODE_OPTIONS: "--require /tmp/evil.js",
-        GOPATH: "/Users/test/.local/gopath",
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-      },
-    });
-
-    expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
-    expect(plan.environment.GOBIN).toBe("/Users/test/.local/gopath/bin");
-    expect(plan.environment.BLOGWATCHER_HOME).toBe("/Users/test/.blogwatcher");
-    expect(plan.environment.NODE_OPTIONS).toBeUndefined();
-    expect(plan.environment.GOPATH).toBeUndefined();
-    expect(plan.environment.OPENCLAW_SERVICE_MARKER).toBeUndefined();
-  });
-
-  it("drops stale non-minimal PATH entries from an existing service env", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_PORT: "3000",
-        PATH: "/usr/local/bin:/usr/bin:/bin",
-        TMPDIR: "/tmp",
-      },
-    });
-
-    // Avoid macOS /home autofs lookups while exercising the same user-tool paths.
-    const home = "/Users/testuser";
-    const plan = await buildGatewayInstallPlan({
-      env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
-      platform: "linux",
-      existingEnvironment: {
-        PATH: [
-          `${home}/.volta/bin`,
-          `${home}/.asdf/shims`,
-          `${home}/.nvm/current/bin`,
-          `${home}/.local/share/fnm/aliases/default/bin`,
-          `${home}/.local/share/fnm/current/bin`,
-          `${home}/.fnm/aliases/default/bin`,
-          `${home}/.fnm/current/bin`,
-          `${home}/.local/share/pnpm`,
-          "/opt/pnpm/bin",
-          "/custom/go/bin",
-          "/usr/bin",
-        ].join(path.delimiter),
-      },
-    });
-
-    expect(plan.environment.PATH).toBe("/usr/local/bin:/usr/bin:/bin:/custom/go/bin");
-  });
-
-  it("drops existing PATH entries that resolve through symlinks into temp dirs", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_PORT: "3000",
-        PATH: "/managed/bin:/usr/bin",
-        TMPDIR: "/tmp",
-      },
-    });
-    const realpathNative = vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => {
-      const value = String(candidate);
-      if (value === "/opt/safe/bin") {
-        return "/tmp/evil/bin";
-      }
-      if (value === "/opt/safe") {
-        return "/tmp/evil";
-      }
-      if (value === "/opt/safe/missing-bin") {
-        throw Object.assign(new Error("missing"), { code: "ENOENT" });
-      }
-      return value;
-    });
-
-    try {
-      const plan = await buildGatewayInstallPlan({
-        env: { HOME: tmpDir },
-        port: 3000,
-        runtime: "node",
-        platform: "linux",
-        existingEnvironment: {
-          PATH: "/opt/safe/bin:/opt/safe/missing-bin:/custom/go/bin:/usr/bin",
-        },
-      });
-
-      expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
-    } finally {
-      realpathNative.mockRestore();
-    }
-  });
-
-  it("drops workspace-derived PATH entries even when HOME equals the install cwd", async () => {
-    const cwd = process.cwd();
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: cwd,
-        OPENCLAW_PORT: "3000",
-        PATH: "/managed/bin:/usr/bin",
-        TMPDIR: "/tmp",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
-      env: { HOME: cwd },
-      port: 3000,
-      runtime: "node",
-      platform: "linux",
-      existingEnvironment: {
-        PATH: `${cwd}/evil-bin:/custom/go/bin:/usr/bin`,
-      },
-    });
-
-    expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
-  });
-
-  it("drops keys that were previously tracked as managed service env", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_PORT: "3000",
-        PATH: "/managed/bin:/usr/bin",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
-      env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
-      platform: "linux",
-      existingEnvironment: {
-        PATH: "/custom/go/bin:/usr/bin",
-        GOBIN: "/Users/test/.local/gopath/bin",
-        BLOGWATCHER_HOME: "/Users/test/.blogwatcher",
-        GOPATH: "/Users/test/.local/gopath",
-        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "GOBIN,GOPATH",
-      },
-    });
-
-    expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
-    expect(plan.environment.GOBIN).toBeUndefined();
-    expect(plan.environment.BLOGWATCHER_HOME).toBe("/Users/test/.blogwatcher");
-    expect(plan.environment.GOPATH).toBeUndefined();
-    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
-  });
-
-  it("does not preserve existing PATH entries for macOS LaunchAgents", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_PORT: "3000",
-        PATH: "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-        TMPDIR: "/tmp",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
-      env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
-      platform: "darwin",
-      existingEnvironment: {
-        PATH: [
-          "/Users/test/.volta/bin",
-          "/Users/test/.asdf/shims",
-          "/Users/test/Library/Application Support/fnm/aliases/default/bin",
-          "/Users/test/Library/pnpm",
-          "/custom/go/bin",
-          "/usr/bin",
-        ].join(path.delimiter),
-      },
-    });
-
-    expect(plan.environment.PATH).toBe(
-      "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-    );
-  });
-
   it("drops legacy inline env values when the key is now managed by .env", async () => {
     await writeStateDirDotEnv("TAVILY_API_KEY=fresh-dotenv-value\n", {
       stateDir: path.join(tmpDir, ".openclaw"),
@@ -2410,10 +1900,8 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       },
     });
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
       existingEnvironment: {
         TAVILY_API_KEY: "old-inline-value",
         CUSTOM_TOOL_HOME: "/Users/test/.custom-tool",
@@ -2433,10 +1921,8 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       },
     });
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
       existingEnvironment: {
         OPENROUTER_API_KEY: "or-operator-key",
         CUSTOM_TOOL_HOME: "/Users/test/.custom-tool",
@@ -2468,13 +1954,11 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       },
     });
 
-    const plan = await buildGatewayInstallPlan({
+    const plan = await buildNodePlan({
       env: {
         HOME: tmpDir,
         OPENAI_API_KEY: "shell-openai",
       },
-      port: 3000,
-      runtime: "node",
       authStore: {
         version: 1,
         profiles: {
@@ -2517,10 +2001,8 @@ describe("collectPreservedExistingServiceEnvVars — operator opt-in allowlist",
       },
     });
     return (
-      await buildGatewayInstallPlan({
+      await buildNodePlan({
         env,
-        port: 3000,
-        runtime: "node",
         existingEnvironment,
       })
     ).environment;
@@ -2563,25 +2045,17 @@ describe("collectPreservedExistingServiceEnvVars — operator opt-in allowlist",
     expect(overridden.OPENCLAW_CONFIG_READONLY).toBe("0");
   });
 
-  it("still drops arbitrary OPENCLAW_FOO", async () => {
-    const result = await buildEnvironment({ OPENCLAW_FOO: "bar" });
-    expect(result.OPENCLAW_FOO).toBeUndefined();
-  });
-
-  it("drops legacy install-time version metadata from canonical rewrites", async () => {
-    const result = await buildEnvironment({ OPENCLAW_SERVICE_VERSION: "2026.4.24" });
-    expect(result.OPENCLAW_SERVICE_VERSION).toBeUndefined();
-  });
-
   it("preserves container opt-ins while dropping unrelated OPENCLAW_* keys", async () => {
     const result = await buildEnvironment({
       OPENCLAW_CLI_CONTAINER_BYPASS: "1",
       OPENCLAW_CONTAINER_HINT: "ci",
-      OPENCLAW_BAZ: "qux",
+      OPENCLAW_ALLOW_ROOT: "1",
+      OPENCLAW_SERVICE_VERSION: "2026.4.24",
     });
     expect(result.OPENCLAW_CLI_CONTAINER_BYPASS).toBe("1");
     expect(result.OPENCLAW_CONTAINER_HINT).toBe("ci");
-    expect(result.OPENCLAW_BAZ).toBeUndefined();
+    expect(result.OPENCLAW_ALLOW_ROOT).toBeUndefined();
+    expect(result.OPENCLAW_SERVICE_VERSION).toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

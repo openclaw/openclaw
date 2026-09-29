@@ -1,4 +1,3 @@
-// Msteams plugin module implements graph members behavior.
 import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveConversationPath, resolveGraphConversationId } from "./graph-messages.js";
 import { fetchAllGraphPages, fetchGraphJson, resolveGraphToken } from "./graph.js";
@@ -8,18 +7,6 @@ type GetMemberInfoMSTeamsParams = {
   to: string;
   userId: string;
   currentRequesterId?: string | null;
-};
-
-type GetMemberInfoMSTeamsResult = {
-  user: {
-    id: string | undefined;
-    displayName: string | undefined;
-    mail: string | undefined;
-    jobTitle: string | undefined;
-    userPrincipalName: string | undefined;
-    officeLocation: string | undefined;
-    roles: string[];
-  };
 };
 
 type GraphConversationMember = {
@@ -79,9 +66,7 @@ async function findStandardChannelMember(params: {
 /**
  * Fetch a user profile from Microsoft Graph by user ID.
  */
-export async function getMemberInfoMSTeams(
-  params: GetMemberInfoMSTeamsParams,
-): Promise<GetMemberInfoMSTeamsResult> {
+export async function getMemberInfoMSTeams(params: GetMemberInfoMSTeamsParams) {
   const isCurrentRequester =
     normalizeUserId(params.userId) === normalizeUserId(params.currentRequesterId);
   if (isCurrentRequester && resolveConversationPath(params.to).kind === "chat") {

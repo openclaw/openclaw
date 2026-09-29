@@ -1,8 +1,3 @@
-/**
- * Core channel plugin public types.
- *
- * Defines channel metadata, capabilities, action discovery, setup, status, and runtime contexts.
- */
 import type { TSchema } from "typebox";
 import type { AgentTool, AgentToolResult } from "../../../packages/agent-core/src/types.js";
 import type {
@@ -24,9 +19,10 @@ import type {
   MessageReceiptSourceResult,
   OutboundReplyFacts,
 } from "../message/types.js";
+import type { ChannelProgressDraftCompositorSnapshot } from "../progress-draft-compositor.types.js";
 import type { ChannelId } from "./channel-id.types.js";
 import type { ConversationReadInvocationOrigin } from "./conversation-read-origin.js";
-import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
+import type { ChannelMessageActionName } from "./message-action-names.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type { ChannelId } from "./channel-id.types.js";
@@ -259,17 +255,6 @@ export type ChannelGroupContext = {
   senderE164?: string | null;
 };
 
-/** TTS voice delivery behavior advertised by a channel plugin. */
-/**
- * Container tokens (file-extension shape, no leading dot) that the host
- * TTS pipeline knows how to pre-transcode synthesized audio into.
- * Channels that benefit from a specific container — currently only
- * iMessage, which needs Apple's native voice-memo CAF descriptor — name
- * one here. Adding a new entry requires extending the host transcoder
- * recipe table in lockstep so a typed declaration cannot silently no-op.
- */
-type PreferredAudioFileFormat = "caf";
-
 export type ChannelTtsVoiceDeliveryCapabilities = {
   synthesisTarget: "audio-file" | "voice-note";
   transcodesAudio?: boolean;
@@ -277,14 +262,12 @@ export type ChannelTtsVoiceDeliveryCapabilities = {
   /** Voice notes can carry the final reply text as a visible caption. */
   captionedFinalText?: boolean;
   /**
-   * Optional preferred audio container the channel wants for voice-memo
-   * delivery. When set and the host can transcode (e.g. `afconvert` on
-   * macOS), the TTS pipeline pre-encodes synthesized audio to this format
-   * before handing it to the channel. Useful for channels (such as
-   * iMessage) whose downstream attempts its own container conversion
-   * that races against the upload write and fails.
+   * Preferred file-extension token, without a leading dot, for host pre-transcoding.
+   * Conversion requires an available transcoder (e.g. `afconvert` on macOS).
+   * iMessage uses CAF for native voice memos to avoid a downstream conversion/upload race.
+   * New formats require a matching host transcoder recipe.
    */
-  preferAudioFileFormat?: PreferredAudioFileFormat;
+  preferAudioFileFormat?: "caf";
 };
 
 /** Static capability flags advertised by a channel plugin. */
@@ -328,17 +311,12 @@ export type ChannelMentionAdapter = {
     cfg: OpenClawConfig | undefined;
     agentId?: string;
   }) => RegExp[];
-  stripPatterns?: (params: {
-    ctx: MsgContext;
-    cfg: OpenClawConfig | undefined;
-    agentId?: string;
-  }) => string[];
-  stripMentions?: (params: {
-    text: string;
-    ctx: MsgContext;
-    cfg: OpenClawConfig | undefined;
-    agentId?: string;
-  }) => string;
+  stripPatterns?: (
+    params: Parameters<NonNullable<ChannelMentionAdapter["stripRegexes"]>>[0],
+  ) => string[];
+  stripMentions?: (
+    params: Parameters<NonNullable<ChannelMentionAdapter["stripRegexes"]>>[0] & { text: string },
+  ) => string;
 };
 
 export type ChannelStreamingAdapter = {
@@ -361,6 +339,8 @@ type ChannelCrossContextPresentationFactory = (params: {
 
 type ChannelReplyTransport = {
   replyToId?: string | null;
+  /** Mark a channel-inferred target so outbound delivery can consume first-mode replies. */
+  replyToIdSource?: "implicit";
   threadId?: string | number | null;
 };
 
@@ -556,10 +536,9 @@ export type ChannelMessagingAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string[];
-  resolveRemoteInboundAttachmentRoots?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => string[];
+  resolveRemoteInboundAttachmentRoots?: NonNullable<
+    ChannelMessagingAdapter["resolveInboundAttachmentRoots"]
+  >;
   /**
    * Bundled plugins that need inbound conversation resolution before runtime
    * bootstrap can mirror it through a top-level `thread-binding-api.ts` surface.
@@ -604,10 +583,9 @@ export type ChannelMessagingAdapter = {
    * `resolveSessionConversation(...)` does not return
    * `parentConversationCandidates`.
    */
-  resolveParentConversationCandidates?: (params: {
-    kind: "group" | "channel";
-    rawId: string;
-  }) => string[] | null;
+  resolveParentConversationCandidates?: (
+    params: Parameters<NonNullable<ChannelMessagingAdapter["resolveSessionConversation"]>>[0],
+  ) => string[] | null;
   resolveSessionTarget?: (params: {
     kind: "group" | "channel";
     id: string;
@@ -687,20 +665,19 @@ export type ChannelMessagingAdapter = {
 
 export type ChannelAgentPromptAdapter = {
   messageToolHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
-  messageToolCapabilities?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => string[] | undefined;
+  messageToolCapabilities?: (
+    params: Parameters<NonNullable<ChannelAgentPromptAdapter["messageToolHints"]>>[0],
+  ) => string[] | undefined;
+  /** Per-account formatting contract for agent turns whose visible text reaches this channel. */
   inboundFormattingHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     | {
         text_markup: string;
         rules: string[];
       }
     | undefined;
-  reactionGuidance?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => { level: "minimal" | "extensive"; channelLabel?: string } | undefined;
+  reactionGuidance?: (
+    params: Parameters<NonNullable<ChannelAgentPromptAdapter["messageToolHints"]>>[0],
+  ) => { level: "minimal" | "extensive"; channelLabel?: string } | undefined;
 };
 
 export type ChannelDirectoryEntryKind = "user" | "group" | "channel";
@@ -715,14 +692,14 @@ export type ChannelDirectoryEntry = {
   raw?: unknown;
 };
 
-type ChannelMessageActionName = ChannelMessageActionNameFromList;
-
 /** Execution context passed to channel-owned actions on the shared `message` tool. */
 export type ChannelMessageActionContext = {
   channel: ChannelId;
   action: ChannelMessageActionName;
   cfg: OpenClawConfig;
   params: Record<string, unknown>;
+  /** Host-prepared progress display state; never sourced from model-controlled params. */
+  progressSnapshot?: ChannelProgressDraftCompositorSnapshot;
   reply?: OutboundReplyFacts;
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
@@ -809,6 +786,13 @@ export type ChannelMessageActionAdapter = {
    * Does not extend conversation-read mutation authority or bypass provider policy.
    */
   readAuthorityActions?: readonly ChannelMessageActionName[];
+  /**
+   * Declare write actions that preserve the host's live request authority.
+   * Invoke assertDirectAdapterHandoff after asynchronous preparation and
+   * immediately before every provider request, including queued retries.
+   * Does not grant authority or bypass current requester/provider permissions.
+   */
+  writeAuthorityActions?: readonly ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   resolveExecutionMode?: (params: { action: ChannelMessageActionName }) => "local" | "gateway";
   resolveCliActionRequest?: (params: {
@@ -830,12 +814,24 @@ export type ChannelMessageActionAdapter = {
         /**
          * Prove that provider-native aliases name the trusted current conversation.
          * Core consults this only for host-owned bundled registrations.
+         * @deprecated Prefer matchesCurrentConversationAsync for storage-backed matching.
+         * Keep this callback synchronous for hosts that predate the async companion.
          */
         matchesCurrentConversation?: (params: {
           args: Record<string, unknown>;
           accountId: string;
           toolContext: ChannelThreadingToolContext;
         }) => boolean;
+        /**
+         * Await provider-owned alias proof after host context and target checks.
+         * Preferred over the synchronous callback when present; false or rejection
+         * never falls back to the synchronous matcher.
+         */
+        matchesCurrentConversationAsync?: (params: {
+          args: Record<string, unknown>;
+          accountId: string;
+          toolContext: ChannelThreadingToolContext;
+        }) => Promise<boolean>;
       }
     >
   >;

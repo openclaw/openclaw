@@ -23,6 +23,7 @@ import { createTestApprovalManager } from "../exec-approval-manager.test-support
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayHostLifecycle } from "../server-public.js";
 import type { WorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
+import { runSystemAgentGatewayTask } from "./system-agent-execution.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import {
   callChat,
@@ -60,6 +61,8 @@ describe("openclaw.chat hosted lifecycle", () => {
   ] as const)(
     "settles delegated $action through host acceptance (Full Access=$fullPermission, loss=$loss)",
     async ({ action, fullPermission, loss }, testContext) => {
+      const approvalRequested = createDeferred();
+      const sameOwnerHandled = createDeferred();
       const preparationStarted = createDeferred();
       const releasePreparation = createDeferred();
       const auditStarted = createDeferred();
@@ -125,9 +128,12 @@ describe("openclaw.chat hosted lifecycle", () => {
         engine.getPendingOperatorProposal(),
         "lifecycle proposal",
       ).hash;
-      const handle = vi
-        .spyOn(engine, "handle")
-        .mockResolvedValue({ text: "Approval pending.", action: "none" });
+      const handle = vi.spyOn(engine, "handle").mockImplementation(async (message) => {
+        if (message === "yes") {
+          sameOwnerHandled.resolve();
+        }
+        return { text: "Approval pending.", action: "none" };
+      });
       const resolveOperatorApproval = vi.spyOn(engine, "resolveOperatorApproval");
       const delegatedSession = seededSession({
         engine,
@@ -146,7 +152,11 @@ describe("openclaw.chat hosted lifecycle", () => {
       );
       const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
       const controller = new AbortController();
-      const broadcast = vi.fn();
+      const broadcast = vi.fn((event: string) => {
+        if (event === "openclaw.approval.requested") {
+          approvalRequested.resolve();
+        }
+      });
       const context = {
         ...makeContext(sessions),
         systemAgentApprovalManager: manager,
@@ -208,15 +218,23 @@ describe("openclaw.chat hosted lifecycle", () => {
       let sameOwnerChat: Promise<RespondCall> | undefined;
       try {
         if (!fullPermission) {
-          await vi.waitFor(() => expect(manager.listPendingRecords()).toHaveLength(1));
+          await Promise.race([
+            approvalRequested.promise,
+            pendingChat.then(() => {
+              throw new Error("Delegated lifecycle replied before approval publication");
+            }),
+          ]);
+          await runSystemAgentGatewayTask(async () => undefined);
+          const pendingRecords = await manager.listPendingRecords();
+          expect(pendingRecords).toHaveLength(1);
           expect(requestResponses.calls).toHaveLength(0);
           expect(getActiveGatewayRootWorkCount()).toBe(1);
           expect(systemAgentLane()).toMatchObject({ activeCount: 0, queuedCount: 0 });
-          const proposalId = expectDefined(manager.listPendingRecords()[0], "pending approval").id;
-          expect(manager.getSnapshot(proposalId)).toMatchObject({
+          const proposalId = expectDefined(pendingRecords[0], "pending approval").id;
+          expect(await manager.getSnapshot(proposalId)).toMatchObject({
             request: { proposalHash, agentId: "main", sessionKey: "agent:main:main" },
           });
-          expect(manager.getSnapshot(proposalId)?.decision).toBeUndefined();
+          expect((await manager.getSnapshot(proposalId))?.decision).toBeUndefined();
           expect(broadcast).toHaveBeenCalledWith(
             "openclaw.approval.requested",
             expect.objectContaining({ id: proposalId }),
@@ -232,9 +250,16 @@ describe("openclaw.chat hosted lifecycle", () => {
                 delegation: { agentId: "main", sessionKey: "agent:main:main" },
               }),
             );
-            await vi.waitFor(() => expect(handle).toHaveBeenCalledTimes(2));
+            await Promise.race([
+              sameOwnerHandled.promise,
+              sameOwnerChat.then(() => {
+                throw new Error("Same-owner chat replied before engine handling");
+              }),
+            ]);
+            await runSystemAgentGatewayTask(async () => undefined);
+            expect(handle).toHaveBeenCalledTimes(2);
           }
-          expect(manager.resolve(proposalId, "allow-once", "operator-ui")).toBe(true);
+          expect(await manager.resolve(proposalId, "allow-once", "operator-ui")).toBe(true);
         }
         await Promise.race([
           preparationStarted.promise,
@@ -250,7 +275,7 @@ describe("openclaw.chat hosted lifecycle", () => {
         expect(nativeEffect).not.toHaveBeenCalled();
         expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
         if (fullPermission) {
-          expect(manager.listPendingRecords()).toEqual([]);
+          expect(await manager.listPendingRecords()).toEqual([]);
           expect(broadcast).not.toHaveBeenCalled();
         }
         if (loss === "run") {
@@ -335,8 +360,8 @@ describe("openclaw.chat hosted lifecycle", () => {
         releasePreparation.resolve();
         releaseAudit.resolve();
         controller.abort();
-        for (const record of manager.listPendingRecords()) {
-          manager.expire(record.id);
+        for (const record of await manager.listPendingRecords()) {
+          await manager.expire(record.id);
         }
         await Promise.allSettled([pendingChat, sameOwnerChat]);
         await host.retire();

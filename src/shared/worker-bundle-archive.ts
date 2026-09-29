@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import * as tar from "tar";
 import { sha256File } from "../infra/directory-durability.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
@@ -53,48 +55,60 @@ export async function readWorkerBundleArchiveManifest(
   }> = [];
   const paths = new Set<string>();
   let expandedBytes = 0;
-  await tar.list({
-    file: tarballPath,
+  const parser = tar.list({
     strict: true,
     maxDepth: MAX_ARCHIVE_DEPTH,
     maxDecompressionRatio: MAX_DECOMPRESSION_RATIO,
     onReadEntry(entry) {
-      const entryPath = requireArchivePath(entry.path);
-      if (paths.has(entryPath)) {
-        throw new Error(`Duplicate worker bundle archive path: ${entryPath}`);
+      try {
+        const entryPath = requireArchivePath(entry.path);
+        if (paths.has(entryPath)) {
+          throw new Error(`Duplicate worker bundle archive path: ${entryPath}`);
+        }
+        paths.add(entryPath);
+        if (paths.size > limits.maxEntries) {
+          throw new Error("Worker bundle archive exceeds its entry limit");
+        }
+        if (!Number.isSafeInteger(entry.size) || entry.size < 0) {
+          throw new Error(`Invalid worker bundle archive size: ${entryPath}`);
+        }
+        expandedBytes += entry.size;
+        if (!Number.isSafeInteger(expandedBytes) || expandedBytes > limits.maxExpandedBytes) {
+          throw new Error("Worker bundle archive exceeds its expanded byte limit");
+        }
+        const hash = createHash("sha256");
+        const item = {
+          path: entryPath,
+          mode: entry.mode,
+          headerSize: entry.size,
+          actualSize: 0,
+          type: entry.type,
+        } as (typeof pending)[number];
+        pending.push(item);
+        entry.on("data", (chunk: Buffer) => {
+          item.actualSize += chunk.byteLength;
+          hash.update(chunk);
+        });
+        entry.on("end", () => {
+          item.sha256 = hash.digest("hex");
+        });
+        entry.on("error", (error) => {
+          item.error = error instanceof Error ? error : new Error(String(error));
+        });
+      } catch (error) {
+        // Entry callbacks run outside the awaited promise. Abort through tar's error owner.
+        parser.abort(error instanceof Error ? error : new Error(String(error)));
       }
-      paths.add(entryPath);
-      if (paths.size > limits.maxEntries) {
-        throw new Error("Worker bundle archive exceeds its entry limit");
-      }
-      if (!Number.isSafeInteger(entry.size) || entry.size < 0) {
-        throw new Error(`Invalid worker bundle archive size: ${entryPath}`);
-      }
-      expandedBytes += entry.size;
-      if (!Number.isSafeInteger(expandedBytes) || expandedBytes > limits.maxExpandedBytes) {
-        throw new Error("Worker bundle archive exceeds its expanded byte limit");
-      }
-      const hash = createHash("sha256");
-      const item = {
-        path: entryPath,
-        mode: entry.mode,
-        headerSize: entry.size,
-        actualSize: 0,
-        type: entry.type,
-      } as (typeof pending)[number];
-      pending.push(item);
-      entry.on("data", (chunk: Buffer) => {
-        item.actualSize += chunk.byteLength;
-        hash.update(chunk);
-      });
-      entry.on("end", () => {
-        item.sha256 = hash.digest("hex");
-      });
-      entry.on("error", (error) => {
-        item.error = error instanceof Error ? error : new Error(String(error));
-      });
     },
   });
+  try {
+    // Match tar.list(file): compressed read grouping affects its prefix ratio check.
+    await pipeline(createReadStream(tarballPath, { highWaterMark: 16 * 1024 * 1024 }), parser);
+  } catch (error) {
+    // Parser has no destroy method; release its decompressor on parser and input failures too.
+    parser.abort(error instanceof Error ? error : new Error(String(error)));
+    throw error;
+  }
   return pending
     .map((entry): WorkerBundleHashEntry => {
       if (entry.error) {

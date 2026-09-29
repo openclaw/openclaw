@@ -61,16 +61,22 @@ export async function resolveWorktreeBase(
   const fetched = await runGit(repoRoot, ["fetch", "origin"], { signal, beforeRun: assertCurrent });
   signal?.throwIfAborted();
   if (fetched.termination === "exit" && fetched.code === 0) {
-    const remoteHead = await runGit(repoRoot, [
-      "symbolic-ref",
-      "--quiet",
-      "--short",
-      "refs/remotes/origin/HEAD",
-    ]);
+    const remoteHead = await runGit(
+      repoRoot,
+      ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+      { signal, beforeRun: assertCurrent },
+    );
     if (remoteHead.termination === "exit" && remoteHead.code === 0 && remoteHead.stdout.trim()) {
       const remoteRef = remoteHead.stdout.trim();
-      const resolved = await resolveWorktreeBase(repoRoot, remoteRef, signal, assertCurrent);
-      return { ...resolved, remote: true };
+      try {
+        const resolved = await resolveWorktreeBase(repoRoot, remoteRef, signal, assertCurrent);
+        return { ...resolved, remote: true };
+      } catch (error) {
+        // Pruning a retired default branch can leave origin/HEAD dangling.
+        if (!(error instanceof InvalidWorktreeBaseRefError)) {
+          throw error;
+        }
+      }
     }
   }
   return await resolveWorktreeBase(repoRoot, "HEAD", signal, assertCurrent);

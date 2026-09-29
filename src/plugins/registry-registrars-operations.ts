@@ -19,6 +19,8 @@ import {
   NODE_WORKER_PRIVATE_COMMANDS,
 } from "../infra/node-commands.js";
 import { isReservedCommandName, registerPluginCommandInRegistry } from "./command-registration.js";
+import { bindPluginGatewayAccessPolicy } from "./gateway-access-policy-registration.js";
+import type { PluginGatewayAccessPolicy } from "./gateway-access-policy.types.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { WidgetPresenter } from "./plugin-registration.types.js";
 import type { PluginRegistryState } from "./registry-state.js";
@@ -52,39 +54,6 @@ function isOfficialCodexPluginRecord(
   return sourcePath.includes("/node_modules/@openclaw/codex");
 }
 
-function createPluginCliProgramView(
-  program: Parameters<OpenClawPluginCliRegistrar>[0]["program"],
-  wrap: <T>(value: T) => T,
-): Parameters<OpenClawPluginCliRegistrar>[0]["program"] {
-  const views = new WeakMap<object, typeof program>();
-  const commandConstructor = program.constructor;
-  const view = (command: typeof program): typeof program => {
-    const cached = views.get(command);
-    if (cached) {
-      return cached;
-    }
-    const proxy = new Proxy(command, {
-      get(target, key) {
-        const value = Reflect.get(target, key, target);
-        if (typeof value !== "function") {
-          return value;
-        }
-        return (...args: unknown[]) => {
-          const prepared =
-            key === "action" && typeof args[0] === "function" ? [wrap(args[0])] : args;
-          const result = Reflect.apply(value, target, prepared);
-          // SAFETY: Commander fluent methods return Command instances from this constructor.
-          return result instanceof commandConstructor ? view(result as typeof program) : result;
-        };
-      },
-      set: (target, key, value) => Reflect.set(target, key, value, target),
-    });
-    views.set(command, proxy);
-    return proxy;
-  };
-  return view(program);
-}
-
 export function canClaimReservedCommandOwnership(
   record: Pick<PluginRecord, "id" | "origin" | "packageName" | "rootDir" | "source">,
 ) {
@@ -92,8 +61,13 @@ export function canClaimReservedCommandOwnership(
 }
 
 export function createOperationRegistrars(state: PluginRegistryState) {
-  const { registry, createRegistration, reportRegistrationError, reportRegistrationWarning } =
-    state;
+  const {
+    registry,
+    createRegistration,
+    createIdentityRegistration,
+    reportRegistrationError,
+    reportRegistrationWarning,
+  } = state;
 
   const registerWidgetPresenter = (record: PluginRecord, presenter: WidgetPresenter) => {
     const description = normalizeOptionalString(presenter.description);
@@ -146,7 +120,6 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     registrar: OpenClawPluginCliRegistrar,
     opts?: OpenClawPluginCliRegistrationOptions,
   ) => {
-    const instance = getPluginInstance(record);
     const normalizeCommandRoot = (raw: string, source: "command" | "descriptor") => {
       const normalized = normalizeCommandDescriptorName(raw);
       if (!normalized) {
@@ -219,16 +192,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     record.cliCommands.push(...commandPaths);
     registry.cliRegistrars.push(
       createRegistration(record, {
-        register: (context: Parameters<OpenClawPluginCliRegistrar>[0]) =>
-          registrar({
-            ...context,
-            // Commander retains action callbacks after registration. Give the plugin a
-            // view of the command tree so callbacks supplied to `.action()` retain the
-            // exact plugin instance and its runtime slots when Commander invokes them.
-            program: instance
-              ? createPluginCliProgramView(context.program, (value) => instance.wrap(value))
-              : context.program,
-          }),
+        register: registrar,
         parentPath: normalizedParentPath,
         commands,
         descriptors,
@@ -361,26 +325,43 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     );
   };
 
+  const registerGatewayAccessPolicy = (record: PluginRecord, policy: PluginGatewayAccessPolicy) => {
+    if (typeof policy.authorize !== "function") {
+      reportRegistrationError(record, "Gateway access policy requires an authorize handler");
+      return;
+    }
+    registry.gatewayAccessPolicies.push(
+      createIdentityRegistration(record, {
+        policy: bindPluginGatewayAccessPolicy(policy, getPluginInstance(record)),
+      }),
+    );
+  };
+
   const resolveServiceRegistrationId = (
     record: PluginRecord,
     service: { id: string },
     kind: "service" | "gateway discovery service",
   ) => {
-    const id = service.id.trim();
-    const registrations =
-      kind === "service" ? registry.services : registry.gatewayDiscoveryServices;
-    const existing = id ? registrations.find((entry) => entry.service.id.trim() === id) : undefined;
-    if (id && !existing) {
-      return id;
-    }
-    // Snapshot and activating loads can both register the same owner; keep the first.
-    if (existing?.pluginId !== record.id) {
-      reportRegistrationError(
-        record,
-        existing
-          ? `${kind} already registered: ${id} (${existing.pluginId})`
-          : `${kind} registration missing id`,
-      );
+    try {
+      const id = service.id.trim();
+      const registrations =
+        kind === "service" ? registry.services : registry.gatewayDiscoveryServices;
+      const existing = id ? registrations.find((entry) => entry.id === id) : undefined;
+      if (id && !existing) {
+        return id;
+      }
+      // Snapshot and activating loads can both register the same owner; keep the first.
+      if (existing?.pluginId !== record.id) {
+        reportRegistrationError(
+          record,
+          existing
+            ? `${kind} already registered: ${id} (${existing.pluginId})`
+            : `${kind} registration missing id`,
+        );
+      }
+    } catch {
+      // Plugin accessors can throw sensitive values; report only the boundary failure.
+      reportRegistrationError(record, `${kind} registration id cannot be normalized`);
     }
     return undefined;
   };
@@ -392,6 +373,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     }
     record.services.push(id);
     registry.services.push({
+      id,
       pluginId: record.id,
       pluginName: record.name,
       service,
@@ -412,7 +394,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     }
     record.gatewayDiscoveryServiceIds.push(id);
     registry.gatewayDiscoveryServices.push({
-      ...createRegistration(record, { service }),
+      ...createRegistration(record, { id, service }),
       // The advertiser can be native data; its registration still owns execution and cleanup.
       instance: getPluginInstance(record),
     });
@@ -479,6 +461,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     registerReload,
     registerNodeHostCommand,
     registerNodeInvokePolicy,
+    registerGatewayAccessPolicy,
     registerSecurityAuditCollector,
     registerService,
     registerGatewayDiscoveryService,

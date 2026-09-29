@@ -1,4 +1,3 @@
-// Telegram plugin module tracks per-update processing outcomes.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ChannelIngressMonitorLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 
@@ -77,14 +76,10 @@ export function recordTelegramMessageProcessingResult(
   result: TelegramMessageProcessingResult,
 ): void {
   const frame = telegramUpdateProcessingFrames.getStore();
-  if (!frame) {
-    return;
-  }
-  if (result.kind === "failed-retryable") {
-    frame.result = result;
-    return;
-  }
-  if (!frame.result || frame.result.kind === "skipped") {
+  if (
+    frame &&
+    (result.kind === "failed-retryable" || !frame.result || frame.result.kind === "skipped")
+  ) {
     frame.result = result;
   }
 }
@@ -108,6 +103,13 @@ export function createTelegramSpooledReplayParticipant(
   const onOwnerAbort = () => {
     if (!settled) {
       ownerAbortedWhilePending = true;
+      // An adoption hold owns its eventual commit or rollback outcome.
+      if (!settlementHeld) {
+        settleNow({
+          kind: "failed-retryable",
+          error: ownerAbortSignal?.reason ?? new Error("telegram spooled replay owner aborted"),
+        });
+      }
     }
   };
   ownerAbortSignal?.addEventListener("abort", onOwnerAbort, { once: true });
@@ -122,6 +124,9 @@ export function createTelegramSpooledReplayParticipant(
     }
     resolveTask(result);
   };
+  if (ownerAbortSignal?.aborted) {
+    onOwnerAbort();
+  }
   return {
     key,
     // Buffered work outlives the ALS frame, so its signal must retain the

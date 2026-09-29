@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { sql } from "kysely";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
 import {
@@ -18,6 +17,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
@@ -29,10 +29,12 @@ import {
   hasPendingInputConsumptionColumn,
   hasSessionPendingInputsSchema,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
-import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   preparePendingInputRequest,
+  resolveCommittedPendingInputRequestHash,
+  resolvePendingInputReplayRequest,
   matchesSessionPendingInputRequest,
+  type PendingInputRequest,
 } from "./session-accessor.pending-input-request.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
@@ -46,7 +48,7 @@ import {
   readSessionPendingInputByKey,
   readSessionPendingInputOwnerIds,
   registerSessionPendingInputOwner,
-  releaseSessionPendingInputOwner,
+  finishSessionPendingInputOwner,
   runWithSessionPendingInput,
   runWithSessionPendingInputPersistence,
   withSessionPendingInputRelocation,
@@ -63,11 +65,12 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import {
-  readMessageIdempotencyKey,
   readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
 export { withSessionPendingInputRelocation };
 export type { SessionPendingInput, SessionPendingInputPage };
@@ -85,7 +88,11 @@ const receiptOwners = new WeakMap<SessionPendingInputReceipt, SessionPendingInpu
 
 function ownerReceipt(owner: SessionPendingInputOwner): SessionPendingInputReceipt {
   const receipt: SessionPendingInputReceipt = {
-    state: "queued",
+    get state() {
+      return owner.consumed || owner.sources?.every((source) => source.consumed)
+        ? "consumed"
+        : "queued";
+    },
     inputId: owner.inputId,
     message: parseSessionPendingInputMessage(owner.messageJson),
     run: (operation) => runWithSessionPendingInput(owner, operation),
@@ -182,17 +189,9 @@ export function bindSessionPendingInputSources(
 /** Accept durable input without changing the active transcript or scheduling execution. */
 export async function stageSessionPendingInput(
   scope: PendingInputScope,
-  options: {
-    runId: string;
-    /** Authenticated ingress binds raw input before randomized media preparation. */
-    requestFingerprint?: string;
+  options: PendingInputRequest & {
     /** Records processing completion separately from canonical transcript consumption. */
     trackCompletion?: boolean;
-    message: PersistedUserTurnMessage;
-    prepareMessageAfterIdempotencyCheck?: (
-      message: PersistedUserTurnMessage,
-    ) => PersistedUserTurnMessage | undefined;
-    config?: OpenClawConfig;
     assertCurrent: () => void;
     /** Retained only after the full admission checks and custody transaction commit. */
     assertAdmittedCurrent?: () => void;
@@ -201,14 +200,8 @@ export async function stageSessionPendingInput(
 ): Promise<SessionPendingInputReceipt | undefined> {
   const resolved = resolveSqliteTranscriptScope(scope);
   const databaseOptions = toDatabaseOptions(resolved);
-  const idempotencyKey = readMessageIdempotencyKey(options.message);
-  if (!idempotencyKey || !options.runId) {
-    throw new Error("Pending input requires an exact run and message idempotency key");
-  }
-  const { stableMessage, requestHash } = preparePendingInputRequest(
-    options.message,
-    options.requestFingerprint,
-  );
+  const preparedRequest = preparePendingInputRequest(options);
+  const { idempotencyKey } = preparedRequest;
   return runExclusiveSqliteSessionWrite(
     resolved,
     async () => {
@@ -218,20 +211,25 @@ export async function stageSessionPendingInput(
         return undefined;
       }
       const existing = readSessionPendingInputByKey(database, resolved, idempotencyKey);
+      if (options.trackCompletion) {
+        ensureSessionInputCompletionsSchema(database.db);
+      }
+      const completionIdentity = { ...resolved, idempotencyKey };
+      const previous = options.trackCompletion
+        ? readSessionInputCompletion(database, completionIdentity)
+        : undefined;
+      const replayRequest = resolvePendingInputReplayRequest(preparedRequest, previous ?? existing);
+      const { message, stableMessage } = replayRequest;
+      let requestHash = replayRequest.requestHash;
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       let finished = false;
       let complete: SessionPendingInputReceipt["complete"];
       if (options.trackCompletion) {
-        ensureSessionInputCompletionsSchema(database.db);
         const completionScope = {
-          sessionKey: resolved.sessionKey,
-          sessionId: scope.sessionId,
-          idempotencyKey,
+          ...completionIdentity,
           runId: options.runId,
-          requestHash,
           lifecycleGeneration,
         };
-        const previous = readSessionInputCompletion(database, completionScope);
         if (
           previous &&
           (previous.request_hash !== requestHash || previous.run_id !== options.runId)
@@ -242,7 +240,7 @@ export async function stageSessionPendingInput(
           return {
             state: "consumed",
             inputId: idempotencyKey,
-            message: options.message,
+            message,
             completion: previous.outcome,
             run: () => {
               throw new Error("Input processing has already completed");
@@ -251,21 +249,30 @@ export async function stageSessionPendingInput(
           };
         }
         complete = (outcome) =>
-          runOpenClawAgentWriteTransaction((current) => {
-            if (finished) {
-              throw new Error("Input completion owner has already been released");
-            }
-            // Abort may itself be the outcome. The producer still must own the
-            // original controller, lifecycle and session at the commit boundary.
-            (options.assertCompletionCurrent ?? options.assertCurrent)();
-            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-            if (
-              readSessionEntryRow(current, resolved.sessionKey)?.entry.sessionId !== scope.sessionId
-            ) {
-              throw new Error("Input completion no longer owns the admitted session");
-            }
-            return writeSessionInputCompletion(current, completionScope, outcome);
-          }, databaseOptions);
+          runOpenClawAgentWriteTransaction(
+            (current) => {
+              if (finished) {
+                throw new Error("Input completion owner has already been released");
+              }
+              // Abort may itself be the outcome. The producer still must own the
+              // original controller, lifecycle and session at the commit boundary.
+              (options.assertCompletionCurrent ?? options.assertCurrent)();
+              assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+              if (
+                readSessionEntryRow(current, resolved.sessionKey)?.entry.sessionId !==
+                scope.sessionId
+              ) {
+                throw new Error("Input completion no longer owns the admitted session");
+              }
+              return writeSessionInputCompletion(
+                current,
+                { ...completionScope, requestHash },
+                outcome,
+              );
+            },
+            databaseOptions,
+            { operationLabel: "session.pending-input.record-outcome" },
+          );
       }
       if (existing) {
         if (
@@ -285,10 +292,7 @@ export async function stageSessionPendingInput(
             finish: () => {},
           };
         }
-        const hasOwner = readSessionPendingInputOwnerIds(database, [existing]).has(
-          existing.input_id,
-        );
-        if (hasOwner) {
+        if (readSessionPendingInputOwnerIds(database, [existing]).has(existing.input_id)) {
           throw new Error("Pending input is already admitted; wait for its current turn");
         }
         if (
@@ -308,18 +312,20 @@ export async function stageSessionPendingInput(
       if (committed) {
         const committedMessage = parseSessionPendingInputMessage(JSON.stringify(committed.message));
         if (options.trackCompletion) {
-          const prepared = options.prepareMessageAfterIdempotencyCheck
-            ? options.prepareMessageAfterIdempotencyCheck(options.message)
-            : options.message;
-          if (!prepared) {
+          const committedRequestHash = resolveCommittedPendingInputRequestHash(
+            {
+              ...options,
+              message,
+              replaySourceSessionKeys:
+                previous || existing ? undefined : options.replaySourceSessionKeys,
+            },
+            committedMessage,
+          );
+          if (!committedRequestHash) {
             return undefined;
           }
-          const { timestamp: _preparedTimestamp, ...stablePrepared } =
-            redactTranscriptMessageForStorage(prepared, { config: options.config });
-          const { timestamp: _committedTimestamp, ...stableCommitted } = committedMessage;
-          if (stableStringify(stablePrepared) !== stableStringify(stableCommitted)) {
-            throw new Error("Input completion retry conflicts with the committed input");
-          }
+          requestHash = committedRequestHash;
+          options.assertCurrent();
         }
         // Committed transcript replay keeps its existing contract and never creates new custody.
         return {
@@ -339,8 +345,8 @@ export async function stageSessionPendingInput(
       const prepared = existing
         ? parseSessionPendingInputMessage(existing.message_json)
         : options.prepareMessageAfterIdempotencyCheck
-          ? options.prepareMessageAfterIdempotencyCheck(options.message)
-          : options.message;
+          ? options.prepareMessageAfterIdempotencyCheck(message)
+          : message;
       if (!prepared) {
         return undefined;
       }
@@ -352,51 +358,64 @@ export async function stageSessionPendingInput(
       }
       const inputId = existing?.input_id ?? randomUUID();
       ensureSessionPendingInputsSchema(database.db);
-      const inserted = runOpenClawAgentWriteTransaction((current) => {
-        options.assertCurrent();
-        if (
-          readSessionEntryRow(current, resolved.sessionKey)?.entry.sessionId !== scope.sessionId
-        ) {
-          return false;
-        }
-        if (existing) {
-          // A reconnect supplies fresh admission, never the previous run's closure.
-          // Keep accepted bytes and order; only wholly unconsumed input may change owners.
-          const result = executeSqliteQuerySync(
-            current.db,
-            getSessionKysely(current.db)
-              .updateTable("session_pending_inputs")
-              .set({ state: "queued", lifecycle_generation: lifecycleGeneration })
-              .where("input_id", "=", inputId)
-              .where("session_key", "=", resolved.sessionKey)
-              .where("session_id", "=", scope.sessionId)
-              .where("run_id", "=", options.runId)
-              .where("lifecycle_generation", "=", existing.lifecycle_generation)
-              .where("request_hash", "=", requestHash)
-              .where("message_json", "=", existing.message_json)
-              .where("state", "=", existing.state)
-              .where("consumed_event_id", "is", null),
-          );
-          return result.numAffectedRows === 1n;
-        }
-        executeSqliteQuerySync(
-          current.db,
-          getSessionKysely(current.db).insertInto("session_pending_inputs").values({
-            input_id: inputId,
-            session_key: resolved.sessionKey,
-            session_id: scope.sessionId,
-            idempotency_key: idempotencyKey,
-            run_id: options.runId,
-            request_hash: requestHash,
-            message_json: messageJson,
-            lifecycle_generation: lifecycleGeneration,
-            state: "queued",
-            accepted_at: Date.now(),
-          }),
-        );
-        return true;
-      }, databaseOptions);
-      if (!inserted) {
+      const source = runOpenClawAgentWriteTransaction(
+        (current) => {
+          options.assertCurrent();
+          if (
+            readSessionEntryRow(current, resolved.sessionKey)?.entry.sessionId !== scope.sessionId
+          ) {
+            return undefined;
+          }
+          if (existing) {
+            // A reconnect supplies fresh admission, never the previous run's closure.
+            // Keep accepted bytes and order; only wholly unconsumed input may change owners.
+            const result = executeSqliteQuerySync(
+              current.db,
+              getSessionKysely(current.db)
+                .updateTable("session_pending_inputs")
+                .set({ state: "queued", lifecycle_generation: lifecycleGeneration })
+                .where("input_id", "=", inputId)
+                .where("session_key", "=", resolved.sessionKey)
+                .where("session_id", "=", scope.sessionId)
+                .where("run_id", "=", options.runId)
+                .where("lifecycle_generation", "=", existing.lifecycle_generation)
+                .where("request_hash", "=", requestHash)
+                .where("message_json", "=", existing.message_json)
+                .where("state", "=", existing.state)
+                .where("consumed_event_id", "is", null),
+            );
+            if (result.numAffectedRows !== 1n) {
+              return undefined;
+            }
+          } else {
+            executeSqliteQuerySync(
+              current.db,
+              getSessionKysely(current.db).insertInto("session_pending_inputs").values({
+                input_id: inputId,
+                session_key: resolved.sessionKey,
+                session_id: scope.sessionId,
+                idempotency_key: idempotencyKey,
+                run_id: options.runId,
+                request_hash: requestHash,
+                message_json: messageJson,
+                lifecycle_generation: lifecycleGeneration,
+                state: "queued",
+                accepted_at: Date.now(),
+              }),
+            );
+          }
+          const physical = readOpenClawAgentDatabaseIdentity(current);
+          return {
+            agentId: current.agentId,
+            path: current.path,
+            databaseIdentity: physical.identity,
+            databaseBirthtime: physical.birthtime,
+          };
+        },
+        databaseOptions,
+        { operationLabel: "session.pending-input.stage" },
+      );
+      if (!source) {
         return undefined;
       }
       const owner: SessionPendingInputOwner = {
@@ -404,7 +423,7 @@ export async function stageSessionPendingInput(
         transcriptInputId: inputId,
         sessionId: scope.sessionId,
         sessionKey: resolved.sessionKey,
-        databasePath: database.path,
+        databasePath: source.path,
         idempotencyKey,
         lifecycleGeneration,
         messageJson,
@@ -416,23 +435,7 @@ export async function stageSessionPendingInput(
             return;
           }
           finished = true;
-          // Release authority even if recording the terminal disposition fails.
-          releaseSessionPendingInputOwner(owner);
-          if (owner.consumed) {
-            return;
-          }
-          runOpenClawAgentWriteTransaction((current) => {
-            executeSqliteQuerySync(
-              current.db,
-              getSessionKysely(current.db)
-                .updateTable("session_pending_inputs")
-                .set({ state: disposition })
-                .where("input_id", "=", inputId)
-                .where("lifecycle_generation", "=", lifecycleGeneration)
-                .where("state", "=", "queued")
-                .where("consumed_event_id", "is", null),
-            );
-          }, databaseOptions);
+          finishSessionPendingInputOwner(owner, disposition, source, databaseOptions);
         },
       };
       registerSessionPendingInputOwner(owner);
@@ -450,7 +453,7 @@ export async function stageSessionPendingInput(
 function readPendingInputRows(
   scope: PendingInputScope,
   options: { limit?: number; before?: number; id?: string },
-): { rows: SessionPendingInputRow[]; total: number; nextBefore?: number } {
+): { rows: SessionPendingInputRow[]; total: number | undefined; nextBefore?: number } {
   const resolved = resolveSqliteTranscriptScope(scope);
   const databaseOptions = toDatabaseOptions(resolved);
   const limit = Math.max(1, Math.min(20, Math.trunc(options.limit ?? 20)));
@@ -467,10 +470,12 @@ function readPendingInputRows(
       base = base.where("consumed_event_id", "is", null);
     }
     const total =
-      executeSqliteQueryTakeFirstSync(
-        database.db,
-        base.select(db.fn.count<number>("input_id").as("total")),
-      )?.total ?? 0;
+      options.id === undefined
+        ? (executeSqliteQueryTakeFirstSync(
+            database.db,
+            base.select(db.fn.count<number>("input_id").as("total")),
+          )?.total ?? 0)
+        : undefined;
     let query = base.orderBy("seq", "desc").limit(limit + 1);
     if (options.before !== undefined) {
       query = query.where("seq", "<", options.before);
@@ -498,11 +503,12 @@ function readPendingInputRows(
     if (metadata.length && !selected.length) {
       throw new Error("Stored pending input exceeds the Gateway payload limit");
     }
+    // Sort the bounded page in memory instead of spilling full message bodies to a temp B-tree.
     const rows = selected.length
       ? executeSqliteQuerySync(
           database.db,
-          base.selectAll().where("seq", "in", selected).orderBy("seq", "desc"),
-        ).rows
+          base.selectAll().where("seq", "in", selected),
+        ).rows.toSorted((left, right) => right.seq - left.seq)
       : [];
     // An aborted but registered owner still owns the terminal disposition. Reads
     // must not race its finish(cancelled) by recording an inferred interruption.
@@ -522,31 +528,35 @@ function readPendingInputRows(
   }
   const snapshot = result.value;
   if (snapshot.staleIds.length) {
-    const interrupted = runOpenClawAgentWriteTransaction((database) => {
-      const db = getSessionKysely(database.db);
-      const candidates = executeSqliteQuerySync(
-        database.db,
-        db
-          .selectFrom("session_pending_inputs")
-          .selectAll()
-          .where("input_id", "in", snapshot.staleIds)
-          .where("state", "=", "queued")
-          .where("consumed_event_id", "is", null),
-      ).rows;
-      const ownedIds = readSessionPendingInputOwnerIds(database, candidates);
-      const ids = candidates.flatMap((row) => (ownedIds.has(row.input_id) ? [] : [row.input_id]));
-      if (ids.length) {
-        executeSqliteQuerySync(
+    const interrupted = runOpenClawAgentWriteTransaction(
+      (database) => {
+        const db = getSessionKysely(database.db);
+        const candidates = executeSqliteQuerySync(
           database.db,
           db
-            .updateTable("session_pending_inputs")
-            .set({ state: "interrupted" })
-            .where("input_id", "in", ids)
+            .selectFrom("session_pending_inputs")
+            .select(["input_id", "session_key", "session_id", "lifecycle_generation"])
+            .where("input_id", "in", snapshot.staleIds)
+            .where("state", "=", "queued")
             .where("consumed_event_id", "is", null),
-        );
-      }
-      return new Set(ids);
-    }, databaseOptions);
+        ).rows;
+        const ownedIds = readSessionPendingInputOwnerIds(database, candidates);
+        const ids = candidates.flatMap((row) => (ownedIds.has(row.input_id) ? [] : [row.input_id]));
+        if (ids.length) {
+          executeSqliteQuerySync(
+            database.db,
+            db
+              .updateTable("session_pending_inputs")
+              .set({ state: "interrupted" })
+              .where("input_id", "in", ids)
+              .where("consumed_event_id", "is", null),
+          );
+        }
+        return new Set(ids);
+      },
+      databaseOptions,
+      { operationLabel: "session.pending-input.interrupt-stale" },
+    );
     for (const row of snapshot.rows) {
       if (interrupted.has(row.input_id)) {
         row.state = "interrupted";
@@ -563,7 +573,7 @@ export function listSessionPendingInputs(
   const { rows, total, nextBefore } = readPendingInputRows(scope, options);
   return {
     items: rows.toReversed().map(projectSessionPendingInput),
-    total,
+    total: total ?? 0,
     ...(nextBefore !== undefined ? { nextBefore } : {}),
   };
 }
@@ -653,7 +663,7 @@ export function readSessionSubmittedInput(
                     .onRef("event.session_id", "=", "identity.session_id")
                     .onRef("event.seq", "=", "identity.seq"),
                 )
-                .select((eb) => eb.fn<number>("octet_length", ["event.event_json"]).as("bytes"))
+                .select(transcriptEventReadBytesSql("event").as("bytes"))
                 .where("identity.session_id", "=", resolved.sessionId)
                 .where("identity.message_idempotency_key", "=", idempotencyKey)
                 .orderBy("identity.seq", "desc")
@@ -683,56 +693,4 @@ export function readSessionSubmittedInput(
     // Unavailable or corrupt storage supplies no proof of the original submitted bytes.
     return undefined;
   }
-}
-
-/** Bounded display reconciliation; these durable correlations never authorize replay. */
-export function listSessionPendingInputReceipts(
-  scope: PendingInputScope,
-  options: { runIds: readonly string[] },
-): Array<
-  | { runId: string; state: "pending" }
-  | { runId: string; state: "consumed"; consumedByEventId: string }
-> {
-  if (options.runIds.length > 50) {
-    throw new Error("Pending input receipt lookup accepts at most 50 run IDs");
-  }
-  const runIds = [...new Set(options.runIds)];
-  if (!runIds.length) {
-    return [];
-  }
-  const resolved = resolveSqliteTranscriptScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    if (
-      !hasSessionPendingInputsSchema(database.db) ||
-      !hasPendingInputConsumptionColumn(database.db)
-    ) {
-      return [];
-    }
-    const rows = executeSqliteQuerySync(
-      database.db,
-      getSessionKysely(database.db)
-        .selectFrom("session_pending_inputs")
-        .select(["run_id", "consumed_event_id"])
-        .where("session_key", "=", resolved.sessionKey)
-        .where("session_id", "=", scope.sessionId)
-        .where("run_id", "in", runIds)
-        .orderBy("seq", "asc")
-        .limit(51),
-    ).rows;
-    // A run ID is correlation, not unique authority. Never retire an ambiguous
-    // provisional message when another source with that run is still pending.
-    if (rows.length > 50 || new Set(rows.map((row) => row.run_id)).size !== rows.length) {
-      throw new Error("Pending input receipt lookup has ambiguous source run IDs");
-    }
-    return rows.map((row) =>
-      row.consumed_event_id == null
-        ? { runId: row.run_id, state: "pending" as const }
-        : {
-            runId: row.run_id,
-            state: "consumed" as const,
-            consumedByEventId: row.consumed_event_id,
-          },
-    );
-  }, toDatabaseOptions(resolved));
-  return result.found ? result.value : [];
 }

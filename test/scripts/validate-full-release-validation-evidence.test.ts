@@ -1,5 +1,12 @@
 // Full release validation evidence tests cover producer and candidate binding.
-import { describe, expect, it, vi } from "vitest";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { text } from "node:stream/consumers";
+import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createPublicationSourceFact,
   publicationDispatchEnvelope,
@@ -12,6 +19,7 @@ import {
   normalizeFullReleaseValidationRun,
   validateFullReleaseValidationEvidence as validateEvidence,
 } from "../../scripts/validate-full-release-validation-evidence.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 function validateFullReleaseValidationEvidence(options: Parameters<typeof validateEvidence>[0]) {
   return validateEvidence({
@@ -25,6 +33,49 @@ const targetSha = "b".repeat(40);
 const workflowSha = "a".repeat(40);
 const publisherWorkflowSha = "c".repeat(40);
 const pinnedBranch = `release-ci/${workflowSha.slice(0, 12)}-1783705000000`;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("reads delayed piped run metadata before enforcing the CLI consumer boundary", async () => {
+  const manifestPath = join(tempDirs.make("release-evidence-stdin-"), "manifest.json");
+  writeFileSync(manifestPath, "{}");
+  const child = spawn(
+    process.execPath,
+    [
+      fileURLToPath(
+        new URL("../../scripts/validate-full-release-validation-evidence.mjs", import.meta.url),
+      ),
+    ],
+    {
+      env: {
+        ...process.env,
+        MANIFEST_FILE: manifestPath,
+        PUBLICATION_CONSUMER: "invalid-consumer",
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    },
+  );
+  const exited = once(child, "exit");
+  const stdout = text(child.stdout);
+  const stderr = text(child.stderr);
+  const inputErrors: Error[] = [];
+  child.stdin.on("error", (error) => inputErrors.push(error));
+  try {
+    child.stdin.write('{"id":');
+    // Model gh api delivering a later chunk while the nonblocking pipe stays open.
+    await delay(250);
+    child.stdin.end("123}");
+    const [code] = await exited;
+    expect(await stderr).toBe("Unknown publication evidence consumer.\n");
+    expect(code).toBe(1);
+    expect(await stdout).toBe("");
+    expect(inputErrors).toEqual([]);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill();
+      await exited;
+    }
+  }
+});
 
 function releaseRun(overrides: Record<string, unknown> = {}) {
   return {
@@ -107,6 +158,51 @@ function validate(
 }
 
 describe("full release validation evidence", () => {
+  it.each([3, 4])("accepts bound Windows Node advisory evidence in manifest v%s", (version) => {
+    const job = {
+      name: "checks-windows-node-test-2",
+      status: "completed",
+      conclusion: "failure",
+      url: "https://example.invalid/job",
+    };
+    const advisory = {
+      class: "windows-node-ci",
+      child: "normalCi",
+      job: job.name,
+      conclusion: "failure",
+      runId: "456",
+      url: job.url,
+    };
+    const manifest = {
+      version,
+      childRuns: { normalCi: "456" },
+      childEvidence: { normalCi: { runId: "456", jobs: [job] } },
+      advisoryJobs: [advisory],
+    };
+    expect(validate({}, manifest).result.source).toBe("sha-pinned-main");
+    for (const changed of [
+      { class: "windows" },
+      { child: "releaseChecksCandidate" },
+      { job: "macos-node" },
+      { job: "cross_os_release_checks / Windows / packaged upgrade" },
+      { runId: "789" },
+    ]) {
+      expect(() =>
+        validate({}, { ...manifest, advisoryJobs: [{ ...advisory, ...changed }] }),
+      ).toThrow(/advisory jobs differ/u);
+    }
+    expect(() => validate({}, { ...manifest, advisoryJobs: [] })).toThrow(/advisory jobs differ/u);
+    expect(validate({}, { version, advisoryJobs: [] }).result.source).toBe("sha-pinned-main");
+  });
+
+  it.each([
+    { validationInputs: { laneWaiver: "approved" } },
+    { publishInputs: { stableSoakWaiver: "approved" } },
+    { validationInputs: { knownFlakyJobsJson: '["checks-windows-node-test-2"]' } },
+  ])("rejects retired waiver inputs before accepting direct evidence: %j", (inputs) => {
+    expect(() => validate({}, inputs)).toThrow(/waivers|knownFlakyJobsJson/u);
+  });
+
   it("keeps historical recovery outside new selection validation", () => {
     const expectedPublicationSelection = vi.fn(() => {
       throw new Error("new selection was evaluated");
@@ -495,6 +591,27 @@ describe("full release validation evidence", () => {
     } else {
       expect(isTrustedMainAncestor).not.toHaveBeenCalled();
     }
+  });
+
+  it("rejects direct monthly-branch evidence under a protected publisher", () => {
+    const branch = "extended-stable/2026.6.33";
+    expect(() =>
+      validateFullReleaseValidationEvidence({
+        run: releaseRun({ head_branch: branch }),
+        manifest: releaseManifest({
+          workflowRef: branch,
+          workflowFullRef: `refs/heads/${branch}`,
+          targetRef: "v2026.6.35",
+        }),
+        expectedRepository: "openclaw/openclaw",
+        expectedRunId: "123",
+        expectedTargetSha: targetSha,
+        expectedWorkflowBranch: branch,
+        expectedTrustedWorkflowFullRef: `refs/tags/release-publish/${workflowSha.slice(0, 12)}-123`,
+        expectedTrustedWorkflowSha: workflowSha,
+        isTrustedMainAncestor: () => false,
+      }),
+    ).toThrow("must use a canonical release-ci producer branch");
   });
 
   it("rejects direct main evidence outside current main", () => {

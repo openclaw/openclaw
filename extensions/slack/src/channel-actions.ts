@@ -1,15 +1,14 @@
-// Slack plugin module implements channel actions behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { SlackActionContext } from "./action-runtime.js";
+import type { SlackActionContext } from "./action-context.js";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
 import { extractSlackToolSend } from "./message-actions.js";
 import { describeSlackMessageTool } from "./message-tool-api.js";
-import { formatSlackTarget, parseSlackTarget, resolveSlackChannelId } from "./target-parsing.js";
+import { parseSlackTarget } from "./target-parsing.js";
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
@@ -40,7 +39,8 @@ function resolveSlackActionContext(
     !ctx.mediaReadFile &&
     !ctx.conversationReadOrigin &&
     !ctx.requesterAccountId &&
-    !ctx.requesterSenderId
+    !ctx.requesterSenderId &&
+    !ctx.assertDirectAdapterHandoff
   ) {
     return undefined;
   }
@@ -54,6 +54,7 @@ function resolveSlackActionContext(
     conversationReadOrigin: ctx.conversationReadOrigin,
     requesterAccountId: ctx.requesterAccountId ?? undefined,
     requesterSenderId: ctx.requesterSenderId ?? undefined,
+    assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
   };
 }
 
@@ -63,7 +64,14 @@ export function createSlackActions(
 ): ChannelMessageActionAdapter {
   return {
     providerOwnedReadGates: true,
-    readAuthorityActions: ["read", "reactions", "list-pins"],
+    readAuthorityActions: [
+      "read",
+      "reactions",
+      "list-pins",
+      "member-info",
+      "emoji-list",
+      "download-file",
+    ],
     describeMessageTool: describeSlackMessageTool,
     extractToolSend: ({ args }) => extractSlackToolSend(args),
     isToolDeliveryAction: ({ args }) =>
@@ -76,8 +84,6 @@ export function createSlackActions(
       return await handleSlackMessageAction({
         providerId,
         ctx,
-        normalizeChannelId: normalizeSlackActionChannelTarget,
-        includeReadThreadId: true,
         invoke: async (action, cfg, toolContext) => {
           const actionContext = resolveSlackActionContext(ctx, toolContext);
           return await (options?.invoke
@@ -87,12 +93,6 @@ export function createSlackActions(
       });
     },
   };
-}
-
-function normalizeSlackActionChannelTarget(raw: string): string {
-  const target = parseSlackTarget(raw, { defaultKind: "channel" });
-  const channelId = resolveSlackChannelId(raw);
-  return formatSlackTarget({ teamId: target?.teamId, kind: "channel", id: channelId });
 }
 
 function shouldUseWorkspaceAwareSlackActionSend(

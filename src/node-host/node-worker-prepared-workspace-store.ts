@@ -1,256 +1,130 @@
-import type { DatabaseSync } from "node:sqlite";
-import type { Selectable } from "kysely";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { ensureNodeWorkerPreparedWorkspaceSchema } from "../state/openclaw-state-db-schema-additive.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import type { DB } from "../state/openclaw-state-db.generated.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type {
   NodeWorkerPreparedWorkspaceBinding,
   NodeWorkerPreparedWorkspaceRegistration,
 } from "../worker/node-workspace-prepared-protocol.js";
+import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
+import type { NodeWorkerJournalAuthority } from "./node-worker-journal.types.js";
+import {
+  NodeWorkerPreparedWorkspaceKernel,
+  type NodeWorkerPreparedWorkspaceRow,
+} from "./node-worker-prepared-workspace-store.kernel.js";
 
-type PreparedDatabase = Pick<DB, "node_worker_prepared_workspaces">;
-export type NodeWorkerPreparedWorkspaceRow = Selectable<DB["node_worker_prepared_workspaces"]>;
-const TABLE = "node_worker_prepared_workspaces";
+export type { NodeWorkerPreparedWorkspaceRow } from "./node-worker-prepared-workspace-store.kernel.js";
 
-function query(db: DatabaseSync) {
-  return getNodeSqliteKysely<PreparedDatabase>(db);
-}
-
-function selectRow(db: DatabaseSync, preparationKey: string) {
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    query(db).selectFrom(TABLE).selectAll().where("preparation_key", "=", preparationKey),
-  );
-}
-
-function requireUnchanged(
-  row: NodeWorkerPreparedWorkspaceRow | undefined,
-  expected: NodeWorkerPreparedWorkspaceRow,
-) {
-  if (!row || JSON.stringify(row) !== JSON.stringify(expected)) {
-    throw new Error("INVALID_REQUEST: prepared workspace ownership changed");
-  }
-  return row;
-}
-
-/** One fresh dedicated node owns one immutable registration and one session binding. */
+/** Prepared workspace persistence shares the node journal's admission and settlement owner. */
 export class NodeWorkerPreparedWorkspaceStore {
-  constructor(private readonly options: OpenClawStateDatabaseOptions) {}
-
-  find(environmentId: string): NodeWorkerPreparedWorkspaceRow | undefined {
-    return withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      if (!tableExists(db, TABLE)) {
-        return undefined;
-      }
-      const rows = executeSqliteQuerySync(
-        db,
-        query(db).selectFrom(TABLE).selectAll().limit(2),
-      ).rows;
-      if (rows.length > 1 || (rows[0] && rows[0].environment_id !== environmentId)) {
-        throw new Error("INVALID_REQUEST: this prepared node belongs to another environment");
-      }
-      return rows[0];
-    }, this.options);
+  private readonly worker: NodeWorkerJournalWorker;
+  private readonly mutations = new Map<string, { open: boolean }>();
+  constructor(private readonly options: Pick<OpenClawStateDatabaseOptions, "env" | "path">) {
+    this.worker = new NodeWorkerJournalWorker({
+      env: options.env,
+      path: options.path,
+    });
   }
 
-  assertCurrent(expected: NodeWorkerPreparedWorkspaceRow): void {
-    requireUnchanged(this.find(expected.environment_id), expected);
+  /** @deprecated Only the synchronous public plugin workspace capability retains this path. */
+  findSync(environmentId: string): NodeWorkerPreparedWorkspaceRow | undefined {
+    if (this.mutations.size > 0) {
+      throw new Error("INVALID_REQUEST: prepared workspace mutation is in progress");
+    }
+    return new NodeWorkerPreparedWorkspaceKernel(this.options).find(environmentId);
   }
 
-  list(gatewayNamespace: string): NodeWorkerPreparedWorkspaceRow[] {
+  find(environmentId: string): Promise<NodeWorkerPreparedWorkspaceRow | undefined> {
+    return this.worker.run(
+      (scope) => scope.execute({ type: "nodeWorker.prepared.find", input: [environmentId] }),
+      undefined,
+      { existingOnly: true },
+    );
+  }
+
+  async assertCurrent(expected: NodeWorkerPreparedWorkspaceRow): Promise<void> {
+    const row = await this.find(expected.environment_id);
+    if (!row || JSON.stringify(row) !== JSON.stringify(expected)) {
+      throw new Error("INVALID_REQUEST: prepared workspace ownership changed");
+    }
+  }
+
+  async list(gatewayNamespace: string): Promise<NodeWorkerPreparedWorkspaceRow[]> {
     return (
-      withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-        if (!tableExists(db, TABLE)) {
-          return [];
-        }
-        return executeSqliteQuerySync(
-          db,
-          query(db).selectFrom(TABLE).selectAll().where("gateway_namespace", "=", gatewayNamespace),
-        ).rows;
-      }, this.options) ?? []
+      (await this.worker.run(
+        (scope) => scope.execute({ type: "nodeWorker.prepared.list", input: [gatewayNamespace] }),
+        undefined,
+        { existingOnly: true },
+      )) ?? []
     );
   }
 
-  register(input: NodeWorkerPreparedWorkspaceRegistration): NodeWorkerPreparedWorkspaceRow {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        ensureNodeWorkerPreparedWorkspaceSchema(db);
-        const existing = executeSqliteQueryTakeFirstSync(
-          db,
-          query(db).selectFrom(TABLE).selectAll().limit(1),
-        );
-        if (existing) {
-          if (
-            existing.state !== "available" ||
-            existing.preparation_key !== input.preparationKey ||
-            existing.cache_key !== input.cacheKey ||
-            existing.gateway_namespace !== input.gatewayNamespace ||
-            existing.environment_id !== input.environmentId ||
-            existing.workspace_dir !== input.workspaceDir ||
-            existing.home_dir !== input.homeDir ||
-            existing.source_manifest_ref !== input.sourceManifestRef ||
-            existing.prepared_manifest_ref !== input.preparedManifestRef
-          ) {
-            throw new Error("INVALID_REQUEST: this node already owns a prepared workspace");
-          }
-          return existing;
-        }
-        const row = {
-          preparation_key: input.preparationKey,
-          cache_key: input.cacheKey,
-          gateway_namespace: input.gatewayNamespace,
-          environment_id: input.environmentId,
-          workspace_dir: input.workspaceDir,
-          home_dir: input.homeDir,
-          source_manifest_ref: input.sourceManifestRef,
-          prepared_manifest_ref: input.preparedManifestRef,
-          state: "available",
-          session_id: null,
-          session_key: null,
-          owner_epoch: null,
-          created_at_ms: Date.now(),
-          bound_at_ms: null,
-          retired_at_ms: null,
-        };
-        executeSqliteQuerySync(db, query(db).insertInto(TABLE).values(row));
-        return selectRow(db, input.preparationKey)!;
-      },
-      this.options,
-      { operationLabel: "prepared-workspace.register" },
-    );
+  register(
+    input: NodeWorkerPreparedWorkspaceRegistration,
+    authority?: NodeWorkerJournalAuthority,
+  ): Promise<NodeWorkerPreparedWorkspaceRow> {
+    return this.worker.execute({ type: "nodeWorker.prepared.register", input: [input] }, authority);
   }
 
-  bind(input: NodeWorkerPreparedWorkspaceBinding): NodeWorkerPreparedWorkspaceRow {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        if (!tableExists(db, TABLE)) {
-          throw new Error("INVALID_REQUEST: prepared workspace registration is missing");
-        }
-        const row = selectRow(db, input.preparationKey);
-        if (
-          !row ||
-          row.cache_key !== input.cacheKey ||
-          row.gateway_namespace !== input.gatewayNamespace ||
-          row.environment_id !== input.environmentId
-        ) {
-          throw new Error(
-            "INVALID_REQUEST: prepared workspace registration does not match this environment",
-          );
-        }
-        if (
-          row.state === "bound" &&
-          row.session_id === input.sessionId &&
-          row.session_key === input.sessionKey &&
-          row.owner_epoch === input.ownerEpoch
-        ) {
-          return row;
-        }
-        if (
-          row.state !== "available" ||
-          row.session_id !== null ||
-          row.session_key !== null ||
-          row.owner_epoch !== null ||
-          row.bound_at_ms !== null
-        ) {
-          throw new Error("INVALID_REQUEST: prepared workspace has already been consumed");
-        }
-        const bound = {
-          ...row,
-          state: "bound",
-          session_id: input.sessionId,
-          session_key: input.sessionKey,
-          owner_epoch: input.ownerEpoch,
-          bound_at_ms: Math.max(Date.now(), row.created_at_ms),
-        };
-        executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable(TABLE)
-            .set(bound)
-            .where("preparation_key", "=", input.preparationKey),
-        );
-        return bound;
-      },
-      this.options,
-      { operationLabel: "prepared-workspace.bind" },
-    );
+  bind(
+    input: NodeWorkerPreparedWorkspaceBinding,
+    authority?: NodeWorkerJournalAuthority,
+  ): Promise<NodeWorkerPreparedWorkspaceRow> {
+    return this.worker.execute({ type: "nodeWorker.prepared.bind", input: [input] }, authority);
   }
 
-  /** A lost mutation permit remains retiring after restart; only verified completion may reopen it. */
-  beginMutation(expected: NodeWorkerPreparedWorkspaceRow): {
-    complete: () => void;
-    close: () => void;
-  } {
+  /** A lost permit stays retiring after restart; only its verified completion can reopen it. */
+  async beginMutation(
+    expected: NodeWorkerPreparedWorkspaceRow,
+    authority?: NodeWorkerJournalAuthority,
+  ): Promise<{ complete: () => Promise<void>; close: () => void }> {
     if (expected.state !== "bound") {
       throw new Error("INVALID_REQUEST: prepared workspace is not bound");
     }
-    const retiring = this.retire(expected);
-    let open = true;
+    const key = expected.preparation_key;
+    if (this.mutations.has(key)) {
+      throw new Error("INVALID_REQUEST: prepared workspace mutation is in progress");
+    }
+    const mutation = { open: true };
+    // Legacy acquisition cannot wait for the async workspace serializer or tombstone.
+    this.mutations.set(key, mutation);
+    const close = () => {
+      mutation.open = false;
+      if (this.mutations.get(key) === mutation) {
+        this.mutations.delete(key);
+      }
+    };
+    let retiring: NodeWorkerPreparedWorkspaceRow;
+    try {
+      retiring = await this.retire(expected, false, authority);
+    } catch (error) {
+      close();
+      throw error;
+    }
     return {
-      complete: () => {
-        if (!open) {
-          throw new Error("INVALID_REQUEST: prepared workspace mutation is closed");
-        }
-        runOpenClawStateWriteTransaction(
-          ({ db }) => {
-            requireUnchanged(selectRow(db, retiring.preparation_key), retiring);
-            executeSqliteQuerySync(
-              db,
-              query(db)
-                .updateTable(TABLE)
-                .set({ state: "bound" })
-                .where("preparation_key", "=", retiring.preparation_key),
-            );
-          },
-          this.options,
-          { operationLabel: "prepared-workspace.finish-mutation" },
+      complete: async () => {
+        const assertCurrent = () => {
+          if (!mutation.open) {
+            throw new Error("INVALID_REQUEST: prepared workspace mutation is closed");
+          }
+          authority?.assertCurrent();
+        };
+        assertCurrent();
+        await this.worker.execute(
+          { type: "nodeWorker.prepared.completeMutation", input: [retiring] },
+          { assertCurrent },
         );
-        open = false;
+        close();
       },
-      close: () => {
-        open = false;
-      },
+      close,
     };
   }
 
   retire(
     expected: NodeWorkerPreparedWorkspaceRow,
     completed = false,
-  ): NodeWorkerPreparedWorkspaceRow {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const row = requireUnchanged(selectRow(db, expected.preparation_key), expected);
-        if (row.state === "retired") {
-          return row;
-        }
-        const retired = {
-          ...row,
-          state: completed ? "retired" : "retiring",
-          retired_at_ms: completed
-            ? Math.max(Date.now(), row.bound_at_ms ?? row.created_at_ms)
-            : null,
-        };
-        executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable(TABLE)
-            .set(retired)
-            .where("preparation_key", "=", row.preparation_key),
-        );
-        return retired;
-      },
-      this.options,
-      { operationLabel: "prepared-workspace.retire" },
+    authority?: NodeWorkerJournalAuthority,
+  ): Promise<NodeWorkerPreparedWorkspaceRow> {
+    return this.worker.execute(
+      { type: "nodeWorker.prepared.retire", input: [expected, completed] },
+      authority,
     );
   }
 }

@@ -2,6 +2,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import {
@@ -12,34 +13,22 @@ import type { ProviderCatalogContext, ProviderCatalogOutcome } from "./provider-
 import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderCatalogOrder[] = ["simple", "profile", "paired", "late"];
-const DANGEROUS_PROVIDER_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const providerRuntimeLoader = createLazyImportLoader(
   () => import("./provider-discovery.runtime.js"),
 );
 
-function loadProviderRuntime() {
-  return providerRuntimeLoader.load();
-}
-
-function resolveProviderCatalogHook(provider: ProviderPlugin) {
-  return provider.catalog;
-}
-
 function resolveProviderCatalogOrderHook(provider: ProviderPlugin) {
-  return resolveProviderCatalogHook(provider) ?? provider.staticCatalog;
-}
-
-function createProviderConfigRecord(): Record<string, ModelProviderConfig> {
-  return Object.create(null) as Record<string, ModelProviderConfig>;
+  return provider.catalog ?? provider.staticCatalog;
 }
 
 function isSafeProviderConfigKey(value: string): boolean {
-  return value !== "" && !DANGEROUS_PROVIDER_KEYS.has(value);
+  return value !== "" && !isBlockedObjectKey(value);
 }
 
 type PreparedProviderStaticCatalogEntry = Readonly<{
   provider: ProviderPlugin;
   result: Awaited<ReturnType<typeof runProviderStaticCatalog>>;
+  providerConfigs: Readonly<Record<string, ModelProviderConfig>>;
 }>;
 
 export type PreparedProviderStaticCatalog = Readonly<{
@@ -69,14 +58,14 @@ export type ProviderDiscoveryPlan =
 export async function planRuntimePluginDiscovery(
   params: ResolveRuntimePluginDiscoveryProvidersParams,
 ): Promise<ProviderDiscoveryPlan> {
-  return (await loadProviderRuntime()).planPluginDiscoveryRuntime(params);
+  return (await providerRuntimeLoader.load()).planPluginDiscoveryRuntime(params);
 }
 
 /** Loads provider runtime discovery and filters to providers that can produce catalog order entries. */
 export async function resolveRuntimePluginDiscoveryProviders(
   params: ResolveRuntimePluginDiscoveryProvidersParams,
 ): Promise<ProviderPlugin[]> {
-  return (await loadProviderRuntime())
+  return (await providerRuntimeLoader.load())
     .resolvePluginDiscoveryProvidersRuntime(params)
     .filter(
       (provider) =>
@@ -125,29 +114,20 @@ export function normalizePluginDiscoveryResult(params: {
   }
 
   const projection = copyProviderCatalogResultProjection(result);
-  if (projection.kind === "provider") {
-    const normalized = createProviderConfigRecord();
-    for (const providerId of [
-      params.provider.id,
-      ...(params.provider.aliases ?? []),
-      ...(params.provider.hookAliases ?? []),
-    ]) {
-      const normalizedKey = normalizeProviderId(providerId);
-      if (!isSafeProviderConfigKey(normalizedKey)) {
-        continue;
-      }
-      normalized[normalizedKey] = projection.provider;
-    }
-    return normalized;
-  }
-
-  const normalized = createProviderConfigRecord();
-  if (projection.kind !== "providers") {
-    return normalized;
-  }
-  for (const [key, value] of projection.providers) {
+  const normalized = Object.create(null) as Record<string, ModelProviderConfig>;
+  const entries =
+    projection.kind === "provider"
+      ? [
+          params.provider.id,
+          ...(params.provider.aliases ?? []),
+          ...(params.provider.hookAliases ?? []),
+        ].map((id) => [id, projection.provider] as const)
+      : projection.kind === "providers"
+        ? projection.providers
+        : [];
+  for (const [key, value] of entries) {
     const normalizedKey = normalizeProviderId(key);
-    if (!isSafeProviderConfigKey(normalizedKey) || !value) {
+    if (!isSafeProviderConfigKey(normalizedKey)) {
       continue;
     }
     normalized[normalizedKey] = value;
@@ -158,6 +138,8 @@ export function normalizePluginDiscoveryResult(params: {
 export async function runProviderCatalog(params: {
   provider: ProviderPlugin;
   providerIds?: readonly string[];
+  /** Captured catalog identities; the hook still receives its original provider scope. */
+  normalizeProviderForScope?: (provider: string) => string;
   config: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -167,7 +149,7 @@ export async function runProviderCatalog(params: {
   reportCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
   isActive?: () => boolean;
 }) {
-  const hook = resolveProviderCatalogHook(params.provider);
+  const hook = params.provider.catalog;
   if (!hook) {
     return undefined;
   }
@@ -183,11 +165,12 @@ export async function runProviderCatalog(params: {
   if (params.isActive?.() === false) {
     return undefined;
   }
+  const normalizeProvider = params.normalizeProviderForScope ?? normalizeProviderId;
   for (const outcome of copyProviderCatalogOutcomes(result)) {
     if (
       params.providerIds !== undefined &&
       !params.providerIds.some(
-        (providerId) => normalizeProviderId(providerId) === normalizeProviderId(outcome.provider),
+        (providerId) => normalizeProvider(providerId) === normalizeProvider(outcome.provider),
       )
     ) {
       continue;
@@ -197,8 +180,13 @@ export async function runProviderCatalog(params: {
   return result;
 }
 
-export function runProviderStaticCatalog(params: { provider: ProviderPlugin }) {
+export function runProviderStaticCatalog(params: {
+  provider: ProviderPlugin;
+  signal?: AbortSignal;
+}) {
+  params.signal?.throwIfAborted();
   return params.provider.staticCatalog?.run({
+    ...(params.signal ? { signal: params.signal } : {}),
     config: {},
     env: {},
     resolveProviderApiKey: () => ({
@@ -218,6 +206,7 @@ export function runProviderStaticCatalog(params: { provider: ProviderPlugin }) {
  */
 export async function prepareProviderStaticCatalog(params: {
   providers: readonly ProviderPlugin[];
+  signal?: AbortSignal;
 }): Promise<PreparedProviderStaticCatalog> {
   const entries: PreparedProviderStaticCatalogEntry[] = [];
   const byOrder = groupPluginDiscoveryProvidersByOrder([...params.providers]);
@@ -226,10 +215,13 @@ export async function prepareProviderStaticCatalog(params: {
       if (!provider.staticCatalog) {
         continue;
       }
+      const result = await runProviderStaticCatalog({ provider, signal: params.signal });
+      params.signal?.throwIfAborted();
       entries.push(
         Object.freeze({
           provider,
-          result: await runProviderStaticCatalog({ provider }),
+          result,
+          providerConfigs: normalizePluginDiscoveryResult({ provider, result }),
         }),
       );
     }
@@ -245,7 +237,7 @@ export function resolvePreparedProviderStaticConfigs(
 ): Record<string, ModelProviderConfig> {
   const providers: Record<string, ModelProviderConfig> = {};
   for (const entry of prepared?.entries ?? []) {
-    Object.assign(providers, normalizePluginDiscoveryResult(entry));
+    Object.assign(providers, entry.providerConfigs);
   }
   return providers;
 }

@@ -220,21 +220,12 @@ export function applyAnthropicMessageDeltaUsage(
     cacheWrite: cacheWriteTokens,
     cacheWrite1h: readAnthropicCacheWriteUsage(usage).cacheWrite1h,
   };
-  if (resolved.input !== undefined) {
-    target.input = resolved.input;
-  }
-  if (resolved.output !== undefined) {
-    target.output = resolved.output;
-  }
   // Match the SDK accumulator: absent or null cache counters preserve prior values.
-  if (resolved.cacheRead !== undefined) {
-    target.cacheRead = resolved.cacheRead;
-  }
-  if (resolved.cacheWrite !== undefined) {
-    target.cacheWrite = resolved.cacheWrite;
-  }
-  if (resolved.cacheWrite1h !== undefined) {
-    target.cacheWrite1h = resolved.cacheWrite1h;
+  for (const key of ["input", "output", "cacheRead", "cacheWrite", "cacheWrite1h"] as const) {
+    const value = resolved[key];
+    if (value !== undefined) {
+      target[key] = value;
+    }
   }
   target.totalTokens = target.input + target.output + target.cacheRead + target.cacheWrite;
   const iterationUsage = readLastAnthropicIterationUsage(usage);

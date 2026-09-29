@@ -3,13 +3,18 @@ import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { enableNodeSqliteKyselyStatementCache } from "../../infra/kysely-sync.js";
-import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
+import { SESSION_OWNER_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { sessionParticipantsSchemaSql } from "../../state/openclaw-agent-session-participants-schema.js";
-import {
-  readExactSessionEntryJson,
-  readExactSessionEntryRowValidated,
-} from "./session-accessor.sqlite-entry-read.js";
+import { sessionEntrySnapshotsSchemaSql } from "../../state/openclaw-agent-session-snapshots-schema.js";
+import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import {
+  splitSessionEntrySnapshots,
+  writeSessionEntrySnapshots,
+} from "./session-entry-snapshots.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const openedDatabases: DatabaseSync[] = [];
@@ -22,7 +27,7 @@ afterEach(() => {
 });
 
 function createDatabase(filename = ":memory:") {
-  const db = new DatabaseSync(filename);
+  const db = openNodeSqliteDatabase(filename);
   openedDatabases.push(db);
   enableNodeSqliteKyselyStatementCache(db);
   db.exec(`
@@ -32,12 +37,16 @@ function createDatabase(filename = ":memory:") {
     CREATE TABLE session_nodes (
       session_key TEXT PRIMARY KEY, current_session_id TEXT, entry_json TEXT,
       updated_at INTEGER, entry_valid INTEGER, parent_session_key TEXT,
-      spawned_by TEXT, fork_source_session_key TEXT
+      spawned_by TEXT, fork_source_session_key TEXT, snapshot_revision INTEGER NOT NULL DEFAULT 0
     );
   `);
   db.exec(sessionParticipantsSchemaSql());
+  db.exec(sessionEntrySnapshotsSchemaSql(OPENCLAW_AGENT_SCHEMA_SQL));
   const keys: [string, string] = ["agent:main:first", "agent:main:second"];
-  const insert = db.prepare("INSERT INTO session_nodes VALUES (?, ?, ?, 1, 1, NULL, NULL, NULL)");
+  const insert = db.prepare(
+    "INSERT INTO session_nodes (session_key,current_session_id,entry_json,updated_at,entry_valid) VALUES (?, ?, ?, 1, 1)",
+  );
+  db.exec("BEGIN");
   for (const [index, key] of keys.entries()) {
     const entry = {
       sessionId: `session-${index}`,
@@ -46,18 +55,22 @@ function createDatabase(filename = ":memory:") {
       skillsSnapshot: { prompt: "saved prompt", skills: [] },
       systemPromptReport: { source: "run" },
     };
-    insert.run(key, entry.sessionId, JSON.stringify(entry));
+    const persisted = splitSessionEntrySnapshots(entry);
+    insert.run(key, entry.sessionId, persisted.entryJson);
+    writeSessionEntrySnapshots({ db }, key, persisted.snapshots);
     db.prepare("INSERT INTO session_participants VALUES (?, ?, ?, 1, 1, 1)").run(
       key,
       '{"type":"profile"}',
       `participant-${index}`,
     );
   }
+  db.exec("COMMIT");
+  admitSqliteSchema(db);
   return { agentId: "main", db, keys };
 }
 
 function addOwnerColumns(db: DatabaseSync) {
-  for (const { columnName, dataType } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
+  for (const { columnName, dataType } of SESSION_OWNER_COLUMN_DEFINITIONS) {
     db.exec(`ALTER TABLE session_nodes ADD COLUMN ${columnName} ${dataType}`);
   }
 }
@@ -88,8 +101,6 @@ describe("prepared session entry reads", () => {
     }
     expect(compile).not.toHaveBeenCalled();
     expect(read("agent:main:missing")).toBeUndefined();
-    expect(readExactSessionEntryJson(database, "agent:main:missing")).toBeUndefined();
-    expect(readExactSessionEntryJson(database, database.keys[0])).toContain("saved prompt");
     expect(
       readExactSessionEntryRowValidated(database, database.keys[0])?.entry.skillsSnapshot,
     ).toMatchObject({ prompt: "saved prompt" });
@@ -109,7 +120,7 @@ describe("prepared session entry reads", () => {
       expect(read()?.owner?.actor).toEqual({ type: "human", id: ownerId });
       database.db.prepare("UPDATE session_nodes SET owner_actor_id = 'current-owner'").run();
       expect(read()?.owner?.actor.id).toBe("current-owner");
-      for (const { columnName } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
+      for (const { columnName } of SESSION_OWNER_COLUMN_DEFINITIONS) {
         database.db.exec(`ALTER TABLE session_nodes DROP COLUMN ${columnName}`);
       }
       expect(read()?.owner).toBeUndefined();
@@ -120,7 +131,8 @@ describe("prepared session entry reads", () => {
     const filename = path.join(tempDirs.make("session-metadata-snapshot-"), "agent.sqlite");
     const database = createDatabase(filename);
     database.db.exec("PRAGMA journal_mode=WAL");
-    const peer = new DatabaseSync(filename);
+    const peer = openNodeSqliteDatabase(filename);
+    admitSqliteSchema(peer);
     openedDatabases.push(peer);
     const key = database.keys[0];
     const read = () => readExactSessionEntryRowValidated(database, key, "list")?.entry;

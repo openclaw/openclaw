@@ -9,14 +9,6 @@ import { resolvePluginCacheInputs } from "./roots.js";
 /** Discovery inputs that affect plugin source resolution. */
 type PluginDiscoveryContext = ReturnType<typeof resolvePluginCacheInputs>;
 
-/** Control-plane fingerprint inputs that affect installed plugin activation. */
-type PluginControlPlaneContext = {
-  discovery: PluginDiscoveryContext;
-  policyFingerprint: string;
-  inventoryFingerprint?: string;
-  activationFingerprint?: string;
-};
-
 /** Parameters used to resolve plugin discovery roots and load paths. */
 type ResolvePluginDiscoveryContextParams = {
   config?: OpenClawConfig;
@@ -47,17 +39,18 @@ export function resolvePluginDiscoveryContext(
   return resolvePluginCacheInputs({
     env: params.env ?? process.env,
     workspaceDir: params.workspaceDir,
-    loadPaths: [...(params.loadPaths ?? resolveConfiguredPluginLoadPaths(params.config) ?? [])],
+    loadPaths: params.loadPaths ?? resolveConfiguredPluginLoadPaths(params.config),
   });
 }
-/** Resolves all inputs that determine plugin control-plane activation state. */
-function resolvePluginControlPlaneContext(
+
+/** Resolves a stable fingerprint for plugin control-plane activation state. */
+export function resolvePluginControlPlaneFingerprint(
   params: ResolvePluginControlPlaneContextParams = {},
-): PluginControlPlaneContext {
+): string {
   const inventoryFingerprint =
     params.inventoryFingerprint ??
     (params.index ? resolveInstalledManifestRegistryIndexFingerprint(params.index) : undefined);
-  return {
+  return hashJson({
     discovery: resolvePluginDiscoveryContext(params),
     policyFingerprint:
       params.policyHash ?? resolveInstalledPluginIndexPolicyHash(params.config, params.env),
@@ -65,16 +58,5 @@ function resolvePluginControlPlaneContext(
     ...(params.activationFingerprint
       ? { activationFingerprint: params.activationFingerprint }
       : {}),
-  };
-}
-
-/** Resolves a stable fingerprint for plugin control-plane activation state. */
-export function resolvePluginControlPlaneFingerprint(
-  params: ResolvePluginControlPlaneContextParams = {},
-): string {
-  return fingerprintPluginControlPlaneContext(resolvePluginControlPlaneContext(params));
-}
-
-function fingerprintPluginControlPlaneContext(context: PluginControlPlaneContext): string {
-  return hashJson(context);
+  });
 }

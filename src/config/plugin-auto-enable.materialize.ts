@@ -8,6 +8,7 @@ import { findChatChannelMeta } from "../channels/chat-meta.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { findUninspectedPluginDiagnostic } from "../plugins/discovery-availability.js";
 import { hasExplicitManifestOwnerTrust } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.types.js";
 import { isNativeSessionCatalogOptOutOnly } from "../plugins/native-session-catalog-config.js";
@@ -34,6 +35,8 @@ export function resolvePluginAutoEnableCandidateReason(
       return `${candidate.providerId} speech provider selected`;
     case "worker-provider-selected":
       return `${candidate.providerId} worker provider selected`;
+    case "decision-provider-selected":
+      return `${candidate.providerId} decision provider selected`;
     case "agent-harness-runtime-configured":
       return `${candidate.runtime} agent runtime configured`;
     case "web-search-provider-selected":
@@ -111,11 +114,6 @@ function disableImplicitPreferredOverPlugin(params: {
   };
 }
 
-function isBuiltInChannelAlreadyEnabled(cfg: OpenClawConfig, channelId: string): boolean {
-  const channels = cfg.channels;
-  return asOptionalRecord(channels?.[channelId])?.enabled === true;
-}
-
 function resolveAutoEnableChannelId(params: {
   entry: PluginAutoEnableCandidate;
   manifestRegistry: PluginManifestRegistry;
@@ -154,9 +152,8 @@ function resolveAutoEnableChannelId(params: {
 function registerPluginEntry(
   cfg: OpenClawConfig,
   entry: PluginAutoEnableCandidate,
-  manifestRegistry: PluginManifestRegistry,
+  builtInChannelId: string | null,
 ): OpenClawConfig {
-  const builtInChannelId = resolveAutoEnableChannelId({ entry, manifestRegistry });
   if (builtInChannelId) {
     const channels = cfg.channels;
     return {
@@ -280,7 +277,10 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
   const changes: string[] = [];
   const autoEnabledReasons = new Map<string, string[]>();
 
-  if (next.plugins?.enabled === false) {
+  if (
+    next.plugins?.enabled === false ||
+    findUninspectedPluginDiagnostic(params.manifestRegistry.diagnostics)
+  ) {
     return { config: next, changes, autoEnabledReasons: {} };
   }
 
@@ -338,13 +338,13 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
     const allowMissing = hasRestrictiveAllowlist && !allow.includes(entry.pluginId);
     const alreadyEnabled =
       builtInChannelId != null
-        ? isBuiltInChannelAlreadyEnabled(next, builtInChannelId)
+        ? asOptionalRecord(next.channels?.[builtInChannelId])?.enabled === true
         : next.plugins?.entries?.[entry.pluginId]?.enabled === true;
     if (alreadyEnabled && !allowMissing) {
       continue;
     }
 
-    next = registerPluginEntry(next, entry, params.manifestRegistry);
+    next = registerPluginEntry(next, entry, builtInChannelId);
     if (hasRestrictiveAllowlist) {
       next = ensurePluginAllowlisted(next, entry.pluginId);
     }

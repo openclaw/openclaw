@@ -8,6 +8,8 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
 import { registerOpenClawAgentDatabase } from "../../../../src/state/openclaw-agent-db-registry.js";
+import { getOpenClawAgentDatabaseIfOpen } from "../../../../src/state/openclaw-agent-db.js";
+import { tableExists } from "../../../../src/state/openclaw-state-db-schema-helpers.js";
 import { withOpenClawTestState } from "../../../../src/test-utils/openclaw-test-state.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { listSessionTranscriptCorpusEntriesForAgent } from "./session-files.js";
@@ -30,9 +32,13 @@ function pauseDirectoryDiscovery(sessionsDir: string) {
 }
 
 describe("listSessionTranscriptCorpusEntriesForAgent", () => {
-  it.each([true, false])(
-    "preserves synchronous corpus results with content revisions %s",
-    async (includeContentRevision) => {
+  it.each([
+    { includeContentRevision: true, archiveTablePresent: true },
+    { includeContentRevision: false, archiveTablePresent: true },
+    { includeContentRevision: false, archiveTablePresent: false },
+  ])(
+    "preserves corpus selection with content revisions $includeContentRevision and archive table $archiveTablePresent",
+    async ({ includeContentRevision, archiveTablePresent }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const sessionsDir = state.sessionsDir();
         await fs.mkdir(sessionsDir, { recursive: true });
@@ -49,6 +55,11 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
           },
           { sessionId: "cron-thread", updatedAt: 1 },
         );
+        const { db } = getOpenClawAgentDatabaseIfOpen({ agentId: "main", env: state.env })!;
+        if (!archiveTablePresent) {
+          db.exec("DROP TABLE session_transcript_archives");
+        }
+        expect(tableExists(db, "session_transcript_archives")).toBe(archiveTablePresent);
 
         const options = { includeContentRevision };
         const expected = listSessionTranscriptCorpusEntriesForAgentSync("main", options);
@@ -64,6 +75,67 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
           sessionKind: "cron",
         });
         expect(archive?.contentRevision !== undefined).toBe(includeContentRevision);
+        expect(tableExists(db, "session_transcript_archives")).toBe(archiveTablePresent);
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "classifies prompt-rich entries without decoding saved prompts (readOnly: %s)",
+    async (readOnly) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const sessionKey = "agent:main:corpus-metadata";
+        const storePath = path.join(state.sessionsDir(), "sessions.json");
+        const persisted = await upsertSessionEntryCore(
+          { sessionKey, storePath },
+          {
+            sessionId: "corpus-metadata",
+            updatedAt: 10,
+            heartbeatIsolatedBaseSessionKey: "agent:main:main",
+            skillsSnapshot: { prompt: "unused corpus prompt ".repeat(256), skills: [] },
+            systemPromptReport: {
+              source: "run",
+              generatedAt: 1,
+              systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+              injectedWorkspaceFiles: [],
+              skills: { promptChars: 0, entries: [] },
+              tools: { listChars: 0, schemaChars: 0, entries: [] },
+            },
+          },
+        );
+
+        const parse = vi.spyOn(JSON, "parse");
+        try {
+          const entries = await listSessionTranscriptCorpusEntriesForAgent("main", {
+            includeContentRevision: false,
+            includeRetainedSqlite: true,
+            readOnly,
+          });
+          expect(entries).toEqual([
+            {
+              agentId: "main",
+              artifactKind: "active-session",
+              sessionFile: sessionKey,
+              sessionId: "corpus-metadata",
+              sessionKey,
+              sessionKind: "heartbeat",
+              storePath,
+              transcriptSource: "sqlite",
+              updatedAtMs: persisted?.updatedAt,
+            },
+          ]);
+          const decodedEntries = parse.mock.calls.filter(([json]) =>
+            json.includes('"sessionId":"corpus-metadata"'),
+          );
+          expect(
+            decodedEntries.every(
+              ([json]) =>
+                !json.includes('"skillsSnapshot"') && !json.includes('"systemPromptReport"'),
+            ),
+          ).toBe(true);
+        } finally {
+          parse.mockRestore();
+        }
       });
     },
   );
@@ -105,11 +177,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         expect(entries.every((entry) => entry.storePath === storePath)).toBe(true);
       } finally {
         release.resolve();
-        try {
-          await listing;
-        } finally {
-          realpathSpy.mockRestore();
-        }
+        await listing.finally(() => realpathSpy.mockRestore());
       }
     });
   });
@@ -138,12 +206,10 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         expect(fsSync.existsSync(unsuffixedDatabase)).toBe(false);
       } finally {
         release.resolve();
-        try {
-          await listing;
-        } finally {
+        await listing.finally(() => {
           Reflect.set(process.env, "OPENCLAW_STATE_DIR", state.stateDir);
           realpathSpy.mockRestore();
-        }
+        });
       }
     });
   });

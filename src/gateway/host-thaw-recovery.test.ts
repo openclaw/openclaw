@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHostThawRecovery } from "./host-thaw-recovery.js";
 import { TICK_INTERVAL_MS } from "./server-constants.js";
 
@@ -7,6 +7,8 @@ const HOST_THAW_MIN_FROZEN_MS = 45_000;
 
 function createHarness() {
   let nowMs = 0;
+  let cpuUsage = { user: 0, system: 0 };
+  vi.spyOn(process, "cpuUsage").mockImplementation(() => cpuUsage);
   let admissionClosed = false;
   let restartReason: "active-work" | "admission-closed" | "channel-restart-incomplete" | undefined;
   const deps = {
@@ -23,6 +25,13 @@ function createHarness() {
     logger: { info: vi.fn(), error: vi.fn() },
   };
   const recovery = createHostThawRecovery(deps);
+  const elapse = (gapMs: number, cpuCoreRatio = 0) => {
+    nowMs += gapMs;
+    cpuUsage = {
+      user: cpuUsage.user + gapMs * 1_000 * cpuCoreRatio * 0.6,
+      system: cpuUsage.system + gapMs * 1_000 * cpuCoreRatio * 0.4,
+    };
+  };
   return {
     deps,
     setAdmissionClosed: (closed: boolean) => {
@@ -34,8 +43,9 @@ function createHarness() {
     setRestartReason: (reason: typeof restartReason) => {
       restartReason = reason;
     },
-    advance: async (gapMs: number) => {
-      nowMs += gapMs;
+    elapse,
+    advance: async (gapMs: number, cpuCoreRatio = 0) => {
+      elapse(gapMs, cpuCoreRatio);
       await recovery.tick();
     },
   };
@@ -49,27 +59,66 @@ function expectRecoveryCount(harness: ReturnType<typeof createHarness>, count: n
 }
 
 describe("host thaw recovery", () => {
-  it.each([
-    ["normal cadence", TICK_INTERVAL_MS],
-    ["one millisecond below the thaw threshold", TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS - 1],
-  ])("does not recover on %s", async (_label, gapMs) => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("does not recover one millisecond below the thaw threshold", async () => {
     const harness = createHarness();
 
-    await harness.advance(gapMs);
+    await harness.advance(TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS - 1);
 
     expectRecoveryCount(harness, 0);
     expect(harness.deps.logger.info).not.toHaveBeenCalled();
   });
 
-  it("recovers and reports the frozen duration at the threshold", async () => {
+  it.each([0, 0.499])("recovers at the threshold with CPU ratio %s", async (cpuCoreRatio) => {
     const harness = createHarness();
 
-    await harness.advance(TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS);
+    await harness.advance(TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS, cpuCoreRatio);
 
     expectRecoveryCount(harness, 1);
     expect(harness.deps.logger.info).toHaveBeenCalledWith(
       expect.stringContaining(`frozen ~${HOST_THAW_MIN_FROZEN_MS}ms`),
     );
+  });
+
+  it.each([0.5, 1, 2.2])(
+    "does not recover from a CPU-busy gap with ratio %s",
+    async (cpuCoreRatio) => {
+      const harness = createHarness();
+      const gapMs = TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS;
+
+      await harness.advance(TICK_INTERVAL_MS, 0);
+      await harness.advance(gapMs, cpuCoreRatio);
+      await harness.advance(TICK_INTERVAL_MS);
+
+      expectRecoveryCount(harness, 0);
+      expect(harness.deps.logger.info).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(`gap ${gapMs}ms, CPU ratio ${cpuCoreRatio.toFixed(2)}`),
+      );
+
+      await harness.advance(gapMs);
+      expectRecoveryCount(harness, 1);
+    },
+  );
+
+  it("excludes slow recovery work from later thaw samples", async () => {
+    const harness = createHarness();
+    const thawGap = TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS;
+    harness.deps.refreshHealth
+      .mockImplementationOnce(async () => harness.elapse(HOST_THAW_MIN_FROZEN_MS))
+      .mockImplementationOnce(async () => harness.elapse(HOST_THAW_MIN_FROZEN_MS, 1));
+
+    await harness.advance(thawGap);
+    expectRecoveryCount(harness, 1);
+
+    await harness.advance(TICK_INTERVAL_MS);
+    expectRecoveryCount(harness, 1);
+
+    await harness.advance(thawGap);
+    expectRecoveryCount(harness, 2);
+
+    await harness.advance(thawGap);
+    expectRecoveryCount(harness, 3);
   });
 
   it("defers channel restart until active Gateway work settles", async () => {
@@ -119,6 +168,55 @@ describe("host thaw recovery", () => {
     );
   });
 
+  it("abandons busy retries after ten minutes, logging deferral and abandonment once", async () => {
+    const harness = createHarness();
+    harness.setRestartIdle(false);
+    await harness.advance(TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS);
+
+    for (let elapsedMs = TICK_INTERVAL_MS; elapsedMs < 10 * 60_000; elapsedMs += TICK_INTERVAL_MS) {
+      await harness.advance(TICK_INTERVAL_MS);
+    }
+    expect(harness.deps.restartChannelsIfIdle).toHaveBeenCalledTimes(20);
+
+    await harness.advance(TICK_INTERVAL_MS);
+    harness.setRestartIdle(true);
+    await harness.advance(TICK_INTERVAL_MS);
+    expect(harness.deps.restartChannelsIfIdle).toHaveBeenCalledTimes(20);
+    expect(
+      harness.deps.logger.info.mock.calls.filter(([message]) =>
+        message.includes("restart deferred"),
+      ),
+    ).toEqual([["host thaw channel restart deferred: gateway still has active work"]]);
+    expect(
+      harness.deps.logger.info.mock.calls.filter(([message]) =>
+        message.includes("restart abandoned"),
+      ),
+    ).toEqual([[expect.stringContaining("gateway stayed busy")]]);
+
+    await harness.advance(TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS);
+    expect(harness.deps.restartChannelsIfIdle).toHaveBeenCalledTimes(21);
+  });
+
+  it("does not renew the restart window while admission stays closed", async () => {
+    const harness = createHarness();
+    harness.setAdmissionClosed(true);
+    await harness.advance(TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS);
+    for (let elapsedMs = 0; elapsedMs < 10 * 60_000; elapsedMs += TICK_INTERVAL_MS) {
+      await harness.advance(TICK_INTERVAL_MS);
+    }
+    harness.setAdmissionClosed(false);
+    await harness.advance(TICK_INTERVAL_MS);
+
+    expect(harness.deps.restartChannelsIfIdle).not.toHaveBeenCalled();
+    expect(harness.deps.refreshHealth).toHaveBeenCalledOnce();
+    expect(harness.deps.refreshPresence).toHaveBeenCalledOnce();
+    expect(
+      harness.deps.logger.info.mock.calls.filter(([message]) =>
+        message.includes("restart abandoned"),
+      ),
+    ).toHaveLength(1);
+  });
+
   it("defers a detected thaw until admission reopens and recovers once", async () => {
     const harness = createHarness();
     harness.setAdmissionClosed(true);
@@ -166,6 +264,9 @@ describe("host thaw recovery", () => {
     await harness.advance(thawGap);
 
     expectRecoveryCount(harness, 2);
+    expect(harness.deps.logger.info).toHaveBeenCalledWith(
+      expect.stringContaining(`frozen ~${HOST_THAW_MIN_FROZEN_MS}ms`),
+    );
     expect(harness.deps.restartChannelsIfIdle.mock.calls).toEqual([["new-thaw"], ["new-thaw"]]);
   });
 });

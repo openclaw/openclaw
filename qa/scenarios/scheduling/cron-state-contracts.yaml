@@ -18,20 +18,20 @@ scenario:
     - An every schedule edit and one-shot removal survive service reloads.
     - A persisted one-shot job executes through the restarted production scheduler exactly once.
     - Two schedulers sharing one store execute one isolated job only once.
-    - The isolated run produces one authoritative SQLite task-ledger history row.
-    - Registry and scheduler reloads preserve that single terminal history row without replay.
+    - The isolated run produces one authoritative SQLite cron history row.
+    - History reads and scheduler reloads preserve that single terminal history row without replay.
   docsRefs:
     - docs/automation/cron-jobs.md
-    - docs/automation/tasks.md
     - docs/cli/cron.md
   codeRefs:
     - src/cron/service.ts
     - src/cron/service/ops-lifecycle.ts
     - src/cron/service/ops-mutations.ts
     - src/cron/service/timer.ts
-    - src/cron/task-run-history.ts
+    - src/cron/run-history.ts
+    - src/cron/store/run-history.ts
     - src/cron/cron-state-contracts.e2e.test.ts
   execution:
     kind: vitest
     path: src/cron/cron-state-contracts.e2e.test.ts
-    summary: Exercise real cron stores, scheduler timers, restart recovery, isolated execution deduplication, and persisted task-ledger run history.
+    summary: Exercise real cron stores, scheduler timers, restart recovery, isolated execution deduplication, and persisted native cron run history.

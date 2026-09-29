@@ -14,7 +14,7 @@ import {
   prepareSqliteQuerySync,
   runSqliteImmediateTransactionSync,
   type SqliteWorkerBackend,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { pickKeyframeId } from "./analyze.js";
 import type {
   LogbookBatchInput,
@@ -51,6 +51,7 @@ class LogbookDatabaseStore {
   private readonly db: Database;
   private readonly query;
   private readonly framesQuery;
+  private readonly frameMetadataQuery;
   private readonly batchesQuery;
   private readonly cardsQuery;
   private readonly statements;
@@ -94,6 +95,10 @@ class LogbookDatabaseStore {
       this.query = getNodeSqliteKysely<LogbookDatabase>(db);
       const { framesQuery, sampledBatchFrames } = createLogbookFrameQueries(db, this.query);
       this.framesQuery = framesQuery;
+      // Keep native integer overflow rejection while omitting unused frame strings.
+      this.frameMetadataQuery = framesQuery
+        .clearSelect()
+        .select(["id", "captured_at_ms", "screen_index", "width", "height", "byte_size", "idle"]);
       this.batchesQuery = this.query
         .selectFrom("batches")
         .select(["id", "day", "start_ms", "end_ms", "status", "error", "frame_count", "model"]);
@@ -276,11 +281,11 @@ class LogbookDatabaseStore {
     return row ? { capturedAtMs: row.captured_at_ms, contentHash: row.content_hash } : null;
   }
 
-  unbatchedActiveFrames(limit: number): LogbookFrame[] {
+  unbatchedActiveFrames(limit: number): Pick<LogbookFrame, "id" | "capturedAtMs">[] {
     return executeSqliteQuerySync(
       this.db,
-      this.framesQuery.where("batch_id", "is", null).where("idle", "=", 0).limit(limit),
-    ).rows.map(toFrame);
+      this.frameMetadataQuery.where("batch_id", "is", null).where("idle", "=", 0).limit(limit),
+    ).rows.map((row) => ({ id: row.id, capturedAtMs: row.captured_at_ms }));
   }
 
   countUnbatchedActiveFrames(): number {
@@ -300,11 +305,20 @@ class LogbookDatabaseStore {
     return row ? toFrame(row) : null;
   }
 
-  framesInRange(startMs: number, endMs: number): LogbookFrame[] {
+  framesInRange(
+    startMs: number,
+    endMs: number,
+  ): Pick<LogbookFrame, "id" | "capturedAtMs" | "idle">[] {
     return executeSqliteQuerySync(
       this.db,
-      this.framesQuery.where("captured_at_ms", ">=", startMs).where("captured_at_ms", "<", endMs),
-    ).rows.map(toFrame);
+      this.frameMetadataQuery
+        .where("captured_at_ms", ">=", startMs)
+        .where("captured_at_ms", "<", endMs),
+    ).rows.map((row) => ({
+      id: row.id,
+      capturedAtMs: row.captured_at_ms,
+      idle: row.idle === 1,
+    }));
   }
 
   createBatch(params: LogbookBatchInput): number {
@@ -468,7 +482,14 @@ class LogbookDatabaseStore {
     runSqliteImmediateTransactionSync(
       this.db,
       () => {
-        const frames = selectKeyframes ? this.framesInRange(startMs, endMs) : undefined;
+        const frames = selectKeyframes
+          ? executeSqliteQuerySync(
+              this.db,
+              this.frameMetadataQuery
+                .where("captured_at_ms", ">=", startMs)
+                .where("captured_at_ms", "<", endMs),
+            ).rows.map((row) => ({ id: row.id, capturedAtMs: row.captured_at_ms }))
+          : undefined;
         this.statements.deleteCards({ day, startMs, endMs });
         for (const draft of drafts) {
           const keyframeId = frames ? pickKeyframeId(draft, frames) : draft.keyframeId;

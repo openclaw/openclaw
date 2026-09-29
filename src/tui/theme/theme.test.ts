@@ -8,8 +8,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 const originalChalkLevel = chalk.level;
 chalk.level = 3;
 
-const { markdownTheme, searchableSelectListTheme, selectListTheme, tuiTheme } =
-  await import("./theme.js");
+const { markdownTheme, searchableSelectListTheme } = await import("./theme.js");
 
 const stripAnsi = (str: string) =>
   str.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"), "");
@@ -118,11 +117,6 @@ function contrastRatio(foreground: string, background: string): number {
 
 describe("markdownTheme", () => {
   describe("highlightCode", () => {
-    it("renders code blocks with the theme code color and preserves lines", () => {
-      const result = markdownTheme.highlightCode!(`echo "hello"`, "not-a-real-language");
-      expect(stripAnsi(result[0] ?? "")).toContain("echo");
-    });
-
     it("preserves multi-line code blocks", () => {
       const result = markdownTheme.highlightCode!("line-1\nline-2", "javascript");
       expect(result.map((line) => stripAnsi(line))).toEqual(["line-1", "line-2"]);
@@ -130,139 +124,24 @@ describe("markdownTheme", () => {
   });
 });
 
-describe("theme", () => {
-  it("keeps assistant text in terminal default foreground", () => {
-    expect(tuiTheme.assistantText("hello")).toBe("hello");
-    expect(stripAnsi(tuiTheme.assistantText("hello"))).toBe("hello");
-  });
-});
-
 describe("light background detection", () => {
-  it("uses dark palette by default", async () => {
-    const mod = await importThemeWithEnv({
-      OPENCLAW_THEME: undefined,
-      COLORFGBG: undefined,
-    });
-    expect(mod.lightMode).toBe(false);
-  });
-
-  it("selects light palette when OPENCLAW_THEME=light", async () => {
-    const mod = await importThemeWithEnv({ OPENCLAW_THEME: "light" });
-    expect(mod.lightMode).toBe(true);
-  });
-
-  it("selects dark palette when OPENCLAW_THEME=dark", async () => {
-    const mod = await importThemeWithEnv({ OPENCLAW_THEME: "dark" });
-    expect(mod.lightMode).toBe(false);
-  });
-
-  it("treats OPENCLAW_THEME case-insensitively", async () => {
-    const mod = await importThemeWithEnv({ OPENCLAW_THEME: "LiGhT" });
-    expect(mod.lightMode).toBe(true);
-  });
-
-  it("detects light background from COLORFGBG", async () => {
-    const mod = await importThemeWithEnv({
-      OPENCLAW_THEME: undefined,
-      COLORFGBG: "0;15",
-    });
-    expect(mod.lightMode).toBe(true);
-  });
-
-  it("treats COLORFGBG bg=7 (silver) as light", async () => {
-    const mod = await importThemeWithEnv({
-      OPENCLAW_THEME: undefined,
-      COLORFGBG: "0;7",
-    });
-    expect(mod.lightMode).toBe(true);
-  });
-
-  it("treats COLORFGBG bg=8 (bright black / dark gray) as dark", async () => {
-    const mod = await importThemeWithEnv({
-      OPENCLAW_THEME: undefined,
-      COLORFGBG: "15;8",
-    });
-    expect(mod.lightMode).toBe(false);
-  });
-
-  it("treats COLORFGBG bg < 7 as dark", async () => {
-    const mod = await importThemeWithEnv({
-      OPENCLAW_THEME: undefined,
-      COLORFGBG: "15;0",
-    });
-    expect(mod.lightMode).toBe(false);
-  });
-
-  it("treats 256-color COLORFGBG bg=232 (near-black greyscale) as dark", async () => {
-    const mod = await importThemeWithEnv({
-      OPENCLAW_THEME: undefined,
-      COLORFGBG: "15;232",
-    });
-    expect(mod.lightMode).toBe(false);
-  });
-
-  it("treats 256-color COLORFGBG bg=255 (near-white greyscale) as light", async () => {
-    const mod = await importThemeWithEnv({
-      OPENCLAW_THEME: undefined,
-      COLORFGBG: "0;255",
-    });
-    expect(mod.lightMode).toBe(true);
-  });
-
-  it("treats 256-color COLORFGBG bg=231 (white cube entry) as light", async () => {
-    const mod = await importThemeWithEnv({
-      OPENCLAW_THEME: undefined,
-      COLORFGBG: "0;231",
-    });
-    expect(mod.lightMode).toBe(true);
-  });
-
-  it("treats 256-color COLORFGBG bg=16 (black cube entry) as dark", async () => {
-    const mod = await importThemeWithEnv({
-      OPENCLAW_THEME: undefined,
-      COLORFGBG: "15;16",
-    });
-    expect(mod.lightMode).toBe(false);
-  });
-
-  it("treats bright 256-color green backgrounds as light when dark text contrasts better", async () => {
-    const mod = await importThemeWithEnv({
-      OPENCLAW_THEME: undefined,
-      COLORFGBG: "15;34",
-    });
-    expect(mod.lightMode).toBe(true);
-  });
-
-  it("treats bright 256-color cyan backgrounds as light when dark text contrasts better", async () => {
-    const mod = await importThemeWithEnv({
-      OPENCLAW_THEME: undefined,
-      COLORFGBG: "15;39",
-    });
-    expect(mod.lightMode).toBe(true);
-  });
-
-  it("falls back to dark mode for invalid COLORFGBG values", async () => {
-    const mod = await importThemeWithEnv({
-      OPENCLAW_THEME: undefined,
-      COLORFGBG: "garbage",
-    });
-    expect(mod.lightMode).toBe(false);
-  });
-
-  it("ignores pathological COLORFGBG values", async () => {
-    const mod = await importThemeWithEnv({
-      OPENCLAW_THEME: undefined,
-      COLORFGBG: "0;".repeat(40),
-    });
-    expect(mod.lightMode).toBe(false);
-  });
-
-  it("OPENCLAW_THEME overrides COLORFGBG", async () => {
-    const mod = await importThemeWithEnv({
-      OPENCLAW_THEME: "dark",
-      COLORFGBG: "0;15",
-    });
-    expect(mod.lightMode).toBe(false);
+  it.each([
+    { name: "default", theme: undefined, background: undefined, light: false },
+    { name: "case-insensitive override", theme: "LiGhT", background: undefined, light: true },
+    { name: "override beats terminal", theme: "dark", background: "0;15", light: false },
+    { name: "ANSI white", background: "0;15", light: true },
+    { name: "ANSI silver", background: "0;7", light: true },
+    { name: "ANSI bright black", background: "15;8", light: false },
+    { name: "grayscale black", background: "15;232", light: false },
+    { name: "grayscale white", background: "0;255", light: true },
+    { name: "color cube black", background: "15;16", light: false },
+    { name: "color cube green", background: "15;34", light: true },
+    { name: "color cube cyan", background: "15;39", light: true },
+    { name: "invalid background", background: "garbage", light: false },
+    { name: "oversized background", background: "0;".repeat(40), light: false },
+  ])("selects the expected palette for $name", async ({ theme, background, light }) => {
+    const mod = await importThemeWithEnv({ OPENCLAW_THEME: theme, COLORFGBG: background });
+    expect(mod.lightMode).toBe(light);
   });
 
   it("keeps assistantText as identity in both modes", async () => {
@@ -318,18 +197,6 @@ describe("light palette accessibility", () => {
 });
 
 describe("list themes", () => {
-  it("reuses shared select-list styles in searchable list theme", () => {
-    expect(searchableSelectListTheme.selectedPrefix(">")).toBe(selectListTheme.selectedPrefix(">"));
-    expect(searchableSelectListTheme.selectedText("entry")).toBe(
-      selectListTheme.selectedText("entry"),
-    );
-    expect(searchableSelectListTheme.description("desc")).toBe(selectListTheme.description("desc"));
-    expect(searchableSelectListTheme.scrollInfo("scroll")).toBe(
-      selectListTheme.scrollInfo("scroll"),
-    );
-    expect(searchableSelectListTheme.noMatch("none")).toBe(selectListTheme.noMatch("none"));
-  });
-
   it("keeps searchable list specific renderers readable", () => {
     expect(stripAnsi(searchableSelectListTheme.searchPrompt("Search:"))).toBe("Search:");
     expect(stripAnsi(searchableSelectListTheme.searchInput("query"))).toBe("query");

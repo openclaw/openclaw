@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, TransformConfigFileParams } from "../../config/config.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 const mocks = vi.hoisted(() => ({
@@ -183,6 +184,37 @@ afterEach(() => {
 });
 
 describe("promosClaimCommand", () => {
+  it("joins claim and notice recording before reporting success", async () => {
+    const claim = createDeferredCore();
+    const claimStarted = createDeferredCore();
+    const notices = createDeferredCore();
+    const noticesStarted = createDeferredCore();
+    mocks.recordPromotionClaim.mockImplementationOnce(() => {
+      claimStarted.resolve();
+      return claim.promise;
+    });
+    mocks.markPromotionSlugsNotified.mockImplementationOnce(() => {
+      noticesStarted.resolve();
+      return notices.promise;
+    });
+    const runtime = makeRuntime();
+    const pending = promosClaimCommand("spring-models", {}, runtime);
+    await claimStarted.promise;
+    try {
+      expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+      expect(mocks.markPromotionSlugsNotified).not.toHaveBeenCalled();
+      expect(runtime.log).not.toHaveBeenCalledWith('Claimed "Free Example models".');
+      claim.resolve();
+      await noticesStarted.promise;
+      expect(runtime.log).not.toHaveBeenCalledWith('Claimed "Free Example models".');
+    } finally {
+      claim.resolve();
+      notices.resolve();
+      await pending;
+    }
+    expect(runtime.log).toHaveBeenCalledWith('Claimed "Free Example models".');
+  });
+
   it("registers promo models with aliases without changing the default", async () => {
     const runtime = makeRuntime();
     await promosClaimCommand("spring-models", {}, runtime);

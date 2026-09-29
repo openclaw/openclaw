@@ -3,8 +3,8 @@ import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-p
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
   type PreparedGatewayModelCatalogSnapshot,
@@ -48,12 +48,41 @@ type ListModelsParams = {
   cfg?: OpenClawConfig;
   discoveryModes?: Record<string, "refreshable" | "runtime" | "static">;
   catalogComplete?: boolean;
+  catalogDiagnostics?: Pick<
+    PreparedGatewayModelCatalogSnapshot,
+    "pendingProviders" | "providerOutcomes" | "refreshFailed"
+  >;
   preparedAuthModes?: PreparedAgentCredentialModes;
   metadataSnapshot?: PluginMetadataSnapshot;
   pluginRegistry?: PluginRegistry;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   view?: "all" | "configured" | "provider-config" | "default";
 };
+
+const chatMetadataSnapshot = createPluginMetadataSnapshotFixture({
+  plugins: [
+    {
+      id: "openai",
+      providers: ["openai"],
+      modelCatalog: {
+        discovery: { openai: "runtime" },
+        providers: { openai: { defaultUtilityModel: "gpt-5.6-luna", models: [] } },
+      },
+      setup: { providers: [{ id: "openai", envVars: ["OPENAI_API_KEY"] }] },
+    },
+    {
+      id: "anthropic",
+      providers: ["anthropic"],
+      cliBackends: ["claude-cli"],
+      syntheticAuthRefs: ["claude-cli"],
+      providerAuthAliases: { "claude-cli": "anthropic" },
+      modelCatalog: { discovery: { anthropic: "refreshable", "claude-cli": "static" } },
+      setup: {
+        providers: [{ id: "anthropic", envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] }],
+      },
+    },
+  ],
+});
 
 export function createModelsListTestContext(params: ListModelsParams) {
   const agentId = params.agentId ?? "main";
@@ -75,12 +104,12 @@ export function createModelsListTestContext(params: ListModelsParams) {
           allowKeychainPrompt: false,
         },
       ),
-      metadataSnapshot:
-        params.metadataSnapshot ?? loadManifestMetadataSnapshot({ config, env: process.env }),
+      metadataSnapshot: params.metadataSnapshot ?? chatMetadataSnapshot,
       entries,
       routeVariants: entries,
       ...(params.staticEntries ? { staticEntries: params.staticEntries } : {}),
       authMaterializations: [],
+      ...params.catalogDiagnostics,
     }) satisfies PreparedGatewayModelCatalogSnapshot;
   let publishedEntries = params.publishedCatalog ?? params.catalog;
   const loadGatewayModelCatalogSnapshot = async (loadParams?: object) => {
@@ -134,13 +163,11 @@ export async function listModels(params: ListModelsParams) {
             cfg: config,
             agentId,
             snapshot: { entries: params.catalog, routeVariants: params.catalog },
-            metadataSnapshot: {
-              index: { plugins: [] },
-              manifestRegistry: { plugins: [] },
+            metadataSnapshot: createPluginMetadataSnapshotFixture({
               plugins: [
                 { id: "test-provider", modelCatalog: { discovery: params.discoveryModes } },
               ],
-            } as never,
+            }),
             preparedAuthStore: { version: 1, profiles: {} },
           }),
         }

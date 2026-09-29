@@ -71,6 +71,7 @@ describe("zaloPlugin pairing.notifyApproval", () => {
         text: "✅ OpenClaw access approved. Send a message to start chatting.",
       },
       fetcher,
+      undefined,
     );
   });
 
@@ -96,6 +97,7 @@ describe("zaloPlugin pairing.notifyApproval", () => {
     expect(hoisted.sendMessage).toHaveBeenCalledExactlyOnceWith(
       token,
       { chat_id: "paired-user", text: expect.any(String) },
+      undefined,
       undefined,
     );
   });

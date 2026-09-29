@@ -64,6 +64,15 @@ Example:
 - The configure wizard accepts `Team/Channel` entries and stores them for you.
 - On startup, OpenClaw resolves team/channel and user allowlist names to IDs (when Graph permissions allow) and logs the mapping. Unresolved names are kept as typed but ignored for routing unless `channels.msteams.dangerouslyAllowNameMatching: true` is set.
 
+With compatible core and Teams versions, verified official npm and ClawHub installations
+can use the existing `read`, `search`, `reactions`, `list-pins`, `member-info`,
+`channel-info`, and `channel-list` actions under these access rules. Agent reads from
+an installed plugin require trusted current Teams conversation and account context.
+Listing a team's channels requires access to the whole team; access to one channel
+does not grant that permission. [Member lookups](/channels/msteams/cards-and-actions#member-info-action)
+retain their standard-channel and current-requester restrictions. Subsequent Graph
+requests and results are rejected when the originating call or plugin loses authority.
+
 Example:
 
 ```json5
@@ -83,6 +92,36 @@ Example:
   },
 }
 ```
+
+### Mentions in bot-created threads
+
+Set `requireMentionInBotThreads: false` to answer without an @mention in channel
+threads whose root message was sent by this bot. Set it to `true` to require a
+mention in those threads, including replies that would otherwise count as an
+implicit mention. Omit it to retain the existing mention behavior.
+
+The setting resolves from channel to team to `channels.msteams`, independently of
+`requireMention`. Parent-channel posts and other people's threads retain their
+usual mention rules. Group-chat quotes are not channel threads, and sender and
+team/channel allowlists still apply.
+
+```json5
+{
+  channels: {
+    msteams: {
+      requireMention: true,
+      requireMentionInBotThreads: false,
+    },
+  },
+}
+```
+
+Ownership uses accepted top-level channel posts recorded by the current bot,
+including proactive messages. Replies inside existing threads do not establish
+ownership. Tracking lasts up to 24 hours and is bounded; the newest 1,000 send
+markers survive restarts. Older or untracked roots retain the ordinary mention
+rules. Teams must grant `ChannelMessage.Read.Group` in the app manifest to deliver
+messages without an @mention; see [RSC permissions](/channels/msteams/manifest-and-permissions#current-teams-rsc-permissions-manifest).
 
 ## Team and Channel IDs (Common Gotcha)
 

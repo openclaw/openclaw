@@ -9,7 +9,6 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
   evaluateStoredCredentialEligibility: vi.fn(),
-  getInstalledPluginRecord: vi.fn(),
   isInstalledPluginEnabled: vi.fn(),
   loadInstalledPluginIndex: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
@@ -28,7 +27,6 @@ vi.mock("../../../agents/auth-profiles/credential-state.js", () => ({
 
 vi.mock("../../../plugins/installed-plugin-index.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/installed-plugin-index.js")>()),
-  getInstalledPluginRecord: mocks.getInstalledPluginRecord,
   isInstalledPluginEnabled: mocks.isInstalledPluginEnabled,
   loadInstalledPluginIndex: mocks.loadInstalledPluginIndex,
 }));
@@ -193,7 +191,6 @@ describe("collectCodexRouteWarnings", () => {
       eligible: true,
       reasonCode: "ok",
     });
-    mocks.getInstalledPluginRecord.mockReturnValue(undefined);
     mocks.isInstalledPluginEnabled.mockReturnValue(false);
     mocks.loadInstalledPluginIndex.mockReturnValue({ plugins: [] });
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
@@ -3392,7 +3389,6 @@ describe("collectCodexRouteWarnings", () => {
     };
     mocks.ensureAuthProfileStore.mockReturnValue(store);
     mocks.loadInstalledPluginIndex.mockReturnValue(index);
-    mocks.getInstalledPluginRecord.mockReturnValue(index.plugins[0]);
     mocks.isInstalledPluginEnabled.mockReturnValue(true);
     mocks.resolveAuthProfileOrder.mockReturnValue(["openai-codex:default"]);
 
@@ -3422,7 +3418,6 @@ describe("collectCodexRouteWarnings", () => {
     };
     mocks.ensureAuthProfileStore.mockReturnValue(store);
     mocks.loadInstalledPluginIndex.mockReturnValue(index);
-    mocks.getInstalledPluginRecord.mockReturnValue(index.plugins[0]);
     mocks.isInstalledPluginEnabled.mockReturnValue(true);
     mocks.resolveAuthProfileOrder.mockReturnValue(["openai-codex:default"]);
 

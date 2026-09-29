@@ -8,11 +8,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   buildNativeHookRelayCommand,
-  registerNativeHookRelay,
+  registerOwnedNativeHookRelay,
   testing as nativeHookRelayTesting,
 } from "../agents/harness/native-hook-relay.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { getFreePort } from "../test-utils/ports.js";
+import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
@@ -183,14 +186,19 @@ async function runHooksCli(params: {
   args: string[];
   completion: "exit" | "output-then-exit";
   entryPath?: string;
+  entryArgv?: string[];
   label: string;
   env?: NodeJS.ProcessEnv;
+  nodeExecutable?: string;
   stdin?: string;
 }) {
   const startedAt = performance.now();
   const child = spawn(
-    process.execPath,
-    ["--import", "tsx", params.entryPath ?? "src/entry.ts", ...params.args],
+    params.nodeExecutable ?? process.execPath,
+    [
+      ...(params.entryArgv ?? ["--import", "tsx", params.entryPath ?? "src/entry.ts"]),
+      ...params.args,
+    ],
     {
       cwd: path.resolve("."),
       env: {
@@ -244,7 +252,7 @@ async function runHooksCli(params: {
     child.stdout.on("data", (chunk: string) => {
       stdout += chunk;
       outputAfterMs ??= Math.round(performance.now() - startedAt);
-      if (params.completion === "exit" || outputObserved) {
+      if (timedOut || params.completion === "exit" || outputObserved) {
         return;
       }
       outputObserved = true;
@@ -323,6 +331,7 @@ describe("hooks CLI process lifecycle", () => {
         stdin,
         completion: "exit",
         label: "dedicated relay error",
+        nodeExecutable: resolveTestNodeExecPath(),
         env: {
           LINGER_MARKER: fixture.markerPath,
           NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
@@ -360,7 +369,7 @@ describe("hooks CLI process lifecycle", () => {
           NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           OPENCLAW_STATE_DIR: fixture.stateDir,
-          OPENCLAW_TEST_NODE: process.execPath,
+          OPENCLAW_TEST_NODE: resolveTestNodeExecPath(),
           RELAY_PID_LOG: fixture.pidLogPath,
           RELAY_READY_MARKER: fixture.readyMarkerPath,
         },
@@ -410,19 +419,17 @@ describe("hooks CLI process lifecycle", () => {
   it.each(["src/entry.ts", "src/cli/native-hook-relay-entry.ts"])(
     "%s uses the explicit relay database and exits despite a lingering handle",
     async (entryPath) => {
-      const relay = registerNativeHookRelay({
+      const relay = registerOwnedNativeHookRelay({
         provider: "codex",
         relayId: "process-explicit-state-db",
         sessionId: "session-1",
         runId: "run-1",
         allowedEvents: ["post_tool_use"],
       });
-      await expect
-        .poll(
-          async () =>
-            await nativeHookRelayTesting.getNativeHookRelayBridgeRecordForTests(relay.relayId),
-        )
-        .toBeDefined();
+      await relay.ready;
+      expect(
+        await nativeHookRelayTesting.getNativeHookRelayBridgeRecordForTests(relay.relayId),
+      ).toBeDefined();
 
       const fixture = await createRelayPreloadFixture();
       const result = await runHooksCli({
@@ -445,6 +452,7 @@ describe("hooks CLI process lifecycle", () => {
         ],
         completion: "exit",
         label: "hooks relay explicit state database",
+        nodeExecutable: resolveTestNodeExecPath(),
         env: {
           LINGER_MARKER: fixture.markerPath,
           NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
@@ -467,6 +475,8 @@ describe("hooks CLI process lifecycle", () => {
     const unavailableGatewayPort = await getFreePort();
 
     const listResult = await runHooksCli({
+      // Prepare CLI code before timing the fresh process and its plugin lifecycle.
+      entryArgv: resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
       args: ["hooks", "list", "--json"],
       completion: "output-then-exit",
       label: "hooks list",
@@ -475,6 +485,7 @@ describe("hooks CLI process lifecycle", () => {
         OPENCLAW_CONFIG_PATH: fixture.configPath,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         OPENCLAW_GATEWAY_PORT: String(unavailableGatewayPort),
+        OPENCLAW_NO_RESPAWN: "1",
         OPENCLAW_STATE_DIR: fixture.stateDir,
       },
     });

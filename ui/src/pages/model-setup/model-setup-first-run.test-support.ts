@@ -70,6 +70,7 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
     connectionRevision: 0,
     eventLog: [],
     eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect: () => undefined,
     setSessionKey: () => undefined,
     start: () => undefined,
@@ -106,6 +107,10 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
   const context = {
     gateway,
     agentSelection: {
+      state: { selectedId: "main", scopeId: "main" },
+      subscribe: () => () => undefined,
+    },
+    settingsAgentSelection: {
       state: { selectedId: "main", scopeId: "main" },
       subscribe: () => () => undefined,
     },
@@ -173,9 +178,13 @@ export function requestParameters(params: unknown) {
 }
 
 export async function clickCandidate(page: ModelSetupPage, kind: string) {
-  await waitForFast(() =>
-    expect(page.querySelector(`[data-candidate-kind="${kind}"] button`)).not.toBeNull(),
-  );
+  await waitForFast(() => {
+    const candidateButton = page.querySelector<HTMLButtonElement>(
+      `[data-candidate-kind="${kind}"] button`,
+    );
+    expect(candidateButton).not.toBeNull();
+    expect(candidateButton!.disabled).toBe(false);
+  });
   const button = page.querySelector<HTMLButtonElement>(`[data-candidate-kind="${kind}"] button`);
   expect(button).not.toBeNull();
   expect(button!.disabled).toBe(false);
@@ -189,4 +198,11 @@ export async function selectManualProvider(page: ModelSetupPage, providerId: str
   expect(item).not.toBeNull();
   picker.dispatchEvent(new CustomEvent("wa-select", { detail: { item }, bubbles: true }));
   await page.updateComplete;
+}
+
+export async function waitForModelSetupDetection(page: ModelSetupPage): Promise<void> {
+  await page.updateComplete;
+  await waitForFast(() =>
+    expect(page.querySelector(".model-setup")?.getAttribute("aria-busy")).toBe("false"),
+  );
 }

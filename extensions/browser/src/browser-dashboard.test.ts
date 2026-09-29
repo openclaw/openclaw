@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenClawPluginService,
@@ -7,7 +8,6 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateSyncKeyedStoreForTests,
   createPluginStateKeyedStoreForTests,
   openOpenClawStateDatabase,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -15,7 +15,10 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { describe, expect, it, vi } from "vitest";
 import { registerBrowserPlugin } from "../plugin-registration.js";
-import { useBrowserDashboardTestHarness } from "./browser-dashboard.test-harness.js";
+import {
+  interceptStoreActions,
+  useBrowserDashboardTestHarness,
+} from "./browser-dashboard.test-harness.js";
 import { handleBrowserGatewayRequest } from "./gateway/browser-request.js";
 
 const browser = vi.hoisted(() => ({
@@ -48,15 +51,21 @@ import {
 } from "./browser/routes/test-helpers.js";
 import type { BrowserRouteContext } from "./browser/server-context.js";
 import { makeBrowserProfile } from "./browser/server-context.test-harness.js";
+import { readColdNativeActivity } from "./browser/session-tab-process-state.js";
 import {
   closeTrackedBrowserTabsForSessions,
   sweepTrackedBrowserTabs,
+  touchSessionBrowserTab,
+  trackSessionBrowserTab,
+  untrackSessionBrowserTab,
 } from "./browser/session-tab-registry.js";
+import { durableOwnership } from "./browser/session-tab-registry.sqlite.test-helpers.js";
 import {
-  assertBrowserDashboardTabCanClose,
+  dispatchBrowserTabClose,
   browserSessionTabStorageKey,
   type BrowserSessionTabRecord,
   getBrowserSessionTabStore,
+  parseBrowserDashboardStopIntent,
   parseBrowserSessionTabRecord,
   readBrowserDashboardTabs,
 } from "./browser/session-tab-store.js";
@@ -66,6 +75,27 @@ const request = { sessionKey, agentId: "main", name: "service" };
 
 describe("Browser dashboard lifetime", () => {
   const fixture = useBrowserDashboardTestHarness(browser, sessionKey);
+
+  it("retains cold activity through dashboard Stop and retires it after final deletion", async () => {
+    await requestBrowserDashboard(request);
+    const siblingOwnership = durableOwnership("target-1", "profile-one", "browser-older");
+    const params = { sessionKey, targetId: "target-1", profile: "openclaw" };
+    await trackSessionBrowserTab({ ...params, ownership: siblingOwnership });
+    await touchSessionBrowserTab({ ...params, now: 2_000 });
+    const coldIdentity = `${sessionKey}\u0000openclaw\u0000target-1`;
+    expect(readColdNativeActivity(coldIdentity)).toBe(2_000);
+    await untrackSessionBrowserTab({ ...params, ownership: siblingOwnership });
+    expect(readColdNativeActivity(coldIdentity)).toBe(2_000);
+
+    await stopBrowserDashboard(request);
+    expect((await readBrowserDashboardTabs())[0]?.dashboard?.state).toBe("stopped");
+    expect(readColdNativeActivity(coldIdentity)).toBe(2_000);
+    fixture.widgets = [];
+    await reconcileBrowserDashboards();
+
+    expect(await readBrowserDashboardTabs()).toEqual([]);
+    expect(readColdNativeActivity(coldIdentity)).toBeUndefined();
+  });
 
   it("shares one HTTP target across simultaneous views, plugin reload, idle sweep, and transcript reset", async () => {
     const [first, second] = await Promise.all([
@@ -80,7 +110,7 @@ describe("Browser dashboard lifetime", () => {
       "http://service.example/",
       expect.objectContaining({ profile: "openclaw", managedOnly: true }),
     );
-    fixture.installRuntime();
+    await fixture.installRuntime();
     expect((await requestBrowserDashboard(request)).browserTab).toEqual(first.browserTab);
     await sweepTrackedBrowserTabs({
       idleMs: 1,
@@ -89,9 +119,11 @@ describe("Browser dashboard lifetime", () => {
     });
     await closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] });
     expect(fixture.tabs.map((tab) => tab.targetId)).toEqual(["target-1"]);
-    expect(() => assertBrowserDashboardTabCanClose("target-1", "openclaw")).toThrow(
+    const ordinaryClose = vi.fn(async () => {});
+    await expect(dispatchBrowserTabClose("target-1", "openclaw", ordinaryClose)).rejects.toThrow(
       /belongs to dashboard service/,
     );
+    expect(ordinaryClose).not.toHaveBeenCalled();
     expect(browser.closeOwned).not.toHaveBeenCalled();
   });
 
@@ -106,20 +138,20 @@ describe("Browser dashboard lifetime", () => {
       expect((await inspectBrowserDashboard(request)).paused).toBe(true);
       if (state === "cold") {
         const store = getBrowserSessionTabStore();
-        store.register("dashboard-stop:forged", store.entries()[0]?.value);
+        await store.register("dashboard-stop:forged", (await store.entries())[0]?.value);
       }
       await sweepTrackedBrowserTabs({
         idleMs: 1,
         maxTabsPerSession: 1,
         now: Date.now() + 86_400_000,
       });
-      expect(getBrowserSessionTabStore().entries()).toHaveLength(1);
-      fixture.installRuntime();
+      expect(await getBrowserSessionTabStore().entries()).toHaveLength(1);
+      await fixture.installRuntime();
       expect((await requestBrowserDashboard(request)).paused).toBe(true);
       expect(browser.open).toHaveBeenCalledTimes(state === "cold" ? 0 : 1);
       if (state === "cold") {
-        expect(readBrowserDashboardTabs()).toEqual([]);
-        expect(getBrowserSessionTabStore().entries()[0]?.value).toMatchObject({
+        expect(await readBrowserDashboardTabs()).toEqual([]);
+        expect((await getBrowserSessionTabStore().entries())[0]?.value).toMatchObject({
           kind: "dashboard-stop",
         });
       }
@@ -127,7 +159,7 @@ describe("Browser dashboard lifetime", () => {
       expect(resumed.browserTab?.targetId).toBe(state === "cold" ? "target-1" : "target-2");
       expect(resumed.paused).toBe(false);
       expect(fixture.widgets[0]?.props).toEqual({ url: "http://service.example/" });
-      expect(getBrowserSessionTabStore().entries()).toHaveLength(1);
+      expect(await getBrowserSessionTabStore().entries()).toHaveLength(1);
     },
   );
 
@@ -153,20 +185,19 @@ describe("Browser dashboard lifetime", () => {
     }
     const controller = new AbortController();
     const error = new Error(`Resume ${failure}`);
-    const store = getBrowserSessionTabStore();
-    const update = store.update!;
-    const writeSpy = vi.spyOn(store, "update").mockImplementation((key, patch) =>
-      update(key, (current) => {
-        const next = patch(current);
+    const writeSpy = interceptStoreActions((store) => ({
+      ...store,
+      compareAndApply: async (key, comparison, intent) => {
         if (
           failure === "registration failed" &&
-          parseBrowserSessionTabRecord(next)?.dashboard?.state === "active"
+          intent.action === "set" &&
+          parseBrowserSessionTabRecord(intent.value)?.dashboard?.state === "active"
         ) {
           throw error;
         }
-        return next;
-      }),
-    );
+        return await store.compareAndApply(key, comparison, intent);
+      },
+    }));
     browser.open.mockImplementationOnce(async () => {
       const tab = fixture.openedTab();
       if (failure === "cancelled") {
@@ -183,9 +214,7 @@ describe("Browser dashboard lifetime", () => {
     try {
       await expect(
         requestBrowserDashboard({ ...request, resume: true }, { signal: controller.signal }),
-      ).rejects.toThrow(
-        failure === "cancelled" ? error.message : "Failed to update plugin state entry.",
-      );
+      ).rejects.toThrow(error.message);
     } finally {
       writeSpy.mockRestore();
     }
@@ -193,7 +222,7 @@ describe("Browser dashboard lifetime", () => {
     expect((await inspectBrowserDashboard(request)).paused).toBe(true);
     expect((await requestBrowserDashboard(request)).paused).toBe(true);
     expect(browser.open).toHaveBeenCalledTimes(state === "cold" ? 1 : 2);
-    expect(getBrowserSessionTabStore().entries()).toHaveLength(1);
+    expect(await getBrowserSessionTabStore().entries()).toHaveLength(1);
     expect((await requestBrowserDashboard({ ...request, resume: true })).paused).toBe(false);
   });
 
@@ -215,7 +244,7 @@ describe("Browser dashboard lifetime", () => {
       } else {
         await sweepTrackedBrowserTabs({ ordinaryCleanup: false });
       }
-      expect(getBrowserSessionTabStore().entries()).toEqual([]);
+      expect(await getBrowserSessionTabStore().entries()).toEqual([]);
       expect(browser.open).not.toHaveBeenCalled();
       expect(browser.closeOwned).not.toHaveBeenCalled();
     },
@@ -228,20 +257,99 @@ describe("Browser dashboard lifetime", () => {
         await requestBrowserDashboard(request);
       }
       await stopBrowserDashboard(request);
-      const retirement = vi
-        .spyOn(getBrowserSessionTabStore(), "deleteIf")
-        .mockReturnValueOnce(false);
+      let advanced = false;
+      const retirement = interceptStoreActions((store) => ({
+        ...store,
+        compareAndApply: async (key, comparison, intent) => {
+          if (intent.action === "delete" && !advanced) {
+            advanced = true;
+            const current = await store.lookup(key);
+            const tab = parseBrowserSessionTabRecord(current);
+            const stop = parseBrowserDashboardStopIntent(key, current);
+            if (!tab && !stop) {
+              throw new Error("Expected the Stop record selected for retirement");
+            }
+            await store.register(
+              key,
+              tab ? { ...tab, lastUsedAt: tab.lastUsedAt + 1 } : { ...stop, stopId: randomUUID() },
+            );
+          }
+          return await store.compareAndApply(key, comparison, intent);
+        },
+      }));
       let resumed;
       try {
         resumed = await requestBrowserDashboard({ ...request, resume: true });
       } finally {
         retirement.mockRestore();
       }
-      expect(getBrowserSessionTabStore().entries()).toHaveLength(2);
+      expect(await getBrowserSessionTabStore().entries()).toHaveLength(2);
       expect((await inspectBrowserDashboard(request)).browserTab).toEqual(resumed.browserTab);
       expect((await requestBrowserDashboard(request)).browserTab).toEqual(resumed.browserTab);
       await sweepTrackedBrowserTabs({ ordinaryCleanup: false });
-      expect(getBrowserSessionTabStore().entries()).toHaveLength(1);
+      expect(await getBrowserSessionTabStore().entries()).toHaveLength(1);
+      expect(fixture.tabs.map((tab) => tab.targetId)).toEqual([resumed.browserTab?.targetId]);
+    },
+  );
+
+  it.each([
+    ["cold", "registration"],
+    ["warm", "registration"],
+    ["stopping", "registration"],
+    ["cold", "Stop retirement"],
+    ["warm", "Stop retirement"],
+  ] as const)(
+    "keeps the committed resumed target when %s cancellation follows %s",
+    async (state, phase) => {
+      if (state !== "cold") {
+        await requestBrowserDashboard(request);
+      }
+      if (state === "stopping") {
+        browser.closeOwned.mockResolvedValueOnce({
+          status: "unavailable",
+          reason: "browser-identity-lookup-failed",
+        });
+        await expect(stopBrowserDashboard(request)).rejects.toThrow(/paused/);
+      } else {
+        await stopBrowserDashboard(request);
+      }
+      browser.closeOwned.mockClear();
+      const controller = new AbortController();
+      const error = new Error(`caller cancelled after ${phase}`);
+      const retirement = interceptStoreActions((store) => ({
+        ...store,
+        compareAndApply: async (key, comparison, intent) => {
+          const result = await store.compareAndApply(key, comparison, intent);
+          if (
+            result.status === "applied" &&
+            (phase === "registration"
+              ? intent.action === "set" &&
+                parseBrowserSessionTabRecord(intent.value)?.dashboard?.state === "active"
+              : intent.action === "delete")
+          ) {
+            controller.abort(error);
+          }
+          return result;
+        },
+      }));
+      try {
+        await expect(
+          requestBrowserDashboard({ ...request, resume: true }, { signal: controller.signal }),
+        ).rejects.toThrow(error.message);
+      } finally {
+        retirement.mockRestore();
+      }
+      const resumed = await inspectBrowserDashboard(request);
+      expect(resumed.paused).toBe(false);
+      expect(fixture.tabs.map((tab) => tab.targetId)).toEqual([resumed.browserTab?.targetId]);
+      expect(await getBrowserSessionTabStore().entries()).toHaveLength(
+        phase === "registration" ? 2 : 1,
+      );
+      expect(browser.closeOwned.mock.calls.map(([args]) => args.nativeTargetId)).toEqual(
+        state === "stopping" ? ["target-1"] : [],
+      );
+      await sweepTrackedBrowserTabs({ ordinaryCleanup: false });
+      expect(await getBrowserSessionTabStore().entries()).toHaveLength(1);
       expect(fixture.tabs.map((tab) => tab.targetId)).toEqual([resumed.browserTab?.targetId]);
     },
   );
@@ -266,15 +374,15 @@ describe("Browser dashboard lifetime", () => {
         }),
       ]);
       await stopBrowserDashboard(request);
-      const retained = getBrowserSessionTabStore().entries();
+      const retained = await getBrowserSessionTabStore().entries();
       finish.resolve();
       await reconciling;
-      expect(getBrowserSessionTabStore().entries()).toEqual(retained);
+      expect(await getBrowserSessionTabStore().entries()).toEqual(retained);
     } finally {
       finish.resolve();
       await reconciling;
     }
-    fixture.installRuntime();
+    await fixture.installRuntime();
     expect((await requestBrowserDashboard(request)).paused).toBe(true);
     expect(browser.open).not.toHaveBeenCalled();
   });
@@ -292,7 +400,7 @@ describe("Browser dashboard lifetime", () => {
       }
       await expect(sweepTrackedBrowserTabs({ ordinaryCleanup: false })).resolves.toBe(1);
       expect(fixture.tabs).toEqual([]);
-      expect(readBrowserDashboardTabs()).toEqual([]);
+      expect(await readBrowserDashboardTabs()).toEqual([]);
       expect(browser.closeOwned).toHaveBeenCalledOnce();
       if (condition !== "removed") {
         await expect(requestBrowserDashboard(request)).rejects.toThrow(/widget_put/);
@@ -300,17 +408,49 @@ describe("Browser dashboard lifetime", () => {
     },
   );
 
-  it("retains a target when authoritative board lookup is unavailable", async () => {
-    await requestBrowserDashboard(request);
-    fixture.readBoard.mockRejectedValueOnce(new Error("Gateway unavailable"));
-    const onWarn = vi.fn();
-    await sweepTrackedBrowserTabs({ ordinaryCleanup: false, onWarn });
-    expect(fixture.tabs).toHaveLength(1);
-    expect(browser.closeOwned).not.toHaveBeenCalled();
-    expect(onWarn).toHaveBeenCalledWith(
-      expect.stringContaining("Could not reconcile Browser dashboard service"),
-    );
-  });
+  it.each(["board", "store", "reconcile tabs", "reconcile intents"] as const)(
+    "retains a target when authoritative %s lookup is unavailable",
+    async (source) => {
+      await requestBrowserDashboard(request);
+      const error = new Error(`${source} unavailable`);
+      let remainingReads = source === "reconcile intents" ? 2 : 1;
+      const storeRead =
+        source !== "board"
+          ? interceptStoreActions((store) => ({
+              ...store,
+              entries: async () => {
+                if (--remainingReads === 0) {
+                  throw error;
+                }
+                return await store.entries();
+              },
+            }))
+          : undefined;
+      if (source === "board") {
+        fixture.readBoard.mockRejectedValueOnce(error);
+      }
+      const onWarn = vi.fn();
+      try {
+        const cleanup = source.startsWith("reconcile")
+          ? reconcileBrowserDashboards({ onWarn })
+          : sweepTrackedBrowserTabs({ ordinaryCleanup: false, onWarn });
+        if (source !== "board") {
+          await expect(cleanup).rejects.toBe(error);
+          expect(onWarn).not.toHaveBeenCalled();
+        } else {
+          await expect(cleanup).resolves.toBe(0);
+          expect(onWarn).toHaveBeenCalledWith(
+            expect.stringContaining("Could not reconcile Browser dashboard service"),
+          );
+        }
+        expect(fixture.tabs).toHaveLength(1);
+        expect(browser.closeOwned).not.toHaveBeenCalled();
+      } finally {
+        storeRead?.mockRestore();
+      }
+      expect(await readBrowserDashboardTabs()).toHaveLength(1);
+    },
+  );
 
   it.each(["ownership", "reachability"] as const)(
     "preserves the live page when its %s probe is unavailable",
@@ -319,7 +459,7 @@ describe("Browser dashboard lifetime", () => {
       const retainedPage = fixture.tabs[0]!;
       retainedPage.url = "http://service.example/unfinished-work";
       retainedPage.title = "Unsubmitted draft";
-      const retainedRows = readBrowserDashboardTabs();
+      const retainedRows = await readBrowserDashboardTabs();
       if (probe === "ownership") {
         browser.ownership.mockResolvedValueOnce({
           status: "non-durable",
@@ -335,7 +475,7 @@ describe("Browser dashboard lifetime", () => {
       expect(browser.closeOwned.mock.calls.map(([args]) => args.nativeTargetId)).toEqual(
         probe === "ownership" ? [] : ["target-2"],
       );
-      expect(readBrowserDashboardTabs()).toEqual(retainedRows);
+      expect(await readBrowserDashboardTabs()).toEqual(retainedRows);
       expect((await requestBrowserDashboard(request)).browserTab).toEqual(opened.browserTab);
       expect(browser.open).toHaveBeenCalledTimes(probe === "ownership" ? 1 : 2);
       expect(retainedPage.url).toBe("http://service.example/unfinished-work");
@@ -371,7 +511,7 @@ describe("Browser dashboard lifetime", () => {
       expect.objectContaining({ message: expect.stringContaining("agent turn cancelled") }),
     );
     expect(fixture.tabs).toEqual([]);
-    expect(readBrowserDashboardTabs()).toEqual([]);
+    expect(await readBrowserDashboardTabs()).toEqual([]);
   });
 
   it("preserves canonical board identity when its opaque session tail is case-sensitive", async () => {
@@ -381,12 +521,12 @@ describe("Browser dashboard lifetime", () => {
       return structuredClone({ sessionKey: opaqueKey, widgets: fixture.widgets });
     });
     const first = await requestBrowserDashboard({ ...request, sessionKey: opaqueKey });
-    fixture.installRuntime();
+    await fixture.installRuntime();
     expect(
       (await requestBrowserDashboard({ sessionKey: opaqueKey, name: "service" })).browserTab,
     ).toEqual(first.browserTab);
     expect(browser.open).toHaveBeenCalledOnce();
-    expect(readBrowserDashboardTabs()[0]?.dashboard?.sessionKey).toBe(opaqueKey);
+    expect((await readBrowserDashboardTabs())[0]?.dashboard?.sessionKey).toBe(opaqueKey);
   });
 
   it.each(["replacement", "stopped", "missing target"] as const)(
@@ -405,8 +545,8 @@ describe("Browser dashboard lifetime", () => {
       expect(fixture.tabs.map((tab) => tab.targetId)).toEqual(
         condition === "replacement" ? ["target-1", "target-2"] : ["target-2"],
       );
-      expect(readBrowserDashboardTabs()).toHaveLength(1);
-      expect(readBrowserDashboardTabs()[0]?.browserInstanceFingerprint).toBe(
+      expect(await readBrowserDashboardTabs()).toHaveLength(1);
+      expect((await readBrowserDashboardTabs())[0]?.browserInstanceFingerprint).toBe(
         fixture.browserInstance,
       );
     },
@@ -459,7 +599,7 @@ describe("Browser dashboard lifetime", () => {
       /retained cleanup record will retry/,
     );
     expect(fixture.tabs).toHaveLength(1);
-    expect(readBrowserDashboardTabs()).toEqual([
+    expect(await readBrowserDashboardTabs()).toEqual([
       expect.objectContaining({
         nativeTargetId: "target-1",
         profileFingerprint: "profile-one",
@@ -469,7 +609,7 @@ describe("Browser dashboard lifetime", () => {
     ]);
     await expect(sweepTrackedBrowserTabs({ ordinaryCleanup: false })).resolves.toBe(1);
     expect(fixture.tabs).toEqual([]);
-    expect(readBrowserDashboardTabs()).toEqual([]);
+    expect(await readBrowserDashboardTabs()).toEqual([]);
   });
 
   it.each(["Stop", "removal"] as const)(
@@ -497,7 +637,7 @@ describe("Browser dashboard lifetime", () => {
           await expect(sweepTrackedBrowserTabs({ ordinaryCleanup: false })).resolves.toBe(0);
         }
         expect(fixture.tabs.map((tab) => tab.targetId)).toEqual(["target-1"]);
-        expect(readBrowserDashboardTabs()).toEqual([
+        expect(await readBrowserDashboardTabs()).toEqual([
           expect.objectContaining({
             nativeTargetId: "target-1",
             cleanupAttemptToken: expect.any(String),
@@ -509,7 +649,7 @@ describe("Browser dashboard lifetime", () => {
         await expect(sweepTrackedBrowserTabs({ ordinaryCleanup: false })).resolves.toBe(1);
         expect(fixture.tabs).toEqual([]);
         if (action === "Stop") {
-          expect(readBrowserDashboardTabs()[0]?.dashboard?.state).toBe("stopped");
+          expect((await readBrowserDashboardTabs())[0]?.dashboard?.state).toBe("stopped");
           expect(await inspectBrowserDashboard(request)).toMatchObject({
             paused: true,
             stopping: false,
@@ -518,7 +658,7 @@ describe("Browser dashboard lifetime", () => {
           expect(resumed.browserTab?.targetId).toBe("target-2");
           expect(fixture.tabs.map((tab) => tab.targetId)).toEqual(["target-2"]);
         } else {
-          expect(readBrowserDashboardTabs()).toEqual([]);
+          expect(await readBrowserDashboardTabs()).toEqual([]);
         }
       } finally {
         clock.mockRestore();
@@ -543,8 +683,6 @@ describe("Browser dashboard lifetime", () => {
         on,
         runtime: {
           state: {
-            openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
-              createPluginStateSyncKeyedStoreForTests("browser", options),
             openKeyedStore: (options: OpenKeyedStoreOptions) =>
               createPluginStateKeyedStoreForTests("browser", options),
           },
@@ -579,16 +717,34 @@ describe("Browser dashboard lifetime", () => {
     const sessionContext = { agentId: "main", sessionId: "dashboard-proof", sessionKey };
     await stopBrowserDashboard(request);
     await sessionEnd({ ...sessionContext, reason: "reset" }, sessionContext);
-    expect(getBrowserSessionTabStore().entries()).toHaveLength(1);
+    expect(await getBrowserSessionTabStore().entries()).toHaveLength(1);
     const savedWidgets = fixture.widgets;
     fixture.widgets = [];
     await sessionEnd({ ...sessionContext, reason: "deleted" }, sessionContext);
-    expect(getBrowserSessionTabStore().entries()).toEqual([]);
+    expect(await getBrowserSessionTabStore().entries()).toEqual([]);
     fixture.widgets = savedWidgets;
     await stopBrowserDashboard(request);
     fixture.widgets = [];
-    boardChanged?.({ sessionKey, agentId: "main", reason: "board" });
-    await vi.waitFor(() => expect(getBrowserSessionTabStore().entries()).toEqual([]));
+    const store = getBrowserSessionTabStore();
+    expect(await store.entries()).toHaveLength(1);
+    const removed = createDeferred<void>();
+    const retirement = interceptStoreActions((action) => ({
+      ...action,
+      compareAndApply: async (key, comparison, intent) => {
+        const result = await action.compareAndApply(key, comparison, intent);
+        if (intent.action === "delete" && result.status === "applied") {
+          removed.resolve();
+        }
+        return result;
+      },
+    }));
+    try {
+      boardChanged?.({ sessionKey, agentId: "main", reason: "board" });
+      await removed.promise;
+    } finally {
+      retirement.mockRestore();
+    }
+    expect(await store.entries()).toEqual([]);
     expect(browser.open).not.toHaveBeenCalled();
     fixture.widgets = savedWidgets;
     emit.mockClear();
@@ -643,7 +799,7 @@ describe("Browser dashboard lifetime", () => {
     finish.resolve();
     await stopping;
     expect(cleanupScope).toBe("browser-service-instance");
-    expect(readBrowserDashboardTabs()).toEqual([]);
+    expect(await readBrowserDashboardTabs()).toEqual([]);
     expect(fixture.tabs).toEqual([]);
   });
 
@@ -676,14 +832,13 @@ describe("Browser dashboard lifetime", () => {
       finish.resolve();
       await rejected;
       expect(fixture.tabs).toEqual([]);
-      expect(readBrowserDashboardTabs()).toEqual([]);
+      expect(await readBrowserDashboardTabs()).toEqual([]);
       expect(browser.closeOwned).toHaveBeenCalledOnce();
     },
   );
 
   it("bounds retained-tab materialization while reconciling unrelated dashboard removals", async () => {
     const store = getBrowserSessionTabStore();
-    const retained = [];
     for (let index = 0; index < 15; index++) {
       const record: BrowserSessionTabRecord = {
         version: 1,
@@ -709,46 +864,45 @@ describe("Browser dashboard lifetime", () => {
           : {}),
       };
       const key = browserSessionTabStorageKey(record);
-      const clock = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000 + index);
-      try {
-        store.register(key, record);
-      } finally {
-        clock.mockRestore();
-      }
-      if (index >= 5) {
-        retained.push({ key, value: record, createdAt: 1_700_000_000_000 + index });
-      }
+      await store.register(key, record);
     }
-    const entries = store.entries.bind(store);
+    const retained = (await store.entries()).filter(
+      ({ value }) => !parseBrowserSessionTabRecord(value)?.dashboard,
+    );
     let fetchedRows = 0;
-    const scans = vi.spyOn(store, "entries").mockImplementation(() => {
-      const rows = entries();
-      fetchedRows += rows.length;
-      return rows;
-    });
+    const scans = interceptStoreActions((action) => ({
+      ...action,
+      entries: async () => {
+        const rows = await action.entries();
+        fetchedRows += rows.length;
+        return rows;
+      },
+    }));
     try {
       expect(await reconcileBrowserDashboards()).toBe(5);
-      expect(browser.closeOwned.mock.calls.map(([params]) => params.nativeTargetId)).toEqual(
-        Array.from({ length: 5 }, (_, index) => `seeded-${index}`),
-      );
+      expect(
+        browser.closeOwned.mock.calls
+          .map(([params]) => params.nativeTargetId)
+          .toSorted((left, right) => left.localeCompare(right)),
+      ).toEqual(Array.from({ length: 5 }, (_, index) => `seeded-${index}`));
       expect(fetchedRows).toBeLessThanOrEqual(30);
     } finally {
       scans.mockRestore();
     }
-    expect(store.entries()).toEqual(retained);
+    expect(await store.entries()).toEqual(retained);
   });
 
   it.each(["definition identity", "storage hash"] as const)(
     "refuses a retained dashboard whose %s changes during ownership lookup",
     async (change) => {
       await requestBrowserDashboard(request);
-      const tab = readBrowserDashboardTabs()[0];
+      const tab = (await readBrowserDashboardTabs())[0];
       if (!tab?.dashboard) {
         throw new Error("Expected the registered dashboard tab");
       }
       const { storageKey, ...record } = tab;
       browser.ownership.mockImplementationOnce(async () => {
-        getBrowserSessionTabStore().register(
+        await getBrowserSessionTabStore().register(
           storageKey,
           change === "storage hash"
             ? { ...record, profileFingerprint: "changed-profile" }
@@ -773,12 +927,12 @@ describe("Browser dashboard lifetime", () => {
     "handles %s corrupt JSON introduced during the dashboard ownership lookup",
     async (scope) => {
       const opened = await requestBrowserDashboard(request);
-      const tab = readBrowserDashboardTabs()[0];
+      const tab = (await readBrowserDashboardTabs())[0];
       if (!tab) {
         throw new Error("Expected the registered dashboard tab");
       }
       const store = getBrowserSessionTabStore();
-      store.register("unrelated-entry", { diagnostic: "unrelated" });
+      await store.register("unrelated-entry", { diagnostic: "unrelated" });
       browser.ownership.mockImplementationOnce(async () => {
         openOpenClawStateDatabase()
           .db.prepare(
@@ -804,7 +958,9 @@ describe("Browser dashboard lifetime", () => {
       } else {
         expect((await requestBrowserDashboard(request)).browserTab).toEqual(opened.browserTab);
       }
-      expect(() => readBrowserDashboardTabs()).toThrow("Plugin state entry contains corrupt JSON");
+      await expect(readBrowserDashboardTabs()).rejects.toThrow(
+        "Plugin state entry contains corrupt JSON",
+      );
       expect(browser.open).toHaveBeenCalledOnce();
       expect(browser.closeOwned).not.toHaveBeenCalled();
     },

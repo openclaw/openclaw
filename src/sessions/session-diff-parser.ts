@@ -7,7 +7,10 @@ type NumstatEntry = { additions: number; deletions: number; binary: boolean };
 
 /** Parses `git diff --name-status -z -M` output; R/C entries consume two paths. */
 export function parseNameStatusZ(text: string): NameStatusEntry[] {
-  const tokens = text.split("\0");
+  return parseNameStatusTokens(text.split("\0"));
+}
+
+function parseNameStatusTokens(tokens: readonly string[]): NameStatusEntry[] {
   const entries: NameStatusEntry[] = [];
   for (let i = 0; i < tokens.length; i += 1) {
     const code = tokens[i];
@@ -37,9 +40,12 @@ export function parseNameStatusZ(text: string): NameStatusEntry[] {
 
 /** Parses `git diff --numstat -z -M`; rename entries put paths in follow-up tokens. */
 export function parseNumstatZ(text: string): Map<string, NumstatEntry> {
-  const tokens = text.split("\0");
+  return parseNumstatTokens(text.split("\0"), 0);
+}
+
+function parseNumstatTokens(tokens: readonly string[], start: number): Map<string, NumstatEntry> {
   const byPath = new Map<string, NumstatEntry>();
-  for (let i = 0; i < tokens.length; i += 1) {
+  for (let i = start; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (!token) {
       continue;
@@ -67,6 +73,30 @@ export function parseNumstatZ(text: string): Map<string, NumstatEntry> {
     }
   }
   return byPath;
+}
+
+/** Git emits all raw records before the numstat records in `--raw --numstat -z`. */
+export function parseDiffInventoryZ(text: string): {
+  entries: NameStatusEntry[];
+  numstat: Map<string, NumstatEntry>;
+} {
+  const tokens = text.split("\0");
+  const nameStatus: string[] = [];
+  let index = 0;
+  while (index < tokens.length) {
+    const header = tokens[index];
+    if (!header?.startsWith(":")) {
+      break;
+    }
+    const code = header.slice(header.lastIndexOf(" ") + 1);
+    const pathCount = code[0] === "R" || code[0] === "C" ? 2 : 1;
+    nameStatus.push(code, ...tokens.slice(index + 1, index + pathCount + 1));
+    index += pathCount + 1;
+  }
+  return {
+    entries: parseNameStatusTokens(nameStatus),
+    numstat: parseNumstatTokens(tokens, index),
+  };
 }
 
 const GIT_PATH_ESCAPES: Record<string, string> = {

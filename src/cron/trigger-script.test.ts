@@ -179,35 +179,50 @@ describe("cron trigger script evaluator", () => {
     },
   );
 
-  it("runs the documented exec contract from a canonically captured pinned cap", async () => {
-    const workspaceDir = tempDirs.make("openclaw-cron-canonical-cap-");
-    // The configured default exec host is a nonexistent node: only the
-    // restrict-only gateway pin can make this command run.
-    const config = {
-      agents: { defaults: { workspace: workspaceDir } },
-      tools: {
-        exec: {
-          host: "node",
-          node: "configured-node-must-not-run",
-          security: "full",
-          ask: "off",
-        },
+  it.each([
+    { host: "auto", expected: { kind: "evaluated", fire: false } },
+    {
+      host: "node",
+      expected: {
+        kind: "error",
+        code: "internal_error",
+        error: expect.stringContaining(
+          "exec host not allowed (requested gateway; configured host is node",
+        ),
       },
-    } as OpenClawConfig;
-    const evaluate = createCronScriptRuntime({ config }).evaluateTrigger;
+    },
+  ] as const)(
+    "honors current host $host for a canonically captured pinned exec cap",
+    async ({ host, expected }) => {
+      const workspaceDir = tempDirs.make("openclaw-cron-canonical-cap-");
+      // Automatic placement must honor the pin despite the script's node request;
+      // an explicit current node restriction must reject the captured Gateway host.
+      const config: OpenClawConfig = {
+        agents: { defaults: { workspace: workspaceDir } },
+        tools: {
+          exec: {
+            host,
+            node: "configured-node-must-not-run",
+            security: "full",
+            ask: "off",
+          },
+        },
+      };
+      const evaluate = createCronScriptRuntime({ config }).evaluateTrigger;
 
-    await expect(
-      evaluate({
-        jobId: "job-canonical-pinned-exec",
-        script:
-          'await exec({ command: "printf openclaw-canonical-ok", host: "node", node: "remote" }); return { fire: false };',
-        state: null,
-        toolsAllow: ["exec", "process"],
-        scheduledToolPolicy: { version: 1, mode: "trusted" },
-        execTarget: { version: 1, host: "gateway" },
-      }),
-    ).resolves.toEqual({ kind: "evaluated", fire: false });
-  });
+      await expect(
+        evaluate({
+          jobId: "job-canonical-pinned-exec",
+          script:
+            'await exec({ command: "printf openclaw-canonical-ok", host: "node", node: "remote" }); return { fire: false };',
+          state: null,
+          toolsAllow: ["exec", "process"],
+          scheduledToolPolicy: { version: 1, mode: "trusted" },
+          execTarget: { version: 1, host: "gateway" },
+        }),
+      ).resolves.toEqual(expected);
+    },
+  );
 
   it("keeps an uncanonicalized alias-name cap fail-closed for exec", async () => {
     const workspaceDir = tempDirs.make("openclaw-cron-alias-collision-");

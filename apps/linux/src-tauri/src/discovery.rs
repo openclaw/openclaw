@@ -6,7 +6,7 @@ use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use tauri::{Manager, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::Url;
 
 const GATEWAY_SERVICE_TYPE: &str = "_openclaw-gw._tcp.local.";
 
@@ -453,7 +453,7 @@ pub fn discover_gateways(
 }
 
 #[tauri::command]
-pub fn connect_discovered_gateway(
+pub async fn connect_discovered_gateway(
     app: tauri::AppHandle,
     discovery: tauri::State<'_, GatewayDiscovery>,
     host: String,
@@ -462,45 +462,7 @@ pub fn connect_discovered_gateway(
 ) -> Result<(), String> {
     let url = discovery.dashboard_url(&host, port, tls)?;
     let name = discovery.gateway_name(&host, port, tls)?;
-    let label = gateway_window_label(&url);
-    if let Some(window) = app.get_webview_window(&label) {
-        window
-            .navigate(url)
-            .map_err(|error| format!("Could not refresh Gateway window: {error}"))?;
-        window
-            .show()
-            .map_err(|error| format!("Could not show Gateway window: {error}"))?;
-        window
-            .set_focus()
-            .map_err(|error| format!("Could not focus Gateway window: {error}"))?;
-        return Ok(());
-    }
-    crate::window_chrome::grant(&app, &label, &url)?;
-    let chrome = crate::window_chrome::initialization_script(Some(&url), false);
-    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url))
-        .initialization_script(chrome)
-        .on_page_load(|window, payload| {
-            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
-                if let Some(view) = window.app_handle().get_webview(window.label()) {
-                    crate::window_chrome::loading(&view);
-                }
-            }
-        })
-        .title(format!("{name} — OpenClaw"))
-        .inner_size(1080.0, 720.0)
-        .min_inner_size(720.0, 520.0)
-        .center()
-        .build()
-        .map_err(|error| format!("Could not open Gateway window: {error}"))?;
-    crate::window_chrome::install(&window.as_ref().window())
-        .map_err(|error| format!("Could not enable window chrome: {error}"))?;
-    if let Some(view) = app.get_webview(window.label()) {
-        #[cfg(target_os = "macos")]
-        crate::window_chrome_macos::install_webview(&view)
-            .map_err(|error| format!("Could not enable window dragging: {error}"))?;
-        crate::window_chrome::observe_history(&view);
-    }
-    Ok(())
+    crate::gateway_windows::open_discovered(app, url, name).await
 }
 
 #[cfg(test)]

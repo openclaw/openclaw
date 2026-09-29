@@ -1,5 +1,7 @@
+import { addAbortListener } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import type { AssistantMessage } from "../../llm/types.js";
@@ -15,9 +17,11 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("worker live Gateway chat projection", () => {
   let harness: ComposedGatewayHarness;
+  let testSignal: AbortSignal;
   const clients: WorkerClients[] = [];
 
-  beforeEach(async () => {
+  beforeEach(async ({ signal }) => {
+    testSignal = signal;
     harness = await ComposedGatewayHarness.create(tempDirs.make("oc-wc-"));
     await harness.start();
   });
@@ -32,7 +36,7 @@ describe("worker live Gateway chat projection", () => {
   });
 
   async function liveProjection() {
-    const current = harness.createClients();
+    const current = await harness.createClients();
     clients.push(current);
     await current.connection.start();
     const runtime = createWorkerLiveRuntime({
@@ -66,13 +70,30 @@ describe("worker live Gateway chat projection", () => {
   const message = (text: string) =>
     makeAgentAssistantMessage({ content: [{ type: "text", text }] });
   const expectChatText = async (text: string) => {
-    await vi.waitFor(() => {
+    const latestText = () => {
       const event = harness.chat.events.at(-1);
-      expect(extractFirstTextBlock(event && "message" in event ? event.message : undefined)).toBe(
-        text,
-      );
+      return extractFirstTextBlock(event && "message" in event ? event.message : undefined);
+    };
+    const projected = createDeferred();
+    const cancelWait = addAbortListener(testSignal, () => projected.reject(testSignal.reason));
+    const push = harness.chat.events.push.bind(harness.chat.events);
+    const capture = vi.spyOn(harness.chat.events, "push").mockImplementation((...events) => {
+      const count = push(...events);
+      if (latestText() === text) {
+        projected.resolve();
+      }
+      return count;
     });
-    expect(harness.chat.state.runs.get(RUN_ID)?.rawBuffer).toBe(text);
+    try {
+      if (latestText() !== text) {
+        await projected.promise;
+      }
+      expect(latestText()).toBe(text);
+      expect(harness.chat.state.runs.get(RUN_ID)?.rawBuffer).toBe(text);
+    } finally {
+      cancelWait[Symbol.dispose]();
+      capture.mockRestore();
+    }
   };
 
   it.each([
@@ -254,6 +275,11 @@ describe("worker live Gateway chat projection", () => {
     for (let index = 0; index < 32; index += 1) {
       live.start();
       live.end(message("x".repeat(16_000)));
+      await vi.waitFor(() => {
+        expect(harness.chat.state.runs.get(RUN_ID)?.rawBuffer?.length).toBe(
+          Math.min((index + 1) * 16_000 + index * 2, 500_000),
+        );
+      });
     }
     // The 31 paragraph separators leave 3,938 characters of the first item after capping.
     const retainedPrefix = "x".repeat(3_938) + ("\n\n" + "x".repeat(16_000)).repeat(30);

@@ -1,6 +1,5 @@
-// Exa provider module implements model/runtime integration.
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { ProviderHttpError, readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
@@ -22,8 +21,12 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
+  asOptionalObjectRecord,
+  asOptionalRecord,
+  isRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
@@ -71,10 +74,6 @@ type ExaSearchResult = {
   text?: unknown;
 };
 
-type ExaSearchResponse = {
-  results?: unknown;
-};
-
 async function readExaSearchResults(response: Response): Promise<ExaSearchResult[]> {
   const bytes = await readResponseWithLimit(response, EXA_SEARCH_JSON_MAX_BYTES, {
     onOverflow: ({ maxBytes: maxBytesLocal }) =>
@@ -87,10 +86,6 @@ async function readExaSearchResults(response: Response): Promise<ExaSearchResult
   }
 }
 
-async function readExaErrorDetail(response: Response): Promise<string> {
-  return await readResponseTextLimited(response, EXA_ERROR_BODY_LIMIT_BYTES);
-}
-
 function normalizeExaFreshness(value: string | undefined): ExaFreshness | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
   if (!trimmed) {
@@ -99,11 +94,6 @@ function normalizeExaFreshness(value: string | undefined): ExaFreshness | undefi
   return EXA_FRESHNESS_VALUES.includes(trimmed as ExaFreshness)
     ? (trimmed as ExaFreshness)
     : undefined;
-}
-
-function resolveExaConfig(searchConfig?: SearchConfigRecord): ExaConfig {
-  const exa = searchConfig?.exa;
-  return exa && typeof exa === "object" && !Array.isArray(exa) ? (exa as ExaConfig) : {};
 }
 
 function resolveExaApiKey(exa?: ExaConfig): string | undefined {
@@ -154,10 +144,7 @@ function resolveExaSearchEndpoint(
 function resolveExaDescription(result: ExaSearchResult): string {
   const highlights = result.highlights;
   if (Array.isArray(highlights)) {
-    const highlightText = highlights
-      .map((entry) => normalizeOptionalString(entry))
-      .filter((entry): entry is string => Boolean(entry))
-      .join("\n");
+    const highlightText = normalizeTrimmedStringList(highlights).join("\n");
     if (highlightText) {
       return highlightText;
     }
@@ -181,33 +168,19 @@ function invalidContentsPayload(message: string) {
   };
 }
 
-function isErrorPayload(value: unknown): value is { error: string; message: string; docs: string } {
-  return Boolean(
-    value && typeof value === "object" && "error" in value && "message" in value && "docs" in value,
-  );
-}
-
-function resolveExaSearchCount(value: unknown, fallback: number): number {
-  const parsed = parseStrictPositiveInteger(value);
-  if (parsed === undefined) {
-    return fallback;
-  }
-  return Math.min(EXA_MAX_SEARCH_COUNT, parsed);
-}
-
 function parseExaContents(
   rawContents: unknown,
 ): { value?: ExaContentsArgs } | { error: string; message: string; docs: string } {
   if (rawContents === undefined) {
     return { value: undefined };
   }
-  if (!rawContents || typeof rawContents !== "object" || Array.isArray(rawContents)) {
+  if (!isRecord(rawContents)) {
     return invalidContentsPayload(
       "contents must be an object with optional text, highlights, and summary fields.",
     );
   }
 
-  const raw = rawContents as Record<string, unknown>;
+  const raw = rawContents;
   const allowedKeys = new Set(["text", "highlights", "summary"]);
   for (const key of Object.keys(raw)) {
     if (!allowedKeys.has(key)) {
@@ -218,11 +191,11 @@ function parseExaContents(
   }
 
   const parsed: ExaContentsArgs = {};
-  const fieldsBySection: Record<string, readonly string[]> = {
+  const fieldsBySection = {
     text: ["maxCharacters"],
     highlights: ["maxCharacters", "query", "numSentences", "highlightsPerUrl"],
     summary: ["query"],
-  };
+  } as const;
 
   for (const section of ["text", "highlights", "summary"] as const) {
     if (!(section in raw)) {
@@ -233,12 +206,12 @@ function parseExaContents(
       parsed[section] = value;
       continue;
     }
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
+    if (!isRecord(value)) {
       return invalidContentsPayload(`contents.${section} must be a boolean or an object.`);
     }
 
-    const option = value as Record<string, unknown>;
-    const fields = fieldsBySection[section] ?? [];
+    const option = value;
+    const fields: readonly string[] = fieldsBySection[section];
     for (const key of Object.keys(option)) {
       if (!fields.includes(key)) {
         const allowed =
@@ -264,12 +237,8 @@ function parseExaContents(
 
     const normalized: Record<string, unknown> = {};
     for (const field of fields) {
-      if (field === "query") {
-        if (typeof option.query === "string") {
-          normalized.query = option.query;
-        }
-      } else if (parsePositiveInteger(option[field])) {
-        normalized[field] = parsePositiveInteger(option[field]);
+      if (field in option) {
+        normalized[field] = option[field];
       }
     }
     Object.assign(parsed, { [section]: normalized });
@@ -279,16 +248,8 @@ function parseExaContents(
 }
 
 function normalizeExaResults(payload: unknown): ExaSearchResult[] {
-  if (!payload || typeof payload !== "object") {
-    return [];
-  }
-  const results = (payload as ExaSearchResponse).results;
-  if (!Array.isArray(results)) {
-    return [];
-  }
-  return results.filter((entry): entry is ExaSearchResult =>
-    Boolean(entry && typeof entry === "object" && !Array.isArray(entry)),
-  );
+  const results = asOptionalObjectRecord(payload)?.results;
+  return Array.isArray(results) ? results.filter(isRecord) : [];
 }
 
 function resolveFreshnessStartDate(freshness: ExaFreshness): string {
@@ -362,10 +323,12 @@ async function runExaSearch(params: {
     },
     async (res) => {
       if (!res.ok) {
-        const detail = await readExaErrorDetail(res);
-        throw new Error(`Exa API error (${res.status}): ${detail || res.statusText}`);
+        const detail = await readResponseTextLimited(res, EXA_ERROR_BODY_LIMIT_BYTES);
+        throw new ProviderHttpError(`Exa API error (${res.status}): ${detail || res.statusText}`, {
+          status: res.status,
+        });
       }
-      return readExaSearchResults(res);
+      return (await readExaSearchResults(res)).slice(0, params.count);
     },
   );
 }
@@ -414,8 +377,7 @@ export async function executeExaWebSearchProviderTool(
     "exa",
     resolveProviderWebSearchPluginConfig(ctx.config, "exa"),
   ) as SearchConfigRecord | undefined;
-  const params = args;
-  const exaConfig = resolveExaConfig(searchConfig);
+  const exaConfig = asOptionalRecord(searchConfig?.exa);
   const apiKey = resolveExaApiKey(exaConfig);
   if (!apiKey) {
     return missingExaKeyPayload();
@@ -426,19 +388,19 @@ export async function executeExaWebSearchProviderTool(
   }
   const endpoint = endpointResult.endpoint;
 
-  const query = readStringParam(params, "query", { required: true });
-  const rawType = readStringParam(params, "type");
+  const query = readStringParam(args, "query", { required: true });
+  const rawType = readStringParam(args, "type");
   const type: ExaSearchType = EXA_SEARCH_TYPES.includes(rawType as ExaSearchType)
     ? (rawType as ExaSearchType)
     : "auto";
   const count =
-    readPositiveIntegerParam(params, "count", {
+    readPositiveIntegerParam(args, "count", {
       max: EXA_MAX_SEARCH_COUNT,
       message: `count must be an integer from 1 to ${EXA_MAX_SEARCH_COUNT}.`,
     }) ??
     searchConfig?.maxResults ??
     undefined;
-  const rawFreshness = readStringParam(params, "freshness");
+  const rawFreshness = readStringParam(args, "freshness");
   const freshness = normalizeExaFreshness(rawFreshness);
   if (rawFreshness && !freshness) {
     return {
@@ -448,8 +410,8 @@ export async function executeExaWebSearchProviderTool(
     };
   }
 
-  const rawDateAfter = readStringParam(params, "date_after");
-  const rawDateBefore = readStringParam(params, "date_before");
+  const rawDateAfter = readStringParam(args, "date_after");
+  const rawDateBefore = readStringParam(args, "date_before");
   if (freshness && (rawDateAfter || rawDateBefore)) {
     return {
       error: "conflicting_time_filters",
@@ -470,8 +432,8 @@ export async function executeExaWebSearchProviderTool(
   }
   const { dateAfter, dateBefore } = parsedDateRange;
 
-  const parsedContents = parseExaContents(params.contents);
-  if (isErrorPayload(parsedContents)) {
+  const parsedContents = parseExaContents(args.contents);
+  if ("error" in parsedContents) {
     return parsedContents;
   }
   const contents =
@@ -479,7 +441,10 @@ export async function executeExaWebSearchProviderTool(
       ? parsedContents.value
       : undefined;
 
-  const resolvedCount = resolveExaSearchCount(count, DEFAULT_SEARCH_COUNT);
+  const resolvedCount = Math.min(
+    EXA_MAX_SEARCH_COUNT,
+    parseStrictPositiveInteger(count) ?? DEFAULT_SEARCH_COUNT,
+  );
   const cacheKey = buildExaCacheKey({
     endpoint,
     type,

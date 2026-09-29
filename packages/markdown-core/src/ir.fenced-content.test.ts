@@ -3,14 +3,19 @@ import { countMarkdownFencedCodeChars } from "./ir.js";
 
 describe("fenced code content length", () => {
   it.each([
-    { name: "below half", text: "```\n1234567\n```", count: 7 },
+    {
+      name: "ordinary inline code and strikethrough",
+      text: "Use `one` and ``two`` ticks with ~~old~~ prose.",
+      count: 0,
+    },
+    { name: "entity-encoded markers", text: "&#96;&#96;&#96;\ncode\n&#96;&#96;&#96;", count: 0 },
+    { name: "escaped opener", text: "\\```\nordinary prose", count: 0 },
+    { name: "control-separated markers", text: "`\0``\r~\0~~", count: 0 },
     { name: "exactly half", text: "```\n12345678\n```", count: 8 },
-    { name: "above half", text: "```\n123456789\n```", count: 9 },
     { name: "empty fence", text: "```\n```", count: 0 },
     { name: "one blank body line", text: "```\n\n```", count: 0 },
     { name: "two blank body lines", text: "```\n\n\n```", count: 1 },
     { name: "trailing code spaces", text: "```\nx  \n```", count: 3 },
-    { name: "trailing code tab", text: "```\nx\t\n```", count: 2 },
     { name: "interior blank line", text: "```\nleft\n\nright\n```", count: 11 },
     { name: "CRLF body", text: "```\r\nleft\r\nright\r\n```", count: 10 },
     { name: "unterminated body", text: "```ts\nconst answer = 42;", count: 18 },

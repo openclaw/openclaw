@@ -12,10 +12,14 @@ const HEARTBEAT_CONTEXT_PROMPT = `Follow the heartbeat monitor scratch context w
 export const HEARTBEAT_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} If nothing needs attention, reply ${SILENT_REPLY_TOKEN}.`;
 export const HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS =
   "Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.";
-export const HEARTBEAT_RESPONSE_TOOL_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`;
+// A fallback backend may lack the direct-only tool; preserve both quiet and alert outcomes.
+const HEARTBEAT_RESPONSE_TOOL_FALLBACK_INSTRUCTIONS = `If the heartbeat_respond tool is not available in this run, reply ${SILENT_REPLY_TOKEN} when nothing needs the user's attention; when the user should be interrupted, reply with only the alert text instead of a prose report.`;
+export const HEARTBEAT_RESPONSE_TOOL_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS} ${HEARTBEAT_RESPONSE_TOOL_FALLBACK_INSTRUCTIONS}`;
 export const INTERNAL_WAKE_TRANSCRIPT_PROMPTS = {
   heartbeat: "[OpenClaw heartbeat poll]",
-  exec: "[OpenClaw exec completion]",
+  exec: "[OpenClaw exec completion]\nDisable automatic completion turns with tools.exec.notifyOnExit=false; check per-agent overrides. Background exec and process poll remain available.",
+  // Saved transcripts still contain the marker without the disablement hint.
+  legacyExec: "[OpenClaw exec completion]",
   cron: "[OpenClaw cron wake]",
   event: "[OpenClaw session event]",
 } as const;
@@ -46,11 +50,6 @@ function stripLeadingHtmlCommentScaffolding(
   return remaining;
 }
 
-function stripHeartbeatHtmlComments(content: string): string[] {
-  const state = { inHtmlComment: false };
-  return content.split("\n").map((line) => stripLeadingHtmlCommentScaffolding(line, state));
-}
-
 /**
  * Check if heartbeat scratch is "effectively empty" - meaning it has no actionable tasks.
  * This allows skipping heartbeat API calls when no tasks are configured.
@@ -66,15 +65,13 @@ function stripHeartbeatHtmlComments(content: string): string[] {
  * still decide what to do. This function applies only when a scratch row exists.
  */
 export function isHeartbeatContentEffectivelyEmpty(content: string | undefined | null): boolean {
-  if (content === undefined || content === null) {
-    return false;
-  }
   if (typeof content !== "string") {
     return false;
   }
 
-  for (const line of stripHeartbeatHtmlComments(content)) {
-    const trimmed = line.trim();
+  const state = { inHtmlComment: false };
+  for (const line of content.split("\n")) {
+    const trimmed = stripLeadingHtmlCommentScaffolding(line, state).trim();
     if (
       !trimmed ||
       /^#+(\s|$)/.test(trimmed) ||
@@ -90,8 +87,7 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
 
 /** Resolves configured heartbeat prompt text with the built-in default fallback. */
 export function resolveHeartbeatPromptCore(raw?: string): string {
-  const trimmed = normalizeOptionalString(raw) ?? "";
-  return trimmed || HEARTBEAT_PROMPT;
+  return normalizeOptionalString(raw) || HEARTBEAT_PROMPT;
 }
 
 /** Resolves heartbeat prompt text and guarantees heartbeat_respond tool instructions are present. */
@@ -100,12 +96,20 @@ export function resolveHeartbeatPromptForResponseTool(raw?: string): string {
   if (!prompt) {
     return HEARTBEAT_RESPONSE_TOOL_PROMPT;
   }
-  return prompt.includes(HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS)
-    ? prompt
-    : `${prompt}\n\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`;
+  let resolved = prompt;
+  for (const instructions of [
+    HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
+    HEARTBEAT_RESPONSE_TOOL_FALLBACK_INSTRUCTIONS,
+  ]) {
+    if (!resolved.includes(instructions)) {
+      resolved = `${resolved}\n\n${instructions}`;
+    }
+  }
+  return resolved;
 }
 
 type StripHeartbeatMode = "heartbeat" | "message";
+const HEARTBEAT_TRAILING_TOKEN_RE = new RegExp(`${escapeRegExp(HEARTBEAT_TOKEN)}[^\\w]{0,4}$`);
 
 function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
   let text = raw.trim();
@@ -114,30 +118,23 @@ function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
   }
 
   const token = HEARTBEAT_TOKEN;
-  const tokenAtEndWithOptionalTrailingPunctuation = new RegExp(
-    `${escapeRegExp(token)}[^\\w]{0,4}$`,
-  );
   if (!text.includes(token)) {
     return { text, didStrip: false };
   }
 
   let didStrip = false;
-  let changed = true;
-  while (changed) {
-    changed = false;
+  while (true) {
     const next = text.trim();
     if (next.startsWith(token)) {
-      const after = next.slice(token.length).trimStart();
-      text = after;
+      text = next.slice(token.length).trimStart();
       didStrip = true;
-      changed = true;
       continue;
     }
     // Strip the token when it appears at the end of the text.
     // Also strip up to 4 trailing non-word characters the model may have appended
     // (e.g. ".", "!!!", "---"). Keep trailing punctuation only when real
     // sentence text exists before the token.
-    if (tokenAtEndWithOptionalTrailingPunctuation.test(next)) {
+    if (HEARTBEAT_TRAILING_TOKEN_RE.test(next)) {
       const idx = next.lastIndexOf(token);
       const before = next.slice(0, idx).trimEnd();
       if (!before) {
@@ -147,7 +144,8 @@ function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
         text = `${before}${after}`.trimEnd();
       }
       didStrip = true;
-      changed = true;
+    } else {
+      break;
     }
   }
 
@@ -210,10 +208,8 @@ export function stripHeartbeatToken(
   }
 
   const rest = picked.text.trim();
-  if (mode === "heartbeat") {
-    if (rest.length <= maxAckChars) {
-      return { shouldSkip: true, text: "", didStrip: true };
-    }
+  if (mode === "heartbeat" && rest.length <= maxAckChars) {
+    return { shouldSkip: true, text: "", didStrip: true };
   }
 
   return { shouldSkip: false, text: rest, didStrip: true };

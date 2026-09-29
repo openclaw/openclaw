@@ -38,6 +38,11 @@ Background the command immediately instead of waiting for `yieldMs`. The process
 Limit the command's total lifetime, in **seconds**, overriding the configured exec timeout for this call. Expiry terminates the process even after `background` or `yieldMs` returns a session ID. `yieldMs` controls how long the tool waits before backgrounding. The `process` tool's `timeout` controls how long a poll waits, also in milliseconds.
 
 Applies to gateway, sandbox, and node `system.run` execution. `timeoutSeconds: 0` disables the exec process timeout for that call. For a persistent service on the gateway or in a sandbox, use `background: true` with `timeoutSeconds: 0`, then stop it with `process` action `kill` when finished. Disabling this timeout does not make the process survive its host or worker shutting down.
+
+Codex foreground `node_exec` inherits this budget, including per-agent defaults,
+instead of the ordinary dynamic-tool timeout. Node transport waits remain bounded
+even when the command timer is disabled; Stop and turn cancellation still apply.
+See [Codex timeouts](/plugins/codex-harness-reference/timeouts).
 </ParamField>
 
 <ParamField path="pty" type="boolean" default="false">
@@ -75,17 +80,19 @@ Notes:
 - Host execution (`gateway`/`node`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to prevent binary hijacking or injected code.
 - Exact `"cat"` or empty `GIT_PAGER` and `PAGER` overrides are normalized to empty values, including on node shell-wrapper execution. This disables Git paging without passing an executable pager name through `PATH`. Other programs may interpret an empty `PAGER` differently. Use their noninteractive flags when needed. Other pager commands, paths, whitespace variants, and `MANPAGER` overrides remain blocked.
 - OpenClaw sets `OPENCLAW_SHELL=exec` in the spawned command environment (including PTY and sandbox execution) so shell/profile rules can detect exec-tool context.
-- With the default-off [secret egress proxy](/gateway/secrets#secret-egress-proxy), Gateway-hosted exec receives shared-store `secret` entries only as process-local sentinels. The authenticated loopback proxy substitutes plaintext at outbound HTTPS request time. The exact run token expires when the agent run closes.
+- With the default-off [secret egress proxy](/gateway/secrets#secret-egress-proxy), Gateway-hosted exec receives shared-store `secret` entries only as process-local sentinels. The authenticated loopback proxy substitutes plaintext at outbound HTTPS request time. Each managed process has its own proxy grant, which survives the originating turn and is revoked on process exit, cancellation, timeout, or Gateway shutdown.
 - Shared-store `env` entries are intentionally plaintext and reach Gateway-hosted exec from the next agent run. They do not reach sandbox, remote `node`, ACP, or Codex-native shell execution. Under the Codex harness, use `gateway_exec` for this OpenClaw-managed environment path.
 - With a [managed GitHub identity](/gateway/config-tools#tools.github), Gateway-hosted exec validates the selected profile and binds its credential privately at each process launch. An unavailable profile blocks that local execution with reconnect guidance instead of falling back to native keyring credentials. Running shells retain their launch token. Later exec launches observe refreshes. Codex-native shell does not share this launch binding.
-- Secret egress sets `NODE_USE_ENV_PROXY=1` so supported Node.js global `fetch` clients honor the run-scoped proxy. It does not use `NODE_OPTIONS`.
+- Secret egress sets `NODE_USE_ENV_PROXY=1` so supported Node.js global `fetch` clients honor the process-scoped proxy. It does not use `NODE_OPTIONS`.
 - For channel-origin runs, OpenClaw also exposes a narrow sender/chat identity JSON payload in `OPENCLAW_CHANNEL_CONTEXT` when the channel provided those ids.
 - `exec` cannot run `openclaw channels login` or `/approve` shell commands: `openclaw channels login` is an interactive channel-auth flow, and `/approve` needs to go through the approval command handler, not a shell. Run channel login in a terminal on the gateway host, or use a channel-specific login agent tool when one exists (for example `whatsapp_login`).
 - Important: sandboxing is **off by default**. If sandboxing is off, implicit `host=auto` resolves to `gateway`. Explicit `host=sandbox` still fails closed instead of silently running on the gateway host. Enable sandboxing or use `host=gateway` with approvals.
-- Script preflight checks (for common Python/Node shell-syntax mistakes) only inspect files inside the effective `workdir` boundary. If a script path resolves outside `workdir`, preflight is skipped for that file. Preflight also skips entirely when `host=gateway` and the effective policy is `security=full` with `ask=off`.
+- Python script preflight checks for common shell-syntax mistakes only inspect files inside the effective `workdir` boundary. If a script path resolves outside `workdir`, the file check is skipped. JavaScript source is left to Node, which returns its normal diagnostics and exit code; statements before a runtime error may already have executed. Separate restrictions on ambiguous Python/Node interpreter commands still apply. Preflight skips entirely when `host=gateway` and the effective policy is `security=full` with `ask=off`.
 - For long-running work that starts now, start it once and rely on automatic completion wake when it is enabled and the command emits output or fails. Use `process` for logs, status, input, or intervention. Do not emulate scheduling with sleep loops, timeout loops, or repeated polling.
-- Subagent sessions do not receive automatic background-exec wakes. Collect the result with `process poll` before yielding without another completion source. With secret egress enabled, leaving the owning run also expires the command's proxy access; start a new command from an active run to obtain current access.
-- Agent-started background commands appear in the Web, iOS, and Android background-task views until they finish. Each task shows a compact command preview with sensitive values redacted; long commands are truncated. The task ledger is finalized before the completion heartbeat wakes the agent again.
+- When `tools.exec.notifyOnExit=false`, a running result explicitly says that automatic completion wake is disabled, in both its text and structured `followUp`. If the task needs the result, collect it with `process poll` and a timeout before ending the turn, unless another continuation is already arranged. A running process or active session goal does not arrange that continuation.
+- When an approved async command completes, its continuation uses the normal agent run timeout from `agents.defaults.timeoutSeconds`. The follow-up observer can finish waiting while the accepted agent run continues.
+- Subagent sessions do not receive automatic background-exec wakes. Collect the result with `process poll` before yielding without another completion source.
+- The process owner tracks agent-started background commands. Use the returned process session ID to inspect output, poll, or stop a command; its completion can wake the agent.
 - For work that should happen later or on a schedule, use cron instead of `exec` sleep/delay patterns.
 
 ## Config
@@ -102,7 +109,7 @@ Notes:
 | `tools.exec.approvalRunningNoticeMs` | `10000`                  | Emit a single "running" notice when an approval-gated exec runs longer than this (`0` disables).                                                                   |
 | `tools.exec.strictInlineEval`        | `false`                  | See [Inline eval](#inline-eval-strictinlineeval).                                                                                                                  |
 | `tools.exec.commandHighlighting`     | `false`                  | When true, approval prompts can highlight parser-derived command spans in the command text. Set globally or per agent; does not change approval policy.            |
-| `tools.exec.pathPrepend`             | unset                    | List of directories to prepend to `PATH` for exec runs (gateway + sandbox only).                                                                                   |
+| `tools.exec.pathPrepend`             | unset                    | Directories to prepend to `PATH` for gateway, sandbox, and owned local native Codex commands.                                                                      |
 | `tools.exec.safeBins`                | unset                    | Stdin-only safe binaries that can run without explicit allowlist entries. See [Safe bins](/tools/exec-approvals-advanced#safe-bins-stdin-only).                    |
 | `tools.exec.safeBinTrustedDirs`      | `/bin`, `/usr/bin`       | Additional explicit directories trusted for `safeBins` path checks. `PATH` entries are never auto-trusted.                                                         |
 | `tools.exec.safeBinProfiles`         | unset                    | Optional custom argv policy per safe bin (`minPositional`, `maxPositional`, `allowedValueFlags`, `deniedFlags`).                                                   |
@@ -177,6 +184,7 @@ For ordinary configured full/off execution without prompts for these forms, leav
   - Linux: `/usr/local/bin`, `/usr/bin`, `/bin`
   - To prevent user shell configuration (like `~/.zshenv` or `/etc/zshenv`) from overriding priority paths during startup, `tools.exec.pathPrepend` entries are securely prepended to the final `PATH` inside the shell command right before execution.
 - `host=sandbox`: runs `sh -lc` (login shell) inside the container, so `/etc/profile` may reset `PATH`. OpenClaw prepends `env.PATH` after profile sourcing via an internal env var (no shell interpolation). `tools.exec.pathPrepend` applies here too.
+- Native Codex on an owned local stdio process receives a nonempty configured prefix and Gateway CLI shim ahead of an explicitly configured native shell `PATH`, or the Gateway process `PATH` when no native value is set. Request-level native PATH overrides take precedence over native config files; an explicit empty PATH keeps only the prefix. Per-agent `tools.exec.pathPrepend` overrides the global list, including an empty list. OpenClaw applies this environment to new and resumed native threads without changing native login-shell policy. Codex reapplies the environment after loading a shell snapshot, but shell startup files can still replace `PATH` when snapshots are unavailable or bypassed, or when the command shell starts. Codex's existing `allow_login_shell = false` setting opts out of login-profile startup; it does not suppress every shell startup file. Host PATH entries are not forwarded to sandbox, remote-workspace, or socket-backed Codex execution.
 - `host=node`: only non-blocked env overrides you pass are sent to the node. `env.PATH` overrides are rejected for host execution and ignored by node hosts. If you need additional PATH entries on a node, configure the node host service environment (systemd/launchd) or install tools in standard locations.
 
 Per-agent node binding (use the keyed agent ID in config):
@@ -186,7 +194,7 @@ openclaw config get agents.entries
 openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 ```
 
-Control UI: the **Devices** page includes a small "Exec node binding" panel for the same settings. A saved target can become unresolvable or stop advertising execution support. Its binding then stays selected and is marked **Unavailable**. Supported names, addresses, and ID prefixes resolve without rewriting the saved reference.
+Control UI: the **Devices** page includes a small "Exec node binding" panel for the same settings. A saved target can become unresolvable or stop advertising execution support. Its binding then stays selected and is marked **Unavailable**. You can clear it with **Any node** or **Use default**, even when no execution-capable nodes are available. Supported names, addresses, and ID prefixes resolve without rewriting the saved reference.
 
 ### Python environments (`uv`)
 
@@ -261,11 +269,11 @@ Foreground:
 Background + poll:
 
 ```json
-{"tool":"exec","command":"npm run build","yieldMs":1000}
-{"tool":"process","action":"poll","sessionId":"<id>"}
+{"tool":"exec","command":"npm run build","background":true}
+{"tool":"process","action":"poll","sessionId":"<id>","timeout":30000}
 ```
 
-Polling is for on-demand status, not waiting loops. If automatic completion wake is enabled, the command can wake the session when it emits output or fails.
+Use `process poll` for on-demand status and bounded waits when no automatic completion wake is available. Avoid rapid status loops; pass a timeout while waiting for a result the current task needs. If automatic completion wake is enabled, the command can wake the session when it emits output or fails.
 
 Send keys (tmux-style):
 
@@ -329,6 +337,6 @@ Notes:
 - [Sandboxing](/gateway/sandboxing) — running commands in sandboxed environments
 - [Background Process](/gateway/background-process) — long-running exec and process tool
 - [Security](/gateway/security) — tool policy and elevated access
-- [Code Mode](/tools/code-mode) — an opt-in runtime where the model writes a program that calls the hidden tool catalog
+- [Code Mode](/tools/code-mode) — a runtime where the model writes a program that calls the hidden tool catalog
 - [`apply_patch`](/tools/apply-patch) — apply a structured edit instead of shelling out
 - [Tokenjuice](/tools/tokenjuice) — compacting large command output

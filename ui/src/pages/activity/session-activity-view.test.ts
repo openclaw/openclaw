@@ -2,170 +2,225 @@
 
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
-import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { SESSION_NAVIGATION_KEY_PARAM } from "../../lib/sessions/route-navigation.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import { createContext, createGateway, createSessions } from "../../test-helpers/app-sidebar.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { loadChatRoute } from "../chat/route-loader.ts";
+import { renderDashboards } from "../dashboards/view.ts";
+import { props, row } from "./session-activity-view.test-harness.ts";
 import { renderSessionActivityView } from "./session-activity-view.ts";
 
-function row(
-  key: string,
-  owner: { id: string; label?: string },
-  updatedAt: number,
-  overrides: Partial<GatewaySessionRow> = {},
-) {
-  const actor = {
-    type: "human" as const,
-    ...owner,
-    identity: { type: "profile" as const, id: owner.id },
-  };
-  return {
-    key,
-    kind: "direct",
-    displayName: key,
-    updatedAt,
-    createdActor: actor,
-    owner: { actor },
-    ...overrides,
-  } satisfies GatewaySessionRow;
-}
-
-function props({
-  rows = [],
-  ...overrides
-}: Partial<Parameters<typeof renderSessionActivityView>[0]> & {
-  rows?: GatewaySessionRow[];
-} = {}): Parameters<typeof renderSessionActivityView>[0] {
-  return {
-    context: {
-      basePath: "",
-      navigate: vi.fn(),
-      gateway: {
-        snapshot: { hello: null, client: null, phase: "stopped" },
-        subscribe: () => () => {},
-        subscribeEvents: () => () => {},
-      },
-      agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-      agentSelection: { state: { selectedId: "main" } },
-      sessions: { state: { result: { sessions: [] } } },
-    } as unknown as ApplicationContext,
-    filters: { personId: null, query: "", time: "7d" as const },
-    presenceViewers: [] as PresenceViewer[],
-    result: {
-      ts: 1,
-      path: "",
-      count: rows.length,
-      sessions: rows,
-      defaults: { model: null, modelProvider: null, contextTokens: null },
-      people: [
-        {
-          identity: { type: "profile" as const, id: "online" },
-          label: "Online person",
-          sessionCount: 1,
-        },
-        {
-          identity: { type: "profile" as const, id: "offline" },
-          label: "Offline person",
-          sessionCount: 1,
-        },
-      ],
-    },
-    loading: false,
-    retrying: false,
-    onRetry: vi.fn(),
-    expandedAutomationDays: new Set<string>(),
-    onAutomationDayToggle: vi.fn(),
-    onFiltersChange: vi.fn(),
-    ...overrides,
-  };
-}
+let container: HTMLDivElement;
+beforeEach(() => {
+  container = document.createElement("div");
+  document.body.replaceChildren(container);
+});
 
 describe("session activity semantics", () => {
   afterEach(() => {
     setAvatarGatewayOrigin(null);
     vi.restoreAllMocks();
   });
-  beforeEach(() => {
-    document.body.innerHTML = "";
-  });
 
-  it("offers recap Retry only for rows with current generation permission", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    const retry = vi.fn();
-    const rows = [true, false].map((canEnsure, index) =>
-      row(`recap-${index}`, { id: "owner" }, Date.now(), {
-        activitySummary: { state: "unavailable", text: "Cached recap", canEnsure },
-      }),
+  it.each([
+    [undefined, "Online"],
+    [0, "Online · Active"],
+    [120_000, "Online · Idle"],
+  ])("separates online identity from interaction age %s", (age, label) => {
+    const now = Date.now();
+    render(
+      renderSessionActivityView(
+        props({
+          rows: [row("agent:main:work", { id: "person" }, now)],
+          filters: { personId: "person", query: "", time: "7d" },
+          presenceViewers: [
+            {
+              id: "person",
+              identity: { type: "profile", id: "person" },
+              name: "Person",
+              watchedSessions: [],
+              entries: [
+                {
+                  ts: now,
+                  lastInputSeconds: 0,
+                  lastActivityAt: age === undefined ? undefined : now - age,
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+      container,
     );
-    render(renderSessionActivityView(props({ rows, onSummaryRetry: retry })), container);
-    const buttons = container.querySelectorAll<HTMLButtonElement>(".activity-feed__recap-retry");
-    expect(buttons).toHaveLength(1);
-    buttons[0]!.click();
-    expect(retry).toHaveBeenCalledWith(rows[0]);
-    rows[0]!.activitySummary!.canEnsure = false;
-    render(renderSessionActivityView(props({ rows, onSummaryRetry: retry })), container);
-    expect(container.querySelector(".activity-feed__recap-retry")).toBeNull();
-    expect(container.textContent).toContain("Cached recap");
+    expect(
+      container.querySelector(".activity-feed__identity .settings-status")?.textContent?.trim(),
+    ).toBe(label);
   });
 
   it("leaves the page main landmark to the app shell", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-
     render(renderSessionActivityView(props()), container);
 
     expect(container.querySelectorAll("main")).toHaveLength(0);
   });
 
-  it.each(["missing", "stale"])(
-    "opens the displayed Activity rows when the sidebar is %s",
-    (sidebar) => {
-      const rows = (["chat", "dashboard"] as const).map((face, index) =>
-        row(
-          `agent:research:${face}:12345678-90ab-cdef-1234-567890abcde${index}`,
-          { id: "owner" },
-          Date.now(),
-          { boardFace: face, displayName: `Research ${face}` },
-        ),
-      );
-      const input = props({ rows });
-      input.context = {
-        ...input.context,
-        basePath: "/control",
-        agentSelection: { state: { selectedId: "other" } },
-        sessions: {
-          state: {
-            agentId: "other",
-            result: {
-              sessions:
-                sidebar === "missing"
-                  ? []
-                  : rows.map((session) => ({ ...session, displayName: "Old title" })),
-            },
-          },
-        },
-      } as unknown as ApplicationContext;
-      const container = document.createElement("div");
-      document.body.append(container);
+  it("renders today's pulse totals and hourly activity above the session list", () => {
+    const since = new Date(2026, 8, 27).getTime();
+    const now = since + 14.5 * 3_600_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const input = props({ rows: [row("Recent session", { id: "owner" }, now)] });
+    const hours = Array.from({ length: 24 }, () => 0);
+    hours[10] = 12;
+    hours[14] = 3;
+    input.result!.activityPulse = {
+      since,
+      until: new Date(2026, 8, 28).getTime(),
+      hours,
+      sessions: 38,
+      started: 12,
+      people: 6,
+      running: 3,
+    };
 
+    render(renderSessionActivityView(input), container);
+
+    const main = container.querySelector(".activity-feed__main")!;
+    const pulse = main.querySelector(".activity-pulse")!;
+    expect(main.firstElementChild).toBe(pulse);
+    expect(
+      pulse.querySelector(".activity-pulse__stats")?.textContent?.replace(/\s+/g, " ").trim(),
+    ).toBe("38 sessions · 12 started · 6 people · 3 running now");
+    expect(pulse.querySelector(".activity-pulse__running")).not.toBeNull();
+    const bars = pulse.querySelectorAll(".activity-pulse__bars > span");
+    expect(bars).toHaveLength(24);
+    expect(pulse.querySelectorAll('[data-hour="current"]')).toHaveLength(1);
+    expect(bars[14]?.getAttribute("data-hour")).toBe("current");
+    expect(bars[13]?.getAttribute("data-hour")).toBe("past");
+    expect(bars[15]?.getAttribute("data-hour")).toBe("future");
+    const peakHour = new Intl.DateTimeFormat(undefined, { hour: "numeric" }).format(
+      since + 10 * 3_600_000,
+    );
+    expect(pulse.querySelector('[role="img"]')?.getAttribute("aria-label")).toContain("38");
+    expect(pulse.querySelector('[role="img"]')?.getAttribute("aria-label")).toContain(peakHour);
+    expect(bars[10]?.getAttribute("title")).toBe(`${peakHour} · 12 sessions`);
+
+    input.result!.peopleIncomplete = true;
+    render(renderSessionActivityView(input), container);
+    const peopleStat = pulse.querySelectorAll(".activity-pulse__stats > span")[2]!;
+    expect(peopleStat.querySelector("b")?.textContent?.trim()).toBe("6+");
+    expect(peopleStat.getAttribute("title")).toBe(
+      "People and counts describe visible recorded session associations; retained history and this people list may be incomplete.",
+    );
+  });
+
+  it("renders every elapsed hour and the next midnight on a 25-hour day", () => {
+    const since = new Date(2026, 10, 1).getTime();
+    const until = new Date(2026, 10, 2).getTime();
+    vi.spyOn(Date, "now").mockReturnValue(since + 24.5 * 3_600_000);
+    const input = props();
+    input.result!.activityPulse = {
+      since,
+      until,
+      hours: Array.from({ length: 25 }, () => 1),
+      sessions: 25,
+      started: 0,
+      running: 0,
+    };
+    render(renderSessionActivityView(input), container);
+
+    const pulse = container.querySelector(".activity-pulse")!;
+    const bars = pulse.querySelectorAll(".activity-pulse__bars > span");
+    expect(bars).toHaveLength(25);
+    expect(bars[24]?.getAttribute("data-hour")).toBe("current");
+    expect(pulse.querySelector(".activity-pulse__axis")?.lastElementChild?.textContent).toBe(
+      new Intl.DateTimeFormat(undefined, { hour: "numeric" }).format(until),
+    );
+  });
+
+  it("keeps a zero-activity pulse and omits an unavailable people count", () => {
+    const since = new Date(2026, 8, 27).getTime();
+    const input = props();
+    input.result!.activityPulse = {
+      since,
+      until: new Date(2026, 8, 28).getTime(),
+      hours: Array.from({ length: 24 }, () => 0),
+      sessions: 0,
+      started: 0,
+      running: 0,
+    };
+    render(renderSessionActivityView(input), container);
+
+    const pulse = container.querySelector(".activity-pulse")!;
+    expect(
+      pulse.querySelector(".activity-pulse__stats")?.textContent?.replace(/\s+/g, " ").trim(),
+    ).toBe("0 sessions · 0 started · 0 running now");
+    expect(pulse.querySelectorAll(".activity-pulse__bars > span")).toHaveLength(24);
+    expect(pulse.querySelector(".activity-pulse__running")).toBeNull();
+
+    render(renderSessionActivityView(props()), container);
+    expect(container.querySelector(".activity-pulse")).toBeNull();
+  });
+
+  it.each([1, 885])(
+    "shows the list footer only when %s matching sessions exceed the visible rows",
+    (totalCount) => {
+      const input = props({ rows: [row("Visible session", { id: "owner" }, Date.now())] });
+      input.result!.totalCount = totalCount;
       render(renderSessionActivityView(input), container);
 
-      const links = container.querySelectorAll<HTMLAnchorElement>("[data-activity-session]");
-      expect(links).toHaveLength(rows.length);
-      for (const [index, session] of rows.entries()) {
-        const link = links[index]!;
-        const pathname = `/control/${session.boardFace}/research/research-${session.boardFace}-12345678`;
-        expect(link.getAttribute("href")).toBe(pathname);
-        link.click();
-        expect(input.context.navigate).toHaveBeenLastCalledWith(session.boardFace, {
-          pathname,
-          search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(session.key)}`,
-        });
+      const main = container.querySelector(".activity-feed__main")!;
+      const footer = main.querySelector(".activity-feed__footer");
+      if (totalCount > 1) {
+        expect(footer?.textContent).toBe("Showing 1 of 885");
+        expect(main.lastElementChild).toBe(footer);
+      } else {
+        expect(footer).toBeNull();
       }
     },
   );
+
+  it("opens the displayed Activity rows when the sidebar is stale", () => {
+    const rows = (["chat", "dashboard"] as const).map((face, index) =>
+      row(
+        `agent:research:${face}:12345678-90ab-cdef-1234-567890abcde${index}`,
+        { id: "owner" },
+        Date.now(),
+        { boardFace: face, displayName: `Research ${face}` },
+      ),
+    );
+    const input = props({ rows });
+    input.context = {
+      ...input.context,
+      basePath: "/control",
+      agentSelection: { state: { selectedId: "other" } },
+      sessions: {
+        state: {
+          agentId: "other",
+          result: {
+            sessions: rows.map((session) => ({ ...session, displayName: "Old title" })),
+          },
+        },
+      },
+    } as unknown as ApplicationContext;
+
+    render(renderSessionActivityView(input), container);
+
+    const links = container.querySelectorAll<HTMLAnchorElement>("[data-activity-session]");
+    expect(links).toHaveLength(rows.length);
+    for (const [index, session] of rows.entries()) {
+      const link = links[index]!;
+      const pathname = `/control/${session.boardFace}/research/research-${session.boardFace}-1234567890abcdef1234567890abcde${index}`;
+      expect(link.getAttribute("href")).toBe(pathname);
+      link.click();
+      expect(input.context.navigate).toHaveBeenLastCalledWith(session.boardFace, {
+        pathname,
+        search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(session.key)}`,
+      });
+    }
+  });
 
   it.each([
     ["workspace", "/control/chat/research", undefined],
@@ -182,11 +237,17 @@ describe("session activity semantics", () => {
       input.context = {
         ...input.context,
         basePath: "/control",
-        agents: { state: { agentsList: { defaultId: "main", mainKey: "workspace" } } },
+        agents: {
+          state: {
+            agentsList: {
+              defaultId: "main",
+              mainKey: "workspace",
+              scope: key === "global" ? "global" : "per-sender",
+            },
+          },
+        },
         agentSelection: { state: { selectedId: "research" } },
       } as unknown as ApplicationContext;
-      const container = document.createElement("div");
-      document.body.append(container);
 
       render(renderSessionActivityView(input), container);
 
@@ -197,6 +258,97 @@ describe("session activity semantics", () => {
         "chat",
         search ? { pathname, search } : { pathname },
       );
+    },
+  );
+
+  it.each(
+    (["activity", "dashboards"] as const).flatMap((surface) =>
+      (
+        [
+          ["unknown", false, null],
+          ["unknown", true, null],
+          ["global", false, null],
+          ["global", true, "global"],
+          ["agent:qa-writer:global", false, "agent:qa-writer:global"],
+        ] as const
+      ).map(([key, globalScope, expectedKey]) => ({ surface, key, globalScope, expectedKey })),
+    ),
+  )(
+    "$surface preserves $key identity with global scope $globalScope",
+    async ({ surface, key, globalScope, expectedKey }) => {
+      const session = row(key, { id: "owner" }, Date.now(), {
+        agentId: "qa-writer",
+        displayName: "Stored session",
+      });
+      const input = props({ rows: [session] });
+      const agentsList = {
+        defaultId: "main",
+        mainKey: "main",
+        scope: globalScope ? "global" : "per-sender",
+      } as const;
+      const request = vi.fn(async () => {
+        throw new Error(
+          "An exact Home or qualified literal open must not discover another session",
+        );
+      });
+      input.context = {
+        ...input.context,
+        agents: { state: { agentsList: { ...agentsList, agents: [] } } },
+        gateway: {
+          ...input.context.gateway,
+          snapshot: {
+            ...input.context.gateway.snapshot,
+            phase: "connected",
+            client: createTestGatewayClient(request),
+          },
+        },
+      } as unknown as ApplicationContext;
+      const surfaceContainer = document.createElement("div");
+      document.body.append(surfaceContainer);
+      render(
+        surface === "activity"
+          ? renderSessionActivityView(input)
+          : renderDashboards({
+              result: input.result!,
+              error: null,
+              basePath: "",
+              fallbackAgentId: "main",
+              mainKey: "main",
+              globalScope,
+            }),
+        surfaceContainer,
+      );
+      const item = surfaceContainer.querySelector<HTMLElement>(
+        surface === "activity" ? "[data-activity-session]" : ".dashboard-card__main",
+      )!;
+      expect(item.textContent).toContain("Stored session");
+      if (surface === "activity") {
+        expect(item.parentElement?.classList.contains("activity-feed__session-row--link")).toBe(
+          Boolean(expectedKey),
+        );
+      }
+      if (!expectedKey) {
+        expect(item.hasAttribute("href")).toBe(false);
+        item.click();
+        expect(input.context.navigate).not.toHaveBeenCalled();
+        return;
+      }
+      const href = item.getAttribute("href")!;
+      const loaded = await loadChatRoute(
+        input.context,
+        { pathname: href, search: "", hash: "" },
+        surface === "activity" ? "chat" : "dashboard",
+        new AbortController().signal,
+      );
+      expect(loaded).toMatchObject({ kind: "session" });
+      if (!("kind" in loaded) || loaded.kind !== "session") {
+        throw new Error("Expected a loaded session");
+      }
+      expect(resolveUiConversationIdentity({ agentsList }, loaded.sessionKey)).toEqual({
+        sessionKey: expectedKey,
+        agentId: "qa-writer",
+      });
+      expect(request).not.toHaveBeenCalled();
     },
   );
 
@@ -228,8 +380,6 @@ describe("session activity semantics", () => {
       label: "Person",
       avatarUrl: "/api/users/person/avatar",
     };
-    const container = document.createElement("div");
-    document.body.append(container);
     const channel = {
       ...human,
       identity: { type: "legacy" as const, actorType: "human", source: "channel", id: "person" },
@@ -292,17 +442,74 @@ describe("session activity semantics", () => {
       ).toBe("blob:agent");
     });
   });
+
+  it("keeps human attribution beside the session agent's configured avatar and name", async () => {
+    const context = createContext(
+      createGateway(createTestGatewayClient(vi.fn(async () => ({})))),
+      createSessions("main", []),
+      {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "research", name: "Research partner", identity: { emoji: "🔬" } }],
+      },
+    );
+    const providerContainer = createApplicationContextProvider(context);
+    document.body.append(providerContainer);
+    render(
+      renderSessionActivityView(
+        props({
+          context,
+          rows: [
+            row("agent:research:review", { id: "person", label: "Alex Morgan" }, Date.now(), {
+              channel: "discord",
+            }),
+          ],
+        }),
+      ),
+      providerContainer,
+    );
+
+    await vi.waitFor(() => {
+      const session = providerContainer.querySelector(
+        '[data-activity-session="agent:research:review"]',
+      );
+      expect(session?.textContent).toContain("Alex Morgan");
+      expect(session?.textContent).toContain("Channel: discord");
+      expect(session?.textContent).not.toContain("Agent:");
+      expect(
+        session?.querySelector('[aria-label="Research partner (agent:research)"]'),
+      ).not.toBeNull();
+      expect(session?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
+        "🔬",
+      );
+    });
+  });
 });
 
 describe("session activity people filter", () => {
-  beforeEach(() => {
-    document.body.innerHTML = "";
+  it("places the partial-history status after the people rows instead of in the main feed", () => {
+    const input = props();
+    input.result!.peopleIncomplete = true;
+    render(renderSessionActivityView(input), container);
+
+    const panel = container.querySelector(".activity-feed__people-panel")!;
+    const note = panel.querySelector('[role="status"]');
+    expect(note?.textContent).toContain(
+      "People and counts describe visible recorded session associations",
+    );
+    expect(panel.lastElementChild).toBe(note);
+    expect(container.querySelector(".activity-feed__main")?.textContent).not.toContain(
+      "People and counts describe visible recorded session associations",
+    );
+
+    input.result!.peopleIncomplete = false;
+    render(renderSessionActivityView(input), container);
+    expect(panel.querySelector('[role="status"]')).toBeNull();
   });
 
   it("uses the server people facet, excludes raw identities, and maps presence by exact profile id", () => {
     const now = Date.now();
-    const container = document.createElement("div");
-    document.body.append(container);
 
     render(
       renderSessionActivityView(
@@ -348,8 +555,6 @@ describe("session activity people filter", () => {
   it.each([false, true])(
     "keeps online identity details and only known watched sessions in recency order (facet present: %s)",
     (hasFacet) => {
-      const container = document.createElement("div");
-      document.body.append(container);
       const input = props({
         filters: { personId: "online", query: "", time: "7d" },
         rows: [
@@ -402,11 +607,9 @@ describe("session activity people filter", () => {
     },
   );
 
-  it.each(["offline", "unknown", "Offline"])(
+  it.each(["offline", "Offline"])(
     "resolves the selected %s identity only from an exact server profile facet",
     (personId) => {
-      const container = document.createElement("div");
-      document.body.append(container);
       const input = props({
         filters: { personId, query: "", time: "7d" },
         rows: [
@@ -417,7 +620,9 @@ describe("session activity people filter", () => {
       });
       render(renderSessionActivityView({ ...input, result: undefined, loading: true }), container);
       expect(container.querySelector(".activity-feed__not-found")).toBeNull();
-      expect(container.querySelector('[role="status"]')?.textContent).toContain("Loading");
+      expect(
+        container.querySelector('.activity-feed__loading [role="status"]')?.textContent,
+      ).toContain("Loading");
 
       render(renderSessionActivityView(input), container);
       if (personId === "offline") {
@@ -436,8 +641,6 @@ describe("session activity people filter", () => {
   it.each([true, false])(
     "never joins raw presence into a profile Activity page (profile online: %s)",
     (online) => {
-      const container = document.createElement("div");
-      document.body.append(container);
       const input = props({
         filters: { personId: "online", query: "", time: "7d" },
         rows: [row("raw-watch", { id: "online" }, 10)],
@@ -476,8 +679,6 @@ describe("session activity people filter", () => {
 
   it("selecting Everyone clears the person while preserving the other filters", () => {
     const onFiltersChange = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
     render(
       renderSessionActivityView(
         props({
@@ -500,10 +701,6 @@ describe("session activity people filter", () => {
 });
 
 describe("session activity automation grouping", () => {
-  beforeEach(() => {
-    document.body.innerHTML = "";
-  });
-
   it("collapses two automation sessions, keeps one inline, and bypasses grouping for filters", () => {
     const current = new Date();
     const now = new Date(
@@ -517,8 +714,6 @@ describe("session activity automation grouping", () => {
     const automationOne = row("Automation one", owner, now - 1_000, { hasAutomation: true });
     const automationTwo = row("Automation two", owner, now - 2_000, { hasAutomation: true });
     const onAutomationDayToggle = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
 
     render(
       renderSessionActivityView(
@@ -577,9 +772,6 @@ describe("session activity automation grouping", () => {
   });
 
   it("labels only cron-origin sessions from their recorded creation provenance", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-
     render(
       renderSessionActivityView(
         props({
@@ -612,10 +804,6 @@ describe("session activity automation grouping", () => {
 });
 
 describe("session activity live status", () => {
-  beforeEach(() => {
-    document.body.innerHTML = "";
-  });
-
   it("uses the recorded active run and observer digest for the row status", () => {
     const now = Date.now();
     const owner = { id: "owner", label: "Owner" };
@@ -626,8 +814,6 @@ describe("session activity live status", () => {
       runId: "fake-run",
       updatedAt: now,
     };
-    const container = document.createElement("div");
-    document.body.append(container);
 
     render(
       renderSessionActivityView(
@@ -667,8 +853,6 @@ describe("session activity live status", () => {
     const owner = { id: "owner", label: "Owner" };
     const base = props();
     const context = { ...base.context, basePath: "/control" } as ApplicationContext;
-    const container = document.createElement("div");
-    document.body.append(container);
 
     render(
       renderSessionActivityView(

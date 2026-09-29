@@ -136,6 +136,23 @@ describe("plugin SDK surface report", () => {
 
   it("keeps default public surface budgets pinned to current source counts", () => {
     expect(readDefaultPublicSurfaceBudgets()).toEqual(readCurrentPublicSurfaceCounts());
+    const channelMessage = surfaceReport.publicStats.byEntrypoint.get("channel-message");
+    expect(channelMessage).toBeDefined();
+    expect(
+      readPluginSdkSurfaceBudgets({}).publicDeprecatedExportsByEntrypointBudget["channel-message"],
+    ).toBe(channelMessage?.deprecatedExports);
+  });
+
+  it("accepts frozen named facades while rejecting missing deprecated reexports", () => {
+    expect(surfaceReport.deprecatedBarrelWithoutReexports).toEqual([]);
+    const report = {
+      ...surfaceReport,
+      deprecatedBarrelWithoutReexports: ["channel-message"],
+    };
+
+    expect(evaluatePluginSdkSurfaceReport(report, readPluginSdkSurfaceBudgets({}))).toContain(
+      "deprecated barrel entrypoints without reexports: channel-message",
+    );
   });
 
   it("keeps approval store internals out of the deprecated infra barrel", () => {
@@ -163,20 +180,6 @@ describe("plugin SDK surface report", () => {
     expect(evaluatePluginSdkSurfaceReport(surfaceReport, budgetConfig)).toContain(
       `public callable exports ${budget} > ${budget - 1}`,
     );
-  });
-
-  it("strips ambient CI budget overrides from CLI checks", () => {
-    const original = process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS;
-    process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS = "1";
-    try {
-      expect(baseSurfaceReportEnv()).not.toHaveProperty("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS");
-    } finally {
-      if (original === undefined) {
-        delete process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS;
-      } else {
-        process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS = original;
-      }
-    }
   });
 
   it("rejects deprecated export growth by public entrypoint", () => {

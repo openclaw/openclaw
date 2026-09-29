@@ -53,6 +53,10 @@ export function createComposerKeyDownHandler({
       return;
     }
 
+    if (state.emojiMenu.handleKeydown(event, props.paneId, requestUpdate)) {
+      return;
+    }
+
     if (state.mentionMenu.handleKeydown(event, mentionMenuHost, requestUpdate)) {
       return;
     }
@@ -95,7 +99,6 @@ export function createComposerKeyDownHandler({
         key: event.key,
         selectionStart: target.selectionStart,
         selectionEnd: target.selectionEnd,
-        valueLength: target.value.length,
         altKey: event.altKey,
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
@@ -104,6 +107,7 @@ export function createComposerKeyDownHandler({
         keyCode: event.keyCode,
       });
       if (result.handled) {
+        state.editRevision += 1;
         if (result.preventDefault) {
           event.preventDefault();
         }
@@ -168,6 +172,9 @@ export function createComposerKeyDownHandler({
       }
       event.preventDefault();
       commitDraft(target.value);
+      if (goalComposer.activateDraft(target.value, true)) {
+        return;
+      }
       const followUpModeOverride =
         (event.metaKey || event.ctrlKey) && !event.altKey ? alternateFollowUpMode : undefined;
       void props.onSend(followUpModeOverride, event);

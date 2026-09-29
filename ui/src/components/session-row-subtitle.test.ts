@@ -19,7 +19,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session: workSession(),
         hasDisplay: true,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: undefined,
@@ -32,7 +31,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session: { ...workSession(), status: "running" },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: "Still running",
@@ -45,7 +43,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session: { ...workSession(), hasActiveRun: true, status: "queued" },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: undefined,
@@ -56,8 +53,6 @@ describe("resolveSidebarSessionSubtitle", () => {
   it.each(["stuck", "waiting-on-user"] as const)(
     "keeps a %s observer headline when previews are hidden",
     (health) => {
-      // isCriticalObserverHealth owns these two states; the chat pane announces them
-      // too, so a display preference must not silence them in the sidebar.
       expect(
         resolveSidebarSessionSubtitle({
           session: {
@@ -67,7 +62,6 @@ describe("resolveSidebarSessionSubtitle", () => {
             status: "running",
           },
           hasDisplay: false,
-          displaySubtitle: undefined,
           sidebarLiveActivity: true,
           showPreview: false,
           narrationLine: "Using bash",
@@ -93,7 +87,6 @@ describe("resolveSidebarSessionSubtitle", () => {
           status: "running",
         },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: false,
         narrationLine: undefined,
@@ -113,7 +106,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session: { ...workSession(), hasActiveRun: true, status: "queued" },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: false,
         narrationLine: undefined,
@@ -128,7 +120,7 @@ describe("resolveSidebarSessionSubtitle", () => {
       activeRunIds: ["run-1"],
       status: "running",
       agentStatusNote: "Waiting for deployment",
-      attention: { kind: "question" },
+      attention: { kind: "question", requests: [] },
     };
     const observerDigest = {
       runId: "run-1",
@@ -141,7 +133,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session: { ...session, ...overrides },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: "Using test runner",
@@ -162,7 +153,6 @@ describe("resolveSidebarSessionSubtitle", () => {
           observerDigest: undefined,
         },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: "Using test runner",
@@ -182,7 +172,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session,
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: "Using test runner",
@@ -222,7 +211,6 @@ describe("resolveSidebarSessionSubtitle", () => {
           lastReadAt: 1_999,
         },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: undefined,
@@ -246,7 +234,6 @@ describe("resolveSidebarSessionSubtitle", () => {
           lastReadAt: 2_000,
         },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: undefined,
@@ -271,7 +258,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session: { ...session, ...overrides },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: undefined,
@@ -280,11 +266,14 @@ describe("resolveSidebarSessionSubtitle", () => {
 
     expect(resolve({ agentStatusNote: "Waiting for deployment" })).toBe("Waiting for deployment");
     expect(
-      resolve({ attention: { kind: "question" }, agentStatusNote: "Waiting for deployment" }),
+      resolve({
+        attention: { kind: "question", requests: [] },
+        agentStatusNote: "Waiting for deployment",
+      }),
     ).toBeUndefined();
     expect(
       resolve({
-        attention: { kind: "approval" },
+        attention: { kind: "approval", requests: [] },
         agentStatusNote: "Waiting for deployment",
       }),
     ).toBe("Waiting for approval");
@@ -302,7 +291,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session,
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: "Running the focused tests",
@@ -317,12 +305,11 @@ describe("resolveSidebarSessionSubtitle", () => {
     ).toBe("Implementing the repair");
   });
 
-  it("keeps attention visible while hiding every preview candidate", () => {
+  it("hides error details and ambient text when previews are hidden", () => {
     const hidden = (session: SidebarRecentSession, narrationLine?: string) =>
       resolveSidebarSessionSubtitle({
         session,
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: false,
         narrationLine,
@@ -336,7 +323,7 @@ describe("resolveSidebarSessionSubtitle", () => {
         agentStatusNote: "Waiting for deployment",
         lastMessagePreview: "The final reply is durable.",
       }),
-    ).toBe("Run failed:   Message failed: deployment unavailable");
+    ).toBeUndefined();
 
     expect([
       hidden({ ...workSession(), agentStatusNote: "Waiting for deployment" }),

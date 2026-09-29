@@ -18,6 +18,7 @@ import {
   selectChecksForShard,
 } from "../../scripts/run-additional-boundary-checks.mts";
 import { waitForChildClose, waitForFile, waitForPidFile } from "../helpers/process-wait.js";
+import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 
 function createOutputBuffer() {
   const chunks: string[] = [];
@@ -403,45 +404,73 @@ describe("run-additional-boundary-checks", () => {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-timeout-"));
       const childPidPath = path.join(tempDir, "child.pid");
       let childPid: number | undefined;
+      let releaseAndWait: (() => ReturnType<typeof runSingleCheck>) | undefined;
+      const errors: unknown[] = [];
       try {
         const childScript = [
+          "const fs = require('node:fs');",
           "process.on('SIGTERM', () => {});",
           "setInterval(() => {}, 1000);",
+          "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', String(process.pid));",
+          "fs.renameSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', process.env.OPENCLAW_TEST_CHILD_PID);",
         ].join("");
         const parentScript = [
           "const { spawn } = require('node:child_process');",
-          "const fs = require('node:fs');",
-          `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-          "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', String(child.pid));",
-          "fs.renameSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', process.env.OPENCLAW_TEST_CHILD_PID);",
+          `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
           "setInterval(() => {}, 1000);",
         ].join("");
 
-        const resultPromise = runSingleCheck(
-          {
-            label: "wrapper-exits",
-            command: process.execPath,
-            args: ["-e", parentScript],
-          },
-          {
-            checkTimeoutMs: 100,
-            cwd: process.cwd(),
-            env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
-            outputMaxBytes: 4096,
-          },
+        releaseAndWait = startProcessWatchdogFixture(() =>
+          runSingleCheck(
+            {
+              label: "wrapper-exits",
+              command: process.execPath,
+              args: ["-e", parentScript],
+            },
+            {
+              checkTimeoutMs: 100,
+              cwd: process.cwd(),
+              env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
+              outputMaxBytes: 4096,
+            },
+          ),
         );
 
         childPid = await waitForPidFile(childPidPath, 2000);
-        const result = await resultPromise;
+        expect(isProcessAlive(childPid)).toBe(true);
+        const result = await releaseAndWait();
 
         expect(result.code).toBe(1);
         expect(result.timedOut).toBe(true);
         await waitForDead(childPid, 2000);
+      } catch (error) {
+        errors.push(error);
       } finally {
-        if (childPid !== undefined && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
+        try {
+          await releaseAndWait?.();
+        } catch (error) {
+          if (!errors.includes(error)) {
+            errors.push(error);
+          }
         }
-        fs.rmSync(tempDir, { force: true, recursive: true });
+        try {
+          if (childPid !== undefined && isProcessAlive(childPid)) {
+            process.kill(childPid, "SIGKILL");
+          }
+        } catch (error) {
+          errors.push(error);
+        }
+        try {
+          fs.rmSync(tempDir, { force: true, recursive: true });
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "Boundary timeout fixture failed", { cause: errors[0] });
       }
     },
   );

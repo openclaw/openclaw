@@ -529,7 +529,7 @@ extension OnboardingView {
 
     func isSelectedGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> Bool {
         guard state.connectionMode == .remote else { return false }
-        return effectivePreferredGatewayID == gateway.stableID
+        return GatewayDiscoveryPreferences.preferredStableID() == gateway.stableID
     }
 
     func connectionChoiceButton(
@@ -606,12 +606,12 @@ extension OnboardingView {
                     detail: self.cliExecutableReady
                         ? (self.cliInstallLocation ?? "Installed")
                         : "A private copy inside your user folder.",
-                    state: self.installStepStateForInstall,
+                    state: self.installStepStates.install,
                     monospacedDetail: self.cliExecutableReady && self.cliInstallLocation != nil)
                 self.installStepRow(
                     title: "Start the background service",
                     detail: "Runs quietly and starts again after a restart.",
-                    state: self.installStepStateForService)
+                    state: self.installStepStates.service)
                 self.installStepRow(
                     title: "Ready for the next step",
                     detail: "Once the service answers, you’ll connect your AI.",
@@ -647,22 +647,13 @@ extension OnboardingView {
 
     /// Exactly one spinner at a time: the install row finishes before the
     /// service row starts, mirroring the actual runCLIInstall phases.
-    private var installStepStateForInstall: InstallStepState {
+    private var installStepStates: (install: InstallStepState, service: InstallStepState) {
         Self.cliInstallStepStates(
             executableReady: self.cliExecutableReady,
             gatewayReady: self.cliInstalled,
             statusKnown: self.cliStatusKnown,
             installing: self.installingCLI,
-            phase: self.cliInstallPhase).install
-    }
-
-    private var installStepStateForService: InstallStepState {
-        Self.cliInstallStepStates(
-            executableReady: self.cliExecutableReady,
-            gatewayReady: self.cliInstalled,
-            statusKnown: self.cliStatusKnown,
-            installing: self.installingCLI,
-            phase: self.cliInstallPhase).service
+            phase: self.cliInstallPhase)
     }
 
     static func cliInstallStepStates(
@@ -764,13 +755,13 @@ extension OnboardingView {
                     title: "Open the menu bar panel",
                     subtitle: "Click the OpenClaw menu bar icon for the compact chat panel and status.",
                     systemImage: "bubble.left.and.bubble.right")
-                self.featureActionRow(
+                self.featureRow(
                     title: "Connect Discord, Slack, Telegram, WhatsApp, …",
                     subtitle: "Open Dashboard → Settings → Channels to link channels and monitor status.",
                     systemImage: "link",
                     buttonTitle: "Open Dashboard → Settings → Channels")
                 {
-                    Task { await DashboardManager.shared.show(atPath: DashboardRouteMap.channelsSettingsPath) }
+                    AppNavigationActions.openPrimaryWebRoute(DashboardRouteMap.channelsSettingsPath)
                 }
                 self.featureRow(
                     title: "Try Voice Wake",
@@ -782,13 +773,13 @@ extension OnboardingView {
                     subtitle: "Open the compact chat panel; the agent can show previews " +
                         "and richer visuals in Canvas.",
                     systemImage: "rectangle.inset.filled.and.person.filled")
-                self.featureActionRow(
+                self.featureRow(
                     title: "Give your agent more powers",
                     subtitle: "Enable optional skills (Peekaboo, oracle, camsnap, …) from Dashboard → Skills.",
                     systemImage: "sparkles",
                     buttonTitle: "Open Dashboard → Skills")
                 {
-                    Task { await DashboardManager.shared.show(atPath: DashboardRouteMap.skillsPagePath) }
+                    AppNavigationActions.openPrimaryWebRoute(DashboardRouteMap.skillsPagePath)
                 }
                 if AppProfile.current.isActive {
                     LabeledContent("Launch at login", value: "Unavailable under profile")

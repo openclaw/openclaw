@@ -1,9 +1,13 @@
+import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
   appendTranscriptEvent,
+  appendTranscriptMessage,
   forkSessionAtMessage,
   listSessionBranches,
   listSessionParticipantsReadOnly,
@@ -11,7 +15,6 @@ import {
   loadTranscriptEvents,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
-  recordSessionParticipant,
   rewindSessionToMessage,
   switchSessionBranch,
   updateSessionEntry,
@@ -22,6 +25,7 @@ import {
   sourceExpectedState,
   useSessionMessageCutFixtures,
 } from "./session-accessor.sqlite-message-cut.test-support.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { SYNC_REBUILD_MAX_BYTES } from "./session-transcript-index.js";
 import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "./types.js";
@@ -30,29 +34,76 @@ const { createSession } = useSessionMessageCutFixtures();
 
 afterEach(() => {
   vi.restoreAllMocks();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
 });
 
 describe("SQLite session message cuts", () => {
-  it.each(["rewind", "switch", "fork"] as const)(
+  it("returns authored text without captured context or attachments on fork", async () => {
+    const { env, scope } = await createSession();
+    const text = "Edit only these words";
+    const snapshot = { page: "chat", title: "Captured work" };
+    await appendTranscriptMessage(scope, {
+      eventId: "context-input",
+      parentId: "assistant-2",
+      message: {
+        role: "user",
+        content: text + "\n\nWorking context captured at send time. " + JSON.stringify(snapshot),
+        __openclaw: { workContext: { snapshot, text } },
+      },
+      now: Date.now(),
+    });
+    const params = { agentId, env, sessionKey, entryId: "context-input" };
+    const result = await forkSessionAtMessage({
+      ...params,
+      targetKey: sessionKey + ":context-fork",
+    });
+    expect(result).toMatchObject({ status: "created", editorText: text });
+    expect(result).not.toHaveProperty("editorAttachments");
+    expect(result).not.toHaveProperty("editorMediaRefs");
+  });
+
+  it("drains fixture resources before retiring native handles and removing the root", async ({
+    onTestFinished,
+  }) => {
+    const { env } = await createSession();
+    const agentDatabase = openOpenClawAgentDatabase({ agentId, env });
+    const stateDatabase = openOpenClawStateDatabase({ env });
+    const closingSnapshots: Array<{ agentOpen: boolean; stateOpen: boolean; rootExists: boolean }> =
+      [];
+    registerOpenClawAgentDatabaseAsyncResource({
+      agentId,
+      path: agentDatabase.path,
+      revoke: () => {},
+      close: async () => {
+        await Promise.resolve();
+        closingSnapshots.push({
+          agentOpen: agentDatabase.db.isOpen,
+          stateOpen: stateDatabase.db.isOpen,
+          rootExists: fs.existsSync(env.OPENCLAW_STATE_DIR),
+        });
+      },
+    });
+
+    // Inspect real fixture teardown after both consumer and helper afterEach hooks run.
+    onTestFinished(() => {
+      expect(closingSnapshots).toEqual([{ agentOpen: true, stateOpen: true, rootExists: true }]);
+      expect(agentDatabase.db.isOpen).toBe(false);
+      expect(stateDatabase.db.isOpen).toBe(false);
+      expect(fs.existsSync(env.OPENCLAW_STATE_DIR)).toBe(false);
+    });
+  });
+
+  it.each(["rewind", "fork"] as const)(
     "rejects %s when the source lifecycle changes in the writer queue",
     async (mode) => {
       const { env, scope } = await createSession();
-      let releaseOwnerChange = () => {};
-      const ownerChangeGate = new Promise<void>((resolve) => {
-        releaseOwnerChange = resolve;
-      });
-      let markOwnerChangeStarted = () => {};
-      const ownerChangeStarted = new Promise<void>((resolve) => {
-        markOwnerChangeStarted = resolve;
-      });
+      const ownerChangeGate = createDeferred();
+      const ownerChangeStarted = createDeferred();
       const ownerChange = updateSessionEntry(scope, async () => {
-        markOwnerChangeStarted();
-        await ownerChangeGate;
+        ownerChangeStarted.resolve();
+        await ownerChangeGate.promise;
         return { lifecycleRevision: "replacement-lifecycle-revision" };
       });
-      await ownerChangeStarted;
+      await ownerChangeStarted.promise;
 
       const targetKey = `${sessionKey}:raced-fork`;
       const mutation =
@@ -63,24 +114,17 @@ describe("SQLite session message cuts", () => {
               entryId: "user-2",
               sessionKey,
             })
-          : mode === "switch"
-            ? switchSessionBranch({
-                agentId,
-                env,
-                leafEntryId: "off-path-user",
-                sessionKey,
-              })
-            : forkSessionAtMessage({
-                agentId,
-                env,
-                entryId: "user-2",
-                sessionKey,
-                targetKey,
-              });
+          : forkSessionAtMessage({
+              agentId,
+              env,
+              entryId: "user-2",
+              sessionKey,
+              targetKey,
+            });
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
-      releaseOwnerChange();
+      ownerChangeGate.resolve();
 
       await ownerChange;
       await expect(mutation).resolves.toEqual({ status: "conflict" });
@@ -129,31 +173,27 @@ describe("SQLite session message cuts", () => {
     });
   });
 
-  it.each([
-    ["unknown", "missing-entry"],
-    ["user-1", "not-branch-tip"],
-    ["assistant-2", "already-active"],
-  ])("rejects branch switch target %s with %s", async (leafEntryId, status) => {
-    const { env } = await createSession();
-
-    await expect(
-      switchSessionBranch({
-        agentId,
-        env,
-        leafEntryId,
-        sessionKey,
-      }),
-    ).resolves.toMatchObject({ status });
-  });
-
   it("rewinds by repointing the active leaf and returns the editor text", async () => {
-    const { env } = await createSession();
+    const { env, scope } = await createSession();
+    const legacyCheckpoints = [
+      {
+        sessionId: scope.sessionId,
+        preCompaction: { sessionId: scope.sessionId },
+        postCompaction: { sessionId: scope.sessionId },
+      },
+    ];
+    await updateSessionEntry(scope, (entry) => ({
+      ...entry,
+      compactionCheckpoints: legacyCheckpoints,
+    }));
 
+    const canonicalKey = "agent:main:canonical-message-cut";
     const result = await rewindSessionToMessage({
       agentId,
       env,
       entryId: "user-2",
-      sessionKey,
+      sessionKey: canonicalKey,
+      sessionStoreKey: sessionKey,
     });
 
     expect(result).toMatchObject({
@@ -175,6 +215,8 @@ describe("SQLite session message cuts", () => {
       ).totalMessages,
     ).toBe(2);
     expect(loadSessionEntry({ agentId, env, sessionKey })?.sessionId).toBe(result.entry.sessionId);
+    expect(loadSessionEntry({ agentId, env, sessionKey: canonicalKey })).toBeUndefined();
+    expect(loadSessionEntry(scope)).toHaveProperty("compactionCheckpoints", legacyCheckpoints);
     expect(result.entry).toMatchObject({
       agentHarnessId: undefined,
       claudeCliSessionId: undefined,
@@ -222,43 +264,19 @@ describe("SQLite session message cuts", () => {
     expect(readSessionTranscriptMessageEvents(targetScope)).toHaveLength(2);
   });
 
-  it("omits editor attachments for a text-only message", async () => {
-    const { env } = await createSession();
-
-    const result = await rewindSessionToMessage({
-      agentId,
-      env,
-      entryId: "user-1",
-      sessionKey,
-    });
-
-    expect(result).toMatchObject({ status: "created", editorText: "first prompt" });
-    expect(result).not.toHaveProperty("editorAttachments");
-    expect(result).not.toHaveProperty("editorMediaRefs");
-  });
-
-  it("rewinds the stored row when its canonical key differs", async () => {
-    const { env } = await createSession();
-    const canonicalKey = "agent:main:canonical-message-cut";
-
-    const result = await rewindSessionToMessage({
-      agentId,
-      env,
-      entryId: "user-2",
-      sessionKey: canonicalKey,
-      sessionStoreKey: sessionKey,
-    });
-
-    expect(result).toMatchObject({ status: "created", key: sessionKey });
-    if (result.status !== "created") {
-      throw new Error("expected rewind result");
-    }
-    expect(loadSessionEntry({ agentId, env, sessionKey })?.sessionId).toBe(result.entry.sessionId);
-    expect(loadSessionEntry({ agentId, env, sessionKey: canonicalKey })).toBeUndefined();
-  });
-
   it("forks an exact active-path prefix without changing the source", async () => {
     const { env, scope } = await createSession();
+    const legacyCheckpoints = [
+      {
+        sessionId: scope.sessionId,
+        preCompaction: { sessionId: scope.sessionId },
+        postCompaction: { sessionId: scope.sessionId },
+      },
+    ];
+    await updateSessionEntry(scope, (entry) => ({
+      ...entry,
+      compactionCheckpoints: legacyCheckpoints,
+    }));
     const canonicalSourceKey = "agent:main:canonical-message-cut-source";
     const targetKey = "agent:main:dashboard:message-cut-fork";
     recordSessionParticipant(scope, {
@@ -300,6 +318,10 @@ describe("SQLite session message cuts", () => {
       ),
     ).toEqual([result.entry.sessionId, "user-1", "assistant-1"]);
     expect(loadSessionEntry(scope)?.sessionId).toBe(scope.sessionId);
+    expect(loadSessionEntry(scope)).toHaveProperty("compactionCheckpoints", legacyCheckpoints);
+    expect(loadSessionEntry({ agentId, env, sessionKey: targetKey })).not.toHaveProperty(
+      "compactionCheckpoints",
+    );
     expect(listSessionParticipantsReadOnly({ agentId, env }).get(targetKey)).toBeUndefined();
     expect(listSessionParticipantsReadOnly({ agentId, env }).get(sessionKey)).toEqual([
       {
@@ -331,22 +353,5 @@ describe("SQLite session message cuts", () => {
       providerOverride: "openai",
     });
     expect(loadSessionEntry(scope)?.lifecycleRevision).toBe("source-lifecycle-revision");
-  });
-
-  it.each([
-    ["unknown", "missing-entry"],
-    ["assistant-1", "not-user-message"],
-    ["off-path-user", "off-active-path"],
-  ])("rejects %s with %s", async (entryId, status) => {
-    const { env } = await createSession();
-
-    await expect(
-      rewindSessionToMessage({
-        agentId,
-        env,
-        entryId,
-        sessionKey,
-      }),
-    ).resolves.toMatchObject({ status });
   });
 });

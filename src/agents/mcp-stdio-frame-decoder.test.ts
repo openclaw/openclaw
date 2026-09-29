@@ -2,6 +2,29 @@ import { describe, expect, it } from "vitest";
 import { McpStdioFrameDecoder, McpStdioFrameError } from "./mcp-stdio-frame-decoder.js";
 
 describe("McpStdioFrameDecoder", () => {
+  it.each([0, 10])("bounds each frame in a combined chunk after %i pending bytes", (split) => {
+    const frame = (id: number) => {
+      const response = { jsonrpc: "2.0", id, result: { text: "x".repeat(32) } };
+      return { response, bytes: Buffer.from(`${JSON.stringify(response)}\n`) };
+    };
+    const first = frame(0);
+    const second = frame(1);
+    const third = frame(2);
+    const decoder = new McpStdioFrameDecoder(first.bytes.length);
+    decoder.append(first.bytes.subarray(0, split));
+    expect(decoder.readMessage()).toBeNull();
+
+    decoder.append(
+      Buffer.concat([first.bytes.subarray(split), second.bytes, third.bytes.subarray(0, 10)]),
+    );
+    expect(decoder.readMessage()).toEqual(first.response);
+    expect(decoder.readMessage()).toEqual(second.response);
+    expect(decoder.readMessage()).toBeNull();
+    decoder.append(third.bytes.subarray(10));
+    expect(decoder.readMessage()).toEqual(third.response);
+    expect(decoder.readMessage()).toBeNull();
+  });
+
   it("rejects an oversized append before retaining any of its bytes", () => {
     const response = { jsonrpc: "2.0", id: 0, result: {} };
     const bytes = Buffer.from(`${JSON.stringify(response)}\n`);
@@ -16,6 +39,29 @@ describe("McpStdioFrameDecoder", () => {
     expect(decoder.readMessage()).toEqual(response);
     expect(decoder.readMessage()).toBeNull();
   });
+
+  it.each(["\n", ""])(
+    "rejects an oversized later frame with delimiter %j before retaining the chunk",
+    (delimiter) => {
+      const response = { jsonrpc: "2.0", id: 0, result: {} };
+      const bytes = Buffer.from(`${JSON.stringify(response)}\n`);
+      const decoder = new McpStdioFrameDecoder(bytes.length);
+      decoder.append(bytes.subarray(0, 10));
+      expect(decoder.readMessage()).toBeNull();
+
+      expect(() =>
+        decoder.append(
+          Buffer.concat([
+            bytes.subarray(10),
+            Buffer.from("x".repeat(bytes.length + 1) + delimiter),
+          ]),
+        ),
+      ).toThrow("response exceeded the line-size limit");
+      decoder.append(bytes.subarray(10));
+      expect(decoder.readMessage()).toEqual(response);
+      expect(decoder.readMessage()).toBeNull();
+    },
+  );
 
   it("preserves a UTF-8 character split across chunks and skips empty lines", () => {
     const response = { jsonrpc: "2.0", id: 0, result: { text: "β雪🦞" } };

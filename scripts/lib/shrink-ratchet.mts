@@ -94,13 +94,13 @@ export function loadRatchetReference<T>(
     : null;
 }
 
-export function loadRatchetSources(root: string, filePaths: string[]) {
+export function loadRatchetSources(root: string, filePaths: string[], ref = "") {
   if (filePaths.length === 0) {
     return new Map<string, string>();
   }
   const output = execFileSync("git", ["cat-file", "--batch", "-z"], {
     cwd: root,
-    input: filePaths.map((filePath) => ":" + filePath).join("\0") + "\0",
+    input: filePaths.map((filePath) => ref + ":" + filePath).join("\0") + "\0",
     maxBuffer: GIT_MAX_BUFFER,
   });
   const sources = new Map<string, string>();
@@ -116,7 +116,7 @@ export function loadRatchetSources(root: string, filePaths: string[]) {
     const header = output.subarray(offset, headerEnd).toString("utf8");
     const size = Number(/^[0-9a-f]+ (?:blob|tree|commit|tag) (\d+)$/u.exec(header)?.[1]);
     if (!Number.isSafeInteger(size)) {
-      throw new Error("Could not read staged source " + filePath);
+      throw new Error("Could not read " + (ref || "staged") + " source " + filePath);
     }
     const sourceStart = headerEnd + 1;
     const sourceEnd = sourceStart + size;
@@ -236,7 +236,7 @@ function collectRatchetDeltas(
     .toSorted((left, right) => compareEntries(left.entry, right.entry));
 }
 
-export function formatRatchetMessage(title: string, entries: readonly string[]) {
+function formatRatchetMessage(title: string, entries: readonly string[]) {
   return [title, ...entries.map((entry) => "  " + entry)].join("\n");
 }
 
@@ -256,16 +256,4 @@ export function reportRatchetFailures(
 
 export function reportRatchetSuccess(message: string) {
   console.log(message);
-}
-
-export function enforceRatchetScalar(
-  current: number,
-  allowed: number,
-  messages: { decreased?: string; increased?: string },
-) {
-  const failure =
-    current > allowed ? messages.increased : current < allowed ? messages.decreased : undefined;
-  if (failure) {
-    throw new Error(failure);
-  }
 }

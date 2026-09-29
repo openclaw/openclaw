@@ -1,5 +1,8 @@
 // Tests background side-question command routing and typing controller integration.
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import { expectObjectFields, mockFirstObjectArg } from "../../test-utils/mock-call-assertions.js";
@@ -24,6 +27,8 @@ function buildParams(commandBody: string) {
 }
 
 describe("handleBtwCommand", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   beforeEach(() => {
     runBtwSideQuestionMock.mockReset();
     resolveAgentDirMock.mockReset();
@@ -88,6 +93,54 @@ describe("handleBtwCommand", () => {
     });
     expect(runBtwSideQuestionMock).not.toHaveBeenCalled();
   });
+
+  it.each(["image", "described image", "document"] as const)(
+    "handleBtwCommand forwards only current undescribed images: %s",
+    async (attachment) => {
+      const params = buildParams("/btw describe this");
+      params.sessionEntry = { sessionId: "session-1", updatedAt: Date.now() };
+      const dir = tempDirs.make("openclaw-btw-images-");
+      const isDocument = attachment === "document";
+      const data = isDocument
+        ? Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n")
+        : Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
+            "base64",
+          );
+      const file = path.join(dir, isDocument ? "document.pdf" : "photo.png");
+      await writeFile(file, data);
+      params.ctx.media = [
+        {
+          path: file,
+          contentType: isDocument ? "application/pdf" : "image/png",
+          kind: isDocument ? "document" : "image",
+          workspaceDir: dir,
+        },
+      ];
+      if (attachment === "described image") {
+        params.ctx.Body = "[Image]\nDescription:\na tiny dot image";
+        params.ctx.MediaUnderstanding = [
+          {
+            kind: "image.description",
+            attachmentIndex: 0,
+            provider: "test",
+            model: "test",
+            text: "a tiny dot image",
+          },
+        ];
+      }
+
+      await handleBtwCommand(params, true);
+
+      const runnerArgs = mockFirstObjectArg(runBtwSideQuestionMock);
+      expect(runnerArgs.question).toBe("describe this");
+      expect(runnerArgs.images).toEqual(
+        attachment === "image"
+          ? [{ type: "image", data: data.toString("base64"), mimeType: "image/png" }]
+          : undefined,
+      );
+    },
+  );
 
   it("delegates to the side-question runner", async () => {
     const params = buildParams("/btw what changed?");

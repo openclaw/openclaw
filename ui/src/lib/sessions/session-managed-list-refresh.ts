@@ -10,11 +10,10 @@ import type {
   SessionListSnapshot,
   SessionState,
 } from "./session-capability.ts";
-import {
-  sessionListQueryAgentId,
-  type ManagedSessionList,
-  type ManagedSessionListRefresh,
-  type ObservedSessionList,
+import type {
+  ManagedSessionList,
+  ManagedSessionListRefresh,
+  ObservedSessionList,
 } from "./session-list-query.ts";
 import { requestSessionListParams } from "./session-requests.ts";
 import type { createSessionRosterObservations } from "./session-roster-observations.ts";
@@ -57,14 +56,16 @@ export function createSessionManagedListRefresh(
     observations,
     nextRevision,
     isPageActive,
+    publishPrimary,
   }: {
     managedLists: ReadonlyMap<string, ManagedSessionList>;
     observations: Pick<
       ReturnType<typeof createSessionRosterObservations>,
-      "inherit" | "accept" | "stageObservedRows"
+      "inherit" | "accept" | "stageObservedRows" | "mergeRows"
     >;
     nextRevision: () => number;
     isPageActive: () => boolean;
+    publishPrimary: (result: SessionsListResult | null) => void;
   },
 ) {
   const refreshManagedList = (
@@ -83,6 +84,15 @@ export function createSessionManagedListRefresh(
         entry.queued = refresh;
       }
       return entry.pending;
+    }
+    // Another bootstrap path can hydrate this query while its initial fill waits for admission.
+    if (
+      refresh.background &&
+      !refresh.invalidated &&
+      !refresh.append &&
+      entry.connectionEpoch === scope.epoch
+    ) {
+      return Promise.resolve();
     }
     if (refresh.append && !entry.snapshot.result) {
       return Promise.resolve();
@@ -113,16 +123,12 @@ export function createSessionManagedListRefresh(
           if (!response) {
             throw new Error("The session query did not return a result. Try again.");
           }
-          const result = host.reconcileList(
-            response,
-            issuedRevision,
-            sessionListQueryAgentId(entry.query),
-          );
+          const result = host.reconcileList(response, issuedRevision, entry.query.agentId);
           const previous = entry.snapshot.result;
           // Only this response's rows were observed now; pagination retains older
           // members and discards duplicate page rows without refreshing their facts.
           const presented = reconcileRosterPresentationMetadata(result, previous);
-          const agentId = sessionListQueryAgentId(entry.query);
+          const agentId = entry.query.agentId;
           observations.inherit(presented, result, previous, agentId);
           const observed = observations.accept(
             presented,
@@ -147,16 +153,29 @@ export function createSessionManagedListRefresh(
             false,
           );
           entry.connectionEpoch = scope.epoch;
-          publishManagedList(
-            entry,
-            {
-              result: decorated,
-              agentId: sessionListQueryAgentId(entry.query) ?? null,
-              loading: false,
-              error: null,
-            },
-            isCurrent,
+          const snapshot: SessionListSnapshot = {
+            result: decorated,
+            agentId: agentId ?? null,
+            loading: false,
+            error: null,
+          };
+          // Stage this window before notifying primary observers. Each query keeps
+          // its membership; only overlapping, admitted row facts reach the primary.
+          entry.snapshot = snapshot;
+          const primary = host.readState();
+          const merged = observations.mergeRows(
+            primary.result,
+            decorated?.sessions ?? [],
+            primary.agentId,
+            agentId,
           );
+          if (merged !== primary.result) {
+            publishPrimary(merged);
+          }
+          // Primary listeners can retire the connection or replace this snapshot.
+          if (isCurrent() && entry.snapshot === snapshot) {
+            publishManagedList(entry, snapshot, isCurrent);
+          }
           notifyObserved();
         } catch (error) {
           if (!isCurrent()) {
@@ -192,17 +211,7 @@ export function createSessionManagedListRefresh(
         entry.pending = null;
         if (entry.queued?.background && isCurrent() && isPageActive()) {
           // Release this request's admission before scheduling its automatic successor.
-          void host.background(pending, async () => {
-            if (
-              isCurrent() &&
-              isPageActive() &&
-              entry.listeners.size > 0 &&
-              !entry.pending &&
-              entry.queued?.background
-            ) {
-              await refreshManagedList(entry, entry.queued);
-            }
-          });
+          entry.coordinator.schedule();
         }
       }
     });
@@ -210,13 +219,27 @@ export function createSessionManagedListRefresh(
     completion.resolve(drain());
     return pending;
   };
-  return (entry: ManagedSessionList, refresh: ManagedSessionListRefresh): Promise<void> => {
+  return (
+    entry: ManagedSessionList,
+    refresh: ManagedSessionListRefresh,
+    isCurrent: () => boolean = () => true,
+  ): Promise<void> => {
     if (!refresh.background || entry.pending) {
       return refreshManagedList(entry, refresh);
     }
+    if (!entry.queued || (refresh.invalidated && entry.queued.background)) {
+      entry.queued = refresh;
+    }
     return host.background(entry, async () => {
-      if (managedLists.get(entry.key) === entry && entry.listeners.size > 0) {
-        await refreshManagedList(entry, refresh);
+      if (isCurrent() && managedLists.get(entry.key) === entry && entry.listeners.size > 0) {
+        if (!isPageActive()) {
+          entry.coordinator.setActive(false, true);
+          return;
+        }
+        // Scheduler deduplication must retain invalidation that arrives after the initial fill.
+        const queued = entry.queued ?? refresh;
+        entry.queued = null;
+        await refreshManagedList(entry, queued);
       }
     });
   };

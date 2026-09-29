@@ -1,6 +1,6 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { isSessionRouteId, type RouteId } from "../app-route-paths.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type {
   SessionCapability,
@@ -31,7 +31,7 @@ import {
 } from "./app-sidebar-child-session-data.ts";
 
 type LineageOwner = {
-  readonly context: ApplicationContext<RouteId> | undefined;
+  readonly context: ApplicationContext | undefined;
   readonly isSessionDataHostConnected: boolean;
   sessionsResult: SessionsListResult | null;
   activeSessionLineageRoot: GatewaySessionRow | null;
@@ -43,7 +43,7 @@ type LineageOwner = {
 type LineageScope = {
   key: string;
   selectedAgentId: string | null;
-  gateway: ApplicationContext<RouteId>["gateway"];
+  gateway: ApplicationContext["gateway"];
   client: GatewayBrowserClient;
   sessions: SessionCapability;
   connectionRevision: number;
@@ -56,7 +56,6 @@ type DescriptorBinding = LineageScope & {
 };
 
 type LineageRequest = {
-  identity: ReturnType<typeof resolveUiConversationIdentity>;
   sourceRevision: number;
   publishingSelected: boolean;
   promise: Promise<void>;
@@ -67,7 +66,7 @@ type LineageNavigation = Pick<LineageScope, "key" | "selectedAgentId" | "gateway
 };
 
 export function sessionLineageIdentityHost(
-  context: ApplicationContext<RouteId> | undefined,
+  context: ApplicationContext | undefined,
 ): UiSessionDefaultsHost {
   return {
     assistantAgentId:
@@ -416,17 +415,22 @@ export class SessionLineageController {
       return Promise.resolve();
     }
     const agentId = identity.agentId ?? scope.selectedAgentId;
+    const retainedBinding = this.binding;
     const binding = agentId
-      ? (this.binding ?? this.observe(scope, { key: identity.sessionKey, agentId }))
+      ? (retainedBinding ?? this.observe(scope, { key: identity.sessionKey, agentId }))
       : null;
     if (binding && !this.bindingIsCurrent(binding)) {
       return Promise.resolve();
     }
     const globalBinding = identity.sessionKey === "global" ? binding : null;
-    const descriptorBinding = globalBinding ?? (binding?.refreshRequested ? binding : null);
+    // Reuse a held descriptor; an empty retained observation still needs the initial lookup.
+    const descriptorBinding =
+      globalBinding ??
+      ((binding === retainedBinding && binding?.observation?.row) || binding?.refreshRequested
+        ? binding
+        : null);
     const childScope = this.childScope();
     const request: LineageRequest = {
-      identity,
       sourceRevision: sessions.canonicalListRevision,
       publishingSelected: false,
       promise: Promise.resolve(),
@@ -442,6 +446,7 @@ export class SessionLineageController {
         (globalBinding ? this.bindingIsCurrent(globalBinding) : childScope === this.childScope());
       const lineage = await fetchSessionLineage({
         client,
+        sessions,
         sessionKey: key,
         captureReconcile: sessions.captureReconcile,
         knownRows: collectKnownSessionRows(
@@ -526,13 +531,17 @@ export class SessionLineageController {
     // Invalidated receipts reissue within the existing descriptor request.
     // Failures leave through fetchSessionLineage's existing retry policy.
     while (isCurrent()) {
+      const refresh = binding.refreshRequested;
       binding.refreshRequested = false;
       const reconcile = observation.captureReconcile();
-      const described = await binding.client
-        .request<{ session?: GatewaySessionRow | null }>("sessions.describe", {
-          key: binding.key,
-          ...(isUiGlobalSessionKey(binding.key) ? { agentId: binding.target.agentId } : {}),
-        })
+      const described = await binding.sessions
+        .describe(
+          {
+            key: binding.key,
+            ...(isUiGlobalSessionKey(binding.key) ? { agentId: binding.target.agentId } : {}),
+          },
+          { client: binding.client, refresh },
+        )
         .catch((error: unknown) => {
           binding.refreshRequested = true;
           throw error;
@@ -541,7 +550,12 @@ export class SessionLineageController {
         return undefined;
       }
       const outcome = reconcile(
-        described?.session ? { ...described.session, runtimeSampledAt: Date.now() } : undefined,
+        described?.session
+          ? {
+              ...described.session,
+              runtimeSampledAt: described.session.runtimeSampledAt ?? Date.now(),
+            }
+          : undefined,
       );
       if (outcome.status === "invalidated") {
         continue;

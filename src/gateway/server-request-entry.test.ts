@@ -36,8 +36,10 @@ vi.mock("./server/ws-connection/request-start.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./server/ws-connection/request-start.js")>();
   return {
     ...actual,
-    scheduleGatewayRequestStart: (bytes: number) => {
-      const started = actual.scheduleGatewayRequestStart(bytes);
+    scheduleGatewayRequestStart: (
+      ...args: Parameters<typeof actual.scheduleGatewayRequestStart>
+    ) => {
+      const started = actual.scheduleGatewayRequestStart(...args);
       return started?.then(() => boundaries.start()) ?? null;
     },
   };

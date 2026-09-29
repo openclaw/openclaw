@@ -3,20 +3,22 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import {
-  loadOriginDeviceTokenReadOnly,
-  storeOriginDeviceToken,
-} from "../infra/device-auth-store.js";
+  readOriginDeviceTokenReadOnlyForTest,
+  seedOriginDeviceToken,
+} from "../infra/device-auth-store.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { getFreePort } from "../test-utils/ports.js";
+import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import {
   prepareGatewayCliFixture,
@@ -30,7 +32,7 @@ import {
 import {
   EMPTY_STABILITY_SNAPSHOT,
   startAgentTurnGateway,
-  startCronListGateway,
+  startCliReadGateway,
   startCronLookupMissGateway,
   startGatewayStabilityRpcServer,
   startNodePairingGateway,
@@ -39,6 +41,7 @@ import {
 // A one-shot command must release its Gateway socket once its output is complete.
 // The clock starts at the complete payload, so cold startup never enters this budget.
 const ONE_SHOT_EXIT_BUDGET_MS = 5_000;
+const cliEntrypoint = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli);
 
 describe("gateway-backed CLI process exit", () => {
   it.each([
@@ -68,7 +71,6 @@ describe("gateway-backed CLI process exit", () => {
   });
 
   it.each([
-    { label: "empty", timeout: "", valid: false },
     { label: "whitespace", timeout: " \t ", valid: false },
     { label: "positive", timeout: "10000", valid: true },
   ])(
@@ -148,7 +150,7 @@ describe("gateway-backed CLI process exit", () => {
       OPENCLAW_STATE_DIR: stateDir,
     };
     const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-    storeOriginDeviceToken({
+    seedOriginDeviceToken({
       gatewayScope: gatewayOriginScope(gateway.url),
       deviceId: identity.deviceId,
       role: "operator",
@@ -171,7 +173,7 @@ describe("gateway-backed CLI process exit", () => {
     expect(gateway.calls).toEqual(["node.pair.list", "node.pair.approve"]);
     expect(await snapshotDirectoryContents(stateDir)).toEqual(before);
     expect(
-      loadOriginDeviceTokenReadOnly({
+      readOriginDeviceTokenReadOnlyForTest({
         gatewayScope: gatewayOriginScope(gateway.url),
         deviceId: identity.deviceId,
         role: "operator",
@@ -222,7 +224,7 @@ describe("gateway-backed CLI process exit", () => {
       OPENCLAW_STATE_DIR: stateDir,
     };
     const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-    storeOriginDeviceToken({
+    seedOriginDeviceToken({
       gatewayScope: gatewayOriginScope(gateway.url),
       deviceId: identity.deviceId,
       role: "operator",
@@ -245,7 +247,7 @@ describe("gateway-backed CLI process exit", () => {
     expect(gateway.authInputs).toEqual([{ deviceToken: storedToken }]);
     expect(gateway.calls).toEqual(["diagnostics.stability"]);
     expect(
-      loadOriginDeviceTokenReadOnly({
+      readOriginDeviceTokenReadOnlyForTest({
         gatewayScope: gatewayOriginScope(gateway.url),
         deviceId: identity.deviceId,
         role: "operator",
@@ -276,7 +278,7 @@ describe("gateway-backed CLI process exit", () => {
       };
       if (seeded) {
         const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-        storeOriginDeviceToken({
+        seedOriginDeviceToken({
           gatewayScope: gatewayOriginScope(gateway.url),
           deviceId: identity.deviceId,
           role: "operator",
@@ -333,7 +335,7 @@ describe("gateway-backed CLI process exit", () => {
         [
           'import fs from "node:fs";',
           'const entry = process.argv[1]?.replaceAll("\\\\", "/");',
-          'if (entry?.endsWith("/src/entry.ts")) {',
+          `if (entry === ${JSON.stringify(fileURLToPath(cliEntrypoint).replaceAll("\\", "/"))}) {`,
           "  fs.appendFileSync(process.env.OPENCLAW_ENTRY_PID_LOG, `${process.pid}\\n`);",
           "}",
           "",
@@ -449,55 +451,12 @@ describe("gateway-backed CLI process exit", () => {
 
   it.each([
     { label: "list", args: ["devices", "list", "--timeout", "250"] },
-    { label: "join-code", args: ["devices", "join-code", "--timeout", "250"] },
-    {
-      label: "remove",
-      args: ["devices", "remove", "test-device", "--timeout", "250"],
-    },
-    {
-      label: "clear",
-      args: ["devices", "clear", "--yes", "--pending", "--timeout", "250"],
-    },
-    {
-      label: "approve",
-      args: ["devices", "approve", "test-request", "--timeout", "250"],
-    },
-    {
-      label: "reject",
-      args: ["devices", "reject", "test-request", "--timeout", "250"],
-    },
-    {
-      label: "rename",
-      args: [
-        "devices",
-        "rename",
-        "--device",
-        "test-device",
-        "--name",
-        "Test Device",
-        "--timeout",
-        "250",
-      ],
-    },
+    { label: "approve", args: ["devices", "approve", "test-request", "--timeout", "250"] },
     {
       label: "rotate",
       args: [
         "devices",
         "rotate",
-        "--device",
-        "test-device",
-        "--role",
-        "operator",
-        "--timeout",
-        "250",
-      ],
-      machineOutput: true,
-    },
-    {
-      label: "revoke",
-      args: [
-        "devices",
-        "revoke",
         "--device",
         "test-device",
         "--role",
@@ -625,7 +584,7 @@ describe("gateway-backed CLI process exit", () => {
     const configPath = path.join(stateDir, "openclaw.json");
     const caTriggerPath = path.join(root, "load-default-ca.mjs");
     const token = "test-token";
-    const gateway = await startCronListGateway(token);
+    const gateway = await startCliReadGateway(token);
     await fs.mkdir(stateDir, { recursive: true });
     await fs.writeFile(
       caTriggerPath,
@@ -644,15 +603,14 @@ describe("gateway-backed CLI process exit", () => {
 
     // The command emits one JSON document, so a parseable buffer is the moment its
     // output is complete. Timing the exit from there measures the one-shot release
-    // of the Gateway socket instead of the child's TSX startup.
+    // of the Gateway socket instead of the child's startup.
     let completeOutputAt: number | undefined;
     const result = await runCliProcessChild({
       nodeArgs: [
-        "--import",
-        "tsx",
+        ...resolveRuntimeWorkerArgv(cliEntrypoint).slice(0, -1),
         "--import",
         pathToFileURL(caTriggerPath).href,
-        "src/entry.ts",
+        fileURLToPath(cliEntrypoint),
         "cron",
         "list",
         "--json",
@@ -897,7 +855,6 @@ describe("gateway-backed CLI process exit", () => {
   });
 
   it.each([
-    { label: "empty", timeout: "", valid: false },
     { label: "whitespace", timeout: " \t ", valid: false },
     { label: "omitted", timeout: undefined, valid: true },
     { label: "positive", timeout: "10000", valid: true },

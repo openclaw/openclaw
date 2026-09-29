@@ -1,72 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { sameFileIdentity } from "../../infra/fs-safe-advanced.js";
+import { resolvePathPrefixSync, sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { tryResolvePathCaseInsensitive } from "../../infra/path-case.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 
-const MAX_SYMLINK_HOPS = 64;
-
-function splitPathSegments(value: string): string[] {
-  return value.split(path.sep).filter(Boolean);
-}
-
 function resolveMissingStorePathIdentity(pathname: string): string | undefined {
-  const absolutePath = path.resolve(pathname);
-  let resolvedPath = path.parse(absolutePath).root;
-  const remaining = splitPathSegments(absolutePath.slice(resolvedPath.length));
-  const visitedLinks = new Set<string>();
-  let symlinkHops = 0;
-
-  while (remaining.length > 0) {
-    const segment = remaining.shift();
-    if (!segment || segment === ".") {
-      continue;
-    }
-    if (segment === "..") {
-      resolvedPath = path.dirname(resolvedPath);
-      continue;
-    }
-    const candidate = path.join(resolvedPath, segment);
-    let stat: fs.Stats;
-    try {
-      stat = fs.lstatSync(candidate);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        return undefined;
-      }
-      try {
-        const canonicalAncestor = fs.realpathSync.native(resolvedPath);
-        return path.resolve(canonicalAncestor, segment, ...remaining);
-      } catch {
-        return undefined;
-      }
-    }
-    if (!stat.isSymbolicLink()) {
-      resolvedPath = candidate;
-      continue;
-    }
-    const resolutionState = `${candidate}\0${remaining.join(path.sep)}`;
-    if (symlinkHops >= MAX_SYMLINK_HOPS || visitedLinks.has(resolutionState)) {
-      return undefined;
-    }
-    visitedLinks.add(resolutionState);
-    symlinkHops += 1;
-    let target: string;
-    try {
-      target = fs.readlinkSync(candidate);
-    } catch {
-      return undefined;
-    }
-    if (path.isAbsolute(target)) {
-      resolvedPath = path.parse(target).root;
-      remaining.unshift(...splitPathSegments(target.slice(resolvedPath.length)));
-    } else {
-      remaining.unshift(...splitPathSegments(target));
-    }
-  }
-
   try {
-    return fs.realpathSync.native(resolvedPath);
+    const prefix = resolvePathPrefixSync(path.resolve(pathname));
+    return path.resolve(prefix.existingPath, ...prefix.unresolvedSegments);
   } catch {
     return undefined;
   }
@@ -74,6 +15,24 @@ function resolveMissingStorePathIdentity(pathname: string): string | undefined {
 
 export function isPerAgentSessionStoreConfig(storeConfig: string | undefined): boolean {
   return !storeConfig?.trim() || storeConfig.includes("{agentId}");
+}
+
+export function isSameAuthoredSessionStoreConfig(
+  source: string | undefined,
+  target: string | undefined,
+): boolean {
+  return (!source?.trim() && !target?.trim()) || source === target;
+}
+
+export function isSameSessionStoreConfig(
+  source: string | undefined,
+  target: string | undefined,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  if (isPerAgentSessionStoreConfig(source) || isPerAgentSessionStoreConfig(target)) {
+    return isSameAuthoredSessionStoreConfig(source, target);
+  }
+  return isSameFixedSessionStoreConfig(source, target, env);
 }
 
 export function isSameFixedSessionStoreConfig(

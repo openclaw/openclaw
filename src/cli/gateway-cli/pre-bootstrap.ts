@@ -1,13 +1,13 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import * as startupRepair from "../../commands/doctor/shared/automatic-startup-config-repair.js";
 import {
   cloneEnvWithPlatformSemantics,
   resetPublishedConfigRuntimeEnv,
 } from "../../config/config-env-vars.js";
-// Gateway startup checks that must run before shared CLI bootstrap can migrate state.
+// Gateway config selection and guards that precede shared CLI state preparation.
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "../../config/gateway-env-selection.js";
 import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
+import { describeConfigSnapshotInputChange } from "../../config/snapshot-inputs.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
@@ -39,8 +39,6 @@ let lastGuardedGatewayRunSnapshot: ConfigFileSnapshot | undefined;
 let preparedGatewayRunBootstrap:
   | (Pick<GatewayRunOpts, "allowUnconfigured" | "dev"> & { snapshot: ConfigFileSnapshot })
   | undefined;
-let preparedGatewayRunStateWasPristine = false;
-let preparedGatewayRunCoreStateWasPristine = false;
 let preparedGatewayRunReset: PreparedGatewayRunReset | undefined;
 let gatewayRunTargetSelectedByConfig = false;
 
@@ -109,20 +107,6 @@ function restoreGatewayConfigSelectionEnvironment(
       process.env[key] = value;
     }
   }
-}
-
-function resolveGatewayRunDotEnvPaths(params: {
-  env: NodeJS.ProcessEnv;
-  join: (...paths: string[]) => string;
-  resolve: (path: string) => string;
-  resolveConfigDir: (env: NodeJS.ProcessEnv) => string;
-  resolveStateDir: (env: NodeJS.ProcessEnv) => string;
-}): { additionalEnvPaths?: string[]; stateEnvPath: string } {
-  const stateEnvPath = params.join(params.resolveStateDir(params.env), ".env");
-  const configEnvPath = params.join(params.resolveConfigDir(params.env), ".env");
-  return params.resolve(stateEnvPath) === params.resolve(configEnvPath)
-    ? { stateEnvPath }
-    : { additionalEnvPaths: [configEnvPath], stateEnvPath };
 }
 
 function resolveInvocationDestructiveOverride(): string | undefined {
@@ -223,18 +207,18 @@ async function readGuardedGatewayRunConfig(
   });
 }
 
-async function isSameGatewayRunConfigSnapshot(
+function describeGatewayRunConfigChange(
   expected: ConfigFileSnapshot,
   current: ConfigFileSnapshot,
   options: { allowPathChange?: boolean } = {},
-): Promise<boolean> {
-  const { hashRuntimeConfigValue } = await import("../../config/runtime-snapshot.js");
-  return (
-    (options.allowPathChange || current.path === expected.path) &&
-    current.exists === expected.exists &&
-    (current.hash ?? current.raw) === (expected.hash ?? expected.raw) &&
-    hashRuntimeConfigValue(current.sourceConfig) === hashRuntimeConfigValue(expected.sourceConfig)
-  );
+): string | undefined {
+  return current.valid !== expected.valid
+    ? "config validity changed"
+    : describeConfigSnapshotInputChange(expected, current, {
+        ...options,
+        // Invalid reset admission pins the selected target and authored revision.
+        compareResolvedConfig: current.valid,
+      });
 }
 
 function resolveGatewayConfigSelectionDeclarationSignature(
@@ -255,21 +239,17 @@ async function guardGatewayRunSelectedConfig(
 ): Promise<boolean> {
   lastGuardedGatewayRunSnapshot = undefined;
   const [
-    path,
-    { applyConfigEnvVars, isConfigRuntimeEnvVarAllowed },
-    { loadGlobalRuntimeDotEnvFiles },
+    applyTrustedGatewayEnv,
+    { applyConfigEnvVars },
     { normalizeEnv },
-    { normalizeStateDirEnv, resolveStateDir },
-    { resolveConfigDir },
+    { normalizeStateDirEnv },
     { collectEnvSecretRefIds },
     { clearMissingManagedServiceEnvKeys, readManagedSystemdServiceEnvKeysFromEnvironment },
   ] = await Promise.all([
-    import("node:path"),
+    createTrustedGatewayEnvLoader(),
     import("../../config/config-env-vars.js"),
-    import("../../infra/dotenv-global.js"),
     import("../../infra/env.js"),
     import("../../config/paths.js"),
-    import("../../utils.js"),
     import("../../config/resolution-facts.js"),
     import("../../daemon/service-managed-env.js"),
   ]);
@@ -282,25 +262,6 @@ async function guardGatewayRunSelectedConfig(
       preservedKeys: GATEWAY_CONFIG_SELECTION_ENV_KEYS,
     });
   }
-  const applyTrustedGatewayEnv = () => {
-    normalizeStateDirEnv(process.env);
-    const loaded = loadGlobalRuntimeDotEnvFiles({
-      ...(gatewayRunTargetSelectedByConfig ? { entryFilter: isConfigRuntimeEnvVarAllowed } : {}),
-      overrideKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
-      quiet: true,
-      ...resolveGatewayRunDotEnvPaths({
-        env: process.env,
-        join: path.join,
-        resolve: path.resolve,
-        resolveConfigDir,
-        resolveStateDir,
-      }),
-    });
-    normalizeStateDirEnv(process.env);
-    normalizeEnv();
-    applyInvocationDestructiveOverride(invocationDestructiveOverride);
-    return loaded;
-  };
   const applySelectedConfigEnv = (snapshot: ConfigFileSnapshot) => {
     restoreAppliedGatewayRunConfigEnvironment(params.opts.reset !== true);
     if (snapshot.valid && params.opts.reset !== true) {
@@ -318,7 +279,7 @@ async function guardGatewayRunSelectedConfig(
   for (;;) {
     const envBeforeTrustedApply = { ...process.env };
     const trustedSelectionSignature = resolveGatewayConfigSelectionSignature(process.env);
-    const trustedEnvLoad = applyTrustedGatewayEnv();
+    const trustedEnvLoad = applyTrustedGatewayEnv(invocationDestructiveOverride);
     if (resolveGatewayConfigSelectionSignature(process.env) !== trustedSelectionSignature) {
       const stateEnvSelectedTarget = trustedEnvLoad.stateEnvAppliedKeys.some((key) =>
         GATEWAY_CONFIG_SELECTION_ENV_KEYS.has(key.toUpperCase()),
@@ -349,16 +310,11 @@ async function guardGatewayRunSelectedConfig(
     if (!snapshot) {
       return false;
     }
-    if (!snapshot.valid && params.opts.reset) {
-      // Invalid config source is untrusted. In particular, applying its env block could let an
-      // off-root $include self-authorize OPENCLAW_INCLUDE_ROOTS on the next read. Only explicit dev
-      // reset may proceed as the recovery path; ordinary startup skips mutation-capable bootstrap.
+    if (!snapshot.valid) {
+      // Invalid authored config cannot choose runtime environment. The config guard
+      // owns refusal and recovery; dev reset must not apply the config it will delete.
       lastGuardedGatewayRunSnapshot = snapshot;
       return true;
-    }
-    const trustedSnapshot = startupRepair.resolveStartupConfigSnapshot(snapshot);
-    if (!trustedSnapshot) {
-      return false;
     }
     // The service marker also owns config SecretRefs. Only dotenv-absent keys with no current
     // config reference are stale; clearing the broad marker blindly would drop file-backed refs.
@@ -366,10 +322,10 @@ async function guardGatewayRunSelectedConfig(
       environment: process.env,
       managedKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
       presentKeys: trustedEnvLoad.dotenvPresentKeys,
-      preserveKeys: collectEnvSecretRefIds(trustedSnapshot.sourceConfig),
+      preserveKeys: collectEnvSecretRefIds(snapshot.sourceConfig),
     });
     const selectionSignature = resolveGatewayConfigSelectionSignature(process.env);
-    applySelectedConfigEnv(trustedSnapshot);
+    applySelectedConfigEnv(snapshot);
     // Only selection inputs survive a selection hop. Reload credentials once the final config and
     // state dotenv are stable so a superseded profile cannot contaminate the selected gateway.
     if (resolveGatewayConfigSelectionSignature(process.env) !== selectionSignature) {
@@ -382,7 +338,7 @@ async function guardGatewayRunSelectedConfig(
       });
       continue;
     }
-    // Migration admission owns repairs; selection cannot write config health or restore backups.
+    // Readiness owns current-config recovery; selection cannot write health or restore backups.
     lastGuardedGatewayRunSnapshot = snapshot;
     return true;
   }
@@ -434,7 +390,7 @@ export async function recheckGatewayRunReset(params: GatewayRunGuardParams): Pro
   if (
     resolveGatewayConfigSelectionSignature(process.env) !== expected.selectionSignature ||
     !current ||
-    !(await isSameGatewayRunConfigSnapshot(expected.snapshot, current))
+    describeGatewayRunConfigChange(expected.snapshot, current)
   ) {
     return await rejectDrift();
   }
@@ -534,9 +490,7 @@ export function clearGatewayRunConfigEnvironment(): void {
   resetPublishedConfigRuntimeEnv();
 }
 
-export async function reloadTrustedGatewayRunEnvironment(params: {
-  runtime: RuntimeEnv;
-}): Promise<boolean> {
+async function createTrustedGatewayEnvLoader() {
   const [
     path,
     { isConfigRuntimeEnvVarAllowed },
@@ -547,32 +501,41 @@ export async function reloadTrustedGatewayRunEnvironment(params: {
     { readManagedSystemdServiceEnvKeysFromEnvironment },
   ] = await Promise.all([
     import("node:path"),
-    import("../../config/env-vars.js"),
+    import("../../config/config-env-vars.js"),
     import("../../infra/dotenv-global.js"),
     import("../../infra/env.js"),
     import("../../config/paths.js"),
     import("../../utils.js"),
     import("../../daemon/service-managed-env.js"),
   ]);
+  return (invocationDestructiveOverride: string | undefined) => {
+    normalizeStateDirEnv(process.env);
+    const stateEnvPath = path.join(resolveStateDir(process.env), ".env");
+    const configEnvPath = path.join(resolveConfigDir(process.env), ".env");
+    const loaded = loadGlobalRuntimeDotEnvFiles({
+      ...(gatewayRunTargetSelectedByConfig ? { entryFilter: isConfigRuntimeEnvVarAllowed } : {}),
+      overrideKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
+      quiet: true,
+      stateEnvPath,
+      ...(path.resolve(stateEnvPath) === path.resolve(configEnvPath)
+        ? {}
+        : { additionalEnvPaths: [configEnvPath] }),
+    });
+    normalizeStateDirEnv(process.env);
+    normalizeEnv();
+    applyInvocationDestructiveOverride(invocationDestructiveOverride);
+    return loaded;
+  };
+}
+
+export async function reloadTrustedGatewayRunEnvironment(params: {
+  runtime: RuntimeEnv;
+}): Promise<boolean> {
+  const applyTrustedGatewayEnv = await createTrustedGatewayEnvLoader();
   const envBeforeReload = { ...process.env };
   const selectionSignature = resolveGatewayConfigSelectionSignature(process.env);
   const invocationDestructiveOverride = resolveInvocationDestructiveOverride();
-  normalizeStateDirEnv(process.env);
-  loadGlobalRuntimeDotEnvFiles({
-    ...(gatewayRunTargetSelectedByConfig ? { entryFilter: isConfigRuntimeEnvVarAllowed } : {}),
-    overrideKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
-    quiet: true,
-    ...resolveGatewayRunDotEnvPaths({
-      env: process.env,
-      join: path.join,
-      resolve: path.resolve,
-      resolveConfigDir,
-      resolveStateDir,
-    }),
-  });
-  normalizeStateDirEnv(process.env);
-  normalizeEnv();
-  applyInvocationDestructiveOverride(invocationDestructiveOverride);
+  applyTrustedGatewayEnv(invocationDestructiveOverride);
   if (resolveGatewayConfigSelectionSignature(process.env) !== selectionSignature) {
     // Runtime modules already derived process-stable paths before startup mutations. A replacement
     // dotenv cannot select another target without splitting the running gateway across state dirs.
@@ -619,12 +582,6 @@ export async function selectGatewayRunEnvironment(params: GatewayRunGuardParams)
 
 export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams): Promise<boolean> {
   preparedGatewayRunReset = undefined;
-  preparedGatewayRunStateWasPristine = false;
-  preparedGatewayRunCoreStateWasPristine = false;
-  const pristineSelectionSignature = resolveGatewayConfigSelectionSignature(process.env);
-  const { planPristineStartupConfigMigrations, planPristineStartupStateMigrations } =
-    await import("../../commands/doctor/shared/pristine-startup-state.js");
-  const pristineStatePlan = planPristineStartupStateMigrations(process.env);
   // Stop the early proxy before selection can choose another config/state target. Its lifecycle
   // restores the underlying env snapshot so the selected target's trusted dotenv can replace it.
   await getGatewayRunRuntimeHooks().releaseManagedProxy?.();
@@ -639,24 +596,6 @@ export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams):
         ...params,
         environmentSelection,
       });
-  // Config can change without changing its selected path. Revalidate the final authored
-  // file while retaining the pre-guard physical-state fact, or stateful config could skip.
-  const guardedConfigPlan = planPristineStartupConfigMigrations(
-    guarded ? lastGuardedGatewayRunSnapshot?.parsed : undefined,
-    process.env,
-  );
-  preparedGatewayRunStateWasPristine =
-    guarded &&
-    !params.opts.reset &&
-    pristineStatePlan.skipAllStateMigrations &&
-    guardedConfigPlan.skipAllStateMigrations &&
-    resolveGatewayConfigSelectionSignature(process.env) === pristineSelectionSignature;
-  preparedGatewayRunCoreStateWasPristine =
-    guarded &&
-    !params.opts.reset &&
-    pristineStatePlan.skipCoreStateMigrations &&
-    guardedConfigPlan.skipCoreStateMigrations &&
-    resolveGatewayConfigSelectionSignature(process.env) === pristineSelectionSignature;
   await pinGatewayRunRuntimePaths();
   // Dev reset deletes the state directory before recreating config. Migrating first would
   // archive legacy state and then delete its imported SQLite rows.
@@ -681,20 +620,10 @@ export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams):
   return shouldBootstrap;
 }
 
-/** Prepared fact captured before Gateway bootstrap can create runtime state. */
-export function wasPreparedGatewayRunStatePristine(): boolean {
-  return preparedGatewayRunStateWasPristine;
-}
-
-/** Prepared fact keeps plugin-only configs out of unrelated core migration discovery. */
-export function wasPreparedGatewayRunCoreStatePristine(): boolean {
-  return preparedGatewayRunCoreStateWasPristine;
-}
-
 export async function recheckGatewayRunBootstrap(
   params: GatewayRunGuardParams & { snapshot?: ConfigFileSnapshot },
 ): Promise<boolean> {
-  // This callback can run while startup preflight owns the shared migration lease.
+  // This callback can run while startup preflight owns the shared preparation lease.
   // Throw a typed exit so its finally releases the lease before the CLI exits.
   const deferredExitRuntime: RuntimeEnv = {
     ...params.runtime,
@@ -705,7 +634,7 @@ export async function recheckGatewayRunBootstrap(
   const expected = preparedGatewayRunBootstrap?.snapshot;
   if (!expected) {
     params.runtime.error(
-      "Refusing to run automatic gateway startup migrations without a prepared config snapshot. Retry startup.",
+      "Refusing to run gateway state preparation without a prepared config snapshot. Retry startup.",
     );
     throw new ExitError(1);
   }
@@ -721,18 +650,16 @@ export async function recheckGatewayRunBootstrap(
   if (!current) {
     return false;
   }
-  // The writer-stamped repair is the only config mutation allowed between selection and launch;
-  // accepting a broader difference here would turn the drift guard into an invalid-config bypass.
-  if (
-    (await isSameGatewayRunConfigSnapshot(expected, current, {
-      allowPathChange: params.snapshot !== undefined,
-    })) ||
-    startupRepair.isStartupConfigRepairResult(expected, current)
-  ) {
+  // Selection already admitted any current-config backup. Later authored drift
+  // must be validated by a new startup attempt.
+  const change = describeGatewayRunConfigChange(expected, current, {
+    allowPathChange: params.snapshot !== undefined,
+  });
+  if (!change) {
     return true;
   }
   params.runtime.error(
-    "Refusing to run automatic gateway startup migrations because the selected config changed during startup. Retry startup so the new config can be validated.",
+    `Refusing to run gateway state preparation because the selected config changed during startup (${change}). Retry startup so the new config can be validated.`,
   );
   throw new ExitError(1);
 }

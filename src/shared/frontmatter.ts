@@ -7,6 +7,7 @@ import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/stri
 import JSON5 from "json5";
 import { LEGACY_MANIFEST_KEYS, MANIFEST_KEY } from "../compat/legacy-names.js";
 import { parseBooleanValue } from "../utils/boolean.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 
 /** Normalizes comma-delimited or loose array metadata fields into string lists. */
 export function normalizeStringList(input: unknown): string[] {
@@ -38,7 +39,7 @@ export function resolveOpenClawManifestBlock(params: {
   }
 
   try {
-    const parsed = JSON5.parse(raw);
+    const parsed = parseJsonWithJson5Fallback(raw, JSON5);
     if (!parsed || typeof parsed !== "object") {
       return undefined;
     }

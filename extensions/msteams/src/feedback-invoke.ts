@@ -1,4 +1,3 @@
-// Msteams plugin module implements feedback invoke behavior.
 import { recordChannelFeedbackEvent } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";

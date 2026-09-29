@@ -2,14 +2,34 @@ import { describe, expect, it } from "vitest";
 import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
 
 describe("docs Markdown rendering", () => {
-  it("preserves published acronym and localized component anchors", () => {
-    // A slugify upgrade must preserve targets in the publisher's MDX and locales too.
+  it.each([
+    {
+      name: "APIUsage",
+      title: "سلوك إعادة المحاولة",
+      ids: ["param-apiusage", "slwk-ieadt-almhawlt"],
+    },
+    {
+      name: "APISection fooBar APIs DNS2API",
+      title: "ու ՈՒ Ու aŒb aœb aƏb aəb ẞ",
+      ids: ["param-api-section-foo-bar-apis-dns-2-api", "vo-vo-vo-a-b-a-b-a-b-a-b-ss"],
+    },
+    {
+      name: "a𝓀b a𝕆b aⓒb aⓓb",
+      title: "Conway’s Law — DON’T",
+      ids: ["param-ahb-a-nb-a-b-b-a-c-b", "conways-law-dont"],
+    },
+    {
+      name: "ŌōfooBar",
+      title: "before−after before⁓after",
+      ids: ["param-oofoo-bar", "before-after-before-after"],
+    },
+  ])("preserves published component anchors for $name", ({ name, title, ids }) => {
     const document = parseDocsDocument(
-      '<ParamField body="APIUsage">Usage</ParamField>\n\n' +
-        '<Accordion title="سلوك إعادة المحاولة">Retry</Accordion>',
+      `<ParamField body="${name}">Usage</ParamField>\n\n` +
+        `<Accordion title="${title}">Details</Accordion>`,
     );
 
-    expect(document.ids).toEqual(["param-apiusage", "slwk-ieadt-almhawlt"]);
+    expect(document.ids).toEqual(ids);
   });
 
   it.each(["", "> "].flatMap((quote) => ["html", "jsx"].map((kind) => ({ quote, kind }))))(

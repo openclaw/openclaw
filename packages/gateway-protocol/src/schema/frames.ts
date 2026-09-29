@@ -1,8 +1,11 @@
-// Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
-import { ControlUiPluginTabSchema, ControlUiPluginWidgetKindSchema } from "./plugins.js";
+import {
+  ControlUiLinkReaderDescriptorSchema,
+  ControlUiPluginTabSchema,
+  ControlUiPluginWidgetKindSchema,
+} from "./plugins.js";
 import {
   GatewayClientIdSchema,
   GatewayClientModeSchema,
@@ -15,18 +18,10 @@ import { WorkerAdmissionHandshakeSchema } from "./worker-admission.js";
 
 export { GATEWAY_SERVER_CAPS } from "../server-capabilities.js";
 
-/**
- * Top-level gateway frame schemas.
- *
- * These are the WebSocket envelope contracts; method/event payload schemas live
- * in feature-specific modules and are referenced by runtime validators.
- */
-/** Periodic server heartbeat event payload. */
 export const TickEventSchema = closedObject({
   ts: Type.Integer({ minimum: 0 }),
 });
 
-/** Server shutdown notice event payload. */
 export const ShutdownEventSchema = closedObject({
   reason: NonEmptyString,
   restartExpectedMs: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -96,7 +91,6 @@ export const ConnectParamsSchema = closedObject({
   userAgent: Type.Optional(Type.String()),
 });
 
-/** Successful gateway hello response with the server protocol and initial state. */
 export const HelloOkSchema = closedObject({
   type: Type.Literal("hello-ok"),
   protocol: Type.Integer({ minimum: 1 }),
@@ -121,6 +115,7 @@ export const HelloOkSchema = closedObject({
   controlUiTabs: Type.Optional(Type.Array(ControlUiPluginTabSchema)),
   // Additive: active plugin widget kinds whose renderers ship in the trusted UI bundle.
   controlUiWidgetKinds: Type.Optional(Type.Array(ControlUiPluginWidgetKindSchema)),
+  controlUiLinkReaders: Type.Optional(Type.Array(ControlUiLinkReaderDescriptorSchema)),
   pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
   auth: closedObject({
     method: Type.Optional(
@@ -190,7 +185,6 @@ export const RequestFrameSchema = closedObject({
   expectedProfileId: Type.Optional(UserProfileIdSchema),
 });
 
-/** Server response frame envelope paired with a prior request id. */
 export const ResponseFrameSchema = closedObject({
   type: Type.Literal("res"),
   id: NonEmptyString,

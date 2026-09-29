@@ -17,14 +17,15 @@ import {
 } from "../infra/diagnostic-events.js";
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "./admitted-run-context.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
+import { closeAuthProfileReadPool } from "./auth-profiles/sqlite.js";
 import { resolveCliExecutionTarget } from "./cli-runner/execution-target.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 
@@ -42,6 +43,27 @@ export type TestCliBackendParams = {
   reseedFromRawTranscriptWhenUncompacted?: boolean;
   systemPromptWhen?: "first" | "always" | "never";
 };
+
+export function createCliRepositorySkillFixture(dir: string, taskDir: string, managed: boolean) {
+  const canonicalDir = path.join(dir, "canonical", "packages", "app");
+  const skillDir = path.join(managed ? canonicalDir : taskDir, ".agents", "skills", "task-proof");
+  fs.mkdirSync(skillDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(skillDir, "SKILL.md"),
+    "---\nname: task-proof\ndescription: Task-local proof\n---\n# Proof instructions\n",
+  );
+  if (managed) {
+    for (const source of [".agents/skills", "skills"]) {
+      const worktreeSkillDir = path.join(taskDir, source, "task-proof");
+      fs.mkdirSync(worktreeSkillDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(worktreeSkillDir, "SKILL.md"),
+        "---\nname: task-proof\ndescription: Worktree copy\n---\n# Changed instructions\n",
+      );
+    }
+  }
+  return { canonicalDir, skillDir };
+}
 
 export function wrappedPluginSystemContext(text: string) {
   return `---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\n${text}\n\n---`;
@@ -230,6 +252,7 @@ export function buildPreparedCliRunContext(
       skillsSnapshot: overrides.skillsSnapshot,
     },
     started: Date.now(),
+    startedMonotonicMs: performance.now(),
     workspaceDir,
     backendResolved: {
       id: provider,
@@ -424,14 +447,15 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
         throw new Error("Could not append CLI fixture transcript message");
       }
     },
-    cleanup() {
+    async cleanup() {
       admissions.splice(0).forEach((admission) => admission.close());
       for (const databasePath of databasePaths) {
-        closeOpenClawAgentDatabaseByPath(databasePath);
+        await closeOpenClawAgentDatabaseByPathAsync(databasePath);
       }
       databasePaths.clear();
       for (const dir of tempDirs) {
-        closeOpenClawStateDatabaseByPath(
+        closeAuthProfileReadPool({ kind: "root", rootPath: dir });
+        await closeOpenClawStateDatabaseByPathAsync(
           resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }),
         );
         fs.rmSync(dir, { recursive: true, force: true });

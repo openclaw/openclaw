@@ -22,7 +22,7 @@ import {
   awaitGatewayQuestionAnswer,
   createGatewayQuestionCanceller,
   createQuestionPromptLifetime,
-  readQuestionErrorReason,
+  readQuestionRejection,
   type GatewayQuestionCall,
 } from "./gateway-question-lifecycle.js";
 import { callGatewayTool } from "./gateway.js";
@@ -389,7 +389,7 @@ export function createSecretsTool(params: {
         }
         throw new Error("question.waitAnswer returned an invalid status");
       } catch (error) {
-        const reason = readQuestionErrorReason(error);
+        const reason = readQuestionRejection(error)?.reason;
         const registrationRefused =
           (error instanceof GatewayClientRequestError && error.gatewayCode === "INVALID_REQUEST") ||
           reason === "QUESTION_ID_IN_USE" ||

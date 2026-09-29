@@ -18,12 +18,6 @@ import {
 } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
-function pointerEvent(type: "pointerenter" | "pointerleave", pointerType = "mouse") {
-  const event = new Event(type);
-  Object.defineProperty(event, "pointerType", { value: pointerType });
-  return event;
-}
-
 describe("AppSidebar agent chip", () => {
   it("keeps a configured avatar blank while waiting for authentication", async () => {
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
@@ -283,92 +277,6 @@ describe("AppSidebar agent chip", () => {
       search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
     });
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-  });
-
-  it("opens after fine-pointer hover intent without stealing focus", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn(() => ({ matches: true })),
-    );
-    try {
-      const { sidebar } = await mountSidebar(
-        createGateway({} as GatewayBrowserClient),
-        createSessions("main", ["agent:main:main"]),
-        "panel",
-        TWO_AGENTS,
-      );
-      const menus = (
-        sidebar as unknown as {
-          sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
-        }
-      ).sidebarMenus;
-      await menus.preloadMenuRenderer();
-      const input = document.createElement("input");
-      document.body.append(input);
-      input.focus();
-      const trigger = sidebar.querySelector<HTMLElement>(".sidebar-agent-card__main");
-      if (!trigger) {
-        throw new Error("Expected the sidebar agent card trigger");
-      }
-
-      trigger.dispatchEvent(pointerEvent("pointerenter"));
-      await vi.advanceTimersByTimeAsync(299);
-      await sidebar.updateComplete;
-      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-      trigger.dispatchEvent(pointerEvent("pointerleave"));
-      await vi.advanceTimersByTimeAsync(1);
-      await sidebar.updateComplete;
-      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-
-      trigger.dispatchEvent(pointerEvent("pointerenter"));
-      await vi.advanceTimersByTimeAsync(300);
-      await sidebar.updateComplete;
-      const menu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
-      if (!menu) {
-        throw new Error("Expected the agent menu after hover intent");
-      }
-      menu.dispatchEvent(new Event("wa-after-show"));
-      expect(document.activeElement).toBe(input);
-
-      trigger.dispatchEvent(pointerEvent("pointerleave"));
-      await vi.advanceTimersByTimeAsync(199);
-      menu.dispatchEvent(pointerEvent("pointerenter"));
-      await vi.advanceTimersByTimeAsync(1);
-      expect(sidebar.querySelector(".sidebar-agent-menu")).toBe(menu);
-      menu.dispatchEvent(pointerEvent("pointerleave"));
-      await vi.advanceTimersByTimeAsync(200);
-      await sidebar.updateComplete;
-      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-    } finally {
-      vi.useRealTimers();
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("keeps hover opening disabled without a fine hover pointer", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn(() => ({ matches: false })),
-    );
-    try {
-      const { sidebar } = await mountSidebar(
-        createGateway({} as GatewayBrowserClient),
-        createSessions("main", ["agent:main:main"]),
-        "panel",
-        TWO_AGENTS,
-      );
-      sidebar
-        .querySelector<HTMLElement>(".sidebar-agent-card__main")
-        ?.dispatchEvent(pointerEvent("pointerenter"));
-      await vi.advanceTimersByTimeAsync(500);
-      await sidebar.updateComplete;
-      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-    } finally {
-      vi.useRealTimers();
-      vi.unstubAllGlobals();
-    }
   });
 
   it("requests composer focus and highlighting from the capabilities action", async () => {

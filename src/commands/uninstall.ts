@@ -30,9 +30,6 @@ type UninstallOptions = {
   dryRun?: boolean;
 };
 
-const multiselectStyled = <T>(params: Parameters<typeof multiselect<T>>[0]) =>
-  multiselect(styleSelectParams(params));
-
 async function stopAndUninstallService(runtime: RuntimeEnv): Promise<boolean> {
   if (isNixMode) {
     // Nix owns service lifecycle in Nix mode; uninstalling via launchd/systemd would fight the profile.
@@ -111,25 +108,27 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
       runtime.exit(1);
       return;
     }
-    const selection = await multiselectStyled<UninstallScope>({
-      message: "Uninstall which components?",
-      options: [
-        {
-          value: "service",
-          label: "Gateway service",
-          hint: "launchd / systemd / schtasks",
-        },
-        { value: "state", label: "State + config", hint: "~/.openclaw" },
-        { value: "workspace", label: "Workspace", hint: "agent files" },
-        {
-          value: "app",
-          label: "macOS app",
-          hint: "/Applications/OpenClaw.app",
-        },
-      ],
-      initialValues: ["service"],
-    });
-    if (isCancel(selection)) {
+    const selection = await multiselect<UninstallScope>(
+      styleSelectParams({
+        message: "Uninstall which components?",
+        options: [
+          {
+            value: "service",
+            label: "Gateway service",
+            hint: "launchd / systemd / schtasks",
+          },
+          { value: "state", label: "State + config", hint: "~/.openclaw" },
+          { value: "workspace", label: "Workspace", hint: "agent files" },
+          {
+            value: "app",
+            label: "macOS app",
+            hint: "/Applications/OpenClaw.app",
+          },
+        ],
+        initialValues: ["service"],
+      }),
+    );
+    if (typeof selection === "symbol") {
       cancel(stylePromptTitle("Uninstall cancelled.") ?? "Uninstall cancelled.");
       runtime.exit(0);
       return;
@@ -191,10 +190,9 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
 
   let cleanupPlan;
   if (removesLocalData && serviceSafe) {
-    const plan = await attemptCleanup("Failed to prepare local data cleanup", () =>
+    cleanupPlan = await attemptCleanup("Failed to prepare local data cleanup", () =>
       dryRun ? resolveCleanupPlanForDryRun() : resolveCleanupPlanForRemoval(runtime),
     );
-    cleanupPlan = plan;
     if (!cleanupPlan) {
       failed = true;
     }

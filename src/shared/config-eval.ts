@@ -1,23 +1,14 @@
-// Config evaluation helpers load dynamic config modules with guarded evaluation.
 import fs from "node:fs";
 import path from "node:path";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { getOrCreatePromise } from "./lazy-promise.js";
 
 /** Normalizes primitive config values into the truthiness rules used by requirements checks. */
 function isTruthy(value: unknown): boolean {
-  if (value === undefined || value === null) {
-    return false;
-  }
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "number") {
-    return value !== 0;
-  }
   if (typeof value === "string") {
     return value.trim().length > 0;
   }
-  return true;
+  return value !== undefined && value !== null && value !== false && value !== 0;
 }
 
 /** Resolves dotted config paths, tolerating extra dots and missing branches. */
@@ -83,52 +74,37 @@ function evaluateRuntimeRequires(params: RuntimeRequirementEvalParams): boolean 
     return true;
   }
 
-  const requiredEnv = requires.env ?? [];
-  if (requiredEnv.length > 0) {
-    for (const envName of requiredEnv) {
-      if (!params.hasEnv(envName)) {
-        return false;
-      }
+  for (const envName of requires.env ?? []) {
+    if (!params.hasEnv(envName)) {
+      return false;
     }
   }
 
-  const requiredConfig = requires.config ?? [];
-  if (requiredConfig.length > 0) {
-    for (const configPath of requiredConfig) {
-      if (!params.isConfigPathTruthy(configPath)) {
-        return false;
-      }
+  for (const configPath of requires.config ?? []) {
+    if (!params.isConfigPathTruthy(configPath)) {
+      return false;
     }
   }
 
-  const requiredBins = requires.bins ?? [];
-  if (requiredBins.length > 0) {
-    for (const bin of requiredBins) {
-      if (params.hasBin(bin)) {
-        continue;
-      }
-      if (params.hasRemoteBin?.(bin)) {
-        continue;
-      }
+  for (const bin of requires.bins ?? []) {
+    if (!params.hasBin(bin) && !params.hasRemoteBin?.(bin)) {
       return false;
     }
   }
 
   const requiredAnyBins = requires.anyBins ?? [];
-  if (requiredAnyBins.length > 0) {
-    const anyFound = requiredAnyBins.some((bin) => params.hasBin(bin));
-    if (!anyFound && !params.hasAnyRemoteBin?.(requiredAnyBins)) {
-      return false;
-    }
-  }
-
-  return true;
+  return (
+    requiredAnyBins.length === 0 ||
+    requiredAnyBins.some((bin) => params.hasBin(bin)) ||
+    Boolean(params.hasAnyRemoteBin?.(requiredAnyBins))
+  );
 }
 
 /** Enforces OS compatibility before allowing `always` to bypass runtime requirements. */
 export function evaluateRuntimeEligibility(
   params: {
     os?: string[];
+    platform?: string;
     remotePlatforms?: string[];
     always?: boolean;
   } & RuntimeRequirementEvalParams,
@@ -137,7 +113,7 @@ export function evaluateRuntimeEligibility(
   const remotePlatforms = params.remotePlatforms ?? [];
   if (
     osList.length > 0 &&
-    !osList.includes(process.platform) &&
+    !osList.includes(params.platform ?? process.platform) &&
     !remotePlatforms.some((platform) => osList.includes(platform))
   ) {
     return false;
@@ -153,6 +129,9 @@ function windowsPathExtensions(raw: string | undefined): string[] {
     raw !== undefined ? raw.split(";").map((v) => v.trim()) : [".EXE", ".CMD", ".BAT", ".COM"];
   return ["", ...list.filter(Boolean)];
 }
+
+// Share pending I/O only so completed misses are checked again on the next preparation.
+const pendingBinaryAccess = new Map<string, Promise<void>>();
 
 // Installs can create binaries under unchanged PATH/PATHEXT, so cache only successful probes.
 let binaryCache: { path: string; pathExt: string; hits: Set<string> } | undefined;
@@ -235,7 +214,13 @@ export async function prepareBinaryAvailability(
       assertCurrent?.();
       try {
         // access uses the filesystem's case, permission, and symlink semantics.
-        await fs.promises.access(path.resolve(cwd, candidate), fs.constants.X_OK);
+        const resolvedCandidate = path.resolve(cwd, candidate);
+        await getOrCreatePromise(
+          pendingBinaryAccess,
+          resolvedCandidate,
+          () => fs.promises.access(resolvedCandidate, fs.constants.X_OK),
+          { evictOnSettled: true },
+        );
       } catch {
         continue;
       }

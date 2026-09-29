@@ -11,15 +11,9 @@ import {
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 
-const hoisted = vi.hoisted(() => ({
-  listSessionEntriesReadOnly: vi.fn(() => []),
-}));
-
-vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
-  listSessionEntriesReadOnly: hoisted.listSessionEntriesReadOnly,
-}));
 // HOME policy uses the real home path, but this fixture must not open its profile database.
 vi.mock("../../state/user-profiles.js", () => ({
   getUserProfileRole: vi.fn(() => null),
@@ -28,6 +22,7 @@ vi.mock("../../state/user-profiles.js", () => ({
 
 const { sessionCatalogHandlers } = await import("./session-catalog.js");
 const { listActiveSessionCatalogs } = await import("../../plugins/session-catalog-active.js");
+let projection: ReturnType<typeof createSessionRowProjectionFixture>;
 
 function provider(
   id: string,
@@ -55,7 +50,10 @@ async function call(
   await sessionCatalogHandlers[method]?.({
     params,
     respond,
-    context: { getRuntimeConfig: () => ({}), ...(logGateway ? { logGateway } : {}) },
+    context: bindSessionRowProjection(
+      { getRuntimeConfig: () => ({}), ...(logGateway ? { logGateway } : {}) },
+      () => projection,
+    ),
   } as never);
   return respond;
 }
@@ -81,9 +79,12 @@ describe("session catalog Gateway HOME isolation", () => {
   beforeEach(() => {
     activeRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(activeRegistry);
-    hoisted.listSessionEntriesReadOnly.mockReset().mockReturnValue([]);
+    projection = createSessionRowProjectionFixture({ cfg: {}, store: {} });
   });
-  afterEach(() => clearActivePluginRegistry());
+  afterEach(async () => {
+    projection.dispose();
+    await clearActivePluginRegistry();
+  });
 
   it.each([true, false])("reads only the scoped registry (has catalog: %s)", async (hasCatalog) => {
     const globalCatalog = provider("global");

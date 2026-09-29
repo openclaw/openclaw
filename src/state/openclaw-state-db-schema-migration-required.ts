@@ -1,8 +1,12 @@
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 
+export const LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX =
+  "idx_skill_workshop_collection_reviews_workspace_time";
+
 type OpenClawStateDatabaseSchemaMigrationRequiredKind =
   | "agent-databases-composite-primary-key"
   | "audit-events-v2"
+  | "legacy-cron-run-logs"
   | "legacy-workshop-review-index";
 
 export class OpenClawStateDatabaseSchemaMigrationRequiredError extends StartupMaintenanceRequiredError {
@@ -16,4 +20,22 @@ export class OpenClawStateDatabaseSchemaMigrationRequiredError extends StartupMa
     );
     this.name = "OpenClawStateDatabaseSchemaMigrationRequiredError";
   }
+}
+
+/** Runtime readers report malformed legacy state without entering repair mode. */
+export function normalizeOpenClawStateSchemaReadError(error: unknown, pathname: string): unknown {
+  if (
+    error instanceof Error &&
+    error.message.startsWith(
+      `malformed database schema (${LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX})`,
+    )
+  ) {
+    const required = new OpenClawStateDatabaseSchemaMigrationRequiredError(
+      "legacy-workshop-review-index",
+      pathname,
+    );
+    required.cause = error;
+    return required;
+  }
+  return error;
 }

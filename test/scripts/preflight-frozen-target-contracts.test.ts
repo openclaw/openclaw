@@ -10,9 +10,11 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { expandUpdateFirstHopCompatLanes } from "../../scripts/lib/update-first-hop-lanes.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
@@ -23,10 +25,17 @@ const closure = [
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/official-external-provider-catalog.json",
+  "scripts/lib/record-shared.mjs",
+  "scripts/lib/update-compat-inventory.json",
+  "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
+  "scripts/lib/upgrade-survivor-scenarios.json",
   "scripts/lib/release-version.mjs",
   "scripts/lib/frozen-target-source.mjs",
   "scripts/lib/frozen-target-compat.sh",
+  "scripts/lib/trusted-native-typescript.mjs",
+  "scripts/lib/native-typescript.mts",
   "scripts/resolve-frozen-codex-live-suite.mjs",
   "scripts/resolve-fs-safe-native-contract.mjs",
   "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
@@ -83,9 +92,9 @@ function fixture(
       recursive: true,
     });
     for (const file of [
-      "record-shared.mjs",
       "update-compat-contract.mjs",
       "openclaw-e2e-instance.sh",
+      "docker-e2e-watchdog.mjs",
       "direct-run.mjs",
     ]) {
       copyFileSync(join(repo, "scripts/lib", file), join(toolingRoot, "scripts/lib", file));
@@ -101,10 +110,24 @@ function fixture(
   const selected = commit(selectedRoot, layout === "nested-tooling" ? [".release-harness"] : []);
   const tooling = commit(toolingRoot, layout === "nested-selected" ? ["selected"] : []);
   if (parser) {
-    cpSync(join(repo, "node_modules/typescript"), join(toolingRoot, "node_modules/typescript"), {
+    const installedParser = createRequire(import.meta.url).resolve("typescript/package.json");
+    const nativeName = `@typescript/typescript-${process.platform}-${process.arch}`;
+    const installedNative = createRequire(installedParser).resolve(`${nativeName}/package.json`);
+    cpSync(dirname(installedParser), join(toolingRoot, "node_modules/typescript"), {
       recursive: true,
       dereference: true,
     });
+    // A joined writer keeps concurrent test forks from inheriting the executable's writable fd.
+    execFileSync(
+      process.execPath,
+      [
+        "-e",
+        "require('node:fs').cpSync(process.argv[1], process.argv[2], { recursive: true, dereference: true })",
+        dirname(installedNative),
+        join(toolingRoot, "node_modules", nativeName),
+      ],
+      { stdio: "pipe", timeout: 20_000 },
+    );
   }
   const log = join(root, "forbidden-commands");
   const bin = join(root, "bin");
@@ -451,6 +474,8 @@ describe("frozen admission upgrade Docker aliases", () => {
     expect(record.contracts).toHaveLength(1);
     expect(record.contracts[0].modes).toEqual({
       OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE: "current",
+      OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE: "absent",
+      OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE: "native",
       releaseTrain: train,
     });
     expect(record.selectedSha).toBe(f.selected.sha);
@@ -487,7 +512,6 @@ describe("frozen admission upgrade Docker aliases", () => {
     "live-cli-backend-claude",
     "live-cli-backend-gemini",
     "update-first-hop-compat",
-    "update-run-package-self-upgrade",
     "release-user-journey",
     "release-upgrade-user-journey",
   ])("keeps unselected upgrade contracts inert for %s", (lane) => {
@@ -509,10 +533,11 @@ describe("frozen admission upgrade Docker aliases", () => {
       const oid = f.selected.git("rev-parse", `${f.selected.sha}:${path}`);
       rmSync(join(f.selected.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
     }
-    const result = f.run({ docker: { lanes: [lane] } });
+    const requestedLanes = expandUpdateFirstHopCompatLanes([lane]);
+    const result = f.run({ docker: { lanes: requestedLanes } });
     expect(result.status, result.stderr).toBe(0);
     const record = JSON.parse(result.stdout);
-    expect(record.docker).toEqual({ lanes: [lane], omitted: [], status: "ADMITTED" });
+    expect(record.docker).toEqual({ lanes: requestedLanes, omitted: [], status: "ADMITTED" });
     expect(record.selection.consumers).toEqual(lane === "plugins-offline" ? ["plugins"] : []);
     expect(record.contracts.map((contract: { consumer: string }) => contract.consumer)).toEqual(
       record.selection.consumers,
@@ -525,29 +550,36 @@ describe("frozen admission bootstrap repairs", () => {
   const reader = "scripts/lib/frozen-target-source.mjs";
   const shell = "scripts/lib/frozen-target-compat.sh";
 
-  it.each([reader, "scripts/lib/docker-e2e-scenarios.mts", shell])(
-    "rejects dirty executable %s before any dependent code runs at unchanged HEAD",
-    (path) => {
-      const f = fixture({ "src/config/zod-schema.ts": "lastRunAt:" });
-      const sentinel = join(f.root, "dependent-code-executed");
-      const file = join(f.tooling.root, path);
-      const payload =
-        path === shell
-          ? `\nprintf executed > '${sentinel}'\n`
-          : `\n(await import("node:fs")).writeFileSync(${JSON.stringify(sentinel)}, "executed");\n`;
-      writeFileSync(file, readFileSync(file, "utf8") + payload);
-      expect(f.tooling.git("rev-parse", "HEAD")).toBe(f.tooling.sha);
-      const result = f.run({ consumers: ["onboard"] });
-      expect(existsSync(sentinel), result.stderr).toBe(false);
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.stderr).toContain(`tooling closure does not match committed source: ${path}`);
-      expect(result.stdout).toBe("");
-    },
-  );
+  it.each([
+    reader,
+    "scripts/lib/docker-e2e-scenarios.mts",
+    "scripts/lib/record-shared.mjs",
+    shell,
+    "scripts/lib/trusted-native-typescript.mjs",
+    "scripts/lib/native-typescript.mts",
+  ])("rejects dirty executable %s before any dependent code runs at unchanged HEAD", (path) => {
+    const f = fixture({ "src/config/zod-schema.ts": "lastRunAt:" });
+    const sentinel = join(f.root, "dependent-code-executed");
+    const file = join(f.tooling.root, path);
+    const payload =
+      path === shell
+        ? `\nprintf executed > '${sentinel}'\n`
+        : `\n(await import("node:fs")).writeFileSync(${JSON.stringify(sentinel)}, "executed");\n`;
+    writeFileSync(file, readFileSync(file, "utf8") + payload);
+    expect(f.tooling.git("rev-parse", "HEAD")).toBe(f.tooling.sha);
+    const result = f.run({ consumers: ["onboard"] });
+    expect(existsSync(sentinel), result.stderr).toBe(false);
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(`tooling closure does not match committed source: ${path}`);
+    expect(result.stdout).toBe("");
+  });
 
   it.each([
     entrypoint,
     "scripts/lib/official-external-channel-catalog.json",
+    "scripts/lib/official-external-provider-catalog.json",
+    "scripts/lib/record-shared.mjs",
+    "scripts/lib/upgrade-survivor-scenarios.json",
     `${recipeDirectory}/agents.json`,
     "package.json",
     "pnpm-lock.yaml",
@@ -981,6 +1013,41 @@ describe("frozen admission entry", () => {
     },
   );
 
+  it("admits the current JSON catalog through the dependency-free cold entry", () => {
+    const catalogPath = "scripts/lib/upgrade-survivor-scenarios.json";
+    const assertionsPath = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
+    const policyPath = "scripts/lib/upgrade-survivor-policy.mjs";
+    const sentinelCode = '\nthrow new Error("selected module must not execute");\n';
+    const f = fixture({
+      "package.json": '{"version":"2026.9.9"}',
+      [catalogPath]: readFileSync(catalogPath, "utf8"),
+      [assertionsPath]: readFileSync(assertionsPath, "utf8") + sentinelCode,
+      [policyPath]: readFileSync(policyPath, "utf8") + sentinelCode,
+    });
+    writeFileSync(
+      join(f.selected.root, catalogPath),
+      "dirty data must not replace committed catalog",
+    );
+    expect(existsSync(join(f.tooling.root, "node_modules"))).toBe(false);
+    expect(existsSync(join(f.selected.root, "node_modules"))).toBe(false);
+    const result = f.run({
+      docker: { lanes: ["published-upgrade-survivor"], baselines: "2026.9.4", scenarios: "base" },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.docker).toEqual({
+      lanes: ["published-upgrade-survivor-2026.9.4"],
+      omitted: [],
+      status: "ADMITTED",
+    });
+    expect(record.sources.selected).toContainEqual({
+      path: catalogPath,
+      oid: f.selected.git("rev-parse", `${f.selected.sha}:${catalogPath}`),
+    });
+    expect(existsSync(join(f.tooling.root, "node_modules"))).toBe(false);
+    expect(existsSync(join(f.selected.root, "node_modules"))).toBe(false);
+  });
+
   it("shares the Codex and fs-safe cores while preserving source read errors", () => {
     const catalog = "extensions/codex/provider-catalog.ts";
     const f = fixture({
@@ -1010,6 +1077,38 @@ describe("frozen admission entry", () => {
     expect(rejected.stdout).toBe("");
     expect(f.run(selection, { allowFrozenTargetScenarioOmissions: false }).status).toBe(0);
   });
+
+  it.each([
+    { dependency: "0.18.2", version: "2026.9.33", requiresDefaults: false },
+    { dependency: "0.4.1", version: "2026.7.33", requiresDefaults: true },
+    { dependency: "0.5.6", version: "2026.8.33", requiresDefaults: true },
+  ])(
+    "retains the fs-safe $dependency contract when the defaults shim is absent",
+    ({ dependency, version, requiresDefaults }) => {
+      const f = fixture({
+        "package.json": JSON.stringify({
+          version,
+          dependencies: { "@openclaw/fs-safe": dependency },
+        }),
+      });
+      f.selected.git(
+        "update-ref",
+        `refs/remotes/origin/extended-stable/${version}`,
+        f.selected.sha,
+      );
+      const result = f.run({ fsSafeNative: true });
+      if (requiresDefaults) {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("missing fs-safe defaults source");
+        expect(result.stdout).toBe("");
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout).contracts).toEqual([
+          { consumer: "fs-safe-native", mode: "required" },
+        ]);
+      }
+    },
+  );
 
   it.each([
     "npm-onboard-channel-agent",

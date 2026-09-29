@@ -6,7 +6,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerThreadExecArgv,
+  resolveRuntimeWorkerUrl,
+  runtimeNeedsTypeScriptLoader,
+} from "./runtime-worker-url.js";
 
 const requireFromHere = createRequire(import.meta.url);
 
@@ -109,7 +114,56 @@ describe("resolveRuntimeWorkerArgv", () => {
       const tsxUrl = pathToFileURL(requireFromHere.resolve("tsx")).href;
       const loader = typescriptLoader && extension.endsWith("ts") ? ["--import", tsxUrl] : [];
       expect(resolveRuntimeWorkerArgv(url, runtime)).toEqual([...loader, fileURLToPath(url)]);
+      expect(resolveRuntimeWorkerThreadExecArgv(url, runtime)).toEqual(
+        typescriptLoader && extension.endsWith("ts")
+          ? ["--import", import.meta.resolve("tsx/esm")]
+          : [],
+      );
     }
+  });
+
+  it.each([
+    { runtime: "Bun", bun: "fixture", executable: "custom-runtime" },
+    { runtime: "Node", bun: undefined, executable: "bun" },
+  ])("uses current $runtime metadata without changing foreign runtimes", ({ bun, executable }) => {
+    const descriptors = Object.getOwnPropertyDescriptors(process);
+    const currentExecutable = path.resolve("current-runtime-fixture", executable);
+    try {
+      Object.defineProperties(process, {
+        execPath: { configurable: true, value: currentExecutable },
+        versions: { configurable: true, value: { ...process.versions, bun } },
+      });
+      for (const extension of ["ts", "mts", "cts", "js", "mjs"]) {
+        const url = pathToFileURL(path.resolve(`worker fixture.${extension}`));
+        for (const { selected, typescriptLoader } of [
+          { selected: undefined, typescriptLoader: !bun },
+          { selected: currentExecutable, typescriptLoader: !bun },
+          { selected: path.resolve("foreign-runtime-fixture", "node"), typescriptLoader: true },
+          { selected: path.resolve("foreign-runtime-fixture", "bun"), typescriptLoader: false },
+        ]) {
+          const needsLoader = typescriptLoader && extension.endsWith("ts");
+          expect(resolveRuntimeWorkerArgv(url, selected)).toEqual([
+            ...(needsLoader ? ["--import", import.meta.resolve("tsx")] : []),
+            fileURLToPath(url),
+          ]);
+          expect(resolveRuntimeWorkerThreadExecArgv(url, selected)).toEqual(
+            needsLoader ? ["--import", import.meta.resolve("tsx/esm")] : [],
+          );
+          expect(runtimeNeedsTypeScriptLoader(fileURLToPath(url), selected)).toBe(needsLoader);
+        }
+      }
+    } finally {
+      Object.defineProperties(process, {
+        execPath: descriptors.execPath,
+        versions: descriptors.versions,
+      });
+    }
+  });
+
+  it("does not preload a file loader for non-file Worker URLs", () => {
+    expect(
+      resolveRuntimeWorkerThreadExecArgv(new URL("data:text/javascript,postMessage(1)")),
+    ).toEqual([]);
   });
 
   it.each(["ts", "mts", "cts"])(

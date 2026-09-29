@@ -138,21 +138,15 @@ describe("preserveRosterPresentationMetadata", () => {
 });
 
 test("sessions.changed removes a label when the event carries null", () => {
-  const result: SessionsListResult = {
-    ts: 1,
-    path: "",
-    count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: [
-      {
-        key: "agent:main:main",
-        kind: "global",
-        updatedAt: 1,
-        label: "Named session",
-        displayName: "Named session",
-      },
-    ],
-  };
+  const result = buildResult([
+    {
+      key: "agent:main:main",
+      kind: "global",
+      updatedAt: 1,
+      label: "Named session",
+      displayName: "Named session",
+    },
+  ]);
 
   const reconciled = reconcileSessionChanged(result, {
     sessionKey: "agent:main:main",
@@ -168,16 +162,11 @@ test("sessions.changed removes a label when the event carries null", () => {
 });
 
 test("reconciling the same sessions.changed twice keeps result identity on the second pass", () => {
-  const result: SessionsListResult = {
-    ts: 1,
-    path: "",
-    count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 1 }],
-  };
+  const result = buildResult([{ key: "agent:main:main", kind: "direct", updatedAt: 1 }]);
   const payload = {
     sessionKey: "agent:main:main",
     reason: "patch",
+    catalogChanged: true,
     ts: 2,
     updatedAt: 2,
     label: "Renamed",
@@ -187,6 +176,7 @@ test("reconciling the same sessions.changed twice keeps result identity on the s
   expect(first.applied).toBe(true);
   expect(first.result).not.toBe(result);
   expect(first.result?.sessions[0]?.label).toBe("Renamed");
+  expect(first.result?.sessions[0]).not.toHaveProperty("catalogChanged");
   expect(first.result?.ts).toBe(2);
 
   // The capability handler and the chat page both drive the same event; the
@@ -199,34 +189,28 @@ test("reconciling the same sessions.changed twice keeps result identity on the s
 test("sessions.changed deletes every nested null tombstone, not a hand-kept list", () => {
   // The gateway tombstones more fields than the old per-field cascade knew
   // about; these five leaked literal null into rows typed optional-not-null.
-  const result: SessionsListResult = {
-    ts: 1,
-    path: "",
-    count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: [
-      {
-        key: "agent:main:main",
-        kind: "direct",
+  const result = buildResult([
+    {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 1,
+      toolOverrides: { profile: "coding" },
+      contextBudgetStatus: contextBudgetStatusFixture(),
+      agentStatus: { state: "needs_attention", message: "Reply requested" },
+      observerDigest: {
+        agentId: "main",
+        runId: "run-stale",
+        headline: "Waiting",
+        health: "needs_attention",
         updatedAt: 1,
-        toolOverrides: { profile: "coding" },
-        contextBudgetStatus: contextBudgetStatusFixture(),
-        agentStatus: { state: "needs_attention", message: "Reply requested" },
-        observerDigest: {
-          agentId: "main",
-          runId: "run-stale",
-          headline: "Waiting",
-          health: "needs_attention",
-          updatedAt: 1,
-          revision: 1,
-        },
-        controlOwnerSessionKey: "agent:main:owner",
-        restartRecoveryStatus: "pending",
-        goal: "ship it",
-        modelOverrideSource: "user",
-      } as never,
-    ],
-  };
+        revision: 1,
+      },
+      controlOwnerSessionKey: "agent:main:owner",
+      restartRecoveryStatus: "pending",
+      goal: "ship it",
+      modelOverrideSource: "user",
+    } as never,
+  ]);
 
   const reconciled = reconcileSessionChanged(result, {
     sessionKey: "agent:main:main",
@@ -481,12 +465,6 @@ test("ownerless raw-global events invalidate without contaminating the selected 
 describe("reconcileSessionChanged", () => {
   it.each([
     {
-      name: "inherited Medium",
-      thinkingDefault: "medium",
-      thinkingLevel: undefined,
-      levels: ["off", "medium"],
-    },
-    {
       name: "configured Off",
       thinkingDefault: "off",
       thinkingLevel: undefined,
@@ -547,38 +525,6 @@ describe("reconcileSessionChanged", () => {
       });
     },
   );
-
-  it("drops a cleared category from the merged row", () => {
-    const key = "agent:main:discord:channel:1";
-    const result = buildResult([
-      { key, kind: "group", updatedAt: 1, sessionId: "s1", category: "Research" },
-    ]);
-    const next = reconcileSessionChanged(result, {
-      sessionKey: key,
-      key,
-      kind: "group",
-      updatedAt: 2,
-      sessionId: "s1",
-      category: null,
-    });
-    expect(next.applied).toBe(true);
-    expect(next.row?.category).toBeUndefined();
-  });
-
-  it("applies an updated category to the merged row", () => {
-    const key = "agent:main:discord:channel:1";
-    const result = buildResult([{ key, kind: "group", updatedAt: 1, sessionId: "s1" }]);
-    const next = reconcileSessionChanged(result, {
-      sessionKey: key,
-      key,
-      kind: "group",
-      updatedAt: 2,
-      sessionId: "s1",
-      category: "Research",
-    });
-    expect(next.applied).toBe(true);
-    expect(next.row?.category).toBe("Research");
-  });
 
   it("replaces thinking metadata when the same model changes runtime", () => {
     const key = "agent:main:main";

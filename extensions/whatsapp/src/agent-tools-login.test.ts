@@ -22,11 +22,15 @@ function resolveRegisteredLoginTool(context: OpenClawPluginToolContext): AnyAgen
   const api = createTestPluginApi({ registerTool });
   registerWhatsAppLoginTool(api);
   const factory = registerTool.mock.calls[0]?.[0];
-  if (typeof factory !== "function") {
+  if (!factory || typeof factory === "function" || !("contextVersion" in factory)) {
     throw new Error("WhatsApp login tool factory was not registered");
   }
   expect(registerTool.mock.calls[0]?.[1]).toEqual({ name: "whatsapp_login" });
-  const tool = factory(context);
+  expect(factory.contextVersion).toBe(2);
+  const tool = factory.create({
+    ...context,
+    assertInvocationCurrent: context.assertInvocationCurrent ?? (() => {}),
+  });
   if (Array.isArray(tool)) {
     throw new Error("expected one WhatsApp login tool");
   }
@@ -70,6 +74,29 @@ describe("createWhatsAppLoginTool", () => {
       "WhatsApp login authority is no longer active",
     );
     expect(startWebLoginWithQrMock).toHaveBeenCalledOnce();
+  });
+
+  it("rechecks continuation ownership at credential persistence without waiting for abort", async () => {
+    let current = true;
+    const tool = createOwnerLoginTool({
+      senderIsOwner: true,
+      assertInvocationCurrent: () => {
+        if (!current) {
+          throw new Error("owner revoked");
+        }
+      },
+    });
+    let persist: (() => Promise<void>) | undefined;
+    startWebLoginWithQrMock.mockImplementationOnce(async (options) => {
+      persist = options?.beforeCredentialPersistence;
+      return { message: "login started" };
+    });
+    const controller = new AbortController();
+    await tool.execute("owner-login", { action: "start" }, controller.signal);
+    await expect(persist?.()).resolves.toBeUndefined();
+    current = false;
+    expect(controller.signal.aborted).toBe(false);
+    await expect(persist?.()).rejects.toThrow("owner revoked");
   });
 
   it("fully anchors the QR data URL pattern for grammar-constrained models", () => {

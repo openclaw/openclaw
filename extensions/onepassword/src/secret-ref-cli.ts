@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
   DEFAULT_SECRET_FILE_MAX_BYTES,
@@ -12,18 +13,17 @@ import { resolveTrustedOnePasswordCli } from "../onepassword-op-path.js";
 import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
 
 const ONEPASSWORD_PROVIDER_ALIAS = "onepassword";
-type PluginSecretRefSetupCli = ReturnType<typeof createPluginSecretRefSetupCli>;
 
 function normalizeOnePasswordSecretId(label: string, value: string): string {
   try {
     return encodeOnePasswordSecretId(value);
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = coerceErrorMessage(error);
     throw new Error(`Invalid ${label} 1Password SecretRef id: ${detail}`, { cause: error });
   }
 }
 
-const onePasswordSecretRefSetupCli: PluginSecretRefSetupCli = createPluginSecretRefSetupCli({
+const onePasswordSecretRefSetupCli = createPluginSecretRefSetupCli({
   productName: "1Password",
   secretIdLabel: "1Password SecretRef id",
   secretIdPlaceholder: "1password-secret-id",
@@ -71,10 +71,6 @@ type ReadinessDependencies = {
 
 function writeLine(message = ""): void {
   process.stdout.write(`${message}\n`);
-}
-
-function writeJson(value: unknown): void {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
 async function inspectSecretRefReadiness(
@@ -153,7 +149,7 @@ async function runStatus(
     issues,
   };
   if (options.json) {
-    writeJson(result);
+    writeLine(JSON.stringify(result, null, 2));
     return;
   }
   writeLine(

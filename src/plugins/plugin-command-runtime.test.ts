@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 const getCurrentPluginConversationBinding = vi.hoisted(() => vi.fn(async () => null));
 vi.mock("./conversation-binding.js", () => ({
@@ -415,10 +416,7 @@ describe("plugin command runtime", () => {
   it("defers full registry cleanup until an admitted command settles", async () => {
     const { registry, cleanup } = createCleanupRegistry("slow");
     let release!: () => void;
-    let entered!: () => void;
-    const started = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
+    const { promise: started, resolve: entered } = createDeferred();
     registerCommand(registry, {
       pluginId: "slow",
       name: "slow",
@@ -477,10 +475,7 @@ describe("plugin command runtime", () => {
 
   it("awaits cleanup from detached handler context after execution settles", async () => {
     const { registry, cleanup } = createCleanupRegistry("detached");
-    let releaseDetached!: () => void;
-    const detachedGate = new Promise<void>((resolve) => {
-      releaseDetached = resolve;
-    });
+    const { promise: detachedGate, resolve: releaseDetached } = createDeferred();
     let releaseCleanup!: () => void;
     cleanup.mockImplementationOnce(
       async () =>
@@ -522,10 +517,7 @@ describe("plugin command runtime", () => {
 
   it("does not reuse an outer admission for detached nested handler cleanup", async () => {
     const { registry } = createCleanupRegistry("nested");
-    let releaseDetached!: () => void;
-    const detachedGate = new Promise<void>((resolve) => {
-      releaseDetached = resolve;
-    });
+    const { promise: detachedGate, resolve: releaseDetached } = createDeferred();
     let detachedClear!: Promise<void>;
     registerCommand(registry, {
       pluginId: "inner",
@@ -538,14 +530,8 @@ describe("plugin command runtime", () => {
         return Promise.resolve({ text: "inner" });
       },
     });
-    let releaseOuter!: () => void;
-    const outerGate = new Promise<void>((resolve) => {
-      releaseOuter = resolve;
-    });
-    let outerHolding!: () => void;
-    const outerHoldingGate = new Promise<void>((resolve) => {
-      outerHolding = resolve;
-    });
+    const { promise: outerGate, resolve: releaseOuter } = createDeferred();
+    const { promise: outerHoldingGate, resolve: outerHolding } = createDeferred();
     const innerDispatchRef: { current?: PluginCommandDispatch } = {};
     registerCommand(registry, {
       pluginId: "outer",

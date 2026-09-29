@@ -1,46 +1,13 @@
 // @vitest-environment node
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { TestHost } from "./controller.test-support.ts";
 import { SubscriptionsController } from "./subscriptions-controller.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
-
-class TestHost implements ReactiveControllerHost {
-  readonly controllers: ReactiveController[] = [];
-  readonly requestUpdate = vi.fn();
-  readonly updateComplete = Promise.resolve(true);
-
-  addController(controller: ReactiveController): void {
-    this.controllers.push(controller);
-  }
-
-  removeController(controller: ReactiveController): void {
-    const index = this.controllers.indexOf(controller);
-    if (index !== -1) {
-      this.controllers.splice(index, 1);
-    }
-  }
-
-  connect(): void {
-    for (const controller of this.controllers) {
-      controller.hostConnected?.();
-    }
-  }
-
-  update(): void {
-    for (const controller of this.controllers) {
-      controller.hostUpdate?.();
-    }
-  }
-
-  disconnect(): void {
-    for (const controller of this.controllers) {
-      controller.hostDisconnected?.();
-    }
-  }
-}
 
 class TestSource {
   private listeners = new Set<() => void>();
@@ -62,6 +29,44 @@ class TestSource {
 }
 
 describe("SubscriptionsController", () => {
+  it.each(["replace", "disconnect"])("retires a queued frame on %s", (retirement) => {
+    const host = new TestHost();
+    const controller = new SubscriptionsController(host);
+    let source = new TestSource();
+    const commit = vi.fn();
+    const synchronize = vi.fn();
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+      frames.push(callback),
+    );
+    const cancelFrame = vi.fn();
+    vi.stubGlobal("cancelAnimationFrame", cancelFrame);
+    controller.watch(
+      () => source,
+      (next, notify) => next.subscribe(notify),
+      synchronize,
+      commit,
+    );
+    host.connect();
+    host.requestUpdate.mockClear();
+    synchronize.mockClear();
+
+    source.notify();
+    expect(synchronize).toHaveBeenCalledOnce();
+    expect(host.requestUpdate).not.toHaveBeenCalled();
+    expect(frames).toHaveLength(1);
+    if (retirement === "replace") {
+      source = new TestSource();
+      host.update();
+    } else {
+      host.disconnect();
+    }
+    expect(cancelFrame).toHaveBeenCalledWith(1);
+    expectDefined(frames[0], "retired render frame")(0);
+    expect(host.requestUpdate).not.toHaveBeenCalled();
+    expect(commit).not.toHaveBeenCalled();
+  });
+
   it("waits for a source, synchronizes once, and does not subscribe twice", () => {
     const host = new TestHost();
     const controller = new SubscriptionsController(host);

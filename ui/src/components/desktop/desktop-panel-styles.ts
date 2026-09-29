@@ -26,6 +26,27 @@ const desktopPanelStyles = css`
   .bp-icon[aria-disabled="true"] {
     opacity: 0.4;
   }
+  .desktop-toolbar-action > svg {
+    width: 15px;
+    height: 15px;
+  }
+  .desktop-audio-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .desktop-audio-button > svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+  }
+  .desktop-audio-button:disabled,
+  .desktop-audio-button[aria-disabled="true"] {
+    opacity: 0.5;
+  }
+  .desktop-touch-toolbar .desktop-audio-label {
+    display: none;
+  }
   .desktop-fullscreen-icon > svg {
     width: 15px;
     height: 15px;
@@ -50,6 +71,7 @@ const desktopPanelStyles = css`
     border-bottom: 1px solid var(--border, #262b34);
   }
   .desktop-toolbar--connection {
+    flex-wrap: wrap;
     min-height: 42px;
     gap: 12px;
   }

@@ -22,17 +22,77 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
     url: string;
     init?: RequestInit;
     signal?: AbortSignal;
-  }) => ({
-    response: await fetch(params.url, { ...params.init, signal: params.signal }),
-    finalUrl: params.url,
-    release: async () => {},
-  }),
+    beforeRequest?: () => void;
+  }) => {
+    params.beforeRequest?.();
+    return {
+      response: await fetch(params.url, { ...params.init, signal: params.signal }),
+      finalUrl: params.url,
+      release: async () => {},
+    };
+  },
 }));
 
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "synthetic-upload-fixture" } } };
 afterEach(() => vi.unstubAllEnvs());
 
 describe("Slack upload rate-limit recovery", () => {
+  it.each([
+    { stage: "upload URL", revokeAt: "start", expectedPaths: [] },
+    {
+      stage: "raw transfer",
+      revokeAt: "upload-url",
+      expectedPaths: ["/api/files.getUploadURLExternal"],
+    },
+    {
+      stage: "completion",
+      revokeAt: "raw-upload",
+      expectedPaths: ["/api/files.getUploadURLExternal", "/upload"],
+    },
+  ])("stops a revoked direct send before external $stage", async ({ revokeAt, expectedPaths }) => {
+    const paths: string[] = [];
+    let isLive = revokeAt !== "start";
+    let apiRoot = "";
+    for (const key of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"]) {
+      vi.stubEnv(key, undefined);
+    }
+    vi.stubEnv("NO_PROXY", "*");
+    await withServer(
+      (req, res) => {
+        paths.push(req.url ?? "");
+        req.resume();
+        if (req.url === "/api/files.getUploadURLExternal") {
+          isLive = revokeAt === "upload-url" ? false : isLive;
+          res.end(JSON.stringify({ ok: true, upload_url: `${apiRoot}/upload`, file_id: "F001" }));
+        } else if (req.url === "/upload") {
+          isLive = revokeAt === "raw-upload" ? false : isLive;
+          res.end("ok");
+        } else if (req.url === "/api/files.completeUploadExternal") {
+          res.end(JSON.stringify({ ok: true, files: [{ id: "F001" }] }));
+        } else {
+          res.writeHead(404);
+          res.end("unexpected route");
+        }
+      },
+      async (baseUrl) => {
+        apiRoot = baseUrl;
+        vi.stubEnv("SLACK_API_URL", `${baseUrl}/api/`);
+        await expect(
+          sendMessageSlack("channel:C123CHAN", "caption", {
+            cfg: SLACK_TEST_CFG,
+            mediaUrl: "/tmp/direct-upload.png",
+            assertDirectAdapterHandoff: () => {
+              if (!isLive) {
+                throw new Error("direct delivery is no longer active");
+              }
+            },
+          }),
+        ).rejects.toThrow();
+        expect(paths).toEqual(expectedPaths);
+      },
+    );
+  });
+
   it.each(["success", "socket", "http500"] as const)(
     "preserves upload dispatch after a completion rate limit followed by %s",
     async (terminal) => {

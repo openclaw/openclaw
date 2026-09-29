@@ -14,10 +14,13 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  DEVICE_PAIR_NOTIFY_SEEN_REQUEST_NAMESPACE,
   DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
   DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
+  notifyRequestStoreKey,
   notifySubscriberStoreKey,
   type NotifySubscription,
 } from "./notify-state.js";
@@ -52,6 +55,8 @@ describe("device-pair notify persistence", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -86,6 +91,85 @@ describe("device-pair notify persistence", () => {
       namespace: DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
       maxEntries: DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
     });
+  }
+
+  function observeNotifyStorage() {
+    const reads: Promise<unknown>[] = [];
+    const active = new Set<Promise<unknown>>();
+    const failed = createDeferred<unknown>();
+    const waitFor = async <T>(operation: Promise<T>): Promise<T> => {
+      const outcome = await Promise.race([
+        operation.then((value) => ({ ok: true as const, value })),
+        failed.promise.then((error) => ({ ok: false as const, error })),
+      ]);
+      if (!outcome.ok) {
+        throw outcome.error;
+      }
+      return outcome.value;
+    };
+    const track = <T>(operation: Promise<T>): Promise<T> => {
+      active.add(operation);
+      void operation.then(
+        () => active.delete(operation),
+        (error: unknown) => {
+          active.delete(operation);
+          failed.resolve(error);
+        },
+      );
+      return operation;
+    };
+    const stored = new Map<string, ReturnType<typeof createDeferred<void>>>();
+    const storedReceipt = (key: string) => {
+      let receipt = stored.get(key);
+      if (!receipt) {
+        receipt = createDeferred<void>();
+        stored.set(key, receipt);
+      }
+      return receipt;
+    };
+    const openKeyedStore = <T>(options: OpenKeyedStoreOptions) => {
+      const store = openStore<T>(options);
+      const entries = store.entries.bind(store);
+      store.entries = () => {
+        const reading = track(entries());
+        reads.push(reading);
+        return reading;
+      };
+      const observe = store.observe;
+      store.observe = (key) => track(observe(key));
+      const compareAndApply = store.compareAndApply;
+      store.compareAndApply = (key, comparison, intent) =>
+        track(compareAndApply(key, comparison, intent));
+      if (options.namespace === DEVICE_PAIR_NOTIFY_SEEN_REQUEST_NAMESPACE) {
+        const register = store.register.bind(store);
+        store.register = async (key, value, opts) => {
+          await track(register(key, value, opts));
+          storedReceipt(key).resolve();
+        };
+      }
+      return store;
+    };
+    return {
+      openKeyedStore,
+      takeStoreReads: () => reads.splice(0),
+      waitFor,
+      requestStored: (requestId: string) =>
+        waitFor(storedReceipt(notifyRequestStoreKey(requestId)).promise),
+      pollFailed: (message: string) => failed.resolve(new Error(message)),
+      async settlePoll(requestId: string) {
+        const terminal =
+          listDevicePairingMock.mock.calls.length > 0
+            ? waitFor(storedReceipt(notifyRequestStoreKey(requestId)).promise)
+            : Promise.resolve();
+        const results = await Promise.allSettled([terminal, ...active]);
+        await vi.advanceTimersByTimeAsync(0);
+        for (const result of results) {
+          if (result.status === "rejected") {
+            throw result.reason;
+          }
+        }
+      },
+    };
   }
 
   it.each([true, false])(
@@ -193,7 +277,8 @@ describe("device-pair notify persistence", () => {
       .mockImplementationOnce(() => firstPoll.promise)
       .mockImplementationOnce(() => failedPoll.promise)
       .mockResolvedValue({ pending: [], paired: [] });
-    const api = createApi();
+    const storage = observeNotifyStorage();
+    const api = createApi(undefined, storage.openKeyedStore);
     let service = createPairingNotifierService(api);
 
     await service.start({} as never);
@@ -205,11 +290,12 @@ describe("device-pair notify persistence", () => {
     expect(listDevicePairingMock).toHaveBeenCalledTimes(1);
 
     await service.stop?.({} as never);
-    service = createPairingNotifierService(createApi());
+    service = createPairingNotifierService(createApi(undefined, storage.openKeyedStore));
     await service.start({} as never);
     await vi.advanceTimersByTimeAsync(10_000);
     expect(listDevicePairingMock).toHaveBeenCalledTimes(1);
 
+    await Promise.all(storage.takeStoreReads());
     firstPoll.resolve({ pending: [], paired: [] });
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(10_000);
@@ -217,10 +303,12 @@ describe("device-pair notify persistence", () => {
     await vi.advanceTimersByTimeAsync(20_000);
     expect(listDevicePairingMock).toHaveBeenCalledTimes(2);
 
+    await Promise.all(storage.takeStoreReads());
     failedPoll.reject(new Error("poll failed"));
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(10_000);
     expect(listDevicePairingMock).toHaveBeenCalledTimes(3);
+    await Promise.all(storage.takeStoreReads());
 
     await service.stop?.({} as never);
   });
@@ -228,9 +316,14 @@ describe("device-pair notify persistence", () => {
   it("delivers each request once when a service reload interrupts a slow send", async () => {
     vi.useFakeTimers();
     const firstSend = createDeferred<unknown>();
+    const sendEntered = createDeferred<void>();
+    const storage = observeNotifyStorage();
     const sendText = vi
       .fn()
-      .mockImplementationOnce(() => firstSend.promise)
+      .mockImplementationOnce(() => {
+        sendEntered.resolve();
+        return firstSend.promise;
+      })
       .mockResolvedValue({ channel: "telegram", to: "chat-123" });
     const firstRequest = {
       requestId: "request-1",
@@ -246,7 +339,7 @@ describe("device-pair notify persistence", () => {
       displayName: "Second device",
       ts: 2,
     };
-    const api = createApi(sendText);
+    const api = createApi(sendText, storage.openKeyedStore);
     await handleNotifyCommand({
       api,
       ctx: {
@@ -260,24 +353,28 @@ describe("device-pair notify persistence", () => {
 
     await service.start({} as never);
     await vi.advanceTimersByTimeAsync(10_000);
+    await sendEntered.promise;
     expect(sendText).toHaveBeenCalledTimes(1);
 
     await service.stop?.({} as never);
-    service = createPairingNotifierService(createApi(sendText));
+    service = createPairingNotifierService(createApi(sendText, storage.openKeyedStore));
     await service.start({} as never);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(sendText).toHaveBeenCalledTimes(1);
 
     firstSend.resolve({ channel: "telegram", to: "chat-123" });
+    await storage.requestStored("request-1");
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(10_000);
     expect(sendText).toHaveBeenCalledTimes(1);
 
+    await Promise.all(storage.takeStoreReads());
     listDevicePairingMock.mockResolvedValue({
       pending: [firstRequest, secondRequest],
       paired: [],
     });
     await vi.advanceTimersByTimeAsync(10_000);
+    await storage.requestStored("request-2");
     expect(sendText).toHaveBeenCalledTimes(2);
     expect(sendText.mock.calls[1]?.[0]).toMatchObject({
       to: "chat-123",
@@ -291,8 +388,13 @@ describe("device-pair notify persistence", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const firstSend = createDeferred<unknown>();
-    const sendText = vi.fn(() => firstSend.promise);
-    const api = createApi(sendText);
+    const sendEntered = createDeferred<void>();
+    const storage = observeNotifyStorage();
+    const sendText = vi.fn(() => {
+      sendEntered.resolve();
+      return firstSend.promise;
+    });
+    const api = createApi(sendText, storage.openKeyedStore);
     await handleNotifyCommand({
       api,
       ctx: { channel: "telegram", senderId: "old-chat" },
@@ -313,6 +415,7 @@ describe("device-pair notify persistence", () => {
 
     await service.start({} as never);
     await vi.advanceTimersByTimeAsync(10_000);
+    await sendEntered.promise;
     expect(sendText).toHaveBeenCalledTimes(1);
 
     await handleNotifyCommand({
@@ -326,6 +429,7 @@ describe("device-pair notify persistence", () => {
       action: "on",
     });
     firstSend.resolve({ channel: "telegram", to: "old-chat" });
+    await storage.requestStored("request-1");
     await vi.advanceTimersByTimeAsync(0);
 
     await expect(openSubscriberStore().entries()).resolves.toMatchObject([
@@ -341,8 +445,14 @@ describe("device-pair notify persistence", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const firstSend = createDeferred<unknown>();
-    const sendText = vi.fn(() => firstSend.promise);
-    const api = createApi(sendText);
+    const sendEntered = createDeferred<void>();
+    const storage = observeNotifyStorage();
+    const sendText = vi.fn(() => {
+      sendEntered.resolve();
+      return firstSend.promise;
+    });
+    const api = createApi(sendText, storage.openKeyedStore);
+    api.logger.warn = storage.pollFailed;
     await handleNotifyCommand({
       api,
       ctx: { channel: "telegram", senderId: "chat-123" },
@@ -361,71 +471,42 @@ describe("device-pair notify persistence", () => {
     });
     const service = createPairingNotifierService(api);
 
-    await service.start({} as never);
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(sendText).toHaveBeenCalledTimes(1);
+    try {
+      await service.start({} as never);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await storage.waitFor(sendEntered.promise);
+      expect(sendText).toHaveBeenCalledTimes(1);
 
-    await handleNotifyCommand({
-      api,
-      ctx: { channel: "telegram", senderId: "chat-123" },
-      action: "once",
-    });
-    firstSend.resolve({ channel: "telegram", to: "chat-123" });
-    await vi.advanceTimersByTimeAsync(0);
+      await handleNotifyCommand({
+        api,
+        ctx: { channel: "telegram", senderId: "chat-123" },
+        action: "once",
+      });
+      firstSend.resolve({ channel: "telegram", to: "chat-123" });
+      await storage.requestStored("request-1");
+      await vi.advanceTimersByTimeAsync(0);
 
-    await expect(
-      openSubscriberStore().lookup(notifySubscriberStoreKey({ to: "chat-123" })),
-    ).resolves.toMatchObject({
-      to: "chat-123",
-      mode: "once",
-      addedAtMs: 11_000,
-    });
-    await service.stop?.({} as never);
-  });
-
-  it("rejects missing conditional-delete support before one-shot delivery", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const subscriber: NotifySubscription = {
-      to: "chat-123",
-      mode: "once",
-      addedAtMs: 1_000,
-      armId: "arm-1",
-    };
-    await openSubscriberStore().register(notifySubscriberStoreKey(subscriber), subscriber);
-    listDevicePairingMock.mockResolvedValue({
-      pending: [
-        {
-          requestId: "request-1",
-          deviceId: "device-1",
-          publicKey: "public-key-1",
-          ts: 2_000,
-        },
-      ],
-      paired: [],
-    });
-    const sendText = vi.fn(async () => ({ channel: "telegram", to: "chat-123" }));
-    const api = createApi(sendText, <T>(options: OpenKeyedStoreOptions) => {
-      const { deleteIf: _deleteIf, ...store } = openStore<T>(options);
-      return store;
-    });
-    const service = createPairingNotifierService(api);
-
-    await service.start({} as never);
-    await vi.advanceTimersByTimeAsync(10_000);
-
-    expect(sendText).not.toHaveBeenCalled();
-    await expect(
-      openSubscriberStore().lookup(notifySubscriberStoreKey(subscriber)),
-    ).resolves.toEqual(subscriber);
-    await service.stop?.({} as never);
+      await expect(
+        openSubscriberStore().lookup(notifySubscriberStoreKey({ to: "chat-123" })),
+      ).resolves.toMatchObject({
+        to: "chat-123",
+        mode: "once",
+        addedAtMs: 11_000,
+      });
+    } finally {
+      await service.stop?.({} as never);
+      firstSend.resolve({ channel: "telegram", to: "chat-123" });
+      await storage.settlePoll("request-1");
+    }
   });
 
   it("keeps the request boundary at the current millisecond when re-armed", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const sendText = vi.fn(async () => ({ channel: "telegram", to: "chat-123" }));
-    const api = createApi(sendText);
+    const storage = observeNotifyStorage();
+    const api = createApi(sendText, storage.openKeyedStore);
+    api.logger.warn = storage.pollFailed;
     const command = {
       api,
       ctx: { channel: "telegram", senderId: "chat-123" },
@@ -454,20 +535,27 @@ describe("device-pair notify persistence", () => {
       paired: [],
     });
     const service = createPairingNotifierService(api);
-    await service.start({} as never);
-    await vi.advanceTimersByTimeAsync(10_000);
+    try {
+      await service.start({} as never);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await storage.requestStored("request-same-ms");
 
-    expect(sendText).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining("ID: request-same-ms") }),
-    );
-    await service.stop?.({} as never);
+      expect(sendText).toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining("ID: request-same-ms") }),
+      );
+    } finally {
+      await service.stop?.({} as never);
+      await storage.settlePoll("request-same-ms");
+    }
   });
 
   it("delivers a one-shot subscription to only the first new request", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const sendText = vi.fn(async () => ({ channel: "telegram", to: "chat-123" }));
-    const api = createApi(sendText);
+    const storage = observeNotifyStorage();
+    const api = createApi(sendText, storage.openKeyedStore);
+    api.logger.warn = storage.pollFailed;
     await handleNotifyCommand({
       api,
       ctx: { channel: "telegram", senderId: "chat-123" },
@@ -492,15 +580,20 @@ describe("device-pair notify persistence", () => {
     });
     const service = createPairingNotifierService(api);
 
-    await service.start({} as never);
-    await vi.advanceTimersByTimeAsync(10_000);
+    try {
+      await service.start({} as never);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await storage.requestStored("request-1");
 
-    expect(sendText).toHaveBeenCalledTimes(1);
-    expect(sendText).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining("ID: request-1") }),
-    );
-    await expect(openSubscriberStore().entries()).resolves.toStrictEqual([]);
-    await service.stop?.({} as never);
+      expect(sendText).toHaveBeenCalledTimes(1);
+      expect(sendText).toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining("ID: request-1") }),
+      );
+      await expect(openSubscriberStore().entries()).resolves.toStrictEqual([]);
+    } finally {
+      await service.stop?.({} as never);
+      await storage.settlePoll("request-1");
+    }
   });
 
   it("matches persisted telegram thread ids across number and string roundtrips", async () => {

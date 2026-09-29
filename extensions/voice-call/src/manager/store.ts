@@ -1,4 +1,3 @@
-// Voice Call plugin module implements store behavior.
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -428,13 +427,6 @@ export async function loadActiveCallsFromStore(
     calls = stores ? await readCallRecordEvents(stores) : [];
   } catch (err) {
     console.error("[voice-call] Failed to read SQLite call records:", err);
-  }
-  if (calls.length === 0) {
-    return {
-      activeCalls: new Map(),
-      providerCallIdMap: new Map(),
-      processedEventIds: new Set(),
-    };
   }
   const callMap = new Map<CallId, CallRecord>();
   for (const call of calls) {

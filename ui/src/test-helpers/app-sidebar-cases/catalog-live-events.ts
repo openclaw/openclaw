@@ -15,7 +15,7 @@ describe("AppSidebar session catalog pagination", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
-          features: { methods: ["sessions.catalog.list"] },
+          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar } = await mountSidebar(
@@ -39,14 +39,14 @@ describe("AppSidebar session catalog pagination", () => {
     }
   });
 
-  it("keeps the scheduled freshness poll when a visible page receives focus", async () => {
+  it("keeps the scheduled safety refresh when a visible page receives focus", async () => {
     vi.useFakeTimers();
     try {
       const request = vi.fn().mockResolvedValue(catalogPage([]));
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
-          features: { methods: ["sessions.catalog.list"] },
+          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar } = await mountSidebar(
@@ -62,7 +62,9 @@ describe("AppSidebar session catalog pagination", () => {
       await vi.advanceTimersByTimeAsync(50);
       expect(request).toHaveBeenCalledOnce();
 
-      await vi.advanceTimersByTimeAsync(29_950);
+      await vi.advanceTimersByTimeAsync(10 * 60_000 - 51);
+      expect(request).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
       expect(request).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
@@ -70,7 +72,7 @@ describe("AppSidebar session catalog pagination", () => {
   });
 
   it.each(
-    (["tab return", "node presence"] as const).flatMap((activation) =>
+    (["tab return", "catalog change"] as const).flatMap((activation) =>
       [false, true].map((discovery) => ({ activation, discovery })),
     ),
   )(
@@ -99,7 +101,7 @@ describe("AppSidebar session catalog pagination", () => {
         const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
         gateway.publish({
           hello: {
-            features: { methods: ["sessions.catalog.list"] },
+            features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
           } as ApplicationGatewaySnapshot["hello"],
         });
         const { sidebar } = await mountSidebar(
@@ -117,11 +119,9 @@ describe("AppSidebar session catalog pagination", () => {
           visibility = "visible";
           document.dispatchEvent(new Event("visibilitychange"));
         } else {
-          gateway.publishEvent("presence", {
-            presence: [{ deviceId: "new-node", mode: "node", reason: "connect" }],
-          });
+          gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
         }
-        await vi.advanceTimersByTimeAsync(50);
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(request).toHaveBeenCalledOnce();
 
         pending.resolve(catalogPage([], discovery ? "page-2" : undefined));
@@ -140,6 +140,10 @@ describe("AppSidebar session catalog pagination", () => {
           await vi.advanceTimersByTimeAsync(0);
           await sidebar.updateComplete;
         }
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(fullScans).toBe(1);
+        await vi.advanceTimersByTimeAsync(1);
+        await sidebar.updateComplete;
         expect(fullScans).toBe(2);
         expect(sidebar.textContent).toContain("Newly available session");
       } finally {
@@ -160,7 +164,7 @@ describe("AppSidebar session catalog pagination", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
-          features: { methods: ["sessions.catalog.list"] },
+          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar } = await mountSidebar(
@@ -176,7 +180,7 @@ describe("AppSidebar session catalog pagination", () => {
       visibility = "visible";
       document.dispatchEvent(new Event("visibilitychange"));
       globalThis.dispatchEvent(new Event("focus"));
-      await vi.advanceTimersByTimeAsync(49);
+      await vi.advanceTimersByTimeAsync(4_999);
       expect(request).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1);
       expect(request).toHaveBeenCalledTimes(2);
@@ -203,7 +207,7 @@ describe("AppSidebar session catalog pagination", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
-          features: { methods: ["sessions.catalog.list"] },
+          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar } = await mountSidebar(
@@ -226,7 +230,7 @@ describe("AppSidebar session catalog pagination", () => {
       visibility = "visible";
       document.dispatchEvent(new Event("visibilitychange"));
       globalThis.dispatchEvent(new Event("focus"));
-      await vi.advanceTimersByTimeAsync(49);
+      await vi.advanceTimersByTimeAsync(4_999);
       expect(request).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1);
       expect(request).toHaveBeenCalledTimes(2);
@@ -253,7 +257,7 @@ describe("AppSidebar session catalog pagination", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
-          features: { methods: ["sessions.catalog.list"] },
+          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar } = await mountSidebar(
@@ -272,7 +276,7 @@ describe("AppSidebar session catalog pagination", () => {
       gateway.publish({
         phase: "connected",
         hello: {
-          features: { methods: ["sessions.catalog.list"] },
+          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       await sidebar.updateComplete;
@@ -282,7 +286,7 @@ describe("AppSidebar session catalog pagination", () => {
       visibility = "visible";
       document.dispatchEvent(new Event("visibilitychange"));
       globalThis.dispatchEvent(new Event("focus"));
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(request).toHaveBeenCalledTimes(2);
       foregroundRequest.resolve(catalogPage([]));
       await vi.advanceTimersByTimeAsync(0);
@@ -292,7 +296,7 @@ describe("AppSidebar session catalog pagination", () => {
     }
   });
 
-  it("does not poll an older Gateway that does not advertise session catalogs", async () => {
+  it("does not refresh when the Gateway does not advertise session catalogs", async () => {
     vi.useFakeTimers();
     try {
       const request = vi.fn().mockResolvedValue(catalogPage([]));
@@ -306,13 +310,8 @@ describe("AppSidebar session catalog pagination", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       globalThis.dispatchEvent(new Event("focus"));
-      gateway.publishEvent("presence", {
-        presence: [{ deviceId: "node-1", mode: "node", reason: "connect" }],
-      });
-      gateway.publishEvent("presence", {
-        presence: [{ deviceId: "node-1", mode: "node", reason: "disconnect" }],
-      });
-      await vi.advanceTimersByTimeAsync(30_000);
+      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
 
       expect(request).not.toHaveBeenCalled();
     } finally {

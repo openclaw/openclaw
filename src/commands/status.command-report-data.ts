@@ -1,7 +1,3 @@
-// Builds the data model for the standard `openclaw status` text report.
-// It converts scan/runtime state into table rows and section lines before rendering.
-
-import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import type { ConnectPairingRequiredReason } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { renderTable, type TableColumn } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -18,7 +14,8 @@ import { formatPluginCompatibilityNotice } from "../plugins/status-compatibility
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { SecurityAuditReport } from "../security/audit.js";
 import { readBackupRunFreshness } from "../state/backup-run-records.js";
-import type { StatusSummary } from "../status/types.js";
+import type { MemoryPluginStatus } from "../status/memory-plugin.js";
+import type { StatusSummary } from "../status/summary.js";
 import { formatHealthChannelLines } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
 import {
@@ -27,7 +24,6 @@ import {
 } from "./status-all/channels-table.js";
 import { buildStatusCommandOverviewRows } from "./status-overview-rows.ts";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
-import type { AgentLocalStatus } from "./status.agent-local.js";
 import {
   buildStatusFooterLines,
   buildStatusHealthRows,
@@ -46,10 +42,9 @@ import {
   formatTokensCompact,
   shortenText,
 } from "./status.format.js";
-import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
+import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
 import { formatUpdateAvailableHint } from "./status.update.js";
 
-/** Builds all table rows, section lines, and footer data needed by the status report renderer. */
 export async function buildStatusCommandReportData(params: {
   env: NodeJS.ProcessEnv;
   opts: {
@@ -63,12 +58,7 @@ export async function buildStatusCommandReportData(params: {
   health?: HealthSummary;
   usageLines?: string[];
   lastHeartbeat: HeartbeatEventPayload | null;
-  agentStatus: {
-    defaultId?: string | null;
-    bootstrapPendingCount: number;
-    totalSessions: number;
-    agents: AgentLocalStatus[];
-  };
+  agentStatus: Parameters<typeof buildStatusCommandOverviewRows>[0]["agentStatus"];
   channels: {
     rows: Array<Parameters<typeof buildStatusChannelsTableRows>[0]["rows"][number]>;
   };
@@ -136,27 +126,12 @@ export async function buildStatusCommandReportData(params: {
         ),
         theme.muted(`Deep probe: ${formatCliCommand("openclaw status --deep")}`),
       ];
-  const retainedLost = params.summary.taskAuditRetainedLost;
-  // Lost task retention is operational noise unless the user requested deep/verbose status.
-  const retainedLostLine =
-    (params.opts.deep || params.opts.verbose) && retainedLost && retainedLost.count > 0
-      ? theme.muted(
-          `${retainedLost.count} lost task${retainedLost.count === 1 ? "" : "s"} retained until ${timestampMsToIsoString(retainedLost.nextCleanupAfter) ?? "cleanupAfter"}`,
-        )
-      : null;
-
   return {
     heading: theme.heading,
     muted: theme.muted,
     renderTable,
     width: params.tableWidth,
     overviewRows,
-    showTaskMaintenanceHint: params.summary.taskAudit.errors > 0,
-    taskMaintenanceHint: `Task maintenance: ${formatCliCommand("openclaw tasks maintenance --apply")}`,
-    taskRegistryMigrationHint: params.summary.tasks.warning
-      ? theme.warn(params.summary.tasks.warning)
-      : null,
-    retainedLostTaskLine: retainedLostLine,
     pluginCompatibilityLines: buildStatusPluginCompatibilityLines({
       notices: params.pluginCompatibility,
       formatNotice: formatPluginCompatibilityNotice,
@@ -221,6 +196,7 @@ export async function buildStatusCommandReportData(params: {
       formatCliCommand,
       nodeOnlyGateway: params.surface.nodeOnlyGateway,
       gatewayReachable: params.surface.gatewayReachable,
+      gatewayStartupPhase: params.surface.gatewayProbe?.startupPhase,
     }),
   };
 }

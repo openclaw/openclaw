@@ -1,6 +1,5 @@
-/**
- * Builds runtime context for context-engine backed embedded compaction.
- */
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ThinkLevel, ThinkingCatalogEntry } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -24,7 +23,6 @@ import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
-import { readAgentModelContextTokens } from "./model-context-tokens.js";
 import { normalizeContextTokenBudget } from "./utils.js";
 
 type EmbeddedCompactionRuntimeContextParams = Omit<
@@ -171,10 +169,10 @@ export function resolveEmbeddedCompactionTarget(params: {
     return assembleTarget(inferredLiteralProvider, override);
   }
   const defaultProvider = provider || DEFAULT_PROVIDER;
-  const aliasKey = normalizeCompactionConfigKey(splitTrailingAuthProfile(override).model);
+  const aliasKey = normalizeLowercaseStringOrEmpty(splitTrailingAuthProfile(override).model);
   // Unrelated aliases must not cold-load provider runtime for a literal override.
   const alias = listModelAliasCandidates(config).some(
-    ({ alias: candidate }) => normalizeCompactionConfigKey(candidate) === aliasKey,
+    ({ alias: candidate }) => normalizeLowercaseStringOrEmpty(candidate) === aliasKey,
   )
     ? buildModelAliasIndex({
         cfg: config,
@@ -212,17 +210,13 @@ export function resolveCompactionTargetRuntime(
   };
 }
 
-function normalizeCompactionConfigKey(value: string): string {
-  return value.trim().toLowerCase();
-}
-
 function hasBareConfiguredModelForProvider(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
 }): boolean {
-  const providerKey = normalizeCompactionConfigKey(params.provider);
-  const modelKey = normalizeCompactionConfigKey(params.model);
+  const providerKey = normalizeLowercaseStringOrEmpty(params.provider);
+  const modelKey = normalizeLowercaseStringOrEmpty(params.model);
   if (!providerKey || !modelKey || params.model.includes("/")) {
     return false;
   }
@@ -234,18 +228,18 @@ function hasBareConfiguredModelForProvider(params: {
     const rawProvider = rawRef.slice(0, slashIdx);
     const rawModel = rawRef.slice(slashIdx + 1);
     if (
-      normalizeCompactionConfigKey(rawProvider) === providerKey &&
-      normalizeCompactionConfigKey(rawModel) === modelKey
+      normalizeLowercaseStringOrEmpty(rawProvider) === providerKey &&
+      normalizeLowercaseStringOrEmpty(rawModel) === modelKey
     ) {
       return true;
     }
   }
-  const configuredProvider = Object.entries(params.cfg.models?.providers ?? {}).find(([key]) => {
-    return normalizeCompactionConfigKey(key) === providerKey;
-  })?.[1];
-  return (configuredProvider?.models ?? []).some((entry) => {
-    return normalizeCompactionConfigKey(entry?.id ?? "") === modelKey;
-  });
+  const configuredProvider = Object.entries(params.cfg.models?.providers ?? {}).find(
+    ([key]) => normalizeLowercaseStringOrEmpty(key) === providerKey,
+  )?.[1];
+  return (configuredProvider?.models ?? []).some(
+    (entry) => normalizeLowercaseStringOrEmpty(entry?.id ?? "") === modelKey,
+  );
 }
 
 /** Resolves the concrete harness already bound to this exact compaction target. */
@@ -278,13 +272,11 @@ export function resolveCompactionHarnessRuntime(params: {
   return normalizeOptionalAgentRuntimeId(params.configuredHarnessRuntime);
 }
 
-/** Resolves the shared policy, target, and harness ownership for either compaction entry point. */
 export function resolveCompactionContextTokenBudget(params: {
   config?: OpenClawConfig;
   provider: string;
   modelId: string;
   model?: ProviderRuntimeModel;
-  agentId?: string;
   requestedTokenBudget?: number;
   fallbackTokenBudget?: number;
 }) {
@@ -295,7 +287,7 @@ export function resolveCompactionContextTokenBudget(params: {
         cfg: params.config,
         provider: params.provider,
         modelId: params.modelId,
-        modelContextTokens: readAgentModelContextTokens(params.model),
+        modelContextTokens: asFiniteNumber(params.model?.contextTokens),
         modelContextWindow: params.model?.contextWindow,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
       }).tokens,

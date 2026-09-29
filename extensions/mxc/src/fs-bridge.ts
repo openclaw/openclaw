@@ -14,10 +14,7 @@ import {
 } from "openclaw/plugin-sdk/sandbox";
 import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeMxcPathForComparison } from "./path-comparison.js";
-import {
-  resolveMxcReadOnlySkillMounts,
-  type MxcReadOnlySkillMount,
-} from "./workspace-skill-mounts.js";
+import { resolveMxcReadOnlySkillMounts } from "./workspace-skill-mounts.js";
 
 type MxcFsBridgeContext = Parameters<
   NonNullable<SandboxBackendHandle["createFsBridge"]>
@@ -71,6 +68,10 @@ class MxcFsBridge implements SandboxFsBridge {
     };
   }
 
+  get pathMappings(): NonNullable<SandboxFsBridge["pathMappings"]> {
+    return [...this.protectedSkillMounts, ...this.workspaceMounts];
+  }
+
   async readFile(params: { filePath: string; cwd?: string; maxBytes?: number }): Promise<Buffer> {
     const target = this.resolveTarget(params);
     return (await (
@@ -90,13 +91,7 @@ class MxcFsBridge implements SandboxFsBridge {
     return entries.map(({ name, isDirectory }) => ({ name, isDirectory }));
   }
 
-  async writeFile(params: {
-    filePath: string;
-    cwd?: string;
-    data: Buffer | string;
-    encoding?: BufferEncoding;
-    mkdir?: boolean;
-  }): Promise<void> {
+  async writeFile(params: Parameters<SandboxFsBridge["writeFile"]>[0]): Promise<void> {
     const target = this.resolveTarget(params);
     this.ensureWritable(target, "write files");
     const buffer = Buffer.isBuffer(params.data)
@@ -109,13 +104,9 @@ class MxcFsBridge implements SandboxFsBridge {
     });
   }
 
-  async createFileExclusive(params: {
-    filePath: string;
-    cwd?: string;
-    data: Buffer | string;
-    encoding?: BufferEncoding;
-    mkdir?: boolean;
-  }): Promise<"created" | "exists"> {
+  async createFileExclusive(
+    params: Parameters<NonNullable<SandboxFsBridge["createFileExclusive"]>>[0],
+  ): Promise<"created" | "exists"> {
     const target = this.resolveTarget(params);
     this.ensureWritable(target, "create files");
     const buffer = Buffer.isBuffer(params.data)
@@ -145,12 +136,7 @@ class MxcFsBridge implements SandboxFsBridge {
     await (await fsRoot(target.mount.hostRoot)).mkdir(target.mountRelativePath);
   }
 
-  async remove(params: {
-    filePath: string;
-    cwd?: string;
-    recursive?: boolean;
-    force?: boolean;
-  }): Promise<void> {
+  async remove(params: Parameters<SandboxFsBridge["remove"]>[0]): Promise<void> {
     const target = this.resolveTarget(params);
     this.ensureWritable(target, "remove files");
     await removePathWithinRoot({
@@ -246,22 +232,10 @@ function resolveWorkspaceMounts(sandbox: MxcFsBridgeContext): readonly MxcFsMoun
   const containerRoot = path.resolve(sandbox.containerWorkdir);
   const workspaceDir = path.resolve(sandbox.workspaceDir);
   const agentWorkspaceDir = path.resolve(sandbox.agentWorkspaceDir);
-  const mounts: MxcFsMount[] =
-    sandbox.workspaceAccess === "rw"
-      ? [
-          {
-            hostRoot: agentWorkspaceDir,
-            containerRoot,
-            writable: true,
-          },
-        ]
-      : [
-          {
-            hostRoot: workspaceDir,
-            containerRoot,
-            writable: false,
-          },
-        ];
+  const writable = sandbox.workspaceAccess === "rw";
+  const mounts: MxcFsMount[] = [
+    { hostRoot: writable ? agentWorkspaceDir : workspaceDir, containerRoot, writable },
+  ];
 
   if (
     sandbox.workspaceAccess === "ro" &&
@@ -284,16 +258,12 @@ function resolveMxcProtectedSkillMounts(sandbox: MxcFsBridgeContext): readonly M
       skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
       workdir: sandbox.containerWorkdir,
       workspaceAccess: sandbox.workspaceAccess,
-    }).map(normalizeMxcProtectedSkillMount),
+    }).map((mount) => ({
+      hostRoot: path.resolve(mount.hostPath),
+      containerRoot: path.resolve(mount.containerPath),
+      writable: false,
+    })),
   );
-}
-
-function normalizeMxcProtectedSkillMount(mount: MxcReadOnlySkillMount): MxcFsMount {
-  return {
-    hostRoot: path.resolve(mount.hostPath),
-    containerRoot: path.resolve(mount.containerPath),
-    writable: false,
-  };
 }
 
 function dedupeAndSortMounts(mounts: readonly MxcFsMount[]): readonly MxcFsMount[] {

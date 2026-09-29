@@ -240,33 +240,55 @@ describe("plugin registry Control UI descriptors", () => {
     );
   });
 
-  it("accepts trusted dashboard widget descriptors", () => {
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({ id: "workboard", name: "Workboard" }),
-      register(api) {
-        api.session.controls.registerControlUiDescriptor({
-          surface: "widget",
-          id: "card",
-          label: "Workboard card",
-          requiredScopes: ["operator.read"],
-        });
-      },
-    });
-
-    expect(registry.registry.controlUiDescriptors).toEqual([
-      expect.objectContaining({
-        pluginId: "workboard",
-        descriptor: expect.objectContaining({
-          id: "card",
-          surface: "widget",
-          label: "Workboard card",
+  it.each([
+    { uiCapabilities: undefined, warns: false },
+    { uiCapabilities: [], warns: true },
+    { uiCapabilities: ["widget", "panel"] as const, warns: false },
+  ])(
+    "keeps widget registration working and diagnoses declaration drift: $uiCapabilities",
+    ({ uiCapabilities, warns }) => {
+      const { config, registry } = createPluginRegistryFixture();
+      registerTestPlugin({
+        registry,
+        config,
+        record: createPluginRecord({
+          id: "workboard",
+          name: "Workboard",
+          uiCapabilities: uiCapabilities ? [...uiCapabilities] : undefined,
         }),
-      }),
-    ]);
-  });
+        register(api) {
+          api.session.controls.registerControlUiDescriptor({
+            surface: "widget",
+            id: "card",
+            label: "Workboard card",
+            requiredScopes: ["operator.read"],
+          });
+        },
+      });
+
+      expect(registry.registry.diagnostics.filter((entry) => entry.level === "warn")).toEqual(
+        warns
+          ? [
+              expect.objectContaining({
+                pluginId: "workboard",
+                message:
+                  'Registered UI capability "widget" is missing from uiCapabilities in openclaw.plugin.json.',
+              }),
+            ]
+          : [],
+      );
+      expect(registry.registry.controlUiDescriptors).toEqual([
+        expect.objectContaining({
+          pluginId: "workboard",
+          descriptor: expect.objectContaining({
+            id: "card",
+            surface: "widget",
+            label: "Workboard card",
+          }),
+        }),
+      ]);
+    },
+  );
 
   it("rejects protocol-relative tab paths that would iframe external content", () => {
     for (const path of ["//attacker.example/panel", "/\\attacker.example/panel"]) {

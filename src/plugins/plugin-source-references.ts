@@ -1,5 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import type { NodePath } from "@babel/traverse";
+import type { CallExpression, Node, Program as BabelProgram } from "@babel/types";
 import { parse, type AnyNode, type Program } from "acorn";
 import type { createJiti } from "jiti";
 
@@ -41,53 +43,139 @@ function staticString(node: StaticStringNode | null | undefined): string | undef
   return undefined;
 }
 
-type RequireReferencePath = {
-  node: (StaticStringNode & { name?: string; computed?: boolean }) | null;
-  scope: {
-    getBinding(name: string): { constant: boolean; path: RequireReferencePath } | undefined;
-  };
-  get(key: "arguments"): RequireReferencePath[];
-  get(key: string): RequireReferencePath;
-  referencesImport(source: string, name: string): boolean;
-  matchesPattern(pattern: string): boolean;
-};
+/** Whether this expression receives a value, directly or through a destructuring pattern. */
+function isAssignmentTarget(target: NodePath): boolean {
+  let child = target;
+  for (let parent = target.parentPath; parent?.node; parent = parent.parentPath) {
+    switch (parent.node.type) {
+      case "AssignmentExpression":
+      case "AssignmentPattern":
+      case "ForInStatement":
+      case "ForOfStatement":
+        return child.key === "left";
+      case "UpdateExpression":
+        return true;
+      case "ObjectProperty":
+        if (child.key !== "value") {
+          return false;
+        }
+        break;
+      case "ArrayPattern":
+      case "ObjectPattern":
+      case "RestElement":
+        break;
+      default:
+        return false;
+    }
+    child = parent;
+  }
+  return false;
+}
 
-function unwrapReferenceArgument(input: RequireReferencePath | undefined) {
+function unwrapReferenceArgument(input: NodePath | undefined) {
   let argument = input;
   // TypeScript erases these wrappers without evaluating another value.
   while (
-    argument &&
-    [
-      "TSAsExpression",
-      "TSTypeAssertion",
-      "TSNonNullExpression",
-      "TSSatisfiesExpression",
-      "TSInstantiationExpression",
-    ].includes(argument.node?.type ?? "")
+    argument?.isTSAsExpression() ||
+    argument?.isTSTypeAssertion() ||
+    argument?.isTSNonNullExpression() ||
+    argument?.isTSSatisfiesExpression() ||
+    argument?.isTSInstantiationExpression()
   ) {
     argument = argument.get("expression");
   }
   return argument;
 }
 
+/** Inspect authored TypeScript syntax before Jiti rewrites module operations. */
+export function inspectPluginTypeScriptExecutionFacts(
+  source: string,
+  sourceText: string,
+  resolver: ReturnType<typeof createJiti>,
+): {
+  hasComputedImport: boolean;
+  staticImports: Array<{ specifier: string; sideEffect: boolean }>;
+} {
+  let hasComputedImport = false;
+  const staticImports = new Map<string, boolean>();
+  const recordStaticImport = (specifier: string, sideEffect: boolean) => {
+    staticImports.set(specifier, (staticImports.get(specifier) ?? false) || sideEffect);
+  };
+  resolver.transform({
+    source: sourceText,
+    filename: source,
+    ts: true,
+    async: true,
+    babel: {
+      plugins: [
+        {
+          pre(file: { path: NodePath<BabelProgram> }) {
+            file.path.traverse({
+              ImportDeclaration(declaration) {
+                const specifier = staticString(declaration.get("source").node);
+                if (specifier !== undefined) {
+                  recordStaticImport(specifier, declaration.node?.specifiers?.length === 0);
+                }
+              },
+              ExportNamedDeclaration(declaration) {
+                const specifier = staticString(declaration.get("source").node);
+                if (specifier !== undefined) {
+                  recordStaticImport(specifier, false);
+                }
+              },
+              ExportAllDeclaration(declaration) {
+                const specifier = staticString(declaration.get("source").node);
+                if (specifier !== undefined) {
+                  recordStaticImport(specifier, false);
+                }
+              },
+              ImportExpression(expression) {
+                if (staticString(expression.get("source").node) === undefined) {
+                  hasComputedImport = true;
+                }
+              },
+              CallExpression(call) {
+                const args = call.get("arguments");
+                if (
+                  call.get("callee").node?.type === "Import" &&
+                  staticString(unwrapReferenceArgument(args[0])?.node) === undefined
+                ) {
+                  hasComputedImport = true;
+                }
+              },
+            });
+          },
+        },
+      ],
+    },
+  });
+  return {
+    hasComputedImport,
+    staticImports: [...staticImports].map(([specifier, sideEffect]) => ({
+      specifier,
+      sideEffect,
+    })),
+  };
+}
+
 /** Read the native factory binding before Jiti rewrites modules and import.meta. */
-function isCurrentFileRequire(call: RequireReferencePath): boolean {
+function isCurrentFileRequire(call: NodePath<CallExpression>): boolean {
   const callee = call.get("callee");
   const reference =
-    callee.node?.type === "MemberExpression" &&
+    callee.isMemberExpression() &&
     !callee.node.computed &&
-    callee.get("property").node?.name === "resolve"
+    callee.get("property").isIdentifier({ name: "resolve" })
       ? callee.get("object")
       : callee;
-  let init = reference;
-  if (reference.node?.type === "Identifier" && reference.node.name) {
+  let init: NodePath<Node | null> = reference;
+  if (reference.isIdentifier() && reference.node.name) {
     const binding = reference.scope.getBinding(reference.node.name);
-    if (!binding?.constant || binding.path.node?.type !== "VariableDeclarator") {
+    if (!binding?.constant || !binding.path.isVariableDeclarator()) {
       return false;
     }
     init = binding.path.get("init");
   }
-  if (init.node?.type !== "CallExpression") {
+  if (!init.isCallExpression()) {
     return false;
   }
   const args = init.get("arguments");
@@ -95,7 +183,7 @@ function isCurrentFileRequire(call: RequireReferencePath): boolean {
   if (
     !anchor ||
     !(
-      (anchor.node?.type === "MemberExpression" &&
+      (anchor.isMemberExpression() &&
         !anchor.node.computed &&
         anchor.get("object").node?.type === "MetaProperty" &&
         anchor.matchesPattern("import.meta.url")) ||
@@ -110,9 +198,9 @@ function isCurrentFileRequire(call: RequireReferencePath): boolean {
   return ["module", "node:module"].some(
     (source) =>
       factory.referencesImport(source, "createRequire") ||
-      (factory.node?.type === "MemberExpression" &&
+      (factory.isMemberExpression() &&
         !factory.node.computed &&
-        factory.get("property").node?.name === "createRequire" &&
+        factory.get("property").isIdentifier({ name: "createRequire" }) &&
         factory.get("object").referencesImport(source, "default")),
   );
 }
@@ -131,6 +219,17 @@ const TRANSFORMED_REFERENCE_NAMES = new Set([
   "jitiESMResolve",
   "__dirname",
 ]);
+
+function* sourceChildren(node: AnyNode): Generator<AnyNode> {
+  for (const value of Object.values(node)) {
+    for (const child of Array.isArray(value) ? value : [value]) {
+      if (child && typeof child === "object" && "type" in child) {
+        // SAFETY: Child fields and arrays come from the same Acorn tree.
+        yield child as AnyNode;
+      }
+    }
+  }
+}
 
 function parseNativePluginJavaScript(source: string, sourceText: string): Program | undefined {
   if (!/\.[cm]?js$/.test(source)) {
@@ -209,22 +308,40 @@ function parseNativePluginJavaScript(source: string, sourceText: string): Progra
         }
       }
     }
-    return Object.values(node)
-      .flat()
-      .some(
-        (child) =>
-          child &&
-          typeof child === "object" &&
-          "type" in child &&
-          needsTransform(
-            // SAFETY: Children belong to the Acorn tree, as in the reference visitor below.
-            child as AnyNode,
-            exportedDeclaration ||
-              (node.type === "ExportNamedDeclaration" && child === node.declaration),
-          ),
-      );
+    for (const child of sourceChildren(node)) {
+      if (
+        needsTransform(
+          child,
+          exportedDeclaration ||
+            (node.type === "ExportNamedDeclaration" && child === node.declaration),
+        )
+      ) {
+        return true;
+      }
+    }
+    return false;
   };
   return needsTransform(tree) ? undefined : tree;
+}
+
+function parseTransformedPluginSource(source: string, code: string): Program {
+  try {
+    return parse(code, {
+      ecmaVersion: "latest",
+      // Jiti can retain import.meta in its mixed ESM/CommonJS inspection output.
+      allowImportExportEverywhere: true,
+      allowAwaitOutsideFunction: true,
+      allowReturnOutsideFunction: true,
+    });
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) {
+      throw error;
+    }
+    // Name the blocking file; positions refer to the Jiti output, not the authored source.
+    throw new SyntaxError(`${source}: could not parse transformed source: ${error.message}`, {
+      cause: error,
+    });
+  }
 }
 
 /** Visit literal module and explicit asset inputs without evaluating plugin code. */
@@ -247,7 +364,8 @@ export function visitPluginSourceReferences(
   };
   const tree =
     parseNativePluginJavaScript(source, sourceText) ??
-    parse(
+    parseTransformedPluginSource(
+      source,
       resolver.transform({
         source: sourceText,
         filename: source,
@@ -256,26 +374,32 @@ export function visitPluginSourceReferences(
         babel: {
           plugins: [
             {
-              pre(file: {
-                path: {
-                  traverse(visitor: { CallExpression(call: RequireReferencePath): void }): void;
-                };
-              }) {
+              pre(file: { path: NodePath<BabelProgram> }) {
                 file.path.traverse({
+                  MemberExpression(member) {
+                    // Jiti inlines import.meta.url, dirname and filename as strings, also
+                    // where valid code assigns to them. Inspection reads only references,
+                    // so a plain identifier keeps that target parseable.
+                    if (
+                      member.get("object").node?.type === "MetaProperty" &&
+                      isAssignmentTarget(member)
+                    ) {
+                      member.replaceWith({ type: "Identifier", name: "importMetaTarget" });
+                    }
+                  },
                   CallExpression(call) {
                     const args = call.get("arguments");
                     // Jiti replaces this anchor with a string; capture its meaning before rewriting.
                     if (unwrapReferenceArgument(args[0])?.matchesPattern("import.meta.dirname")) {
                       const callee = call.get("callee");
-                      const member =
-                        callee.node?.type === "MemberExpression" ? callee.get("property") : callee;
+                      const member = callee.isMemberExpression() ? callee.get("property") : callee;
                       const name =
                         ["join", "resolve"].find((method) =>
                           ["path", "node:path"].some((moduleName) =>
                             callee.referencesImport(moduleName, method),
                           ),
                         ) ??
-                        member.node?.name ??
+                        (member.isIdentifier() ? member.node.name : undefined) ??
                         "";
                       visitDirectoryAsset(
                         name,
@@ -298,11 +422,6 @@ export function visitPluginSourceReferences(
           ],
         },
       }),
-      {
-        ecmaVersion: "latest",
-        allowAwaitOutsideFunction: true,
-        allowReturnOutsideFunction: true,
-      },
     );
   const staticImports = new Set<string>();
   for (const statement of tree.body) {
@@ -362,11 +481,8 @@ export function visitPluginSourceReferences(
         visitDirectoryAsset(name, args.slice(1).map(staticString));
       }
     }
-    for (const child of Object.values(node).flat()) {
-      if (child && typeof child === "object" && "type" in child) {
-        // SAFETY: The tree comes directly from Acorn; typed child fields are Acorn nodes.
-        visit(child as AnyNode);
-      }
+    for (const child of sourceChildren(node)) {
+      visit(child);
     }
   };
   visit(tree);

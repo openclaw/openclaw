@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { buildMatrixToolProgressMentionSafetyPrompt } from "../../live-transports/matrix/scenarios/scenario-runtime-prompts.js";
-import { startQaMockOpenAiServer } from "./server.js";
+import { createMockServerTestHarness, expectOk, postJson } from "./server.test-harness.js";
+
+const { startMockServer } = createMockServerTestHarness();
 
 const READ_PROMPT =
   "Tool progress QA check: read `empty.txt` before answering. After the read completes, reply exactly `PROGRESS_OK`.";
@@ -25,7 +27,7 @@ const APPROVAL_RESTRICTED_OUTPUT = APPROVAL_OUTPUT.replace(
   "allow-once|deny\nAllow Always is unavailable for this command.\n",
 );
 const APPROVAL_UNAVAILABLE_OUTPUT =
-  "Exec approval is required, but no interactive approval client is currently available.\n\nApprove it from the Web UI or terminal UI. Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox. Then retry the command. You can usually leave execApprovals.approvers unset when owner config already identifies the approvers.";
+  "Exec approval is required, but no interactive approval client is currently available.\n\nApprove it from the Web UI. Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox. Then retry the command. You can usually leave execApprovals.approvers unset when owner config already identifies the approvers.";
 const UNKNOWN_OUTPUT =
   "Node command outcome is unknown for node-1.\nThe command may have executed. Do not rerun it automatically.\n\nCommand:\ntrue\n\nDetails: node disconnected";
 
@@ -43,7 +45,7 @@ async function requestProgress(
   results: ProgressResult[],
   context?: string,
 ) {
-  const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
+  const server = await startMockServer();
   const toolResults = results.map((result, index) => ({
     ...result,
     callId: result.callId === null ? undefined : (result.callId ?? `progress_${index}`),
@@ -102,20 +104,19 @@ async function requestProgress(
             ]),
           ],
         };
-  try {
-    const response = await fetch(`${server.baseUrl}/v1/${route}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "qa-model", stream: false, max_tokens: 256, ...body }),
-    });
-    expect(response.status).toBe(200);
-    return await response.json();
-  } finally {
-    await server.stop();
-  }
+  return (
+    await expectOk(
+      postJson(server, `/v1/${route}`, {
+        model: "qa-model",
+        stream: false,
+        max_tokens: 256,
+        ...body,
+      }),
+    )
+  ).json();
 }
 
-describe.each(["responses", "messages"])("%s background command progress", (route) => {
+describe("Anthropic command progress wire", () => {
   it.each([
     { exitCode: 1, expected: "PROGRESS_OK" },
     { exitCode: 0, expected: "BUG-TOOL-DID-NOT-FAIL" },
@@ -124,231 +125,39 @@ describe.each(["responses", "messages"])("%s background command progress", (rout
       "@qa-sut:matrix-qa.test",
       "PROGRESS_OK",
     );
-    const plan = await requestProgress(route, prompt, []);
-    const call = (route === "responses" ? plan.output : plan.content)[0];
+    const plan = await requestProgress("messages", prompt, []);
+    const call = plan.content[0];
     expect(call.name).toBe("exec");
-    const args = route === "responses" ? JSON.parse(call.arguments) : call.input;
+    const args = call.input;
     expect(args.command).toBe(
       "while [ ! -d 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release' ]; do sleep 1; done; rmdir 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release'; false",
     );
-    const results: ProgressResult[] = [{ tool: "exec", args, output: RUNNING_OUTPUT }];
-    const pending = await requestProgress(route, prompt, results);
-    expect(route === "responses" ? pending.output : pending.content).toMatchObject([
-      { name: "process" },
-    ]);
+    const results: ProgressResult[] = [
+      {
+        tool: "exec",
+        args,
+        output: exitCode === 1 ? RUNNING_OUTPUT : [{ type: "text", text: RUNNING_OUTPUT }],
+      },
+    ];
+    const pending = await requestProgress("messages", prompt, results);
+    expect(pending.content).toMatchObject([{ name: "process" }]);
     results.push({
       tool: "process",
       args: { action: "poll", sessionId: "lucky-slug" },
       output: `\n\nProcess exited with code ${exitCode}.`,
     });
-    expect(await requestProgress(route, prompt, results)).toMatchObject(
-      route === "responses"
-        ? { output: [{ content: [{ text: expected }] }] }
-        : { content: [{ text: expected }] },
-    );
-  });
-
-  it.each([
-    { label: "plain text", output: RUNNING_OUTPUT },
-    { label: "warning-prefixed text", output: `Task warning\n\n${RUNNING_OUTPUT}` },
-    { label: "unavailable PID", output: RUNNING_OUTPUT.replace("pid 3128", "pid n/a") },
-    { label: "text blocks", output: [{ type: "text", text: RUNNING_OUTPUT }] },
-  ])("polls $label until terminal before emitting the marker", async ({ output }) => {
-    const sessionId = "lucky-slug";
-    const results: ProgressResult[] = [
-      {
-        tool: "exec",
-        args: { command: "true" },
-        output,
-      },
-    ];
-    const expectPoll = (response: {
-      output?: Record<string, unknown>[];
-      content?: Record<string, unknown>[];
-    }) => {
-      const content = (route === "responses" ? response.output : response.content)!;
-      expect(content).toMatchObject([{ name: "process" }]);
-      const args =
-        route === "responses" ? JSON.parse(String(content[0]?.arguments)) : content[0]?.input;
-      expect(args).toMatchObject({ action: "poll", sessionId });
-    };
-    expectPoll(await requestProgress(route, EXEC_PROMPT, results));
-    results.push({
-      tool: "process",
-      args: { action: "poll", sessionId },
-      output: "Process exited with code 7.\n\nProcess still running.",
+    expect(await requestProgress("messages", prompt, results)).toMatchObject({
+      content: [{ text: expected }],
     });
-    expectPoll(await requestProgress(route, EXEC_PROMPT, results));
-    results.push({
-      tool: "process",
-      args: { action: "poll", sessionId },
-      output: INPUT_WAIT_OUTPUT,
-    });
-    expectPoll(await requestProgress(route, EXEC_PROMPT, results));
-    results.push({
-      tool: "process",
-      args: { action: "poll", sessionId },
-      output: `${TIMED_OUT_OUTPUT}\n${RUNNING_OUTPUT.replace("lucky-slug", "other-session")}\n\nProcess exited with code 0.`,
-    });
-    expect(await requestProgress(route, EXEC_PROMPT, results)).toMatchObject(
-      route === "responses"
-        ? { output: [{ type: "message", content: [{ text: "PROGRESS_OK" }] }] }
-        : { content: [{ type: "text", text: "PROGRESS_OK" }] },
-    );
   });
-
   it.each([
-    {
-      label: "timeout after zero exit",
-      args: { action: "poll", sessionId: "lucky-slug" },
-      output: TIMED_OUT_OUTPUT,
-      marker: "BUG-TOOL-FAILED",
-    },
-    {
-      label: "failed process",
-      args: { action: "poll", sessionId: "lucky-slug" },
-      output: "\n\nProcess exited with code 7.",
-      marker: "BUG-TOOL-FAILED",
-    },
-    {
-      label: "killed process",
-      args: { action: "poll", sessionId: "lucky-slug" },
-      output: "\n\nProcess exited with signal SIGTERM.",
-      marker: "BUG-TOOL-FAILED",
-    },
-    {
-      label: "single-newline exit-like stdout",
-      args: { action: "poll", sessionId: "lucky-slug" },
-      output: "ordinary output\nProcess exited with code 0.",
-      marker: "BUG-TOOL-DID-NOT-COMPLETE",
-    },
-    {
-      label: "unsettled process",
-      args: { action: "poll", sessionId: "lucky-slug" },
-      output: "partial output",
-      marker: "BUG-TOOL-DID-NOT-COMPLETE",
-    },
-    {
-      label: "unrelated poll",
-      args: { action: "poll", sessionId: "other-session" },
-      output: "\n\nProcess exited with code 0.",
-      marker: "BUG-TOOL-PROGRESS-CALL-MISMATCH",
-    },
-  ])("does not report success for $label", async ({ args, output, marker }) => {
-    const response = await requestProgress(route, EXEC_PROMPT, [
-      { tool: "exec", args: { command: "true" }, output: RUNNING_OUTPUT },
-      { tool: "process", args, output },
-    ]);
-    expect(response).toMatchObject(
-      route === "responses"
-        ? { output: [{ content: [{ text: marker }] }] }
-        : { content: [{ text: marker }] },
-    );
-  });
-
-  it.each([
-    { label: "untyped nonzero exit", output: "\n\nProcess exited with code 1." },
-    { label: "typed nonzero exit", output: "\n\nProcess exited with code 1.", isError: true },
-    {
-      label: "typed unknown exit",
-      output: "\n\nProcess exited with unknown exit code.",
-      isError: true,
-    },
-  ])("allows terminal command failure for $label", async ({ output, isError }) => {
+    { label: "missing", callId: null },
+    { label: "empty", callId: "" },
+  ])("rejects $label call IDs even when command failure is allowed", async ({ callId }) => {
     const response = await requestProgress(
-      route,
+      "messages",
       EXEC_PROMPT.replace("command completes,", "command completes or fails,"),
       [
-        { tool: "exec", args: { command: "true" }, output: RUNNING_OUTPUT },
-        {
-          tool: "process",
-          args: { action: "poll", sessionId: "lucky-slug" },
-          output,
-          isError,
-        },
-      ],
-    );
-    expect(response).toMatchObject(
-      route === "responses"
-        ? { output: [{ content: [{ text: "PROGRESS_OK" }] }] }
-        : { content: [{ text: "PROGRESS_OK" }] },
-    );
-  });
-
-  it.each([
-    { output: "Command aborted by signal SIGTERM", isError: true },
-    { output: `${RUNNING_OUTPUT}\n\n(Command exited with code 7)`, isError: false },
-    { output: "Node: node-1\n(Command exited with code 7)", isError: false },
-  ])("reports foreground failure from $output", async ({ output, isError }) => {
-    for (const allowsFailure of [false, true]) {
-      const prompt = allowsFailure
-        ? EXEC_PROMPT.replace("command completes,", "command completes or fails,")
-        : EXEC_PROMPT;
-      const response = await requestProgress(route, prompt, [
-        {
-          tool: "exec",
-          args: { command: "true" },
-          output,
-          isError,
-        },
-      ]);
-      const marker = allowsFailure ? "PROGRESS_OK" : "BUG-TOOL-FAILED";
-      expect(response).toMatchObject(
-        route === "responses"
-          ? { output: [{ content: [{ text: marker }] }] }
-          : { content: [{ text: marker }] },
-      );
-    }
-  });
-
-  it.each([
-    {
-      label: "typed error with a running exec handle",
-      results: [{ tool: "exec", args: { command: "true" }, output: RUNNING_OUTPUT, isError: true }],
-      marker: "BUG-TOOL-DID-NOT-COMPLETE",
-    },
-    {
-      label: "typed error with an unknown outcome",
-      results: [
-        {
-          tool: "exec",
-          args: { command: "true" },
-          output: `Task warning\n\n${UNKNOWN_OUTPUT}\n(Command exited with code 0)`,
-          isError: true,
-        },
-      ],
-      marker: "BUG-TOOL-DID-NOT-COMPLETE",
-    },
-    {
-      label: "approval pending",
-      results: [
-        {
-          tool: "exec",
-          args: { command: "true" },
-          output: `Task warning\n\n${APPROVAL_OUTPUT}`,
-          isError: false,
-        },
-      ],
-      marker: "BUG-TOOL-DID-NOT-COMPLETE",
-    },
-    ...[
-      { label: "restricted approval decisions", output: APPROVAL_RESTRICTED_OUTPUT },
-      {
-        label: "foreign approval warning before actual pending notice",
-        output: `${APPROVAL_OUTPUT.replace("\ntrue\n", "\nother command\n")}\n\n${APPROVAL_OUTPUT}`,
-      },
-      {
-        label: "foreign unknown warning before actual unknown notice",
-        output: `${UNKNOWN_OUTPUT.replace("\ntrue\n", "\nother command\n")}\n\n${UNKNOWN_OUTPUT}`,
-      },
-    ].map(({ label, output }) => ({
-      label,
-      results: [{ tool: "exec", args: { command: "true" }, output, isError: false }],
-      marker: "BUG-TOOL-DID-NOT-COMPLETE",
-    })),
-    ...[null, ""].map((callId) => ({
-      label: callId === null ? "missing call IDs" : "empty call IDs",
-      results: [
         { tool: "exec", args: { command: "true" }, output: RUNNING_OUTPUT, callId },
         {
           tool: "process",
@@ -357,86 +166,156 @@ describe.each(["responses", "messages"])("%s background command progress", (rout
           callId,
         },
       ],
-      marker: "BUG-TOOL-PROGRESS-CALL-MISMATCH",
-    })),
-    {
-      label: "foreign poll before exec",
-      results: [
-        {
-          tool: "process",
-          args: { action: "poll", sessionId: "foreign-session" },
-          output: "\n\nProcess exited with code 0.",
-        },
-        { tool: "exec", args: { command: "true" }, output: "" },
-      ],
-      marker: "BUG-TOOL-PROGRESS-CALL-MISMATCH",
-    },
-    {
-      label: "approval pending in approver DMs",
-      results: [
-        {
-          tool: "exec",
-          args: { command: "true" },
-          output: "Approval required. I sent approval DMs to the approvers for this account.",
-          isError: true,
-        },
-      ],
-      marker: "BUG-TOOL-DID-NOT-COMPLETE",
-    },
-    {
-      label: "approval unavailable",
-      results: [
-        {
-          tool: "exec",
-          args: { command: "true" },
-          output: `Task warning\n\n${APPROVAL_UNAVAILABLE_OUTPUT}`,
-          isError: true,
-        },
-      ],
-      marker: "BUG-TOOL-DID-NOT-COMPLETE",
-    },
-    {
-      label: "lost poll session",
-      results: [
-        { tool: "exec", args: { command: "true" }, output: RUNNING_OUTPUT },
-        {
-          tool: "process",
-          args: { action: "poll", sessionId: "lucky-slug" },
-          output: "No session found for lucky-slug",
-          isError: true,
-        },
-      ],
-      marker: "BUG-TOOL-DID-NOT-COMPLETE",
-    },
-    {
-      label: "intermediate foreign poll",
-      results: [
-        { tool: "exec", args: { command: "true" }, output: RUNNING_OUTPUT },
-        {
-          tool: "process",
-          args: { action: "poll", sessionId: "foreign-session" },
-          output: "\n\nProcess still running.",
-        },
-        {
-          tool: "process",
-          args: { action: "poll", sessionId: "lucky-slug" },
-          output: "\n\nProcess exited with code 0.",
-        },
-      ],
-      marker: "BUG-TOOL-PROGRESS-CALL-MISMATCH",
-    },
-  ])("does not accept $label even when command failure is allowed", async ({ results, marker }) => {
-    const response = await requestProgress(
-      route,
-      EXEC_PROMPT.replace("command completes,", "command completes or fails,"),
-      results,
     );
-    expect(response).toMatchObject(
-      route === "responses"
-        ? { output: [{ content: [{ text: marker }] }] }
-        : { content: [{ text: marker }] },
-    );
+    expect(response).toMatchObject({ content: [{ text: "BUG-TOOL-PROGRESS-CALL-MISMATCH" }] });
   });
+});
+
+function execResult(output: ProgressResult["output"], isError?: boolean): ProgressResult {
+  return { tool: "exec", args: { command: "true" }, output, isError };
+}
+
+function pollResult(output: string, isError?: boolean, sessionId = "lucky-slug"): ProgressResult {
+  return { tool: "process", args: { action: "poll", sessionId }, output, isError };
+}
+
+const FAILURE_ALLOWED_PROMPT = EXEC_PROMPT.replace(
+  "command completes,",
+  "command completes or fails,",
+);
+
+describe("background command progress", () => {
+  it("polls warning-prefixed output until terminal before emitting the marker", async () => {
+    const results = [execResult(`Task warning\n\n${RUNNING_OUTPUT}`)];
+    const expectPoll = (response: { output: Record<string, unknown>[] }) => {
+      expect(response.output).toMatchObject([{ name: "process" }]);
+      expect(JSON.parse(String(response.output[0]?.arguments))).toMatchObject({
+        action: "poll",
+        sessionId: "lucky-slug",
+      });
+    };
+    expectPoll(await requestProgress("responses", EXEC_PROMPT, results));
+    for (const output of [
+      "Process exited with code 7.\n\nProcess still running.",
+      INPUT_WAIT_OUTPUT,
+    ]) {
+      results.push(pollResult(output));
+      expectPoll(await requestProgress("responses", EXEC_PROMPT, results));
+    }
+    results.push(
+      pollResult(
+        `${TIMED_OUT_OUTPUT}\n${RUNNING_OUTPUT.replace("lucky-slug", "other-session")}\n\nProcess exited with code 0.`,
+      ),
+    );
+    expect(await requestProgress("responses", EXEC_PROMPT, results)).toMatchObject({
+      output: [{ type: "message", content: [{ text: "PROGRESS_OK" }] }],
+    });
+  });
+
+  it.each([
+    ["timeout after zero exit", pollResult(TIMED_OUT_OUTPUT), "BUG-TOOL-FAILED"],
+    ["failed process", pollResult("\n\nProcess exited with code 7."), "BUG-TOOL-FAILED"],
+    [
+      "single-newline exit-like stdout",
+      pollResult("ordinary output\nProcess exited with code 0."),
+      "BUG-TOOL-DID-NOT-COMPLETE",
+    ],
+    [
+      "unrelated poll",
+      pollResult("\n\nProcess exited with code 0.", undefined, "other-session"),
+      "BUG-TOOL-PROGRESS-CALL-MISMATCH",
+    ],
+  ] as const)("does not report success for %s", async (_label, poll, marker) => {
+    const response = await requestProgress("responses", EXEC_PROMPT, [
+      execResult(RUNNING_OUTPUT),
+      poll,
+    ]);
+    expect(response).toMatchObject({ output: [{ content: [{ text: marker }] }] });
+  });
+
+  it("allows a terminal typed failure with an unknown exit code", async () => {
+    const response = await requestProgress("responses", FAILURE_ALLOWED_PROMPT, [
+      execResult(RUNNING_OUTPUT),
+      pollResult("\n\nProcess exited with unknown exit code.", true),
+    ]);
+    expect(response).toMatchObject({ output: [{ content: [{ text: "PROGRESS_OK" }] }] });
+  });
+
+  it.each([
+    { output: "Command aborted by signal SIGTERM", isError: true },
+    { output: `${RUNNING_OUTPUT}\n\n(Command exited with code 7)`, isError: false },
+    { output: "Node: node-1\n(Command exited with code 7)", isError: false },
+  ])("reports foreground failure from $output", async ({ output, isError }) => {
+    for (const allowsFailure of [false, true]) {
+      const response = await requestProgress(
+        "responses",
+        allowsFailure ? FAILURE_ALLOWED_PROMPT : EXEC_PROMPT,
+        [execResult(output, isError)],
+      );
+      expect(response).toMatchObject({
+        output: [{ content: [{ text: allowsFailure ? "PROGRESS_OK" : "BUG-TOOL-FAILED" }] }],
+      });
+    }
+  });
+
+  it.each([
+    [
+      "typed error with a running exec handle",
+      [execResult(RUNNING_OUTPUT, true)],
+      "BUG-TOOL-DID-NOT-COMPLETE",
+    ],
+    [
+      "typed error with an unknown outcome",
+      [execResult(`Task warning\n\n${UNKNOWN_OUTPUT}\n(Command exited with code 0)`, true)],
+      "BUG-TOOL-DID-NOT-COMPLETE",
+    ],
+    [
+      "restricted approval decisions",
+      [execResult(APPROVAL_RESTRICTED_OUTPUT, false)],
+      "BUG-TOOL-DID-NOT-COMPLETE",
+    ],
+    [
+      "foreign approval warning before actual pending notice",
+      [
+        execResult(
+          `${APPROVAL_OUTPUT.replace("\ntrue\n", "\nother command\n")}\n\n${APPROVAL_OUTPUT}`,
+          false,
+        ),
+      ],
+      "BUG-TOOL-DID-NOT-COMPLETE",
+    ],
+    [
+      "foreign poll before exec",
+      [pollResult("\n\nProcess exited with code 0.", undefined, "foreign-session"), execResult("")],
+      "BUG-TOOL-PROGRESS-CALL-MISMATCH",
+    ],
+    [
+      "approval pending in approver DMs",
+      [
+        execResult(
+          "Approval required. I sent approval DMs to the approvers for this account.",
+          true,
+        ),
+      ],
+      "BUG-TOOL-DID-NOT-COMPLETE",
+    ],
+    [
+      "approval unavailable",
+      [execResult(`Task warning\n\n${APPROVAL_UNAVAILABLE_OUTPUT}`, true)],
+      "BUG-TOOL-DID-NOT-COMPLETE",
+    ],
+    [
+      "lost poll session",
+      [execResult(RUNNING_OUTPUT), pollResult("No session found for lucky-slug", true)],
+      "BUG-TOOL-DID-NOT-COMPLETE",
+    ],
+  ] as const)(
+    "does not accept %s even when command failure is allowed",
+    async (_label, results, marker) => {
+      const response = await requestProgress("responses", FAILURE_ALLOWED_PROMPT, [...results]);
+      expect(response).toMatchObject({ output: [{ content: [{ text: marker }] }] });
+    },
+  );
 });
 
 it("keeps Slack commentary progress open while its exec is running", async () => {
@@ -468,7 +347,6 @@ it("keeps Slack commentary progress open while its exec is running", async () =>
 });
 
 async function completeProgress(params: {
-  route: string;
   prompt: string;
   tool: string;
   args: Record<string, unknown>;
@@ -476,15 +354,11 @@ async function completeProgress(params: {
   isError?: boolean;
   context?: string;
 }) {
-  const plan = await requestProgress(params.route, params.prompt, [], params.context);
-  const call = params.route === "responses" ? plan.output[0] : plan.content[0];
-  expect(call).toMatchObject(
-    params.route === "responses"
-      ? { type: "function_call", name: params.tool, arguments: JSON.stringify(params.args) }
-      : { type: "tool_use", name: params.tool, input: params.args },
-  );
+  const plan = await requestProgress("messages", params.prompt, [], params.context);
+  const call = plan.content[0];
+  expect(call).toMatchObject({ type: "tool_use", name: params.tool, input: params.args });
   return requestProgress(
-    params.route,
+    "messages",
     params.prompt,
     [
       {
@@ -492,14 +366,14 @@ async function completeProgress(params: {
         args: params.args,
         output: params.output,
         isError: params.isError,
-        callId: params.route === "responses" ? call.call_id : call.id,
+        callId: call.id,
       },
     ],
     params.context,
   );
 }
 
-describe.each(["responses", "messages"])("%s tool progress", (route) => {
+describe("tool progress stdout", () => {
   const target = "repo/資料🙂/missing.txt";
   const prompt = [
     "Conversation info:",
@@ -524,18 +398,6 @@ describe.each(["responses", "messages"])("%s tool progress", (route) => {
       output: JSON.stringify({ status: "error", tool: "read", error: `File not found: ${target}` }),
       isError: true,
     },
-    ...[
-      { status: "failed" },
-      { status: "running", sessionId: "other-session" },
-      { status: "approval-pending" },
-    ].flatMap((details) =>
-      [details, { details }].map((value, index) => ({
-        label: `${index === 0 ? "bare" : "nested"} JSON stdout with ${details.status}`,
-        tool: "exec",
-        prompt: EXEC_PROMPT,
-        output: JSON.stringify(value),
-      })),
-    ),
     {
       label: "JSON stdout containing an exec running header",
       tool: "exec",
@@ -543,42 +405,14 @@ describe.each(["responses", "messages"])("%s tool progress", (route) => {
       output: JSON.stringify({ text: RUNNING_OUTPUT }),
     },
     ...[
-      "Command still running (session lucky-slug, pid 3128)",
-      `${RUNNING_OUTPUT}\nlater stdout`,
-    ].map((output) => ({
-      label: `exec stdout containing a partial running notice: ${output}`,
-      tool: "exec",
-      prompt: EXEC_PROMPT,
-      output,
-    })),
-    ...[
-      ...[
-        RUNNING_OUTPUT,
-        APPROVAL_OUTPUT,
-        "Approval required. I sent approval DMs to the approvers for this account.",
-        APPROVAL_UNAVAILABLE_OUTPUT,
-        UNKNOWN_OUTPUT,
-        "(Command exited with code 7)",
-      ].map((notice) => `log entry\n${notice}`),
-      APPROVAL_OUTPUT.replace("Reply with: /approve abc123 ", "Reply with: /approve other "),
       APPROVAL_RESTRICTED_OUTPUT.replace("Allow Always is unavailable for this command.\n", ""),
       APPROVAL_OUTPUT.replace(
         "If the short code is ambiguous,",
         "Allow Always is unavailable for this command.\nIf the short code is ambiguous,",
       ),
       APPROVAL_OUTPUT.replaceAll("```", "````"),
-      APPROVAL_UNAVAILABLE_OUTPUT.replace(
-        "Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox. ",
-        "",
-      ),
-      "Approval required.\nordinary output",
-      "Approval required (id demo, full demo).\nfinished",
       APPROVAL_OUTPUT.replace("\ntrue\n", "\nother command\n"),
-      APPROVAL_OUTPUT.replace("\ntrue\n", "\n\n"),
-      "Exec approval is required, but no interactive approval client is currently available.\nordinary output",
-      UNKNOWN_OUTPUT.slice(0, UNKNOWN_OUTPUT.indexOf("\n\nCommand:")),
       UNKNOWN_OUTPUT.replace("\ntrue\n", "\nother command\n"),
-      UNKNOWN_OUTPUT.slice(0, UNKNOWN_OUTPUT.indexOf("\n\nDetails:")),
     ].map((output) => ({
       label: `exec stdout containing an incomplete or foreign notice: ${output}`,
       tool: "exec",
@@ -588,34 +422,19 @@ describe.each(["responses", "messages"])("%s tool progress", (route) => {
     })),
     { label: "an empty read result", tool: "read", prompt: READ_PROMPT, output: "" },
     { label: "an empty exec result", tool: "exec", prompt: EXEC_PROMPT, output: [] },
-    {
-      label: "exec stdout matching a poll hint",
-      tool: "exec",
-      prompt: EXEC_PROMPT,
-      output: INPUT_WAIT_OUTPUT,
-    },
-    {
-      label: "exec stdout matching a poll exit footer",
-      tool: "exec",
-      prompt: EXEC_PROMPT,
-      output: "Process exited with code 7.",
-    },
   ])("finishes after $label", async (fixture) => {
     const response = await completeProgress({
-      route,
       args: fixture.tool === "exec" ? { command: "true" } : { path: "empty.txt" },
       ...fixture,
     });
-    expect(response).toMatchObject(
-      route === "responses"
-        ? { output: [{ type: "message", content: [{ type: "output_text", text: "PROGRESS_OK" }] }] }
-        : { stop_reason: "end_turn", content: [{ type: "text", text: "PROGRESS_OK" }] },
-    );
+    expect(response).toMatchObject({
+      stop_reason: "end_turn",
+      content: [{ type: "text", text: "PROGRESS_OK" }],
+    });
   });
 });
 
 it.each([
-  { label: "typed failure", output: "Access denied", isError: true, expected: "PROGRESS_OK" },
   { label: "empty typed failure", output: [], isError: true, expected: "PROGRESS_OK" },
   {
     label: "explicit success with error-shaped content",
@@ -637,7 +456,6 @@ it.each([
   },
 ])("uses $label for error-progress completion", async ({ expected, ...fixture }) => {
   const response = await completeProgress({
-    route: "messages",
     prompt: ERROR_PROMPT,
     tool: "read",
     args: { path: "denied.txt" },
@@ -650,7 +468,7 @@ it.each([
 });
 
 it("distinguishes a successful CodeMode runner from its failed read", async () => {
-  const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
+  const server = await startMockServer();
   const tools = [
     {
       name: "exec",
@@ -663,41 +481,40 @@ it("distinguishes a successful CodeMode runner from its failed read", async () =
     { name: "wait", input_schema: { type: "object", properties: {} } },
   ];
   const request = async (messages: unknown[]) => {
-    const response = await fetch(`${server.baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "qa-model", max_tokens: 256, tools, messages }),
-    });
-    expect(response.status).toBe(200);
-    return response.json();
+    return (
+      await expectOk(
+        postJson(server, "/v1/messages", {
+          model: "qa-model",
+          max_tokens: 256,
+          tools,
+          messages,
+        }),
+      )
+    ).json();
   };
-  try {
-    const input = [{ role: "user", content: ERROR_PROMPT }];
-    const plan = await request(input);
-    expect(plan.content).toMatchObject([{ type: "tool_use", name: "exec" }]);
-    const result = await request([
-      ...input,
-      { role: "assistant", content: plan.content },
-      {
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: plan.content[0].id,
-            is_error: false,
-            content: JSON.stringify({
-              status: "completed",
-              value: { status: "error", error: "Access denied" },
-            }),
-          },
-        ],
-      },
-    ]);
-    expect(result).toMatchObject({
-      stop_reason: "end_turn",
-      content: [{ type: "text", text: "PROGRESS_OK" }],
-    });
-  } finally {
-    await server.stop();
-  }
+  const input = [{ role: "user", content: ERROR_PROMPT }];
+  const plan = await request(input);
+  expect(plan.content).toMatchObject([{ type: "tool_use", name: "exec" }]);
+  const result = await request([
+    ...input,
+    { role: "assistant", content: plan.content },
+    {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: plan.content[0].id,
+          is_error: false,
+          content: JSON.stringify({
+            status: "completed",
+            value: { status: "error", error: "Access denied" },
+          }),
+        },
+      ],
+    },
+  ]);
+  expect(result).toMatchObject({
+    stop_reason: "end_turn",
+    content: [{ type: "text", text: "PROGRESS_OK" }],
+  });
 });

@@ -1,4 +1,5 @@
 use crate::gateway::{GatewayAction, GatewaySnapshot};
+use crate::gateway_windows::PromotionGuard;
 use crate::installer::InstallChannel;
 use crate::remote_gateway::RemoteGatewayRequest;
 use std::sync::{mpsc, Arc, Mutex};
@@ -9,10 +10,16 @@ pub(crate) enum GatewayOperation {
     Connect,
     ConnectExplicitLocal,
     ConnectRemote(RemoteGatewayRequest),
+    PromoteProfile {
+        request: RemoteGatewayRequest,
+        guard: PromotionGuard,
+    },
     RetryRemote,
     Install(InstallChannel),
     Action(GatewayAction),
-    RecoverRemote { child_id: u64 },
+    RecoverRemote {
+        child_id: u64,
+    },
 }
 
 struct QueuedGatewayOperation {
@@ -93,15 +100,19 @@ impl GatewayOperationQueue {
         self.submit_detached(GatewayOperation::Action(action));
     }
 
-    pub(crate) async fn execute(
+    pub(crate) fn execute(
         &self,
         operation: GatewayOperation,
-    ) -> Result<GatewaySnapshot, String> {
+    ) -> impl std::future::Future<Output = Result<GatewaySnapshot, String>> {
         let (reply, receiver) = oneshot::channel();
-        self.submit(operation, Some(reply))?;
-        receiver
-            .await
-            .map_err(|_| "Gateway operation worker stopped unexpectedly.".to_string())?
+        // Admission survives replacement of the renderer awaiting this reply.
+        let admitted = self.submit(operation, Some(reply));
+        async move {
+            admitted?;
+            receiver
+                .await
+                .map_err(|_| "Gateway operation worker stopped unexpectedly.".to_string())?
+        }
     }
 
     fn submit_detached(&self, operation: GatewayOperation) {
@@ -139,6 +150,24 @@ mod tests {
     enum ObservedOperation {
         Stop,
         Connect,
+    }
+
+    #[test]
+    fn admitted_connection_survives_discarding_the_launch_pages_reply() {
+        let (sender, receiver) = mpsc::channel();
+        let queue = GatewayOperationQueue::new(
+            move |operation, _| {
+                assert!(matches!(operation, GatewayOperation::Connect));
+                sender.send(()).unwrap();
+                Ok(crate::gateway::GatewaySnapshot::remote_opening())
+            },
+            |_| {},
+        );
+        let reply = queue.execute(GatewayOperation::Connect);
+        drop(reply);
+        receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("Primary must connect after the launch page is replaced");
     }
 
     #[test]

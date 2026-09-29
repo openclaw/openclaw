@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createWorkerPlacementMoveService } from "../worker-environments/placement-move-service.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
-import { readSessionsMutationVersion } from "./session-change-event.js";
 import {
   dispatchTestSessionId as sessionId,
   dispatchTestSessionKey as sessionKey,
@@ -105,6 +105,15 @@ describe("sessions.move abandonment", () => {
         getMany: () => new Map([[sessionId, existing]]),
       },
     });
+    const changes = vi.fn();
+    onTestFinished(
+      sessionChanges.subscribe((change) => {
+        // Placement ownership also publishes qualified changes; these are the broadcaster receipts.
+        if ("sessionKey" in change && change.agentId === undefined) {
+          changes(change);
+        }
+      }),
+    );
     const respond = await invokeSessionMove(context, {
       expected: source,
       target: { kind: "gateway" },
@@ -122,7 +131,7 @@ describe("sessions.move abandonment", () => {
       undefined,
     );
     expect(validateAbandonSource).toHaveBeenCalledTimes(joined ? 0 : 1);
-    expect(readSessionsMutationVersion(context)).toBe(2);
+    expect(changes.mock.calls).toEqual([[{ sessionKey }], [{ sessionKey }]]);
     expect(recordPlacementMoveError).not.toHaveBeenCalled();
     expect(remoteSettlementObserved).toBe(false);
   });

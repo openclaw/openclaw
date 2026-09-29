@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type {
@@ -7,6 +8,7 @@ import type {
   ModelsProbeResult,
 } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { createGatewayMetadataObserver } from "../../app/gateway-observers.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import type {
@@ -27,8 +29,7 @@ import { peekModelCatalog } from "../../lib/model-catalog-store.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import type { ModelBehaviorConfig } from "./config-mutation.ts";
-import type { DefaultModelSelection } from "./data.ts";
+import type { DefaultModelSelection, ModelBehaviorConfig } from "./data.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
 import type { ModelProviderProfileActionsController } from "./profile-actions-controller.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
@@ -54,10 +55,9 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   defaultsDraft: (DefaultModelSelection & Partial<ModelBehaviorConfig>) | null;
   keyDraft: string;
   keyEditorProvider: string | null;
-  profileActions: Pick<ModelProviderProfileActionsController, "logout" | "setOrder">;
+  profileActions: Pick<ModelProviderProfileActionsController, "logout" | "setOrder" | "probe">;
   messages: Record<string, { kind: "success" | "error"; text: string; warning?: string }>;
   profileOrders: Record<string, string[]>;
-  probe: (cardId: string, providers: string[]) => Promise<void>;
   probeResults: Record<string, ModelsProbeResult>;
   refresh: (reason: "forced") => Promise<void>;
   routeData: ModelProvidersRouteData | undefined;
@@ -66,14 +66,38 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   selectedAgentId: string;
 };
 
-export type AgentSelectElement = HTMLElement & {
-  onSelect: (value: string) => void;
+const modelPickerLabels = {
+  primary: "Model",
+  utility: "Utility Model",
+  fallback: "Fallback Model",
+  decision: "Decision Model",
 };
 
-export function modelPickers(page: Element): SelectPicker[] {
-  return [
-    ...page.querySelectorAll<SelectPicker>(".model-providers__defaults openclaw-select-picker"),
-  ];
+export function modelPicker(page: Element, role: keyof typeof modelPickerLabels): SelectPicker {
+  const picker = page.querySelector<SelectPicker>(
+    `.model-providers__defaults openclaw-select-picker:has([role="listbox"][aria-label="${modelPickerLabels[role]}"])`,
+  );
+  expect(picker, `${role} model picker`).not.toBeNull();
+  return picker!;
+}
+
+export function chatModelPickers(page: Element): SelectPicker[] {
+  return (["primary", "utility", "fallback"] as const).map((role) => modelPicker(page, role));
+}
+
+export async function retryCatalog(page: ModelProvidersPageTestElement): Promise<void> {
+  await page.updateComplete;
+  const retry = page.querySelector<HTMLButtonElement>(".model-providers__catalog-progress button");
+  expect(retry?.textContent?.trim()).toBe("Retry");
+  retry!.click();
+  await page.updateComplete;
+}
+
+export async function drainPageUpdates(page: ModelProvidersPageTestElement): Promise<void> {
+  // Drain every promise continuation before checking that a retired result stayed absent.
+  await setImmediate();
+  await page.updateComplete;
+  await updatePickers(page);
 }
 
 export function displayedCatalog(page: ModelProvidersPageTestElement) {
@@ -94,18 +118,20 @@ export function publishCatalog(
   expect(publishModelCatalogResult(beginModelCatalogRead(client, scope), scope, result)).toBe(true);
 }
 
-export async function openModelPicker(page: HTMLElement, index = 0): Promise<void> {
+export async function openModelPicker(
+  page: HTMLElement,
+  role: keyof typeof modelPickerLabels = "primary",
+): Promise<void> {
   await updatePickers(page);
-  const picker = modelPickers(page)[index];
-  expect(picker).toBeDefined();
-  const trigger = picker!.querySelector<HTMLButtonElement>(".picker-select__trigger");
+  const picker = modelPicker(page, role);
+  const trigger = picker.querySelector<HTMLButtonElement>(".picker-select__trigger");
   expect(trigger).not.toBeNull();
   if (trigger!.getAttribute("aria-expanded") === "true") {
     trigger!.click();
-    await picker!.updateComplete;
+    await picker.updateComplete;
   }
   trigger!.click();
-  await picker!.updateComplete;
+  await picker.updateComplete;
 }
 
 export function createAuthStatus(
@@ -234,8 +260,18 @@ export function createHarness(initialScopeId: string) {
     lastErrorCode: null,
   };
   const gatewaySource = createApplicationGateway(snapshot);
+  const metadata = createGatewayMetadataObserver(
+    (current) => current === gatewaySource.gateway.snapshot,
+  );
+  let previousSnapshot = { ...snapshot };
+  gatewaySource.gateway.subscribe((next) => {
+    const previous = previousSnapshot;
+    previousSnapshot = { ...next };
+    metadata.synchronize(previous, next);
+  });
   let selectionListener: (() => void) | undefined;
-  const agentSelection = {
+  const settingsAgentSelection = {
+    intentRevision: 0,
     state: {
       selectedId: initialScopeId as string | null,
       scopeId: initialScopeId as string | null,
@@ -253,7 +289,7 @@ export function createHarness(initialScopeId: string) {
   const subscribe = () => () => undefined;
   const owner = createRuntimeConfigCapability(gatewaySource.gateway);
   configOwners.add(owner);
-  const subscribeConfig = owner.subscribe;
+  const subscribeConfig = owner.subscribe.bind(owner);
   const runExternalMutation = owner.runExternalMutation;
   const runtimeConfig = Object.assign(owner, {
     ensureLoaded: vi.fn(owner.ensureLoaded),
@@ -303,7 +339,11 @@ export function createHarness(initialScopeId: string) {
       refreshList: vi.fn(),
       subscribe,
     },
-    agentSelection,
+    settingsAgentSelection,
+    agentSelection: {
+      state: { selectedId: "main", scopeId: "main" },
+      subscribe: () => () => undefined,
+    },
     runtimeConfig,
     overlays: {
       snapshot: { updateRunning: false, updateReconciliationPending: false },
@@ -312,7 +352,7 @@ export function createHarness(initialScopeId: string) {
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
   return {
-    agentSelection,
+    settingsAgentSelection,
     context,
     gatewaySource,
     deferNextAuthStatus,
@@ -371,8 +411,8 @@ export async function waitForProviders(
 }
 
 export async function advanceUsageRetries(): Promise<void> {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    await vi.advanceTimersByTimeAsync(5_000);
+  for (const delay of [5_000, 10_000, 20_000]) {
+    await vi.advanceTimersByTimeAsync(delay);
   }
 }
 
@@ -390,7 +430,8 @@ export function createEmptyModelProvidersRouteData(
     gatewaySnapshot: { ...context.gateway.snapshot, phase: "stopped", client: null },
     data: EMPTY_MODEL_PROVIDERS_DATA,
     client: null,
-    agentId: context.agentSelection.state.selectedId,
+    agentId: context.settingsAgentSelection.state.selectedId,
+    selectionIntentRevision: context.settingsAgentSelection.intentRevision,
   };
 }
 
@@ -402,4 +443,37 @@ export function appendPage(context: ApplicationContext) {
   page.routeData = createEmptyModelProvidersRouteData(context);
   document.body.append(page);
   return page;
+}
+
+export function clickLoginChoice(page: ModelProvidersPageTestElement, choice: string) {
+  const option = page.data?.authStatus?.providerCapabilities
+    ?.flatMap((provider) => provider.loginOptions ?? [])
+    .find((candidate) => candidate.id === choice);
+  expect(option).toBeDefined();
+  const button = [
+    ...page.querySelectorAll<HTMLButtonElement>("[data-models-login-choice] button"),
+  ].find((candidate) => candidate.querySelector("strong")?.textContent === option!.label);
+  expect(button).toBeDefined();
+  button!.click();
+}
+
+export async function startSelectedLogin(page: ModelProvidersPageTestElement, choice: string) {
+  clickLoginChoice(page, choice);
+  await waitForFast(() =>
+    expect(page.querySelector<HTMLInputElement>('input[name="wizard-text"]')?.disabled).toBe(false),
+  );
+}
+
+export async function submitCredential(page: ModelProvidersPageTestElement) {
+  const manual = page.querySelector<HTMLDetailsElement>(".wizard-step__manual-entry");
+  if (manual && !manual.open) {
+    manual.querySelector<HTMLElement>("summary")!.click();
+    expect(manual.open).toBe(true);
+  }
+  const input = page.querySelector<HTMLInputElement>('input[name="wizard-text"]')!;
+  input.value = "synthetic-test-credential";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  await page.updateComplete;
+  page.querySelector<HTMLButtonElement>('.wizard-step__form button[type="submit"]')!.click();
+  await waitForFast(() => expect(input.disabled).toBe(true));
 }

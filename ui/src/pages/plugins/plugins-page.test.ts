@@ -67,6 +67,66 @@ describe("PluginsPage", () => {
     },
   );
 
+  it.each(["missing", "older generation"])(
+    "waits for the initial installed inventory before browsing discovery (%s)",
+    async (routeInventory) => {
+      const current = { ...createResult(), generation: 7 };
+      const inventory = deferred<typeof current>();
+      const { client, request } = createClient(async (method) => {
+        if (method === "plugins.list") {
+          return inventory.promise;
+        }
+        if (method === "plugins.catalog.browse") {
+          return { items: [] };
+        }
+        if (method === "plugins.catalog.categories") {
+          return {
+            categories: [
+              { slug: "memory", label: "Memory", description: "Memory", icon: "brain", order: 0 },
+            ],
+          };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      });
+      const harness = createGateway(client);
+      harness.emit(client, true, {
+        pluginCapabilities: {
+          ok: true,
+          generation: 7,
+          descriptors: [],
+          methods: [],
+          controlUiTabs: [],
+          controlUiWidgetKinds: [],
+          pluginSurfaceUrls: {},
+        },
+      });
+      const { page } = await mountPage(
+        createContext(harness.gateway),
+        createPluginsRouteData(
+          harness.gateway,
+          routeInventory === "missing" ? null : { ...createResult(), generation: 6 },
+          createPluginsRouteLocation("/plugins"),
+        ),
+      );
+      try {
+        expect(request.mock.calls.map(([method]) => method)).toEqual([
+          "plugins.catalog.categories",
+          "plugins.list",
+        ]);
+        expect(page.querySelector(".plugin-catalog-chips")?.textContent).toContain("Memory");
+      } finally {
+        inventory.resolve(current);
+      }
+      await waitForFast(() => expect(page.result).toBe(current));
+      await page.updateComplete;
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "plugins.catalog.categories",
+        "plugins.list",
+        "plugins.catalog.browse",
+      ]);
+    },
+  );
+
   it("surfaces a route catalog load failure without retrying it", async () => {
     const { client, request } = createClient(async () => createResult());
     const harness = createGateway(client);
@@ -99,7 +159,7 @@ describe("PluginsPage", () => {
       expect(page.querySelector('[role="alert"]')?.textContent).toContain("catalog unavailable"),
     );
     expect(page.textContent?.match(/catalog unavailable/gu)).toHaveLength(1);
-    expect(request.mock.calls[0]?.slice(0, 2)).toEqual(["plugins.list", {}]);
+    expect(request).toHaveBeenCalledWith("plugins.list", {}, expect.anything());
   });
 
   it("refreshes the authoritative catalog after a same-client reconnect", async () => {
@@ -183,7 +243,7 @@ describe("PluginsPage", () => {
       source: "clawhub",
       packageName: "@openclaw/bluebubbles",
     } satisfies PluginInstallRequest;
-    page.messages["plugin:workboard"] = { kind: "success", text: "Unrelated message." };
+    page.messages["plugin:workboard"] = { kind: "warning", text: "Unrelated message." };
 
     await page.consentController.install(catalogRequest, installIdentity);
     expect(page.messages[installIdentity]?.installPolicyWarning?.details.reason).toBe(
@@ -201,7 +261,7 @@ describe("PluginsPage", () => {
     );
 
     expect(page.messages[installIdentity]).toBeUndefined();
-    expect(page.messages["plugin:bluebubbles"]?.kind).toBe("success");
+    expect(page.messages["plugin:bluebubbles"]).toBeUndefined();
     expect(page.result?.plugins.map((plugin) => plugin.id)).toEqual(["bluebubbles"]);
     expect(page.messages["plugin:workboard"]?.text).toBe("Unrelated message.");
   });
@@ -466,17 +526,17 @@ describe("PluginsPage", () => {
     );
 
     await activatePluginControl(page, '[data-plugin-id="workboard"]', "Enable or disable");
-    expect(page.busy["plugin:workboard"]).toBe(true);
+    expect(page.busy["plugin:workboard"]).toBe("enable");
 
     harness.emit(replacementClient, true);
     await waitForFast(() => expect(replacementListCount).toBe(1));
     await page.updateComplete;
     await activatePluginControl(page, '[data-plugin-id="workboard"]', "Enable or disable");
-    expect(page.busy["plugin:workboard"]).toBe(true);
+    expect(page.busy["plugin:workboard"]).toBe("enable");
 
     staleMutation.resolve({ ok: true, plugin: enabledPlugin, restartRequired: false });
     await Promise.resolve();
-    expect(page.busy["plugin:workboard"]).toBe(true);
+    expect(page.busy["plugin:workboard"]).toBe("enable");
 
     freshMutation.resolve({ ok: true, plugin: enabledPlugin, restartRequired: false });
     await waitForFast(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
@@ -498,7 +558,8 @@ describe("PluginsPage", () => {
           ok: true,
           pluginId: "community-thing",
           restartRequired: true,
-          removed: ["config entry", "install record", "directory"],
+          removed: ["config entry", "install record"],
+          warnings: ["Some plugin files could not be removed."],
         };
       }
       if (method === "plugins.list") {
@@ -537,11 +598,13 @@ describe("PluginsPage", () => {
 
     await page.uninstall("community-thing", "plugin:community-thing");
 
-    await waitForFast(() =>
-      expect(page.querySelector('[role="status"]')?.textContent).toContain(
-        "Removed Community Thing",
-      ),
+    await page.updateComplete;
+    expect(page.result?.plugins.some((plugin) => plugin.id === "community-thing")).toBe(false);
+    expect(page.querySelector(".plugins-row-message--success")).toBeNull();
+    expect(page.querySelector(".plugins-row-message--warning")?.textContent).toContain(
+      "Some plugin files could not be removed.",
     );
+    expect(page.textContent).not.toContain("Removed Community Thing");
     expect(calls).toContainEqual(["plugins.uninstall", { pluginId: "community-thing" }]);
     expect(calls).toContainEqual(["plugins.list", {}]);
   });
@@ -561,7 +624,12 @@ describe("PluginsPage", () => {
         return uninstallResult.promise;
       }
       if (method === "plugins.setEnabled") {
-        return { ok: true, plugin: enabledPlugin, restartRequired: false };
+        return {
+          ok: true,
+          plugin: enabledPlugin,
+          restartRequired: false,
+          warnings: ["Enable requires attention."],
+        };
       }
       if (method === "plugins.list") {
         return createResult(enabledPlugin);
@@ -589,11 +657,18 @@ describe("PluginsPage", () => {
       pluginId: "community-thing",
       restartRequired: true,
       removed: ["config entry", "install record", "directory"],
+      warnings: ["Old uninstall warning must not replace the newer action."],
     });
     await uninstall;
     await page.updateComplete;
 
+    expect(page.textContent).not.toContain(
+      "Old uninstall warning must not replace the newer action.",
+    );
     expect(page.textContent).not.toContain("Removed Community Thing");
-    expect(page.messages["plugin:workboard"]?.text).toContain("Enabled Workboard");
+    expect(page.messages["plugin:workboard"]).toEqual({
+      kind: "warning",
+      text: "Enable requires attention.",
+    });
   });
 });

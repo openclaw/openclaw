@@ -1,6 +1,12 @@
+import AppKit
 import Foundation
 import OpenClawKit
 import WebKit
+
+enum DashboardRouteProbePurpose: Sendable {
+    case authentication
+    case presentation
+}
 
 extension DashboardManager {
     struct AuxiliaryWindowInstance {
@@ -17,6 +23,8 @@ extension DashboardManager {
         var browserSession: GatewayBrowserSession?
         var signedOut: DashboardFailurePage.SignedOut?
         var autoStartSignIn = false
+        var legacyNativeCredentials: DashboardNativeGatewayAuth.LegacyCredentials?
+        var nativeAuthProvider: DashboardNativeGatewayAuth.Provider?
     }
 
     struct SupersededDashboardPresentation: Error {}
@@ -24,6 +32,31 @@ extension DashboardManager {
     struct NavigationIntent {
         let id = UUID()
         let windowID: ObjectIdentifier?
+    }
+
+    @MainActor
+    struct WindowIntent {
+        let window: NSWindow?
+        private let lifetime: UInt64?
+        private let generation: UInt64?
+
+        init(_ controller: DashboardWindowController?) {
+            self.window = controller?.window
+            self.lifetime = controller?.windowLifetimeRevision
+            self.generation = controller?.windowIntentGeneration
+        }
+
+        func currentController(for target: DashboardGatewayTarget, in manager: DashboardManager)
+            -> DashboardWindowController?
+        {
+            // A replacement document may inherit the shell; a new selection,
+            // close, or experience switch retires the shell's earlier intent.
+            guard let controller = self.window?.windowController as? DashboardWindowController,
+                  manager.target(for: controller) == target,
+                  controller.windowLifetimeRevision == self.lifetime,
+                  controller.windowIntentGeneration == self.generation else { return nil }
+            return controller
+        }
     }
 
     final class ProfileObservation {
@@ -63,6 +96,10 @@ extension DashboardManager {
         },
         browserIdentityURLProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws
             -> URL?)? = { _, _ in nil },
+        legacyCredentialsProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.EndpointSnapshot) async throws
+            -> DashboardNativeGatewayAuth.LegacyCredentials)? = { _, _ in
+            .init(credentials: [:], isCurrent: { true }, waitForInvalidation: nil)
+        },
         routeProbe: @escaping @Sendable (DashboardRouteProbePurpose) async -> Void = { _ in },
         endpointStateProvider: @escaping @Sendable () async -> GatewayEndpointState = {
             .unavailable(mode: .unconfigured, reason: "not configured")
@@ -83,6 +120,7 @@ extension DashboardManager {
             authTokenProvider: authTokenProvider,
             connectionProvider: connectionProvider,
             browserIdentityURLProvider: browserIdentityURLProvider,
+            legacyCredentialsProvider: legacyCredentialsProvider,
             routeProbe: routeProbe,
             endpointStateProvider: endpointStateProvider,
             observeGatewayChanges: observeGatewayChanges,
@@ -99,31 +137,25 @@ extension DashboardManager {
 extension DashboardManager {
     nonisolated static let failureURL = URL(string: "about:blank")!
 
-    nonisolated static let browserSessionRenewalLeadTime: TimeInterval = 15 * 60
-
-    nonisolated static func requiresBrowserSignIn(
-        error: Error?, expiresAt: Date?, userGesture: Bool, now: Date = Date()) -> Bool
-    {
-        if let error { return error as? GatewayBrowserSessionError == .expired }
-        guard userGesture, let expiresAt else { return false }
-        return expiresAt <= now.addingTimeInterval(Self.browserSessionRenewalLeadTime)
-    }
-
-    func canFocusWithoutReload(_ controller: DashboardWindowController, userGesture: Bool) -> Bool {
-        controller.hasCurrentBrowserSession && !controller.isShowingFailurePage &&
-            !Self.requiresBrowserSignIn(
-                error: nil, expiresAt: controller.browserSession?.expiresAt, userGesture: userGesture)
+    func canFocusWithoutReload(_ controller: DashboardWindowController) -> Bool {
+        controller.hasCurrentBrowserSession && !controller.isShowingFailurePage
     }
 
     func loadWindow(
-        _ controller: DashboardWindowController, configuration: WindowConfiguration, present: Bool)
+        _ controller: DashboardWindowController,
+        configuration: WindowConfiguration,
+        present: Bool,
+        restoringRoute: URL? = nil)
     {
+        controller.documentHost.nativeGatewayAuthProvider = configuration.nativeAuthProvider
+        controller.documentHost.legacyNativeCredentials = configuration.legacyNativeCredentials
         if let page = configuration.signedOut {
             controller.showSignedOut(page, present: present, autoStart: configuration.autoStartSignIn)
         } else if present {
             controller.show(url: configuration.url, auth: configuration.auth)
         } else {
-            controller.loadInBackground(url: configuration.url, auth: configuration.auth)
+            controller.loadInBackground(
+                url: configuration.url, auth: configuration.auth, restoringRoute: restoringRoute)
         }
     }
 }
@@ -143,7 +175,7 @@ extension DashboardManager.WindowConfiguration {
             profile = context.profile
             expiry = context.expiresAt
         } else {
-            guard DashboardManager.requiresBrowserSignIn(error: error, expiresAt: nil, userGesture: userGesture),
+            guard error as? GatewayBrowserSessionError == .expired,
                   let endpoint, let session = endpoint.browserSession else { return nil }
             profile = MacGatewayProfile(
                 id: profileID, name: name ?? endpoint.config.url.host ?? "Gateway", url: endpoint.config.url)
@@ -190,18 +222,28 @@ extension DashboardManager {
         let identityURL = mode == .remote
             ? try await browserIdentityURLProvider(target, config)
             : nil
-        let dashboardConfig: GatewayConnection.Config = browserSession == nil
-            ? config : (url: config.url, token: nil, password: nil)
+        // Device grants remain challenge-only. Shared startup credentials retain
+        // the released UI contract, but come only from the native accepted binding.
+        let dashboardConfig: GatewayConnection.Config = (url: config.url, token: nil, password: nil)
         let url = try identityURL ?? GatewayEndpointStore.dashboardURL(
-            for: dashboardConfig, mode: mode, authToken: browserSession == nil ? token : nil)
+            for: dashboardConfig, mode: mode)
         try browserSession?.validate(for: url)
+        let legacyCredentials: DashboardNativeGatewayAuth.LegacyCredentials? = if identityURL == nil,
+                                                                                  browserSession == nil
+        {
+            try await self.legacyCredentialsProvider(target, endpoint)
+        } else {
+            nil
+        }
+        guard legacyCredentials?.isCurrent() != false else { throw CancellationError() }
         let auth: DashboardWindowAuth = if identityURL != nil || browserSession != nil {
             .browserIdentity(gatewayUrl: Self.websocketURLString(for: url))
         } else {
-            DashboardWindowAuth(
+            .nativeDevice(
                 gatewayUrl: Self.websocketURLString(for: url),
                 token: token,
-                password: config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
+                password: config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
+                legacyCredentials: legacyCredentials?.credentials)
         }
         let name = target == .primary ? "OpenClaw"
             : self.gatewayEntries.first { $0.id == target.bridgeID }?.name ?? url.host ?? "Gateway"
@@ -213,6 +255,59 @@ extension DashboardManager {
             tlsParams: identityURL == nil && browserSession == nil ? endpoint.tls?.params : nil,
             mode: mode,
             displayName: name,
-            browserSession: browserSession)
+            browserSession: browserSession,
+            legacyNativeCredentials: legacyCredentials,
+            nativeAuthProvider: auth.usesNativeDevice ? self
+                .nativeAuthProvider(target: target, endpoint: endpoint) : nil)
+    }
+}
+
+extension DashboardManager {
+    func nativeAuthProvider(
+        target: DashboardGatewayTarget,
+        endpoint: GatewayConnection.EndpointSnapshot) -> DashboardNativeGatewayAuth.Provider
+    {
+        let connectionProvider = self.connectionProvider
+        return { nonce, signedAt in
+            let connection = await connectionProvider(target)
+            return try await connection.controlUiNativeAuth(endpoint: endpoint, nonce: nonce, signedAt: signedAt)
+        }
+    }
+}
+
+extension DashboardManager {
+    static func requiresIsolatedDashboardDocument(
+        _ controller: DashboardWindowController,
+        configuration: WindowConfiguration,
+        endpoint: GatewayConnection.EndpointSnapshot,
+        displayedRoute: (revision: UInt64?, authority: UInt64?)?,
+        comparePrimaryRoute: Bool = true) -> Bool
+    {
+        // A saved renewal may reach the catalog before its serialized cookie
+        // write finishes. The existing account lease remains valid throughout.
+        controller.tlsParams != configuration.tlsParams ||
+            controller.auth != configuration.auth ||
+            !controller.hasCurrentBrowserSession ||
+            controller.browserSession?.browserDataPrincipal != configuration.browserSession?.browserDataPrincipal ||
+            (comparePrimaryRoute && (endpoint.routeAuthority != displayedRoute?.authority ||
+                    endpoint.revision.map { $0 != displayedRoute?.revision } == true))
+    }
+}
+
+extension DashboardManager {
+    func localWindowConfiguration() async throws
+        -> (configuration: WindowConfiguration, endpoint: GatewayConnection.EndpointSnapshot)
+    {
+        let state = AppStateStore.shared
+        guard state.connectionMode == .remote, state.hostsLocalGatewayWithRemotePrimary,
+              state.gatewayConfigIsCurrentForRouting else { throw CancellationError() }
+        let generation = state.gatewayRoutingGeneration
+        let endpoint = try GatewayEndpointStore.localEndpoint(hostingBesideRemotePrimary: true)
+        let configuration = try await dashboardConfiguration(
+            endpoint: endpoint, mode: .local, target: .local, token: endpoint.config.token)
+        guard state.connectionMode == .remote, state.hostsLocalGatewayWithRemotePrimary,
+              state.gatewayRoutingGeneration == generation,
+              state.gatewayConfigIsCurrentForRouting else { throw CancellationError() }
+        return (configuration, endpoint)
     }
 }

@@ -1,5 +1,6 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { INTERNAL_MEMORY_PATH_PARAM } from "../../app-route-paths.ts";
+import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 
 export const MODEL_SETTINGS_TARGET_IDS = { behavior: "settings-model-behavior" } as const;
 
@@ -7,6 +8,7 @@ export const APPEARANCE_SETTINGS_TARGET_IDS = {
   language: "settings-language",
   theme: "settings-appearance-theme",
   accent: "settings-appearance-accent",
+  typography: "settings-appearance-typography",
   textSize: "settings-appearance-text-size",
   sidebar: "settings-appearance-sidebar",
   chat: "settings-appearance-chat",
@@ -36,6 +38,8 @@ export type ConfigRouteData = {
   /** Raw `?tab=`; curated hub pages normalize it against their own tab set. */
   tab: string | null;
   targetBlockId: string | null;
+  /** Memory URL intent is applied only if a newer sidebar choice has not superseded it. */
+  agentSelectionIntent?: { owner: AgentSelectionCapability; revision: number };
 };
 
 export function configTargetIdFromHash(hash: string): string | null {

@@ -16,44 +16,25 @@ import type { AgentContextLimitsSchema, HeartbeatSchema } from "./zod-schema.age
 
 type SchemaAgentDefaultsConfig = z.input<typeof AgentDefaultsBaseSchema>;
 
-/** Workspace bootstrap-file injection policy for agent system prompts. */
-export type AgentContextInjection = "always" | "continuation-skip" | "never";
-/**
- * Optional bootstrap files that setup can skip while still creating required
- * agent files. "HEARTBEAT.md" stays accepted as legacy config input even
- * though workspace setup no longer writes it.
- */
-export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" | "IDENTITY.md";
-/** Embedded runner behavior contract used by strict-agentic provider flows. */
-export type EmbeddedAgentExecutionContract = "default" | "strict-agentic";
-/** Prompt-only default for how strongly agents should delegate to sub-agents. */
-export type SubagentDelegationMode = "suggest" | "prefer";
-/** Image compression/detail preference used before sending image inputs to models. */
-export type AgentImageQualityPreference = "auto" | "efficient" | "balanced" | "high";
-/** Scope of an interactive model selection when no explicit scope is supplied. */
-export type ModelSelectionScope = "session" | "agent" | "global";
-/** Canonical thinking levels accepted by agent defaults and compaction overrides. */
-export type AgentThinkingLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "adaptive"
-  | "max"
-  | "ultra";
+export type AgentContextInjection = NonNullable<SchemaAgentDefaultsConfig["contextInjection"]>;
+export type OptionalBootstrapFileName = NonNullable<
+  SchemaAgentDefaultsConfig["skipOptionalBootstrapFiles"]
+>[number];
+export type EmbeddedAgentExecutionContract = NonNullable<
+  NonNullable<SchemaAgentDefaultsConfig["embeddedAgent"]>["executionContract"]
+>;
+export type SubagentDelegationMode = NonNullable<
+  NonNullable<SchemaAgentDefaultsConfig["subagents"]>["delegationMode"]
+>;
+export type AgentImageQualityPreference = NonNullable<SchemaAgentDefaultsConfig["imageQuality"]>;
+export type ModelSelectionScope = NonNullable<SchemaAgentDefaultsConfig["modelSelectionScope"]>;
+export type AgentThinkingLevel = NonNullable<SchemaAgentDefaultsConfig["thinkingDefault"]>;
 
 export type AgentModelEntryConfig = NonNullable<SchemaAgentDefaultsConfig["models"]>[string];
 
 export type AgentModelPolicyConfig = NonNullable<SchemaAgentDefaultsConfig["modelPolicy"]>;
 
-export type AgentModelListConfig = {
-  /** Primary provider/model ref. */
-  primary?: string;
-  /** Ordered provider/model fallback refs. */
-  fallbacks?: string[];
-};
+export type AgentModelListConfig = Exclude<NonNullable<SchemaAgentDefaultsConfig["model"]>, string>;
 
 export type AgentContextPruningConfig = NonNullable<SchemaAgentDefaultsConfig["contextPruning"]>;
 
@@ -93,9 +74,11 @@ export type AgentDefaultsConfig = SchemaAgentDefaultsConfig & {
   };
   sandbox?: AgentSandboxConfig;
 };
-export type AgentCompactionMode = "default" | "safeguard";
-export type AgentCompactionPostIndexSyncMode = "off" | "async" | "await";
-export type AgentCompactionIdentifierPolicy = "strict" | "off";
+export type AgentCompactionMode = NonNullable<AgentCompactionConfig["mode"]>;
+export type AgentCompactionPostIndexSyncMode = NonNullable<AgentCompactionConfig["postIndexSync"]>;
+export type AgentCompactionIdentifierPolicy = NonNullable<
+  AgentCompactionConfig["identifierPolicy"]
+>;
 export type AgentCompactionQualityGuardConfig = NonNullable<AgentCompactionConfig["qualityGuard"]>;
 
 export type AgentCompactionMidTurnPrecheckConfig = NonNullable<

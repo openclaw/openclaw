@@ -58,7 +58,7 @@ actor DiagnosticsFileLog {
 
     private func write(record: Record) {
         do {
-            try self.ensureDirectory()
+            try FileManager().createDirectory(at: Self.logDirectoryURL(), withIntermediateDirectories: true)
             try self.rotateIfNeeded()
             try self.append(record: record)
         } catch {
@@ -66,17 +66,9 @@ actor DiagnosticsFileLog {
         }
     }
 
-    private func ensureDirectory() throws {
-        try FileManager().createDirectory(
-            at: Self.logDirectoryURL(),
-            withIntermediateDirectories: true)
-    }
-
     private func append(record: Record) throws {
         let url = Self.logFileURL()
-        let data = try JSONEncoder().encode(record)
-        var line = Data()
-        line.append(data)
+        var line = try JSONEncoder().encode(record)
         line.append(0x0A) // newline
 
         let fm = FileManager()

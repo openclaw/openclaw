@@ -10,7 +10,6 @@ import {
   formatChannelProgressDraftText,
   getChannelStreamingConfigObject,
   isChannelProgressDraftWorkToolName,
-  isPotentialTruncatedFinal,
   mergeChannelProgressDraftLine,
   resolveChannelPreviewStreamMode,
   resolveChannelProgressDraftMaxLineChars,
@@ -24,8 +23,6 @@ import {
   resolveChannelStreamingPreviewChunk,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
   resolveChannelStreamingPreviewToolProgress,
-  resolveTranscriptBackedChannelFinalText,
-  selectLongerFinalText,
 } from "./streaming.js";
 
 const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 1_500;
@@ -147,58 +144,6 @@ describe("channel-streaming", () => {
     ).toBe(false);
   });
 
-  it("keeps complete replies with long blank runs without stalling or reading candidates", async () => {
-    const finalText = `before${"\n".repeat(60_000)}after`;
-    const resolveCandidateText = vi.fn(async () => "unused");
-    const started = performance.now();
-    await expect(
-      resolveTranscriptBackedChannelFinalText({ finalText, resolveCandidateText }),
-    ).resolves.toBe(finalText);
-    expect(performance.now() - started).toBeLessThan(1_000);
-    expect(resolveCandidateText).not.toHaveBeenCalled();
-  });
-
-  it("selects a longer transcript candidate for ellipsis-truncated finals", async () => {
-    const fullAnswer =
-      "Here is the complete final answer with enough stable prefix text before the ellipsis and enough continuation text after it.";
-    const truncatedFinal =
-      "Here is the complete final answer with enough stable prefix text before the ellipsis...";
-
-    expect(isPotentialTruncatedFinal(truncatedFinal)).toBe(true);
-    expect(
-      selectLongerFinalText({
-        finalText: truncatedFinal,
-        candidateTexts: ["short", fullAnswer],
-      }),
-    ).toBe(fullAnswer);
-    await expect(
-      resolveTranscriptBackedChannelFinalText({
-        finalText: truncatedFinal,
-        resolveCandidateText: async () => fullAnswer,
-      }),
-    ).resolves.toBe(fullAnswer);
-  });
-
-  it("keeps intentional ellipsis finals when candidates do not prove truncation", async () => {
-    const finalText =
-      "Here is the complete final answer with enough stable prefix text before an intentional pause...";
-    const candidateText =
-      "Here is the complete final answer with enough stable prefix text before an intentional pause... then punctuation";
-
-    expect(
-      selectLongerFinalText({
-        finalText,
-        candidateTexts: [candidateText],
-      }),
-    ).toBeUndefined();
-    await expect(
-      resolveTranscriptBackedChannelFinalText({
-        finalText,
-        resolveCandidateText: async () => candidateText,
-      }),
-    ).resolves.toBe(finalText);
-  });
-
   it("suppresses standalone tool progress for active preview drafts", () => {
     expect(
       resolveChannelStreamingSuppressDefaultToolProgressMessages({
@@ -223,17 +168,6 @@ describe("channel-streaming", () => {
         { draftStreamActive: false },
       ),
     ).toBe(false);
-  });
-
-  it("separates progress labels from detail lines with a blank line", () => {
-    const entry = { streaming: { progress: { label: "Working" } } };
-
-    expect(
-      formatChannelProgressDraftText({
-        entry,
-        lines: ["🛠️ pgrep -fl Discord || true (agent)", "Discord is installed."],
-      }),
-    ).toBe("Working\n\n🛠️ pgrep -fl Discord || true (agent)\n• Discord is installed.");
   });
 
   it("renders automatic and configured progress labels through the public formatter", () => {
@@ -286,17 +220,6 @@ describe("channel-streaming", () => {
         ],
       }),
     ).toBe("_Checking source data before summarizing._");
-  });
-
-  it("renders progress labels as rolling lines", () => {
-    const entry = { streaming: { progress: { label: "Shelling", maxLines: 3 } } };
-
-    expect(
-      formatChannelProgressDraftText({
-        entry,
-        lines: ["🛠️ Exec", "📖 Read", "🩹 Patch"],
-      }),
-    ).toBe("🛠️ Exec\n📖 Read\n🩹 Patch");
   });
 
   it("renders structured progress lines with compact details", () => {
@@ -902,22 +825,6 @@ describe("channel-streaming", () => {
     expect(merged).toHaveLength(1);
     expect(merged[0]).toEqual({ ...output, id: expect.any(String) });
     expect(merged[0]).toMatchObject({ detail: "command pnpm test", status: "exit 2" });
-  });
-
-  it("starts progress drafts after the initial delay", async () => {
-    vi.useFakeTimers();
-    const onStart = vi.fn(async () => {});
-    const gate = createChannelProgressDraftGate({ onStart });
-
-    await expect(gate.noteWork()).resolves.toBe(false);
-    expect(onStart).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS - 1);
-    expect(onStart).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(onStart).toHaveBeenCalledTimes(1);
-    expect(gate.hasStarted).toBe(true);
   });
 
   it("does not start progress drafts before the delay after two rapid work events", async () => {

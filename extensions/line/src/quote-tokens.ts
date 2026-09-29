@@ -1,9 +1,10 @@
 // Line plugin module implements quote token behavior.
 import type { messagingApi, webhook } from "@line/bot-sdk";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeAccountId, resolveDefaultLineAccountId } from "./accounts.js";
+import { resolveDefaultLineAccountId } from "./accounts.js";
 import { normalizeLineMessagingTarget } from "./messaging-target.js";
 
 type Message = messagingApi.Message;

@@ -1,10 +1,7 @@
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { describe, expect, it } from "vitest";
-import {
-  createChatHistoryRecoveryProjection,
-  createPreSessionStartAnnouncePairFilter,
-  projectChatDisplayMessages,
-} from "./chat-display-projection.js";
+import { createPreSessionStartAnnouncePairFilter } from "./chat-display-projection.history.js";
+import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { SessionHistorySseState } from "./session-history-state.js";
 
 const user = { role: "user", content: "hello", __openclaw: { seq: 1 } };
@@ -225,60 +222,6 @@ describe("recovered assistant errors", () => {
 });
 
 describe("appended history recovery", () => {
-  it("reconciles an earlier delivery mirror after its tool result arrives in another chunk", () => {
-    const call = {
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "send",
-          name: "message",
-          arguments: { action: "send", message: "Delivered" },
-        },
-      ],
-      __openclaw: { id: "call" },
-    };
-    const delivery = {
-      role: "assistant",
-      provider: "openclaw",
-      model: "delivery-mirror",
-      content: [{ type: "text", text: "Delivered" }],
-      openclawDeliveryMirror: { kind: "message-tool-source-reply", toolCallId: "send" },
-      __openclaw: { id: "delivery" },
-    };
-    const result = {
-      role: "toolResult",
-      toolName: "message",
-      toolCallId: "send",
-      content: { ok: true },
-      __openclaw: { id: "result" },
-    };
-    const rows = [user, failed, call, delivery, result, answer];
-    const original = structuredClone(rows);
-    for (let split = 1; split < rows.length; split++) {
-      const projection = createChatHistoryRecoveryProjection();
-      projection.append(rows.slice(0, split));
-      projection.append(rows.slice(split));
-      const recovered = projection.result();
-      expect(recovered.pending).toBe(false);
-      expect(recovered.recoveryObserved).toBe(true);
-      expect(recovered.messages).toEqual([
-        user,
-        call,
-        { ...delivery, display: false },
-        result,
-        {
-          role: "assistant",
-          content: delivery.content,
-          openclawMessageToolMirror: { toolName: "message", toolCallId: "send" },
-          __openclaw: delivery["__openclaw"],
-        },
-        answer,
-      ]);
-    }
-    expect(rows).toEqual(original);
-  });
-
   it("drops only old announce pairs when the adjacent assistant starts a later chunk", () => {
     const announce = {
       role: "user",

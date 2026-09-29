@@ -1,10 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
+import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import { retainAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
@@ -19,11 +22,19 @@ export function withOpenClawAgentDatabaseWrite<T>(
   operation: (database: OpenClawAgentDatabase) => T,
   expectedDatabase?: DatabaseSync,
 ): Promise<T> {
-  const options = { ...inputOptions, env: { ...(inputOptions.env ?? process.env) } };
+  const options = {
+    ...inputOptions,
+    env: cloneEnvWithPlatformSemantics(inputOptions.env ?? process.env),
+  };
   // Relative paths and legacy-root discovery must not retarget a queued operation.
   options.env.OPENCLAW_STATE_DIR = resolveStateDir(options.env);
-  options.path = resolveOpenClawAgentSqlitePath(options);
+  const pathname = resolveOpenClawAgentSqlitePath(options);
+  options.path = pathname;
   const run = async (database: OpenClawAgentDatabase): Promise<T> => {
+    const { identity, birthtime } = readOpenClawAgentDatabaseIdentity(database);
+    if (typeof identity === "string") {
+      assertExistingDatabaseIdentity(pathname, `file:${identity}`, birthtime);
+    }
     const result = operation(database);
     if (isPromiseLike(result)) {
       // A malformed callback must not leave an admitted tail writing after the
@@ -35,9 +46,9 @@ export function withOpenClawAgentDatabaseWrite<T>(
   };
   return runOpenClawAgentWriteAdmission(
     options,
-    async () => {
+    async (_identity, assertCurrent) => {
       if (!expectedDatabase) {
-        return await withOpenClawAgentDatabaseAsync(options, run);
+        return await withOpenClawAgentDatabaseAsync(options, run, assertCurrent);
       }
       const database = getOpenClawAgentDatabaseIfOpen(options);
       if (!database || database.db !== expectedDatabase || !expectedDatabase.isOpen) {
