@@ -1539,6 +1539,37 @@ describe("google transport stream", () => {
     expect(result.errorMessage).toContain("incomplete");
   });
 
+  it("rejects an oversized incomplete frame on a real Google HTTP/SSE stream", async () => {
+    const server = createServer((request, response) => {
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(`data: ${"x".repeat(16 * 1024 * 1024)}`);
+      });
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing Google loopback server address");
+      }
+      guardedFetchMock.mockImplementation((_url, init) =>
+        fetch(`http://127.0.0.1:${address.port}/stream`, init),
+      );
+      const result = await runGeminiStreamResult({ options: { apiKey: "test-google-key" } });
+
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toContain("Google SSE frame exceeds 16777216 bytes");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it.each([
     { label: "keepalive comment", tail: ": keepalive\n" },
     { label: "control fields", tail: "event: ping\nid: heartbeat" },

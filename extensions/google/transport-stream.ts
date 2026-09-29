@@ -111,6 +111,7 @@ const GOOGLE_NATIVE_VIDEO_MIME: ReadonlySet<string> = new Set([
 const GOOGLE_VIDEO_SLOT_OMISSION = "(video omitted: native video slot unavailable)";
 const GOOGLE_VIDEO_MIME_OMISSION = "(video omitted: unsupported Google video MIME type)";
 const GOOGLE_REQUEST_BYTES_EXCLUSIVE = 20_000_000;
+const GOOGLE_SSE_FRAME_MAX_BYTES = 16 * 1024 * 1024;
 type GoogleVideoSlots = Map<Record<string, unknown>, VideoContent>;
 
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS = 45_000;
@@ -954,7 +955,15 @@ async function* parseGoogleSseChunks(
         buffer += decoder.decode(value, { stream: true });
       }
       let boundary = GOOGLE_SSE_EVENT_BOUNDARY_RE.exec(buffer);
+      if (boundary === null && Buffer.byteLength(buffer, "utf8") > GOOGLE_SSE_FRAME_MAX_BYTES) {
+        throw new Error(`Google SSE frame exceeds ${GOOGLE_SSE_FRAME_MAX_BYTES} bytes`);
+      }
       while (boundary) {
+        if (
+          Buffer.byteLength(buffer.slice(0, boundary.index), "utf8") > GOOGLE_SSE_FRAME_MAX_BYTES
+        ) {
+          throw new Error(`Google SSE frame exceeds ${GOOGLE_SSE_FRAME_MAX_BYTES} bytes`);
+        }
         const rawEvent = buffer.slice(0, boundary.index);
         buffer = buffer.slice(boundary.index + boundary[0].length);
         boundary = GOOGLE_SSE_EVENT_BOUNDARY_RE.exec(buffer);
