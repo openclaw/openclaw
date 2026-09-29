@@ -649,7 +649,9 @@ export function runServiceChildGroupAnchor(): void {
       rootResultDelivery = send({ type: "root-result", code, signal });
       rootExited.resolve();
       void settleRoot();
-      if (subreaper && state === "active") {
+      // Worker death retires its scope, but an ordinary command may deliberately
+      // leave background descendants. Their lineage still owns natural completion.
+      if (subreaper && start?.ownedWorker && state === "active") {
         void requestCleanup("lineage-lost");
       }
     });
