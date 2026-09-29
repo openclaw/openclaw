@@ -10,7 +10,10 @@ import {
   loadAuthProfileStoreForRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
 } from "../agents/auth-profiles/store-runtime.js";
-import { resolvePersistedAuthProfileOwnerAgentDir } from "../agents/auth-profiles/store.js";
+import {
+  findPersistedAuthProfileCredential,
+  resolvePersistedAuthProfileOwnerAgentDir,
+} from "../agents/auth-profiles/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -243,7 +246,10 @@ describe("Doctor shared auth health", () => {
       writePersistedAuthProfileStoreRaw({ version: 1, profiles: { [profileId]: shared } });
       writePersistedAuthProfileStoreRaw({ version: 1, profiles: { [profileId]: local } }, agentDir);
 
-      expect(loadAuthProfileStoreForRuntime(agentDir).profiles[profileId]).toEqual(local);
+      expect(loadAuthProfileStoreForRuntime(agentDir).profiles[profileId]).toEqual(
+        scenario.sameAccount ? shared : local,
+      );
+      expect(findPersistedAuthProfileCredential({ agentDir, profileId })).toEqual(local);
       expect(resolvePersistedAuthProfileOwnerAgentDir({ agentDir, profileId })).toBe(
         scenario.sameAccount ? undefined : agentDir,
       );
@@ -277,6 +283,7 @@ describe("Doctor shared auth health", () => {
           }),
         );
       }
+      expect(findPersistedAuthProfileCredential({ agentDir, profileId })).toEqual(local);
     });
   });
 });

@@ -3,6 +3,7 @@
  * Keeps store snapshots JSON-serializable before callers mutate or persist
  * profile state.
  */
+import { isDeepStrictEqual } from "node:util";
 import type { AuthProfileStore } from "./types.js";
 
 /** Deep-clones an auth profile store and rejects non-JSON values. */
@@ -15,4 +16,12 @@ export function cloneAuthProfileStore<T extends AuthProfileStore>(store: T): T {
       return value;
     }),
   ) as T;
+}
+
+/** Compare the same JSON shape; materialization can add or drop undefined optional fields. */
+export function areAuthProfileStoresEqual(
+  left: AuthProfileStore,
+  right: AuthProfileStore,
+): boolean {
+  return isDeepStrictEqual(cloneAuthProfileStore(left), cloneAuthProfileStore(right));
 }

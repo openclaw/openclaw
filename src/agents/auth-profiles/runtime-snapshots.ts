@@ -12,7 +12,7 @@ import {
 } from "./mutation-lineage.js";
 import { publishOAuthRefreshClaimIdentities } from "./oauth-refresh-observation.js";
 import { captureAuthProfileOwnerScope } from "./path-resolve.js";
-import { buildPersistedAuthProfileSecretsStore, mergeAuthProfileStores } from "./persisted.js";
+import { buildPersistedAuthProfileSecretsStore } from "./persisted.js";
 import { removePersonalAuthProfileReferences } from "./runtime-external-profile-references.js";
 import {
   clearAllRuntimeAuthMaterializations,
@@ -29,6 +29,7 @@ import {
   resolveRuntimeAuthSharedOwnerPath,
   runtimeAuthCredentialState as credentialState,
   runtimeAuthMetadataState,
+  mergeLocalAuthProfileStoreWithInheritedStore,
   type RuntimeAuthSharedOwner,
   type RuntimeAuthProfileLegacyCandidates,
   type OwnedRuntimeAuthProfileStoreSnapshotEntry,
@@ -285,9 +286,7 @@ export function getPreparedRuntimeAuthProfileStoreSnapshotCore(
   const requested = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(requestedKey);
   // With no agent, the shared snapshot wins without merging the inherited store.
   if (agentDir && inherited && requested) {
-    return mergeAuthProfileStores(inherited, requested, {
-      preserveBaseRuntimeExternalProfiles: true,
-    });
+    return mergeLocalAuthProfileStoreWithInheritedStore(requested, inherited);
   }
   if (agentDir && !requested && inherited) {
     // The shared snapshot owns its order; this agent has no local override to reset.
@@ -325,9 +324,7 @@ export function createPreparedRuntimeAuthProfileUsageReader(
     const requested = current.get(requestedKey);
     const published =
       inherited && requested && inheritedKey !== requestedKey
-        ? mergeAuthProfileStores(inherited, requested, {
-            preserveBaseRuntimeExternalProfiles: true,
-          })
+        ? mergeLocalAuthProfileStoreWithInheritedStore(requested, inherited)
         : (requested ?? inherited);
     if (!published) {
       return store;

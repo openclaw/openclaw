@@ -664,7 +664,15 @@ describe("runtime auth profile snapshots", () => {
         },
         inheritedAuthDir,
       );
-      setRuntimeAuthProfileStoreSnapshot(createStore("agent"), agentDir);
+      const localStore = createStore("agent");
+      const localCredential = localStore.profiles["openai:default"];
+      if (localCredential?.type !== "oauth") {
+        throw new Error("Expected local OAuth fixture");
+      }
+      // An agent-local account overrides the inherited profile; copies of the
+      // inherited account instead follow the canonical OAuth owner.
+      localCredential.accountId = "acct-agent";
+      setRuntimeAuthProfileStoreSnapshot(localStore, agentDir);
 
       const prepared = getPreparedRuntimeAuthProfileStoreSnapshotCore(agentDir, inheritedAuthDir);
 

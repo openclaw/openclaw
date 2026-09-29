@@ -1,6 +1,8 @@
 /**
  * Tests credential validation across legacy OAuth profile fallback.
  */
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
@@ -11,6 +13,7 @@ import {
   createOAuthTestTempRoot,
   removeOAuthTestTempRoot,
 } from "./oauth-test-utils.js";
+import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
@@ -55,9 +58,11 @@ function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCreden
 
 describe("resolveApiKeyForProfile fallback credential validation", () => {
   it.each([
-    { name: "returns an accepted fallback", reject: false },
-    { name: "rejects an invalid fallback", reject: true },
-  ])("$name", async ({ reject }) => {
+    { name: "returns an accepted fallback", reject: false, inherited: false },
+    { name: "rejects an invalid fallback", reject: true, inherited: false },
+    { name: "returns an accepted inherited fallback", reject: false, inherited: true },
+    { name: "rejects an invalid inherited fallback", reject: true, inherited: true },
+  ])("$name", async ({ reject, inherited }) => {
     const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
     let tempRoot = "";
 
@@ -67,6 +72,8 @@ describe("resolveApiKeyForProfile fallback credential validation", () => {
       refreshProviderOAuthCredentialWithPluginMock.mockReset();
       tempRoot = await createOAuthTestTempRoot("openclaw-oauth-validator-fallback-");
       const mainAgentDir = await createOAuthMainAgentDir(tempRoot);
+      const agentDir = inherited ? path.join(tempRoot, "agents", "child", "agent") : mainAgentDir;
+      await fs.mkdir(agentDir, { recursive: true });
       const legacyProfileId = "openai:default";
       const fallbackProfileId = "openai:alternate";
       const fallbackCredential = createCredential({
@@ -85,13 +92,20 @@ describe("resolveApiKeyForProfile fallback credential validation", () => {
         {
           version: 1,
           profiles: {
-            [legacyProfileId]: legacyCredential,
+            ...(inherited ? {} : { [legacyProfileId]: legacyCredential }),
             [fallbackProfileId]: fallbackCredential,
           },
         },
         mainAgentDir,
         { filterExternalAuthProfiles: false },
       );
+      if (inherited) {
+        saveAuthProfileStore(
+          { version: 1, profiles: { [legacyProfileId]: legacyCredential } },
+          agentDir,
+          { filterExternalAuthProfiles: false },
+        );
+      }
       refreshProviderOAuthCredentialWithPluginMock.mockRejectedValueOnce(
         new Error("primary refresh failed"),
       );
@@ -111,9 +125,9 @@ describe("resolveApiKeyForProfile fallback credential validation", () => {
             },
           },
         },
-        store: ensureAuthProfileStoreWithoutExternalProfiles(mainAgentDir),
+        store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir),
         profileId: legacyProfileId,
-        agentDir: mainAgentDir,
+        agentDir,
         validateOAuthCredential,
       });
 
@@ -136,6 +150,11 @@ describe("resolveApiKeyForProfile fallback credential validation", () => {
       expect(
         ensureAuthProfileStoreWithoutExternalProfiles(mainAgentDir).profiles[fallbackProfileId],
       ).toEqual(fallbackCredential);
+      if (inherited) {
+        expect(
+          loadPersistedAuthProfileStore(agentDir)?.profiles[fallbackProfileId],
+        ).toBeUndefined();
+      }
     } finally {
       envSnapshot.restore();
       resetFileLockStateForTest();
