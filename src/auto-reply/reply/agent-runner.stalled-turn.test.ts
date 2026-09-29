@@ -201,27 +201,32 @@ describe("runReplyAgent stalled turn continuation", () => {
   });
 
   // Default DM scope shares one main session across senders.
-  it("keeps another sender's queued request separate and recovers on the stalled route", async () => {
+  it("never hands the stalled request past another sender's earlier queued request", async () => {
     const stalled = createStalledRun();
     const queued = createQueuedRequest({ senderId: "bystander", to: "67890" });
-    expect(enqueueFollowupRun(queueKey, queued, settings, "message-id", drainedRuns, false)).toBe(
-      true,
-    );
+    const sameSenderLater = createQueuedRequest({ senderId: "traveler", to: "12345" });
+    sameSenderLater.messageId = "msg-later";
+    for (const run of [queued, sameSenderLater]) {
+      expect(enqueueFollowupRun(queueKey, run, settings, "message-id", drainedRuns, false)).toBe(
+        true,
+      );
+    }
     await stallBeforeOutput(stalled);
 
     expect(stalled.runState.continueStalledTurn?.()).toBe(true);
     expect(queued.currentInboundContext).toBeUndefined();
+    expect(sameSenderLater.currentInboundContext).toBeUndefined();
 
     await settleStalledOwner(stalled);
-    await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledTimes(2));
-    const [recovery, next] = drainedRuns.mock.calls.map(([run]) => run);
+    await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledTimes(3));
+    const [recovery, next, last] = drainedRuns.mock.calls.map(([run]) => run);
     expect(recovery).toMatchObject({
       stalledTurnRecovery: true,
       originatingTo: "12345",
       run: { senderId: "traveler" },
     });
     expect(next).toBe(queued);
-    expect(next?.prompt).toBe("answer already");
+    expect(last).toBe(sameSenderLater);
   });
 
   it("falls back to the notice once the stalled turn's authority is revoked", async () => {

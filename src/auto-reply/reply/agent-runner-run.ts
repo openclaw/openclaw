@@ -56,8 +56,8 @@ import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import {
+  claimNextQueuedFollowupRequestFrom,
   enqueueFollowupRun,
-  findQueuedFollowupRequestFrom,
   scheduleFollowupDrain,
 } from "./queue.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
@@ -600,7 +600,7 @@ export async function runReplyAgent(
   };
   if (replyOperationRunState && !isHeartbeat && replyExpectation === "required") {
     // Dispatch owns the stall notice; this owner holds the queue facts needed to answer
-    // instead. The same sender's queued request inherits the guidance; otherwise one
+    // instead. The same sender's next queued request inherits the guidance; otherwise one
     // recovery run bound to this turn's route and authority is queued.
     replyOperationRunState.continueStalledTurn = () => {
       try {
@@ -608,7 +608,7 @@ export async function runReplyAgent(
       } catch {
         return false;
       }
-      const queuedRequest = findQueuedFollowupRequestFrom(queueKey, followupRun);
+      const queuedRequest = claimNextQueuedFollowupRequestFrom(queueKey, followupRun);
       if (queuedRequest) {
         queuedRequest.currentInboundContext = appendCurrentInboundContext(
           queuedRequest.currentInboundContext,

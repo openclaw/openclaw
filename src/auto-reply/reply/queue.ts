@@ -3,8 +3,8 @@
 export { clearSessionQueues } from "./queue/cleanup.js";
 export { scheduleFollowupDrain } from "./queue/drain.js";
 export {
+  claimNextQueuedFollowupRequestFrom,
   enqueueFollowupRun,
-  findQueuedFollowupRequestFrom,
   getFollowupQueueDepth,
   parkSteerCandidate,
 } from "./queue/enqueue.js";

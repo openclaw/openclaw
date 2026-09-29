@@ -277,25 +277,31 @@ export function getFollowupQueueDepth(key: string): number {
 }
 
 /**
- * Next pending user request from the same route and principal as `source`, so it can
- * answer for it; internal retries and ambient events do not count.
+ * Claims the next pending user request when it comes from the same route and principal
+ * as `source`, so it can answer for it; internal retries and ambient events do not count.
+ * The claimed request survives overflow eviction like a front-queued recovery run.
  */
-export function findQueuedFollowupRequestFrom(
+export function claimNextQueuedFollowupRequestFrom(
   key: string,
   source: FollowupRun,
 ): FollowupRun | undefined {
   const queue = getExistingFollowupQueue(key);
-  const route = followupMessageRouteIdentityKey(source);
-  const authorization = resolveFollowupAuthorizationKey(source);
-  return queue?.items.find(
+  const next = queue?.items.find(
     (item) =>
       !queue.inFlight.has(item) &&
       !isFollowupRunAborted(item) &&
       item.run.terminalReplyExpectation === "required" &&
-      item.strandedReplyRetry !== true &&
-      followupMessageRouteIdentityKey(item) === route &&
-      resolveFollowupAuthorizationKey(item) === authorization,
+      item.strandedReplyRetry !== true,
   );
+  if (
+    !next ||
+    followupMessageRouteIdentityKey(next) !== followupMessageRouteIdentityKey(source) ||
+    resolveFollowupAuthorizationKey(next) !== resolveFollowupAuthorizationKey(source)
+  ) {
+    return undefined;
+  }
+  next.protectFromQueueOverflow = true;
+  return next;
 }
 
 function settleParkedSteerAcceptance(key: string, run: FollowupRun, accepted: boolean): boolean {
