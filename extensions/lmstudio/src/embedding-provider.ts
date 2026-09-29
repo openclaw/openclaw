@@ -389,6 +389,7 @@ export async function createLmstudioEmbeddingProvider(
   const resolveCallOptionsOnReadinessWait = (
     callOptions: Record<string | symbol, unknown> | undefined,
   ): ((waiting: boolean) => void) | undefined => {
+    // SAFETY: callOptions is typed as unknown from plugin SDK; the MEMORY_SEARCH_DEADLINE_CONTROL symbol key holds this shape when deadline control is wired.
     const deadlineControl = callOptions?.[MEMORY_SEARCH_DEADLINE_CONTROL] as
       | { report: (action: "pause" | "resume") => void }
       | undefined;
@@ -405,6 +406,7 @@ export async function createLmstudioEmbeddingProvider(
         callOptions?.signal?.throwIfAborted();
         return await resolveRequestProvider(prepared).embed(input, callOptions);
       },
+      // SAFETY: callOptions is the SDK opaque options type; widening to Record allows symbol-keyed deadline control extraction without breaking the provider contract.
       resolveCallOptionsOnReadinessWait(callOptions as Record<string | symbol, unknown> | undefined),
     );
   const embedBatch: MemoryEmbeddingProvider["embedBatch"] = async (inputs, callOptions) => {
@@ -422,6 +424,7 @@ export async function createLmstudioEmbeddingProvider(
         callOptions?.signal?.throwIfAborted();
         return await resolveRequestProvider(prepared).embedBatch(inputs, callOptions);
       },
+      // SAFETY: callOptions is the SDK opaque options type; widening to Record allows symbol-keyed deadline control extraction without breaking the provider contract.
       resolveCallOptionsOnReadinessWait(callOptions as Record<string | symbol, unknown> | undefined),
     );
   };
