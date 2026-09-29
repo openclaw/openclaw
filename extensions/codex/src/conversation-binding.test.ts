@@ -557,6 +557,183 @@ describe("codex conversation binding", () => {
     });
   });
 
+  it.each([
+    { stored: false, failure: "none" },
+    { stored: false, failure: "thread not loaded" },
+    { stored: false, failure: "thread not found" },
+    { stored: false, failure: "no rollout" },
+    { stored: true, failure: "thread not loaded" },
+  ])(
+    "recovers independent Telegram topics after restart (stored: $stored, native: $failure)",
+    async ({ stored, failure }) => {
+      const claims = [101, 202].map((topic) => {
+        const claim = boundConversationClaim(
+          "unused",
+          `agent:main:telegram:group:-100123:topic:${topic}`,
+        );
+        claim.ctx.pluginBinding = {
+          ...claim.ctx.pluginBinding,
+          bindingId: `public-${topic}`,
+          conversationId: `-100123:topic:${topic}`,
+          parentConversationId: "-100123",
+          data: createCodexConversationBindingData({
+            bindingId: `native-${topic}`,
+            workspaceDir: tempDir,
+            start: { id: `start-${topic}`, threadId: `old-${topic}`, model: "gpt-5.4-mini" },
+          }),
+        };
+        return claim;
+      });
+      publicBindingMocks.resolveByConversation.mockImplementation(
+        (conversation) =>
+          claims.find(
+            ({ ctx }) =>
+              ctx.pluginBinding.conversationId ===
+              (conversation as { conversationId: string }).conversationId,
+          )?.ctx.pluginBinding ?? null,
+      );
+      for (const topic of [101, 202]) {
+        const identity = { kind: "conversation" as const, bindingId: `native-${topic}` };
+        if (stored) {
+          await testCodexAppServerBindingStore.mutate(identity, {
+            kind: "set",
+            binding: {
+              threadId: `old-${topic}`,
+              clientId: "before-restart",
+              cwd: tempDir,
+              model: "gpt-5.4-mini",
+              conversationStartId: `start-${topic}`,
+            },
+          });
+        } else {
+          expect(testCodexAppServerBindingStore.read(identity)).toBeUndefined();
+        }
+      }
+      const notifications = new Set<(notification: unknown) => void>();
+      let nextThread = 0;
+      const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+        if (method === "thread/read" && failure !== "none" && failure !== "no rollout") {
+          throw new CodexAppServerRpcError(
+            {
+              code: -32_600,
+              message: `${failure}: ${String(params.threadId)}`,
+            },
+            method,
+          );
+        }
+        if (method === "thread/resume" && failure === "no rollout") {
+          throw new CodexAppServerRpcError(
+            {
+              code: -32_600,
+              message: `no rollout found for thread id ${String(params.threadId)}`,
+            },
+            method,
+          );
+        }
+        if (method === "thread/read" || method === "thread/resume") {
+          return conversationThreadStartResult(String(params.threadId));
+        }
+        if (method === "thread/start") {
+          return conversationThreadStartResult(`recovered-${++nextThread}`);
+        }
+        if (method === "thread/unsubscribe") {
+          return { status: "notLoaded" };
+        }
+        if (method === "turn/start") {
+          const turnId = `turn-${String(params.threadId)}`;
+          for (const notify of notifications) {
+            notify({
+              method: "turn/completed",
+              params: {
+                threadId: params.threadId,
+                turn: {
+                  id: turnId,
+                  status: "completed",
+                  items: [
+                    {
+                      type: "agentMessage",
+                      id: "answer",
+                      text: `reply:${String(params.threadId)}`,
+                    },
+                  ],
+                },
+              },
+            });
+          }
+          return { turn: { id: turnId } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const client = {
+        getInstanceId: () => "after-restart",
+        request,
+        addNotificationHandler: (handler: (notification: unknown) => void) => {
+          notifications.add(handler);
+          return () => notifications.delete(handler);
+        },
+        addRequestHandler: () => () => undefined,
+        addCloseHandler: () => () => undefined,
+      } as unknown as CodexAppServerClient;
+      // The app-server connection is already live; native bindings are independently absent/stale.
+      ensureCodexAppServerClientRuntime(client, { agentDir: tempDir });
+      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(client);
+      const results = [];
+      for (const { event, ctx } of claims) {
+        results.push(await handleCodexConversationInboundClaim(event, ctx));
+      }
+      expect(results).toEqual(
+        [101, 202].map(() => ({
+          handled: true,
+          reply: { text: expect.stringMatching(/^reply:/) },
+        })),
+      );
+      const bindings = [101, 202].map((topic) =>
+        testCodexAppServerBindingStore.read({
+          kind: "conversation",
+          bindingId: `native-${topic}`,
+        }),
+      );
+      expect(bindings.every(Boolean)).toBe(true);
+      expect(new Set(bindings.map((binding) => binding?.threadId)).size).toBe(2);
+      for (const [index, binding] of bindings.entries()) {
+        expect(binding).toMatchObject({
+          clientId: "after-restart",
+          conversationStartId: `start-${[101, 202][index]}`,
+          model: "gpt-5.4-mini",
+        });
+        expect(results[index]).toEqual({
+          handled: true,
+          reply: { text: `reply:${binding?.threadId}` },
+        });
+      }
+      const calls = request.mock.calls;
+      if (stored && failure === "thread not loaded") {
+        for (const topic of [101, 202]) {
+          const readIndex = calls.findIndex(
+            ([method, params]) => method === "thread/read" && params.threadId === `old-${topic}`,
+          );
+          const replacementIndex = calls.findIndex(
+            ([method], index) => index > readIndex && method === "thread/start",
+          );
+          expect(readIndex).toBeGreaterThanOrEqual(0);
+          expect(replacementIndex).toBeGreaterThan(readIndex);
+        }
+      }
+      expect(calls.filter(([method]) => method === "thread/start")).toHaveLength(
+        failure === "none" ? 0 : 2,
+      );
+      expect(calls.filter(([method]) => method === "turn/start")).toHaveLength(2);
+      // A second message reuses each recovered generation instead of replaying public start intent.
+      for (const { event, ctx } of claims) {
+        await handleCodexConversationInboundClaim(event, ctx);
+      }
+      expect(calls.filter(([method]) => method === "thread/start")).toHaveLength(
+        failure === "none" ? 0 : 2,
+      );
+      expect(calls.filter(([method]) => method === "turn/start")).toHaveLength(4);
+    },
+  );
+
   it("isolates concurrent turn requests and buffers early bound-turn completion", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeTestConversationBinding(sessionFile, { threadId: "bound-thread", cwd: tempDir });
