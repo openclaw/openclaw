@@ -140,17 +140,15 @@ export class OpenClawApp extends OpenClawLightDomElement {
     this.resetLoginSensitivePresentation();
     this.runtime = bootstrapApplication();
     const focusTarget = this.focusTarget;
-    if (focusTarget?.kind === "terminal") {
-      this.requestLazyDocument(TERMINAL_PANEL_ELEMENT);
-    }
-    if (focusTarget?.kind === "desktop") {
-      this.requestLazyDocument(DESKTOP_PANEL_ELEMENT);
-    }
-    if (focusTarget?.kind === "browser") {
-      this.requestLazyDocument(BROWSER_DOCUMENT_ELEMENT);
-    }
-    if (focusTarget?.kind === "dashboard") {
-      this.requestLazyDocument(DASHBOARD_DOCUMENT_ELEMENT);
+    if (focusTarget) {
+      this.requestLazyDocument(
+        {
+          terminal: TERMINAL_PANEL_ELEMENT,
+          desktop: DESKTOP_PANEL_ELEMENT,
+          browser: BROWSER_DOCUMENT_ELEMENT,
+          dashboard: DASHBOARD_DOCUMENT_ELEMENT,
+        }[focusTarget.kind],
+      );
     }
     if (this.runtime.documentMode?.kind === "approval") {
       this.requestLazyDocument(APPROVAL_PAGE_ELEMENT);

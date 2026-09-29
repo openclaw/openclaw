@@ -1,8 +1,4 @@
 import { CONTROL_UI_OPERATOR_ROLE } from "../api/gateway.ts";
-// "Forget this browser" stored device-credential reset, split out of
-// gateway-store.ts to keep that module inside the TS LOC ratchet. Token-only
-// and gateway-scoped: the browser device identity and other gateways' stored
-// tokens survive.
 import { retireStoredGoalOperations } from "../lib/chat/goal-operation-storage.ts";
 import {
   clearDeviceAuthToken,
@@ -22,7 +18,7 @@ type DeviceCredentialHost = {
 export function createDeviceCredentialMethods(
   host: DeviceCredentialHost,
 ): Required<Pick<ApplicationGateway, "hasStoredDeviceToken" | "forgetDeviceToken">> {
-  const storedOperatorDeviceToken = () => {
+  const storedOperatorDeviceId = () => {
     const deviceId = peekStoredDeviceIdentityId();
     if (!deviceId) {
       return null;
@@ -32,20 +28,20 @@ export function createDeviceCredentialMethods(
       gatewayUrl: host.gatewayUrl(),
       role: CONTROL_UI_OPERATOR_ROLE,
     });
-    return entry ? { deviceId } : null;
+    return entry ? deviceId : null;
   };
   return {
-    hasStoredDeviceToken: () => storedOperatorDeviceToken() !== null,
+    hasStoredDeviceToken: () => storedOperatorDeviceId() !== null,
     forgetDeviceToken: () => {
-      const stored = storedOperatorDeviceToken();
-      if (!stored) {
+      const deviceId = storedOperatorDeviceId();
+      if (!deviceId) {
         return false;
       }
       const gatewayUrl = host.gatewayUrl();
       // Token-only reset: keep the browser device identity so the gateway can
       // mint a fresh token for the same device on the next pairing/login.
       clearDeviceAuthToken({
-        deviceId: stored.deviceId,
+        deviceId,
         gatewayUrl,
         role: CONTROL_UI_OPERATOR_ROLE,
       });

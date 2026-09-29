@@ -347,7 +347,7 @@ export class GatewayBoardProvider implements BoardProvider {
   }
 
   private async runRefreshLoop(): Promise<void> {
-    const retry = { delayMs: 1_000 };
+    let retryDelayMs = 1_000;
     while (this.refreshRequested) {
       if (this.disposed) {
         this.refreshRequested = false;
@@ -392,7 +392,7 @@ export class GatewayBoardProvider implements BoardProvider {
         // fresh snapshot. A state-generation change above still forces a reread.
         this.refreshRequested = false;
         this.setSnapshot(snapshot, changedWidgets);
-        retry.delayMs = 1_000;
+        retryDelayMs = 1_000;
       } catch (error) {
         if (this.disposed) {
           return;
@@ -422,11 +422,10 @@ export class GatewayBoardProvider implements BoardProvider {
           }
           return;
         }
-        const delayMs = retry.delayMs;
+        const delayMs = retryDelayMs;
         // Carry backoff across failed loop iterations; successful refreshes reset it above.
-        retry.delayMs = Math.min(delayMs * 2, 30_000);
+        retryDelayMs = Math.min(delayMs * 2, 30_000);
         await this.waitForRetry(delayMs);
-        continue;
       }
     }
   }
@@ -492,31 +491,26 @@ export class GatewayBoardProvider implements BoardProvider {
     const widgets = snapshot.widgets.map((widget) => {
       const previous = previousWidgets.get(widget.name);
       if (
-        preserveMissingViewContracts &&
         previous &&
         !changedWidgets.has(widget.name) &&
         previous.revision === widget.revision &&
-        previous.instanceId === widget.instanceId &&
-        widget.viewGeneration === undefined
+        previous.instanceId === widget.instanceId
       ) {
-        // Mutation snapshots contain board state but not the view contract minted
-        // by board.get. Keep that contract only while the document revision matches.
-        const preserved = preserveBoardWidgetViewContract(widget, previous);
-        copyBoardWidgetTicketReceipt(preserved, previous, receivedAtMs);
-        return preserved;
-      }
-      if (
-        previous &&
-        !changedWidgets.has(widget.name) &&
-        previous.revision === widget.revision &&
-        previous.instanceId === widget.instanceId &&
-        previous.viewGeneration === widget.viewGeneration &&
-        !widget.sandboxUrl &&
-        previous.frameUrl
-      ) {
-        const preserved = { ...widget, frameUrl: previous.frameUrl };
-        recordBoardWidgetTicketReceipt(preserved, receivedAtMs);
-        return preserved;
+        if (preserveMissingViewContracts && widget.viewGeneration === undefined) {
+          // Mutation snapshots omit the view contract minted by board.get.
+          const preserved = preserveBoardWidgetViewContract(widget, previous);
+          copyBoardWidgetTicketReceipt(preserved, previous, receivedAtMs);
+          return preserved;
+        }
+        if (
+          previous.viewGeneration === widget.viewGeneration &&
+          !widget.sandboxUrl &&
+          previous.frameUrl
+        ) {
+          const preserved = { ...widget, frameUrl: previous.frameUrl };
+          recordBoardWidgetTicketReceipt(preserved, receivedAtMs);
+          return preserved;
+        }
       }
       recordBoardWidgetTicketReceipt(widget, receivedAtMs);
       return widget;
