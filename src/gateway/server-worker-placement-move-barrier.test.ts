@@ -83,6 +83,7 @@ describe("worker placement move destination", () => {
             claimsReleased.resolve();
           },
         },
+        awaitTurnClaimRelease: async (_sessionId, wait) => await wait(),
         loadSessionRuntime: async () => ({
           managedWorktrees: { findLiveByOwner: () => undefined },
           resolveCanonicalSessionEntryFromStoreKeys,

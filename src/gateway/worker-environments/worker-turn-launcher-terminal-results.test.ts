@@ -41,6 +41,7 @@ import {
   REQUEST,
   createCoordinatorTestService,
 } from "./placement-dispatch-coordinator.test-support.js";
+import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerPlacementMoveService } from "./placement-move-service.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createWorkerEnvironmentService } from "./service.js";
@@ -55,6 +56,7 @@ import {
   createWorkerTurnTunnel,
   reconcileUnchangedLocalWorkspace,
   acknowledgeCompletedWorkerTurn,
+  abortWorkerTurnClaimWaitOnSignal,
   ENVIRONMENT_ID,
   MANIFEST_REF,
   OWNER_EPOCH,
@@ -64,6 +66,7 @@ import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   credential,
+  database as launcherDatabase,
   openSessionManager,
   createWorkerTurnSessionRuntimeLoader,
   placements,
@@ -76,6 +79,8 @@ import {
   unusedEnvironments,
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-launcher.test-support.js";
+import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+import { gitInit } from "./workspace-recovery.test-support.js";
 
 describe("worker finishing admission", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -623,8 +628,9 @@ describe("worker turn launcher terminal results", () => {
     expect(destroy).not.toHaveBeenCalled();
   });
 
-  it("lends durable reconcile Move retry admission to targeted result recovery while interrupting its admitted turn", async () => {
+  it("lends durable reconcile Move retry admission to production result recovery while interrupting its admitted turn", async () => {
     await seedActivePlacement();
+    await gitInit(root);
     const source = placements.get(SESSION_ID);
     if (source?.state !== "active") {
       throw new Error("Expected active source");
@@ -648,32 +654,37 @@ describe("worker turn launcher terminal results", () => {
     const interrupted = createDeferredCore();
     const turnAbort = new AbortController();
     const targetedAdmission = createDeferredCore();
+    const recoverySettled = createDeferredCore();
+    const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
+    const completeResult = vi.spyOn(placements, "completeWorkspaceResultAndReleaseTurn");
     const destroy = vi.fn(async () => attachedEnvironment());
     const tunnelFailure = new NodeWorkerWorkspaceTransferError(
       "workspace-transfer-failed: gateway TLS fingerprint mismatch",
     );
-    const targetRecovery = vi.fn(async (_mode?: "results-only") => {
-      const [pending] = placements.listPendingWorkspaceResults();
-      if (!pending) {
-        throw new Error("expected pending workspace result");
-      }
-      placements.failWorkspaceResultAndReleaseTurn(pending, tunnelFailure);
+    const recoveryEntered = vi.fn((_mode?: "results-only") => {});
+    const harness = createHarness(launcherDatabase, placements, {
+      workspacePath: root,
+      workspaceOperations,
     });
-    const waitForClaim = placements.waitForTurnClaimRelease.bind(placements);
-    vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) => {
-      const pending = waitForClaim(sessionId, {
-        ...options,
-        signal: options.signal
-          ? AbortSignal.any([options.signal, claimWaitCleanup.signal])
-          : claimWaitCleanup.signal,
-      });
-      return pending;
-    });
+    vi.mocked(harness.environments.get).mockReturnValue(attachedEnvironment());
+    const reconcileActive = harness.service.reconcileActive;
+    vi.spyOn(harness.service, "reconcileActive").mockImplementation(
+      (environmentId, admitRecovery) =>
+        reconcileActive(environmentId, (sessionIds, run) => {
+          const pending = admitRecovery!(sessionIds, (mode) => {
+            recoveryEntered(mode);
+            return run(mode).finally(() => recoverySettled.resolve());
+          });
+          targetedAdmission.resolve();
+          return pending;
+        }),
+    );
+    abortWorkerTurnClaimWaitOnSignal(claimWaitCleanup.signal);
     const unexpected = async (): Promise<never> => {
       throw new Error("Unexpected destination or abandoned-source work");
     };
     const reclaimSource = vi.fn(async (): Promise<never> => {
-      expect(placements.get(SESSION_ID)).toMatchObject({ state: "failed", turnClaim: null });
+      expect(placements.get(SESSION_ID)).toMatchObject({ state: "draining", turnClaim: null });
       throw new Error("fixture: Move barrier complete");
     });
     const loadSessionRuntime = createWorkerTurnSessionRuntimeLoader();
@@ -701,17 +712,13 @@ describe("worker turn launcher terminal results", () => {
     });
     const admit = createGatewayWorkerDispatchAdmission(loadSessionRuntime);
     const dispatch = coordinateWorkerPlacementDispatch(
-      createCoordinatorTestService({
+      {
+        ...harness.service,
         forceDestroyEnvironment: async () => attachedEnvironment(),
         getEnvironmentAttachedSessionIds: () => ["unrelated"],
         readEnvironmentSessionIds: async () => ["unrelated"],
         move: moveService.move,
-        reconcileActive: async (_environmentId, recoveryAdmission) => {
-          const pending = recoveryAdmission!([SESSION_ID], targetRecovery);
-          targetedAdmission.resolve();
-          await pending;
-        },
-      }),
+      },
       admit,
     );
     const tunnel = createWorkerTurnTunnel({
@@ -729,12 +736,15 @@ describe("worker turn launcher terminal results", () => {
         );
         return acknowledgeCompletedWorkerTurn(launchRequest.turnClaim, leafId);
       }),
-      reconcileWorkspace: vi.fn(async () => {
-        transferEntered.resolve();
-        await failTransfer.promise;
-        throw tunnelFailure;
-      }),
+      reconcileWorkspace: vi
+        .fn(reconcileUnchangedLocalWorkspace)
+        .mockImplementationOnce(async () => {
+          transferEntered.resolve();
+          await failTransfer.promise;
+          throw tunnelFailure;
+        }),
     });
+    vi.mocked(harness.environments.startTunnel).mockResolvedValue(tunnel);
     const environments: WorkerTurnEnvironmentService = {
       ...unusedEnvironments(),
       get: vi.fn(() => attachedEnvironment()),
@@ -748,6 +758,7 @@ describe("worker turn launcher terminal results", () => {
       environments,
       placements,
       reconcileActivePlacement,
+      workspaceOperations,
     });
 
     const workerTurn = turn("run-reconcile-tunnel-loss");
@@ -784,7 +795,7 @@ describe("worker turn launcher terminal results", () => {
       failTransfer.resolve();
       await targetedAdmission.promise;
       expect(admission.isActive()).toBe(true);
-      expect(targetRecovery).not.toHaveBeenCalled();
+      expect(recoveryEntered).not.toHaveBeenCalled();
       expect(placements.get(SESSION_ID)?.turnClaim).not.toBeNull();
       startBarrier.resolve();
       await Promise.race([
@@ -796,8 +807,10 @@ describe("worker turn launcher terminal results", () => {
       expect(turnAbort.signal.aborted).toBe(true);
       // Independent admission settles after targeted recovery could enter this session.
       await dispatch.forceDestroyEnvironment("unrelated");
-      expect(targetRecovery).toHaveBeenCalledOnce();
-      expect(targetRecovery).toHaveBeenCalledWith("results-only");
+      expect(recoveryEntered).toHaveBeenCalledOnce();
+      expect(recoveryEntered).toHaveBeenCalledWith("results-only");
+      await recoverySettled.promise;
+      expect(completeResult).toHaveBeenCalledOnce();
       expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
       await expect(moving).resolves.toMatchObject({
         message: "fixture: Move barrier complete",
@@ -819,8 +832,12 @@ describe("worker turn launcher terminal results", () => {
     }
 
     expect(reconcileActivePlacement).toHaveBeenCalledWith(ENVIRONMENT_ID);
-    expect(placements.get(SESSION_ID)).toMatchObject({ state: "failed", turnClaim: null });
+    expect(placements.get(SESSION_ID)).toMatchObject({ state: "draining", turnClaim: null });
     expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+    expect(tunnel.reconcileWorkspace).toHaveBeenCalledTimes(2);
+    expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
+    expect(harness.reportWorkspaceResultRecoveryFailure).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
     expect(destroy).not.toHaveBeenCalled();
   });
 
