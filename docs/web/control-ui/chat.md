@@ -42,7 +42,9 @@ Editing a Side chat draft does not interrupt loading its earlier answers. **Clea
 
 The Control UI keeps the latest 24 Side chat turns, including failed questions. Sending a follow-up keeps earlier failures in order; **Retry** resends that question in place. Failed questions stay in the current pane through a reconnect, but are not persisted across a page reload.
 
-The question box wraps and grows like the main composer; Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. Highlighting text in a chat message offers **Ask in side chat**, which opens the rail with a quoted draft ready to edit.
+The question box wraps and grows like the main composer; Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. Highlighting text in a chat message offers **Ask in side chat**. Add an optional comment in the selection editor, then save it to stage an editable comment in Side chat. An empty question box starts with a short quote; an existing Side chat draft and the main composer stay unchanged. The full selection and comment accompany that question as bounded, temporary context. After the answer, the restored thread keeps the question text, including its quote, but not the attached context. Reselect the passage for a later question.
+
+If the selection alone exceeds the context limit, Side chat opens without adding the selection and shows a notification. An empty question box still gets a short quote; an existing draft stays intact. If a comment or the combined selections exceed the limit, the editor stays open so you can shorten the comment or adjust the pending selections.
 
 Drop an image onto Side chat or paste one into its question box. You can send it
 with a written question or on its own. Side chat accepts image attachments, not
@@ -405,7 +407,9 @@ side panel and copy the original text, preserving markup, line breaks, and
 indentation. The excerpt and chip also support keyboard activation. Select
 **Show in text field** on the second row inside the composer card to return its
 text to the draft without opening the side panel.
-The composer side panel also offers the same action and removal. Messages
+Use the **X** at the card's top-right corner to discard the pasted text without
+changing your draft or other attachments. The composer side panel also offers
+the same action and removal. Messages
 containing only comment or pasted-text chips
 use a transparent shell.
 Newly uploaded text files remain file cards, even when their names resemble

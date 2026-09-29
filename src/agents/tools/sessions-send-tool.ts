@@ -76,7 +76,10 @@ import { buildAgentToAgentMessageContext } from "./sessions-send-helpers.js";
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
 import { captureSessionsSendResumeCaller, resumeSessionsSendTask } from "./sessions-send-resume.js";
 import { normalizeSessionsSendArguments } from "./sessions-send-tool.arguments.js";
-import { createConfiguredAgentMainSession } from "./sessions-send-tool.delivery.js";
+import {
+  createConfiguredAgentMainSession,
+  trySessionsSendActiveRunDelivery,
+} from "./sessions-send-tool.delivery.js";
 import { SessionsSendToolSchema, SessionsSendOutputSchema } from "./sessions-send-tool.schema.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
@@ -666,9 +669,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             targetSessionEntry,
             targetAcpMeta,
           );
-          // Watch registration follows successful dispatch: a failed send must not leave
-          // a hidden watch, and cron run-scoped sends can fall back to the durable parent
-          // session, which is the key that receives future state changes.
+          // Register watches only after successful dispatch, using any Cron fallback's actual target.
           const watchRequested = params.watch === true;
           const registerWatchIfRequested = (targetSessionKey: string) => {
             const watched =
@@ -777,10 +778,25 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 ? "one-way"
                 : "peer";
 
+          const ownChild = targetSessionEntry?.spawnedBy === effectiveRequesterKey;
+          const startParams: Parameters<typeof startSessionsSendFollowup>[1] = {
+            cfg,
+            callGateway: gatewayCall,
+            runId,
+            mode,
+            sendParams,
+            sourceOrigin: sameSession ? requesterOrigin : undefined,
+            sessionKey: mode || ownChild ? resolvedKey : displayKey,
+            sessionStoreTarget: targetSession,
+            deliveryTimeoutMs: announceTimeoutMs,
+            allowActiveRunQueueDelivery: timeoutSeconds === 0,
+            expectedSessionId,
+          };
+          const activeDelivery = await trySessionsSendActiveRunDelivery(startParams, ownChild);
           const followup =
+            !("ok" in activeDelivery) &&
             replyMode === "one-way" &&
-            mode !== "steer" &&
-            targetSessionEntry?.spawnedBy === effectiveRequesterKey &&
+            ownChild &&
             // Key-only DM rerouting keeps its run-scoped contract, not new authority for another key.
             replyRequesterSessionKey === effectiveRequesterKey &&
             replyRequesterSessionKey
@@ -810,41 +826,21 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             requesterOrigin,
             requesterChannel,
           };
-          const { start, completion } = await startSessionsSendFollowup(
-            followup,
-            {
-              cfg,
-              callGateway: gatewayCall,
-              runId,
-              mode,
-              sendParams,
-              sourceOrigin: sameSession ? requesterOrigin : undefined,
-              sessionKey: mode ? resolvedKey : displayKey,
-              sessionStoreTarget: targetSession,
-              deliveryTimeoutMs: announceTimeoutMs,
-              ...(timeoutSeconds === 0
-                ? {
-                    allowActiveRunQueueDelivery: true,
-                    // An exact-incarnation grant authorizes only this target. Never
-                    // reroute a worker-owned send to a durable Cron parent outside
-                    // the scoped lifecycle admission or replace its stable key.
-                    allowActiveRunQueueFallback: !expectedSessionId,
-                    expectedSessionId,
-                  }
-                : {}),
-            },
-            replyContext,
-          );
+          const { start, completion } =
+            "ok" in activeDelivery
+              ? { start: activeDelivery, completion: undefined }
+              : await startSessionsSendFollowup(
+                  followup,
+                  { ...startParams, ...activeDelivery },
+                  replyContext,
+                );
           if (!start.ok) {
             return start.result;
           }
           const acceptedTargetSessionKey = start.a2aSessionKey ?? resolvedKey;
           // Steering keeps its active owner; an inline child reply is already delivered.
           const delayedDelivery = {
-            status:
-              replyMode !== undefined && start.targetDisposition === "queued"
-                ? "pending"
-                : "skipped",
+            status: replyMode && start.targetDisposition === "queued" ? "pending" : "skipped",
             mode: "announce",
           } as const;
           const delivery =

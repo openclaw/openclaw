@@ -45,6 +45,7 @@ import {
   withOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
 import {
+  canReadWarmNativeSourceIndependently,
   withCachedOpenClawStateDatabaseReadOnly,
   type ReusedOpenClawStateReadOnlyDatabase,
 } from "./openclaw-state-db-readonly-reuse.js";
@@ -382,12 +383,19 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
 export function executeExistingOpenClawStateRead(
   options: OpenClawStateDatabaseOptions,
   command: OpenClawStateReadCommand,
-  { context, current, mapError, signal }: OpenClawStateReadOptions = {},
+  { context, current, mapError, signal, preferIndependentWarmRead }: OpenClawStateReadOptions = {},
 ): Promise<OpenClawStateReadReply | undefined> {
   return mapOpenClawStateReadError(mapError, (receipt) => {
     context?.admission.assertCurrent();
     const execute = () =>
-      executeRetainedOpenClawStateRead(options, command, receipt, context, signal);
+      executeRetainedOpenClawStateRead(
+        options,
+        command,
+        receipt,
+        context,
+        signal,
+        preferIndependentWarmRead,
+      );
     const read = current ? () => stateSnapshotReads.exit(execute) : execute;
     return context?.runInCapturedSchemaScope ? context.runInCapturedSchemaScope(read) : read();
   });
@@ -399,6 +407,7 @@ function executeRetainedOpenClawStateRead(
   receipt: OpenClawStateReadReceipt,
   capturedContext?: OpenClawStateReadOptions["context"],
   signal?: AbortSignal,
+  preferIndependentWarmRead?: true,
 ): Promise<OpenClawStateReadReply | undefined> {
   const pathname = resolveReadOnlyPath(options);
   const current = stateSnapshotReads.getStore();
@@ -528,8 +537,16 @@ function executeRetainedOpenClawStateRead(
       if (!snapshot && !borrowed && !existingPathOrUndefined(pathname)) {
         return undefined;
       }
+      const independentWarmSource =
+        nativeSource &&
+        preferIndependentWarmRead &&
+        canReadWarmNativeSourceIndependently(
+          nativeSource,
+          pathname,
+          context.admission.identity.key,
+        );
       let location = snapshot?.location ?? pathname;
-      if (nativeSource) {
+      if (nativeSource && !independentWarmSource) {
         prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(
           nativeSource.db,
           authority.assertCurrent,
@@ -537,7 +554,7 @@ function executeRetainedOpenClawStateRead(
           "async",
         );
         location = prepared.location;
-      } else if (!snapshot && preserveArtifacts) {
+      } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
         await transport.validateFresh(context, authority);
         authority.assertCurrent();
         prepared = await prepareSqliteReadOnlyLocationAsync(pathname, {

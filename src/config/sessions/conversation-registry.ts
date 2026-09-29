@@ -24,10 +24,7 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import {
-  parseSessionEntryJson,
-  sessionEntryMetadataJson,
-} from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 
 const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
 
@@ -218,7 +215,7 @@ function selectConversationRows(
       // Historical windows retain address activity, while session_nodes owns
       // the current session binding after reset/rebind.
       .leftJoin("session_nodes as sn", "sn.session_key", "s.session_key")
-      .select((eb) => [
+      .select([
         "c.conversation_id",
         "c.channel",
         "c.account_id",
@@ -238,7 +235,7 @@ function selectConversationRows(
         "sc.last_seen_at",
         "s.session_id as associated_session_id",
         "sn.current_session_id as current_session_id",
-        eb.parens(sessionEntryMetadataJson.expression).as("current_entry_json"),
+        "sn.entry_json as current_entry_json",
         "sn.session_key as current_session_key",
       ]);
     const channel = normalizeOptionalLowercaseString(options.channel);

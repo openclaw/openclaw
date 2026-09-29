@@ -33,6 +33,7 @@ packages/gateway-protocol/src/svg-image.ts
 packages/gateway-protocol/src/theme-ids.ts
 packages/gateway-protocol/src/theme.ts
 packages/gateway-protocol/src/update-run-vocabulary.ts
+packages/gateway-protocol/src/worker-capacity.ts
 packages/llm-core/package.json
 packages/llm-core/src/model-data.ts
 packages/media-core/src/constants.ts
@@ -374,6 +375,7 @@ src/config/channel-configured.ts
 src/config/channel-schema-selection.ts
 src/config/cloud-worker-project-profiles.ts
 src/config/codex-plugin-diagnostics.ts
+src/config/config-env-values.ts
 src/config/config-env-vars.ts
 src/config/config-journal-snapshot.kernel.ts
 src/config/config-journal-snapshot.ts

@@ -1,9 +1,12 @@
+import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import {
   isGatewayRestartDraining,
   runWithGatewayDetachedWorkContinuation,
 } from "../../../process/gateway-work-admission.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
+import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
@@ -36,6 +39,9 @@ export function createSubagentRegistryCompletionRuntime(config: {
         await completeSubagentRun(params);
         return;
       } catch (error) {
+        if (hasSqliteWorkerOutcomeUnknown(error)) {
+          throw error;
+        }
         const current = runs.get(params.runId);
         warn(message, {
           source,
@@ -105,10 +111,19 @@ export function createSubagentRegistryCompletionRuntime(config: {
     }
     const generation = entry.generation;
     const runId = params.runId;
-    const isCurrent = () =>
-      runs.get(runId) === entry &&
-      entry.generation === generation &&
-      params.isRecoveryCurrent?.() !== false;
+    const stateContext = captureOpenClawStateWorkerContext();
+    const isCurrent = () => {
+      try {
+        assertSubagentRegistryWriteSourceCurrent(stateContext);
+      } catch {
+        return false;
+      }
+      return (
+        runs.get(runId) === entry &&
+        entry.generation === generation &&
+        params.isRecoveryCurrent?.() !== false
+      );
+    };
     const ownedParams = { ...params, expectedEntry: entry, isRecoveryCurrent: isCurrent };
     // Each controller attempt owns its terminal transition, while this outer
     // lease outlives the launch scope and spans retries and fallback cleanup.
@@ -117,6 +132,9 @@ export function createSubagentRegistryCompletionRuntime(config: {
         await completeSubagentRunWithRecoveryAttempt(ownedParams, source, isCurrent);
       }, "subagents:completion");
     } catch (error) {
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        throw error;
+      }
       if (!isCurrent()) {
         return;
       }

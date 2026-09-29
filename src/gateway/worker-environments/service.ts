@@ -475,7 +475,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     }
     credentialBroker.clear();
     options.liveEvents?.clear();
-    options.stopNodeWorkerBundleTransfers?.();
+    await options.stopNodeWorkerBundleTransfers?.();
     try {
       await joinWorkerTunnelStops([
         environmentAccess.stopAllTunnels(),

@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Restart-path proof against the real registry sweeper and SQLite session store.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { makeRestartRecoveryRun as makeRunRecord, useSubagentRestartRecoveryFixture } from "./subagent-restart-recovery.test-support.js";
@@ -42,7 +42,10 @@ import { prepareInternalSessionEffectsSession } from "../../internal-session-eff
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
+import {
+  onSubagentRegistryPersisted,
+  persistSubagentRunsToDiskOrThrow,
+} from "./subagent-registry-state.js";
 import {
   readSubagentSessionStore,
   removeSubagentSessionEntry,
@@ -189,6 +192,13 @@ describe("subagent orphan recovery — faithful restart path", () => {
         waitRequests.push(params.runId);
         return (params.runId === runId ? await oldWait.promise : { status: "pending" }) as T;
       };
+      const terminalPersisted = createDeferred();
+      const stopObservingTerminal = onSubagentRegistryPersisted(() => {
+        if (loadSubagentRegistryFromSqlite().get(runId)?.execution.status === "terminal") {
+          terminalPersisted.resolve();
+        }
+      });
+      onTestFinished(stopObservingTerminal);
       try {
         await runWithGatewayIndependentRootWorkAdmission(async () => {
           await registerSubagentRun({
@@ -258,6 +268,10 @@ describe("subagent orphan recovery — faithful restart path", () => {
           }
           await vi.dynamicImportSettled();
         }, "test:admitted-agent");
+        // The wait can still be reconciling worker reads after its spawning admission returns.
+        if (expected === "terminal") {
+          await terminalPersisted.promise;
+        }
         await fixture.settle();
 
         const persisted = loadSubagentRegistryFromSqlite().get(runId);
@@ -289,6 +303,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
           execution: { status: "terminal", outcome: { status: "error" } },
         });
       } finally {
+        stopObservingTerminal();
         if (source === "retired wait retry") {
           vi.useRealTimers();
         }

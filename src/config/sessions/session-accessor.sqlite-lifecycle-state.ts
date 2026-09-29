@@ -4,6 +4,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
@@ -31,7 +32,6 @@ import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-dele
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import {
   deleteSessionEntryRows,
-  readExactSessionEntryJson,
   readExactSessionEntryRow,
   readSessionEntryStore,
 } from "./session-accessor.sqlite-entry-store.js";
@@ -50,10 +50,7 @@ import {
   collectSessionStateIdsForEntry,
 } from "./session-accessor.sqlite-references.js";
 import { getSessionKysely, withSqliteSessionDatabase } from "./session-accessor.sqlite-scope.js";
-import {
-  parseSessionEntryJson as parseSessionEntryRow,
-  sessionEntryMetadataJson,
-} from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
 import {
   assertSessionTranscriptHot,
   readSessionColdTranscript,
@@ -166,7 +163,7 @@ export function readReferencedSessionIds(
     .select(
       /* kysely-allow-raw: only exceptional rows cross into JS as entry JSON. */ sql<
         string | null
-      >`CASE WHEN "references" IS NULL THEN (SELECT ${sessionEntryMetadataJson.expression} FROM session_nodes WHERE session_nodes.session_key = reference_nodes.session_key) END`.as(
+      >`CASE WHEN "references" IS NULL THEN (SELECT entry_json FROM session_nodes WHERE session_nodes.session_key = reference_nodes.session_key) END`.as(
         "entry_json",
       ),
     );
@@ -343,6 +340,28 @@ export function readSessionGenerationIdsForKeys(
   ).rows.map((row) => row.session_id);
 }
 
+/** Raw Doctor removals also guard cold changes while the hot blob remains unchanged. */
+export function assertRawSessionEntryRemovalUnchanged(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionKey: string,
+  removal: Extract<SessionEntryLifecycleRemoval, { expectedRawEntryJson: string }>,
+): void {
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    getSessionKysely(database.db)
+      .selectFrom("session_nodes")
+      .select(["entry_json", "snapshot_revision"])
+      .where("session_key", "=", sessionKey),
+  );
+  if (
+    !row ||
+    row.entry_json !== removal.expectedRawEntryJson ||
+    row.snapshot_revision !== removal.expectedSnapshotRevision
+  ) {
+    throw new Error(`SQLite session entry changed before raw lifecycle removal for ${sessionKey}`);
+  }
+}
+
 // Projects removals and upserts before archive materialization so same-call
 // upserts can keep a transcript live without producing a spurious archive.
 export async function projectSessionEntryLifecycleMutation(
@@ -392,13 +411,8 @@ export async function projectSessionEntryLifecycleMutation(
       const sessionKey = removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim();
       let entry = removal.exactStoredKey || sessionKey ? store[sessionKey] : undefined;
       if (removal.expectedRawEntryJson !== undefined) {
-        const currentRawEntryJson = readExactSessionEntryJson(removalDatabase, sessionKey);
-        if (currentRawEntryJson !== removal.expectedRawEntryJson) {
-          throw new Error(
-            `SQLite session entry changed before raw lifecycle removal for ${sessionKey}`,
-          );
-        }
-        entry = removal.expectedEntry ? structuredClone(removal.expectedEntry) : undefined;
+        assertRawSessionEntryRemovalUnchanged(removalDatabase, sessionKey, removal);
+        entry = structuredClone(removal.expectedEntry);
       }
       if (!shouldRemoveSessionEntry(entry, removal)) {
         continue;

@@ -131,6 +131,22 @@ function wire(payload: NodeWorkerSupervisorReceipt | null) {
   return { ok: true, payloadJSON: JSON.stringify(payload) };
 }
 
+function wireError(code: string, message: string) {
+  return { ok: false, error: { code, message } };
+}
+
+function admissionDeadlineReceipt(input: NodeWorkerLaunchInput): NodeWorkerSupervisorReceipt {
+  return {
+    ...receipt(input, "completed"),
+    state: "completed",
+    resultJson: JSON.stringify({
+      status: "not-started",
+      reason: "admission-deadline",
+      errorText: "gateway unreachable",
+    }),
+  };
+}
+
 function transportWith(
   invoke: NodeWorkerSupervisorTransport["invoke"],
   listCurrentNodes: NodeWorkerSupervisorTransport["listCurrentNodes"] = async () => [nodeProof()],
@@ -308,7 +324,7 @@ describe("node worker launch adapter", () => {
       if (invoke.mock.calls.length === 2) {
         expect(request.params).toHaveProperty("waitMs");
         node = nodeProof("older-replacement");
-        return { ok: false, error: { code: "DISCONNECTED", message: "connection replaced" } };
+        return wireError("DISCONNECTED", "connection replaced");
       }
       if (request.command === "worker.launch.v1") {
         return wire(receipt(input, "running"));
@@ -358,19 +374,9 @@ describe("node worker launch adapter", () => {
         JSON.stringify({ turnIdLength: attempt.launchId.length, frameBytes, bound }),
       );
       launches.push(attempt);
-      return wire({
-        ...receipt(attempt, "completed"),
-        state: "completed",
-        resultJson: JSON.stringify(
-          launches.length === 1
-            ? {
-                status: "not-started",
-                reason: "admission-deadline",
-                errorText: "gateway unreachable",
-              }
-            : { status: "completed", transcriptLeafId: "leaf-1", transcriptNextSeq: 2 },
-        ),
-      });
+      return wire(
+        launches.length === 1 ? admissionDeadlineReceipt(attempt) : receipt(attempt, "completed"),
+      );
     });
     const adapter = createNodeWorkerLaunchAdapter({
       getTransport: () => transportWith(invoke),
@@ -401,18 +407,9 @@ describe("node worker launch adapter", () => {
 
   it("stops re-arming once the next attempt would outlive the admission credential", async () => {
     const nowMs = 1_700_000_000_000;
-    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
-      const input = request.params as NodeWorkerLaunchInput;
-      return wire({
-        ...receipt(input, "completed"),
-        state: "completed",
-        resultJson: JSON.stringify({
-          status: "not-started",
-          reason: "admission-deadline",
-          errorText: "gateway unreachable",
-        }),
-      });
-    });
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) =>
+      wire(admissionDeadlineReceipt(request.params as NodeWorkerLaunchInput)),
+    );
     const adapter = createNodeWorkerLaunchAdapter({
       getTransport: () => transportWith(invoke),
       now: () => nowMs,
@@ -431,18 +428,9 @@ describe("node worker launch adapter", () => {
   });
 
   it("bounds admission re-arms to five journaled attempts", async () => {
-    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
-      const input = request.params as NodeWorkerLaunchInput;
-      return wire({
-        ...receipt(input, "completed"),
-        state: "completed",
-        resultJson: JSON.stringify({
-          status: "not-started",
-          reason: "admission-deadline",
-          errorText: "gateway unreachable",
-        }),
-      });
-    });
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) =>
+      wire(admissionDeadlineReceipt(request.params as NodeWorkerLaunchInput)),
+    );
     const adapter = createNodeWorkerLaunchAdapter({
       getTransport: () => transportWith(invoke),
       sleep: async () => {},
@@ -473,15 +461,7 @@ describe("node worker launch adapter", () => {
       const controller = new AbortController();
       let authorized = true;
       const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () =>
-        wire({
-          ...receipt(input, "completed"),
-          state: "completed",
-          resultJson: JSON.stringify({
-            status: "not-started",
-            reason: "admission-deadline",
-            errorText: "gateway unreachable",
-          }),
-        }),
+        wire(admissionDeadlineReceipt(input)),
       );
       const adapter = createNodeWorkerLaunchAdapter({
         getTransport: () => transportWith(invoke),
@@ -579,20 +559,31 @@ describe("node worker launch adapter", () => {
     },
   );
 
-  it("dispatches a bound environment at capacity so its retained worker can reuse the slot", async () => {
-    const input = launchInput();
-    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () =>
-      wire(receipt(input, "completed")),
-    );
-    const adapter = createNodeWorkerLaunchAdapter({
-      getTransport: () => transportWith(invoke, async () => [nodeProof("conn-1", 0)]),
-    });
-
-    await expect(adapter.launch(launchRequest(input))).resolves.toEqual(
-      receipt(input, "completed"),
-    );
-    expect(invoke).toHaveBeenCalledOnce();
-  });
+  it.each([0, 2])(
+    "completes a bound turn with %i slots at dispatch and no free slots while polling",
+    async (initialAvailable) => {
+      const input = launchInput();
+      let available = initialAvailable;
+      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+        if (request.command === "worker.launch.v1" && available > 0) {
+          available = 0;
+          return wire(receipt(input, "running"));
+        }
+        return wire(receipt(input, "completed"));
+      });
+      const adapter = createNodeWorkerLaunchAdapter({
+        getTransport: () => transportWith(invoke, async () => [nodeProof("conn-1", available)]),
+        sleep: async () => {},
+      });
+      await expect(adapter.launch(launchRequest(input))).resolves.toEqual(
+        receipt(input, "completed"),
+      );
+      expect(invoke).toHaveBeenCalledTimes(initialAvailable === 0 ? 1 : 2);
+      expect(invoke.mock.calls.map(([request]) => request.command)).toEqual(
+        initialAvailable === 0 ? ["worker.launch.v1"] : ["worker.launch.v1", "worker.status.v1"],
+      );
+    },
+  );
 
   it.each(["environmentSession", "capturedExecPolicy"] as const)(
     "requires %s support before dispatching a turn",
@@ -619,7 +610,7 @@ describe("node worker launch adapter", () => {
       launchCalls += 1;
       request.onDispatchReady?.(`invoke-${launchCalls}`);
       return launchCalls === 1
-        ? { ok: false, error: { code: "DISCONNECTED", message: "node disconnected" } }
+        ? wireError("DISCONNECTED", "node disconnected")
         : wire(receipt(input, "completed"));
     });
     let listCalls = 0;
@@ -642,13 +633,10 @@ describe("node worker launch adapter", () => {
   it("does not retry or cancel a dispatched launch rejected before capacity admission", async () => {
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
       request.onDispatchReady?.("invoke-1");
-      return {
-        ok: false,
-        error: {
-          code: NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
-          message: "node worker capacity remained full for 10000 ms",
-        },
-      };
+      return wireError(
+        NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
+        "node worker capacity remained full for 10000 ms",
+      );
     });
     const adapter = createNodeWorkerLaunchAdapter({
       getTransport: () => transportWith(invoke),
@@ -671,13 +659,7 @@ describe("node worker launch adapter", () => {
         return wire(null);
       }
       request.onDispatchReady?.("invoke-1");
-      return {
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "INVALID_REQUEST: invalid worker launch descriptor",
-        },
-      };
+      return wireError("INVALID_REQUEST", "INVALID_REQUEST: invalid worker launch descriptor");
     });
     const adapter = createNodeWorkerLaunchAdapter({
       getTransport: () => transportWith(invoke),
@@ -699,14 +681,8 @@ describe("node worker launch adapter", () => {
   it("cancels an invalid launch replay when an earlier dispatch may have registered it", async () => {
     const input = launchInput();
     const launchResponses = [
-      { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } },
-      {
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "INVALID_REQUEST: node placement workspace is being removed",
-        },
-      },
+      wireError("TIMEOUT", "node invoke timed out"),
+      wireError("INVALID_REQUEST", "INVALID_REQUEST: node placement workspace is being removed"),
     ];
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
       if (request.command === "worker.cancel.v1") {
@@ -749,31 +725,6 @@ describe("node worker launch adapter", () => {
       receipt(expectedInput, "completed"),
     );
     expect(input.descriptor.assignment.prompt).toBe("mutated after launch call");
-  });
-
-  it("polls an existing launch while the node reports full capacity", async () => {
-    const input = launchInput();
-    let launched = false;
-    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
-      if (request.command === "worker.launch.v1") {
-        launched = true;
-        return wire(receipt(input, "running"));
-      }
-      return wire(receipt(input, "completed"));
-    });
-    const adapter = createNodeWorkerLaunchAdapter({
-      getTransport: () =>
-        transportWith(invoke, async () => [nodeProof("conn-1", launched ? 0 : 2)]),
-      sleep: async () => {},
-    });
-
-    await expect(adapter.launch(launchRequest(input))).resolves.toEqual(
-      receipt(input, "completed"),
-    );
-    expect(invoke.mock.calls.map(([request]) => request.command)).toEqual([
-      "worker.launch.v1",
-      "worker.status.v1",
-    ]);
   });
 
   it("replays launch when status cannot find the durable receipt", async () => {
@@ -831,14 +782,14 @@ describe("node worker launch adapter", () => {
       const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
         if (request.command === "worker.cancel.v1") {
           return failedCommand === "cancel"
-            ? { ok: false, error: { code: "INVALID_REQUEST", message: cancellationRejection } }
+            ? wireError("INVALID_REQUEST", cancellationRejection)
             : wire(receipt(input, "cancelled"));
         }
         request.onDispatchReady?.("invoke-1");
         if (request.command === "worker.launch.v1" && failedCommand !== "launch") {
           return wire(receipt(input, "running"));
         }
-        return { ok: false, error: { code: "INVALID_REQUEST", message: rejection } };
+        return wireError("INVALID_REQUEST", rejection);
       });
       const adapter = createNodeWorkerLaunchAdapter({
         getTransport: () => transportWith(invoke),
@@ -871,13 +822,10 @@ describe("node worker launch adapter", () => {
         return wire(receipt(input, "cancelled"));
       }
       request.onDispatchReady?.("invoke-1");
-      return {
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: `invalid descriptor token=${secret}\n${"x".repeat(2_048)}; field assignment is invalid`,
-        },
-      };
+      return wireError(
+        "INVALID_REQUEST",
+        `invalid descriptor token=${secret}\n${"x".repeat(2_048)}; field assignment is invalid`,
+      );
     });
     const adapter = createNodeWorkerLaunchAdapter({ getTransport: () => transportWith(invoke) });
 

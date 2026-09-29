@@ -79,7 +79,7 @@ type SidebarPanelDefinitionParams = {
   companionFocusRequest: (() => boolean) | undefined;
   onCompanionSubmit: (question: string | ChatSessionCompanionTurn) => void;
   onCompanionDraftChange: (draft: string) => void;
-  onCompanionAttachmentsChange?: (attachments: ChatAttachment[]) => void;
+  onCompanionAttachmentsChange?: (attachments: ChatAttachment[]) => boolean | void;
   onCompanionVisibilityChange: (visible: boolean) => void;
   connected: boolean;
   onClearCompanion: () => void;

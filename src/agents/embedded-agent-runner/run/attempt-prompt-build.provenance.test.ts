@@ -38,7 +38,7 @@ vi.mock("../../subagents/registry/subagent-registry.js", async () => {
 });
 
 // Completion storage and queue consumption stay real; terminal cleanup is outside this turn.
-vi.mock("../../subagents/registry/subagent-registry-lifecycle-cleanup.js", () => ({
+vi.mock("../../subagents/registry/subagent-registry-terminal-effects.js", () => ({
   completeTerminalEffects: vi.fn(async () => {}),
 }));
 
@@ -234,6 +234,12 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
     getRuntimeConfig: () => ({}),
     persist,
     persistOrThrow: persist,
+    persistAsyncOrThrow: async (_context, publication, ...runIds) => {
+      publication.assertCurrent();
+      persist(...runIds);
+      await Promise.resolve();
+      publication.onCommitted?.();
+    },
     clearPendingLifecycleError: vi.fn(),
     countPendingDescendantRuns: () => 0,
     getLatestRunForChildSession: () => null,

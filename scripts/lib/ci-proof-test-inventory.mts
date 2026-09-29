@@ -5321,6 +5321,7 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "test/scripts/vitest-worker-cache.test.ts",
   "test/scripts/worktree-setup.test.ts",
   "test/vitest-performance-config.test.ts",
+  "test/vitest-pr-exempt-retention.test.ts",
   "test/vitest-reporters-config.test.ts",
   "ui/src/api/gateway.node.test.ts",
   "ui/src/app/vite-build.node.test.ts",

@@ -90,6 +90,11 @@ export type SessionEntryMaintenanceInput = {
   storePath: string;
 };
 
+export type SessionMaintenanceLiveProtection = Pick<
+  SessionEntryMaintenanceInput,
+  "activeSessionKeys" | "preservation"
+>;
+
 type SessionReclamationPlanBase = {
   databaseOptions: ReclamationDatabaseOptions;
   materializedPlans: MaterializedSessionStateDeletePlan[];
