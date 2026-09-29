@@ -132,6 +132,12 @@ describe("redactTranscriptMessage", () => {
     },
   );
 
+  it("keeps assistant prose where pass: ends a clause", () => {
+    const text = "The boundary tests now pass: older clients receive compatible speed values.";
+    const redacted = redactTranscriptMessage(textMessage(text), cfg());
+    expect(msgContent(redacted)).toEqual([{ type: "text", text }]);
+  });
+
   it("revalidates prepared tool text against explicit and mutated pattern policies", () => {
     const patterns = [String.raw`/opaque\(([^)]+)\)/g`];
     const config = cfg(patterns);

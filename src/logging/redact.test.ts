@@ -1192,6 +1192,22 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain("opaque-pass-secret-1234567890");
   });
 
+  it("keeps prose where pass: ends a clause but still masks pass as a config key", () => {
+    const prose =
+      "The boundary tests now pass: older clients receive compatible speed values. All checks pass: lint, types.";
+    expect(redactSensitiveText(prose, { mode: "tools" })).toBe(prose);
+    const value = "opaque-pass-secret-1234567890";
+    expect(redactSensitiveText(`smtp.pass: ${value}`, { mode: "tools" })).toBe(
+      "smtp.pass: opaque…7890",
+    );
+    expect(redactSensitiveText(`db-pass: ${value}`, { mode: "tools" })).toBe(
+      "db-pass: opaque…7890",
+    );
+    expect(redactSensitiveText(`pass: "${value}"`, { mode: "tools" })).toBe('pass: "opaque…7890"');
+    expect(redactSensitiveText(`pass = ${value}`, { mode: "tools" })).toBe("pass = opaque…7890");
+    expect(redactSensitiveText(`pass= ${value}`, { mode: "tools" })).toBe("pass= opaque…7890");
+  });
+
   it("masks common config-file secret assignments", () => {
     const dbPassword = ["db", "password", "fixture", "1234567890"].join("-");
     const databasePassword = ["database", "password", "fixture", "1234567890"].join("-");
