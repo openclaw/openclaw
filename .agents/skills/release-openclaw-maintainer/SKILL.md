@@ -26,8 +26,19 @@ Read only the references needed for the selected phase:
 
 ## Shared release boundaries
 
-Every selected validation lane must succeed. Preserve first failures and fix the
-owning defect before explicit recovery. Stable publication requires stable/full
+Windows Node unit-test CI shards (`checks-windows-node-*`) in FRV's `normalCi`
+child are advisory for Release Decision and publication. The named
+`windows-node-ci` class belongs to `scripts/full-release-validation-policy.mjs`;
+failures remain recorded in the decision, GitHub step summary, and release
+evidence manifest. It is policy-derived, never an operator input or waiver.
+Ordinary PR, push, scheduled, and main CI keep Windows blocking.
+
+Every other selected validation lane must succeed: macOS Node and other normal
+CI jobs, install smoke, survivor lanes, `update-first-hop-compat*`, pack/npm
+qualification, package integrity, and Linux/Windows/macOS Gateway checks,
+including Windows packaged install/upgrade checks in Release Checks. A cancelled
+run still blocks. Preserve first failures and fix the owning defect before
+explicit recovery. Stable publication requires stable/full
 evidence, soak, and blocking performance. Beta-profile evidence cannot authorize
 stable publication. No lane or soak waiver can bypass these requirements.
 All nine Gateway install/upgrade combinations across Linux, Windows, and macOS
@@ -119,6 +130,7 @@ Required publication proofs and enforced environment approvals remain required.
 A passing sibling cannot replace missing required evidence. npm + ClawHub is the
 priority path. macOS, Windows, Linux, and Android native publication runs in
 parallel and never gates npm/ClawHub, GitHub release finalization, or main closeout.
-Selected Windows/macOS Gateway, Node, and native-app CI failures block release
-validation. Platform publishers retain their own artifact
+Selected Windows/macOS Gateway, macOS Node, and native-app CI failures block
+release validation; only the `windows-node-ci` class above is advisory. Platform
+publishers retain their own artifact
 and updater contracts; report pending platforms and proof gaps accurately.

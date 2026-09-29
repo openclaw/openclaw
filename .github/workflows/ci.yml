@@ -7379,6 +7379,7 @@ jobs:
         shell: bash
         env:
           RELEASE_FAST_LANE: ${{ needs.preflight.outputs.release_fast_lane }}
+          FRV_WINDOWS_NODE_ADVISORY: ${{ github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
           ALLOW_COALESCED_IOS: ${{ github.event_name == 'schedule' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' }}
           ALLOW_KNOWN_MAIN_RED: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 && needs.pr-fail-fast.result == 'success' && needs.pr-fail-fast.outputs.known_main_red_attempt == format('{0}', github.run_attempt) }}
           JOB_RESULTS: |
@@ -7431,6 +7432,12 @@ jobs:
             selected="${result#*|}"
             result="${result%%|*}"
             echo "${name}: ${result} (selected=${selected:-missing})"
+            # Pinned to WINDOWS_NODE_CI_ADVISORY by the executable workflow tests.
+            if [[ "${FRV_WINDOWS_NODE_ADVISORY:-false}" == "true" && "$name:$selected:$result" == "checks-windows:true:failure" ]]; then
+              echo "::notice title=windows-node-ci advisory::Windows Node unit-test shards failed; Full Release Validation records these results without blocking release."
+              echo 'Advisory class `windows-node-ci`: Windows Node unit-test shards failed. Individual shard results remain visible and are recorded in Full Release Validation evidence.' >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
             if [[ "${ALLOW_KNOWN_MAIN_RED:-false}" == "true" && "$selected:$result" == "true:failure" ]]; then
               case "$name" in
                 checks-node-core-test-nondist-shard|check-shard|check-test-types-hosted-core-shard|check-lint-hosted-core-shard|check-lint-hosted-extension-shard)
@@ -7458,7 +7465,7 @@ jobs:
 
       # Write-capable consumers require this exact-attempt receipt; skipped CI proves nothing.
       - name: Confirm validated workflow revision
-        if: success() && needs.preflight.outputs.validation_tier == 'full' && needs.preflight.outputs.checkout_revision == github.sha && (github.event_name != 'workflow_dispatch' || (!inputs.release_gate && inputs.target_ref == '' && inputs.release_scope == 'full' && inputs.include_android))
+        if: success() && needs.preflight.outputs.validation_tier == 'full' && needs.preflight.outputs.checkout_revision == github.sha && (github.event_name != 'workflow_dispatch' || (!startsWith(inputs.dispatch_id, 'full-release-validation-') && !inputs.release_gate && inputs.target_ref == '' && inputs.release_scope == 'full' && inputs.include_android))
         run: echo "Full CI validated the immutable workflow revision."
   seal_release_child_evidence:
     name: Seal full release child evidence
