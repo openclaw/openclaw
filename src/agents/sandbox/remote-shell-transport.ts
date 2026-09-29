@@ -242,8 +242,9 @@ async function uploadDirectoryToRemoteCommand(
       Object.assign(child, {
         stderrCapture: createCapturedOutputBuffers(),
         // The remote's stdout mirrors the archive to the remote `tar -xf`;
-        // nothing reads it, so count it without retaining a copy.
-        stdoutCapture: child === remote ? createCapturedOutputBuffers() : undefined,
+        // nothing reads it, so count it without retaining a copy. The tar side
+        // is piped to the remote's stdin, so it needs no capture.
+        stdoutCapture: child.name === "remote" ? createCapturedOutputBuffers() : undefined,
         closed: false,
         code: 0,
         signal: null,
@@ -288,12 +289,14 @@ async function uploadDirectoryToRemoteCommand(
       child.process.stderr?.on("error", fail);
       // The remote's stdout mirrors the archive to the remote `tar -xf`; nothing
       // reads it, so discard it instead of retaining a second copy in the heap.
-      child.process.stdout?.on("data", (chunk) => {
-        const capture = child.stdoutCapture;
-        if (capture) {
-          appendCapturedOutput(capture, Buffer.from(chunk), 0, "discard");
-        }
-      });
+      // The tar side's stdout is piped to the remote's stdin, so it needs no
+      // consumer here.
+      const stdoutCapture = child.stdoutCapture;
+      if (stdoutCapture) {
+        child.process.stdout?.on("data", (chunk) =>
+          appendCapturedOutput(stdoutCapture, Buffer.from(chunk), 0, "discard"),
+        );
+      }
       child.process.stdout?.on("error", fail);
     }
     remote.stdin?.on("error", fail);

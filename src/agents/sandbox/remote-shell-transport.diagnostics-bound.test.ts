@@ -99,6 +99,13 @@ describe("remote shell upload diagnostic bound", () => {
       "the uploader never attached the tar child's listeners",
     );
 
+    // The uploader must consume the mirrored archive on remote.stdout, or the
+    // pipeline retains the whole transfer in the parent heap again. Count what
+    // its discard listener reads.
+    let mirroredStdoutBytes = 0;
+    remote.stdout.on("data", (chunk: Buffer) => {
+      mirroredStdoutBytes += chunk.byteLength;
+    });
     remote.stdout.write(Buffer.alloc(emittedPerStream, 0x61));
     const chunks = Math.ceil(emittedPerStream / (64 * 1024));
     for (let index = 0; index < chunks; index += 1) {
@@ -132,6 +139,8 @@ describe("remote shell upload diagnostic bound", () => {
     const reportedDropped = Number(/(\d+) earlier bytes/.exec(error.message)?.[1]);
     expect(reportedDropped).toBeGreaterThan(0);
     expect(reportedDropped).toBe(emittedPerStream - SANDBOX_UPLOAD_DIAGNOSTIC_TAIL_BYTES);
+    // The uploader consumed the mirrored archive instead of retaining a copy.
+    expect(mirroredStdoutBytes).toBe(emittedPerStream);
     expect(remote.kill).not.toHaveBeenCalled();
   });
 });
