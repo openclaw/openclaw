@@ -55,6 +55,10 @@ import {
 } from "./incomplete-turn-resolution.js";
 import type { RunEmbeddedAgentInternalParams as TerminalRunParams } from "./internal-params.js";
 import {
+  resolveSubagentReasoningOnlyExhaustion,
+  resolveSubagentReasoningOnlyRetryInstruction,
+} from "./subagent-reasoning-only-retry.js";
+import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalInterrupted,
   isEmbeddedRunTerminalTimeout,
@@ -271,18 +275,13 @@ export async function resolveEmbeddedRunTerminal(input: {
   const replyRecoverySuppressed =
     emptyAssistantReplyIsSilent ||
     resolveSourceReplyDelivery(attempt, input.replyDeliveryState) !== "missing";
-  const nextReasoningOnlyRetryInstruction =
-    replyRecoverySuppressed || settledTurnFinalizationAttempted
-      ? null
-      : resolveReasoningOnlyRetryInstruction({
-          provider: input.activeErrorContext.provider,
-          modelId: input.activeErrorContext.model,
-          modelApi: input.modelApi,
-          executionContract: input.executionContract,
-          aborted: terminalAborted,
-          timedOut: terminalTimedOut,
-          attempt,
-        });
+  const nextReasoningOnlyRetryInstruction = resolveSubagentReasoningOnlyRetryInstruction({
+    input,
+    settledTurnFinalizationAttempted,
+    replyRecoverySuppressed,
+    aborted: terminalAborted,
+    timedOut: terminalTimedOut,
+  });
   const nextEmptyResponseRetryInstruction =
     replyRecoverySuppressed || settledTurnFinalizationAttempted
       ? null
@@ -404,17 +403,22 @@ export async function resolveEmbeddedRunTerminal(input: {
   input.clearCompactionContinuation();
 
   if (reasoningOnlyRetriesExhausted && !input.finalAssistantVisibleText) {
-    const incompletePayloadText = "⚠️ Agent couldn't generate a response. Please try again.";
+    const exhaustedTurn = resolveSubagentReasoningOnlyExhaustion({
+      input,
+      terminalInterrupted,
+      promptError,
+      terminalAssistantError,
+      incompleteTurnFallbackSafe,
+      terminalToolPresentation,
+      availableTerminalToolPresentation,
+    });
     log.warn(
       `reasoning-only retries exhausted: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} attempts=${retryState.reasoningOnlyAttempts}/${input.maxReasoningOnlyRetryAttempts} — surfacing incomplete-turn error`,
     );
     return completeEmbeddedRun({
       ...input,
-      incompleteTurnText: incompletePayloadText,
-      payloadCount: 0,
-      incompleteTurnFallbackSafe,
-      terminalToolPresentation,
+      ...exhaustedTurn,
     });
   }
   if (
