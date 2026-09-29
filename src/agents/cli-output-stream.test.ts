@@ -579,6 +579,46 @@ describe("createCliJsonlStreamingParser", () => {
     finishFrames(parser, init("session-commentary"), ...frames);
     expect(commentaryTexts).toEqual(expected);
   });
+
+  it.each([
+    {
+      name: "a streamed final answer",
+      frames: [messageStart, claudeTextDelta("Final answer"), messageStop],
+      expected: "Final answer",
+    },
+    {
+      name: "a final answer after pre-tool commentary",
+      frames: [
+        messageStart,
+        claudeTextDelta("Checking now."),
+        toolStart("toolu_1", 1),
+        messageStop,
+        messageStart,
+        claudeTextDelta("Final answer"),
+        messageStop,
+      ],
+      expected: "Final answer",
+    },
+    {
+      name: "a tool-only ending after commentary",
+      frames: [
+        messageStart,
+        claudeTextDelta("Checking now."),
+        toolStart("toolu_1", 1),
+        messageStop,
+      ],
+      expected: "",
+    },
+  ])(
+    "records the final message with commentary classification on ($name)",
+    ({ frames, expected }) => {
+      const parser = createClaudeParser({ onCommentaryText: () => undefined });
+      finishFrames(parser, init("session-commentary-final"), ...frames, result(""));
+      // rawFinalText is omitted when the final message equals the reply text.
+      const output = parser.getOutput();
+      expect(output?.rawFinalText ?? output?.text.trim()).toBe(expected);
+    },
+  );
 });
 
 it.each([

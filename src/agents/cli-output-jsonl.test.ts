@@ -301,6 +301,33 @@ describe("parseCliJsonl", () => {
     expect(result).toEqual(expected);
   });
 
+  it.each([
+    { name: "no tool call", tool: false, final: true, expected: "Checking tools.Done." },
+    { name: "text after a tool call", tool: true, final: true, expected: "Done." },
+    { name: "a tool-only ending", tool: true, final: false, expected: "" },
+  ])("records only the final Gemini message ($name)", ({ tool, final, expected }) => {
+    const message = (content: string) => ({ type: "message", role: "assistant", content });
+    const result = parseCliJsonl(
+      joinJsonlFrames(
+        { type: "init", session_id: "gemini-final" },
+        message("Checking tools."),
+        ...(tool
+          ? [
+              { type: "tool_use", tool_name: "read_file", tool_id: "tool-1", parameters: {} },
+              { type: "tool_result", tool_id: "tool-1", status: "success", output: "ok" },
+            ]
+          : []),
+        ...(final ? [message("Done.")] : []),
+        { type: "result", status: "success", stats: { total_tokens: 2 } },
+      ),
+      { command: "gemini", output: "jsonl", jsonlDialect: "gemini-stream-json" },
+      "google-gemini-cli",
+    );
+
+    // rawFinalText is omitted when the final message equals the reply text.
+    expect(result?.rawFinalText ?? result?.text.trim()).toBe(expected);
+  });
+
   it("preserves Claude cache creation tokens instead of flattening them to zero", () => {
     const result = parseCliJsonl(
       joinJsonlFrames(
