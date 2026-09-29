@@ -23,7 +23,6 @@ export const baseProps = () => ({
   viewState: createConfigViewState(),
   showModeToggle: true,
   formValue: {},
-  originalValue: {},
   activeSection: null,
   activeSubsection: null,
   onRawChange: vi.fn(),

@@ -374,12 +374,18 @@ it("reports one failed set as unresolved and multiple failed sets as ambiguous",
   const c = await capture();
   mocks.readRun.mockResolvedValue(await run(c));
   await updateStatusCommand({ json: true });
-  expect(result().recoverySets[0]).toMatchObject({
-    status: "unresolved",
-    nextAction: "openclaw update status --json",
-  });
-  expect(result().recoverySets[0].message).toMatch(/retained original.*manual inspection/i);
-  expect(result().recoverySets[0].message).not.toContain("doctor --fix");
+  const unresolved = result().recoverySets[0];
+  expect(unresolved.status).toBe("unresolved");
+  expect(unresolved.nextAction).toContain(c.manifestPath);
+  expect(unresolved.nextAction).toMatch(/preserve current state/i);
+  expect(unresolved.nextAction).toContain(
+    "https://docs.openclaw.ai/cli/update/repair-and-recovery#original-state-captures",
+  );
+  expect(unresolved.message).toMatch(/retained original.*manual inspection/i);
+  for (const guidance of [unresolved.nextAction, unresolved.message]) {
+    expect(guidance).not.toContain("openclaw update status --json");
+    expect(guidance).not.toContain("doctor --fix");
+  }
   const second = await capture("22222222-2222-4222-8222-222222222222");
   const rows = new Map([
     [c.manifest.runId, await run(c)],
