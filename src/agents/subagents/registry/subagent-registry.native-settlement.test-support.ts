@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import {
+  getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
@@ -13,10 +14,65 @@ import {
   waitForFast,
   type SubagentRegistryHarness,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+export function registerQueuedCollectorLaunchSettlementTest({
+  getRegistry,
+}: {
+  getRegistry: () => SubagentRegistryHarness;
+}): void {
+  it("keeps an in-flight queued collector pending until launch cleanup settles", async () => {
+    const mod = getRegistry();
+    const runId = "run-collector-launch-kill";
+    mod.addSubagentRunForTests({
+      runId,
+      childSessionKey: "agent:main:subagent:launch-kill",
+      task: "cancel while gateway launch is unresolved",
+      createdAt: Date.now(),
+      collect: true,
+      swarmRunId: runId,
+      schedulerSlotId: runId,
+      swarmLaunchPending: true,
+      execution: { status: "queued" },
+      completion: { required: false },
+    });
+
+    const launch = createDeferred();
+    const started = createDeferred();
+    enqueueSwarmRun({
+      groupId: "delayed-acceptance",
+      runId,
+      maxConcurrent: 1,
+      activeRunIds: [],
+      start: async () => {
+        started.resolve();
+        await launch.promise;
+      },
+      onStartFailure: () => true,
+    });
+    try {
+      await started.promise;
+      expect(await mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
+      expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toBeUndefined();
+      expect(mod.startQueuedSubagentRun(runId, "gateway-launch-kill")).toBe(false);
+      expect(mod.getSubagentRunByRunId("gateway-launch-kill")).toBeUndefined();
+
+      expect(mod.settleFailedQueuedSubagentLaunch(runId, "launch response lost")).toBe(true);
+      expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toMatchObject({
+        status: "killed",
+      });
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    } finally {
+      launch.resolve();
+      await launch.promise;
+      releaseSwarmRun(runId);
+    }
+  });
+}
 
 export function registerRestoredRunDeadlineSettlementTests({
   getRegistry,

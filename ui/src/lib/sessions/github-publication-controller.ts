@@ -69,6 +69,15 @@ export function selectedGitHubPublisher(
     : selection?.expected;
 }
 
+export function personalGitHubPublicationSelection(
+  options: GitHubPublicationOptions | null,
+): Extract<GitHubPublicationSelection, { source: "personal" }> | null {
+  const personal = options?.personal;
+  return personal?.state === "connected" && personal.account && personal.generation
+    ? { source: "personal", account: personal.account, generation: personal.generation }
+    : null;
+}
+
 /** Owns one session's explicit publication; connection/access changes retire every response. */
 export class GitHubPublicationController {
   private readonly presentations = new Set<Presentation>();
@@ -222,15 +231,12 @@ export class GitHubPublicationController {
     ) {
       return;
     }
-    const personal = options.personal;
     this.selection =
       source === "shared"
         ? options.shared
           ? { source, expected: options.shared }
           : null
-        : personal?.state === "connected" && personal.account && personal.generation
-          ? { source, account: personal.account, generation: personal.generation }
-          : null;
+        : personalGitHubPublicationSelection(options);
     this.version += 1;
     this.changed();
   }
@@ -356,6 +362,11 @@ export class GitHubPublicationController {
     });
   }
   private async publish(presentation: Presentation): Promise<void> {
+    // With no shared account, the labeled Publish as button is the explicit
+    // personal choice. Discovery itself still never selects personal credentials.
+    if (!this.selection && this.options && !this.options.shared) {
+      this.choose(presentation, "personal");
+    }
     const selection = this.attempt?.selection ?? this.selection;
     if (
       !presentation.scope?.canWrite ||

@@ -1,6 +1,3 @@
-/**
- * Guards against repeated tool-loop compactions that never make progress.
- */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 /**

@@ -2962,7 +2962,7 @@ AFTER_CD
     });
     expect(job.if).toBe("needs.preflight.outputs.run_docker_seed_e2e == 'true'");
     expect(job.needs).toEqual(["preflight"]);
-    expect(job["timeout-minutes"]).toBe(60);
+    expect(job["timeout-minutes"]).toBe(115);
     expect(job.permissions).toEqual({ contents: "read" });
     expect(job.strategy).toBeUndefined();
     expect(job.steps[0]).toEqual(jobs["build-artifacts"].steps[0]);

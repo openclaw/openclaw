@@ -22,7 +22,6 @@ import {
   resolveTelegramEffectiveDmPolicy,
   type NormalizedAllowFrom,
 } from "../bot-access.js";
-import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
 import type { TelegramThreadSpec } from "../thread-spec.js";
 import { buildTelegramConversationId } from "../topic-conversation.js";
 import {
@@ -44,6 +43,7 @@ import {
 import type { TelegramGetChat } from "./types.js";
 
 export { resolveTelegramPreviewStreamMode as resolveTelegramStreamMode } from "../preview-streaming.js";
+export { normalizeTelegramReplyToMessageId as resolveTelegramReplyId } from "../outbound-params.js";
 
 export type {
   TelegramForwardedContext,
@@ -541,10 +541,6 @@ export function buildGroupLabel(msg: Message, chatId: number | string, messageTh
     return `${title} id:${chatId}${topicSuffix}`;
   }
   return `group:${chatId}${topicSuffix}`;
-}
-
-export function resolveTelegramReplyId(raw?: string): number | undefined {
-  return normalizeTelegramReplyToMessageId(raw);
 }
 
 export type TelegramReplyTarget = {

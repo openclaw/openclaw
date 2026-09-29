@@ -118,18 +118,22 @@ export function commitRequesterWake(
   retryWholeBatch = false,
   stateContext?: OpenClawStateWorkerContext,
 ): Promise<void> {
-  const owners = entries.map((entry) => ({
-    entry,
-    identity: captureRequesterSettleRunIdentity(entry),
-    wake: entry.requesterSettleWake,
-    wakeJson: JSON.stringify(entry.requesterSettleWake),
-    deliveryGeneration: entry.delivery?.generation,
-    execution: entry.execution,
-    cancellation: entry.killReconciliation,
-    suppressed: entry.suppressCompletionDelivery,
-    published: false,
-    retired: false,
-  }));
+  const owners = new Map(
+    entries.map((entry) => [
+      entry,
+      {
+        identity: captureRequesterSettleRunIdentity(entry),
+        wake: entry.requesterSettleWake,
+        wakeJson: JSON.stringify(entry.requesterSettleWake),
+        deliveryGeneration: entry.delivery?.generation,
+        execution: entry.execution,
+        cancellation: entry.killReconciliation,
+        suppressed: entry.suppressCompletionDelivery,
+        published: false,
+        retired: false,
+      },
+    ]),
+  );
   const pending: PendingRequesterSettleWakeCommit = {
     entries: [...entries],
     generation,
@@ -138,61 +142,62 @@ export function commitRequesterWake(
     retryWholeBatch,
     failures: 0,
     nextAttemptAt: 0,
-    isPublishedRetirement: (entry) =>
-      owners.some((owner) => owner.entry === entry && owner.published && owner.retired),
+    isPublishedRetirement: (entry) => {
+      const owner = owners.get(entry);
+      return owner?.published === true && owner.retired;
+    },
     adoptPublished(members) {
-      for (const owner of owners) {
-        if (!members.includes(owner.entry)) {
+      for (const entry of members) {
+        const owner = owners.get(entry);
+        if (!owner) {
           continue;
         }
         owner.published = true;
         owner.retired =
           pending.committedWake?.result.retiredRunIds.includes(owner.identity.runId) === true;
-        owner.wake = owner.entry.requesterSettleWake;
+        owner.wake = entry.requesterSettleWake;
         owner.wakeJson = JSON.stringify(owner.wake);
-        owner.execution = owner.entry.execution;
-        owner.cancellation = owner.entry.killReconciliation;
-        owner.suppressed = owner.entry.suppressCompletionDelivery;
+        owner.execution = entry.execution;
+        owner.cancellation = entry.killReconciliation;
+        owner.suppressed = entry.suppressCompletionDelivery;
       }
     },
-    isCurrent: (current) =>
-      owners.some((owner) => {
-        const { entry, identity } = owner;
-        if (
-          current !== entry ||
-          !isDeepStrictEqual(captureRequesterSettleRunIdentity(entry), identity) ||
-          context.newerGenerationOwnsSession(entry)
-        ) {
-          return false;
-        }
-        const live = context.options.runs.get(identity.runId);
-        if (
-          (owner.published && owner.retired ? live !== undefined : live !== entry) ||
-          (!owner.published &&
-            (!entry.requesterSettleWake ||
-              entry.requesterSettleWake.rearmGeneration !== generation))
-        ) {
-          return false;
-        }
-        if (
-          entry.requesterSettleWake === owner.wake &&
-          entry.execution === owner.execution &&
-          entry.killReconciliation === owner.cancellation &&
-          entry.suppressCompletionDelivery === owner.suppressed
-        ) {
-          return true;
-        }
-        // Independent blocking keeps the same closed member in its frozen wave.
-        return (
-          !owner.published &&
-          entry.execution.status === "terminal" &&
-          entry.pauseReason !== "sessions_yield" &&
-          entry.suppressCompletionDelivery === true &&
-          entry.delivery?.status === "failed" &&
-          entry.delivery.generation === owner.deliveryGeneration &&
-          JSON.stringify(entry.requesterSettleWake) === owner.wakeJson
-        );
-      }),
+    isCurrent: (entry) => {
+      const owner = owners.get(entry);
+      if (
+        !owner ||
+        !isDeepStrictEqual(captureRequesterSettleRunIdentity(entry), owner.identity) ||
+        context.newerGenerationOwnsSession(entry)
+      ) {
+        return false;
+      }
+      const live = context.options.runs.get(owner.identity.runId);
+      if (
+        (owner.published && owner.retired ? live !== undefined : live !== entry) ||
+        (!owner.published &&
+          (!entry.requesterSettleWake || entry.requesterSettleWake.rearmGeneration !== generation))
+      ) {
+        return false;
+      }
+      if (
+        entry.requesterSettleWake === owner.wake &&
+        entry.execution === owner.execution &&
+        entry.killReconciliation === owner.cancellation &&
+        entry.suppressCompletionDelivery === owner.suppressed
+      ) {
+        return true;
+      }
+      // Independent blocking keeps the same closed member in its frozen wave.
+      return (
+        !owner.published &&
+        entry.execution.status === "terminal" &&
+        entry.pauseReason !== "sessions_yield" &&
+        entry.suppressCompletionDelivery === true &&
+        entry.delivery?.status === "failed" &&
+        entry.delivery.generation === owner.deliveryGeneration &&
+        JSON.stringify(entry.requesterSettleWake) === owner.wakeJson
+      );
+    },
   };
   // Sibling wakes must observe the same fence while the first worker write is
   // still settling, before a failure has established its retry deadline.

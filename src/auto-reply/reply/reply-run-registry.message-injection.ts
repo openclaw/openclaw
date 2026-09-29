@@ -246,6 +246,8 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
           if (!(await injection.claimPendingUserInputAnswer?.(text, options))) {
             throw new Error("pending user input was not accepted");
           }
+          options?.onQueueAccepted?.(true);
+          options?.onQueueSettled?.();
         },
       },
     };
@@ -505,14 +507,15 @@ export async function finalizeReplyMessageInjectionAttempt(params: {
       adoptionError,
     };
   }
-  recordAcceptedReplyMessageInjectionTarget(params.target, {
+  const owner = params.target[replyMessageInjectionTargetOwner];
+  owner.recordAccepted({
     inboundAudio: params.inboundAudio,
   });
   let aborted =
     outcome.result?.transcriptCommit === "unconfirmed" &&
     params.abortOnUnconfirmedTranscript !== false;
   if (aborted) {
-    abortReplyMessageInjectionTarget(params.target);
+    owner.abort();
   }
   let adoptionError: unknown;
   try {
@@ -520,7 +523,7 @@ export async function finalizeReplyMessageInjectionAttempt(params: {
   } catch (error) {
     adoptionError = error;
     if (params.shouldAbortOnAdoptionError?.(error)) {
-      abortReplyMessageInjectionTarget(params.target);
+      owner.abort();
       aborted = true;
     }
   }
@@ -531,17 +534,4 @@ export async function finalizeReplyMessageInjectionAttempt(params: {
     aborted,
     ...(adoptionError === undefined ? {} : { adoptionError }),
   };
-}
-
-/** Abort only the captured owner; never a same-key successor. */
-function abortReplyMessageInjectionTarget(target: ReplyMessageInjectionTarget): boolean {
-  return target[replyMessageInjectionTargetOwner].abort();
-}
-
-/** Record accepted input on the captured owner without rediscovering its session slot. */
-function recordAcceptedReplyMessageInjectionTarget(
-  target: ReplyMessageInjectionTarget,
-  options?: { inboundAudio?: boolean },
-): void {
-  target[replyMessageInjectionTargetOwner].recordAccepted(options);
 }

@@ -86,6 +86,10 @@ wa-select.settings-select wa-option::part(checked-icon),
   font-weight: 650;
 }
 
+.picker-select__option .picker-select__label {
+  white-space: normal;
+}
+
 .picker-select__copy {
   display: grid;
   gap: 2px;

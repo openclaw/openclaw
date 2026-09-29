@@ -116,6 +116,12 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     lastRunPromptUsage,
     terminalState: initial.terminalState,
   });
+  const preserveInitial = (finalizationOutcome: "not-attempted" | "failed") => ({
+    ...initial,
+    prepared,
+    lastRunPromptUsage,
+    finalizationOutcome,
+  });
   const prompt = resolveSettledTurnFinalizationRequest({
     runParams: input.terminalBase.runParams,
     attempt,
@@ -133,12 +139,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       typeof input.finalization.harness.finalizeSettledTurn === "function",
   });
   if (!prompt) {
-    return {
-      ...initial,
-      prepared,
-      lastRunPromptUsage,
-      finalizationOutcome: "not-attempted" as const,
-    };
+    return preserveInitial("not-attempted");
   }
   const assertFinalizationActive = resolveAdmittedRunActiveAssertion(
     input.finalization.preparedAttempt.admittedRunContext,
@@ -147,11 +148,11 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   if (!assertFinalizationActive) {
     throw new Error("admitted run authority is no longer active");
   }
-  const committedSessionTarget = resolveCommittedSessionTarget({
-    preparedAttempt: input.finalization.preparedAttempt,
-    sessionTarget: input.finalization.sessionTarget,
-    sessionWriterFence: input.finalization.sessionWriterFence,
-  });
+  const { preparedAttempt, sessionTarget, sessionWriterFence } = input.finalization;
+  const committedSessionTarget =
+    preparedAttempt.sessionTarget || sessionTarget || sessionWriterFence
+      ? { ...preparedAttempt.sessionTarget, ...sessionTarget, ...sessionWriterFence }
+      : undefined;
   const sessionWriterDeliveryAuthority = resolveSessionWriterDeliveryAuthority({
     attempt: input.finalization.preparedAttempt,
     sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
@@ -243,12 +244,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
         `settled-turn finalization was cancelled: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
           `provider=${errorContext.provider}/${errorContext.model} error=${formatErrorMessage(error)} — preserving cancellation`,
       );
-      return {
-        ...initial,
-        prepared,
-        lastRunPromptUsage,
-        finalizationOutcome: "failed" as const,
-      };
+      return preserveInitial("failed");
     }
     log.warn(
       `settled-turn finalization failed: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
@@ -260,12 +256,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       `settled-turn finalization was cancelled before terminal delivery: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${errorContext.provider}/${errorContext.model} — preserving cancellation`,
     );
-    return {
-      ...initial,
-      prepared,
-      lastRunPromptUsage,
-      finalizationOutcome: "failed" as const,
-    };
+    return preserveInitial("failed");
   }
   if (finalizationOutcome !== "answered" && terminalFallbackAllowed) {
     // Scheduled runs have no useful announcement when only a host placeholder remains.
@@ -284,12 +275,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
         `settled-turn fallback was cancelled during transcript persistence: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
           `provider=${errorContext.provider}/${errorContext.model} — preserving cancellation`,
       );
-      return {
-        ...initial,
-        prepared,
-        lastRunPromptUsage,
-        finalizationOutcome: "failed" as const,
-      };
+      return preserveInitial("failed");
     }
     attempt = buildSettledToolFallbackAttemptResult({
       text: fallbackText,
@@ -397,22 +383,6 @@ function resolveSessionWriterDeliveryAuthority(input: {
     ...(expectedWriterRunId !== undefined ? { expectedWriterRunId } : {}),
     sessionKey,
     ...(target?.storePath ? { storePath: target.storePath } : {}),
-  };
-}
-
-function resolveCommittedSessionTarget(input: {
-  preparedAttempt: EmbeddedRunAttemptParams;
-  sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
-  sessionWriterFence?: SessionTranscriptWriterFence;
-}): EmbeddedRunAttemptParams["sessionTarget"] {
-  const preparedTarget = input.preparedAttempt.sessionTarget;
-  if (!preparedTarget && !input.sessionTarget && !input.sessionWriterFence) {
-    return undefined;
-  }
-  return {
-    ...preparedTarget,
-    ...input.sessionTarget,
-    ...input.sessionWriterFence,
   };
 }
 

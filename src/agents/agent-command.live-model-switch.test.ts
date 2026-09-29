@@ -37,6 +37,7 @@ import {
   createCommandSessionEntry,
   createCommandSessionFixture,
   createConfiguredModelCompatRuntimeConfig,
+  createLegacyAutoFallbackAliasCollisionConfig,
   createTestModelSelection,
   createTestModelVisibilityPolicy,
   makeSuccessResult,
@@ -662,7 +663,10 @@ vi.mock("./model-catalog.runtime.js", () => ({
   loadPreparedModelCatalogSnapshot: state.loadPreparedModelCatalogSnapshotMock,
 }));
 
-vi.mock("./model-selection.js", () => createTestModelSelection(state));
+vi.mock("./model-selection.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./model-selection.js")>();
+  return { ...actual, ...createTestModelSelection(state) };
+});
 
 vi.mock("./model-visibility-policy.js", () => ({
   createModelVisibilityPolicy: createTestModelVisibilityPolicy,
@@ -4202,18 +4206,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   });
 
   it("keeps a legacy auto-fallback route ahead of a colliding model alias", async () => {
-    state.runtimeConfigMock = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude" },
-          models: {
-            "anthropic/claude": {},
-            "cloudflare-ai-gateway/gemini-2.5-flash-lite": {},
-            "google/gemini-2.5-flash-lite": { alias: "gemini-2.5-flash-lite" },
-          },
-        },
-      },
-    };
+    state.runtimeConfigMock = createLegacyAutoFallbackAliasCollisionConfig();
     const sessionEntry: SessionEntry = {
       sessionId: "session-1",
       updatedAt: Date.now(),

@@ -36,11 +36,9 @@ type RuntimePolicyContext = Pick<
 >;
 
 function resolvePolicyChannel(ctx?: RuntimePolicyContext): string | undefined {
-  const raw = normalizeOptionalString(ctx?.OriginatingChannel ?? ctx?.Provider ?? ctx?.Surface);
-  if (!raw) {
-    return undefined;
-  }
-  const channel = normalizeLowercaseStringOrEmpty(raw);
+  const channel = normalizeLowercaseStringOrEmpty(
+    ctx?.OriginatingChannel ?? ctx?.Provider ?? ctx?.Surface,
+  );
   return channel && channel !== "webchat" ? channel : undefined;
 }
 

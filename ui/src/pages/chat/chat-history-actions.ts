@@ -84,12 +84,7 @@ function ownsClearChatView(state: ClearChatHistoryState, owner: ClearChatViewOwn
 
 function clearPostResetBranchPrecondition(
   state: ClearChatHistoryState,
-  target: {
-    client: NonNullable<ClearChatHistoryState["client"]>;
-    connectionEpoch: number;
-    sessionKey: string;
-    agentId?: string;
-  },
+  target: ClearChatViewOwner,
   history: ChatHistoryResult | undefined,
 ) {
   if (
@@ -165,11 +160,7 @@ export async function clearChatHistory(
         resetChatHistoryProjection(state, agentParams.agentId);
         const history = await loadChatHistory(state);
         historyRefreshed = Boolean(history);
-        clearPostResetBranchPrecondition(
-          state,
-          { client, connectionEpoch, sessionKey, agentId: agentParams.agentId },
-          history,
-        );
+        clearPostResetBranchPrecondition(state, originalViewOwner, history);
       }
       if (ownsClearChatView(state, feedbackOwner)) {
         setChatError(
@@ -208,11 +199,7 @@ export async function clearChatHistory(
     clearRunStatus: !hadActiveRun,
   });
   const history = await loadChatHistory(state);
-  clearPostResetBranchPrecondition(
-    state,
-    { client, connectionEpoch, sessionKey, agentId: agentParams.agentId },
-    history,
-  );
+  clearPostResetBranchPrecondition(state, originalViewOwner, history);
   if (ownsClearChatView(state, originalViewOwner)) {
     scheduleChatScroll(state);
   }

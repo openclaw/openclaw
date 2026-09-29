@@ -161,11 +161,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const emojiMenu = options.textareaController.emojiMenu;
   const composerLocked =
     options.submitting || options.messageLocked === true || options.dictationActive === true;
-  mentionMenu.syncDirectory(
-    options.submitting || options.messageLocked || options.dictationActive
-      ? undefined
-      : options.mentionDirectory,
-  );
+  mentionMenu.syncDirectory(composerLocked ? undefined : options.mentionDirectory);
   const skillMenuHost: SkillMenuHost = {
     paneId: "new-session",
     getDraft: () => options.textareaController.getTextarea()?.value ?? options.message,

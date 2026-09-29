@@ -38,7 +38,7 @@ import {
   waitForFast,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -56,6 +56,7 @@ import {
 import { findRecordCallArg } from "./subagent-registry.mock-call.test-support.js";
 import {
   registerForcedCollectorCompletionSettlementTests,
+  registerQueuedCollectorLaunchSettlementTest,
   registerRestartDrainCompletionSettlementTest,
   registerRestoredRunDeadlineSettlementTests,
 } from "./subagent-registry.native-settlement.test-support.js";
@@ -679,52 +680,7 @@ describe("subagent registry seam flow", () => {
 
   registerRestartDrainCompletionSettlementTest({ getRegistry: () => mod, mocks, findRequesterRun });
 
-  it("keeps an in-flight queued collector pending until launch cleanup settles", async () => {
-    const runId = "run-collector-launch-kill";
-    mod.addSubagentRunForTests({
-      runId,
-      childSessionKey: "agent:main:subagent:launch-kill",
-      task: "cancel while gateway launch is unresolved",
-      createdAt: Date.now(),
-      collect: true,
-      swarmRunId: runId,
-      schedulerSlotId: runId,
-      swarmLaunchPending: true,
-      execution: { status: "queued" },
-      completion: { required: false },
-    });
-
-    const launch = createDeferred();
-    const started = createDeferred();
-    enqueueSwarmRun({
-      groupId: "delayed-acceptance",
-      runId,
-      maxConcurrent: 1,
-      activeRunIds: [],
-      start: async () => {
-        started.resolve();
-        await launch.promise;
-      },
-      onStartFailure: () => true,
-    });
-    try {
-      await started.promise;
-      expect(await mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
-      expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toBeUndefined();
-      expect(mod.startQueuedSubagentRun(runId, "gateway-launch-kill")).toBe(false);
-      expect(mod.getSubagentRunByRunId("gateway-launch-kill")).toBeUndefined();
-
-      expect(mod.settleFailedQueuedSubagentLaunch(runId, "launch response lost")).toBe(true);
-      expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toMatchObject({
-        status: "killed",
-      });
-      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    } finally {
-      launch.resolve();
-      await launch.promise;
-      releaseSwarmRun(runId);
-    }
-  });
+  registerQueuedCollectorLaunchSettlementTest({ getRegistry: () => mod });
 
   it("records early structured output through the child session identity", () => {
     const childSessionKey = "agent:main:subagent:early-structured-output";
@@ -2081,6 +2037,8 @@ describe("subagent registry seam flow", () => {
         });
         await terminalPersisted.promise;
       } finally {
+        // Run the zero-delay wait continuation before draining owned root work.
+        await vi.advanceTimersByTimeAsync(0);
         await settleRootWork();
       }
 

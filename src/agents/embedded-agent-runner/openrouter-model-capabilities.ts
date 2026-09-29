@@ -199,11 +199,6 @@ function triggerFetch(): void {
   });
 }
 
-/**
- * Ensure the cache is populated. Checks in-memory first, then SQLite, then
- * triggers a background API fetch as a last resort.
- * Does not block — returns immediately.
- */
 function ensureOpenRouterModelCache(): void {
   if (cache) {
     return;
@@ -233,12 +228,8 @@ export async function loadOpenRouterModelCapabilities(modelId: string): Promise<
   if (cache?.has(modelId)) {
     return;
   }
-  let fetchPromise = fetchInFlight;
-  if (!fetchPromise) {
-    triggerFetch();
-    fetchPromise = fetchInFlight;
-  }
-  await fetchPromise;
+  triggerFetch();
+  await fetchInFlight;
   if (!cache?.has(modelId)) {
     skipNextMissRefresh.add(modelId);
   }
@@ -263,12 +254,7 @@ export function getOpenRouterModelCapabilities(
   }
   const result = cache?.get(modelId);
 
-  // Model not found but cache exists — may be a newly added model.
-  // Trigger a refresh so the next call picks it up.
-  if (!result && skipMissRefresh) {
-    return undefined;
-  }
-  if (!result && cache && !fetchInFlight) {
+  if (!result && !skipMissRefresh && cache) {
     triggerFetch();
   }
 

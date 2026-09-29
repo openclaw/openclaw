@@ -225,8 +225,8 @@ export async function runAgentsApiAttempt(
     const sessionIdentity = [
       params.model.id,
       params.resolvedApiKey,
-      // Hosted settings preserve the identity of existing saved sessions.
-      ...(environment.type === "self_hosted" ? [environment] : []),
+      // Preserve existing hosted identities only when no network policy is configured.
+      ...(environment.type === "self_hosted" || environment.network != null ? [environment] : []),
     ];
     const fingerprint = createHash("sha256").update(JSON.stringify(sessionIdentity)).digest("hex");
     if (binding && binding.authFingerprint !== fingerprint) {
@@ -234,7 +234,11 @@ export async function runAgentsApiAttempt(
       const toolsFingerprint = createHash("sha256")
         .update(JSON.stringify([params.model.id, params.resolvedApiKey, surface.declarations]))
         .digest("hex");
-      if (environment.type !== "openai_hosted" || binding.authFingerprint !== toolsFingerprint) {
+      if (
+        environment.type !== "openai_hosted" ||
+        environment.network != null ||
+        binding.authFingerprint !== toolsFingerprint
+      ) {
         throw new Error(
           "Agents API model, credential, or environment changed; reset the OpenClaw session before continuing",
         );

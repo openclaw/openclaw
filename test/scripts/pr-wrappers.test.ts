@@ -2089,6 +2089,11 @@ exit 99
     mkdirSync(join(dir, "bin"));
     writeFileSync(join(dir, "bin/gh"), "#!/bin/sh\nexit 99\n");
     chmodSync(join(dir, "bin/gh"), 0o755);
+    // These tests cover wrapper trust routing, not the host command inventory.
+    for (const command of ["pnpm", "rg"]) {
+      writeFileSync(join(dir, "bin", command), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(dir, "bin", command), 0o755);
+    }
     const git = (cwd: string, args: string[]) =>
       spawnSync("git", args, { cwd, env, encoding: "utf8", stdio: "pipe" });
     expect(git(repo, ["init", "-b", "main"]).status).toBe(0);
@@ -2169,6 +2174,11 @@ exit 99
     mkdirSync(join(dir, "bin"));
     writeFileSync(join(dir, "bin/gh"), "#!/bin/sh\nexit 99\n");
     chmodSync(join(dir, "bin/gh"), 0o755);
+    // These tests cover wrapper trust routing, not the host command inventory.
+    for (const command of ["pnpm", "rg"]) {
+      writeFileSync(join(dir, "bin", command), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(dir, "bin", command), 0o755);
+    }
     const git = (cwd: string, args: string[]) =>
       spawnSync("git", args, { cwd, env, encoding: "utf8", stdio: "pipe" });
     expect(git(repo, ["init", "-b", "main"]).status).toBe(0);

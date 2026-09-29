@@ -4,6 +4,17 @@ import { z } from "zod";
 
 export const agentsApiConfigSchema = z.strictObject({
   environment: z.enum(["openai_hosted", "self_hosted"]).default("openai_hosted"),
+  openai_host: z
+    .strictObject({
+      network: z
+        .strictObject({
+          access: z.enum(["enabled", "disabled", "restricted"]),
+          allowed_domains: z.array(z.string()).nullable().optional(),
+        })
+        .nullable()
+        .optional(),
+    })
+    .optional(),
   hostExecutorSkillDirectories: z
     .array(
       z
@@ -42,5 +53,10 @@ export function resolveAgentsApiEnvironment(
           ? { capability_directories: parsed.hostExecutorSkillDirectories }
           : {}),
       }
-    : { type: "openai_hosted" };
+    : {
+        type: "openai_hosted",
+        ...(parsed.openai_host?.network !== undefined
+          ? { network: parsed.openai_host.network }
+          : {}),
+      };
 }
