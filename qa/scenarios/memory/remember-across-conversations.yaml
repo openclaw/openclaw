@@ -35,7 +35,7 @@ scenario:
             maxSummaryChars: 220
   successCriteria:
     - Two private conversations keep distinct session keys and persisted transcript identities.
-    - A private reply recalls the relevant fact from the other private conversation.
+    - A completed private reply recalls the exact relevant fact from the other private conversation.
     - Accepted memory-search evidence excludes the group transcript and anchor transcript.
     - Group destinations, the disabled setting, and a session-scoped pause do not start product recall.
     - The feature does not widen tools.sessions.visibility.
@@ -66,8 +66,7 @@ scenario:
       groupFact: GROUP-ONLY loaded nachos with black olives
       anchorFact: ANCHOR-ONLY pretzel bites test marker
       sourceMarker: QA-REMEMBER-SOURCE-SEEDED
-      recallPrompt: "Remember across conversations QA check: what snack do I usually want for QA movie night? Reply in one short sentence."
-      expectedNeedle: lemon pepper wings with blue cheese
+      recallPrompt: "Remember across conversations QA check: what snack do I usually want for QA movie night? Reply with only the snack preference, verbatim, without punctuation or any other text."
       transcriptDir: qa-remember-across-conversations
 
 flow:
@@ -144,17 +143,18 @@ flow:
                     expr: config.sourceConversationId
                   senderName: Remember Source
                   text:
-                    expr: "`Stable QA movie night usual favorite snack preference: ${config.privateFact}. Reply exactly: ${config.sourceMarker}.`"
-              - waitForOutbound:
-                  conversation:
-                    id:
-                      expr: config.sourceConversationId
-                    kind: direct
-                  textIncludes:
-                    expr: config.sourceMarker
-                  timeoutMs:
-                    expr: liveTurnTimeoutMs(env, 60000)
+                    expr: "`Stable QA movie night usual favorite snack preference: ${config.privateFact}. Reply exactly: ${config.sourceMarker}`"
+                saveAs: lastInbound
+              - call: waitForCompletedQaReply
                 saveAs: sourceOutbound
+                args:
+                  - ref: state
+                  - ref: lastInbound
+                  - expr: liveTurnTimeoutMs(env, 60000)
+              - assert:
+                  expr: sourceOutbound.text === config.sourceMarker
+                  message:
+                    expr: "`private source did not acknowledge the seeded fact: ${sourceOutbound.text}`"
               - sendInbound:
                   conversation:
                     id:
@@ -165,14 +165,12 @@ flow:
                   senderName: Remember Group Member
                   text:
                     expr: "`@openclaw Stable QA movie night usual favorite snack preference: ${config.groupFact}. This applies only inside this group. Acknowledge briefly.`"
-              - waitForOutbound:
-                  conversation:
-                    id:
-                      expr: config.groupConversationId
-                    kind: channel
-                  timeoutMs:
-                    expr: liveTurnTimeoutMs(env, 60000)
-                saveAs: groupOutbound
+                saveAs: lastInbound
+              - call: waitForCompletedQaReply
+                args:
+                  - ref: state
+                  - ref: lastInbound
+                  - expr: liveTurnTimeoutMs(env, 60000)
               - sendInbound:
                   conversation:
                     id:
@@ -183,14 +181,12 @@ flow:
                   senderName: Remember Target
                   text:
                     expr: "`QA movie night snack recall anchor fixture: ${config.anchorFact}. This is a test marker, not a preference. Acknowledge briefly.`"
-              - waitForOutbound:
-                  conversation:
-                    id:
-                      expr: config.targetConversationId
-                    kind: direct
-                  timeoutMs:
-                    expr: liveTurnTimeoutMs(env, 60000)
-                saveAs: anchorOutbound
+                saveAs: lastInbound
+              - call: waitForCompletedQaReply
+                args:
+                  - ref: state
+                  - ref: lastInbound
+                  - expr: liveTurnTimeoutMs(env, 60000)
               - call: readRawQaSessionStore
                 saveAs: seededStore
                 args:
@@ -248,9 +244,6 @@ flow:
               - set: requestCursorBeforeRecall
                 value:
                   expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
-              - set: targetStartIndex
-                value:
-                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
               - sendInbound:
                   conversation:
                     id:
@@ -261,16 +254,13 @@ flow:
                   senderName: Remember Target
                   text:
                     expr: config.recallPrompt
-              - call: waitForOutboundMessage
+                saveAs: lastInbound
+              - call: waitForCompletedQaReply
                 saveAs: targetOutbound
                 args:
                   - ref: state
-                  - lambda:
-                      params: [candidate]
-                      expr: "candidate.conversation.id === config.targetConversationId && candidate.direction === 'outbound'"
+                  - ref: lastInbound
                   - expr: liveTurnTimeoutMs(env, 60000)
-                  - sinceIndex:
-                      ref: targetStartIndex
               - call: waitForCondition
                 saveAs: helperTranscriptPath
                 args:
@@ -291,7 +281,7 @@ flow:
                 value:
                   expr: "recallRequests.map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, toolOutput: String(request.toolOutput ?? '').slice(0, 1200), finalText: String(request.finalText ?? '').slice(0, 300), allInputText: String(request.allInputText ?? '').slice(-500) }))"
               - assert:
-                  expr: "normalizeLowercaseStringOrEmpty(targetOutbound.text).includes(normalizeLowercaseStringOrEmpty(config.expectedNeedle))"
+                  expr: targetOutbound.text === config.privateFact
                   message:
                     expr: "`private target missed recalled preference: reply=${targetOutbound.text}; sessions=${JSON.stringify({ sourceSession, targetSession, groupSession })}; helper=${helperTranscriptText}; requests=${JSON.stringify(recallRequestDebug)}`"
               - assert:
@@ -342,14 +332,15 @@ flow:
                         senderName: Remember Group Member
                         text:
                           expr: "`@openclaw ${config.recallPrompt}`"
-                    - call: waitForCondition
-                      saveAs: groupDestinationRequests
+                      saveAs: lastInbound
+                    - call: waitForCompletedQaReply
                       args:
-                        - lambda:
-                            async: true
-                            expr: "await (async () => { const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${groupRequestCursorBefore}`); return requests.length > 0 ? requests : undefined; })()"
+                        - ref: state
+                        - ref: lastInbound
                         - expr: liveTurnTimeoutMs(env, 60000)
-                        - 100
+                    - set: groupDestinationRequests
+                      value:
+                        expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${groupRequestCursorBefore}`)"
                     - set: helperCountAfterGroupDestination
                       value:
                         expr: "(await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).length"
@@ -363,9 +354,6 @@ flow:
                         expr: "groupDestinationRequests.every((request) => !String(request.allInputText ?? '').includes(config.privateFact) && !String(request.allInputText ?? '').includes('<active_memory_plugin>'))"
                         message:
                           expr: "`group destination received private recall context: ${JSON.stringify(groupDestinationRequests)}`"
-                    - set: pauseCommandStartIndex
-                      value:
-                        expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
                     - sendInbound:
                         conversation:
                           id:
@@ -374,18 +362,15 @@ flow:
                         senderId: qa-operator
                         senderName: QA Operator
                         text: /active-memory off
-                    - call: waitForOutboundMessage
+                      saveAs: lastInbound
+                    - call: waitForCompletedQaReply
                       saveAs: pauseCommandOutbound
                       args:
                         - ref: state
-                        - lambda:
-                            params: [candidate]
-                            expr: "candidate.direction === 'outbound' && candidate.conversation.id === config.pausedConversationId && candidate.text.includes('Active Memory: off for this session.')"
+                        - ref: lastInbound
                         - expr: liveTurnTimeoutMs(env, 60000)
-                        - sinceIndex:
-                            ref: pauseCommandStartIndex
                     - assert:
-                        expr: "pauseCommandOutbound.text.includes('Active Memory: off for this session.')"
+                        expr: "pauseCommandOutbound.text === 'Active Memory: off for this session.'"
                         message:
                           expr: "`unexpected Active Memory command response: ${JSON.stringify(pauseCommandOutbound)}`"
                     - set: helperCountBeforePaused
@@ -404,14 +389,15 @@ flow:
                         senderName: Remember Paused
                         text:
                           expr: config.recallPrompt
-                    - call: waitForCondition
-                      saveAs: pausedRequests
+                      saveAs: lastInbound
+                    - call: waitForCompletedQaReply
                       args:
-                        - lambda:
-                            async: true
-                            expr: "await (async () => { const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${pausedRequestCursorBefore}`); return requests.length > 0 ? requests : undefined; })()"
+                        - ref: state
+                        - ref: lastInbound
                         - expr: liveTurnTimeoutMs(env, 60000)
-                        - 100
+                    - set: pausedRequests
+                      value:
+                        expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${pausedRequestCursorBefore}`)"
                     - set: helperCountAfterPaused
                       value:
                         expr: "(await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).length"
@@ -419,7 +405,7 @@ flow:
                         expr: helperCountAfterPaused === helperCountBeforePaused
                         message: session-scoped pause unexpectedly started recall
                     - assert:
-                        expr: "pausedRequests.every((request) => !String(request.allInputText ?? '').includes(config.privateFact) && !String(request.allInputText ?? '').includes('<active_memory_plugin>'))"
+                        expr: "pausedRequests.length > 0 && pausedRequests.every((request) => !String(request.allInputText ?? '').includes(config.privateFact) && !String(request.allInputText ?? '').includes('<active_memory_plugin>'))"
                         message:
                           expr: "`paused conversation received private recall context: ${JSON.stringify(pausedRequests)}`"
                     - set: freshRequestCursorBefore
@@ -435,14 +421,15 @@ flow:
                         senderName: Remember Fresh
                         text:
                           expr: config.recallPrompt
-                    - call: waitForCondition
-                      saveAs: freshRequests
+                      saveAs: lastInbound
+                    - call: waitForCompletedQaReply
                       args:
-                        - lambda:
-                            async: true
-                            expr: "await (async () => { const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${freshRequestCursorBefore}`); return requests.some((request) => String(request.allInputText ?? '').includes('<active_memory_plugin>')) ? requests : undefined; })()"
+                        - ref: state
+                        - ref: lastInbound
                         - expr: liveTurnTimeoutMs(env, 60000)
-                        - 100
+                    - set: freshRequests
+                      value:
+                        expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${freshRequestCursorBefore}`)"
                     - set: helperCountAfterFresh
                       value:
                         expr: "(await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).length"
@@ -485,14 +472,15 @@ flow:
                         senderName: Remember Disabled
                         text:
                           expr: config.recallPrompt
-                    - call: waitForCondition
-                      saveAs: disabledRequests
+                      saveAs: lastInbound
+                    - call: waitForCompletedQaReply
                       args:
-                        - lambda:
-                            async: true
-                            expr: "await (async () => { const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${disabledRequestCursorBefore}`); return requests.length > 0 ? requests : undefined; })()"
+                        - ref: state
+                        - ref: lastInbound
                         - expr: liveTurnTimeoutMs(env, 60000)
-                        - 100
+                    - set: disabledRequests
+                      value:
+                        expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${disabledRequestCursorBefore}`)"
                     - set: helperCountAfterDisabled
                       value:
                         expr: "(await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).length"
@@ -500,10 +488,18 @@ flow:
                         expr: helperCountAfterDisabled === helperCountBeforeDisabled
                         message: disabled setting unexpectedly started Remember across conversations recall
                     - assert:
-                        expr: "disabledRequests.every((request) => !String(request.allInputText ?? '').includes(config.privateFact) && !String(request.allInputText ?? '').includes('<active_memory_plugin>'))"
+                        expr: "disabledRequests.length > 0 && disabledRequests.every((request) => !String(request.allInputText ?? '').includes(config.privateFact) && !String(request.allInputText ?? '').includes('<active_memory_plugin>'))"
                         message:
                           expr: "`disabled setting received private recall context: ${JSON.stringify(disabledRequests)}`"
             finally:
+              - if:
+                  expr: "typeof lastInbound !== 'undefined'"
+                  then:
+                    - call: waitForQaInboundCompletion
+                      args:
+                        - ref: state
+                        - ref: lastInbound
+                        - expr: liveTurnTimeoutMs(env, 60000)
               - call: patchConfig
                 args:
                   - env:
