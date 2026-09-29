@@ -576,10 +576,10 @@ function canCodexAppServerNativeToolSurfaceHonorSandbox(
   // by the app-server process. Without the explicit exec-server integration,
   // active OpenClaw sandboxing must disable the native surface and route shell
   // access through sandbox-backed dynamic tools instead.
-  return Boolean(
+  return (
     options.sandboxExecServerEnabled === true &&
     (sandbox.backend || isCodexRemoteExecPlacementSandbox(sandbox)) &&
-    CODEX_NATIVE_TOOL_REQUIREMENTS.every((toolName) => isToolAllowed(sandbox.tools, toolName)),
+    CODEX_NATIVE_TOOL_REQUIREMENTS.every((toolName) => isToolAllowed(sandbox.tools, toolName))
   );
 }
 function isCodexMemoryFlushRun(

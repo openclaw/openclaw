@@ -29,7 +29,9 @@ export function createCodexDesktopGenerationOwner(params: {
         }
         const observedInvalidation = invalidation;
         const first = await params.readFingerprint();
-        await new Promise((resolve) => setTimeout(resolve, SETTLE_DELAY_MS));
+        await new Promise((resolve) => {
+          setTimeout(resolve, SETTLE_DELAY_MS);
+        });
         if (stopped) {
           throw new Error("Codex desktop generation owner stopped");
         }

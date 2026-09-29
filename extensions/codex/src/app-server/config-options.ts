@@ -424,67 +424,78 @@ export function resolveCodexComputerUseConfig(
 ): ResolvedCodexComputerUseConfig {
   const env = params.env ?? process.env;
   const config = readCodexPluginConfig(params.pluginConfig).computerUse ?? {};
-  const readString = (
-    key:
-      | "marketplaceSource"
-      | "marketplacePath"
-      | "marketplaceName"
-      | "pluginName"
-      | "mcpServerName",
-    envSuffix: string,
-  ) =>
-    readNonEmptyString(params.overrides?.[key]) ??
-    readNonEmptyString(config[key]) ??
-    readNonEmptyString(env[`OPENCLAW_CODEX_COMPUTER_USE${envSuffix}`]);
-  const readBoolean = (
-    key: "enabled" | "autoInstall" | "healthCheckEnabled" | "strictReadiness" | "autoRepair",
-    envSuffix: string,
-  ) =>
-    params.overrides?.[key] ??
-    config[key] ??
-    parseBooleanValue(env[`OPENCLAW_CODEX_COMPUTER_USE${envSuffix}`]);
-  const readNumber = (
-    key:
-      | "marketplaceDiscoveryTimeoutMs"
-      | "liveTestTimeoutMs"
-      | "toolCallTimeoutMs"
-      | "healthCheckIntervalMinutes",
-    envSuffix: string,
-  ) =>
-    params.overrides?.[key] ??
-    config[key] ??
-    readNumberEnv(env[`OPENCLAW_CODEX_COMPUTER_USE${envSuffix}`]);
-  const marketplaceSource = readString("marketplaceSource", "_MARKETPLACE_SOURCE");
-  const marketplacePath = readString("marketplacePath", "_MARKETPLACE_PATH");
-  const marketplaceName = readString("marketplaceName", "_MARKETPLACE_NAME");
-  const configuredPluginName = readString("pluginName", "_PLUGIN_NAME");
-  const configuredMcpServerName = readString("mcpServerName", "_MCP_SERVER_NAME");
-  const autoInstall = readBoolean("autoInstall", "_AUTO_INSTALL") ?? false;
+  const marketplaceSource =
+    readNonEmptyString(params.overrides?.marketplaceSource) ??
+    readNonEmptyString(config.marketplaceSource) ??
+    readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_SOURCE);
+  const marketplacePath =
+    readNonEmptyString(params.overrides?.marketplacePath) ??
+    readNonEmptyString(config.marketplacePath) ??
+    readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_PATH);
+  const marketplaceName =
+    readNonEmptyString(params.overrides?.marketplaceName) ??
+    readNonEmptyString(config.marketplaceName) ??
+    readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_NAME);
+  const configuredPluginName =
+    readNonEmptyString(params.overrides?.pluginName) ??
+    readNonEmptyString(config.pluginName) ??
+    readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_NAME);
+  const configuredMcpServerName =
+    readNonEmptyString(params.overrides?.mcpServerName) ??
+    readNonEmptyString(config.mcpServerName) ??
+    readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_MCP_SERVER_NAME);
+  const autoInstall =
+    params.overrides?.autoInstall ??
+    config.autoInstall ??
+    parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE_AUTO_INSTALL) ??
+    false;
   const marketplaceDiscoveryTimeoutMs = resolvePositiveTimerTimeoutMs(
-    readNumber("marketplaceDiscoveryTimeoutMs", "_MARKETPLACE_DISCOVERY_TIMEOUT_MS"),
+    params.overrides?.marketplaceDiscoveryTimeoutMs ??
+      config.marketplaceDiscoveryTimeoutMs ??
+      readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS),
     DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS,
   );
   const liveTestTimeoutMs = resolvePositiveTimerTimeoutMs(
-    readNumber("liveTestTimeoutMs", "_LIVE_TEST_TIMEOUT_MS"),
+    params.overrides?.liveTestTimeoutMs ??
+      config.liveTestTimeoutMs ??
+      readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_LIVE_TEST_TIMEOUT_MS),
     DEFAULT_CODEX_COMPUTER_USE_LIVE_TEST_TIMEOUT_MS,
   );
   const toolCallTimeoutMs = resolvePositiveTimerTimeoutMs(
-    readNumber("toolCallTimeoutMs", "_TOOL_CALL_TIMEOUT_MS"),
+    params.overrides?.toolCallTimeoutMs ??
+      config.toolCallTimeoutMs ??
+      readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS),
     DEFAULT_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS,
   );
   const healthCheckIntervalMinutes = normalizeComputerUseHealthCheckIntervalMinutes(
-    readNumber("healthCheckIntervalMinutes", "_HEALTH_CHECK_INTERVAL_MINUTES"),
+    params.overrides?.healthCheckIntervalMinutes ??
+      config.healthCheckIntervalMinutes ??
+      readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES),
   );
-  const healthCheckEnabled = readBoolean("healthCheckEnabled", "_HEALTH_CHECK_ENABLED") ?? false;
+  const healthCheckEnabled =
+    params.overrides?.healthCheckEnabled ??
+    config.healthCheckEnabled ??
+    parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_ENABLED) ??
+    false;
   const pluginCacheMode =
     normalizeComputerUsePluginCacheMode(params.overrides?.pluginCacheMode) ??
     normalizeComputerUsePluginCacheMode(config.pluginCacheMode) ??
     normalizeComputerUsePluginCacheMode(env.OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_CACHE_MODE) ??
     "independent";
-  const strictReadiness = readBoolean("strictReadiness", "_STRICT_READINESS") ?? false;
-  const autoRepair = readBoolean("autoRepair", "_AUTO_REPAIR") ?? false;
+  const strictReadiness =
+    params.overrides?.strictReadiness ??
+    config.strictReadiness ??
+    parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE_STRICT_READINESS) ??
+    false;
+  const autoRepair =
+    params.overrides?.autoRepair ??
+    config.autoRepair ??
+    parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE_AUTO_REPAIR) ??
+    false;
   const enabled =
-    readBoolean("enabled", "") ??
+    params.overrides?.enabled ??
+    config.enabled ??
+    parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE) ??
     Boolean(
       autoInstall ||
       marketplaceSource ||
