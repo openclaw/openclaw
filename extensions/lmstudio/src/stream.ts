@@ -73,11 +73,7 @@ function normalizeLmstudioModelKey(modelId: string): string {
 }
 
 function resolveRequestedContextLength(model: StreamModel): number | undefined {
-  const withContextTokens = model as StreamModel & { contextTokens?: unknown };
-  return (
-    asPositiveSafeInteger(withContextTokens.contextTokens) ??
-    asPositiveSafeInteger(model.contextWindow)
-  );
+  return asPositiveSafeInteger(model.contextTokens) ?? asPositiveSafeInteger(model.contextWindow);
 }
 
 function resolveModelHeaders(model: StreamModel): Record<string, string> | undefined {

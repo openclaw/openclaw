@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -9,11 +11,17 @@ import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-w
 import { runSpawnPipeline } from "../../spawn-pipeline.js";
 import { holdQueuedSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
-import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
+import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
+import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
+import {
+  SubagentRegistryWriteError,
+  withSubagentRegistryWriteAuthority,
+} from "./subagent-registry-persistence.js";
 import { registerQueuedRegistrationAdmissionCases } from "./subagent-registry-queued-admission.test-support.js";
 import { registerQueuedCancelledLaunchCases } from "./subagent-registry-queued-cancelled-launch.test-support.js";
 import { registerQueuedRegistrationClaimCases } from "./subagent-registry-queued-registration-claims.test-support.js";
 import { createQueuedRegistrationFixture } from "./subagent-registry-queued-registration.test-support.js";
+import { registerQueuedUnknownKillAuthorityTest } from "./subagent-registry-queued-uncertain-kill.test-support.js";
 import type { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
 import * as registryState from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -40,15 +48,19 @@ vi.mock("../../../infra/agent-events.js", () => ({
   getAgentEventLifecycleGeneration: () => mocks.lifecycle,
   isAgentEventLifecycleGenerationCurrent: (value: string) => value === mocks.lifecycle,
 }));
-vi.mock("../../../state/openclaw-state-worker-context.js", () => ({
-  captureOpenClawStateWorkerContext: () => ({
+vi.mock("../../../state/openclaw-state-worker-context.js", () => {
+  const captureContext = () => ({
     ...mocks.context,
     admission: {
       ...mocks.context?.admission,
       identity: { key: mocks.database, canonicalPath: "/synthetic/state.sqlite" },
     },
-  }),
-}));
+  });
+  return {
+    captureOpenClawStateWorkerContext: captureContext,
+    captureOpenClawStateReadContext: captureContext,
+  };
+});
 vi.mock("./subagent-session-reconciliation.js", () => ({
   loadSubagentSessionEntry: () => undefined,
 }));
@@ -92,6 +104,7 @@ afterEach(() => {
 });
 
 const fixture = () => createQueuedRegistrationFixture(mocks);
+registerQueuedUnknownKillAuthorityTest({ fixture, getContext: () => mocks.context! });
 
 it("awaits both registry acknowledgements through the spawn pipeline before publishing success", async () => {
   const f = fixture();
@@ -249,6 +262,67 @@ it.each(["running", "terminal"] as const)(
     };
     expect(f.scope.canLaunch()).toBe(false);
     expect(f.scope.canAcceptLaunch()).toBe(true);
+  },
+);
+
+it.each([false, true])(
+  "refuses adoption during a pending kill claim after lifecycle start=%s",
+  async (started) => {
+    const f = fixture();
+    f.acknowledgeAllWrites();
+    await f.register();
+    const entry = f.runs.get(f.registration.runId)!;
+    let emit: ((event: AgentEventPayload) => void) | undefined;
+    const listener = createSubagentRegistryListener({
+      runs: f.runs,
+      pendingLifecycle: createPendingLifecycleScheduler({
+        runs: f.runs,
+        completeInBackground: vi.fn(),
+      }),
+      onAgentEvent: (handler) => {
+        emit = handler;
+        return () => {};
+      },
+      persist: f.options.persistOrThrow,
+      refreshFrozenResultFromSession: async () => {},
+      completeSubagentRunWithRecovery: async () => {},
+      warn: vi.fn(),
+    });
+    listener.ensure();
+    if (started) {
+      emit?.({
+        runId: entry.runId,
+        seq: 1,
+        stream: "lifecycle",
+        ts: 10,
+        data: { phase: "start", startedAt: 10 },
+      });
+    }
+    expect(entry.execution.status).toBe(started ? "running" : "queued");
+    expect(entry.swarmLaunchPending).toBe(true);
+    const registered = structuredClone(entry);
+    const publication = createDeferred();
+    f.options.persistAsyncOrThrow.mockImplementation((context, callbacks, ...runIds) =>
+      withSubagentRegistryWriteAuthority(runIds, { context, ...callbacks }, async (authority) => {
+        await publication.promise;
+        authority.assertCurrent();
+        callbacks.onCommitted?.();
+      }),
+    );
+    const claiming = f.manager.claimSubagentRunKill({ runId: entry.runId, expected: entry });
+    const settled = claiming.catch(() => undefined);
+    try {
+      expect(entry.killIntent).toBeUndefined();
+      expect(f.manager.startQueuedSubagentRun(entry.runId, "late-gateway-run")).toBe(false);
+      expect(f.runs.has("late-gateway-run")).toBe(false);
+      expect(entry).toEqual(registered);
+      publication.resolve();
+      expect(await claiming).toBeDefined();
+    } finally {
+      publication.resolve();
+      await settled;
+      listener.reset();
+    }
   },
 );
 
@@ -514,9 +588,7 @@ it.each(["abort", "drain", "replacement", "database retirement"] as const)(
     const completion = work.track(() => f.register());
     const rejection = expect(completion).rejects.toThrow();
     const claimed = f.runs.get(f.registration.runId)!;
-    expect(
-      f.manager.claimSubagentRunKill({ runId: claimed.runId, expected: claimed }),
-    ).toBeDefined();
+    expect(await f.claimSubagentRunKill({ runId: claimed.runId, expected: claimed })).toBeDefined();
     f.writes[0]!.gate.resolve();
     await vi.waitFor(() => expect(mocks.databaseListeners.size).toBe(1));
     try {

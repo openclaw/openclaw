@@ -23,7 +23,11 @@ type PeerSocket = EventEmitter & {
   bufferedAmount: number;
   close: () => void;
   terminate: () => void;
-  send: (wire: string, callback?: (error?: Error) => void) => void;
+  send: (
+    wire: string | Buffer,
+    options?: { binary: false } | ((error?: Error) => void),
+    callback?: (error?: Error) => void,
+  ) => void;
 };
 
 function createPeer(connId: string, completeImmediately = false) {
@@ -34,12 +38,13 @@ function createPeer(connId: string, completeImmediately = false) {
     bufferedAmount: 0,
     close: vi.fn(),
     terminate: vi.fn(),
-    send: vi.fn((wire: string, callback?: (error?: Error) => void) => {
-      frames.push(JSON.parse(wire) as Frame);
+    send: vi.fn<PeerSocket["send"]>((wire, options, callback) => {
+      frames.push(JSON.parse(String(wire)) as Frame);
+      const done = typeof options === "function" ? options : callback;
       if (completeImmediately) {
-        callback?.();
-      } else if (callback) {
-        callbacks.push(callback);
+        done?.();
+      } else if (done) {
+        callbacks.push(done);
       }
     }),
   });
@@ -56,10 +61,10 @@ function createBufferedPeer(connId: string, bufferedAmount: number) {
   const peer = createPeer(connId);
   const send = peer.socket.send;
   peer.socket.bufferedAmount = bufferedAmount;
-  peer.socket.send = (wire, callback) => {
+  peer.socket.send = (wire, options, callback) => {
     const bytes = Buffer.byteLength(wire);
     peer.socket.bufferedAmount += bytes + (bytes < 126 ? 2 : bytes < 65536 ? 4 : 10);
-    send(wire, callback);
+    send(wire, options, callback);
   };
   return peer;
 }
@@ -727,9 +732,9 @@ describe("connection live-text delivery", () => {
     peer.client.preparedRecipientProfileId = "\u0001".repeat(USER_PROFILE_ID_MAX_LENGTH);
     peer.socket.bufferedAmount = 0;
     const originalSend = peer.socket.send;
-    peer.socket.send = (wire, callback) => {
-      originalSend(wire, callback);
-      if ((JSON.parse(wire) as Frame).payload?.text === "queued") {
+    peer.socket.send = (wire, options, callback) => {
+      originalSend(wire, options, callback);
+      if ((JSON.parse(String(wire)) as Frame).payload?.text === "queued") {
         // The barrier must stamp after the pending send's synchronous publication.
         peer.client.preparedRecipientProfileId = "after-drain";
       }

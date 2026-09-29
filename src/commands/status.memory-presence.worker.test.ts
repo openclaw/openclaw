@@ -118,7 +118,7 @@ beforeAll(async () => {
   vi.doMock("../state/backup-run-records.js", () => ({
     readBackupRunFreshness: async () => ({}),
   }));
-  vi.doMock("../infra/update-run-status.js", () => ({ readUpdateRunStatus: () => ({}) }));
+  vi.doMock("../infra/update-run-status.js", () => ({ readUpdateRunStatus: async () => ({}) }));
   vi.resetModules();
   ({ statusJsonCommand } = await import("./status-json.js"));
   sqliteOwner = await import("../infra/node-sqlite.js");

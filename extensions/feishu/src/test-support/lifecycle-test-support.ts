@@ -92,7 +92,6 @@ export function restoreFeishuLifecycleStateDir(originalStateDir: string | undefi
 const FEISHU_PREFETCHED_BOT_OPEN_ID_SOURCE = {
   kind: "prefetched",
   botOpenId: "ou_bot_1",
-  botName: "Bot",
 } as const;
 
 export function createFeishuLifecycleReplyDispatcher(): FeishuLifecycleReplyDispatcher {

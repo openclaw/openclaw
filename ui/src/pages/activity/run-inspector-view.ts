@@ -427,6 +427,10 @@ function renderPanel(
 
 export function renderRunInspector(props: RunInspectorProps) {
   const state = props.state;
+  const identity =
+    state.status === "ready" && state.result.identity.state === "present"
+      ? state.result.identity.context
+      : null;
   const content =
     state.status === "ready"
       ? renderReady(
@@ -443,6 +447,8 @@ export function renderRunInspector(props: RunInspectorProps) {
     <section
       id="activity-run-panel"
       class="run-inspector"
+      data-run-id=${identity?.runId ?? nothing}
+      data-execution-id=${identity?.executionId ?? nothing}
       aria-label=${t("activity.runInspector.mode")}
     >
       <div class="settings-section__header">

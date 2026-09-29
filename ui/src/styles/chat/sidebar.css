@@ -1250,6 +1250,10 @@ openclaw-session-discussion {
   flex: 1;
 }
 
+.session-diff__refresh:disabled svg {
+  animation: btn-spinner-spin 0.7s linear infinite;
+}
+
 .session-diff__toolbar-button,
 .session-diff__toolbar-icon,
 .session-diff__refresh {

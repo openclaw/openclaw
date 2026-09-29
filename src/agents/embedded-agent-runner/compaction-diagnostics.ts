@@ -1,4 +1,3 @@
-/** Diagnostic helpers for embedded-agent compaction. */
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { isRealConversationMessage } from "../compaction-real-conversation.js";
 import type { AgentMessage } from "../runtime/index.js";

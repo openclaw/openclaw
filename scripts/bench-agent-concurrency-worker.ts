@@ -558,7 +558,7 @@ async function runSweepSample(childCount: number): Promise<Sample> {
       },
     };
   } finally {
-    sweeper.reset();
+    await sweeper.reset();
     runs.clear();
   }
 }

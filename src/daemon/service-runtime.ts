@@ -2,6 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { isPidAlive } from "../shared/pid-alive.js";
 import {
   assertServiceInspectionFallbackAllowed,
   ServiceInspectionError,
@@ -59,6 +60,28 @@ export type GatewayServiceRuntime = {
   };
   systemd?: GatewayServiceSystemdRuntime;
 };
+
+/** Positive process observations protect serving files, but grant no service-control authority. */
+export function isGatewayServiceStateLive(state: {
+  running: boolean;
+  runtime?: GatewayServiceRuntime;
+}): boolean {
+  if (state.running || (state.runtime?.systemd?.tasksCurrent ?? 0) > 0) {
+    return true;
+  }
+  const pid = state.runtime?.pid;
+  if (typeof pid === "number" && Number.isSafeInteger(pid) && pid > 1 && isPidAlive(pid)) {
+    return true;
+  }
+  const serviceState = state.runtime?.state?.toLowerCase() ?? "";
+  const subState = state.runtime?.subState?.toLowerCase() ?? "";
+  return (
+    serviceState === "deactivating" ||
+    subState === "stop-sigterm" ||
+    subState === "stop-sigkill" ||
+    subState === "final-sigterm"
+  );
+}
 
 const SERVICE_RUNTIME_INSPECTION_ERROR_MAX_CHARS = 500;
 const SERVICE_RUNTIME_INSPECTION_FAILED_DETAIL = "service runtime inspection failed";

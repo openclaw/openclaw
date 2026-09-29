@@ -1,6 +1,7 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import type {
   PluginHookBeforeModelResolveAttachment,
@@ -27,29 +28,11 @@ import { FailoverError } from "../../failover-error.js";
 import { resolveModelContextWindowProfile } from "../../model-context-window.js";
 import { log } from "../logger.js";
 
-type HookContext = {
-  agentId?: string;
-  sessionKey?: string;
-  sessionId: string;
-  workspaceDir: string;
-  /** Logical model provider reported to hooks (e.g. `anthropic`, not a CLI backend). */
-  modelProviderId?: string;
-  /** Caller-selected model id, so routers can compare the current selection. */
-  modelId?: string;
-  messageProvider?: string;
-  trigger?: string;
-  channelId?: string;
-  /** Configured channel account; routing context, not requester identity. */
-  accountId?: string;
-};
-
-type HookRunnerLike = {
-  hasHooks(hookName: string): boolean;
-  runBeforeModelResolve(
-    input: PluginHookBeforeModelResolveEvent,
-    context: HookContext,
-  ): Promise<{ providerOverride?: string; modelOverride?: string } | undefined>;
-};
+type HookRunnerLike = Pick<
+  NonNullable<ReturnType<typeof getGlobalHookRunner>>,
+  "hasHooks" | "runBeforeModelResolve"
+>;
+type HookContext = Parameters<HookRunnerLike["runBeforeModelResolve"]>[1];
 
 /** Durable harness sessions run only with their exact persisted identity and runtime lock. */
 export function resolveAgentHarnessRunAdmissionError(params: {
@@ -110,7 +93,7 @@ export async function resolveHookModelSelection(params: {
   if (params.modelSelectionLocked === true) {
     return { provider, modelId };
   }
-  let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
+  let modelResolveOverride: Awaited<ReturnType<HookRunnerLike["runBeforeModelResolve"]>>;
   const hookRunner = params.hookRunner;
 
   // Run before_model_resolve hooks early so plugins can override the

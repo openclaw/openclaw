@@ -113,6 +113,11 @@ interface BeforeAgentStartCombinedResult {
   systemPrompt?: string;
 }
 
+type DiscoveredResourcePaths = Record<
+  keyof ResourcesDiscoverResult,
+  Array<{ path: string; extensionPath: string }>
+>;
+
 /**
  * Events handled by the generic emit() method.
  * Events with dedicated emitXxx() methods are excluded for stronger type safety.
@@ -834,31 +839,22 @@ export class ExtensionRunner {
   async emitResourcesDiscover(
     cwd: string,
     reason: ResourcesDiscoverEvent["reason"],
-  ): Promise<{
-    skillPaths: Array<{ path: string; extensionPath: string }>;
-    promptPaths: Array<{ path: string; extensionPath: string }>;
-    themePaths: Array<{ path: string; extensionPath: string }>;
-  }> {
-    const skillPaths: Array<{ path: string; extensionPath: string }> = [];
-    const promptPaths: Array<{ path: string; extensionPath: string }> = [];
-    const themePaths: Array<{ path: string; extensionPath: string }> = [];
+  ): Promise<DiscoveredResourcePaths> {
+    const paths: DiscoveredResourcePaths = { skillPaths: [], promptPaths: [], themePaths: [] };
 
     await this.dispatchHandlers("resources_discover", async (handler, ctx, extensionPath) => {
       const event: ResourcesDiscoverEvent = { type: "resources_discover", cwd, reason };
       const result = (await handler(event, ctx)) as ResourcesDiscoverResult | undefined;
 
-      if (result?.skillPaths?.length) {
-        skillPaths.push(...result.skillPaths.map((path) => ({ path, extensionPath })));
-      }
-      if (result?.promptPaths?.length) {
-        promptPaths.push(...result.promptPaths.map((path) => ({ path, extensionPath })));
-      }
-      if (result?.themePaths?.length) {
-        themePaths.push(...result.themePaths.map((path) => ({ path, extensionPath })));
+      for (const key of ["skillPaths", "promptPaths", "themePaths"] as const) {
+        const discovered = result?.[key];
+        if (discovered?.length) {
+          paths[key].push(...discovered.map((path) => ({ path, extensionPath })));
+        }
       }
     });
 
-    return { skillPaths, promptPaths, themePaths };
+    return paths;
   }
 
   /** Emit input event. Transforms chain, "handled" short-circuits. */

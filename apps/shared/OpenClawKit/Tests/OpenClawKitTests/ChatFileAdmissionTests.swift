@@ -10,9 +10,9 @@ import AppKit
 
 struct ChatFileAdmissionTests {
     #if os(macOS)
-    @Test(arguments: [false, true])
+    @Test(arguments: ["picker", "pasteboard", "stale-picker"])
     @MainActor
-    func `stages whole file selection`(fromPasteboard: Bool) async throws {
+    func `file selection remains with the captured conversation`(source: String) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -36,7 +36,7 @@ struct ChatFileAdmissionTests {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("test-\(UUID().uuidString)"))
         defer { pasteboard.releaseGlobally() }
         let urls: [URL]
-        if fromPasteboard {
+        if source == "pasteboard" {
             #expect(pasteboard.writeObjects(files.map { $0 as NSURL }))
             urls = ChatComposerPasteSupport.fileURLs(from: pasteboard)
         } else {
@@ -44,8 +44,19 @@ struct ChatFileAdmissionTests {
         }
         #expect(urls == files)
 
-        model.addAttachments(urls: urls)
-        #expect(model.attachmentStagingCount == 1)
+        let owner = OpenClawChatAttachmentCaptureOwner(viewModel: model)
+        let isStale = source == "stale-picker"
+        if isStale {
+            model.switchSession(to: "other")
+        }
+        owner.addAttachments(urls: urls)
+        #expect(model.attachmentStagingCount == (isStale ? 0 : 1))
+        guard model.attachmentStagingCount > 0 else {
+            #expect(isStale)
+            #expect(model.attachments.isEmpty)
+            #expect(model.errorText == nil)
+            return
+        }
         withObservationTracking {
             _ = model.attachmentStagingCount
         } onChange: {
@@ -56,10 +67,14 @@ struct ChatFileAdmissionTests {
 
         #expect(firstEvent == .finished)
         #expect(model.attachmentStagingCount == 0)
-        #expect(model.attachments.map(\.fileName) == names)
-        #expect(model.attachments.map(\.data.count) == sizes)
-        #expect(Set(model.attachments.map(\.id)).count == 3)
-        #expect(model.attachments.last?.mimeType.hasPrefix("audio/") == true)
+        if isStale {
+            #expect(model.attachments.isEmpty)
+        } else {
+            #expect(model.attachments.map(\.fileName) == names)
+            #expect(model.attachments.map(\.data.count) == sizes)
+            #expect(Set(model.attachments.map(\.id)).count == 3)
+            #expect(model.attachments.last?.mimeType.hasPrefix("audio/") == true)
+        }
         #expect(model.errorText == nil)
         // Always release a failing implementation's pending route lookup so
         // the test owns and joins its staging task without timers or polling.

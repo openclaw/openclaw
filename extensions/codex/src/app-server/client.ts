@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { parse as parseSemver } from "semver";
 import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
 import {
@@ -212,13 +213,7 @@ type CodexServerNotificationHandler = (
 ) => Promise<void> | void;
 
 /** Runtime identity returned by the Codex app-server initialize handshake. */
-export type CodexAppServerRuntimeIdentity = {
-  serverVersion: string;
-  userAgent?: string;
-  codexHome?: string;
-  platformFamily?: string;
-  platformOs?: string;
-};
+export type CodexAppServerRuntimeIdentity = ReturnType<typeof buildCodexAppServerRuntimeIdentity>;
 
 export class CodexAppServerClient {
   private readonly instanceId = randomUUID();
@@ -610,27 +605,19 @@ export class CodexAppServerClient {
       throw new CodexAppServerLocalRequestCancellationError(method, "timed out", false);
     }
     const delayMs = remainingMs === undefined ? backoffMs : Math.min(backoffMs, remainingMs);
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        cleanup();
-        resolve();
-      }, delayMs);
-      timer.unref?.();
-      const abortListener = () => {
-        cleanup();
-        reject(
-          new CodexAppServerLocalRequestCancellationError(method, "aborted", false, signal?.reason),
-        );
-      };
-      const cleanup = () => {
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", abortListener);
-      };
-      signal?.addEventListener("abort", abortListener, { once: true });
+    try {
+      await sleepWithAbort(delayMs, signal, { ref: false });
+    } catch (error) {
       if (signal?.aborted) {
-        abortListener();
+        throw new CodexAppServerLocalRequestCancellationError(
+          method,
+          "aborted",
+          false,
+          signal.reason,
+        );
       }
-    });
+      throw error;
+    }
   }
 
   private requestOnce<T>(
@@ -644,16 +631,6 @@ export class CodexAppServerClient {
   ): Promise<T> {
     if (this.closed) {
       return Promise.reject(this.closeError ?? new Error("codex app-server client is closed"));
-    }
-    if (options.signal?.aborted) {
-      return Promise.reject(
-        new CodexAppServerLocalRequestCancellationError(
-          method,
-          "aborted",
-          false,
-          options.signal?.reason,
-        ),
-      );
     }
     const id = codexCatalogRequestId(method, params, this.nextId++, options.catalogPreview);
     if (

@@ -1,4 +1,3 @@
-// OpenAI Responses tool helpers convert runtime tools to Responses API schemas.
 import type { FunctionTool } from "openai/resources/responses/responses.js";
 import { getAiTransportHost } from "../host.js";
 import { resolveOpenAICompletionsCompat } from "../transports/openai-completions-compat.js";
@@ -20,13 +19,7 @@ interface ConvertResponsesToolsOptions {
 }
 
 type OpenAIToolSchemaCompat = Parameters<typeof normalizeOpenAIStrictToolParameters>[2];
-type ResponsesFunctionTool = {
-  type: "function";
-  name: string;
-  description?: string;
-  parameters: Record<string, unknown>;
-  strict?: boolean | null;
-};
+type ResponsesFunctionTool = Omit<FunctionTool, "strict"> & { strict?: boolean | null };
 
 /** Projects direct provider descriptors before resolving their strict policy. */
 export function convertResponsesToolPayload(

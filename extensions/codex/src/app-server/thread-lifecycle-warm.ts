@@ -408,6 +408,13 @@ export async function tryReuseCodexLiveThread(
     const modelProvider = binding.preserveNativeModel
       ? nativeThread?.modelProvider?.trim() || binding.modelProvider
       : binding.modelProvider;
+    const bindingPatch = {
+      cwd: params.cwd,
+      model,
+      modelProvider,
+      nativeHookRelayGeneration,
+      environmentSelectionFingerprint,
+    };
     // Validate ownership even when relay generation is unchanged; reset may
     // have replaced the persisted binding since it was first read. Model and
     // cwd are sticky turn settings, so future turns and /btw need current facts.
@@ -421,13 +428,7 @@ export async function tryReuseCodexLiveThread(
             threadId: binding.threadId,
             // Environment selection is sticky turn/start state, like cwd/model;
             // recording its new value must not recreate the approval-bearing thread.
-            patch: {
-              cwd: params.cwd,
-              model,
-              modelProvider,
-              nativeHookRelayGeneration,
-              environmentSelectionFingerprint,
-            },
+            patch: bindingPatch,
           },
           assertWarmOwner,
         ),
@@ -449,15 +450,7 @@ export async function tryReuseCodexLiveThread(
       kind: "ready",
       binding: {
         ...binding,
-        ...(!incognito
-          ? {
-              cwd: params.cwd,
-              model,
-              modelProvider,
-              nativeHookRelayGeneration,
-              environmentSelectionFingerprint,
-            }
-          : {}),
+        ...(!incognito ? bindingPatch : {}),
         liveThreadConfigFingerprint,
         liveThreadEphemeralPolicy: ephemeralPolicy && {
           ...ephemeralPolicy,

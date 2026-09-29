@@ -13,7 +13,7 @@ export function registerSubagentOrphanTaskCases({
     persisted: Record<string, unknown>,
     opts?: { seedChildSessions?: boolean },
   ) => Promise<void>;
-  restartRegistry: () => void;
+  restartRegistry: () => Promise<void>;
   waitForRegistryWork: (predicate: () => boolean | Promise<boolean>) => Promise<void>;
 }) {
   it("terminalizes a stale restored orphan without replaying its provider", async () => {
@@ -36,7 +36,7 @@ export function registerSubagentOrphanTaskCases({
       },
     });
 
-    restartRegistry();
+    await restartRegistry();
     await testing.sweepOnceForTests();
     await waitForRegistryWork(
       () => resolveSubagentSessionStatus(subagentRuns.get(runId)) === "failed",

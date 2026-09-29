@@ -58,14 +58,7 @@ export function registerPluginStateEntryIfAbsent(
   assertCanInsertPluginStateEntry({ store, ...params, now });
   const inserted = insertPluginStateEntryIfAbsent(
     store.db,
-    bindPluginStateEntry({
-      pluginId: params.pluginId,
-      namespace: params.namespace,
-      key: params.key,
-      valueJson: params.valueJson,
-      createdAt: now,
-      expiresAt,
-    }),
+    bindPluginStateEntry({ ...params, createdAt: now, expiresAt }),
   );
   if (!inserted) {
     return false;
@@ -122,12 +115,7 @@ export function consumePluginStateEntry(
   store: PluginStateDatabase,
   params: { pluginId: string; namespace: string; key: string },
 ): unknown {
-  const row = selectPluginStateEntry(store.db, {
-    pluginId: params.pluginId,
-    namespace: params.namespace,
-    key: params.key,
-    now: Date.now(),
-  });
+  const row = selectPluginStateEntry(store.db, { ...params, now: Date.now() });
   if (!row) {
     return undefined;
   }

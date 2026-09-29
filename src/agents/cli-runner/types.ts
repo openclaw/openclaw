@@ -77,6 +77,11 @@ export type RunCliAgentParams = {
   rootedExecution?: RootedExecutionRequest;
   /** Start a fresh CLI process so per-turn MCP authority is reloaded from this run. */
   disableCliLiveSession?: boolean;
+  /**
+   * One-shot helper runs mint a session identity per run. Carry Runtime facts in their only
+   * turn so those identities stay out of the native system prompt shared across runs.
+   */
+  runtimeFactsInTurn?: true;
   /** Finalizes caller-owned guidance after backend tool projection is known. */
   finalizePromptForResolvedTools?: ResolvedToolPromptFinalizer;
   /** Undecorated current-turn prompt used to merge inline and offloaded images. */

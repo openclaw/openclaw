@@ -496,6 +496,7 @@ export function activateCodexAttemptTurn(
       // A question claim is already consumption. Closing the run during its
       // response must not turn that answer into a rejected, replayable steer.
       optionsLocal?.onQueueAccepted?.(true);
+      optionsLocal?.onQueueSettled?.();
       return undefined;
     }
     if (optionsLocal?.isInboundUserMessage === true && hasPromptImageInput(optionsLocal)) {

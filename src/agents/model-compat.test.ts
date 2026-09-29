@@ -495,6 +495,28 @@ describe("isSmallLiveModelRef", () => {
 });
 
 describe("selectHighSignalLiveItems", () => {
+  it("prioritizes Sonnet 5.5 after Opus 4.8 and before Sonnet 5", () => {
+    const items = [
+      { provider: "anthropic", id: "claude-sonnet-4-6" },
+      { provider: "anthropic", id: "claude-sonnet-5" },
+      { provider: "anthropic", id: "claude-sonnet-5-5" },
+      { provider: "anthropic", id: "claude-opus-4-8" },
+    ];
+
+    expect(
+      selectHighSignalLiveItems(
+        items,
+        3,
+        (item) => item,
+        (item) => item.provider,
+      ),
+    ).toEqual([
+      { provider: "anthropic", id: "claude-opus-4-8" },
+      { provider: "anthropic", id: "claude-sonnet-5-5" },
+      { provider: "anthropic", id: "claude-sonnet-5" },
+    ]);
+  });
+
   it("prefers curated Google replacements before fallback provider spread", () => {
     const items = [
       { provider: "anthropic", id: "claude-opus-4-8" },

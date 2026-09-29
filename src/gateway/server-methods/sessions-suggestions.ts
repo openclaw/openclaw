@@ -7,7 +7,6 @@ import {
   validateSessionSuggestionsResolveParams,
   validateSessionTypingParams,
   type SessionSuggestion,
-  type SessionSuggestionResolution,
   type SessionTypingEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -82,10 +81,6 @@ function protocolSuggestion(
     createdAt: suggestion.createdAt,
     state: suggestion.state,
   };
-}
-
-function resolutionState(resolution: SessionSuggestionResolution): "accepted" | "dismissed" {
-  return resolution === "dismiss" ? "dismissed" : "accepted";
 }
 
 function respondSessionSuggestionSessionChanged(respond: RespondFn, sessionKey: string): void {
@@ -468,7 +463,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           finalizeSessionSuggestionClaim(scope, {
             id: claim.suggestion.id,
             token: claim.token,
-            state: resolutionState(resolution),
+            state: resolution === "dismiss" ? "dismissed" : "accepted",
             expectedSessionId: target.entry.sessionId,
           }),
       });

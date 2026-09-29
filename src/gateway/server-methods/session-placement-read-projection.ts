@@ -13,6 +13,7 @@ import {
   readWorkerPlacementIdentity,
   type WorkerPlacementDiskSpaceReader,
   type WorkerPlacementRunnerAvailabilityReader,
+  type WorkerPlacementRuntimeInstallReader,
 } from "../worker-environments/placement-projector.js";
 import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";
 import {
@@ -23,6 +24,7 @@ import {
 type PlacementReadContext = {
   workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
   workerPlacementRunnerAvailabilityReader?: WorkerPlacementRunnerAvailabilityReader;
+  workerPlacementRuntimeInstallReader?: WorkerPlacementRuntimeInstallReader;
   workerEnvironmentService?: Pick<WorkerEnvironmentServiceContract, "get" | "readMachineShape">;
 };
 
@@ -123,6 +125,12 @@ export function readSessionRowFacts(params: {
                 failedRecoveryAction,
                 workspaceResultReconciling,
                 retryOnSend,
+                {
+                  workerRuntimeInstall: context.workerPlacementRuntimeInstallReader?.read(
+                    placement,
+                    environment ?? null,
+                  ),
+                },
               ),
             }
           : {}),

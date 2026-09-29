@@ -343,21 +343,4 @@ enum SettingsDiagnostics {
         if !notificationsAllowed { issues.append(.notificationsUnavailable) }
         return issues
     }
-
-    static func issueCount(
-        gatewayConnected: Bool,
-        discoveredGatewayCount: Int,
-        talkConfigLoaded: Bool,
-        notificationsAllowed: Bool) -> Int
-    {
-        self.issues(
-            gatewayConnected: gatewayConnected,
-            discoveredGatewayCount: discoveredGatewayCount,
-            talkConfigLoaded: talkConfigLoaded,
-            notificationsAllowed: notificationsAllowed).count
-    }
-
-    static func timestamp(_ date: Date) -> String {
-        date.formatted(date: .omitted, time: .shortened)
-    }
 }

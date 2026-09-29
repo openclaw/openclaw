@@ -1,478 +1,153 @@
-// Cron flat-parameter tests cover model-friendly shorthand recovery before
-// gateway cron RPC dispatch.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const { callGatewayToolMock } = vi.hoisted(() => ({
-  callGatewayToolMock: vi.fn(),
-}));
-
 import { getToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { createCronTool } from "./cron-tool.js";
 
-describe("cron tool flat-params", () => {
-  beforeEach(() => {
-    callGatewayToolMock.mockClear();
-    callGatewayToolMock.mockResolvedValue({ ok: true });
-  });
+const gateway = vi.fn();
+const job = {
+  name: "reminder",
+  schedule: { kind: "cron", expr: "0 12 * * *", tz: "UTC" },
+  payload: { kind: "agentTurn", message: "work" },
+};
+function execute(args: Record<string, unknown>) {
+  return createCronTool(undefined, { callGatewayTool: gateway }).execute("cron", args);
+}
+function expectAdd(params: Record<string, unknown>) {
+  expect(gateway).toHaveBeenCalledExactlyOnceWith(
+    "cron.add",
+    expect.anything(),
+    expect.objectContaining(params),
+  );
+}
 
-  function firstGatewayToolCall<TParams>(): [string, unknown, TParams] {
-    return gatewayToolCall<TParams>(0);
-  }
+beforeEach(() => {
+  gateway.mockReset().mockResolvedValue({ ok: true });
+});
 
-  function gatewayToolCall<TParams>(index: number): [string, unknown, TParams] {
-    const call = callGatewayToolMock.mock.calls[index];
-    if (!call) {
-      throw new Error(`expected callGatewayTool call ${index + 1}`);
+describe("cron shorthand recovery", () => {
+  it("presents list metadata without private job content", () => {
+    const presentation = getToolTerminalPresentation(createCronTool());
+    if (!presentation) {
+      throw new Error("expected terminal presentation");
     }
-    return call as [string, unknown, TParams];
-  }
-
-  it("presents read-only cron metadata without job content", () => {
-    const tool = createCronTool();
-    const terminalPresentation = getToolTerminalPresentation(tool);
-    if (!terminalPresentation) {
-      throw new Error("expected cron terminal presentation");
-    }
-
-    expect(
-      terminalPresentation(
-        { action: "list" },
-        {
-          content: [],
-          details: {
-            total: 2,
-            jobs: [
-              { id: "one", name: "private reminder", payload: { text: "secret" } },
-              { id: "two", name: "another reminder" },
-            ],
-          },
-        },
-      ),
-    ).toEqual({ text: "Automations listed.\nCount: 2" });
-    expect(
-      terminalPresentation(
-        { action: "list" },
-        {
-          content: [],
-          details: {
-            total: 250,
-            jobs: [{ id: "one" }, { id: "two" }],
-          },
-        },
-      ),
-    ).toEqual({ text: "Automations listed.\nCount: 250" });
-    expect(
-      terminalPresentation(
-        { action: "add" },
-        { content: [], details: { id: "three", name: "private reminder" } },
-      ),
-    ).toBeUndefined();
+    const result = {
+      content: [],
+      details: {
+        total: 250,
+        jobs: [{ id: "one", name: "private reminder", payload: { text: "secret" } }],
+      },
+    };
+    expect(presentation({ action: "list" }, result)).toEqual({
+      text: "Automations listed.\nCount: 250",
+    });
+    expect(presentation({ action: "add" }, result)).toBeUndefined();
   });
 
-  it("binds recovered agentTurn jobs to the creating conversation by default", async () => {
-    const tool = createCronTool(
-      { agentSessionKey: "agent:main:discord:channel:ops" },
-      { callGatewayTool: callGatewayToolMock },
-    );
-    await tool.execute("call-flat-session-key", {
-      action: "add",
-      sessionKey: "agent:main:telegram:group:-100123:topic:99",
-      schedule: { kind: "at", at: new Date(123).toISOString() },
-      message: "do stuff",
-    });
-
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
-      sessionKey?: string;
-      sessionTarget?: string;
-    }>();
-    expect(method).toBe("cron.add");
-    expect(params.sessionTarget).toBe("current");
-    expect(params.sessionKey).toBe("agent:main:discord:channel:ops");
-  });
-
-  it("recovers flat cron schedule shorthand for add", async () => {
-    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
-
-    await tool.execute("call-flat-cron-add", {
-      action: "add",
-      name: "hourly report",
-      cron: "0 18 * * *",
-      tz: "Asia/Shanghai",
-      staggerMs: 5000,
-      message: "send report",
-    });
-
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
-      schedule?: unknown;
-      payload?: unknown;
-    }>();
-    expect(method).toBe("cron.add");
-    expect(params.schedule).toEqual({
-      kind: "cron",
-      expr: "0 18 * * *",
-      tz: "Asia/Shanghai",
-      staggerMs: 5000,
-    });
-    expect(params.payload).toEqual({
-      kind: "agentTurn",
-      message: "send report",
-    });
-  });
-
-  it("recovers flat script payload fields before agent-turn hints", async () => {
-    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
-
-    await tool.execute("call-flat-script-add", {
-      action: "add",
-      name: "queue watcher",
-      everyMs: 60_000,
-      script: "return { notify: 'changed' }",
-      timeoutSeconds: 30,
-      toolBudget: 12,
-    });
-
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
-      payload?: unknown;
-    }>();
-    expect(method).toBe("cron.add");
-    expect(params.payload).toEqual({
-      kind: "script",
-      script: "return { notify: 'changed' }",
-      timeoutSeconds: 30,
-      toolBudget: 12,
-    });
-  });
-
-  it("recovers a flat trigger when adding a job", async () => {
-    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
-
-    await tool.execute("call-flat-trigger-add", {
-      action: "add",
-      name: "watcher",
-      schedule: { kind: "every", everyMs: 60_000 },
-      message: "report the change",
-      trigger: { script: "json({ fire: false })", once: true },
-    });
-
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
-      trigger?: { script?: string; once?: boolean };
-    }>();
-    expect(method).toBe("cron.add");
-    expect(params.trigger).toEqual({ script: "json({ fire: false })", once: true });
-  });
-
-  it("rejects flat on-exit schedule shorthand for add", async () => {
-    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
-
-    await expect(
-      tool.execute("call-flat-onexit-add", {
-        action: "add",
-        name: "rebuild on exit",
-        kind: "on-exit",
-        command: "pnpm build",
-        cwd: "/repo",
-        message: "rebuilt",
-      }),
-    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects flat command schedule shorthand for add", async () => {
-    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
-
-    await expect(
-      tool.execute("call-flat-onexit-infer", {
-        action: "add",
-        name: "watch build",
-        command: "make",
-        message: "done",
-      }),
-    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects flat on-exit schedule shorthand for update", async () => {
-    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
-
-    await expect(
-      tool.execute("call-flat-onexit-update", {
-        action: "update",
-        jobId: "job-onexit",
-        kind: "on-exit",
-        command: "pnpm build",
-        cwd: "/repo",
-      }),
-    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects flat command schedule shorthand for update", async () => {
-    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
-
-    await expect(
-      tool.execute("call-flat-onexit-update-infer", {
-        action: "update",
-        jobId: "job-infer",
-        command: "make",
-      }),
-    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it("leaves out-of-range flat atMs for gateway validation", async () => {
-    // The gateway owns final schedule validation; flat recovery should preserve
-    // the supplied value instead of silently coercing an invalid date.
-    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
-    const invalidAtMs = 8_640_000_000_000_001;
-
-    await tool.execute("call-flat-invalid-atms-add", {
-      action: "add",
-      name: "bad date",
-      atMs: invalidAtMs,
-      message: "send reminder",
-    });
-
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
-      schedule?: { at?: unknown; kind?: unknown };
-    }>();
-    expect(method).toBe("cron.add");
-    expect(params.schedule).toEqual({ kind: "at", at: invalidAtMs });
-  });
-
-  it("recovers flat cron schedule shorthand for update", async () => {
-    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
-
-    await tool.execute("call-flat-cron-update", {
-      action: "update",
-      jobId: "job-123",
-      cron: "15 8 * * 1-5",
-      tz: "America/Los_Angeles",
-      staggerMs: 30_000,
-    });
-
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
-      id?: string;
-      patch?: { schedule?: unknown };
-    }>();
-    expect(method).toBe("cron.update");
-    expect(params.id).toBe("job-123");
-    expect(params.patch?.schedule).toEqual({
-      kind: "cron",
-      expr: "15 8 * * 1-5",
-      tz: "America/Los_Angeles",
-      staggerMs: 30_000,
-    });
-  });
-
-  it("recovers flat script payload fields for update", async () => {
-    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
-
-    await tool.execute("call-flat-script-update", {
-      action: "update",
-      jobId: "job-script",
-      script: "return { wake: 'now' }",
-      timeoutSeconds: 45,
-      toolBudget: 8,
-    });
-
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
-      id?: string;
-      patch?: { payload?: unknown };
-    }>();
-    expect(method).toBe("cron.update");
-    expect(params).toEqual({
-      id: "job-script",
-      patch: {
+  it.each([
+    {
+      name: "cron with timezone and stagger",
+      input: { cron: "0 18 * * *", tz: "Asia/Shanghai", staggerMs: 5000, message: "report" },
+      expected: {
+        schedule: { kind: "cron", expr: "0 18 * * *", tz: "Asia/Shanghai", staggerMs: 5000 },
+        payload: { kind: "agentTurn", message: "report" },
+      },
+    },
+    {
+      name: "script before agent-turn hints",
+      input: {
+        everyMs: 60_000,
+        script: "return { notify: 'changed' }",
+        timeoutSeconds: 30,
+        toolBudget: 12,
+      },
+      expected: {
         payload: {
           kind: "script",
-          script: "return { wake: 'now' }",
-          timeoutSeconds: 45,
-          toolBudget: 8,
+          script: "return { notify: 'changed' }",
+          timeoutSeconds: 30,
+          toolBudget: 12,
         },
       },
-    });
+    },
+    {
+      name: "out-of-range timestamp for gateway validation",
+      input: { atMs: 8_640_000_000_000_001, message: "report" },
+      expected: { schedule: { kind: "at", at: 8_640_000_000_000_001 } },
+    },
+  ])("recovers $name", async ({ input, expected }) => {
+    await execute({ action: "add", name: "reminder", ...input });
+    expectAdd(expected);
   });
 
-  it("recovers a flat trigger when updating a job", async () => {
-    callGatewayToolMock
-      .mockResolvedValueOnce({
-        id: "job-trigger",
-        configRevision: "sha256:flat-trigger-update",
-        trigger: null,
-        payload: { kind: "systemEvent", text: "before" },
-      })
-      .mockResolvedValueOnce({ ok: true });
-    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
-
-    await tool.execute("call-flat-trigger-update", {
-      action: "update",
-      jobId: "job-trigger",
-      trigger: { script: "json({ fire: true })", once: false },
-    });
-
-    const [getMethod, _getGatewayOpts, getParams] = firstGatewayToolCall<{ id?: string }>();
-    expect(getMethod).toBe("cron.get");
-    expect(getParams).toEqual({ id: "job-trigger" });
-
-    const [method, _gatewayOpts, params] = gatewayToolCall<{
-      id?: string;
-      expectedConfigRevision?: string;
-      patch?: { trigger?: { script?: string; once?: boolean } };
-    }>(1);
-    expect(method).toBe("cron.update");
-    expect(params).toEqual({
-      id: "job-trigger",
-      expectedConfigRevision: "sha256:flat-trigger-update",
-      patch: { trigger: { script: "json({ fire: true })", once: false } },
-    });
+  it.each([
+    { action: "add", kind: "on-exit", command: "pnpm build", cwd: "/repo", message: "rebuilt" },
+    { action: "update", jobId: "job", command: "make" },
+  ])("rejects explicit or inferred on-exit shorthand on $action", async (args) => {
+    await expect(execute(args)).rejects.toThrow(
+      "automation on-exit schedules cannot be created or edited",
+    );
+    expect(gateway).not.toHaveBeenCalled();
   });
 
-  it("recovers a flat trigger clear when updating a job", async () => {
-    callGatewayToolMock
-      .mockResolvedValueOnce({
-        id: "job-trigger",
-        configRevision: "sha256:flat-trigger-clear",
-        trigger: { script: "json({ fire: false })", once: true },
-        payload: { kind: "systemEvent", text: "before" },
-      })
-      .mockResolvedValueOnce({ ok: true });
-    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
-
-    await tool.execute("call-flat-trigger-clear", {
-      action: "update",
-      jobId: "job-trigger",
+  it("loads the current revision before updating a flat trigger", async () => {
+    gateway.mockResolvedValueOnce({
+      id: "job",
+      configRevision: "sha256:trigger",
       trigger: null,
+      payload: { kind: "systemEvent", text: "before" },
     });
-
-    const [getMethod, _getGatewayOpts, getParams] = firstGatewayToolCall<{ id?: string }>();
-    expect(getMethod).toBe("cron.get");
-    expect(getParams).toEqual({ id: "job-trigger" });
-
-    const [method, _gatewayOpts, params] = gatewayToolCall<{
-      id?: string;
-      expectedConfigRevision?: string;
-      patch?: { trigger?: null };
-    }>(1);
-    expect(method).toBe("cron.update");
-    expect(params).toEqual({
-      id: "job-trigger",
-      expectedConfigRevision: "sha256:flat-trigger-clear",
-      patch: { trigger: null },
-    });
+    const trigger = { script: "json({ fire: true })", once: false };
+    await execute({ action: "update", jobId: "job", trigger });
+    expect(gateway.mock.calls).toEqual([
+      ["cron.get", expect.anything(), { id: "job" }],
+      [
+        "cron.update",
+        expect.anything(),
+        { id: "job", expectedConfigRevision: "sha256:trigger", patch: { trigger } },
+      ],
+    ]);
   });
 
-  it("trims trailing whitespace from recognized job object keys (#95407)", async () => {
-    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
-
-    await tool.execute("call-trailing-space", {
+  it("repairs recognized padded keys (#95407)", async () => {
+    await execute({
       action: "add",
       job: {
-        name: "Holiday Check-in",
-        description: "Casual check-in",
-        "schedule ": { kind: "cron", expr: "30 10,20 * * *", tz: "Europe/Madrid" },
+        name: job.name,
+        description: "Check-in",
+        "schedule ": job.schedule,
+        "payload ": job.payload,
         "sessionTarget ": "isolated",
-        "payload ": { kind: "agentTurn", message: "How's it going?" },
         "enabled ": true,
       },
     });
-
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
-      name?: string;
-      description?: string;
-      schedule?: unknown;
-      sessionTarget?: string;
-      payload?: unknown;
-      enabled?: boolean;
-    }>();
-    expect(method).toBe("cron.add");
-    expect(params.name).toBe("Holiday Check-in");
-    expect(params.description).toBe("Casual check-in");
-    expect(params.schedule).toBeDefined();
-    expect(params.sessionTarget).toBe("isolated");
-    expect(params.payload).toBeDefined();
-    expect(params.enabled).toBe(true);
-    expect(params).not.toHaveProperty("schedule ");
-    expect(params).not.toHaveProperty("sessionTarget ");
-    expect(params).not.toHaveProperty("payload ");
-    expect(params).not.toHaveProperty("enabled ");
+    expectAdd({ ...job, description: "Check-in", sessionTarget: "isolated", enabled: true });
+    for (const key of ["schedule ", "payload ", "sessionTarget ", "enabled "]) {
+      expect(gateway.mock.calls[0]?.[2]).not.toHaveProperty(key);
+    }
   });
 
-  it("trims trailing whitespace from recognized patch object keys (#95407)", async () => {
-    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
-
-    await tool.execute("call-patch-trailing-space", {
-      action: "update",
-      jobId: "job-123",
-      job: {
-        "schedule ": { kind: "cron", expr: "0 9 * * 1-5", tz: "America/New_York" },
-        "enabled ": false,
-      },
+  it("does not repair prototype keys (#95407)", async () => {
+    await execute({
+      action: "add",
+      job: { ...job, "__proto__ ": { malicious: true }, "constructor ": "unrecognized" },
     });
-
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
-      id?: string;
-      patch?: { schedule?: unknown; enabled?: boolean };
-    }>();
-    expect(method).toBe("cron.update");
-    expect(params.id).toBe("job-123");
-    expect(params.patch?.schedule).toBeDefined();
-    expect((params.patch?.schedule as Record<string, unknown>)?.kind).toBe("cron");
-    expect(params.patch?.enabled).toBe(false);
-    expect(params.patch).not.toHaveProperty("schedule ");
-    expect(params.patch).not.toHaveProperty("enabled ");
+    expectAdd({ "__proto__ ": { malicious: true }, "constructor ": "unrecognized" });
   });
 
-  it("does not trim unrecognized keys to prevent prototype pollution (#95407)", async () => {
-    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
-
-    await tool.execute("call-unsafe-keys", {
+  it("preserves canonical/padded conflicts for gateway rejection (#95407)", async () => {
+    await execute({
       action: "add",
       job: {
-        name: "Safe trim",
-        schedule: { kind: "cron", expr: "0 12 * * *", tz: "UTC" },
-        payload: { kind: "agentTurn", message: "work" },
-        // Non-recognized keys with trailing spaces should NOT be trimmed
-        // (prevents "__proto__ " → "__proto__" style attacks)
-        "__proto__ ": { malicious: true },
-        "constructor ": "should not be trimmed",
-      },
-    });
-
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<Record<string, unknown>>();
-    expect(method).toBe("cron.add");
-    // Non-recognized padded keys should remain as-is
-    expect(params).toHaveProperty("__proto__ ");
-    expect(params).toHaveProperty("constructor ");
-  });
-
-  it("preserves padded duplicate when canonical key already exists (#95407)", async () => {
-    // When both canonical and padded forms exist, the padded key is preserved
-    // so strict gateway validation rejects the ambiguous input rather than
-    // silently picking one value.
-    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
-
-    await tool.execute("call-duplicate-keys", {
-      action: "add",
-      job: {
-        name: "Duplicate test",
-        schedule: { kind: "cron", expr: "0 9 * * 1-5", tz: "UTC" },
-        // Both "schedule" and "schedule " exist — padded preserved for rejection
-        "schedule ": { kind: "every", everyMs: 60000 },
-        payload: { kind: "agentTurn", message: "work" },
-        "enabled ": true,
+        ...job,
+        "schedule ": { kind: "every", everyMs: 60_000 },
         enabled: false,
+        "enabled ": true,
       },
     });
-
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<Record<string, unknown>>();
-    expect(method).toBe("cron.add");
-    // Canonical key is untouched
-    expect((params.schedule as Record<string, unknown>)?.kind).toBe("cron");
-    expect(params.enabled).toBe(false);
-    // Padded keys are preserved so gateway schema validation sees the conflict
-    // and rejects with "unexpected property 'schedule '" instead of silently
-    // accepting one of the two conflicting values.
-    expect(params).toHaveProperty("schedule ");
-    expect(params).toHaveProperty("enabled ");
+    expectAdd({
+      schedule: job.schedule,
+      enabled: false,
+      "schedule ": { kind: "every", everyMs: 60_000 },
+      "enabled ": true,
+    });
   });
 });

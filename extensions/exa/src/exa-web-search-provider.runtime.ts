@@ -26,6 +26,7 @@ import {
   isRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
@@ -143,10 +144,7 @@ function resolveExaSearchEndpoint(
 function resolveExaDescription(result: ExaSearchResult): string {
   const highlights = result.highlights;
   if (Array.isArray(highlights)) {
-    const highlightText = highlights
-      .map((entry) => normalizeOptionalString(entry))
-      .filter((entry): entry is string => Boolean(entry))
-      .join("\n");
+    const highlightText = normalizeTrimmedStringList(highlights).join("\n");
     if (highlightText) {
       return highlightText;
     }
@@ -168,14 +166,6 @@ function invalidContentsPayload(message: string) {
     message,
     docs: "https://docs.openclaw.ai/tools/web",
   };
-}
-
-function resolveExaSearchCount(value: unknown, fallback: number): number {
-  const parsed = parseStrictPositiveInteger(value);
-  if (parsed === undefined) {
-    return fallback;
-  }
-  return Math.min(EXA_MAX_SEARCH_COUNT, parsed);
 }
 
 function parseExaContents(
@@ -201,11 +191,11 @@ function parseExaContents(
   }
 
   const parsed: ExaContentsArgs = {};
-  const fieldsBySection: Record<string, readonly string[]> = {
+  const fieldsBySection = {
     text: ["maxCharacters"],
     highlights: ["maxCharacters", "query", "numSentences", "highlightsPerUrl"],
     summary: ["query"],
-  };
+  } as const;
 
   for (const section of ["text", "highlights", "summary"] as const) {
     if (!(section in raw)) {
@@ -221,7 +211,7 @@ function parseExaContents(
     }
 
     const option = value;
-    const fields = fieldsBySection[section] ?? [];
+    const fields: readonly string[] = fieldsBySection[section];
     for (const key of Object.keys(option)) {
       if (!fields.includes(key)) {
         const allowed =
@@ -247,12 +237,8 @@ function parseExaContents(
 
     const normalized: Record<string, unknown> = {};
     for (const field of fields) {
-      if (field === "query") {
-        if (typeof option.query === "string") {
-          normalized.query = option.query;
-        }
-      } else if (parsePositiveInteger(option[field])) {
-        normalized[field] = parsePositiveInteger(option[field]);
+      if (field in option) {
+        normalized[field] = option[field];
       }
     }
     Object.assign(parsed, { [section]: normalized });
@@ -455,7 +441,10 @@ export async function executeExaWebSearchProviderTool(
       ? parsedContents.value
       : undefined;
 
-  const resolvedCount = resolveExaSearchCount(count, DEFAULT_SEARCH_COUNT);
+  const resolvedCount = Math.min(
+    EXA_MAX_SEARCH_COUNT,
+    parseStrictPositiveInteger(count) ?? DEFAULT_SEARCH_COUNT,
+  );
   const cacheKey = buildExaCacheKey({
     endpoint,
     type,

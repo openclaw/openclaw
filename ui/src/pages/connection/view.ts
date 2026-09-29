@@ -1,4 +1,3 @@
-// Control UI view renders the gateway connection settings content.
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { html, nothing } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";

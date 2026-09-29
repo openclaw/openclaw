@@ -17,10 +17,13 @@ function pushQaReportDetailsBlock(lines: string[], label: string, details: strin
   lines.push("", "```text", details, "```");
 }
 
-function formatQaReportCheck(check: QaReportCheck, indent = "") {
+function pushQaReportCheck(lines: string[], check: QaReportCheck, indent = "") {
   const marker = check.status === "pass" ? "x" : " ";
   const outcome = check.status === "pass" ? "" : ` (${check.status})`;
-  return `${indent}- [${marker}] ${check.name}${outcome}`;
+  lines.push(`${indent}- [${marker}] ${check.name}${outcome}`);
+  if (check.details) {
+    pushQaReportDetailsBlock(lines, "Details", check.details, `${indent}  `);
+  }
 }
 
 export function renderQaMarkdownReport(params: {
@@ -56,10 +59,7 @@ export function renderQaMarkdownReport(params: {
   if (checks.length > 0) {
     lines.push("## Checks", "");
     for (const check of checks) {
-      lines.push(formatQaReportCheck(check));
-      if (check.details) {
-        pushQaReportDetailsBlock(lines, "Details", check.details, "  ");
-      }
+      pushQaReportCheck(lines, check);
     }
   }
 
@@ -75,10 +75,7 @@ export function renderQaMarkdownReport(params: {
       if (scenario.steps?.length) {
         lines.push("- Steps:");
         for (const step of scenario.steps) {
-          lines.push(formatQaReportCheck(step, "  "));
-          if (step.details) {
-            pushQaReportDetailsBlock(lines, "Details", step.details, "    ");
-          }
+          pushQaReportCheck(lines, step, "  ");
         }
       }
       lines.push("");

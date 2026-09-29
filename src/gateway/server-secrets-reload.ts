@@ -332,7 +332,10 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
         }
         if (
           !isCurrent() ||
-          !params.sharedGatewaySessionGenerationState.finalize(generationOwnership)
+          !params.sharedGatewaySessionGenerationState.finalize(generationOwnership, {
+            previous: transaction.previousSnapshot.config,
+            next: prepared.config,
+          })
         ) {
           throw new Error("secrets.reload was superseded by a newer config write");
         }
@@ -360,6 +363,10 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
                       state: params.sharedGatewaySessionGenerationState,
                       clients: params.clients,
                       expectedGeneration: failedTransaction.previousGeneration,
+                      transition: {
+                        previous: failedTransaction.prepared.config,
+                        next: failedTransaction.previousSnapshot.config,
+                      },
                     });
                   }
                   // Restoration can preserve newer credential state; rebuild from what actually won,

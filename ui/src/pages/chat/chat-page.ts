@@ -42,7 +42,7 @@ import { RouteDraftComposerFocus, type ChatPaneElement } from "./route-draft-foc
 import { locationWithoutDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
 import { observeChatCache, type ChatMessageCache } from "./session-message-cache.ts";
-import { installSessionPrefetch } from "./session-prefetch.ts";
+import { SessionPrefetchController } from "./session-prefetch.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { SplitDropZone } from "./split-drop-zone.ts";
 import type { ChatSplitLayout, ChatSplitPane, SessionSplitHost } from "./split-layout-types.ts";
@@ -156,7 +156,14 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
         () => this.context?.nativeConversation,
         (bridge, notify) => bridge.subscribe(notify),
       );
-    installSessionPrefetch(this, this.messageCache, this.snapshotStore, () => this.context);
+    this.addController(
+      new SessionPrefetchController(
+        this,
+        this.messageCache,
+        this.snapshotStore,
+        () => this.context,
+      ),
+    );
   }
 
   override connectedCallback() {

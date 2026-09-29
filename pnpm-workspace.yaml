@@ -10,19 +10,21 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
+  # Maintainer-approved for Bun-only npm plugin installs; remove after 2026-09-29T21:29:31.258Z.
+  - npm@11.20.0
   # Reviewed ACPX release; remove after 2026-09-29T10:05:37.124Z.
   - acpx@0.19.1
   - "@openai/codex"
   - "@openai/codex-*"
-  # Reviewed fs-safe 0.21.1 release and native helpers; remove after 2026-10-04T19:13:10.081Z.
-  - "@openclaw/fs-safe@0.21.1"
-  - "@openclaw/fs-safe-darwin-arm64@0.21.1"
-  - "@openclaw/fs-safe-darwin-x64@0.21.1"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.21.1"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.21.1"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.21.1"
-  - "@openclaw/fs-safe-linux-x64-musl@0.21.1"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.21.1"
+  # Reviewed fs-safe 0.21.2 release and native helpers; remove after 2026-10-05T17:19:08.397Z.
+  - "@openclaw/fs-safe@0.21.2"
+  - "@openclaw/fs-safe-darwin-arm64@0.21.2"
+  - "@openclaw/fs-safe-darwin-x64@0.21.2"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.21.2"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.21.2"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.21.2"
+  - "@openclaw/fs-safe-linux-x64-musl@0.21.2"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.21.2"
 
 # Isolated installs let pnpm reuse whole-package APFS clones instead of relinking every file.
 nodeLinker: isolated
@@ -40,7 +42,7 @@ overrides:
   "chevrotain>lodash-es": 4.18.1
   "@chevrotain/cst-dts-gen>lodash-es": 4.18.1
   "@chevrotain/gast>lodash-es": 4.18.1
-  "@agentclientprotocol/codex-acp@1.12.0>@openai/codex": 0.155.1
+  "@agentclientprotocol/codex-acp@1.12.0>@openai/codex": 0.158.0
   "@codemirror/commands@6.11.1>@codemirror/view": 6.43.12
   "@anthropic-ai/sdk": 0.127.0
   "@anthropic-ai/vertex-sdk@0.19.10>google-auth-library": 11.1.0
@@ -123,3 +125,4 @@ patchedDependencies:
   vitest@5.0.1: patches/vitest@5.0.1.patch
   "@awesome.me/webawesome@3.13.0": patches/@awesome.me__webawesome@3.13.0.patch
   "@openclaw/proxyline@0.3.12": patches/@openclaw__proxyline@0.3.12.patch
+  ghostty-web@0.4.0: patches/ghostty-web@0.4.0.patch

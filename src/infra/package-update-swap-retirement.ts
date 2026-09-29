@@ -6,8 +6,30 @@ import {
 } from "./package-update-filesystem.js";
 import type { PackageRootIntegrityFingerprint } from "./package-update-integrity.js";
 import type { createNpmPackageRootLinkLifecycle } from "./package-update-npm-root.js";
+import { PackageUpdateActivationError } from "./package-update-swap-contract.js";
 import { UPDATE_CLEANUP_BUDGET_MS } from "./update-maintenance.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+
+/** Refusal occurred before transaction handoff or any live package mutation. */
+export async function retireRefusedPackageSwap(
+  activation: { disarmRollback: () => Promise<boolean>; retire: () => Promise<unknown> },
+  refusal: unknown,
+): Promise<void> {
+  try {
+    // The publication owner verifies the original live generation and launchers
+    // before disarming forward recovery and removing its prepared candidate.
+    await activation.disarmRollback();
+    await activation.retire();
+  } catch (retirementError) {
+    throw new PackageUpdateActivationError(
+      new AggregateError(
+        [refusal, retirementError],
+        "Package activation was refused and its prepared publication could not be retired.",
+        { cause: refusal },
+      ),
+    );
+  }
+}
 
 /** Called only by the verified, cached transaction completion path. */
 export async function retireVerifiedPackageSwap(params: {

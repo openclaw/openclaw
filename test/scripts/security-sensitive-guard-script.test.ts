@@ -97,7 +97,13 @@ function runGuard(options: Options = {}) {
     },
     ...options.routes,
   };
-  writeFileSync(eventPath, JSON.stringify(options.event ?? { pull_request: pr }));
+  writeFileSync(
+    eventPath,
+    JSON.stringify({
+      repository: { default_branch: "main" },
+      ...(options.event ?? { pull_request: pr }),
+    }),
+  );
   writeFileSync(fixturePath, JSON.stringify({ routes, logPath, clock: true }));
   writeFileSync(logPath, "");
   const script = options.script ?? "security-sensitive-guard";
@@ -417,6 +423,54 @@ describe("security-sensitive guard entry point", () => {
     expect(result.status).toBe(1);
     expect(result.statuses).toEqual(["failure"]);
   });
+
+  it.each([undefined, "", null])(
+    "rejects an invalid default branch %s before writes",
+    (defaultBranch) => {
+      const result = runGuard({
+        event: {
+          repository: { default_branch: defaultBranch },
+          issue: { number: 7, pull_request: {} },
+          comment: {},
+        },
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("event has no default branch");
+      expect(result.requests).toEqual([]);
+    },
+  );
+
+  it.each(["security-sensitive-guard", "dependency-guard"] as const)(
+    "%s stops a closed PR during rollout reads without publishing failure",
+    (script) => {
+      const pr = {
+        number: 7,
+        state: "open",
+        draft: false,
+        created_at: "2025-01-01T00:00:00Z",
+        user: author,
+        changed_files: 1,
+        head: { sha: headSha, ref: "change", repo: { id: 2 } },
+        base: { sha: "b".repeat(40), ref: "main", repo: { id: 1 } },
+      };
+      const result = runGuard({
+        script,
+        routes: {
+          [`GET ${pullPath}`]: {
+            responses: [
+              { advanceMs: 15_000, response: pr },
+              { ...pr, state: "closed" },
+            ],
+          },
+          "GET /repos/openclaw/openclaw/pulls/152415": { advanceMs: 15_000, response: rollout },
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("skipping");
+      expect(result.requests.every((entry) => entry.method === "GET")).toBe(true);
+      expect(result.requests.at(-1)).toMatchObject({ method: "GET", path: pullPath });
+    },
+  );
 
   it("refuses incomplete changed-file lists", () => {
     const result = runGuard({ changedFiles: 3001 });

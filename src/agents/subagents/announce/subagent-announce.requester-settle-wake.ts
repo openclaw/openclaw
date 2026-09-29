@@ -89,9 +89,10 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     requesterOrigin?: DeliveryContext;
     settledEntry: SubagentRunRecord;
     signal?: AbortSignal;
+    isSourceCurrent: () => boolean;
   },
 ): Promise<boolean> {
-  if (params.signal?.aborted) {
+  if (params.signal?.aborted || !params.isSourceCurrent()) {
     return false;
   }
   const requesterSessionKey = params.requesterSessionKey.trim();
@@ -544,6 +545,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     };
     const isSourceSessionEffectsAllowed = () =>
       !params.signal?.aborted &&
+      params.isSourceCurrent() &&
       isStoreCurrent() &&
       preparedFindings.isCurrent() &&
       !isGatewayClosed() &&
@@ -593,10 +595,6 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
               deliverSubagentAnnouncement({
                 requesterSessionKey,
                 requesterAgentId,
-                requesterRunTimeoutSeconds:
-                  requesterDepth >= 1 && requesterRun
-                    ? (requesterRun.runTimeoutSeconds ?? 0)
-                    : undefined,
                 triggerMessage: wakeMessage,
                 steerMessage: wakeMessage,
                 requesterSessionOrigin,

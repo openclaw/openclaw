@@ -14,6 +14,7 @@ import {
 } from "../../../sessions/session-lifecycle-admission.js";
 import type { AgentWaitResult } from "../../run-wait.js";
 import * as killRuntime from "./subagent-control-kill-runtime.js";
+import * as killSession from "./subagent-control-session.js";
 import { killSubagentRunAdmin } from "./subagent-control.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
@@ -47,12 +48,13 @@ it.each(["replacement", "retirement"] as const)(
       cleanup: "keep",
     });
     const onResult = vi.fn();
-    const preparePublication = vi.fn(async () => {
+    const preparePublication = vi.fn(async (publish: () => void) => {
       if (transition === "replacement") {
         await writeSubagentSessionEntry({ ...target, sessionId: "successor-session" });
       } else {
         await removeSubagentSessionEntry(target);
       }
+      return publish();
     });
     const result = await killSubagentRunAdmin(
       {
@@ -64,7 +66,7 @@ it.each(["replacement", "retirement"] as const)(
       },
       {
         assertCurrent: () => {},
-        preparePublication: { prepare: preparePublication, needsPreparation: () => false },
+        preparePublication,
       },
     );
     expect(preparePublication).toHaveBeenCalledOnce();
@@ -213,8 +215,8 @@ it.each([
       }
       return result;
     });
-    const persistMarker = killRuntime.persistSubagentAbortedLastRun;
-    vi.spyOn(killRuntime, "persistSubagentAbortedLastRun").mockImplementation(async (params) => {
+    const persistMarker = killSession.persistSubagentAbortedLastRun;
+    vi.spyOn(killSession, "persistSubagentAbortedLastRun").mockImplementation(async (params) => {
       const result = await persistMarker(params);
       if (
         completeDuringDrain &&

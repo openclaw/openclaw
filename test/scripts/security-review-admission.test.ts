@@ -215,7 +215,7 @@ describe("published security clearance admission", () => {
     },
   );
 
-  it.each(["head", "rollout"])(
+  it.each(["head", "rollout", "merged"])(
     "refuses %s changes while reading approval authority",
     async (change) => {
       const f = fixture();
@@ -223,11 +223,19 @@ describe("published security clearance admission", () => {
       f.state.afterPermission = () => {
         if (change === "head") {
           f.state.currentPull.head.sha = "d".repeat(40);
+        } else if (change === "merged") {
+          Object.assign(f.state.currentPull, { state: "closed", merged: true });
         } else {
           f.state.rollout = "grandfathered";
         }
       };
-      await expect(f.run()).rejects.toThrow(change === "head" ? "Superseded" : "rollout changed");
+      await expect(f.run()).rejects.toThrow(
+        change === "head"
+          ? "Superseded"
+          : change === "merged"
+            ? "eligibility changed"
+            : "rollout changed",
+      );
     },
   );
 

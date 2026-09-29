@@ -1,8 +1,3 @@
-/**
- * Channel message receipt normalization.
- *
- * Builds stable receipts from platform send results and nested adapter receipt data.
- */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {

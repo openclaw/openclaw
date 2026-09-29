@@ -1,5 +1,3 @@
-// Approval request delivery fans out external routes while preserving the
-// approval record's visibility boundary for mobile and browser push targets.
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { ExecApprovalRequestPayload } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";

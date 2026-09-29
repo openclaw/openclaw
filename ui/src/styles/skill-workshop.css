@@ -883,8 +883,8 @@
 
 .sw-evaluation__badge.is-revise,
 .sw-evaluation__severity.is-warn {
-  border-color: color-mix(in srgb, var(--warn-bright) 46%, var(--border));
-  color: var(--warn-strong);
+  border-color: color-mix(in srgb, var(--warn) 46%, var(--border));
+  color: var(--warn);
 }
 
 .sw-evaluation__badge.is-block,
@@ -1167,19 +1167,11 @@
 }
 
 .sw-btn--primary:hover {
-  background: color-mix(in srgb, var(--accent) 90%, white 10%);
+  background: var(--primary-hover);
 }
 
 .sw-btn--primary:disabled:hover {
   background: var(--primary);
-}
-
-:root[data-theme="dark"] .sw-btn--primary:hover:not(:disabled) {
-  background: var(--primary-hover);
-}
-
-:root[data-theme="openknot"] .sw-btn--primary:hover:not(:disabled) {
-  background: var(--primary-hover);
 }
 
 .sw-btn.is-busy {
@@ -1356,7 +1348,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--warn-strong);
+  color: var(--warn);
   font-size: 12.5px;
 }
 

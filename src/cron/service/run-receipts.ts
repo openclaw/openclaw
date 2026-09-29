@@ -12,33 +12,23 @@ import {
   noteActiveCronJobScheduleMutation,
   type CronActiveJobMarker,
 } from "../active-jobs.js";
-import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronStoreKey } from "../store/key.js";
 import { loadCronRows, loadedCronStoreFromRows } from "../store/row-codec.js";
 import {
   adjudicateActiveCronRunReceiptInDatabase,
   assertCronRunReceiptCurrent,
-  assertCronRunReceiptCurrentInDatabase,
-  assertCronRunReceiptOwnedInDatabase,
   CronRunReceiptRevisionError,
   findActiveCronRunReceiptInDatabase,
-  finishCronRunReceipt,
-  finishCronRunReceiptInDatabase,
-  isCronRunReceiptSettlementPending,
   prepareCronRunReceiptAdjudication,
-  prepareCronRunReceiptClaim,
   readCronRunReceiptCurrentJob,
   trackCronRunReceiptSettlement,
-  type CronRunReceiptSettlementDisposition,
 } from "../store/run-receipt-store.js";
 import { retireCronRunTriggerStateInDatabase } from "../store/run-receipt-trigger-state.js";
-import type { CronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type {
   CronRunReceiptHandle,
   CronRunReceiptOwnerObservation,
   CronRunReceiptStatus,
-  PreparedCronRunReceiptClaim,
 } from "../store/run-receipt.types.js";
 import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob, CronRunStatus, CronStoredJob } from "../types.js";
@@ -51,18 +41,13 @@ import { findCronRunRecoveryInDatabase } from "./run-history-recovery.js";
 import type { CronServiceState } from "./state.js";
 import { runsDetachedFromMainSession } from "./timer-execution-timeout.js";
 
-function currentDefaultAgentId(state: CronServiceState): string | undefined {
-  return state.deps.resolveDefaultAgentId
-    ? state.deps.resolveDefaultAgentId()
-    : state.deps.defaultAgentId;
-}
-
 function resolveCronRunReceiptAgentId(state: CronServiceState, job: CronJob): string {
-  return resolveCronJobEffectiveAgentId(job, currentDefaultAgentId(state));
-}
-
-function resolveAgentId(state: CronServiceState) {
-  return (job: CronJob) => resolveCronRunReceiptAgentId(state, job);
+  return resolveCronJobEffectiveAgentId(
+    job,
+    state.deps.resolveDefaultAgentId
+      ? state.deps.resolveDefaultAgentId()
+      : state.deps.defaultAgentId,
+  );
 }
 
 /** Only receipt facts cross the reader boundary; liveness and claims stay with their owners. */
@@ -146,7 +131,7 @@ function createServiceCronRunMessageAuthorityChecker(params: {
     try {
       current = readCronRunReceiptCurrentJob({
         handle,
-        resolveAgentId: resolveAgentId(state),
+        resolveAgentId: (job) => resolveCronRunReceiptAgentId(state, job),
         isAgentAvailable: state.deps.isAgentAvailable,
       });
     } catch (error) {
@@ -162,23 +147,6 @@ function createServiceCronRunMessageAuthorityChecker(params: {
       isDeepStrictEqual(expected, params.resolveInputs(current))
     );
   };
-}
-
-export function prepareServiceCronRunReceiptClaim(params: {
-  state: CronServiceState;
-  job: CronJob;
-  startedAtMs: number;
-  requestRunId?: string;
-  observed: CronRunReceiptOwnerObservation | undefined;
-}): PreparedCronRunReceiptClaim {
-  return prepareCronRunReceiptClaim({
-    storePath: params.state.deps.storePath,
-    job: params.job,
-    agentId: resolveCronRunReceiptAgentId(params.state, params.job),
-    startedAtMs: params.startedAtMs,
-    requestRunId: params.requestRunId,
-    observed: params.observed,
-  });
 }
 
 export function prepareCronRunReceiptOwnerMutationHooks(params: {
@@ -329,7 +297,7 @@ export function assertServiceCronRunReceiptCurrent(
 ): void {
   assertCronRunReceiptCurrent({
     handle,
-    resolveAgentId: resolveAgentId(state),
+    resolveAgentId: (job) => resolveCronRunReceiptAgentId(state, job),
     isAgentAvailable: state.deps.isAgentAvailable,
     allowMissingJob:
       activeJobMarker?.jobId === handle.jobId && isCronSelfRemovalCurrent(activeJobMarker),
@@ -357,17 +325,6 @@ function logReceiptFinishError(
   );
 }
 
-function finishReceiptAfterCommit(
-  state: CronServiceState,
-  terminal: Parameters<typeof finishCronRunReceipt>[0],
-): undefined {
-  try {
-    finishCronRunReceipt(terminal);
-  } catch (error) {
-    logReceiptFinishError(state, terminal.handle, error);
-  }
-}
-
 export function trackServiceCronRunReceiptSettlement(params: {
   state: CronServiceState;
   handle: CronRunReceiptHandle;
@@ -377,87 +334,5 @@ export function trackServiceCronRunReceiptSettlement(params: {
     handle: params.handle,
     settlement: params.settlement,
     onFinishError: (error) => logReceiptFinishError(params.state, params.handle, error),
-  });
-}
-
-export function cronRunReceiptPersistHooks(params: {
-  state: CronServiceState;
-  handle: CronRunReceiptHandle;
-  allowMissingJob?: boolean;
-  terminal?: {
-    status: CronRunStatus;
-    triggerFired?: boolean;
-    finishedAtMs: number;
-    error?: string;
-    disposition?: CronRunReceiptSettlementDisposition;
-  };
-}): CronStoreTransactionHooks {
-  const terminal = params.terminal
-    ? {
-        handle: params.handle,
-        status: resolveCronRunReceiptTerminalStatus(
-          params.terminal.status,
-          params.terminal.triggerFired,
-        ),
-        finishedAtMs: params.terminal.finishedAtMs,
-        error: params.terminal.error,
-      }
-    : undefined;
-  const deferTerminal = terminal && isCronRunReceiptSettlementPending(params.handle);
-  return {
-    beforeWrite: (database) => {
-      const unavailableError = describeUnavailableCronAgent(params.handle.agentId);
-      const recordsUnavailableGuard =
-        terminal?.status === "error" && params.terminal?.disposition === "owner-unavailable";
-      if (
-        params.state.deps.isAgentAvailable?.(params.handle.agentId, database) === false &&
-        !recordsUnavailableGuard
-      ) {
-        throw new CronRunReceiptRevisionError(
-          params.handle.receiptId,
-          unavailableError,
-          "owner-unavailable",
-        );
-      }
-      if (params.allowMissingJob) {
-        assertCronRunReceiptOwnedInDatabase({ database, handle: params.handle });
-      } else {
-        assertCronRunReceiptCurrentInDatabase({
-          database,
-          handle: params.handle,
-          resolveAgentId: resolveAgentId(params.state),
-        });
-      }
-    },
-    ...(terminal && !deferTerminal
-      ? {
-          afterWrite: (
-            database: Parameters<NonNullable<CronStoreTransactionHooks["afterWrite"]>>[0],
-            receiptSchema: CronRunReceiptWriteSchema,
-          ) => {
-            finishCronRunReceiptInDatabase({
-              receiptSchema,
-              database,
-              ...terminal,
-            });
-          },
-        }
-      : {}),
-    ...(terminal && deferTerminal
-      ? { afterCommit: () => finishReceiptAfterCommit(params.state, terminal) }
-      : {}),
-  };
-}
-
-export function supersedeServiceCronRunReceipt(
-  handle: CronRunReceiptHandle,
-  finishedAtMs: number,
-  error: string,
-): void {
-  finishCronRunReceipt({
-    handle,
-    status: "superseded",
-    finishedAtMs,
-    error,
   });
 }

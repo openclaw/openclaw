@@ -353,6 +353,39 @@ describe("CI changed Node test plan", () => {
     }
   });
 
+  it("leaves files unmatched by a large consumer query for the later full graph", () => {
+    const cwd = argvTempDirs.make("changed-large-consumer-query-");
+    // Two search terms per test path exceed the Git prefilter's 64-term limit.
+    const isolated = Array.from(
+      { length: 40 },
+      (_, index) => `src/isolated-${String(index).padStart(2, "0")}.test.ts`,
+    );
+    const files = {
+      "src/shared.ts": "export const shared = 1;\n",
+      "src/consumer.test.ts": 'import "./shared.js";\n',
+      ...Object.fromEntries(isolated.map((file) => [file, "export {};\n"])),
+    };
+    for (const [file, source] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
+      writeFileSync(path.join(cwd, file), source);
+    }
+    for (const args of [
+      ["init", "--quiet"],
+      ["add", "."],
+    ]) {
+      execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args], {
+        cwd,
+        env: createNestedGitEnv(),
+        stdio: "pipe",
+      });
+    }
+    const options = { tooling: true, resolveAliases: true, runtimeOnly: true, forceFull: true };
+    expect(hasImportGraphConsumers(isolated, cwd, options)).toBe(false);
+    expect(resolveAffectedTestsFromImportGraph(["src/shared.ts"], cwd, options)).toEqual([
+      "src/consumer.test.ts",
+    ]);
+  });
+
   it("defers named process proofs without dropping mixed ordinary targets", () => {
     const ordinary = "src/plugin-sdk/config-runtime.test.ts";
     const shards = createChangedNodeTestShards([...CI_PROOF_TEST_FILES, ordinary]);

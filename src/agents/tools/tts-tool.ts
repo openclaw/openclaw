@@ -1,8 +1,3 @@
-/**
- * tts built-in tool.
- *
- * Converts explicit speech requests into generated audio and safe transcript content.
- */
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -68,11 +63,7 @@ export function createTtsTool(opts?: {
       });
 
       if (result.success && result.audioPath) {
-        // Preserve the spoken text in the tool result content so the session
-        // transcript retains what was said across turns. The audio itself is
-        // still delivered via details.media. Sanitize first so a crafted
-        // utterance cannot inject reply directives when the tool output is
-        // rendered in verbose mode.
+        // Retain spoken text across turns without admitting reply directives from it.
         return markCoreTtsToolResult(
           {
             content: [{ type: "text", text: `(spoken) ${sanitizeTranscriptForToolContent(text)}` }],

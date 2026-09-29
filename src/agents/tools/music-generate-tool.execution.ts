@@ -230,12 +230,7 @@ export async function executeMusicGenerationJob(params: {
             timeoutNormalization: params.timeoutNormalization,
           }
         : {}),
-      ...buildMediaReferenceDetails({
-        entries: params.loadedReferenceImages,
-        singleKey: "image",
-        pluralKey: "images",
-        getResolvedInput: (entry) => entry.resolvedInput,
-      }),
+      ...buildMediaReferenceDetails(params.loadedReferenceImages, "image"),
       ...(result.lyrics?.length ? { lyrics: result.lyrics } : {}),
     },
   });

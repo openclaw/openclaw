@@ -1981,7 +1981,7 @@ describe("initSessionState RawBody", () => {
     // Boundary proof: worker placement, which failed with "dispatch requires
     // a session-owned workspace" before the fix, now resolves the rolled-over
     // entry against its live worktree.
-    const placement = resolveWorkerPlacementSessionTarget({
+    const placement = await resolveWorkerPlacementSessionTarget({
       sessionRuntime: {
         resolveGatewaySessionStoreTargetWithStore,
         resolveCanonicalSessionEntryFromStoreKeys,

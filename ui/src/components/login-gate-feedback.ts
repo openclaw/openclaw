@@ -22,6 +22,7 @@ function isPasswordModeErrorCode(code: string | null): boolean {
 type LoginFailureKind =
   | "auth-required"
   | "auth-failed"
+  | "bootstrap-invalid"
   | "trusted-proxy"
   | "auth-rate-limited"
   | "profile-unavailable"
@@ -32,6 +33,7 @@ type LoginFailureKind =
   | "origin-not-allowed"
   | "build-mismatch"
   | "protocol-mismatch"
+  | "busy"
   | "network";
 
 /**
@@ -78,6 +80,7 @@ export type LoginFailureFeedbackParams = Parameters<typeof resolveAuthHintKind>[
   gatewayUrl?: string;
   secret?: string;
   reconnectPending?: boolean;
+  reconnectAt?: number;
 };
 
 function buildFeedback(params: {
@@ -126,6 +129,36 @@ export function resolveLoginFailureFeedback(
   const lastErrorCode = params.lastErrorCode ?? null;
   const lower = normalizeLowercaseStringOrEmpty(rawError);
   const host = formatGatewayHost(params.gatewayUrl);
+
+  if (lastErrorCode === "GATEWAY_BUSY" && params.reconnectPending) {
+    return buildFeedback({
+      kind: "busy",
+      tone: "pending",
+      rawError,
+      titleKey: "login.failure.busy.title",
+      summaryKey: "login.failure.busy.summary",
+      stepKeys: [],
+    });
+  }
+
+  if (lastErrorCode === ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID) {
+    return buildFeedback({
+      kind: "bootstrap-invalid",
+      tone: "warn",
+      rawError,
+      titleKey: "login.failure.bootstrapInvalid.title",
+      summaryKey: "login.failure.bootstrapInvalid.summary",
+      primaryCommand: "openclaw dashboard",
+      stepKeys: [
+        "login.failure.bootstrapInvalid.stepOpen",
+        {
+          key: "login.failure.bootstrapInvalid.stepJson",
+          commands: ["openclaw dashboard --json"],
+        },
+      ],
+      docsHref: "https://docs.openclaw.ai/cli/dashboard",
+    });
+  }
 
   if (lastErrorCode === ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE) {
     return buildFeedback({

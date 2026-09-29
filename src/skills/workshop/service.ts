@@ -179,9 +179,6 @@ export async function reviseSkillProposal(
       goal: lockedRequest.goal === undefined ? record.goal : lockedRequest.goal,
       evidence: lockedRequest.evidence === undefined ? record.evidence : lockedRequest.evidence,
     });
-    if (!prepared.ok) {
-      throw prepared.error.cause;
-    }
     const {
       content: proposalContent,
       draftHash,
@@ -189,7 +186,7 @@ export async function reviseSkillProposal(
       goal,
       scan,
       supportFiles: preparedSupportFiles,
-    } = prepared.value;
+    } = prepared;
     const supportFileMetadata =
       preparedSupportFiles.length > 0
         ? await buildSupportFileMetadata(
@@ -363,24 +360,15 @@ async function withPendingSkillProposalRevision<T>(
     proposalStoreOptions(input.env, input.agentId, input.config),
   );
   const request = { ...input, env: store.env };
-  const recoveryReadOptions = { config: request.config, store };
-  const lockedReadOptions = {
-    config: request.config,
-    reconcile: false,
-  };
-  const initial = await readRequiredProposal(
-    request.proposalId,
-    request.env,
-    request.agentId,
-    recoveryReadOptions,
-  );
+  const initial = await readRequiredProposal(request.proposalId, store);
   return await withSkillProposalTargetLock(
     initial.record,
     async (lockedStore) => {
-      const read = await readRequiredProposal(request.proposalId, request.env, request.agentId, {
-        ...lockedReadOptions,
-        store: lockedStore,
-      });
+      const read = await readRequiredProposal(
+        request.proposalId,
+        { ...lockedStore, config: request.config },
+        { reconcile: false },
+      );
       if (read.record.status !== "pending") {
         throw new Error(
           `Only pending proposals can be revised. Current status: ${read.record.status}.`,

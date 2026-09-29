@@ -37,14 +37,6 @@ function resolveMantleAnthropicBaseUrl(baseUrl: string): string {
   return `${trimmed}/anthropic`;
 }
 
-function isClaudeOpus5Model(model: Model): boolean {
-  return resolveClaudeOpus5ModelIdentity(model) !== undefined;
-}
-
-function isClaudeSonnet5Model(model: Model): boolean {
-  return resolveClaudeSonnet5ModelIdentity(model) !== undefined;
-}
-
 function isClaudeMythosPreviewModel(model: Model): boolean {
   return [model.id, model.name, model.params?.canonicalModelId]
     .filter((value): value is string => typeof value === "string")
@@ -58,12 +50,10 @@ function isClaudeMythosPreviewModel(model: Model): boolean {
     );
 }
 
-function isClaudeMythos5Model(model: Model): boolean {
-  return resolveClaudeMythos5ModelIdentity(model) !== undefined;
-}
-
 function requiresClaudeMythosAdaptiveThinking(model: Model): boolean {
-  return isClaudeMythos5Model(model) || isClaudeMythosPreviewModel(model);
+  return (
+    resolveClaudeMythos5ModelIdentity(model) !== undefined || isClaudeMythosPreviewModel(model)
+  );
 }
 
 function resolveMantleReasoning(
@@ -73,10 +63,10 @@ function resolveMantleReasoning(
   if (model.id.includes("claude-opus-4-7")) {
     return undefined;
   }
-  const opus5 = isClaudeOpus5Model(model);
-  const sonnet5 = isClaudeSonnet5Model(model);
+  const opus5 = resolveClaudeOpus5ModelIdentity(model) !== undefined;
+  const sonnet5 = resolveClaudeSonnet5ModelIdentity(model) !== undefined;
   const mythosPreview = isClaudeMythosPreviewModel(model);
-  const mandatoryMythos = isClaudeMythos5Model(model) || mythosPreview;
+  const mandatoryMythos = resolveClaudeMythos5ModelIdentity(model) !== undefined || mythosPreview;
   const reasoning =
     options?.reasoning ?? (mandatoryMythos || opus5 || sonnet5 ? "high" : undefined);
   if (opus5) {
@@ -115,7 +105,9 @@ function buildMantleAnthropicBaseOptions(
     ...(requiresClaudeDefaultSampling(model) ? {} : { temperature: options?.temperature }),
     maxTokens:
       options?.maxTokens ||
-      (isClaudeOpus5Model(model) || isClaudeSonnet5Model(model) || isClaudeMythos5Model(model)
+      (resolveClaudeOpus5ModelIdentity(model) ||
+      resolveClaudeSonnet5ModelIdentity(model) ||
+      resolveClaudeMythos5ModelIdentity(model)
         ? model.maxTokens
         : Math.min(model.maxTokens, 32_000)),
     signal: options?.signal,
@@ -181,9 +173,9 @@ export function createMantleAnthropicStreamFn(deps?: {
     // The client API is the same, but the SDK class private field makes types nominal.
     const streamClient = client as unknown as Anthropic;
     const reasoning = resolveMantleReasoning(model, options);
-    const opus5 = isClaudeOpus5Model(model);
-    const sonnet5 = isClaudeSonnet5Model(model);
-    const mythos5 = isClaudeMythos5Model(model);
+    const opus5 = resolveClaudeOpus5ModelIdentity(model) !== undefined;
+    const sonnet5 = resolveClaudeSonnet5ModelIdentity(model) !== undefined;
+    const mythos5 = resolveClaudeMythos5ModelIdentity(model) !== undefined;
     if (!reasoning || reasoning === "off") {
       return streamFn(model as Model<"anthropic-messages">, context, {
         ...base,

@@ -96,25 +96,15 @@ export function collectReplyMediaEntries(
     // Compact referenced records do not identify other media through their array positions.
     positionalAttachments.push(reference ? undefined : attachment);
   }
-  const mediaUrlCount = payload.mediaUrls?.length ?? 0;
   const mediaEntries = [
-    ...(payload.mediaUrls ?? []).map((url, index) => ({
-      url,
-      attachment:
-        attachmentByReference.get(normalizeMediaReferenceForComparison(url)) ??
-        positionalAttachments[index],
-    })),
-    ...(typeof payload.mediaUrl === "string"
-      ? [
-          {
-            url: payload.mediaUrl,
-            attachment:
-              attachmentByReference.get(normalizeMediaReferenceForComparison(payload.mediaUrl)) ??
-              positionalAttachments[mediaUrlCount],
-          },
-        ]
-      : []),
-  ];
+    ...(payload.mediaUrls ?? []),
+    ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
+  ].map((url, index) => ({
+    url,
+    attachment:
+      attachmentByReference.get(normalizeMediaReferenceForComparison(url)) ??
+      positionalAttachments[index],
+  }));
   if (!projectedMediaUrls) {
     return mediaEntries.map(withSourceUrls);
   }

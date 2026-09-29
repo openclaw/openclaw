@@ -1,8 +1,8 @@
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import type { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import type { SessionSuspensionParams } from "../../session-suspension.js";
 import type { resolveRunWorkspaceDir } from "../../workspace-run.js";
-import type { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
 import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
 import type { createEmbeddedRunLaneController } from "./lane-controller.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -31,7 +31,7 @@ export type PreparedEmbeddedRunInput = {
   resolvedSessionKey: string;
   resolvedToolResultFormat: NonNullable<RunEmbeddedAgentParams["toolResultFormat"]>;
   startedAtMs: number;
-  startupStages: ReturnType<typeof createEmbeddedRunStageTracker>;
+  startupStages: ReturnType<typeof createStageTimingTracker>;
   emitStartupStageSummary: (phase: string) => void;
   progressController: ReturnType<typeof createEmbeddedRunProgressController>;
   laneController: ReturnType<typeof createEmbeddedRunLaneController>;

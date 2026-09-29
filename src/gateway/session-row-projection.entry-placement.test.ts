@@ -4,6 +4,7 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sql
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.js";
 import { recordSessionParticipant as recordNativeParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.transcript-turn.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
@@ -15,7 +16,7 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 
 afterEach(() => vi.restoreAllMocks());
 
-it("reuses placement after entry and participant writes and refreshes actual placement changes", async () => {
+it("reuses placement after runtime events and entry writes and refreshes actual placement changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = {
       agents: {
@@ -96,6 +97,21 @@ it("reuses placement after entry and participant writes and refreshes actual pla
           });
         }
       }
+      expect(reads).not.toHaveBeenCalled();
+
+      emitSessionLifecycleEvent({
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        reason: "worker-runtime-install",
+        scope: "runtime",
+      });
+      await describe();
+      expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+        session: expect.objectContaining({
+          label: "Updated by the entry worker",
+          placement: expect.objectContaining({ state: "requested" }),
+        }),
+      });
       expect(reads).not.toHaveBeenCalled();
 
       sessionChanges.emit({

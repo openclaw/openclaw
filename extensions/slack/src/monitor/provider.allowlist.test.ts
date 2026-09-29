@@ -358,6 +358,7 @@ describe("slack startup user allowlist resolution", () => {
           capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
           context: expect.objectContaining({
             config: expect.objectContaining({ enabled: false }),
+            workspaceTeamId: "T_TEST",
           }),
         }),
       );

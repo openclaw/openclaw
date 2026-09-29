@@ -18,7 +18,9 @@ const DOCKER_E2E_CHUNKS = [
   {
     chunk_id: "package-update-openai",
     label: "package/update OpenAI and recovery",
-    timeout_minutes: 45,
+    // Five weight-3 npm lanes serialize at limit 5: 30m + 30m + 20m + 25m + 43m.
+    // The 10m chat lane overlaps; add 10m for setup/artifacts => 158m, round to 160m.
+    timeout_minutes: 160,
     profiles: "beta minimum stable full",
   },
   {
@@ -36,9 +38,9 @@ const DOCKER_E2E_CHUNKS = [
   {
     chunk_id: "package-update-self-upgrade",
     label: "package/update self-upgrade",
-    // Six 35m first-hop lanes need two waves at npm weight limit 5; the 20m
-    // survivor (weight 3) overlaps them. Add 10m for job setup and artifacts.
-    timeout_minutes: 80,
+    // Six 3500s first-hop lanes need two waves at npm weight limit 5; the 20m
+    // survivor (weight 3) overlaps. 2 x 3500s + 10m setup/artifacts ~= 127m => 130m.
+    timeout_minutes: 130,
     profiles: "beta minimum stable full",
   },
   {
@@ -204,7 +206,10 @@ const LIVE_DOCKER_SUITES = [
       'OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M3,minimax-portal/MiniMax-M3 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh',
     timeout_minutes: 40,
     profile_env_only: false,
-    profiles: "stable full",
+    // Waived from stable for 2026.9.7: MiniMax-M3 intermittently misses the Code Mode
+    // tool-read probe (model behavior, not a tool-result regression). Evidence: FRV
+    // 36534008742, job 109300784027. Restore "stable full" when #161072 is fixed.
+    profiles: "full",
   },
   {
     suite_id: "live-gateway-advisory-docker-deepseek-fireworks",

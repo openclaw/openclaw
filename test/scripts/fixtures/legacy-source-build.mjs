@@ -75,6 +75,9 @@ export function readState(_service, options = {}) {
     },
   };
 }
+export function readBinding(binding) {
+  return readState(undefined, { env: binding.env });
+}
 export async function inspect() {
   if (["disjoint", "sibling", "unavailable"].includes(mode)) {
     return null;
@@ -191,7 +194,8 @@ const modules = new Map([
   ],
   [
     "src/daemon/managed-gateway-bindings",
-    `export const discoverManagedGatewayBindings = async () => ${JSON.stringify(mode === "sibling" ? [{ profile: "sibling", env: { OPENCLAW_PROFILE: "sibling" } }] : [])};`,
+    exportsFromSelf("readBinding as readManagedGatewayBindingState") +
+      `export const discoverManagedGatewayBindings = async () => ${JSON.stringify(mode === "sibling" ? [{ profile: "sibling", env: { OPENCLAW_PROFILE: "sibling" } }] : [])};`,
   ],
 ]);
 if (

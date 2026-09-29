@@ -804,14 +804,15 @@ suite.define(() => {
         name: /^(Queue message|Steer into the active run)$/,
       });
       await expect.poll(() => followUp.isVisible()).toBe(true);
-      await expect.poll(() => page.locator(".chat-send-btn--stop").count()).toBe(1);
+      await expect.poll(() => page.locator(".chat-send-btn--stop").count()).toBe(0);
       await page.setViewportSize({ width: 393, height: 852 });
       await captureMobileState("mobile-composer-active-follow-up.png");
 
       await textarea.fill("");
       const stop = page.getByRole("button", { name: "Stop generating" });
       await expect.poll(() => stop.isVisible()).toBe(true);
-      // Stop stays distinct from the follow-up action beside it.
+      // Stop is deliberately left out of the brand fill: commit and interrupt
+      // share one slot, so they must not share one colour.
       await expect
         .poll(() => stop.evaluate((node) => getComputedStyle(node).backgroundColor))
         .not.toBe(brandFill);

@@ -180,23 +180,17 @@ function buildApprovalInteractiveReply(
     blocks: [
       {
         type: "buttons",
-        buttons: [
-          {
-            label: "Allow once",
-            value: buildPluginBindingApprovalCustomId(approvalId, "allow-once"),
-            style: "success",
-          },
-          {
-            label: "Always allow",
-            value: buildPluginBindingApprovalCustomId(approvalId, "allow-always"),
-            style: "primary",
-          },
-          {
-            label: "Deny",
-            value: buildPluginBindingApprovalCustomId(approvalId, "deny"),
-            style: "danger",
-          },
-        ],
+        buttons: (
+          [
+            ["Allow once", "allow-once", "success"],
+            ["Always allow", "allow-always", "primary"],
+            ["Deny", "deny", "danger"],
+          ] as const
+        ).map(([label, decision, style]) => ({
+          label,
+          value: buildPluginBindingApprovalCustomId(approvalId, decision),
+          style,
+        })),
       },
     ],
   };
