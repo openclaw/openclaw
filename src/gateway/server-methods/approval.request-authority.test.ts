@@ -184,6 +184,7 @@ it.each([
                 case "native-refused":
                 case "native-config-equivalent":
                 case "native-config-unrelated":
+                case "native-config-unrelated-agent":
                 case "native-config-role-aba":
                 case "native-config-routing-aba":
                 case "verdict":
