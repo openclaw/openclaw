@@ -12,27 +12,19 @@ import {
   noteActiveCronJobScheduleMutation,
   type CronActiveJobMarker,
 } from "../active-jobs.js";
-import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronStoreKey } from "../store/key.js";
 import { loadCronRows, loadedCronStoreFromRows } from "../store/row-codec.js";
 import {
   adjudicateActiveCronRunReceiptInDatabase,
   assertCronRunReceiptCurrent,
-  assertCronRunReceiptCurrentInDatabase,
-  assertCronRunReceiptOwnedInDatabase,
   CronRunReceiptRevisionError,
   findActiveCronRunReceiptInDatabase,
-  finishCronRunReceipt,
-  finishCronRunReceiptInDatabase,
-  isCronRunReceiptSettlementPending,
   prepareCronRunReceiptAdjudication,
   readCronRunReceiptCurrentJob,
   trackCronRunReceiptSettlement,
-  type CronRunReceiptSettlementDisposition,
 } from "../store/run-receipt-store.js";
 import { retireCronRunTriggerStateInDatabase } from "../store/run-receipt-trigger-state.js";
-import type { CronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type {
   CronRunReceiptHandle,
   CronRunReceiptOwnerObservation,
@@ -333,17 +325,6 @@ function logReceiptFinishError(
   );
 }
 
-function finishReceiptAfterCommit(
-  state: CronServiceState,
-  terminal: Parameters<typeof finishCronRunReceipt>[0],
-): undefined {
-  try {
-    finishCronRunReceipt(terminal);
-  } catch (error) {
-    logReceiptFinishError(state, terminal.handle, error);
-  }
-}
-
 export function trackServiceCronRunReceiptSettlement(params: {
   state: CronServiceState;
   handle: CronRunReceiptHandle;
@@ -354,73 +335,4 @@ export function trackServiceCronRunReceiptSettlement(params: {
     settlement: params.settlement,
     onFinishError: (error) => logReceiptFinishError(params.state, params.handle, error),
   });
-}
-
-export function cronRunReceiptPersistHooks(params: {
-  state: CronServiceState;
-  handle: CronRunReceiptHandle;
-  allowMissingJob?: boolean;
-  terminal?: {
-    status: CronRunStatus;
-    triggerFired?: boolean;
-    finishedAtMs: number;
-    error?: string;
-    disposition?: CronRunReceiptSettlementDisposition;
-  };
-}): CronStoreTransactionHooks {
-  const terminal = params.terminal
-    ? {
-        handle: params.handle,
-        status: resolveCronRunReceiptTerminalStatus(
-          params.terminal.status,
-          params.terminal.triggerFired,
-        ),
-        finishedAtMs: params.terminal.finishedAtMs,
-        error: params.terminal.error,
-      }
-    : undefined;
-  const deferTerminal = terminal && isCronRunReceiptSettlementPending(params.handle);
-  return {
-    beforeWrite: (database) => {
-      const unavailableError = describeUnavailableCronAgent(params.handle.agentId);
-      const recordsUnavailableGuard =
-        terminal?.status === "error" && params.terminal?.disposition === "owner-unavailable";
-      if (
-        params.state.deps.isAgentAvailable?.(params.handle.agentId, database) === false &&
-        !recordsUnavailableGuard
-      ) {
-        throw new CronRunReceiptRevisionError(
-          params.handle.receiptId,
-          unavailableError,
-          "owner-unavailable",
-        );
-      }
-      if (params.allowMissingJob) {
-        assertCronRunReceiptOwnedInDatabase({ database, handle: params.handle });
-      } else {
-        assertCronRunReceiptCurrentInDatabase({
-          database,
-          handle: params.handle,
-          resolveAgentId: (job) => resolveCronRunReceiptAgentId(params.state, job),
-        });
-      }
-    },
-    ...(terminal && !deferTerminal
-      ? {
-          afterWrite: (
-            database: Parameters<NonNullable<CronStoreTransactionHooks["afterWrite"]>>[0],
-            receiptSchema: CronRunReceiptWriteSchema,
-          ) => {
-            finishCronRunReceiptInDatabase({
-              receiptSchema,
-              database,
-              ...terminal,
-            });
-          },
-        }
-      : {}),
-    ...(terminal && deferTerminal
-      ? { afterCommit: () => finishReceiptAfterCommit(params.state, terminal) }
-      : {}),
-  };
 }

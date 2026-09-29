@@ -154,14 +154,20 @@ pending/skipped `openclaw/ci-gate`. An explicitly approved `pre-existing-failure
 attribution instead binds the current failed attempt, effective gate check-run,
 tested merge/base, unchanged failure inputs, and inspected qualification artifacts.
 Every failed job and fail-fast cancellation must be accounted for; cancelled
-coverage stays unrun. A cancelled job's failed step remains blocking except for
+coverage stays unrun. An independently attributed cancelled Node test root can
+use `failures[].failedStep: { number, workflowJob }`, with the existing
+`checks-node-core-test-nondist-shard` owner. Admission binds its live check-run,
+complete steps, single failed Node test, timestamps, and unchanged audited
+workflow. Other steps must succeed or be skipped through successful cleanup.
+Retain the cancelled conclusion in the root proof; this is not passing coverage.
+A collateral cancelled job's failed step remains blocking except for
 the explicitly qualified historical skipped-producer/missing-artifact case in
 the landing workflow. Its secondary evidence stays under cancellation, never
 in the causal root list; test, cleanup, and upload transport failures remain blocked.
 The review retains `tests.result: "fail"` with exact
 `tests.preExistingCi` head/run/attempt attribution. Ordinary merge admission refuses
 that review; the confirmed admin route must verify the same failed attempt.
-An explicitly attributed Node root reported as cancelled qualifies only with its
+Without a failed test-step binding, an attributed cancelled Node root requires its
 matching live GitHub Actions check-run and complete deadline/cancellation annotations,
 consistent head/suite/timestamps, elapsed deadline, one cancelled test step, no
 additional failed steps, and unchanged workflow. Retain that cancelled status in

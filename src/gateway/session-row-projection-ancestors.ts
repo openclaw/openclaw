@@ -181,10 +181,13 @@ export function createSessionRowAncestorReads(owner: {
     ) => boolean;
   };
   isActive: () => boolean;
-  projection: () => SessionRowReadView & { isCurrent(row: records.Row): boolean };
+  projection: () => SessionRowReadView & {
+    isCurrent(row: records.Row): boolean;
+    getPolicyConfig(): records.Inputs["cfg"];
+  };
 }) {
   return {
-    ancestorRows: (record: records.MaterializedRow) =>
+    ancestorRows: (record: records.MaterializedRow, read?: SessionRowReadView) =>
       readSessionRowAncestors(record, {
         ...owner.state(),
         referenced: owner.referenced,
@@ -194,7 +197,7 @@ export function createSessionRowAncestorReads(owner: {
           !owner.membership.needsPreparation(() => [
             { ...row, storePath: row.storeTarget.storePath },
           ])
-            ? owner.describe({ ...row, storePath: row.storeTarget.storePath }, row)
+            ? (read ?? owner).describe({ ...row, storePath: row.storeTarget.storePath }, row)
             : undefined,
       }),
     async withPreparedExactRows<T>(

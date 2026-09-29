@@ -211,7 +211,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
   "sessions.github.status": defineSessionGitHubMethod(
     "sessions.github.status",
     validateSessionGitHubStatusParams,
-    (options) => {
+    async (options) => {
       const read = prepareGitHubPublicationOptionsRead(options, options.params);
       const service = options.context.githubPublicationService;
       if (!service) {
@@ -225,6 +225,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      const prepared = await service.preparePersonalStatus(options.params.requestId);
       const session = read.currentSession();
       const shared = service.sharedStatus(session, options.params.requestId);
       if (shared) {
@@ -239,6 +240,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         read.personal.action,
         session,
         options.params.requestId,
+        prepared,
       );
       read.currentSession();
       options.respond(true, result);

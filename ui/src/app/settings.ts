@@ -135,9 +135,9 @@ export type CatalogOpenTarget = (typeof CATALOG_OPEN_TARGETS)[number];
 export const normalizeCatalogOpenTarget = normalizeChoice(CATALOG_OPEN_TARGETS, "viewer");
 
 const CHAT_WORKSPACE_DOCKS = ["right", "bottom"] as const;
-export type ChatWorkspaceDock = (typeof CHAT_WORKSPACE_DOCKS)[number];
+type ChatWorkspaceDock = (typeof CHAT_WORKSPACE_DOCKS)[number];
 
-export const normalizeChatWorkspaceDock = normalizeChoice(CHAT_WORKSPACE_DOCKS, "right");
+const normalizeChatWorkspaceDock = normalizeChoice(CHAT_WORKSPACE_DOCKS, "right");
 
 export function normalizeAccentColor(value: unknown): string | undefined {
   return normalizeUiAppearancePreference("ui.accent", value);

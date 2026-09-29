@@ -357,7 +357,7 @@ export default defineSingleProviderPluginEntry({
           provider: buildOpenrouterProvider(),
         }),
       },
-      resolveDynamicModel: (ctx) => buildDynamicOpenRouterModel(ctx),
+      resolveDynamicModel: buildDynamicOpenRouterModel,
       // Resolve the catalog model even when a configured row already exists.
       preferRuntimeResolvedModel: (ctx) => {
         const configuredProvider = findNormalizedProviderValue(

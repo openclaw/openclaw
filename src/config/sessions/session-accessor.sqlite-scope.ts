@@ -447,10 +447,12 @@ export function resolveSqliteAgentId(params: ResolveSqliteAgentIdParams): string
 }
 
 export function resolveSqliteTranscriptArchiveDirectory(
-  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
+  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "ownerStorePath" | "path">,
 ): string {
-  const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(scope));
-  return resolveSessionArtifactDirectory(databasePath);
+  // Pinning the native database must not move artifacts away from its configured selector.
+  const storePath =
+    scope.ownerStorePath ?? resolveOpenClawAgentSqlitePath(toDatabaseOptions(scope));
+  return resolveSessionArtifactDirectory(storePath);
 }
 
 /** Validate prepared write identity without resolving or reopening its physical target. */

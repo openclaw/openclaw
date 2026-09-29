@@ -2519,12 +2519,6 @@ describe("chat composer IME composition", () => {
       handled: true,
       preventDefault: true,
       restoreCaret: null,
-      decision: "handled:history-up" as const,
-      historyNavigationActiveBefore: false,
-      historyNavigationActiveAfter: false,
-      selectionStart: 0,
-      selectionEnd: 0,
-      valueLength: 0,
     }));
     const onSend = vi.fn();
     const container = renderChatView({ onHistoryKeydown, onSend, draft: "hello" });
@@ -2558,12 +2552,6 @@ describe("chat composer IME composition", () => {
       handled: true,
       preventDefault: true,
       restoreCaret: "up" as const,
-      decision: "handled:history-up" as const,
-      historyNavigationActiveBefore: false,
-      historyNavigationActiveAfter: true,
-      selectionStart: 0,
-      selectionEnd: 0,
-      valueLength: 0,
     }));
     const container = renderChatView({ onHistoryKeydown, onRequestUpdate });
     const textarea = getComposerTextarea(container);

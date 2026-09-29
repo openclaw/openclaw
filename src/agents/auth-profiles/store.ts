@@ -708,17 +708,12 @@ function recordRuntimeAuthProfileStorePublicationEdge(
     owned.runtimeRevisionBeforePublication = runtime.runtimeRevision;
   }
   if (runtime.derivedRuntimeStores !== undefined) {
-    owned.derivedRuntimeRevisionsBeforePublication = runtime.derivedRuntimeStores.flatMap(
-      (entry) =>
-        typeof entry.runtimeRevision === "number"
-          ? [
-              {
-                databasePath: entry.databasePath,
-                agentDir: entry.agentDir,
-                runtimeRevision: entry.runtimeRevision,
-              },
-            ]
-          : [],
+    owned.derivedRuntimeRevisionsBeforePublication = runtime.derivedRuntimeStores.map(
+      ({ databasePath, agentDir, runtimeRevision }) => ({
+        databasePath,
+        agentDir,
+        runtimeRevision,
+      }),
     );
   }
 }
@@ -2005,17 +2000,12 @@ export function createAuthProfileStoreRuntime(
           throw new Error("auth profile store changed after secrets apply captured it");
         }
         const runtimeAtSaveEdge = captureRuntimeAuthProfileStorePersistenceSnapshot(owner);
-        const derivedRuntimeRevisionsAtSaveEdge = runtimeAtSaveEdge.derivedRuntimeStores?.flatMap(
-          (entry) =>
-            typeof entry.runtimeRevision === "number"
-              ? [
-                  {
-                    databasePath: entry.databasePath,
-                    agentDir: entry.agentDir,
-                    runtimeRevision: entry.runtimeRevision,
-                  },
-                ]
-              : [],
+        const derivedRuntimeRevisionsAtSaveEdge = runtimeAtSaveEdge.derivedRuntimeStores?.map(
+          ({ databasePath, agentDir: derivedAgentDir, runtimeRevision }) => ({
+            databasePath,
+            agentDir: derivedAgentDir,
+            runtimeRevision,
+          }),
         );
         publishRuntimeSnapshots = saveAuthProfileStoreInTransaction(
           params.store,

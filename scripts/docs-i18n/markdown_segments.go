@@ -70,29 +70,18 @@ func extractSegments(body, relPath string) ([]Segment, error) {
 		return nil, err
 	}
 
-	filtered := make([]Segment, 0, len(segments))
-	for _, seg := range segments {
-		textValue := string(source[seg.Start:seg.Stop])
-		trimmed := strings.TrimSpace(textValue)
-		if trimmed == "" {
-			continue
-		}
-		textHash := hashText(textValue)
-		segmentID := segmentID(relPath, textHash)
-		filtered = append(filtered, Segment{
-			Start:     seg.Start,
-			Stop:      seg.Stop,
-			Text:      textValue,
-			TextHash:  textHash,
-			SegmentID: segmentID,
-		})
+	for index := range segments {
+		seg := &segments[index]
+		seg.Text = string(source[seg.Start:seg.Stop])
+		seg.TextHash = hashText(seg.Text)
+		seg.SegmentID = segmentID(relPath, seg.TextHash)
 	}
 
-	sort.Slice(filtered, func(i, j int) bool {
-		return filtered[i].Start < filtered[j].Start
+	sort.Slice(segments, func(i, j int) bool {
+		return segments[i].Start < segments[j].Start
 	})
 
-	return filtered, nil
+	return segments, nil
 }
 
 func extractMarkdownHeadingLevels(body string) []int {
@@ -1039,20 +1028,12 @@ func stripDocComponentTagsForHeadingParse(body string) string {
 
 func blockParent(n ast.Node) ast.Node {
 	for node := n.Parent(); node != nil; node = node.Parent() {
-		if isTranslatableBlock(node) {
+		switch node.(type) {
+		case *ast.Paragraph, *ast.Heading, *ast.ListItem:
 			return node
 		}
 	}
 	return nil
-}
-
-func isTranslatableBlock(n ast.Node) bool {
-	switch n.(type) {
-	case *ast.Paragraph, *ast.Heading, *ast.ListItem:
-		return true
-	default:
-		return false
-	}
 }
 
 func applyTranslations(body string, segments []Segment) string {

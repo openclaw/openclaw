@@ -100,17 +100,8 @@ const SessionsSearchOutputSchema = Type.Union([
   ),
 ]);
 
-type GatewaySearchHit = {
-  sessionKey?: unknown;
-  sessionId?: unknown;
-  messageId?: unknown;
-  role?: unknown;
-  timestamp?: unknown;
-  snippet?: unknown;
-  score?: unknown;
-};
-
 type SanitizedSearchHit = Static<typeof SessionsSearchHitSchema>;
+type GatewaySearchHit = Partial<Record<keyof SanitizedSearchHit, unknown>>;
 
 type SearchSessionCandidate = {
   key: string;
@@ -180,15 +171,7 @@ async function listVisibleSearchSessions(params: {
   effectiveRequesterAgentId?: string;
   effectiveRequesterKey: string;
   gatewayCall: GatewayCaller;
-  rowGuard: {
-    check: (row: {
-      key: string;
-      agentId?: string;
-      ownerSessionKey?: string;
-      parentSessionKey?: string;
-      spawnedBy?: string;
-    }) => { allowed: boolean };
-  };
+  rowGuard: Pick<ReturnType<typeof createSessionVisibilityRowChecker>, "check">;
   restrictToSpawned: boolean;
 }): Promise<SearchSessionCandidate[]> {
   const candidates = new Map<string, SearchSessionCandidate>();

@@ -75,7 +75,10 @@ async function createQueuedReservations() {
       reservedAtMs: now,
     });
     for (const item of reserved) {
-      reserveQueuedCronRun(state, item.job.id, now, { runReceipt: item.runReceipt });
+      reserveQueuedCronRun(state, item.job.id, now, {
+        runReceipt: item.runReceipt,
+        runReceiptContext: item.runReceiptContext,
+      });
     }
     const ownership = state.queuedRunReservationsByJobId.get(job.id);
     const siblingOwnership = state.queuedRunReservationsByJobId.get(sibling.id);
@@ -229,6 +232,7 @@ it("does not release a replacement identity when the old admission callback fail
           // Keep the timestamp and receipt equal: only the local identity distinguishes owners.
           replacementIdentity = reserveQueuedCronRun(state, job.id, now, {
             runReceipt: ownership.runReceipt,
+            runReceiptContext: ownership.runReceiptContext,
           });
           throw error;
         },

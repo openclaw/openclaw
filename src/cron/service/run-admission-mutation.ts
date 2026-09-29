@@ -1,4 +1,3 @@
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { resolveCronJobEffectiveAgentId, tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
@@ -182,7 +181,7 @@ export async function activateReservedCronRun(params: {
   const markerAtMs = reservation.markerAtMs;
   const runReceipt = reservation.runReceipt;
   const storeKey = cronStoreKey(state.deps.storePath);
-  const context = captureOpenClawStateWorkerContext();
+  const context = reservation.runReceiptContext;
   let activation: CronRuntimeMutationContracts["cron.activateRun"]["outcome"]["activation"];
   await runCronRuntimeMutation({
     context,
@@ -234,7 +233,7 @@ export async function activateReservedCronRun(params: {
 
 export async function releaseReservedCronRuns(params: {
   state: CronServiceState;
-  context?: OpenClawStateWorkerContext;
+  context: OpenClawStateWorkerContext;
   reservations: readonly QueuedCronRunReservation[];
   restoreLastError?: boolean;
   recompute?: boolean;
@@ -242,9 +241,8 @@ export async function releaseReservedCronRuns(params: {
   requireCurrentReceipt?: boolean;
   onSettled: (outcome: "committed" | "not-committed" | "unknown") => void;
 }): Promise<void> {
-  const { state } = params;
+  const { state, context } = params;
   const storeKey = cronStoreKey(state.deps.storePath);
-  const context = params.context ?? captureOpenClawStateWorkerContext();
   const retained = params.terminal
     ? retainCronRunReceiptSettlement(params.terminal.handle)
     : undefined;
@@ -262,6 +260,20 @@ export async function releaseReservedCronRuns(params: {
       },
       assertCurrent() {
         retained?.assertCurrent();
+        for (const { jobId, reservationIdentity } of params.reservations) {
+          const owner = state.queuedRunReservationsByJobId.get(jobId);
+          if (owner?.identity !== reservationIdentity) {
+            continue;
+          }
+          const admission = owner.runReceiptContext.admission;
+          admission.assertCurrent();
+          if (
+            admission.identity.key !== context.admission.identity.key ||
+            admission.identity.birthtime !== context.admission.identity.birthtime
+          ) {
+            throw new Error("Cron reservation cleanup spans different database owners");
+          }
+        }
       },
       prepare(facts) {
         const defaultAgentId = currentDefaultAgentId(state);

@@ -12,7 +12,6 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
-import { captureGatewayToolCallerAssertion } from "../../tools/gateway-caller-context.js";
 import {
   prepareRequesterCronAuthority,
   type PreparedRequesterCronAuthority,
@@ -362,14 +361,13 @@ export class SubagentLifecycleController {
     assertCurrent?: () => void,
     stateContext = captureOpenClawStateWorkerContext(),
   ): RequesterInitialTransfer {
-    const assertCallerCurrent = captureGatewayToolCallerAssertion();
+    // Logical settlement retains run or reply-operation authority beyond individual tool calls.
     return (params) =>
       commitRequesterInitialTransfer(this, {
         ...params,
         stateContext,
         assertCurrent: () => {
           assertSubagentRegistryWriteSourceCurrent(stateContext);
-          assertCallerCurrent?.();
           assertCurrent?.();
         },
         scheduleRetry: (entry) =>

@@ -15,6 +15,7 @@ import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
 import { root as fsRoot, type Root, walkDirectorySync } from "../../infra/fs-safe.js";
 import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { getBinDir } from "../config.js";
 import { APP_NAME } from "../package-metadata.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
@@ -42,10 +43,6 @@ const TOOL_INSTALL_LOCK_OPTIONS: FileLockOptions = {
   stale: TOOL_INSTALL_STALE_MS,
   staleRecovery: "remove-if-unchanged",
 };
-
-function isOfflineModeEnabled(): boolean {
-  return isTruthyEnvValue(process.env.OPENCLAW_OFFLINE);
-}
 
 interface ToolConfig {
   name: string;
@@ -100,7 +97,6 @@ const TOOLS: Record<"fd" | "rg", ToolConfig> = {
   },
 };
 
-// Check if a command exists in PATH by trying to run it
 function commandExists(cmd: string): boolean {
   try {
     const result = spawnSync(cmd, ["--version"], {
@@ -118,11 +114,9 @@ function commandExists(cmd: string): boolean {
   }
 }
 
-// Get the path to a tool (system-wide or in our tools dir)
 function getToolPath(tool: "fd" | "rg", toolsDir: string | undefined): string | null {
   const config = TOOLS[tool];
 
-  // Check our tools directory first
   if (toolsDir) {
     const localPath = join(toolsDir, config.binaryName + (platform() === "win32" ? ".exe" : ""));
     if (existsSync(localPath)) {
@@ -130,7 +124,6 @@ function getToolPath(tool: "fd" | "rg", toolsDir: string | undefined): string | 
     }
   }
 
-  // Check system PATH - if found, just return the command name (it's in PATH)
   const systemBinaryNames = config.systemBinaryNames ?? [config.binaryName];
   for (const systemBinaryName of systemBinaryNames) {
     if (commandExists(systemBinaryName)) {
@@ -141,7 +134,6 @@ function getToolPath(tool: "fd" | "rg", toolsDir: string | undefined): string | 
   return null;
 }
 
-// Fetch latest release version from GitHub
 async function getLatestVersion(repo: string): Promise<string> {
   const guarded = await fetchWithSsrFGuard({
     url: `https://api.github.com/repos/${repo}/releases/latest`,
@@ -239,26 +231,22 @@ async function extractArchiveSafe(
   }
 }
 
-// Download and install a tool
 async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string> {
   const config = TOOLS[tool];
 
   const plat = platform();
   const architecture = arch();
 
-  // Get latest version
   let version = await getLatestVersion(config.repo);
   if (tool === "fd" && plat === "darwin" && architecture === "x64") {
     version = "10.3.0";
   }
 
-  // Get asset name for this platform
   const assetName = config.getAssetName(version, plat, architecture);
   if (!assetName) {
     throw new Error(`Unsupported platform: ${plat}/${architecture}`);
   }
 
-  // Create tools directory
   mkdirSync(toolsDir, { recursive: true });
 
   const downloadUrl = `https://github.com/${config.repo}/releases/download/${config.tagPrefix}${version}/${assetName}`;
@@ -328,30 +316,18 @@ async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string
 function installTool(tool: "fd" | "rg", toolsDir: string): Promise<string> {
   const config = TOOLS[tool];
   const binaryPath = join(toolsDir, config.binaryName + (platform() === "win32" ? ".exe" : ""));
-  const currentInstallation = toolInstallations.get(binaryPath);
-  if (currentInstallation) {
-    return currentInstallation;
-  }
-
-  mkdirSync(toolsDir, { recursive: true });
-  const installation = withFileLock(binaryPath, TOOL_INSTALL_LOCK_OPTIONS, async () => {
-    const existingPath = getToolPath(tool, toolsDir);
-    return existingPath ?? downloadTool(tool, toolsDir);
-  });
-  toolInstallations.set(binaryPath, installation);
-  void installation.then(
+  return getOrCreatePromise(
+    toolInstallations,
+    binaryPath,
     () => {
-      if (toolInstallations.get(binaryPath) === installation) {
-        toolInstallations.delete(binaryPath);
-      }
+      mkdirSync(toolsDir, { recursive: true });
+      return withFileLock(binaryPath, TOOL_INSTALL_LOCK_OPTIONS, async () => {
+        const existingPath = getToolPath(tool, toolsDir);
+        return existingPath ?? downloadTool(tool, toolsDir);
+      });
     },
-    () => {
-      if (toolInstallations.get(binaryPath) === installation) {
-        toolInstallations.delete(binaryPath);
-      }
-    },
+    { evictOnSettled: true },
   );
-  return installation;
 }
 
 // Termux package names for tools
@@ -382,7 +358,7 @@ export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<str
     return undefined;
   }
 
-  if (isOfflineModeEnabled()) {
+  if (isTruthyEnvValue(process.env.OPENCLAW_OFFLINE)) {
     if (!silent) {
       console.log(
         chalk.yellow(`${config.name} not found. Offline mode enabled, skipping download.`),
@@ -401,7 +377,6 @@ export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<str
     return undefined;
   }
 
-  // Tool not found - download it
   if (!silent) {
     console.log(chalk.dim(`${config.name} not found. Downloading...`));
   }

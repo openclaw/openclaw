@@ -19,7 +19,6 @@ import {
 } from "./chat-audio-coordinator.ts";
 import {
   cacheAndRetainChatAudioBlob,
-  canDecodeChatAudioWaveform,
   CHAT_AUDIO_WAVEFORM_MAX_BYTES,
   CHAT_AUDIO_WAVEFORM_SAMPLE_RATE,
   computeChatAudioWaveformPeaks,
@@ -334,7 +333,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     const blobUrl = URL.createObjectURL(blob);
     let peaks: readonly number[] | undefined;
     let acceptedDecodedDuration: number | undefined;
-    if (canDecodeChatAudioWaveform({ sizeBytes: bytes.byteLength, durationSeconds })) {
+    if (shouldFetchChatAudioWaveform({ sizeBytes: bytes.byteLength, durationSeconds })) {
       let context: AudioContext | null = null;
       try {
         // Duration is trusted only from the server-side ffprobe metadata.
